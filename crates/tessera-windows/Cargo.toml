@@ -6,7 +6,7 @@ rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-description = "Read-only Windows desktop observation for Tessera"
+description = "Windows desktop observation and explicit activation for Tessera"
 publish = false
 
 [dependencies]
@@ -19,6 +19,14 @@ windows-sys = { workspace = true, features = [
     "Win32_Graphics_Gdi",
     "Win32_System_Threading",
     "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

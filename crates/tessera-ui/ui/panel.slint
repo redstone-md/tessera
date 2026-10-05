@@ -1,33 +1,103 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { Button, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
+
+export struct Row {
+    key: string,
+    caption: string,
+    minimized: bool,
+}
 
 export component Panel inherits Window {
-    title: "Tessera desktop panel";
-    preferred-width: 600px;
-    preferred-height: 420px;
-    min-width: 360px;
-    min-height: 260px;
+    title: "Tessera " + root.version + " — alpha";
+    background: Palette.background;
+    preferred-width: 640px;
+    preferred-height: 460px;
+    min-width: 560px;
+    min-height: 300px;
 
-    in property <[string]> rows;
+    // In/out state (the controller reads and writes these).
+    in-out property <[Row]> rows;
+    in-out property <string> search;
+    in-out property <int> theme-index;
+    in-out property <bool> compact;
+
+    // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
     in property <bool> refreshing;
     in property <bool> has-snapshot;
+    // True while the retained data must not be activated: refreshing or
+    // after a failed refresh, until the next success confirms the desktop.
+    in property <bool> stale;
+    in property <string> startup-notice;
+    in property <string> version;
+
     callback refresh-requested();
+    callback filter-requested();
+    changed search => { root.filter-requested(); }
+    callback activate-requested(string /* key */);
+    callback save-preferences-requested();
+
+    // Live preview: only explicit Save persists through the host. The
+    // two-way binding keeps the user's choice while propagating to Palette.
+    property <ColorScheme> color-scheme <=> Palette.color-scheme;
+    property <ColorScheme> theme-derived: root.theme-index == 1 ? ColorScheme.light :
+        root.theme-index == 2 ? ColorScheme.dark : ColorScheme.unknown;
+    changed theme-derived => { color-scheme = theme-derived; }
+
+    property <length> row-height: root.compact ? 24px : 32px;
+    property <length> gap: root.compact ? 6px : 12px;
 
     VerticalLayout {
         padding: 16px;
-        spacing: 12px;
+        spacing: root.gap;
+
+        if root.startup-notice != "": Rectangle {
+            border-radius: 8px;
+            background: Palette.control-background;
+            height: notice-text.preferred-height + 16px;
+            notice-text := Text {
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                text: root.startup-notice;
+                wrap: word-wrap;
+                color: Palette.foreground;
+            }
+        }
 
         HorizontalLayout {
-            spacing: 12px;
+            spacing: root.gap;
             Text {
                 text: "Observed desktop";
                 font-size: 20px;
                 font-weight: 600;
                 vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            ComboBox {
+                accessible-label: "Appearance theme";
+                model: ["System", "Light", "Dark"];
+                current-index <=> root.theme-index;
+            }
+            CheckBox {
+                text: "Compact";
+                checked <=> root.compact;
+            }
+            Button {
+                text: "Save preferences";
+                clicked => { root.save-preferences-requested(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: root.gap;
+            LineEdit {
+                accessible-label: "Search window titles";
+                placeholder-text: "Search window titles (case-insensitive)";
+                text <=> root.search;
             }
             Button {
                 text: "Refresh";
@@ -35,23 +105,34 @@ export component Panel inherits Window {
                 clicked => { root.refresh-requested(); }
             }
         }
+
         Text { text: root.summary; wrap: word-wrap; }
         Text { text: root.status; wrap: word-wrap; }
+        if root.stale && root.has-snapshot: Text {
+            text: "Last observation is stale. Refresh before switching windows.";
+            wrap: word-wrap;
+        }
+
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
                 spacing: 4px;
-                for caption in root.rows: Text {
-                    text: caption;
-                    height: 28px;
-                    overflow: elide;
-                    vertical-alignment: center;
+                for row in root.rows: Button {
+                    text: row.caption;
+                    height: root.row-height;
+                    horizontal-stretch: 1;
+                    // Activation is an explicit button action only, and is
+                    // paused while refreshing or when the snapshot is stale.
+                    enabled: !root.refreshing && !root.stale && root.has-snapshot;
+                    clicked => { root.activate-requested(row.key); }
                 }
             }
         }
+
         Text {
-            text: "Read-only. Application windows and Explorer are unchanged.";
+            text: "Tessera " + root.version + " — unsigned test alpha. Windows activate only on explicit input; Explorer is unchanged.";
             wrap: word-wrap;
+            font-size: 12px;
         }
     }
 }

@@ -8,7 +8,7 @@ Default toolkit features are disabled. The host enables only `std`, `backend-win
 
 ## Presentation seam
 
-`tessera-ui` receives a portable `PanelSnapshot` from an injected observation function. It does not depend on the Windows adapter or receive system handles. The application composition root maps the existing Windows snapshot getters into this view. Startup and manual Refresh use one asynchronous path; only one observation can be active, and failed refreshes retain explicitly stale last-successful data. Weak component handles deliver results on the UI thread without retaining a closed window.
+`tessera-ui` receives portable `PanelSnapshot`/`PanelWindow` data from a `DesktopHost` adapter. It does not depend on Windows or receive native handles. The application host owns the ephemeral activation-key registry and preference storage. Startup and manual Refresh use one asynchronous path; failed refreshes retain stale data and pause actions. Search projects the retained full view without observing again, preserving opaque keys. Activation runs directly on explicit UI input, because foreground eligibility depends on user input; Windows owns its validation and denial policy. Preference preview is independent of an explicit Save. Weak component handles deliver worker results without retaining a closed window.
 
 The generated Slint module is isolated from handwritten Rust. Win32 integration remains in the platform module; any compiler-generated toolkit unsafe code is not permission to add handwritten FFI to presentation. Selecting Slint does not choose or freeze a plugin runtime, third-party UI protocol, or shell-activation mechanism.
 
@@ -18,4 +18,4 @@ The official [preliminary headless testing backend](https://docs.slint.dev/lates
 
 Development builds emit static widget metadata for headless element queries; release builds omit it. This is compiler metadata, not a running inspection server. Controller and text-safety tests do not need that metadata; the headless accessible-button assertion runs in debug builds. Real Windows accessibility remains an interactive release check.
 
-The first panel is an ordinary read-only utility window alongside Explorer, not yet a dock or taskbar replacement. Interactive Windows 11 testing and the [distribution trust gates](../distribution-and-trust.md) remain prerequisites for a consumer release.
+The alpha is an ordinary window-switching utility alongside Explorer, not yet a dock or taskbar replacement. A private unsigned tester package is an explicit exception to consumer distribution, not evidence of Windows 11 or antivirus approval. Interactive testing and the [distribution trust gates](../distribution-and-trust.md) remain prerequisites for a consumer release.

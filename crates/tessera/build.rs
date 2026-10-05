@@ -19,10 +19,25 @@ fn main() {
     let manifest =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo package directory"))
             .join("app.manifest");
-    // Embed before signing; no elevation, UIAccess bypass, or external manifest.
-    println!("cargo:rustc-link-arg-bin=tessera=/MANIFEST:EMBED");
-    println!(
-        "cargo:rustc-link-arg-bin=tessera=/MANIFESTINPUT:{}",
-        manifest.display()
-    );
+    // Both launchers keep the same privilege/DPI contract. Embed before signing.
+    for binary in ["tessera", "tessera-desktop"] {
+        println!("cargo:rustc-link-arg-bin={binary}=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg-bin={binary}=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
+    }
+    // Linux cross-checks validate Rust types, not Windows SDK resource compilation.
+    if env::var("HOST").is_ok_and(|host| host.contains("windows")) {
+        let mut resource = winresource::WindowsResource::new();
+        resource
+            .set("ProductName", "Tessera")
+            .set("FileDescription", "Tessera native desktop alpha")
+            .set("ProductVersion", env!("CARGO_PKG_VERSION"))
+            .set("LegalCopyright", "Copyright (C) 2026 Tessera contributors")
+            .set_version_info(winresource::VersionInfo::FILEFLAGS, 0x2);
+        resource
+            .compile()
+            .expect("Compile Windows version resources");
+    }
 }

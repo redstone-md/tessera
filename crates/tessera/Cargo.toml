@@ -8,13 +8,18 @@ license.workspace = true
 readme.workspace = true
 description = "Native desktop panel and validation tools for Tessera"
 publish = false
+default-run = "tessera"
 
 [dependencies]
 tessera-core.workspace = true
 tessera-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 tessera-ui.workspace = true
+parking_lot.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = [
@@ -22,6 +27,9 @@ windows-sys = { workspace = true, features = [
     "Win32_System_LibraryLoader",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[build-dependencies]
+winresource.workspace = true
 
 [lints]
 workspace = true

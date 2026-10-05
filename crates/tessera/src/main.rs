@@ -4,7 +4,6 @@
 #![forbid(unsafe_code)]
 
 mod inspection;
-mod panel;
 
 use std::env;
 use std::error::Error;
@@ -19,12 +18,13 @@ Usage: tessera demo
        tessera inspect
        tessera panel
        tessera --help
+       tessera --version
 
 demo     Calculate a layout for synthetic windows.
 inspect  Read real Windows monitors and visible windows (Windows only).
-panel    Open a read-only native desktop panel (Windows only).
+panel    Open the native alpha window switcher (Windows only).
 
-These tools never move application windows or replace Explorer.";
+Observation never changes other windows. The panel activates only on explicit input.";
 
 fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
@@ -37,9 +37,13 @@ fn main() -> ExitCode {
             println!("{HELP}");
             return ExitCode::SUCCESS;
         }
+        [command] if command == "--version" || command == "-V" => {
+            println!("Tessera {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
         [command] if command == "demo" => demo(io::stdout().lock()),
         [command] if command == "inspect" => inspection::inspect(io::stdout().lock()),
-        [command] if command == "panel" => panel::run(),
+        [command] if command == "panel" => tessera::run_panel(),
         _ => {
             eprintln!("tessera: unsupported arguments\n\n{HELP}");
             return ExitCode::from(2);

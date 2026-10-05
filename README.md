@@ -4,9 +4,9 @@ A modular, native desktop environment for Windows 11, built in Rust. Tessera foc
 
 ## Status
 
-**Early development; not a daily-driver shell.** The current implementation provides a pure layout engine, a synthetic layout demo, read-only observation through `inspect`, and an experimental native read-only panel.
+**Private test alpha; not a daily-driver shell.** The first alpha adds a native window switcher with title search, explicit activation, and saved appearance preferences to the layout/inspection foundation. See the [alpha tester guide](docs/alpha-testing.md) for the portable package, security limitations, and checklist.
 
-Tessera does **not** move application windows or modify Explorer. The panel is a normal utility window, not a dock or taskbar replacement. Shell replacement and the plugin runtime are not implemented. Windows 11 x64 with the MSVC toolchain is the initial platform target; other architectures need separate validation.
+Tessera does not automatically rearrange application windows or modify Explorer. The panel is a normal utility window, not a dock or taskbar replacement. Only choosing an application requests foreground activation and, if minimized, asynchronous restoration. Shell replacement and the plugin runtime are not implemented. Windows 11 x64 with the MSVC toolchain is the initial platform target; other architectures need separate validation.
 
 ## Product direction
 
@@ -49,9 +49,9 @@ Linux workspace builds (including headless UI tests and cross-target builds) req
 | Crate | Responsibility |
 | --- | --- |
 | `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
-| `tessera-windows` | Desktop observation through official `windows-sys` bindings; handwritten Win32 FFI is isolated in the platform module. |
-| `tessera-ui` | Native Slint presentation, portable view data, and asynchronous read-only refresh; no Windows-adapter dependency. |
-| `tessera` | Application composition and CLI commands for the domain, platform, and native panel. |
+| `tessera-windows` | Read-only desktop observation and separately scoped explicit foreground activation; handwritten Win32 FFI stays here. |
+| `tessera-ui` | Native Slint presentation, portable window rows, asynchronous observation, search, and preference preview; no Windows-adapter dependency. |
+| `tessera` | Shared application host, bounded atomic preferences, GUI launcher, and developer CLI. |
 
 ```sh
 cargo run -p tessera -- demo
@@ -91,17 +91,23 @@ On Windows:
 
 ```sh
 cargo run -p tessera -- panel
+# Or launch the GUI binary directly (no console subsystem on Windows):
+cargo run -p tessera --bin tessera-desktop
 ```
 
-The native Slint window shows observed window captions and monitor/window/warning counts. It observes at startup and on **Refresh**, off the UI thread with one request in flight. It does not run periodic background polling. Failed refreshes retain explicitly stale last-successful data and allow retry; captions are bounded and cleaned for display, not interpreted as commands or markup.
+The native Slint window shows ordinary application candidates and monitor/application/warning counts. It observes at startup and on **Refresh**, off the UI thread with one request in flight. Search uses retained data, not a new observation. Failed refreshes retain explicitly stale data and disable activation until a successful refresh. Captions are bounded plain text, never commands or markup.
 
-The panel uses native window decorations and can be moved, resized, minimized, and closed normally. It is not always-on-top and does not hide Explorer, reserve monitor work area, change other windows, write settings, install autostart, or load plugins. Linux rejects the command before creating UI rather than showing a fake desktop.
+Choose a row to request foreground activation; the platform revalidates its transient HWND/PID and eligibility. Minimized targets may be restored asynchronously only on that explicit input. Windows foreground restrictions are respected and reported, not bypassed. Observation and activation cannot be made atomic; same-process handle reuse remains a race.
 
-The native software renderer and accessibility support are enabled; Qt, WebView, GPU renderers, and toolkit inspection servers are not. Headless tests validate UI behavior, **not Windows rendering or accessibility**. The Windows executable embeds `asInvoker`, `uiAccess=false`, and PerMonitorV2 declarations. Development builds are not signed or antivirus-approved; read the [distribution and trust policy](docs/distribution-and-trust.md) before distributing them.
+System/light/dark and compact spacing preview live. **Save preferences** writes only versioned appearance data to `%LOCALAPPDATA%\Tessera\settings.json`, atomically; invalid or future files stay untouched until an explicit save. No captions or system identities are stored.
+
+The panel has native decorations and normal move/resize/minimize/close behavior. It is not always-on-top and does not hide Explorer, reserve work area, install autostart, run plugins, or perform periodic background polling. Linux rejects native launch rather than showing a fake desktop. Qt, WebView, GPU renderers, and inspection servers remain disabled. Both Windows launchers embed `asInvoker`, `uiAccess=false`, and PerMonitorV2; unsigned alpha artifacts are not antivirus-approved.
 
 ### Verification and limitations
 
 `Cargo.lock` is committed. CI runs **only when a release tag matching `v*` is pushed**, not on ordinary branch commits or pull requests. Its matrix covers Linux stable, Windows stable, and Windows Rust 1.92. Run the local checks above before pushing changes. Headless UI tests cover refresh behavior and error states. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
+
+After all checks pass, numbered `v*-alpha.N` tags in the private repository also build verified unsigned portable assets, complete corresponding source with vendored dependencies, and SHA-256 checksums. The packaging script checks x64 GUI/console PE subsystems, product version, embedded privilege/DPI manifests, static CRT imports, and packaged CLI commands. This private-alpha path does not publish unsigned consumer/stable releases. See [distribution and trust](docs/distribution-and-trust.md).
 
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for panel rendering, native accessibility, keyboard/focus behavior, idle resource use, mixed DPI, multiple monitors, privilege boundaries, games, the notification area, recovery, and security-product compatibility. A Linux cross-target check is not a Windows runtime test.
 
@@ -111,8 +117,8 @@ Home and Pro are target editions, but Microsoft's [Shell Launcher](https://learn
 
 1. Pure layout calculation and a side-effect-free demo — implemented.
 2. Real Windows observation — implemented.
-3. A minimal native read-only panel alongside Explorer — implemented; a dock with real application actions and presentation settings is next.
-4. Settings and profiles, replaceable shell presentation, themes, and motion on Tessera-owned surfaces.
+3. Native panel alongside Explorer with explicit window switching and title search — implemented; a dock and application launching are next.
+4. System/light/dark and compact preferences — implemented; broader profiles, replaceable presentation, themes, and motion remain.
 5. An isolated host with one useful plugin, followed by replaceable modules.
 6. Workspaces, system integrations, and optional window-placement commands with application rules and safety checks.
 7. Remaining shell modules and opt-in shell replacement after recovery has been verified.

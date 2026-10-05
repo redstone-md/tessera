@@ -8,6 +8,35 @@ use std::process::Command;
 mod windows_fixture;
 
 #[test]
+fn version_identifies_the_exact_alpha_build() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tessera"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("Tessera {}", env!("CARGO_PKG_VERSION")),
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn desktop_launcher_reports_unsupported_platform() {
+    let output = Command::new(env!("CARGO_BIN_EXE_tessera-desktop"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Windows")
+    );
+}
+
+#[test]
 fn demo_outputs_the_domain_plan_without_excluded_windows() {
     let output = Command::new(env!("CARGO_BIN_EXE_tessera"))
         .arg("demo")

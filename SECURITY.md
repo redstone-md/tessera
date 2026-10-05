@@ -18,7 +18,7 @@ Before a public release, maintainers must configure a working confidential repor
 
 Relevant areas include Win32 memory safety, FFI callback boundaries, DPI-context restoration, untrusted desktop text, dependency vulnerabilities, and future window-management or plugin permissions.
 
-The current implementation observes desktop state, calculates synthetic layouts, and displays a read-only native panel. It does not move application windows, replace Explorer, execute plugins, install autostart, or change security settings. Those future features are not security guarantees of the current build.
+The current implementation observes desktop state, calculates synthetic layouts, and displays a native window switcher. Observation remains read-only. Explicit row activation revalidates a transient HWND/PID, may restore a minimized target asynchronously, and requests foreground without bypassing Windows restrictions. Explicit Save writes only appearance preferences. No automatic layout, Explorer replacement, plugin execution, autostart, or security-setting changes are implemented. Activation is non-atomic; same-process handle reuse remains a risk to test.
 
 Avoid publishing desktop captions, file paths, screenshots, or tokens as part of a report. Please allow maintainers to assess a report and coordinate disclosure before making exploit details public.
 
@@ -26,4 +26,4 @@ Avoid publishing desktop captions, file paths, screenshots, or tokens as part of
 
 The Windows executable requests `asInvoker` with `uiAccess=false`; normal use does not require elevation or protected-UI bypass. The panel has no global input hooks, injection, background polling, network operations, or toolkit inspection server. Read the [distribution and trust policy](docs/distribution-and-trust.md) for signing requirements, consumer-release gates, and detection handling.
 
-Development builds are not signed or certified as antivirus-safe. Do not recommend disabling Windows protection or adding exclusions. Investigate detections before calling them false positives, and obtain approval before uploading private artifacts to a vendor or third-party scanner.
+Private alpha builds are explicitly unsigned and not certified as antivirus-safe. The private prerelease includes corresponding source and checksums; some protected machines cannot run it until trusted signing is available. Do not recommend disabling Windows protection or adding exclusions. Investigate detections before calling them false positives, and obtain approval before uploading private artifacts to a vendor or third-party scanner.

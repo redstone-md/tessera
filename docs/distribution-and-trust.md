@@ -6,9 +6,9 @@ Tessera must behave like an ordinary, well-identified desktop application. Reduc
 
 - Run at the caller's normal permission level. The Windows MSVC executable embeds `requestedExecutionLevel="asInvoker"` and `uiAccess="false"`; it does not request elevation or bypass protected UI. Starting it from an elevated process can still inherit that process's privileges.
 - Use documented Windows interfaces and a native toolkit. No drivers, process injection, remote process-memory manipulation, low-level global keyboard/mouse hooks, executable packers, or security-setting changes in the baseline.
-- The first panel is a normal, resizable, closable window alongside Explorer. It neither hides the taskbar nor reserves screen space, forces itself above other applications, or changes application geometry. It does not install itself as the shell.
+- The panel is a normal, resizable, closable window alongside Explorer. It does not hide the taskbar, reserve screen space, stay above other apps, install itself as the shell, or automatically arrange windows. Only explicit row activation may request foreground and asynchronously restore a minimized app; it respects Windows restrictions.
 - Observe once at startup and on explicit Refresh, off the UI thread, with one request in flight. Do not continuously poll or render at a fixed frame rate while idle. On error, explain that retained data is stale and allow retry.
-- No implicit autostart, services, scheduled tasks, telemetry, downloads, update executables, or plugin execution. Future persistence or shell activation requires explicit consent, a reversible operation, and an independent recovery path.
+- No implicit autostart, services, scheduled tasks, telemetry, downloads, update executables, or plugin execution. Explicit Save stores only appearance preferences in the user's local app data. Startup/shell persistence requires separate consent, a reversible operation, and an independent recovery path.
 - Keep captions in memory for the visible panel; treat them as untrusted text, not commands, paths, or markup. Do not log or upload them. Disable toolkit inspection servers and live-debug features in production.
 
 Future integrations must justify any additional rights and stay separate from appearance settings. Prefer scoped documented commands and events over techniques that alter other processes. A theme must not silently enable a system integration.
@@ -30,7 +30,14 @@ Before distributing a consumer binary or installer:
 5. Use a consistent publisher identity and an authenticated distribution channel. Evaluate Microsoft Store distribution where its policies fit the shell capabilities; it is not an assumed deployment mechanism. Microsoft-managed signing services or a trusted certificate issuer require real identity validation and eligibility checks.
 6. Make installation and any startup/shell integration explicit, reversible, and removable without disabling Windows protection. Do not add application directories to Defender exclusions or instruct users to turn off UAC, Defender, SmartScreen, or Smart App Control.
 
-Signing, packaging, the publisher identity, and clean-machine security validation are **not implemented yet**. Ordinary source commits do not run GitHub Actions; release tags matching `v*` start verification, not automatic binary publication. Development builds must not be presented as signed or antivirus-approved releases.
+Signing, a trusted publisher identity, consumer installation, and clean-machine security validation are **not implemented yet**. Private-alpha packaging is implemented. Ordinary source commits do not run GitHub Actions; release tags matching `v*` start checks. Only numbered alpha tags in the private repository also package and publish explicitly unsigned test assets after those checks pass. There is no unsigned stable/consumer publication path.
+
+## Private tester alpha exception
+
+A maintainer-approved private prerelease may distribute an explicitly unsigned portable developer build to informed testers before consumer gates are complete. It must include the version/commit, checksums, complete corresponding source with locked dependencies and license files, no installer/persistence, and the [tester limitations and checklist](alpha-testing.md). The package verifies native version resources, GUI/console subsystems, privilege/DPI manifests, and static CRT imports.
+
+This exception does not imply security-product approval. Smart App Control, SmartScreen, antivirus, or enterprise policy may block it; a tester must report the block rather than weaken protection. A machine that requires trusted signing must wait for a signed build. Keep the repository and release private; broader consumer distribution still requires all gates above.
+
 
 ## Handling a detection
 

@@ -35,11 +35,14 @@ On Windows, also exercise the native path:
 ```sh
 cargo run -p tessera -- inspect
 cargo run -p tessera -- panel
+cargo run -p tessera --bin tessera-desktop
 ```
 
 Linux can validate domain behavior, portable helpers, and unsupported-platform handling. It cannot validate native Windows behavior. Describe what you actually tested; do not present a cross-target type check as a completed Windows runtime test.
 
 Run the local checks before pushing changes. GitHub Actions CI runs only for pushed release tags matching `v*` (for example, `v0.1.0`), not for ordinary branch commits or pull requests. The release matrix covers Linux stable, Windows stable, and Windows Rust 1.92. Keep the minimum supported Rust version working, and commit `Cargo.lock` changes when dependencies change. Packages remain `publish = false` while the interfaces are experimental. Do not create a release tag just to validate an ordinary commit.
+
+Numbered alpha tags in the private repository also run `scripts/package-alpha.ps1` after all checks. This native Windows-only path produces explicitly unsigned portable test assets, corresponding source, and checksums; it verifies resources/manifests/subsystems and static CRT imports. Read the [tester guide](docs/alpha-testing.md) before distributing an alpha. A release tag is an outward-facing publication decision, not a workaround for ordinary local checks.
 
 ## Architecture and code
 

@@ -6,18 +6,18 @@ rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-description = "Native read-only desktop panel for Tessera"
+description = "Native alpha desktop presentation for Tessera"
 publish = false
 
 [dependencies]
 slint.workspace = true
+parking_lot.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
-parking_lot = "0.12.5"
 
 [lints]
 workspace = true
