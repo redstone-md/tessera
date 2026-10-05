@@ -1,6 +1,6 @@
 # Tessera
 
-A modular desktop environment for Windows. It combines window management with replaceable shell elements, keeping the user in control of their working environment.
+A modular desktop environment for Windows. Its primary product is a customizable native shell with conventional floating-window behavior. Automatic tiling is an optional capability, not the baseline interaction model.
 
 ## Terminology
 
@@ -11,6 +11,10 @@ _Avoid_: "window manager" as the name for the whole environment.
 **Window management**:
 Organizing the position, size, and interaction of application windows.
 _Avoid_: using "shell" as a synonym for window management.
+
+**Conventional desktop**:
+A working environment with floating windows and ordinary dragging, resizing, minimize, maximize, and application fullscreen. Automatic tiling requires an explicit choice.
+_Avoid_: using "floating" to mean a lack of window controls.
 
 **Managed window**:
 An application window for which Tessera determines placement rules. Its identity belongs to the current session, not to a persisted application profile.
@@ -64,6 +68,10 @@ _Avoid_: "active window"; focus and position in the layout are independent.
 **Shell module**:
 A replaceable part of the environment, such as a taskbar, launcher, or desktop.
 _Avoid_: using "plugin" as a mandatory synonym; a module may ship with Tessera.
+
+**Theme**:
+Appearance settings for shell surfaces, including colors, typography, icons, spacing, and motion. A theme does not grant system permissions or automatically restyle foreign application windows.
+_Avoid_: using "profile" or "shell module" as a mandatory synonym.
 
 **Plugin**:
 An installable extension that provides additional capabilities or replaces a shell module.

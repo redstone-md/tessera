@@ -1,6 +1,6 @@
 # Tessera
 
-A modular desktop environment for Windows 11, built in Rust. Tessera aims to combine hybrid window management, a replaceable shell, native UI, and restricted third-party plugins.
+A modular, native desktop environment for Windows 11, built in Rust. Tessera focuses on a deeply customizable shell with familiar floating-window behavior, replaceable modules, and restricted third-party plugins. Tiling is optional, not the default workflow.
 
 ## Status
 
@@ -10,18 +10,21 @@ Tessera does **not** move windows or modify Explorer. The panel, shell replaceme
 
 ## Product direction
 
-- Hybrid window management: automatic tiling and floating windows.
-- Main-and-stack layout: one main window on the left, other tiled windows stacked on the right.
-- Mouse-driven reordering with a placement preview.
-- Independent workspaces per monitor, with linked switching for monitor groups.
-- Replaceable taskbar and notification area, launcher, desktop, system panels, and widgets.
+- Conventional desktop behavior by default: floating windows, mouse dragging and resizing, minimize, maximize, and application fullscreen, without automatic rearrangement.
+- Replaceable dock/taskbar, notification area, launcher, desktop, system panels, notification center, and widgets.
+- Profiles combining module selection, layouts, themes, icons, and motion settings, including macOS-inspired dock-and-top-panel arrangements.
+- Native Rust presentation: no WebView, Electron, or HTML/CSS/JavaScript UI stack, including for custom shell modules.
 - Fully replaceable presentation, while permissions and recovery remain under trusted control.
 - Restricted plugins for themes, layouts, commands, integrations, and shell modules, without arbitrary system access.
 - GUI-based configuration for a broad audience, rather than mandatory configuration-file editing.
-- Explicit opt-in shell replacement with a recovery path; a separate choice of file manager.
-- Fullscreen applications excluded from automatic placement by default.
+- Independent workspaces per monitor, with linked switching for monitor groups.
+- Optional tiling: main-and-stack layout and mouse-driven reordering with a placement preview, enabled explicitly.
+- Explicit opt-in shell replacement with a recovery path; a separate choice of file manager, with Explorer as the default.
+- Games and fullscreen applications left alone by default.
 
 These are planned capabilities, not a list of completed features.
+
+Customization applies first to Tessera-owned surfaces. Animating foreign application windows, integrating Windows notifications, and replacing system flyouts are separate compatibility-sensitive platform features, not automatic consequences of theming. Tessera does not aim to replace DWM or promise arbitrary restyling of other applications.
 
 ## Architecture
 
@@ -33,6 +36,7 @@ Start with working modules, then add layers. Do not create empty crates for hypo
 - [Domain, platform, and presentation](docs/adr/0001-domain-and-platform.md)
 - [Restricted plugins](docs/adr/0002-restricted-plugins.md)
 - [Shell activation and recovery](docs/adr/0003-shell-activation-and-recovery.md)
+- [Conventional desktop and native customization](docs/adr/0004-conventional-native-desktop.md)
 
 ## Development
 
@@ -52,7 +56,7 @@ cargo test --workspace --locked
 cargo doc --workspace --no-deps --locked
 ```
 
-`demo` uses a work area with a negative origin, three tiled windows, one floating window, and one fullscreen window. Only tiled windows appear in the plan. By default, the main column receives 60% of the width after subtracting an eight-physical-pixel gap. There is no outer gap; remaining stack-height pixels are distributed from top to bottom.
+`demo` deliberately exercises the **optional tiling engine**, not the default desktop experience. It uses a synthetic work area with a negative origin, three explicitly tiled windows, one floating window, and one fullscreen window. Only tiled windows appear in the plan; `WindowMode::default()` is `Floating`. The default **layout parameters** give the main column 60% of the width after subtracting an eight-physical-pixel gap. There is no outer gap; remaining stack-height pixels are distributed from top to bottom.
 
 Invalid geometry, duplicate identities, and insufficient space return a layout error without a partial plan. Real application size constraints and applying plans are not implemented yet.
 
@@ -87,16 +91,18 @@ Home and Pro are target editions, but Microsoft's [Shell Launcher](https://learn
 ## Roadmap
 
 1. Pure layout calculation and a side-effect-free demo — implemented.
-2. Real Windows observation — implemented; safe plan application alongside Explorer is next.
-3. A minimal native panel, hotkeys, and tiled/floating mode switching.
-4. Workspaces, settings, application rules, and mouse interaction.
+2. Real Windows observation — implemented.
+3. A minimal native dock/panel alongside Explorer, using real observed state without automatically moving application windows.
+4. Settings and profiles, replaceable shell presentation, themes, and motion on Tessera-owned surfaces.
 5. An isolated host with one useful plugin, followed by replaceable modules.
-6. Remaining shell modules and opt-in shell replacement after recovery has been verified.
+6. Workspaces, system integrations, and optional window-placement commands with application rules and safety checks.
+7. Remaining shell modules and opt-in shell replacement after recovery has been verified.
 
 Each layer builds on a working previous layer.
 
 ## Architectural references
 
+- [Seelen UI](https://seelen.io/apps/seelen-ui): functional reference for customizable docks, toolbars, launchers, widgets, themes, and notification panels. Its [upstream README](https://github.com/eythaann/Seelen-UI) documents a required WebView runtime; Tessera adopts the product direction, not its web UI stack.
 - [komorebi](https://github.com/LGUG2Z/komorebi): window management on top of DWM, separated commands and panels, and reversible changes.
 - [GlazeWM](https://github.com/glzr-io/glazewm): layouts, window rules, and independent panel integration.
 

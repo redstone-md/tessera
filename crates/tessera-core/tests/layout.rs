@@ -26,6 +26,18 @@ fn expected(x: i32, y: i32, w: u32, h: u32) -> Rect {
 }
 
 #[test]
+fn default_window_mode_does_not_opt_into_tiling() {
+    let window = Window::new(WindowId::new(1), WindowMode::default());
+    assert_eq!(window.mode(), WindowMode::Floating);
+    assert!(
+        MainStack::default()
+            .arrange(area(), &[window])
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn empty_and_all_excluded_yield_no_placements() {
     let stack = MainStack::default();
     assert!(stack.arrange(area(), &[]).unwrap().is_empty());

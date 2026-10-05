@@ -43,6 +43,7 @@ Run the local checks before pushing changes. GitHub Actions CI runs only for pus
 Read the [glossary](CONTEXT.md), [README](README.md), and [architecture decisions](docs/adr/0001-domain-and-platform.md) before changing behavior.
 
 - Keep the domain independent of Windows and presentation. A placement plan is not an observed fact.
+- Preserve conventional floating-window behavior by default. Tiling is opt-in; customization of native shell modules must not require a web renderer or grant extra system permissions.
 - Use encapsulation and composition; do not introduce inheritance-shaped scaffolding or registries without a real need.
 - Keep Win32 and production `unsafe` inside the platform module. Explain pointer lifetimes and other invariants with safety comments.
 - Preserve explicit error handling, DPI restoration, callback panic boundaries, and terminal escaping.

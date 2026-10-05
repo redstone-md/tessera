@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-/// How a window participates in the shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Whether a window participates in automatic layout.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WindowMode {
     /// Participates in tiling.
     Tiled,
-    /// Managed but not tiled; excluded from layout proposals.
+    /// Excluded from layout proposals; the conventional default placement mode.
+    #[default]
     Floating,
     /// Occupies a full output; excluded from layout proposals.
     Fullscreen,
