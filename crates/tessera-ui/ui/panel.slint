@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component Panel inherits Window {
+    title: "Tessera desktop panel";
+    preferred-width: 600px;
+    preferred-height: 420px;
+    min-width: 360px;
+    min-height: 260px;
+
+    in property <[string]> rows;
+    in property <string> summary: "No observation yet";
+    in property <string> status: "Ready to observe";
+    in property <bool> refreshing;
+    in property <bool> has-snapshot;
+    callback refresh-requested();
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "Observed desktop";
+                font-size: 20px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+            Button {
+                text: "Refresh";
+                enabled: !root.refreshing;
+                clicked => { root.refresh-requested(); }
+            }
+        }
+        Text { text: root.summary; wrap: word-wrap; }
+        Text { text: root.status; wrap: word-wrap; }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 4px;
+                for caption in root.rows: Text {
+                    text: caption;
+                    height: 28px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Text {
+            text: "Read-only. Application windows and Explorer are unchanged.";
+            wrap: word-wrap;
+        }
+    }
+}

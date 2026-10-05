@@ -34,7 +34,11 @@ fn demo_outputs_the_domain_plan_without_excluded_windows() {
 
 #[test]
 fn unsupported_arguments_fail_without_running_the_demo() {
-    for arguments in [vec!["start"], vec!["demo", "unexpected"]] {
+    for arguments in [
+        vec!["start"],
+        vec!["demo", "unexpected"],
+        vec!["panel", "unexpected"],
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_tessera"))
             .args(arguments)
             .output()
@@ -51,18 +55,20 @@ fn unsupported_arguments_fail_without_running_the_demo() {
 
 #[cfg(not(windows))]
 #[test]
-fn inspection_reports_unsupported_platform_instead_of_an_empty_desktop() {
-    let output = Command::new(env!("CARGO_BIN_EXE_tessera"))
-        .arg("inspect")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("Windows")
-    );
+fn native_commands_report_unsupported_platform_without_a_fake_desktop() {
+    for command in ["inspect", "panel"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_tessera"))
+            .arg(command)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("Windows")
+        );
+    }
 }
 
 #[cfg(windows)]

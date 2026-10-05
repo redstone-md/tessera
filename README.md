@@ -4,9 +4,9 @@ A modular, native desktop environment for Windows 11, built in Rust. Tessera foc
 
 ## Status
 
-**Early development; not a daily-driver shell.** The current implementation provides a pure layout engine, a synthetic layout demo, and read-only observation of real Windows windows and monitors through `inspect`.
+**Early development; not a daily-driver shell.** The current implementation provides a pure layout engine, a synthetic layout demo, read-only observation through `inspect`, and an experimental native read-only panel.
 
-Tessera does **not** move windows or modify Explorer. The panel, shell replacement, and plugin runtime are not implemented. Windows 11 x64 is the initial platform target; other architectures need separate validation.
+Tessera does **not** move application windows or modify Explorer. The panel is a normal utility window, not a dock or taskbar replacement. Shell replacement and the plugin runtime are not implemented. Windows 11 x64 with the MSVC toolchain is the initial platform target; other architectures need separate validation.
 
 ## Product direction
 
@@ -37,16 +37,21 @@ Start with working modules, then add layers. Do not create empty crates for hypo
 - [Restricted plugins](docs/adr/0002-restricted-plugins.md)
 - [Shell activation and recovery](docs/adr/0003-shell-activation-and-recovery.md)
 - [Conventional desktop and native customization](docs/adr/0004-conventional-native-desktop.md)
+- [Native presentation toolkit](docs/adr/0005-native-presentation.md)
+- [Distribution, trust, and user comfort](docs/distribution-and-trust.md)
 
 ## Development
 
-Install Rust 1.85 or newer. `rust-toolchain.toml` selects stable Rust with `rustfmt` and Clippy. The workspace contains three crates:
+Install Rust 1.92 or newer. The current Slint release requires this version; earlier versions of the CLI foundation supported Rust 1.85. `rust-toolchain.toml` selects stable Rust with `rustfmt` and Clippy. The workspace contains four crates:
+
+Linux workspace builds (including headless UI tests and cross-target builds) require `pkg-config` and Fontconfig development files. On Debian/Ubuntu, install them with `sudo apt-get install pkg-config libfontconfig1-dev`. Windows builds use the system's native font support; this is not an additional Windows runtime dependency.
 
 | Crate | Responsibility |
 | --- | --- |
 | `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
-| `tessera-windows` | Desktop observation through official `windows-sys` bindings; Win32 and production `unsafe` are isolated in the platform module. |
-| `tessera` | A CLI that exercises the domain and platform interfaces. |
+| `tessera-windows` | Desktop observation through official `windows-sys` bindings; handwritten Win32 FFI is isolated in the platform module. |
+| `tessera-ui` | Native Slint presentation, portable view data, and asynchronous read-only refresh; no Windows-adapter dependency. |
+| `tessera` | Application composition and CLI commands for the domain, platform, and native panel. |
 
 ```sh
 cargo run -p tessera -- demo
@@ -80,11 +85,25 @@ cargo run -p tessera -- inspect
 
 The adapter uses documented [EnumWindows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumwindows), [GetWindowRect](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect), and [SetThreadDpiAwarenessContext](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext) APIs. Observation does not write settings, save captions to files, or launch applications.
 
+### Open the native panel
+
+On Windows:
+
+```sh
+cargo run -p tessera -- panel
+```
+
+The native Slint window shows observed window captions and monitor/window/warning counts. It observes at startup and on **Refresh**, off the UI thread with one request in flight. It does not run periodic background polling. Failed refreshes retain explicitly stale last-successful data and allow retry; captions are bounded and cleaned for display, not interpreted as commands or markup.
+
+The panel uses native window decorations and can be moved, resized, minimized, and closed normally. It is not always-on-top and does not hide Explorer, reserve monitor work area, change other windows, write settings, install autostart, or load plugins. Linux rejects the command before creating UI rather than showing a fake desktop.
+
+The native software renderer and accessibility support are enabled; Qt, WebView, GPU renderers, and toolkit inspection servers are not. Headless tests validate UI behavior, **not Windows rendering or accessibility**. The Windows executable embeds `asInvoker`, `uiAccess=false`, and PerMonitorV2 declarations. Development builds are not signed or antivirus-approved; read the [distribution and trust policy](docs/distribution-and-trust.md) before distributing them.
+
 ### Verification and limitations
 
-`Cargo.lock` is committed. CI runs **only when a release tag matching `v*` is pushed**, not on ordinary branch commits or pull requests. Its matrix covers Linux stable, Windows stable, and Windows Rust 1.85 so the minimum supported version also covers native code. Run the local checks above before pushing changes. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
+`Cargo.lock` is committed. CI runs **only when a release tag matching `v*` is pushed**, not on ordinary branch commits or pull requests. Its matrix covers Linux stable, Windows stable, and Windows Rust 1.92. Run the local checks above before pushing changes. Headless UI tests cover refresh behavior and error states. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
 
-These checks do not validate a complete shell. Manual Windows 11 testing is still needed for mixed DPI, multiple monitors, windows closing during commands, privilege boundaries, games, the notification area, and recovery.
+These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for panel rendering, native accessibility, keyboard/focus behavior, idle resource use, mixed DPI, multiple monitors, privilege boundaries, games, the notification area, recovery, and security-product compatibility. A Linux cross-target check is not a Windows runtime test.
 
 Home and Pro are target editions, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. Shell activation mechanisms have not been selected.
 
@@ -92,7 +111,7 @@ Home and Pro are target editions, but Microsoft's [Shell Launcher](https://learn
 
 1. Pure layout calculation and a side-effect-free demo — implemented.
 2. Real Windows observation — implemented.
-3. A minimal native dock/panel alongside Explorer, using real observed state without automatically moving application windows.
+3. A minimal native read-only panel alongside Explorer — implemented; a dock with real application actions and presentation settings is next.
 4. Settings and profiles, replaceable shell presentation, themes, and motion on Tessera-owned surfaces.
 5. An isolated host with one useful plugin, followed by replaceable modules.
 6. Workspaces, system integrations, and optional window-placement commands with application rules and safety checks.

@@ -18,7 +18,9 @@ Desktop captions, paths, screenshots, and `inspect` output can contain private i
 
 ## Local development
 
-Install Rust 1.85 or newer with `rustfmt` and Clippy. The repository selects stable Rust through `rust-toolchain.toml`.
+Install Rust 1.92 or newer with `rustfmt` and Clippy. The current native toolkit requires this version. The repository selects stable Rust through `rust-toolchain.toml`.
+
+For Linux workspace builds, install `pkg-config` and Fontconfig development files (`sudo apt-get install pkg-config libfontconfig1-dev` on Debian/Ubuntu). The headless tests do not need a display server, but the native toolkit and compiler still need these build prerequisites.
 
 ```sh
 cargo run -p tessera -- demo
@@ -32,11 +34,12 @@ On Windows, also exercise the native path:
 
 ```sh
 cargo run -p tessera -- inspect
+cargo run -p tessera -- panel
 ```
 
 Linux can validate domain behavior, portable helpers, and unsupported-platform handling. It cannot validate native Windows behavior. Describe what you actually tested; do not present a cross-target type check as a completed Windows runtime test.
 
-Run the local checks before pushing changes. GitHub Actions CI runs only for pushed release tags matching `v*` (for example, `v0.1.0`), not for ordinary branch commits or pull requests. The release matrix covers Linux stable, Windows stable, and Windows Rust 1.85. Keep the minimum supported Rust version working, and commit `Cargo.lock` changes when dependencies change. Packages remain `publish = false` while the interfaces are experimental. Do not create a release tag just to validate an ordinary commit.
+Run the local checks before pushing changes. GitHub Actions CI runs only for pushed release tags matching `v*` (for example, `v0.1.0`), not for ordinary branch commits or pull requests. The release matrix covers Linux stable, Windows stable, and Windows Rust 1.92. Keep the minimum supported Rust version working, and commit `Cargo.lock` changes when dependencies change. Packages remain `publish = false` while the interfaces are experimental. Do not create a release tag just to validate an ordinary commit.
 
 ## Architecture and code
 
@@ -45,13 +48,15 @@ Read the [glossary](CONTEXT.md), [README](README.md), and [architecture decision
 - Keep the domain independent of Windows and presentation. A placement plan is not an observed fact.
 - Preserve conventional floating-window behavior by default. Tiling is opt-in; customization of native shell modules must not require a web renderer or grant extra system permissions.
 - Use encapsulation and composition; do not introduce inheritance-shaped scaffolding or registries without a real need.
-- Keep Win32 and production `unsafe` inside the platform module. Explain pointer lifetimes and other invariants with safety comments.
+- Keep handwritten Win32 and production `unsafe` inside the platform module. Generated Slint code stays isolated; it is not permission for handwritten UI FFI. Explain pointer lifetimes and other invariants with safety comments.
 - Preserve explicit error handling, DPI restoration, callback panic boundaries, and terminal escaping.
 - Prefer existing dependencies and established interfaces over custom replacements.
 - Add focused tests for changed behavior, especially geometry, window races, and recovery. Do not add tests that merely repeat implementation details.
 - Update documentation when behavior or terminology changes. Record a new ADR only for a consequential trade-off.
 
 Do not introduce window mutations, shell activation, or unrestricted plugin execution as an incidental part of an unrelated change. Those capabilities need explicit scope, safety review, and targeted Windows tests.
+
+Follow the [distribution and trust policy](docs/distribution-and-trust.md). Do not add security exclusions, elevation, injection, input hooks, persistence, downloads, or toolkit debug servers as an incidental dependency or convenience. Keep Slint, its compiler, and the dev-only headless testing backend at the same exact version; review feature changes when upgrading.
 
 ## Pull requests and commits
 

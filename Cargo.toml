@@ -1,11 +1,11 @@
 [workspace]
-members = ["crates/tessera-core", "crates/tessera-windows", "crates/tessera"]
+members = ["crates/tessera-core", "crates/tessera-windows", "crates/tessera-ui", "crates/tessera"]
 resolver = "3"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.92"
 repository = "https://github.com/redstone-md/tessera"
 license = "GPL-3.0-only"
 readme = "README.md"
@@ -13,6 +13,10 @@ readme = "README.md"
 [workspace.dependencies]
 tessera-core = { path = "crates/tessera-core" }
 tessera-windows = { path = "crates/tessera-windows" }
+tessera-ui = { path = "crates/tessera-ui" }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-18"] }
+slint-build = "=1.18.1"
+i-slint-backend-testing = "=1.18.1"
 windows-sys = "0.61.2"
 
 [workspace.lints.rust]

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod inspection;
+mod panel;
 
 use std::env;
 use std::error::Error;
@@ -16,12 +17,14 @@ const HELP: &str = "Tessera — desktop environment foundation
 
 Usage: tessera demo
        tessera inspect
+       tessera panel
        tessera --help
 
 demo     Calculate a layout for synthetic windows.
 inspect  Read real Windows monitors and visible windows (Windows only).
+panel    Open a read-only native desktop panel (Windows only).
 
-Neither command moves windows or replaces Explorer.";
+These tools never move application windows or replace Explorer.";
 
 fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
@@ -36,6 +39,7 @@ fn main() -> ExitCode {
         }
         [command] if command == "demo" => demo(io::stdout().lock()),
         [command] if command == "inspect" => inspection::inspect(io::stdout().lock()),
+        [command] if command == "panel" => panel::run(),
         _ => {
             eprintln!("tessera: unsupported arguments\n\n{HELP}");
             return ExitCode::from(2);

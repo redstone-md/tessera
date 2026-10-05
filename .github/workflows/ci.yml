@@ -21,7 +21,7 @@ jobs:
           - os: windows-latest
             toolchain: stable
           - os: windows-latest
-            toolchain: 1.85.0
+            toolchain: 1.92.0
     env:
       CARGO_TERM_COLOR: always
       RUSTDOCFLAGS: -D warnings
@@ -29,6 +29,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Install Linux native UI build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends pkg-config libfontconfig1-dev
       - name: Install Rust tooling
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt --component clippy
       - name: Check formatting

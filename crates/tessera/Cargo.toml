@@ -6,12 +6,15 @@ rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-description = "Validation application for the Tessera desktop environment"
+description = "Native desktop panel and validation tools for Tessera"
 publish = false
 
 [dependencies]
 tessera-core.workspace = true
 tessera-windows.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+tessera-ui.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = [

@@ -18,6 +18,12 @@ Before a public release, maintainers must configure a working confidential repor
 
 Relevant areas include Win32 memory safety, FFI callback boundaries, DPI-context restoration, untrusted desktop text, dependency vulnerabilities, and future window-management or plugin permissions.
 
-The current implementation observes desktop state and calculates synthetic layouts. It does not move real windows, replace Explorer, or execute plugins. Those future features are not security guarantees of the current build.
+The current implementation observes desktop state, calculates synthetic layouts, and displays a read-only native panel. It does not move application windows, replace Explorer, execute plugins, install autostart, or change security settings. Those future features are not security guarantees of the current build.
 
 Avoid publishing desktop captions, file paths, screenshots, or tokens as part of a report. Please allow maintainers to assess a report and coordinate disclosure before making exploit details public.
+
+## Security-product compatibility
+
+The Windows executable requests `asInvoker` with `uiAccess=false`; normal use does not require elevation or protected-UI bypass. The panel has no global input hooks, injection, background polling, network operations, or toolkit inspection server. Read the [distribution and trust policy](docs/distribution-and-trust.md) for signing requirements, consumer-release gates, and detection handling.
+
+Development builds are not signed or certified as antivirus-safe. Do not recommend disabling Windows protection or adding exclusions. Investigate detections before calling them false positives, and obtain approval before uploading private artifacts to a vendor or third-party scanner.
