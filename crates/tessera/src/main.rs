@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+mod inspection;
+
 use std::env;
 use std::error::Error;
 use std::io::{self, Write};
@@ -10,32 +12,37 @@ use tessera_core::{MainStack, Rect, Window, WindowId, WindowMode};
 const HELP: &str = "Tessera — desktop environment foundation
 
 Usage: tessera demo
+       tessera inspect
        tessera --help
 
-The demo calculates a layout for synthetic windows.
-It does not access Windows, move real windows, or replace Explorer.";
+demo     Calculate a layout for synthetic windows.
+inspect  Read real Windows monitors and visible windows (Windows only).
+
+Neither command moves windows or replaces Explorer.";
 
 fn main() -> ExitCode {
     let arguments: Vec<_> = env::args_os().skip(1).collect();
-    match arguments.as_slice() {
+    let result = match arguments.as_slice() {
         [] => {
             println!("{HELP}");
-            ExitCode::SUCCESS
+            return ExitCode::SUCCESS;
         }
         [command] if command == "--help" || command == "-h" => {
             println!("{HELP}");
-            ExitCode::SUCCESS
+            return ExitCode::SUCCESS;
         }
-        [command] if command == "demo" => match demo(io::stdout().lock()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("tessera: {error}");
-                ExitCode::FAILURE
-            }
-        },
+        [command] if command == "demo" => demo(io::stdout().lock()),
+        [command] if command == "inspect" => inspection::inspect(io::stdout().lock()),
         _ => {
             eprintln!("tessera: unsupported arguments\n\n{HELP}");
-            ExitCode::from(2)
+            return ExitCode::from(2);
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("tessera: {error}");
+            ExitCode::FAILURE
         }
     }
 }

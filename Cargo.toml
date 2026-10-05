@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tessera-core", "crates/tessera"]
+members = ["crates/tessera-core", "crates/tessera-windows", "crates/tessera"]
 resolver = "3"
 
 [workspace.package]
@@ -10,6 +10,8 @@ repository = "https://github.com/redstone-md/tessera"
 
 [workspace.dependencies]
 tessera-core = { path = "crates/tessera-core" }
+tessera-windows = { path = "crates/tessera-windows" }
+windows-sys = "0.61.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
