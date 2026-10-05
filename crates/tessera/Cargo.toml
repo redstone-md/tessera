@@ -1,0 +1,14 @@
+[package]
+name = "tessera"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Validation application for the Tessera desktop environment"
+publish = false
+
+[dependencies]
+tessera-core.workspace = true
+
+[lints]
+workspace = true
