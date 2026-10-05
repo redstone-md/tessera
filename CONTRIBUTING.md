@@ -36,7 +36,7 @@ cargo run -p tessera -- inspect
 
 Linux can validate domain behavior, portable helpers, and unsupported-platform handling. It cannot validate native Windows behavior. Describe what you actually tested; do not present a cross-target type check as a completed Windows runtime test.
 
-CI runs Linux stable, Windows stable, and Windows Rust 1.85. Keep the minimum supported Rust version working, and commit `Cargo.lock` changes when dependencies change. Packages remain `publish = false` while the interfaces are experimental.
+Run the local checks before pushing changes. GitHub Actions CI runs only for pushed release tags matching `v*` (for example, `v0.1.0`), not for ordinary branch commits or pull requests. The release matrix covers Linux stable, Windows stable, and Windows Rust 1.85. Keep the minimum supported Rust version working, and commit `Cargo.lock` changes when dependencies change. Packages remain `publish = false` while the interfaces are experimental. Do not create a release tag just to validate an ordinary commit.
 
 ## Architecture and code
 

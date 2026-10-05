@@ -78,7 +78,7 @@ The adapter uses documented [EnumWindows](https://learn.microsoft.com/en-us/wind
 
 ### Verification and limitations
 
-`Cargo.lock` is committed. CI checks Linux stable, Windows stable, and Windows Rust 1.85 so the minimum supported version also covers native code. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
+`Cargo.lock` is committed. CI runs **only when a release tag matching `v*` is pushed**, not on ordinary branch commits or pull requests. Its matrix covers Linux stable, Windows stable, and Windows Rust 1.85 so the minimum supported version also covers native code. Run the local checks above before pushing changes. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
 
 These checks do not validate a complete shell. Manual Windows 11 testing is still needed for mixed DPI, multiple monitors, windows closing during commands, privilege boundaries, games, the notification area, and recovery.
 
