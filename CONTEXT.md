@@ -1,77 +1,77 @@
 # Tessera
 
-Модульное окружение рабочего стола для Windows. Оно объединяет управление окнами и заменяемые элементы оболочки, сохраняя контроль пользователя над рабочим окружением.
+A modular desktop environment for Windows. It combines window management with replaceable shell elements, keeping the user in control of their working environment.
 
-## Язык
+## Terminology
 
-**Оболочка (Shell)**:
-Окружение, через которое пользователь запускает приложения, переключает окна и взаимодействует с рабочим столом.
-_Избегать_: оконный менеджер как название всего окружения.
+**Shell**:
+The environment through which the user launches applications, switches windows, and interacts with the desktop.
+_Avoid_: "window manager" as the name for the whole environment.
 
-**Управление окнами (Window management)**:
-Организация положения, размеров и взаимодействия окон приложений.
-_Избегать_: оболочка как синоним управления окнами.
+**Window management**:
+Organizing the position, size, and interaction of application windows.
+_Avoid_: using "shell" as a synonym for window management.
 
-**Управляемое окно (Window)**:
-Окно приложения, для которого Tessera определяет правила размещения. Его идентичность относится к текущему сеансу, а не к сохранённому профилю приложения.
+**Managed window**:
+An application window for which Tessera determines placement rules. Its identity belongs to the current session, not to a persisted application profile.
 
-**Наблюдаемое окно (Observed window)**:
-Окно, сведения о котором получены из текущего рабочего окружения. Обнаружение окна не означает, что Tessera управляет его размещением.
-_Избегать_: управляемое окно как обязательный синоним.
+**Observed window**:
+A window whose details were obtained from the current working environment. Detecting a window does not mean Tessera manages its placement.
+_Avoid_: using "managed window" as a mandatory synonym.
 
-**Снимок рабочего окружения (Desktop snapshot)**:
-Набор наблюдаемых сведений об экранах и окнах, собранных за один проход. Он описывает наблюдение, а не гарантированно одновременное состояние всех объектов.
-_Избегать_: план размещения, атомарный снимок.
+**Desktop snapshot**:
+A set of observed facts about screens and windows, collected in a single pass. It describes an observation, not a guaranteed simultaneous state of all objects.
+_Avoid_: "placement plan", "atomic snapshot".
 
-**Монитор (Monitor)**:
-Экран с собственным положением в общем пространстве рабочего стола.
-_Избегать_: рабочее пространство как синоним монитора.
+**Monitor**:
+A screen with its own position in the overall desktop space.
+_Avoid_: using "workspace" as a synonym for monitor.
 
-**Рабочая область (Work area)**:
-Часть экрана, доступная для размещения окон после исключения зарезервированного места под панели.
-_Избегать_: полный размер экрана.
+**Work area**:
+The part of the screen available for placing windows after space reserved for panels is excluded.
+_Avoid_: "full screen size".
 
-**Рабочее пространство (Workspace)**:
-Набор окон, между которыми пользователь работает как с отдельным окружением на мониторе.
-_Избегать_: виртуальный рабочий стол Windows как обязательный синоним.
+**Workspace**:
+A collection of windows the user treats as a separate working environment on a monitor.
+_Avoid_: using Windows virtual desktops as a mandatory synonym.
 
-**Группа мониторов (Monitor group)**:
-Мониторы, на которых пользователь выбирает совместное переключение рабочих пространств вместо независимого.
+**Monitor group**:
+Monitors on which the user chooses to switch workspaces together instead of independently.
 
-**Раскладка (Layout)**:
-Правило распределения окон по рабочей области.
-_Избегать_: тема, рабочее пространство.
+**Layout**:
+A rule for distributing windows across the work area.
+_Avoid_: "theme", "workspace".
 
-**План размещения (Placement plan)**:
-Предложенный набор положений и размеров окон, ещё не применённый к рабочему столу.
-_Избегать_: текущее состояние окон.
+**Placement plan**:
+A proposed set of window positions and sizes, not yet applied to the desktop.
+_Avoid_: "current window state".
 
-**Тайлинговое окно (Tiled window)**:
-Окно, положение и размер которого определяются раскладкой.
+**Tiled window**:
+A window whose position and size are determined by the layout.
 
-**Свободное окно (Floating window)**:
-Окно, положение и размер которого не определяются раскладкой.
-_Избегать_: всегда поверх остальных окон.
+**Floating window**:
+A window whose position and size are not determined by the layout.
+_Avoid_: "always on top".
 
-**Полноэкранное окно (Fullscreen window)**:
-Окно, занимающее экран в полноэкранном режиме и по умолчанию исключённое из автоматического размещения.
-_Избегать_: развёрнутое окно как обязательный синоним.
+**Fullscreen window**:
+A window occupying the screen in fullscreen mode and, by default, excluded from automatic placement.
+_Avoid_: using "maximized window" as a mandatory synonym.
 
-**Главное окно (Main window)**:
-Первое тайлинговое окно в порядке раскладки «главное окно и соседняя колонка», занимающее главную область.
-_Избегать_: активное окно; фокус и положение в раскладке независимы.
+**Main window**:
+The first tiled window in the main-and-stack layout, occupying the main area.
+_Avoid_: "active window"; focus and position in the layout are independent.
 
-**Модуль оболочки (Shell module)**:
-Заменяемая часть окружения, например панель задач, лаунчер или рабочий стол.
-_Избегать_: плагин как обязательный синоним; модуль может входить в поставку Tessera.
+**Shell module**:
+A replaceable part of the environment, such as a taskbar, launcher, or desktop.
+_Avoid_: using "plugin" as a mandatory synonym; a module may ship with Tessera.
 
-**Плагин (Plugin)**:
-Устанавливаемое расширение, предоставляющее дополнительные возможности или замену модуля оболочки.
+**Plugin**:
+An installable extension that provides additional capabilities or replaces a shell module.
 
-**Разрешение (Permission)**:
-Явно предоставленное право расширения на определённые действия или доступ к определённым данным.
-_Избегать_: безусловное доверие ко всему расширению.
+**Permission**:
+An explicitly granted right of an extension to perform certain actions or access certain data.
+_Avoid_: unconditional trust in the entire extension.
 
-**Профиль (Profile)**:
-Сохраняемый набор настроек поведения, внешнего вида и выбранных модулей окружения.
-_Избегать_: рабочее пространство как синоним конфигурации.
+**Profile**:
+A saved collection of behavior and appearance settings and selected shell modules.
+_Avoid_: using "workspace" as a synonym for configuration.

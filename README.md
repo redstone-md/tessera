@@ -1,44 +1,48 @@
 # Tessera
 
-Модульное окружение рабочего стола для Windows 11 на Rust: управление окнами, заменяемая оболочка, нативный интерфейс и ограниченные сторонние плагины.
+A modular desktop environment for Windows 11, built in Rust. Tessera aims to combine hybrid window management, a replaceable shell, native UI, and restricted third-party plugins.
 
-## Статус
+## Status
 
-Реализованы чистый расчёт раскладки, демо на синтетических окнах и read-only наблюдение реальных окон и мониторов Windows через команду `inspect`. Tessera пока не перемещает окна и не меняет Explorer. Панель, замена оболочки и загрузка плагинов ещё не реализованы.
+**Early development; not a daily-driver shell.** The current implementation provides a pure layout engine, a synthetic layout demo, and read-only observation of real Windows windows and monitors through `inspect`.
 
-## Направление продукта
+Tessera does **not** move windows or modify Explorer. The panel, shell replacement, and plugin runtime are not implemented. Windows 11 x64 is the initial platform target; other architectures need separate validation.
 
-- Гибридное управление окнами: автоматический тайлинг и свободное размещение.
-- Первая раскладка: главное окно слева и соседняя колонка остальных окон.
-- Перестановка тайлинговых окон мышью с предпросмотром места вставки.
-- Независимые рабочие пространства на мониторах и связанное переключение групп мониторов.
-- Заменяемые панель задач с областью уведомлений, лаунчер, рабочий стол, системные панели и виджеты.
-- Полная замена интерфейса модулями при сохранении доверенного управления разрешениями и восстановлением.
-- Сторонние плагины: темы, раскладки, команды, интеграции и модули оболочки; без произвольного системного доступа.
-- Настройка для широкой аудитории через интерфейс, а не обязательное редактирование конфигов.
-- Явное включение замены оболочки и безопасный откат. Выбор файлового менеджера отдельно от оболочки.
-- Полноэкранные приложения по умолчанию исключены из автоматического размещения.
+## Product direction
 
-Это целевые возможности, а не список уже реализованного.
+- Hybrid window management: automatic tiling and floating windows.
+- Main-and-stack layout: one main window on the left, other tiled windows stacked on the right.
+- Mouse-driven reordering with a placement preview.
+- Independent workspaces per monitor, with linked switching for monitor groups.
+- Replaceable taskbar and notification area, launcher, desktop, system panels, and widgets.
+- Fully replaceable presentation, while permissions and recovery remain under trusted control.
+- Restricted plugins for themes, layouts, commands, integrations, and shell modules, without arbitrary system access.
+- GUI-based configuration for a broad audience, rather than mandatory configuration-file editing.
+- Explicit opt-in shell replacement with a recovery path; a separate choice of file manager.
+- Fullscreen applications excluded from automatic placement by default.
 
-## Архитектура
+These are planned capabilities, not a list of completed features.
 
-Доменная модель рассчитывает правила и планы размещения без системных вызовов. Платформенная интеграция наблюдает окна и применяет проверенные команды. Нативное представление отображает состояние. Хост расширений предоставляет ограниченный интерфейс и не передаёт стороннему коду контроль над безопасностью.
+## Architecture
 
-Начинаем с минимальных работающих модулей. Не создаём пустые crates для будущих функций и не фиксируем интерфейс плагинов до проверки его модели угроз.
+The domain model calculates rules and placement plans without OS calls. Platform integration observes windows and eventually applies validated commands. Native presentation displays state. The plugin host will expose a restricted interface without handing third-party code control over safety.
 
-- [Глоссарий](CONTEXT.md)
-- [Домен, платформа и представление](docs/adr/0001-domain-and-platform.md)
-- [Ограниченные плагины](docs/adr/0002-restricted-plugins.md)
-- [Активация оболочки и восстановление](docs/adr/0003-shell-activation-and-recovery.md)
+Start with working modules, then add layers. Do not create empty crates for hypothetical features or freeze a plugin interface before reviewing its threat model.
 
-## Разработка
+- [Domain glossary](CONTEXT.md)
+- [Domain, platform, and presentation](docs/adr/0001-domain-and-platform.md)
+- [Restricted plugins](docs/adr/0002-restricted-plugins.md)
+- [Shell activation and recovery](docs/adr/0003-shell-activation-and-recovery.md)
 
-Нужен Rust 1.85 или новее; `rust-toolchain.toml` выбирает stable с `rustfmt` и Clippy. Workspace содержит три crates:
+## Development
 
-- `crates/tessera-core` — геометрия, идентичность и режимы окон, расчёт раскладки `MainStack`.
-- `crates/tessera-windows` — наблюдение рабочего окружения через официальные `windows-sys` bindings; Win32 и `unsafe` изолированы в платформенном модуле.
-- `crates/tessera` — проверочное приложение, использующее тот же доменный интерфейс.
+Install Rust 1.85 or newer. `rust-toolchain.toml` selects stable Rust with `rustfmt` and Clippy. The workspace contains three crates:
+
+| Crate | Responsibility |
+| --- | --- |
+| `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
+| `tessera-windows` | Desktop observation through official `windows-sys` bindings; Win32 and production `unsafe` are isolated in the platform module. |
+| `tessera` | A CLI that exercises the domain and platform interfaces. |
 
 ```sh
 cargo run -p tessera -- demo
@@ -48,50 +52,56 @@ cargo test --workspace --locked
 cargo doc --workspace --no-deps --locked
 ```
 
-`demo` использует рабочую область с отрицательной координатой, три тайлинговых окна, одно свободное и одно полноэкранное. В плане появляются только тайлинговые окна. По умолчанию главная колонка занимает 60% ширины после вычитания промежутка в 8 физических пикселей; внешнего отступа нет. Остаток высоты соседней колонки распределяется сверху вниз.
+`demo` uses a work area with a negative origin, three tiled windows, one floating window, and one fullscreen window. Only tiled windows appear in the plan. By default, the main column receives 60% of the width after subtracting an eight-physical-pixel gap. There is no outer gap; remaining stack-height pixels are distributed from top to bottom.
 
-На Windows:
+Invalid geometry, duplicate identities, and insufficient space return a layout error without a partial plan. Real application size constraints and applying plans are not implemented yet.
+
+### Inspect a Windows desktop
+
+On Windows:
 
 ```sh
 cargo run -p tessera -- inspect
 ```
 
-`inspect` выводит границы и рабочие области мониторов, видимые top-level окна desktop-приложений, PID, заголовок, класс, прямоугольник и наблюдаемые признаки окна. На других ОС команда завершается с ошибкой, а не подменяет наблюдение пустым результатом.
+`inspect` reports monitor bounds and work areas, visible top-level desktop-app windows, PIDs, captions, classes, rectangles, and observed window flags. On other operating systems, it reports an unsupported-platform error instead of returning a fake empty desktop.
 
-- Это последовательное наблюдение, не атомарный снимок. Окна могут закрыться, а мониторы отключиться во время сбора данных.
-- Невидимые окна и окна самого процесса Tessera исключены. Инструментальные, owned-окна и системные окна могут присутствовать: обнаружение не означает разрешение на управление.
-- Координаты читаются в физических пикселях с временным thread-local DPI-контекстом, который восстанавливается при выходе. `GetWindowRect` включает невидимые границы изменения размера.
-- `covers-monitor` — только геометрическая подсказка, не надёжное определение полноэкранного режима. `cloaked=unknown` означает, что соответствующий запрос DWM не удался.
-- Ошибки чтения отдельных окон записываются в `Warnings`; некоторые повреждённые или исчезнувшие записи пропускаются. Ошибка перечисления или геометрии монитора прерывает наблюдение целиком.
-- Идентификаторы — временные значения системных handles, не постоянные идентификаторы приложений или мониторов для сохранения настроек.
-- Заголовки и классы выводятся с экранированием. Текст ограничен фиксированными буферами: заголовок — до 1023 кодовых единиц UTF-16, класс — до 255; длинные значения могут усекаться.
+- Observation is sequential, not atomic. Windows can close and monitors can disconnect during collection.
+- Invisible windows and windows belonging to the calling process are excluded. Tool, owned, and system windows can appear: observation is not permission to manage them.
+- Coordinates use physical pixels under a temporary thread-local DPI context, restored on exit. `GetWindowRect` includes invisible resize borders.
+- `covers-monitor` is a geometric hint, not a reliable fullscreen classification. `cloaked=unknown` means the DWM query failed.
+- Per-window read failures appear in `Warnings`; some invalid or disappearing records are skipped. Enumeration or monitor-geometry errors abort the observation.
+- Identities contain transient system-handle values. Do not persist them as application or monitor identities.
+- Captions and classes are escaped for terminal output. Fixed buffers limit captions to 1,023 UTF-16 code units and classes to 255; longer values may be truncated.
 
-Используются документированные [EnumWindows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumwindows), [GetWindowRect](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect) и [SetThreadDpiAwarenessContext](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext). Наблюдение не записывает настройки, не сохраняет заголовки в файлы и не запускает приложения.
+The adapter uses documented [EnumWindows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumwindows), [GetWindowRect](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect), and [SetThreadDpiAwarenessContext](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext) APIs. Observation does not write settings, save captions to files, or launch applications.
 
-Некорректная геометрия, повторяющиеся идентификаторы и нехватка места в расчёте раскладки возвращают ошибку без частичного плана. Минимальные размеры реальных приложений и корректное применение плана ещё не реализованы.
+### Verification and limitations
 
-`Cargo.lock` хранится в репозитории. CI проверяет workspace на Linux и Windows, а также минимальную версию Rust на Windows, чтобы проверять и native-код. Windows-тест создаёт контролируемое окно, проверяет его чтение отдельным процессом, экранирование заголовка и неизменность геометрии; после теста окно удаляется. Отдельно проверяются callback panic и восстановление DPI-контекста. Это не проверка полноценной оболочки.
+`Cargo.lock` is committed. CI checks Linux stable, Windows stable, and Windows Rust 1.85 so the minimum supported version also covers native code. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
 
-## Порядок развития
+These checks do not validate a complete shell. Manual Windows 11 testing is still needed for mixed DPI, multiple monitors, windows closing during commands, privilege boundaries, games, the notification area, and recovery.
 
-1. Чистый расчёт раскладки и проверочное приложение без изменения окон.
-2. Наблюдение реальных окон и мониторов Windows, затем безопасное применение плана рядом с Explorer.
-3. Минимальная нативная панель, горячие клавиши и переключение тайлингового/свободного режима.
-4. Рабочие пространства, настройки, правила приложений и взаимодействие мышью.
-5. Изолированный хост с одним полезным плагином; затем заменяемые модули.
-6. Остальные модули окружения и включаемая замена оболочки после проверки восстановления.
+Home and Pro are target editions, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. Shell activation mechanisms have not been selected.
 
-Каждый следующий слой добавляется поверх работающего предыдущего. Первой платформенной целью является Windows 11 x64; другие архитектуры требуют отдельной проверки.
+## Roadmap
 
-## Проверка и ограничения
+1. Pure layout calculation and a side-effect-free demo — implemented.
+2. Real Windows observation — implemented; safe plan application alongside Explorer is next.
+3. A minimal native panel, hotkeys, and tiled/floating mode switching.
+4. Workspaces, settings, application rules, and mouse interaction.
+5. An isolated host with one useful plugin, followed by replaceable modules.
+6. Remaining shell modules and opt-in shell replacement after recovery has been verified.
 
-Тесты доменной модели на Linux полезны, но не подтверждают работу оболочки Windows. Реальные проверки нужны для DPI, нескольких мониторов, закрытия окон во время команды, ограничений привилегий, игр, области уведомлений и восстановления.
+Each layer builds on a working previous layer.
 
-Home/Pro входят в целевые редакции, но штатный [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) в них недоступен. Конкретные механизмы интеграции ещё не выбраны.
+## Architectural references
 
-## Архитектурные ориентиры
+- [komorebi](https://github.com/LGUG2Z/komorebi): window management on top of DWM, separated commands and panels, and reversible changes.
+- [GlazeWM](https://github.com/glzr-io/glazewm): layouts, window rules, and independent panel integration.
 
-- [komorebi](https://github.com/LGUG2Z/komorebi): управление окнами поверх DWM, отделение управляющих команд и подключаемых панелей, обратимые изменения.
-- [GlazeWM](https://github.com/glzr-io/glazewm): раскладки, правила окон и независимая интеграция панели.
+These projects inform separation of responsibilities; their implementations are not copied into Tessera.
 
-Используем проверенные принципы разделения ответственности, а не переносим чужую реализацию. Лицензия Tessera пока не выбрана.
+## Licensing and availability
+
+GPL-3.0-only has been selected. Licensing and community files are being prepared. The repository remains private during early development; public availability is a separate decision.

@@ -1,7 +1,7 @@
-# Доменная модель отдельно от Windows и представления
+# Domain model is separate from Windows and presentation
 
-Tessera разрабатывается на Rust с нативным интерфейсом без обязательного браузерного движка. Правила управления окнами рассчитывают план размещения и не вызывают Windows самостоятельно: применение плана принадлежит платформенному адаптеру, а интерфейс отображает состояние и отправляет команды.
+Tessera is developed in Rust with a native interface and no mandatory browser engine. Window management rules compute a placement plan and do not call Windows themselves: applying the plan belongs to the platform adapter, while the interface displays state and sends commands.
 
-Такой интерфейс позволяет проверять правила без Windows и использовать одну модель из штатного интерфейса и расширений. Цена решения — необходимость явно согласовывать наблюдаемое состояние окон и предложенный план; план не считается фактом до применения и повторного наблюдения.
+This separation makes it possible to test the rules without Windows and to use one model from both the first-party interface and extensions. The cost of this decision is the need to explicitly reconcile observed window state with the proposed plan; the plan is not treated as fact until it is applied and observed again.
 
-Инкапсуляция и композиция обеспечивают объектную модель без искусственных иерархий наследования. Отдельные интерфейсы стратегий, реестры и crates появляются, когда возникает реальная вариативность, а не ради пустого архитектурного каркаса. Инструментарий нативного интерфейса пока не выбран.
+Encapsulation and composition provide an object model without artificial inheritance hierarchies. Separate strategy interfaces, registries, and crates appear when real variation arises, not as empty architectural scaffolding. The tooling for the native interface has not been chosen yet.

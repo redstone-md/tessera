@@ -1,9 +1,9 @@
-# Замена оболочки включается явно и имеет путь восстановления
+# Shell replacement is explicitly enabled and has a recovery path
 
-Целевые системы — поддерживаемые выпуски Windows 11, включая Home и Pro. Tessera в перспективе заменяет оболочку Explorer, но не DWM и не обязана заменять файловый менеджер: Проводник остаётся вариантом по умолчанию, пользователь сможет выбрать другую программу.
+Target systems are supported releases of Windows 11, including Home and Pro. Tessera eventually replaces the Explorer shell, but not the DWM, and does not have to replace the file manager: Explorer remains the default, and the user will be able to choose a different program.
 
-Замена оболочки требует отдельного действия пользователя после режима знакомства. До её включения должны быть проверены восстановление Explorer, аварийный выход и поведение при сбоях; безопасность не должна зависеть от стороннего плагина. Первый рабочий этап развивается рядом с Explorer и не меняет настройки входа в систему.
+Shell replacement requires a separate user action after the onboarding stage. Before it is enabled, Explorer recovery, emergency exit, and failure behavior must be verified; safety must not depend on a third-party plugin. The first working stage evolves alongside Explorer and does not change the sign-in configuration.
 
-[Shell Launcher Microsoft](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) доступен только в Enterprise, Education и IoT Enterprise. Для Home/Pro допустимы необходимые недокументированные интеграции, но только в изолированном платформенном модуле с проверкой совместимости и безопасным отказом; это не обещание одинаковой реализации на всех редакциях. Внедрение кода в Explorer, отключение UAC и запуск всей оболочки с повышенными правами не являются базовым способом интеграции.
+[Microsoft Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is available only in Enterprise, Education, and IoT Enterprise editions. For Home/Pro, the necessary undocumented integrations are acceptable, but only inside an isolated platform module with compatibility checks and safe failure; this is not a promise of identical implementation across all editions. Code injection into Explorer, disabling UAC, and running the whole shell elevated are not the baseline integration approach.
 
-Механизм активации и восстановления пока не реализован. Обновления Windows, запуск выбранного файлового менеджера и возможное повторное появление оболочки Explorer требуют проверки в настоящем Windows-сеансе.
+The activation and recovery mechanism is not yet implemented. Windows updates, launching the chosen file manager, and the possible reappearance of the Explorer shell require verification in a real Windows session.

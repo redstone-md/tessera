@@ -1,9 +1,9 @@
-# Сторонние плагины ограничены независимо от заменяемого интерфейса
+# Third-party plugins are restricted independently of the replaceable interface
 
-Tessera допускает замену визуальных модулей и алгоритмов раскладки сторонними расширениями, но не загрузку произвольных нативных библиотек в доверенное ядро. Системные действия проходят через проверяемые команды; доступ к файлам, сети и другим ресурсам предоставляется отдельными разрешениями.
+Tessera allows third-party extensions to replace visual modules and layout algorithms, but not to load arbitrary native libraries into the trusted core. System actions go through vetted commands; access to files, network, and other resources is granted through separate permissions.
 
-Цена этого решения — расширения не могут произвольно обращаться к Windows или запускать любые команды. Простое разрешение «запускать программы» способно разрушить ограничения песочницы, поэтому будущий интерфейс запуска должен различать утверждённые действия и произвольное выполнение кода. Отдельный процесс сам по себе не является песочницей.
+The cost of this decision is that extensions cannot arbitrarily call Windows or run arbitrary commands. A simple "launch programs" permission can undermine sandbox constraints, so the future launch interface must distinguish approved actions from arbitrary code execution. A separate process is not, by itself, a sandbox.
 
-Реализация хоста должна ограничивать ресурсы расширения, проверять входящие данные и планы размещения, поддерживать отзыв разрешений и деградацию к штатным модулям. Восстановление и аварийное управление не заменяются плагинами. Нативное представление расширений должно проходить через контролируемый интерфейс описания UI и событий, а не давать доступ к системным указателям.
+The host implementation must limit extension resources, validate incoming data and placement plans, support permission revocation, and degrade back to first-party modules. Recovery and emergency handling are not replaced by plugins. Native presentation from extensions must go through a controlled UI and event description interface rather than receiving access to system pointers.
 
-Runtime, формат UI и версия интерфейса расширений ещё не выбраны; песочница и загрузка плагинов пока не реализованы. До выбора runtime необходима проверка модели угроз, включая произвольное выполнение, доступ к данным, зависание и подмену интерфейса разрешений.
+The runtime, UI format, and extension interface version have not been chosen yet; sandboxing and plugin loading are not implemented. Before choosing a runtime, the threat model must be reviewed, including arbitrary execution, data access, hangs, and spoofing of the permission interface.
