@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 //! Win32 observation. All FFI and thread-local DPI state live in this module.
 
 use std::mem::size_of;

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 use crate::error::LayoutError;
 use crate::primitive::Rect;
 use crate::window::{Window, WindowId, WindowMode};

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 //! Encapsulated snapshot and record types. Field storage is private; all
 //! access goes through getters. Portable (no OS types in the public model).
 

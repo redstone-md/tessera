@@ -7,6 +7,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 repository = "https://github.com/redstone-md/tessera"
+license = "GPL-3.0-only"
+readme = "README.md"
 
 [workspace.dependencies]
 tessera-core = { path = "crates/tessera-core" }

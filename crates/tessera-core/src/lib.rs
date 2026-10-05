@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 //! Pure layout domain for the Tessera shell.
 //!
 //! No OS access, no I/O: plain value types with invariants enforced by

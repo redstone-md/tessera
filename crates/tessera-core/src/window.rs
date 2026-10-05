@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 /// How a window participates in the shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WindowMode {

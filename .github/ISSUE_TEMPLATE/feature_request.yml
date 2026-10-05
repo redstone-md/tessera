@@ -1,0 +1,29 @@
+name: Feature proposal
+description: Describe a workflow that Tessera should improve.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English and check the README roadmap and existing issues first.
+        Describe the user problem before proposing implementation details.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful result, including relevant safety or compatibility constraints.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Existing tools, workarounds, or other approaches.

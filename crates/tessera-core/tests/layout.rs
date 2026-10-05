@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 //! Focused integration tests through the public interface only.
 
 use tessera_core::{LayoutError, MainStack, Placement, Rect, Window, WindowId, WindowMode};

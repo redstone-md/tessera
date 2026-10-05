@@ -102,6 +102,16 @@ Each layer builds on a working previous layer.
 
 These projects inform separation of responsibilities; their implementations are not copied into Tessera.
 
-## Licensing and availability
+## Contributing
 
-GPL-3.0-only has been selected. Licensing and community files are being prepared. The repository remains private during early development; public availability is a separate decision.
+English is the project language. Read the [contribution guide](CONTRIBUTING.md) for setup, architecture expectations, tests, and pull requests. Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security concerns according to the [security policy](SECURITY.md), not the normal bug-report process.
+
+The repository remains private during early development. These files prepare it for public OSS collaboration; they do not announce a public release.
+
+## License
+
+Copyright (C) 2026 Tessera contributors.
+
+Tessera source code and documentation are licensed under the **GNU General Public License, version 3 only** (`GPL-3.0-only`). See [LICENSE](LICENSE) for the complete terms. This grant does not include the option to choose a later GPL version.
+
+The software is provided without warranty. Contributors retain their copyrights; third-party dependencies retain their own licenses and notices.

@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible problem in the current implementation.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please write in English and search existing issues first.
+        Do not include credentials, personal data, screenshots, or unredacted desktop captions.
+        For security concerns, follow the [security policy](https://github.com/redstone-md/tessera/blob/main/SECURITY.md) instead.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the command, input, and minimal steps needed to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include a redacted error message if one is available.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit, OS version/build, Rust version, and relevant monitor/DPI details. State whether native behavior was verified on Windows.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted diagnostic output
+      description: Optional. Remove captions, paths, tokens, and unrelated application details.
+      render: text

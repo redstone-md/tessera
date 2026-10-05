@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 use crate::error::LayoutError;
 
 /// An axis-aligned rectangle in physical pixels.

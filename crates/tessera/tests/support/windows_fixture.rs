@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
 #![allow(unsafe_code)]
 
 use std::ptr::{null, null_mut};

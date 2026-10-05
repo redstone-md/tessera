@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
+readme.workspace = true
+description = "Pure geometry and layout domain for the Tessera desktop environment"
 publish = false
 
 [lints]
