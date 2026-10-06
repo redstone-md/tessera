@@ -14,7 +14,12 @@ pub fn run_panel() -> Result<(), Box<dyn std::error::Error>> {
     panel::run()
 }
 
-/// Opens the native dock. A heartbeat name is accepted only from the installed supervisor.
+/// Starts a supervised desktop session, or opens its native UI with the owner's heartbeat.
 pub fn run_desktop(heartbeat: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     panel::run_desktop(heartbeat)
+}
+
+/// Opens the installer's diagnostic UI without taskbar/appbar/Winlogon mutation.
+pub fn run_desktop_diagnostic(heartbeat: &str) -> Result<(), Box<dyn std::error::Error>> {
+    panel::run_desktop_diagnostic(heartbeat)
 }

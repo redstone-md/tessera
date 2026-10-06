@@ -193,6 +193,42 @@ pub enum SurfaceMode {
     Dock,
 }
 
+/// Which native shell surface a window represents.
+///
+/// The parent adapter validates and attaches the window's HWND through the
+/// native crate's `OwnedShellSurface::attach` (via
+/// [`crate::DesktopHost::configure_surface`]); the UI crate never touches
+/// native handles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SurfaceKind {
+    /// Bottom-center MinContent dock bar.
+    #[default]
+    Dock,
+    /// 32px top toolbar.
+    Toolbar,
+    /// Frameless centered icon-grid launcher.
+    Launcher,
+}
+
+/// Genuine identity text the host supplies on observations.
+///
+/// The UI renders these strings verbatim (bounded); it never invents values
+/// when the host reports them absent — the surface simply shows what exists.
+/// The clock text is refreshed only through the low-frequency clock path
+/// (at most once per minute); it is not part of desktop observations.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShellIdentity {
+    /// Display name of the current desktop user, when known.
+    pub user_name: String,
+    /// Native locale clock text, when the host refreshed it.
+    pub clock: String,
+    /// Keyboard layout language, when known.
+    pub language: String,
+    /// Opaque key of the focused window from the last accepted snapshot,
+    /// when it maps to a known eligible observed window.
+    pub focused_window_key: Option<String>,
+}
+
 /// How the host drives the presentation loop.
 ///
 /// `heartbeat`, when supplied, is invoked only on the UI event loop: once

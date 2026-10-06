@@ -11,6 +11,14 @@
 //! original shell before returning to Explorer. [`restore_explorer`] and
 //! [`open_file_manager`] are the explicit recovery/escape paths.
 //!
+//! The developer session path ([`start_desktop_session`] /
+//! [`run_desktop_session`]) owns the reversible taskbar presentation for one
+//! ordinary (non-elevated, non-service) supervisor run: hide only after GUI
+//! readiness, primary monitor only, exact captured restore, event-driven
+//! re-hide, single presentation owner per session. Diagnostics
+//! ([`verify_runtime`], `--verify-heartbeat`) never mutate the taskbar or
+//! appbar state.
+//!
 //! Error dialogs are never shown here: the module returns contextual errors
 //! and the GUI entry point reports them after the Explorer fallback.
 
@@ -19,18 +27,91 @@ pub use error::ShellRuntimeError;
 pub use heartbeat::ShellHeartbeat;
 
 #[cfg(windows)]
+pub use identity::DesktopIdentity;
+#[cfg(windows)]
+pub use surface::{OwnedShellSurface, request_owned_foreground};
+
+/// Native shell surface role, available on all targets for typed host adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellSurfaceKind {
+    /// Floating dock; never reserves the work area.
+    Dock,
+    /// The only appbar surface: a 32-logical-pixel top toolbar.
+    Toolbar,
+    /// Activatable tool window for search.
+    Launcher,
+}
+
+#[cfg(not(windows))]
+pub struct OwnedShellSurface {
+    kind: ShellSurfaceKind,
+}
+
+#[cfg(not(windows))]
+impl OwnedShellSurface {
+    pub fn attach(_handle: isize, _kind: ShellSurfaceKind) -> Result<Self, ShellRuntimeError> {
+        Err(ShellRuntimeError::UnsupportedPlatform)
+    }
+
+    pub fn reserve(&self) -> Result<(), ShellRuntimeError> {
+        Err(ShellRuntimeError::UnsupportedPlatform)
+    }
+
+    pub fn kind(&self) -> ShellSurfaceKind {
+        self.kind
+    }
+}
+
+#[cfg(not(windows))]
+pub fn request_owned_foreground(_handle: isize) -> Result<bool, ShellRuntimeError> {
+    Err(ShellRuntimeError::UnsupportedPlatform)
+}
+
+use crate::apps::ApplicationError;
+#[cfg(windows)]
 use crate::shell_recovery::{OriginalShellState, ShellRecoveryBackup};
+
+#[cfg(not(windows))]
+pub use identity_stub::DesktopIdentity;
+#[cfg(not(windows))]
+mod identity_stub {
+    /// Non-Windows stub: desktop identity requires Windows; never fabricated.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DesktopIdentity {
+        pub user_name: String,
+        pub clock: String,
+        pub language: String,
+        pub foreground_window: Option<tessera_core::WindowId>,
+    }
+}
 
 pub(crate) mod error;
 #[cfg(windows)]
-mod heartbeat;
+pub(crate) mod heartbeat;
 #[cfg(windows)]
 #[allow(unsafe_code)]
-mod supervisor;
+pub(crate) mod supervisor;
 
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub(crate) mod native;
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub(crate) mod identity;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub(crate) mod native_presentation;
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) mod placement;
+#[cfg(any(windows, test))]
+pub(crate) mod session_guard;
+#[cfg(test)]
+#[path = "shell_runtime/session_guard_tests.rs"]
+mod session_guard_tests;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub(crate) mod surface;
 
 /// Verifies the deployment conditions for launching the supervisor:
 /// an active, valid backup exists, and the current executable is the exact
@@ -75,7 +156,7 @@ fn validate_takeover_record(
 
 /// Verifies that the production UI can actually start under the current
 /// unsigned-launch policy: resolves the sibling Tessera.exe, creates the
-/// heartbeat event, spawns the real GUI with `--shell-heartbeat`, waits for
+/// heartbeat event, spawns the real GUI with `--verify-heartbeat`, waits for
 /// the first heartbeat (UI event loop ready) and then a second fresh
 /// heartbeat within the 30-second window (timer retention proof), and
 /// terminates and reaps only the diagnostic child. No backup record or
@@ -162,6 +243,69 @@ pub fn open_task_manager() -> Result<(), ShellRuntimeError> {
     #[cfg(not(windows))]
     {
         Err(ShellRuntimeError::UnsupportedPlatform)
+    }
+}
+
+/// Bootstraps the ordinary desktop session: from the GUI process, spawns the
+/// sibling `tessera-shell.exe` supervisor with
+/// `--desktop-session <absolute-current-GUI-path>` and returns. No
+/// elevation, no shell command, no registry/Winlogon access.
+pub fn start_desktop_session() -> Result<(), ShellRuntimeError> {
+    #[cfg(windows)]
+    {
+        crate::shell_runtime::native::start_desktop_session_impl()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(ShellRuntimeError::UnsupportedPlatform)
+    }
+}
+
+/// Runs the developer session supervisor in-process: owns exactly one GUI
+/// child, watches its heartbeat with the same guarded supervision as
+/// [`run_shell`], reversibly hides the primary-monitor taskbar only after
+/// the GUI readiness pulse, and restores the exact original visibility and
+/// appbar auto-hide state on child exit/crash/timeout/errors. Event-driven
+/// re-hide on taskbar re-creation; no Explorer kill/restart, no services,
+/// no periodic polling, no input hooks. A second presentation owner in this
+/// session is refused without touching the running one.
+pub fn run_desktop_session(gui: &std::path::Path) -> Result<(), ShellRuntimeError> {
+    #[cfg(windows)]
+    {
+        crate::shell_runtime::native::run_desktop_session_impl(gui)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = gui;
+        Err(ShellRuntimeError::UnsupportedPlatform)
+    }
+}
+
+/// Bounded genuine desktop identity for the shell surfaces: user name,
+/// locale clock text, language display name, and the raw-HWND identity of
+/// the eligible foreground window (when any). No simulated telemetry; off
+/// Windows this reports an error instead of fabricated data.
+pub fn desktop_identity() -> Result<DesktopIdentity, ApplicationError> {
+    #[cfg(windows)]
+    {
+        crate::shell_runtime::native::desktop_identity_impl()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(ApplicationError::UnsupportedPlatform)
+    }
+}
+
+/// Current native clock text (user locale, minutes granularity). Reads only
+/// date/time APIs; the UI calls this at most once per minute for clock text.
+pub fn clock_text() -> Result<String, ApplicationError> {
+    #[cfg(windows)]
+    {
+        crate::shell_runtime::native::clock_text_impl()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(ApplicationError::UnsupportedPlatform)
     }
 }
 

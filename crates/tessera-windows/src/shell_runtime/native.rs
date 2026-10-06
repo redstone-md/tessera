@@ -7,7 +7,7 @@ use crate::shell_recovery::native::{read_backup, read_live_shell};
 use crate::shell_recovery::{OriginalShellState, RestoreDecision};
 use crate::shell_runtime::error::ShellRuntimeError;
 use crate::shell_runtime::supervisor::{
-    ChildOutcome, sibling_tessera_exe, supervise, verify_supervision,
+    WaitOutcome, sibling_tessera_exe, spawn_session_child, verify_supervision,
 };
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -97,22 +97,18 @@ pub(crate) fn run_shell_impl() -> Result<(), ShellRuntimeError> {
         }
         return Err(error);
     }
-    // No early returns after validation: every child startup/wait failure recovers.
-    let supervised = sibling_tessera_exe(&supervisor)
-        .ok_or(ShellRuntimeError::UnusablePath {
-            context: "sibling Tessera.exe not found",
-        })
-        .and_then(|child| supervise(&child))
-        .and_then(|outcome| match outcome {
-            ChildOutcome::Exited(0) => Ok(()),
-            ChildOutcome::Exited(code) => Err(ShellRuntimeError::Windows {
-                operation: "GUI exited",
-                code,
-            }),
-            ChildOutcome::HeartbeatTimeout => Err(ShellRuntimeError::HeartbeatViolation {
-                reason: "GUI heartbeat stopped",
-            }),
-        });
+    // No early returns after validation: every child startup/wait failure
+    // recovers. The takeover session shares the guarded presentation engine
+    // (capture-before-hide, readiness-gated hide, exact restore, event-driven
+    // re-hide) with the developer session; the persistent recovery step then
+    // runs as before.
+    let gui = sibling_tessera_exe(&supervisor).ok_or(ShellRuntimeError::UnusablePath {
+        context: "sibling Tessera.exe not found",
+    });
+    let supervised = match gui {
+        Ok(gui) => supervise_session(&gui),
+        Err(error) => Err(error),
+    };
     let restore = perform_restore();
     let explorer = launch_system("explorer.exe", true, &[]);
     supervised.and(restore).and(explorer)
@@ -168,4 +164,150 @@ pub(crate) fn open_file_manager_impl() -> Result<(), ShellRuntimeError> {
 
 pub(crate) fn open_task_manager_impl() -> Result<(), ShellRuntimeError> {
     launch_system("Taskmgr.exe", false, &[])
+}
+
+/// Validates the supervisor for `--desktop-session`: the sibling
+/// `tessera-shell.exe` in this GUI's directory, an absolute existing file.
+/// No shell command, no elevation, no registry access.
+fn owned_session_supervisor(gui: &Path) -> Result<(PathBuf, &'static str), ShellRuntimeError> {
+    let (supervisor, flag) =
+        super::placement::session_command(gui).ok_or(ShellRuntimeError::UnusablePath {
+            context: "current GUI is not an allowed Tessera executable",
+        })?;
+    if !supervisor.is_file() {
+        return Err(ShellRuntimeError::UnusablePath {
+            context: "owned sibling supervisor (tessera-shell.exe)",
+        });
+    }
+    Ok((supervisor, flag))
+}
+
+pub(crate) fn start_desktop_session_impl() -> Result<(), ShellRuntimeError> {
+    // This process is the GUI (parent app adapter calls this seam); the
+    // absolute current GUI path is the validated argument, never a shell
+    // command string.
+    let gui = std::env::current_exe().map_err(|error| ShellRuntimeError::Windows {
+        operation: "resolve current GUI path",
+        code: error.raw_os_error().unwrap_or_default() as u32,
+    })?;
+    if !gui.is_absolute() {
+        return Err(ShellRuntimeError::UnusablePath {
+            context: "current GUI path is relative",
+        });
+    }
+    let (supervisor, flag) = owned_session_supervisor(&gui)?;
+    // The supervisor (tessera-shell.exe) is spawned with
+    // `--desktop-session <absolute-current-GUI-path>`; the GUI never
+    // receives this flag.
+    let _ = Command::new(&supervisor)
+        .arg(flag)
+        .arg(&gui)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| ShellRuntimeError::SpawnFailed {
+            code: error.raw_os_error().unwrap_or_default() as u32,
+        })?;
+    Ok(())
+}
+
+/// Validates the passed GUI for the session run: same folder as this
+/// supervisor, exactly `Tessera.exe` (packaged) or `tessera-desktop.exe`
+/// (developer build), an absolute existing file. An arbitrary path is
+/// refused.
+fn validated_session_gui(gui: &Path, supervisor: &Path) -> Result<PathBuf, ShellRuntimeError> {
+    let expected = super::placement::session_command(gui).map(|(executable, _)| executable);
+    if expected.as_deref() != Some(supervisor) || !gui.is_file() {
+        return Err(ShellRuntimeError::UnusablePath {
+            context: "session GUI is not an allowed same-directory Tessera executable",
+        });
+    }
+    Ok(gui.to_path_buf())
+}
+
+/// The shared guarded session engine for one GUI child (used by both the
+/// takeover session and the developer session): presentation capture,
+/// readiness-gated hide, event-driven re-hide, and stop-reap-then-restore
+/// ordering on every outcome.
+fn supervise_session(gui: &Path) -> Result<(), ShellRuntimeError> {
+    // Both ordinary and persistent paths acquire this before spawning or hiding.
+    let _owner = super::native_presentation::PresentationOwner::acquire()?;
+    let mut guard = super::native_presentation::PresentationGuard::new()?;
+    guard.prepare()?;
+    let event = super::supervisor::SupervisorEvent::create(std::process::id())?;
+    // Declaration order is intentional: RAII reaps child before guard restores.
+    let mut child = spawn_session_child(gui, &event)?;
+    let result = (|| {
+        match child.wait(&event)? {
+            WaitOutcome::Signalled(1) => {}
+            WaitOutcome::Signalled(0) => {
+                return Err(ShellRuntimeError::HeartbeatViolation {
+                    reason: "GUI exited before readiness",
+                });
+            }
+            _ => {
+                return Err(ShellRuntimeError::HeartbeatViolation {
+                    reason: "GUI never pulsed readiness",
+                });
+            }
+        }
+        guard.hide_after_ready()?;
+        let mut last_heartbeat = std::time::Instant::now();
+        // The presentation event is first, so a queued failure is not starved by
+        // heartbeat pulses. It coalesces taskbar changes instead of queueing them.
+        loop {
+            let remaining = std::time::Duration::from_millis(u64::from(
+                super::supervisor::HEARTBEAT_TIMEOUT_MS,
+            ))
+            .saturating_sub(last_heartbeat.elapsed());
+            if remaining.is_zero() {
+                return Err(ShellRuntimeError::HeartbeatViolation {
+                    reason: "GUI heartbeat lost",
+                });
+            }
+            match child.wait_with_presentation(
+                &event,
+                guard.signal_handle(),
+                remaining.as_millis() as u32,
+            )? {
+                WaitOutcome::Signalled(0) => guard.process_signal()?,
+                WaitOutcome::Signalled(1) => {
+                    let code = child.exit_code()?;
+                    return if code == 0 {
+                        Ok(())
+                    } else {
+                        Err(ShellRuntimeError::Windows {
+                            operation: "GUI exited",
+                            code,
+                        })
+                    };
+                }
+                WaitOutcome::Signalled(2) => last_heartbeat = std::time::Instant::now(),
+                _ => {
+                    return Err(ShellRuntimeError::HeartbeatViolation {
+                        reason: "GUI heartbeat lost",
+                    });
+                }
+            }
+        }
+    })();
+    guard.stop_watcher();
+    super::session_guard::finish_session(result, || child.stop(), || guard.restore())
+}
+
+/// Validates the same-directory GUI, then uses the persistent path's session engine.
+pub(crate) fn run_desktop_session_impl(gui: &Path) -> Result<(), ShellRuntimeError> {
+    let supervisor = crate::shell_recovery::native::supervisor_path()?;
+    let gui = validated_session_gui(gui, &supervisor)?;
+    supervise_session(&gui)
+}
+
+pub(crate) fn desktop_identity_impl()
+-> Result<super::identity::DesktopIdentity, crate::apps::ApplicationError> {
+    super::identity::desktop_identity()
+}
+
+pub(crate) fn clock_text_impl() -> Result<String, crate::apps::ApplicationError> {
+    super::identity::clock_text()
 }

@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { Palette } from "std-widgets.slint";
+
+// Seelen default neutral colors, converted from its published OKLCH values.
+// System mode follows the toolkit's resolved native background brightness,
+// rather than treating ColorScheme.unknown as an explicit light theme.
+export global SeelenPalette {
+    in-out property <ColorScheme> color-scheme;
+    out property <bool> dark: self.color-scheme == ColorScheme.dark
+        || (self.color-scheme == ColorScheme.unknown
+            && Palette.background.to-oklch().lightness < 0.5);
+    out property <color> bar: self.dark ? #181818 : #f2f2f2;
+    out property <color> tile: self.dark ? #1f1f1f : #fcfcfc;
+    out property <color> hover: self.dark ? #121212 : #e8e8e8;
+    out property <color> pressed: self.dark ? #0a0a0a : #dcdcdc;
+    out property <color> foreground: self.dark ? #e4e4e4 : #121212;
+    out property <color> secondary: self.dark ? #bababa : #3d3d3d;
+    out property <color> muted: self.dark ? #898989 : #6f6f6f;
+    out property <brush> accent: Palette.accent-background;
+}

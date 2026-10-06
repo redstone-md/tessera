@@ -1,0 +1,98 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+
+// One Seelen-style clickable tile (dock items, launcher tiles, toolbar
+// entries): a rounded rectangle with hover/pressed/focus states and a
+// focusable keyboard handler (Space/Return activate) — the stock
+// StateLayer pattern from the toolkit's own widgets.
+//
+// `clicked` fires only when enabled; disabled tiles dim and reject input.
+// `accessible-role`/label make every tile a real button for the platform's
+// accessibility tree.
+export component TileButton inherits Rectangle {
+    in property <string> accessible-text;
+    in property <bool> enabled: true;
+    in property <length> radius;
+    in property <bool> show-focus-ring: true;
+    /// false renders no idle background (transparent until hover/press).
+    in property <bool> filled: true;
+    callback clicked;
+
+    border-radius: root.radius;
+    background: !root.enabled ? (root.filled ? SeelenPalette.tile : transparent) :
+        touch.pressed ? SeelenPalette.pressed :
+        touch.has-hover ? SeelenPalette.hover :
+        root.filled ? SeelenPalette.tile : transparent;
+    opacity: root.enabled ? 1 : 0.5;
+
+    accessible-role: button;
+    accessible-enabled: root.enabled;
+    accessible-label: root.accessible-text;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+
+    keyboard := FocusScope {
+        // Zero-size: must not react on clicks (only key events); the stock
+        // StateLayer pattern from the toolkit's own widgets.
+        width: 0px;
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    forward-focus: keyboard;
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        forward-focus: keyboard;
+    }
+
+    if root.show-focus-ring && keyboard.has-focus && root.enabled: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: root.radius + 3px;
+        border-width: 1px;
+        border-color: SeelenPalette.accent;
+        accessible-role: none;
+    }
+
+    // Children (icons, glyphs, indicators) render above the state layers.
+    @children
+}
+
+// Genuine host icon when available; a small independent application glyph
+// when icon extraction fails. Missing images never leave invisible buttons.
+export component ApplicationIcon inherits Rectangle {
+    in property <image> source;
+    accessible-role: none;
+    Image {
+        source: root.source;
+        image-fit: ImageFit.contain;
+        accessible-role: none;
+    }
+    if root.source.width == 0 || root.source.height == 0: Rectangle {
+        x: parent.width * 0.15;
+        y: parent.height * 0.15;
+        width: parent.width * 0.7;
+        height: parent.height * 0.7;
+        border-radius: parent.width * 0.1;
+        border-width: 1.5px;
+        border-color: SeelenPalette.secondary;
+        accessible-role: none;
+        Rectangle {
+            x: 2px;
+            y: parent.height * 0.25;
+            width: max(0px, parent.width - 4px);
+            height: 1.5px;
+            background: SeelenPalette.secondary;
+            accessible-role: none;
+        }
+    }
+}

@@ -12,25 +12,36 @@ use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 use super::error::ShellRuntimeError;
-use super::heartbeat::{SupervisorEvent, WaitOutcome, wait_any};
+use super::heartbeat::wait_any;
+pub(crate) use super::heartbeat::{SupervisorEvent, WaitOutcome};
 
-const HEARTBEAT_TIMEOUT_MS: u32 = 30_000;
+pub(crate) const HEARTBEAT_TIMEOUT_MS: u32 = 30_000;
 const CLEANUP_TIMEOUT_MS: u32 = 5_000;
 
-struct OwnedChild {
+pub(crate) struct OwnedChild {
     process: Child,
     finished: bool,
 }
 
+/// The supervisor->GUI heartbeat argument for ordinary session children.
+const SESSION_HEARTBEAT_ARG: &str = "--shell-heartbeat";
+/// The distinct diagnostic argument: a child started with it must never
+/// hide the taskbar, change appbar state, or touch Winlogon.
+const DIAGNOSTIC_HEARTBEAT_ARG: &str = "--verify-heartbeat";
+
 impl OwnedChild {
-    fn spawn(executable: &Path, event: &SupervisorEvent) -> Result<Self, ShellRuntimeError> {
+    fn spawn_with(
+        executable: &Path,
+        event: &SupervisorEvent,
+        heartbeat_arg: &str,
+    ) -> Result<Self, ShellRuntimeError> {
         if !executable.is_absolute() {
             return Err(ShellRuntimeError::UnusablePath {
                 context: "child executable is not absolute",
             });
         }
         let process = Command::new(executable)
-            .arg("--shell-heartbeat")
+            .arg(heartbeat_arg)
             .arg(event.name())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -45,15 +56,34 @@ impl OwnedChild {
         })
     }
 
+    pub(crate) fn spawn(
+        executable: &Path,
+        event: &SupervisorEvent,
+    ) -> Result<Self, ShellRuntimeError> {
+        Self::spawn_with(executable, event, SESSION_HEARTBEAT_ARG)
+    }
+
     fn handle(&self) -> HANDLE {
         self.process.as_raw_handle()
     }
 
-    fn wait(&self, event: &SupervisorEvent) -> Result<WaitOutcome, ShellRuntimeError> {
+    pub(crate) fn wait(&self, event: &SupervisorEvent) -> Result<WaitOutcome, ShellRuntimeError> {
         wait_any(&[self.handle(), event.raw_handle()], HEARTBEAT_TIMEOUT_MS)
     }
 
-    fn exit_code(&mut self) -> Result<u32, ShellRuntimeError> {
+    pub(crate) fn wait_with_presentation(
+        &self,
+        event: &SupervisorEvent,
+        presentation: HANDLE,
+        timeout_ms: u32,
+    ) -> Result<WaitOutcome, ShellRuntimeError> {
+        wait_any(
+            &[presentation, self.handle(), event.raw_handle()],
+            timeout_ms,
+        )
+    }
+
+    pub(crate) fn exit_code(&mut self) -> Result<u32, ShellRuntimeError> {
         let status = self
             .process
             .wait()
@@ -62,17 +92,24 @@ impl OwnedChild {
         Ok(status.code().unwrap_or(1) as u32)
     }
 
-    fn stop(&mut self) -> Result<(), ShellRuntimeError> {
-        self.process
+    pub(crate) fn stop(&mut self) -> Result<(), ShellRuntimeError> {
+        if self.finished {
+            return Ok(());
+        }
+        if matches!(self.process.try_wait(), Ok(Some(_))) {
+            return self.exit_code().map(|_| ());
+        }
+        let killed = self
+            .process
             .kill()
-            .map_err(|error| process_error("stop owned GUI", error))?;
+            .map_err(|error| process_error("stop owned GUI", error));
         // SAFETY: this handle belongs to our live Child and remains owned during the wait.
         let wait = unsafe { WaitForSingleObject(self.handle(), CLEANUP_TIMEOUT_MS) };
         if wait != WAIT_OBJECT_0 {
-            return Err(ShellRuntimeError::Windows {
+            return killed.and(Err(ShellRuntimeError::Windows {
                 operation: "reap owned GUI",
                 code: wait,
-            });
+            }));
         }
         self.exit_code().map(|_| ())
     }
@@ -95,37 +132,11 @@ fn process_error(operation: &'static str, error: std::io::Error) -> ShellRuntime
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChildOutcome {
-    Exited(u32),
-    HeartbeatTimeout,
-}
-
-pub(crate) fn supervise(executable: &Path) -> Result<ChildOutcome, ShellRuntimeError> {
-    let event = SupervisorEvent::create(std::process::id())?;
-    let mut child = OwnedChild::spawn(executable, &event)?;
-    loop {
-        match child.wait(&event)? {
-            WaitOutcome::Signalled(0) => return child.exit_code().map(ChildOutcome::Exited),
-            WaitOutcome::Signalled(1) => {}
-            WaitOutcome::TimedOut => {
-                child.stop()?;
-                return Ok(ChildOutcome::HeartbeatTimeout);
-            }
-            WaitOutcome::Signalled(_) => {
-                return Err(ShellRuntimeError::HeartbeatViolation {
-                    reason: "invalid wait result",
-                });
-            }
-        }
-    }
-}
-
 /// Uses the exact production GUI. No registry/backup reads or writes, and no
 /// Explorer launch: two fresh pulses prove event-loop and timer readiness.
 pub(crate) fn verify_supervision(executable: &Path) -> Result<(), ShellRuntimeError> {
     let event = SupervisorEvent::create(std::process::id())?;
-    let mut child = OwnedChild::spawn(executable, &event)?;
+    let mut child = OwnedChild::spawn_with(executable, &event, DIAGNOSTIC_HEARTBEAT_ARG)?;
     for _ in 0..2 {
         match child.wait(&event)? {
             WaitOutcome::Signalled(1) => {}
@@ -148,4 +159,18 @@ pub(crate) fn verify_supervision(executable: &Path) -> Result<(), ShellRuntimeEr
 pub(crate) fn sibling_tessera_exe(supervisor: &Path) -> Option<PathBuf> {
     let candidate = supervisor.parent()?.join("Tessera.exe");
     candidate.is_file().then_some(candidate)
+}
+
+/// Spawns exactly one session GUI child with the heartbeat argument. Same
+/// single-owned-child invariant as the takeover path; `gui` must be absolute.
+pub(crate) fn spawn_session_child(
+    gui: &Path,
+    event: &SupervisorEvent,
+) -> Result<OwnedChild, ShellRuntimeError> {
+    if !gui.is_absolute() {
+        return Err(ShellRuntimeError::UnusablePath {
+            context: "session GUI path is not absolute",
+        });
+    }
+    OwnedChild::spawn(gui, event)
 }

@@ -17,13 +17,14 @@ pub(crate) struct RowProjection {
     pub(crate) minimized: bool,
 }
 
-/// One launcher row: cleaned application name plus the opaque launch key and
-/// whether the key is currently pinned.
+/// One launcher row: cleaned application name plus the opaque launch key,
+/// whether the key is currently pinned, and the icon pixels to render.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppProjection {
     pub(crate) key: String,
     pub(crate) label: String,
     pub(crate) pinned: bool,
+    pub(crate) icon: Option<crate::PixelIcon>,
 }
 
 /// Maximum number of application rows shown at once.
@@ -111,6 +112,7 @@ pub(crate) fn project_apps(
             key: application.key().to_string(),
             label: sanitize::caption(application.title()),
             pinned: pins.iter().any(|pin| pin == application.key()),
+            icon: application.icon().cloned(),
         })
         .collect()
 }

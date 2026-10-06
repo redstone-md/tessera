@@ -12,7 +12,7 @@ mod desktop {
     use parking_lot::Mutex;
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
-        PixelIcon, RunOptions, SurfaceMode, SystemAction,
+        PixelIcon, RunOptions, ShellIdentity, SurfaceKind, SurfaceMode, SystemAction,
     };
     use tessera_windows::{ActivationTarget, Application, IconPixels};
 
@@ -25,17 +25,64 @@ mod desktop {
         failed: bool,
     }
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Presentation {
+        Utility,
+        Desktop,
+        Diagnostic,
+    }
+
+    struct CachedWindowIcon {
+        checked: Instant,
+        pixels: Option<PixelIcon>,
+    }
+
     struct AppHost {
         targets: Mutex<HashMap<String, ActivationTarget>>,
         catalog: Mutex<Option<CatalogCache>>,
         settings: Option<SettingsStore>,
+        presentation: Presentation,
+        window_icons: Mutex<HashMap<String, CachedWindowIcon>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
         PixelIcon::new(pixels.width(), pixels.height(), pixels.rgba().to_vec())
     }
 
+    fn native_window_handle(window: &slint::Window) -> Result<std::num::NonZeroIsize, String> {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let handle = window.window_handle();
+        let native = handle.window_handle().map_err(|error| error.to_string())?;
+        match native.as_raw() {
+            RawWindowHandle::Win32(native) => Ok(native.hwnd),
+            _ => Err("The desktop surface is not a native Windows window".into()),
+        }
+    }
+
     impl AppHost {
+        // WinEvent bursts must not repeat synchronous icon extraction for
+        // every retained window. Cache bounded identities, not HWNDs alone.
+        fn window_icon(&self, key: &str, target: ActivationTarget) -> Option<PixelIcon> {
+            const LIMIT: usize = 256;
+            let mut icons = self.window_icons.lock();
+            if let Some(cached) = icons.get(key) {
+                if cached.checked.elapsed() < Duration::from_secs(300) {
+                    return cached.pixels.clone();
+                }
+            } else if icons.len() >= LIMIT {
+                return None;
+            }
+            let pixels = tessera_windows::window_icon(target).as_ref().and_then(icon);
+            icons.insert(
+                key.to_owned(),
+                CachedWindowIcon {
+                    checked: Instant::now(),
+                    pixels: pixels.clone(),
+                },
+            );
+            pixels
+        }
+
         // COM catalog/icon work stays on the observation worker and is cached independently
         // of cheap desktop notifications. Failures cannot take away window switching.
         fn applications(&self) -> (Vec<PanelApplication>, bool) {
@@ -73,19 +120,33 @@ mod desktop {
     impl DesktopHost for AppHost {
         fn observe(&self) -> Result<PanelSnapshot, String> {
             let snapshot = tessera_windows::observe().map_err(|error| error.to_string())?;
-            let mut targets = HashMap::new();
-            let mut windows = Vec::new();
-            for window in snapshot.windows() {
-                if let Some(target) = ActivationTarget::from_window(window) {
-                    // Snapshot-local identity is never a persisted application pin.
-                    let key = format!("{}:{}", target.window_id().value(), target.process_id());
-                    targets.insert(key.clone(), target);
-                    let row = PanelWindow::new(key, window.title().to_owned(), window.minimized());
-                    windows.push(
-                        row.with_icon(tessera_windows::window_icon(target).as_ref().and_then(icon)),
-                    );
-                }
-            }
+            let candidates: Vec<_> = snapshot
+                .windows()
+                .iter()
+                .filter_map(|window| {
+                    ActivationTarget::from_window(window).map(|target| {
+                        // Snapshot-local identity is never a persisted application pin.
+                        let key = format!("{}:{}", target.window_id().value(), target.process_id());
+                        (key, target, window)
+                    })
+                })
+                .collect();
+            let targets = candidates
+                .iter()
+                .map(|(key, target, _)| (key.clone(), *target))
+                .collect::<HashMap<_, _>>();
+            // Free closed identities before extracting icons for newly opened windows.
+            self.window_icons
+                .lock()
+                .retain(|key, _| targets.contains_key(key));
+            let windows = candidates
+                .into_iter()
+                .map(|(key, target, window)| {
+                    let pixels = self.window_icon(&key, target);
+                    PanelWindow::new(key, window.title().to_owned(), window.minimized())
+                        .with_icon(pixels)
+                })
+                .collect();
             *self.targets.lock() = targets;
             let (applications, catalog_failed) = self.applications();
             let mut view = PanelSnapshot::new(
@@ -108,7 +169,7 @@ mod desktop {
                         && !window.maximized()
                         && ActivationTarget::from_window(window).is_some()
                 });
-                let area = primary.work_area();
+                let area = primary.bounds();
                 if let Some(context) =
                     DockContext::new(area.x(), area.y(), area.width(), area.height(), fullscreen)
                 {
@@ -116,6 +177,59 @@ mod desktop {
                 }
             }
             Ok(view)
+        }
+
+        fn shell_identity(&self) -> Result<ShellIdentity, String> {
+            let identity =
+                tessera_windows::desktop_identity().map_err(|error| error.to_string())?;
+            let focused_window_key = self
+                .targets
+                .lock()
+                .iter()
+                .find(|(_, target)| Some(target.window_id()) == identity.foreground_window)
+                .map(|(key, _)| key.clone());
+            Ok(ShellIdentity {
+                user_name: identity.user_name,
+                clock: identity.clock,
+                language: identity.language,
+                focused_window_key,
+            })
+        }
+
+        fn clock_text(&self) -> Result<String, String> {
+            tessera_windows::clock_text().map_err(|error| error.to_string())
+        }
+
+        fn configure_surface(
+            &self,
+            kind: SurfaceKind,
+            window: &slint::Window,
+        ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+            if self.presentation != Presentation::Desktop {
+                return Ok(None);
+            }
+            let handle = native_window_handle(window)?;
+            let kind = match kind {
+                SurfaceKind::Dock => tessera_windows::ShellSurfaceKind::Dock,
+                SurfaceKind::Toolbar => tessera_windows::ShellSurfaceKind::Toolbar,
+                SurfaceKind::Launcher => tessera_windows::ShellSurfaceKind::Launcher,
+            };
+            let lease = tessera_windows::OwnedShellSurface::attach(handle.get(), kind)
+                .map_err(|error| error.to_string())?;
+            Ok(Some(Box::new(lease)))
+        }
+
+        fn request_ui_focus(&self, window: &slint::Window) -> Result<(), String> {
+            if self.presentation != Presentation::Desktop {
+                return Ok(());
+            }
+            let handle = native_window_handle(window)?;
+            match tessera_windows::request_owned_foreground(handle.get())
+                .map_err(|error| error.to_string())?
+            {
+                true => Ok(()),
+                false => Err("Windows declined activation; click the window to focus it".into()),
+            }
         }
 
         fn activate(&self, key: &str) -> Result<(), String> {
@@ -140,6 +254,12 @@ mod desktop {
         }
 
         fn system_action(&self, action: SystemAction) -> Result<(), String> {
+            if action == SystemAction::RestoreExplorer && self.presentation != Presentation::Utility
+            {
+                // The independent owner restores taskbar presentation and, in
+                // sign-in-shell mode, the original registry value after GUI exit.
+                return slint::quit_event_loop().map_err(|error| error.to_string());
+            }
             match action {
                 SystemAction::OpenFileManager => tessera_windows::open_file_manager(),
                 SystemAction::OpenTaskManager => tessera_windows::open_task_manager(),
@@ -182,7 +302,7 @@ mod desktop {
     }
 
     pub(super) fn run(
-        surface: SurfaceMode,
+        presentation: Presentation,
         heartbeat: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (settings, preferences, notice) = match SettingsStore::for_current_user() {
@@ -230,13 +350,22 @@ mod desktop {
             targets: Mutex::new(HashMap::new()),
             catalog: Mutex::new(None),
             settings,
+            presentation,
+            window_icons: Mutex::new(HashMap::new()),
         };
         tessera_ui::run(
             host,
             PanelPreferences::new(theme, preferences.compact())
                 .with_dock(edge, preferences.pinned_apps().to_vec()),
             notice,
-            RunOptions { surface, heartbeat },
+            RunOptions {
+                surface: if presentation == Presentation::Utility {
+                    SurfaceMode::Panel
+                } else {
+                    SurfaceMode::Dock
+                },
+                heartbeat,
+            },
         )?;
         Ok(())
     }
@@ -244,12 +373,20 @@ mod desktop {
 
 #[cfg(windows)]
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    desktop::run(tessera_ui::SurfaceMode::Panel, None)
+    desktop::run(desktop::Presentation::Utility, None)
 }
 
 #[cfg(windows)]
 pub(crate) fn run_desktop(heartbeat: Option<&str>) -> Result<(), Box<dyn Error>> {
-    desktop::run(tessera_ui::SurfaceMode::Dock, heartbeat)
+    match heartbeat {
+        Some(event) => desktop::run(desktop::Presentation::Desktop, Some(event)),
+        None => tessera_windows::start_desktop_session().map_err(Into::into),
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn run_desktop_diagnostic(heartbeat: &str) -> Result<(), Box<dyn Error>> {
+    desktop::run(desktop::Presentation::Diagnostic, Some(heartbeat))
 }
 
 #[cfg(not(windows))]
@@ -259,5 +396,10 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
 
 #[cfg(not(windows))]
 pub(crate) fn run_desktop(_heartbeat: Option<&str>) -> Result<(), Box<dyn Error>> {
+    run()
+}
+
+#[cfg(not(windows))]
+pub(crate) fn run_desktop_diagnostic(_heartbeat: &str) -> Result<(), Box<dyn Error>> {
     run()
 }

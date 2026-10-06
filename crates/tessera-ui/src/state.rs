@@ -14,7 +14,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use slint::invoke_from_event_loop;
 
-use crate::{DesktopHost, MAX_PINS, PanelApplication, PanelPreferences, PanelSnapshot, sanitize};
+use crate::{
+    DesktopHost, DockContext, MAX_PINS, PanelApplication, PanelPreferences, PanelSnapshot, sanitize,
+};
 
 type Host = dyn DesktopHost;
 
@@ -37,6 +39,12 @@ pub(crate) struct SurfaceCore {
     dirty: Mutex<bool>,
     /// UI-thread routes installed by the surface controller.
     routes: Mutex<Option<Routes>>,
+    /// A Send-safe signal containing only the weak component handle.
+    apply_route: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Single-flight completion waiting for its UI-thread component callback.
+    pending_observation: Mutex<Option<Result<PanelSnapshot, String>>>,
+    /// Last host-reported identity text; refreshed with each observation.
+    identity: Mutex<crate::ShellIdentity>,
 }
 
 /// Surface-owned UI-thread hooks: whether a worker is running right now, and
@@ -84,6 +92,9 @@ impl SurfaceCore {
             applied_dock_edge: Mutex::new(preferences.dock_edge()),
             dirty: Mutex::new(false),
             routes: Mutex::new(None),
+            apply_route: Mutex::new(None),
+            pending_observation: Mutex::new(None),
+            identity: Mutex::new(crate::ShellIdentity::default()),
         });
         // One passive subscription; a failure degrades to manual refresh.
         let guard = match host.subscribe(core.notification_callback()) {
@@ -101,10 +112,37 @@ impl SurfaceCore {
         (core, guard)
     }
 
-    /// Installs the surface's UI-thread routes. Must be called on the UI
-    /// thread before any notification can arrive.
+    /// Installs the surface's UI-thread routes before its first refresh.
+    /// Notifications received earlier remain dirty for one follow-up refresh.
     pub(crate) fn install_routes(&self, routes: Routes) {
         *self.routes.lock() = Some(routes);
+    }
+
+    /// Installs the UI-thread observation-completion route. Must be called
+    /// on the UI thread before any worker can finish.
+    pub(crate) fn install_apply_route(&self, route: Arc<dyn Fn() + Send + Sync>) {
+        *self.apply_route.lock() = Some(route);
+    }
+
+    /// Store one single-flight result, then signal its UI-thread callback.
+    /// No controller, component state or native lease enters the worker closure.
+    pub(crate) fn apply_observation(self: &Arc<Self>, result: Result<PanelSnapshot, String>) {
+        *self.pending_observation.lock() = Some(result);
+        if let Some(route) = self.apply_route.lock().clone() {
+            let dispatched = invoke_from_event_loop({
+                let route = Arc::clone(&route);
+                move || route()
+            });
+            if dispatched.is_err() {
+                // A weak component refuses upgrades from a different thread.
+                // Direct delivery is useful only for same-thread startup errors.
+                route();
+            }
+        }
+    }
+
+    pub(crate) fn take_observation(&self) -> Option<Result<PanelSnapshot, String>> {
+        self.pending_observation.lock().take()
     }
 
     /// Builds the watcher callback. Out-of-context notifications are
@@ -115,22 +153,29 @@ impl SurfaceCore {
         Arc::new(move || core.clone().notify_from_watcher())
     }
 
-    /// Called from a watcher thread: hands one notification to the UI thread.
-    /// Without an event loop (tests, pre-loop startup) the notification is
-    /// applied directly on the calling thread; coalescing behavior is the same.
+    /// Pre-route notifications mark dirty at arrival, before queued delivery.
+    /// Once routes exist, marshal to the UI thread; a missing dispatcher falls
+    /// back to the same coalescing path without moving any component handles.
     fn notify_from_watcher(self: Arc<Self>) {
+        if self.routes.lock().is_none() {
+            *self.dirty.lock() = true;
+            return;
+        }
         let dispatched = invoke_from_event_loop({
             let core = Arc::clone(&self);
-            move || {
-                if let Some(routes) = core.routes.lock().clone() {
-                    core.notify_on_ui_thread(&routes);
-                }
-            }
+            move || core.dispatch_notification()
         });
-        if dispatched.is_err()
-            && let Some(routes) = self.routes.lock().clone()
-        {
+        if dispatched.is_err() {
+            self.dispatch_notification();
+        }
+    }
+
+    fn dispatch_notification(&self) {
+        let routes = self.routes.lock().clone();
+        if let Some(routes) = routes {
             self.notify_on_ui_thread(&routes);
+        } else {
+            *self.dirty.lock() = true;
         }
     }
 
@@ -161,6 +206,13 @@ impl SurfaceCore {
 
     pub(crate) fn retained_snapshot(&self) -> Option<PanelSnapshot> {
         self.snapshot.lock().clone()
+    }
+
+    pub(crate) fn dock_context(&self) -> Option<DockContext> {
+        self.snapshot
+            .lock()
+            .as_ref()
+            .and_then(PanelSnapshot::dock_context)
     }
 
     pub(crate) fn store_snapshot(&self, snapshot: PanelSnapshot) {
@@ -194,6 +246,35 @@ impl SurfaceCore {
 
     pub(crate) fn pin_capacity_full(&self, pins: &[String]) -> bool {
         pins.len() >= MAX_PINS
+    }
+
+    /// Refreshes identity from the host (best-effort: an error keeps the
+    /// previous text; only bounded genuine values are stored).
+    pub(crate) fn refresh_identity(&self) {
+        let identity = self
+            .host
+            .shell_identity()
+            .unwrap_or_else(|_| self.identity.lock().clone());
+        *self.identity.lock() = crate::ShellIdentity {
+            user_name: sanitize::bounded_text(&identity.user_name, 64),
+            clock: sanitize::bounded_text(&identity.clock, 64),
+            language: sanitize::bounded_text(&identity.language, 32),
+            focused_window_key: identity.focused_window_key,
+        };
+    }
+
+    pub(crate) fn identity(&self) -> crate::ShellIdentity {
+        self.identity.lock().clone()
+    }
+
+    /// Explicit clock-only refresh (timer path, at most once per minute);
+    /// never queries windows, foreground, or any other identity input.
+    pub(crate) fn refresh_clock(&self) -> Option<String> {
+        self.host.clock_text().ok().map(|clock| {
+            let clock = sanitize::bounded_text(&clock, 64);
+            self.identity.lock().clock = clock.clone();
+            clock
+        })
     }
 
     pub(crate) fn host(&self) -> &Arc<Host> {
@@ -300,6 +381,27 @@ mod tests {
         assert!(core.take_dirty());
         assert!(!core.take_dirty());
         assert!(core.pin_capacity_full(&vec!["a".to_string(); MAX_PINS]));
+    }
+
+    #[test]
+    fn notifications_before_routes_survive_as_one_follow_up() {
+        let mut error = None;
+        let (core, _guard) = SurfaceCore::new(CoalesceHost::counting(), &preferences(), &mut error);
+        // Subscription can deliver a burst before UI construction completes.
+        for _ in 0..3 {
+            core.clone().notify_from_watcher();
+        }
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let requested = Arc::clone(&refreshes);
+        core.install_routes(Routes {
+            is_refreshing: Arc::new(|| true),
+            start_refresh: Arc::new(move || {
+                requested.fetch_add(1, Ordering::SeqCst);
+            }),
+        });
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+        assert!(core.take_dirty());
+        assert!(!core.take_dirty());
     }
 
     #[test]

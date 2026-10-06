@@ -32,6 +32,9 @@ pub enum ShellRuntimeError {
     UnusablePath { context: &'static str },
     /// A value could not be decoded as bounded UTF-16.
     InvalidUtf16 { context: &'static str },
+    /// Another presentation owner already runs for this user/session. The
+    /// existing owner is left untouched; nothing was hidden or restored.
+    PresentationOwnerBusy,
 }
 
 impl fmt::Display for ShellRuntimeError {
@@ -58,6 +61,10 @@ impl fmt::Display for ShellRuntimeError {
             }
             Self::UnusablePath { context } => write!(f, "path unusable: {context}"),
             Self::InvalidUtf16 { context } => write!(f, "value at `{context}` is not valid UTF-16"),
+            Self::PresentationOwnerBusy => write!(
+                f,
+                "another presentation owner already runs in this session; nothing was changed"
+            ),
         }
     }
 }

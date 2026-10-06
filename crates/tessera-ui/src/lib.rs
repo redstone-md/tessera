@@ -14,13 +14,17 @@
 
 #![deny(unsafe_code)]
 
-mod controller;
-mod dock;
-mod dto;
-mod icons;
-mod projection;
-mod sanitize;
-mod state;
+pub(crate) mod controller;
+pub(crate) mod dock;
+pub(crate) mod dto;
+pub(crate) mod icons;
+pub(crate) mod projection;
+// Renderer-backed tests: test-only (they need the software renderer and the
+// testing backend's element introspection; see build.rs debug info).
+#[cfg(test)]
+mod render_tests;
+pub(crate) mod sanitize;
+pub(crate) mod state;
 
 // Slint owns its generated code; handwritten presentation remains safe Rust.
 #[allow(unsafe_code)]
@@ -30,8 +34,8 @@ mod generated {
 use generated::Panel;
 
 pub use dto::{
-    DockContext, DockEdge, MAX_PINS, PanelApplication, PixelIcon, RunOptions, SurfaceMode,
-    SystemAction,
+    DockContext, DockEdge, MAX_PINS, PanelApplication, PixelIcon, RunOptions, ShellIdentity,
+    SurfaceKind, SurfaceMode, SystemAction,
 };
 
 /// Preferred color scheme for the panel.
@@ -62,6 +66,15 @@ pub(crate) fn theme_from_index(index: i32) -> Theme {
     }
 }
 
+/// Maps the UI's system-action combo index (0..=2) to the dispatched action.
+pub(crate) fn system_action_from_index(index: i32) -> SystemAction {
+    match index {
+        1 => SystemAction::OpenTaskManager,
+        2 => SystemAction::RestoreExplorer,
+        _ => SystemAction::OpenFileManager,
+    }
+}
+
 /// Maps a [`DockEdge`] to the dock combo box row index (Bottom, Top, Left, Right).
 pub(crate) fn dock_edge_to_index(edge: DockEdge) -> i32 {
     match edge {
@@ -69,15 +82,6 @@ pub(crate) fn dock_edge_to_index(edge: DockEdge) -> i32 {
         DockEdge::Top => 1,
         DockEdge::Left => 2,
         DockEdge::Right => 3,
-    }
-}
-
-/// Maps the UI's system-action combo index (0..=2) to the dispatched action.
-pub(crate) fn system_action_from_index(index: i32) -> SystemAction {
-    match index {
-        1 => SystemAction::OpenTaskManager,
-        2 => SystemAction::RestoreExplorer,
-        _ => SystemAction::OpenFileManager,
     }
 }
 
@@ -91,23 +95,62 @@ pub(crate) fn dock_edge_from_index(index: i32) -> DockEdge {
     }
 }
 
-/// Starts the UI-thread heartbeat, if the host supplied one: one queued
-/// invocation right after the surface shows, then a two-second repeated Slint
-/// timer owned by the caller. The timer is retained until `run` returns so the
-/// watchdog never fires into a dropped loop; it never observes the desktop.
-pub(crate) fn start_heartbeat(run_options: &RunOptions) -> Option<slint::Timer> {
-    let heartbeat = run_options.heartbeat.clone()?;
-    // Queued first tick: it runs once the event loop is spinning, right
-    // after the surface has been shown.
-    let initial = std::sync::Arc::clone(&heartbeat);
-    let _ = slint::invoke_from_event_loop(move || initial());
+/// Retained heartbeat control: pulses only once the surface startup is
+/// provably ready (valid real geometry, shown windows, attached leases), then
+/// keeps the two-second repeated timer alive until `run` returns so the
+/// watchdog never fires into a dropped loop. It never observes the desktop.
+pub(crate) struct Heartbeat {
+    closure: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    timer: slint::Timer,
+}
+
+impl Heartbeat {
+    /// Builds an unarmed heartbeat; without [`Heartbeat::arm`] nothing is
+    /// ever pulsed (a failed startup exits cleanly and silently).
+    pub(crate) fn unarmed(run_options: &RunOptions) -> Self {
+        Self {
+            closure: run_options.heartbeat.clone(),
+            timer: slint::Timer::default(),
+        }
+    }
+
+    /// Queues one heartbeat tick right away (it drains as soon as the event
+    /// loop spins, i.e. directly after the surfaces are shown) and starts the
+    /// two-second repeated timer. Idempotent: a second call does nothing.
+    pub(crate) fn arm(&mut self) {
+        if let Some(heartbeat) = self.closure.take() {
+            let initial = std::sync::Arc::clone(&heartbeat);
+            // Queued first tick: runs once the event loop is spinning, right
+            // after the surfaces have been shown.
+            let _ = slint::invoke_from_event_loop(move || initial());
+            self.timer.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_secs(2),
+                move || heartbeat(),
+            );
+        }
+    }
+}
+
+/// Starts the clock-only timer: at most one tick per minute, each tick
+/// refreshing only the clock text through [`DesktopHost::clock_text`] (never
+/// windows, foreground, or accent). Retained until `run` returns.
+pub(crate) fn start_clock_timer(
+    core: &std::sync::Arc<crate::state::SurfaceCore>,
+    sink: std::sync::Arc<dyn Fn(String) + Send + Sync>,
+) -> slint::Timer {
+    let core = std::sync::Arc::clone(core);
     let timer = slint::Timer::default();
     timer.start(
         slint::TimerMode::Repeated,
-        std::time::Duration::from_secs(2),
-        move || heartbeat(),
+        std::time::Duration::from_secs(60),
+        move || {
+            if let Some(clock) = core.refresh_clock() {
+                sink(clock);
+            }
+        },
     );
-    Some(timer)
+    timer
 }
 
 /// Panel appearance preferences, persisted by the host on explicit save.
@@ -300,6 +343,52 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<Option<Box<dyn Send>>, String> {
         Ok(None)
     }
+
+    /// Refreshes only the clock text. Called on the UI thread by the
+    /// low-frequency clock timer (at most once per minute); it must never
+    /// observe windows, foreground state, or anything else — one cheap
+    /// display-only query, not desktop polling.
+    fn clock_text(&self) -> Result<String, String> {
+        Ok(String::new())
+    }
+
+    /// Attaches one shown UI window to its native shell surface.
+    ///
+    /// Called on the main UI thread after the window is shown and native
+    /// window creation completed — for the bars once real monitor geometry
+    /// is applied (never with a provisional/default rect), for the launcher
+    /// on each show. The default returns no lease and performs no native
+    /// action (the developer Panel mode and diagnostics hosts); `None` is
+    /// a success answer for such hosts. A production adapter converts the
+    /// window handle, validates it as an owned live surface, attaches it
+    /// (tool-window styling: the bars no-activate, the launcher activatable;
+    /// toolbar work-area reservation when available), and returns a
+    /// lease the UI retains until the attachment must end (before hide,
+    /// before a changed-geometry re-reservation, before HWND close). An
+    /// `Err` terminates the UI session so its supervisor can restore Explorer.
+    fn configure_surface(
+        &self,
+        _kind: SurfaceKind,
+        _window: &slint::Window,
+    ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+        Ok(None)
+    }
+
+    /// Requests foreground for a user-opened launcher/settings window only.
+    ///
+    /// Windows may refuse activation; the adapter must respect that decision
+    /// without synthetic input or focus-policy workarounds. Bars never call it.
+    fn request_ui_focus(&self, _window: &slint::Window) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Bounded genuine identity sample on successful observation application
+    /// (UI thread). May read the foreground identity, but must not rescan the
+    /// desktop/catalog or mutate system state. The minute timer uses only
+    /// [`DesktopHost::clock_text`], never this method.
+    fn shell_identity(&self) -> Result<ShellIdentity, String> {
+        Ok(ShellIdentity::default())
+    }
 }
 
 /// Opens the requested surface and runs the UI event loop until it closes.
@@ -312,7 +401,15 @@ pub trait DesktopHost: Send + Sync + 'static {
 /// explicit Save. `startup_notice`, when present, is shown as a plain notice
 /// at the top of the launcher panel. One desktop-change subscription is
 /// created; a subscription failure just leaves manual refresh as the update
-/// path. In dock mode the loop runs until the strip's explicit Exit button.
+/// path.
+///
+/// In dock mode the loop runs until explicit Exit or a bar close request.
+/// The heartbeat pulses only once startup is provably ready — a successful
+/// initial observation with real monitor bounds and both bar leases attached.
+/// Setup failure exits for immediate Explorer restoration; geometry that
+/// never arrives reaches the supervisor's startup timeout. The readiness
+/// pulse routes through the panel's `readiness-pulse` callback (the heartbeat
+/// is UI-thread-only; the observation route is Send).
 ///
 /// This must be called on the UI main thread.
 pub fn run(
@@ -321,10 +418,41 @@ pub fn run(
     startup_notice: Option<String>,
     run_options: RunOptions,
 ) -> Result<(), slint::PlatformError> {
+    #[cfg(windows)]
+    if run_options.surface == SurfaceMode::Dock {
+        // The hook runs before native creation; titles are not available yet.
+        // User-opened windows request activation explicitly through the host.
+        slint::BackendSelector::new()
+            .backend_name("winit".into())
+            .with_winit_window_attributes_hook(nonactivating_window_attributes)
+            .select()?;
+    }
     controller::run(
         std::sync::Arc::new(host),
         preferences,
         startup_notice,
         run_options,
     )
+}
+
+#[cfg(any(windows, test))]
+fn nonactivating_window_attributes(
+    attributes: slint::winit_030::winit::window::WindowAttributes,
+) -> slint::winit_030::winit::window::WindowAttributes {
+    attributes.with_active(false)
+}
+
+#[cfg(test)]
+mod activation_tests {
+    #[test]
+    fn first_native_show_is_nonactivating_without_changing_surface_options() {
+        let attributes = slint::winit_030::winit::window::WindowAttributes::default()
+            .with_active(true)
+            .with_visible(false)
+            .with_transparent(true);
+        let attributes = super::nonactivating_window_attributes(attributes);
+        assert!(!attributes.active);
+        assert!(!attributes.visible);
+        assert!(attributes.transparent);
+    }
 }

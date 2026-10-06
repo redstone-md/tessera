@@ -4,6 +4,9 @@
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 
 export { Dock, DockApp, DockWindow, DockStatus } from "dock.slint";
+export { SeelenPalette } from "palette.slint";
+export { Toolbar } from "toolbar.slint";
+export { Launcher, LaunchTile } from "launcher.slint";
 // Re-export the style Palette global so Rust can drive the dock strip's
 // scheme from the panel's live preview without a second settings surface.
 export { Palette } from "std-widgets.slint";
@@ -55,9 +58,13 @@ export component Panel inherits Window {
     callback pin-toggle-requested(string /* key */, bool /* pinned */);
     callback system-action-requested(int /* action */);
     callback save-preferences-requested();
-    // Fires whenever the live theme preview changes, so the dock strip can
-    // follow the panel's Palette without a second settings surface.
-    callback theme-changed();
+    // A shared live appearance preview updates every surface without Save.
+    callback appearance-changed();
+    // The one-shot dock-mode readiness pulse: `run` wires this to the
+    // supervisor heartbeat armer on the UI thread (the heartbeat is not
+    // Send, so the Send observation route reaches it only through here).
+    callback readiness-pulse();
+    callback observation-result-ready();
 
     // Live preview: only explicit Save persists through the host. The
     // two-way binding keeps the user's choice while propagating to Palette.
@@ -66,8 +73,10 @@ export component Panel inherits Window {
         root.theme-index == 2 ? ColorScheme.dark : ColorScheme.unknown;
     changed theme-derived => {
         color-scheme = theme-derived;
-        root.theme-changed();
+        root.appearance-changed();
     }
+    changed compact => { root.appearance-changed(); }
+    changed dock-edge-index => { root.appearance-changed(); }
 
     property <length> row-height: root.compact ? 24px : 32px;
     property <length> gap: root.compact ? 6px : 12px;

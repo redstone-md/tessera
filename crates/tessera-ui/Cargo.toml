@@ -13,11 +13,15 @@ publish = false
 slint.workspace = true
 parking_lot.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+slint = { workspace = true, features = ["unstable-winit-030"] }
+
 [build-dependencies]
 slint-build.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
+slint = { workspace = true, features = ["unstable-winit-030"] }
 
 [lints]
 workspace = true

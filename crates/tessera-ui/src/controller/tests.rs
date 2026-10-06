@@ -38,6 +38,9 @@ struct FixtureHost {
     system_result: Mutex<Result<(), String>>,
     subscription_result: Mutex<Result<bool, String>>,
     subscription_calls: AtomicUsize,
+    ui_focus_calls: AtomicUsize,
+    ui_focus_result: Mutex<Result<(), String>>,
+    lease_drops: Arc<AtomicUsize>,
 }
 
 impl FixtureHost {
@@ -58,6 +61,9 @@ impl FixtureHost {
             system_result: Mutex::new(Ok(())),
             subscription_result: Mutex::new(Ok(true)),
             subscription_calls: AtomicUsize::new(0),
+            ui_focus_calls: AtomicUsize::new(0),
+            ui_focus_result: Mutex::new(Ok(())),
+            lease_drops: Arc::default(),
         })
     }
 
@@ -99,6 +105,31 @@ impl DesktopHost for FixtureHost {
         self.subscription_calls.fetch_add(1, Ordering::SeqCst);
         let available = self.subscription_result.lock().clone();
         available.map(|available| available.then_some(Box::new(()) as Box<dyn Send>))
+    }
+
+    fn configure_surface(
+        &self,
+        _kind: SurfaceKind,
+        _window: &slint::Window,
+    ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+        struct Lease {
+            dropped: Arc<AtomicUsize>,
+            _ui_thread: Rc<()>,
+        }
+        impl Drop for Lease {
+            fn drop(&mut self) {
+                self.dropped.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        Ok(Some(Box::new(Lease {
+            dropped: Arc::clone(&self.lease_drops),
+            _ui_thread: Rc::new(()),
+        })))
+    }
+
+    fn request_ui_focus(&self, _window: &slint::Window) -> Result<(), String> {
+        self.ui_focus_calls.fetch_add(1, Ordering::SeqCst);
+        self.ui_focus_result.lock().clone()
     }
 }
 
@@ -181,6 +212,21 @@ fn workers_are_single_flight_recover_from_errors_and_do_not_retain_closed_window
     worker.join().unwrap();
 
     let failed = failed_panel.as_weak();
+    let retry_core = Arc::clone(&retry.core);
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&ticks);
+    let heartbeat = Rc::new(RefCell::new(crate::Heartbeat::unarmed(
+        &crate::RunOptions {
+            surface: crate::SurfaceMode::Panel,
+            heartbeat: Some(Arc::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })),
+        },
+    )));
+    failed_panel.on_readiness_pulse({
+        let heartbeat = Rc::clone(&heartbeat);
+        move || heartbeat.borrow_mut().arm()
+    });
     slint::invoke_from_event_loop(move || {
         let panel = failed.upgrade().unwrap();
         assert!(panel.get_stale());
@@ -194,23 +240,15 @@ fn workers_are_single_flight_recover_from_errors_and_do_not_retain_closed_window
         assert_eq!(panel.get_status(), error);
         assert_eq!(panel.get_rows().row_count(), 1);
         // Immediate fixture retry queues delivery before the quit callback.
-        retry.refresh().unwrap().join().unwrap();
-        // Retained two-pulse heartbeat: the helper queues its initial tick on
-        // the live event loop and starts a two-second repeated timer; the
-        // queued tick drains before the quit event below. The timer stays
-        // alive (held) until the loop has ended — retention is the contract.
-        let ticks = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&ticks);
-        let options = crate::RunOptions {
-            surface: crate::SurfaceMode::Panel,
-            heartbeat: Some(Arc::new(move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-            })),
-        };
-        let timer = crate::start_heartbeat(&options);
-        assert!(timer.is_some());
+        PanelController::refresh_from(&panel, &retry_core)
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(ticks.load(Ordering::SeqCst), 0);
+        // Signal UI-thread state through a weak component, not through a
+        // Send closure pretending that a Slint timer or native lease is Send.
+        panel.invoke_readiness_pulse();
         slint::invoke_from_event_loop(move || {
-            // The queued initial heartbeat tick drains before this event.
             assert_eq!(ticks.load(Ordering::SeqCst), 1);
             slint::quit_event_loop().unwrap();
         })
@@ -218,6 +256,7 @@ fn workers_are_single_flight_recover_from_errors_and_do_not_retain_closed_window
     })
     .unwrap();
     slint::run_event_loop().unwrap();
+    assert!(heartbeat.borrow().timer.running());
 
     assert!(!panel.get_refreshing());
     assert_eq!(
@@ -459,55 +498,89 @@ fn system_actions_dispatch_and_failures_are_visible() {
 
 #[test]
 fn subscription_failure_leaves_manual_refresh_and_notice() {
+    i_slint_backend_testing::init_no_event_loop();
     let host = FixtureHost::returning(snapshot());
     *host.subscription_result.lock() = Err("watcher unavailable".into());
     let mut subscription_error = None;
-    let (_core, guard) =
+    let (core, guard) =
         SurfaceCore::new(host.clone(), &seeded_preferences(), &mut subscription_error);
     assert!(subscription_error.is_some());
     assert_eq!(host.subscription_calls.load(Ordering::SeqCst), 1);
     // A failed subscription yields no guard to retain.
     assert!(guard.is_none());
     // Presentation degrades to manual refresh; the notice text is bounded.
-    assert!(subscription_error.unwrap().contains("use Refresh"));
+    let notice = subscription_error.unwrap();
+    assert!(notice.contains("use Refresh"));
+
+    let panel = Panel::new().unwrap();
+    panel.set_startup_notice(notice.clone().into());
+    let dock = Dock::new().unwrap();
+    let toolbar = Toolbar::new().unwrap();
+    let launcher = Launcher::new().unwrap();
+    let controller =
+        PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, Arc::clone(&core));
+    let _scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    controller.sync_launcher_status();
+    assert_eq!(launcher.get_notice(), notice);
+
+    // Successful manual refresh cannot repair a failed subscription, so
+    // its warning remains visible independently of the current status.
+    apply_result_to_both(&controller, &panel, Ok(launcher_snapshot()));
+    assert_eq!(launcher.get_notice(), notice);
+    assert_ne!(launcher.get_status(), launcher.get_notice());
+    assert!(!launcher.get_stale());
 }
 
 #[test]
-fn dock_rects_cover_edge_orientation_and_fullscreen_hide_decision() {
-    // Fullscreen work areas must never produce a visible overlay: the
-    // controller hides the strip, and geometry is simply not applied.
+fn bars_never_request_focus_but_user_opened_windows_do() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(launcher_snapshot());
+    let core = controller_for(&panel, host.clone()).core;
+    let dock = Dock::new().unwrap();
+    let toolbar = Toolbar::new().unwrap();
+    let launcher = Launcher::new().unwrap();
+    let controller = PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core);
+    let _scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    apply_result_to_both(&controller, &panel, Ok(launcher_snapshot()));
+    assert_eq!(host.ui_focus_calls.load(Ordering::SeqCst), 0);
+    let fullscreen = launcher_snapshot()
+        .with_dock_context(crate::DockContext::new(0, 0, 1920, 1040, true).unwrap());
+    apply_result_to_both(&controller, &panel, Ok(fullscreen));
+    assert!(!dock.window().is_visible());
+    assert!(!toolbar.window().is_visible());
+    apply_result_to_both(&controller, &panel, Ok(launcher_snapshot()));
+    assert!(dock.window().is_visible());
+    assert!(toolbar.window().is_visible());
+    assert_eq!(host.ui_focus_calls.load(Ordering::SeqCst), 0);
+
+    controller.open_launcher();
+    assert_eq!(host.ui_focus_calls.load(Ordering::SeqCst), 1);
+    controller.hide_launcher();
+    controller.open_panel();
+    assert_eq!(host.ui_focus_calls.load(Ordering::SeqCst), 2);
+
+    *host.ui_focus_result.lock() = Err("Windows declined activation".into());
+    controller.open_launcher();
+    assert!(launcher.get_status().contains("declined activation"));
+    assert!(controller.surface_failure.borrow().is_none());
+    assert_eq!(host.ui_focus_calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn dock_rects_cover_monitor_bounds_and_fullscreen_hide_decision() {
+    // Fullscreen monitor bounds must never produce a visible bar overlay:
+    // the controller hides both bars (leases drop before the hides).
     let fullscreen = crate::DockContext::new(0, 0, 1920, 1040, true).unwrap();
     assert!(fullscreen.fullscreen_active());
-    let bottom = crate::dock::dock_rect(fullscreen, crate::DockEdge::Bottom, 56, 1.0);
+    let bottom = crate::dock::dock_rect(fullscreen, crate::DockEdge::Bottom, 5, false, 1.0);
     assert_eq!(
         bottom.y + bottom.height as i32,
         fullscreen.y() + fullscreen.height() as i32
     );
-    let top = crate::dock::dock_rect(fullscreen, crate::DockEdge::Top, 56, 1.0);
-    assert_eq!(top.y, fullscreen.y());
-}
-
-#[test]
-fn fullscreen_dock_hide_decision_never_yields_a_zero_window_exit() {
-    // Dock geometry on a fullscreen work area is not applied: the controller
-    // hides the strip and the event loop must stay alive because it was
-    // started with run_event_loop_until_quit. This test pins the geometry
-    // decision only; loop-lifetime behavior is covered by the dock runner.
-    let fullscreen = crate::DockContext::new(0, 0, 1920, 1040, true).unwrap();
-    assert!(fullscreen.fullscreen_active());
-    // Both edges still compute an in-bounds strip; the controller simply
-    // never shows it while this flag is set.
-    for edge in [
-        crate::DockEdge::Bottom,
-        crate::DockEdge::Top,
-        crate::DockEdge::Left,
-        crate::DockEdge::Right,
-    ] {
-        let rect = crate::dock::dock_rect(fullscreen, edge, 56, 1.0);
-        assert!(rect.width >= 1 && rect.height >= 1);
-        assert!(rect.x >= fullscreen.x());
-        assert!(rect.y >= fullscreen.y());
-    }
+    let toolbar = crate::dock::toolbar_rect(fullscreen, 1.0);
+    assert_eq!(toolbar.y, fullscreen.y());
+    assert_eq!(toolbar.width, fullscreen.width());
 }
 
 #[test]
@@ -526,8 +599,272 @@ fn dock_status_mirrors_panel_and_launch_guards_carry_over() {
     panel.invoke_filter_requested();
     assert!(controller.resolve_app_key("app-editor").is_some());
     assert!(controller.resolve_app_key("fabricated").is_none());
-    // Fullscreen snapshots must never leave a visible dock: geometry returns
-    // early (hide) rather than applying a strip over the work area.
+    // Fullscreen snapshots must never leave a visible bar: geometry drops
+    // the leases and hides both surfaces (heartbeat and loop keep running).
     let fullscreen = crate::DockContext::new(0, 0, 1920, 1040, true).unwrap();
     assert!(fullscreen.fullscreen_active());
+}
+
+// Seelen dock/toolbar/launcher focused tests (parent runs them integrated).
+
+fn icon_tile_pixels(seed: u8) -> crate::PixelIcon {
+    crate::PixelIcon::new(8, 8, vec![seed; 8 * 8 * 4]).unwrap()
+}
+
+fn launcher_snapshot() -> PanelSnapshot {
+    PanelSnapshot::new(1, Vec::new(), 0)
+        .with_applications(vec![
+            PanelApplication::new(
+                "app-editor".into(),
+                "Rust Editor".into(),
+                Some(icon_tile_pixels(1)),
+            )
+            .unwrap(),
+            PanelApplication::new(
+                "app-browser".into(),
+                "Web Browser".into(),
+                Some(icon_tile_pixels(2)),
+            )
+            .unwrap(),
+            PanelApplication::new("app-files".into(), "File Manager".into(), None).unwrap(),
+        ])
+        .with_dock_context(crate::DockContext::new(0, 0, 1920, 1040, false).unwrap())
+}
+
+#[test]
+fn launcher_tiles_search_pins_and_rescue_actions() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(launcher_snapshot());
+    let controller = controller_for(&panel, host.clone());
+    apply_result(&controller, &panel, Ok(launcher_snapshot()));
+
+    // The launcher surface exists alongside the panel in these tests only
+    // through the shared controller state; tiles project from the catalog.
+    let tiles = crate::projection::project_apps(
+        &controller.core.catalog(),
+        &controller.core.pins(),
+        "editor",
+    );
+    assert_eq!(tiles.len(), 1);
+    assert_eq!(tiles[0].key, "app-editor");
+    // Bounded: at most MAX_APPS tiles are ever rendered.
+    let everything =
+        crate::projection::project_apps(&controller.core.catalog(), &controller.core.pins(), "");
+    assert!(everything.len() <= crate::projection::MAX_APPS);
+
+    // Launch through the displayed launcher key resolves; unknown never does.
+    assert!(controller.resolve_app_key("app-editor").is_some());
+    assert!(controller.resolve_app_key("not-a-key").is_none());
+    controller.launch("app-editor");
+    assert_eq!(host.launches.lock().as_slice(), ["app-editor"]);
+}
+
+#[test]
+fn shell_identity_is_bounded_and_focused_key_is_snapshot_eligible() {
+    i_slint_backend_testing::init_no_event_loop();
+    struct IdentityHost {
+        base: Arc<FixtureHost>,
+    }
+    impl DesktopHost for IdentityHost {
+        fn observe(&self) -> Result<PanelSnapshot, String> {
+            self.base.observe()
+        }
+        fn activate(&self, key: &str) -> Result<(), String> {
+            self.base.activate(key)
+        }
+        fn launch(&self, key: &str) -> Result<(), String> {
+            self.base.launch(key)
+        }
+        fn system_action(&self, action: SystemAction) -> Result<(), String> {
+            self.base.system_action(action)
+        }
+        fn save_preferences(&self, preferences: &PanelPreferences) -> Result<(), String> {
+            self.base.save_preferences(preferences)
+        }
+        fn subscribe(
+            &self,
+            callback: Arc<dyn Fn() + Send + Sync>,
+        ) -> Result<Option<Box<dyn Send>>, String> {
+            self.base.subscribe(callback)
+        }
+        fn clock_text(&self) -> Result<String, String> {
+            Ok("12:34".to_string())
+        }
+        fn shell_identity(&self) -> Result<crate::ShellIdentity, String> {
+            Ok(crate::ShellIdentity {
+                user_name: "user\u{202e}name".into(),
+                clock: "12:34".into(),
+                language: "en-US".into(),
+                focused_window_key: Some("editor-key".into()),
+            })
+        }
+    }
+    let panel = Panel::new().unwrap();
+    let mut subscription_error = None;
+    let (core, _guard) = SurfaceCore::new(
+        Arc::new(IdentityHost {
+            base: FixtureHost::returning(snapshot()),
+        }),
+        &seeded_preferences(),
+        &mut subscription_error,
+    );
+    let controller = PanelController::new(&panel, Arc::clone(&core));
+    core.install_routes(controller.routes());
+    apply_result(&controller, &panel, Ok(snapshot()));
+
+    // Bounded, sanitized identity: direction controls are removed, the
+    // focused key is retained because it is in the snapshot.
+    let identity = core.identity();
+    assert_eq!(identity.user_name, "username");
+    assert_eq!(identity.clock, "12:34");
+    assert_eq!(identity.language, "en-US");
+    assert_eq!(identity.focused_window_key.as_deref(), Some("editor-key"));
+
+    // The clock-only path refreshes just the clock text.
+    core.refresh_clock();
+    assert_eq!(core.identity().clock, "12:34");
+}
+
+#[test]
+fn clock_timer_never_observes_the_desktop() {
+    i_slint_backend_testing::init_no_event_loop();
+    // The clock path exists precisely so the 60s timer does not re-run
+    // observe/shell_identity: pin the separation in the SurfaceCore API.
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(snapshot());
+    let controller = controller_for(&panel, host.clone());
+    apply_result(&controller, &panel, Ok(snapshot()));
+    let observes_before = host.observe_calls.load(Ordering::SeqCst);
+    // Default host clock_text is an empty Ok; no error, no observation.
+    assert_eq!(controller.core.refresh_clock(), Some(String::new()));
+    assert_eq!(host.observe_calls.load(Ordering::SeqCst), observes_before);
+}
+
+#[test]
+fn fullscreen_geometry_still_computes_in_bounds_rects_for_both_bars() {
+    // Geometry decision only: a fullscreen monitor bounds hides BOTH bars
+    // (leases drop before the hides); these rects stay in bounds for the
+    // reveal after fullscreen ends.
+    let fullscreen = crate::DockContext::new(-1920, -1080, 1920, 2160, true).unwrap();
+    let dock = crate::dock::dock_rect(fullscreen, crate::DockEdge::Bottom, 0, false, 1.0);
+    assert_eq!(
+        dock.y + dock.height as i32,
+        fullscreen.y() + fullscreen.height() as i32
+    );
+    let toolbar = crate::dock::toolbar_rect(fullscreen, 1.0);
+    assert_eq!(toolbar.y, fullscreen.y());
+    assert_eq!(toolbar.x, fullscreen.x());
+    assert_eq!(toolbar.width, fullscreen.width());
+}
+
+#[test]
+fn overflow_is_bounded_by_max_dock_tiles() {
+    // A snapshot with more windows than MAX_DOCK_TILES never grows the
+    // window beyond the clamped bounds (geometry stays within the monitor).
+    let bounds = crate::DockContext::new(0, 0, 800, 600, false).unwrap();
+    let rect = crate::dock::dock_rect(bounds, crate::DockEdge::Bottom, 400, false, 1.0);
+    assert!(rect.width <= bounds.width());
+    assert!(rect.x >= bounds.x());
+    assert!(rect.y >= bounds.y());
+}
+
+// Native leases stay thread-affine and outlive attachment, not their HWNDs.
+
+#[test]
+fn lease_registry_geometry_change_detection_is_rect_exact() {
+    let leases = crate::controller::SurfaceLeases::default();
+    // Nothing attached yet: every rect is a change (first attach pending).
+    assert!(leases.geometry_changed(crate::SurfaceKind::Toolbar, (0, 0, 1920, 32)));
+    assert!(leases.geometry_changed(crate::SurfaceKind::Dock, (0, 0, 256, 72)));
+}
+
+#[test]
+fn thread_affine_leases_survive_attach_and_release_before_window_teardown() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(snapshot());
+    let controller = controller_for(&panel, host.clone());
+    let core = Arc::downgrade(&controller.core);
+    let rect = (0, 0, 1920, 32);
+    {
+        let mut leases = controller.leases.borrow_mut();
+        leases
+            .attach(SurfaceKind::Toolbar, host.as_ref(), panel.window(), rect)
+            .unwrap();
+        assert_eq!(host.lease_drops.load(Ordering::SeqCst), 0);
+        assert!(!leases.geometry_changed(SurfaceKind::Toolbar, rect));
+        leases
+            .attach(
+                SurfaceKind::Toolbar,
+                host.as_ref(),
+                panel.window(),
+                (0, 0, 1920, 64),
+            )
+            .unwrap();
+        assert_eq!(host.lease_drops.load(Ordering::SeqCst), 1);
+    }
+    let scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    drop(scope);
+    assert_eq!(host.lease_drops.load(Ordering::SeqCst), 2);
+    assert!(
+        controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Toolbar, rect)
+    );
+    // Component callbacks may retain the controller, but cannot retain native
+    // leases past the run scope or form a core -> route -> core reference cycle.
+    drop(controller);
+    drop(panel);
+    assert!(core.upgrade().is_none());
+}
+
+#[test]
+fn live_density_edge_and_pin_changes_resize_without_observing_or_saving_preview() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let dock = Dock::new().unwrap();
+    let toolbar = Toolbar::new().unwrap();
+    let launcher = Launcher::new().unwrap();
+    let host = FixtureHost::returning(launcher_snapshot());
+    let mut error = None;
+    let (core, _watcher) = SurfaceCore::new(host.clone(), &seeded_preferences(), &mut error);
+    let controller =
+        PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core.clone());
+    let _scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    apply_result(&controller, &panel, Ok(launcher_snapshot()));
+    controller.render();
+    controller.sync_appearance();
+    panel.set_compact(true);
+    panel.set_dock_edge_index(crate::dock_edge_to_index(crate::DockEdge::Left));
+    panel.invoke_appearance_changed();
+    assert!(dock.get_compact());
+    assert_eq!(
+        dock.get_edge(),
+        crate::dock_edge_to_index(crate::DockEdge::Left)
+    );
+    assert!(host.saves.lock().is_empty());
+    assert_eq!(core.applied_dock_edge(), crate::DockEdge::Bottom);
+    controller.toggle_pin("app-editor", true);
+    let saved = host.saves.lock();
+    assert_eq!(saved.len(), 1);
+    assert!(!saved[0].compact());
+    assert_eq!(saved[0].dock_edge(), crate::DockEdge::Bottom);
+    drop(saved);
+    let rect = crate::dock::dock_rect(
+        core.dock_context().unwrap(),
+        crate::DockEdge::Left,
+        1,
+        true,
+        1.0,
+    );
+    assert_eq!(
+        controller.leases.borrow().attached_rect[0],
+        Some((rect.x, rect.y, rect.width, rect.height))
+    );
+    assert_eq!(host.observe_calls.load(Ordering::SeqCst), 0);
+    panel.invoke_save_preferences_requested();
+    assert!(core.applied_appearance().compact);
+    assert_eq!(core.applied_dock_edge(), crate::DockEdge::Left);
 }

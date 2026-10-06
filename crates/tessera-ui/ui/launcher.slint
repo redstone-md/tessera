@@ -1,0 +1,243 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { ApplicationIcon, TileButton } from "tiles.slint";
+
+export struct LaunchTile {
+    key: string,
+    label: string,
+    icon: image,
+    pinned: bool,
+}
+
+// Frameless OPAQUE centered launcher (source apps-menu has no translucency):
+// a search header, a 7-column icon grid of
+// genuine cached application icons, and a footer with settings/recovery and
+// exit. Seelen apps-menu facts: 7 columns, gap/padding 8px, square tiles with
+// icon and a 0.8rem name, radius 10. Escape hides the window (FocusScope at
+// the window level). No fake media, tray, or workspace data is rendered.
+export component Launcher inherits Window {
+    no-frame: true;
+    background: transparent;
+    title: "Tessera applications";
+    min-width: 1px;
+    min-height: 1px;
+
+    in property <[LaunchTile]> tiles;
+    in property <string> status;
+    in property <string> notice;
+    in property <bool> refreshing;
+    in property <bool> stale;
+    in property <string> user-name;
+    in property <string> version;
+    in-out property <string> search;
+    callback search-changed();
+    callback launch-requested(string);
+    callback pin-toggle-requested(string, bool);
+    callback open-settings-requested();
+    callback refresh-requested();
+    callback hide-requested();
+    callback exit-requested();
+    callback focus-search();
+    focus-search => { search-field.focus(); }
+
+    property <int> columns: 7;
+    property <length> gap: 8px;
+    property <length> pad: 8px;
+    property <length> outer: 10px;
+    property <bool> blocked: root.refreshing || root.stale;
+
+    changed search => { root.search-changed(); }
+
+    Rectangle {
+        x: root.outer;
+        y: root.outer;
+        width: max(0px, parent.width - 2 * root.outer);
+        height: max(0px, parent.height - 2 * root.outer);
+        border-radius: 16px;
+        background: SeelenPalette.bar;
+
+        // Search receives focus on each show; Escape bubbles from all of
+        // this scope's children, including the search field and pin controls.
+        escape-scope := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Escape {
+                    root.hide-requested();
+                    return accept;
+                }
+                return reject;
+            }
+
+        VerticalLayout {
+            padding: root.pad;
+            spacing: root.pad;
+
+            // Header: search field.
+            search-field := LineEdit {
+                accessible-label: "Search applications";
+                placeholder-text: "Search applications";
+                text <=> root.search;
+                enabled: true;
+            }
+
+            // Grid: 7 columns of square tiles; overflow scrolls.
+            HorizontalLayout {
+                padding: root.pad;
+                vertical-stretch: 1;
+            grid-scroll := ScrollView {
+                vertical-stretch: 1;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+
+                property <length> tile: (self.visible-width - (root.columns - 1) * root.gap) / root.columns;
+                property <int> rows: ceil(root.tiles.length / root.columns);
+                content-width: self.visible-width;
+                content-height: max(self.visible-height, self.rows * (self.tile + root.gap));
+
+                for tile[i] in root.tiles: Rectangle {
+                    property <int> column-index: mod(i, root.columns);
+                    property <int> row-index: floor(i / root.columns);
+                    property <length> size: grid-scroll.tile;
+                    x: self.column-index * (self.size + root.gap);
+                    y: self.row-index * (self.size + root.gap);
+                    width: self.size;
+                    height: self.size;
+                    clip: true;
+
+                    TileButton {
+                        width: parent.width;
+                        height: parent.height;
+                        radius: 10px;
+                        filled: false;
+                        enabled: !root.blocked;
+                        accessible-text: "Launch " + tile.label;
+                        clicked => { root.launch-requested(tile.key); }
+
+                        VerticalLayout {
+                            padding: root.pad;
+                            spacing: root.gap;
+                            ApplicationIcon { source: tile.icon; }
+                            Text {
+                                text: tile.label;
+                                color: SeelenPalette.foreground;
+                                font-size: 12.8px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                                height: 35.2px;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+                        }
+
+                        // Visible pin control (Seelen apps-menu uses
+                        // drag/context-menu pinning; a bounded corner toggle
+                        // keeps pinning reachable without that system).
+                        Rectangle {
+                            width: 16px;
+                            height: 16px;
+                            x: parent.width - self.width;
+                            y: 0px;
+                            border-radius: 4px;
+                            opacity: root.blocked ? 0.5 : 1;
+                            forward-focus: pin-key;
+
+                            pin-touch := TouchArea {
+                                enabled: !root.blocked;
+                                clicked => {
+                                    pin-key.focus();
+                                    root.pin-toggle-requested(tile.key, !tile.pinned);
+                                }
+                                forward-focus: pin-key;
+                            }
+                            pin-key := FocusScope {
+                                width: 0px;
+                                key-pressed(event) => {
+                                    if root.blocked == false
+                                        && (event.text == Key.Space || event.text == Key.Return) {
+                                        root.pin-toggle-requested(tile.key, !tile.pinned);
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                x: (parent.width - 8px) / 2;
+                                y: (parent.height - 8px) / 2;
+                                border-radius: 4px;
+                                background: tile.pinned ? SeelenPalette.accent : SeelenPalette.muted;
+                                accessible-role: none;
+                            }
+
+                            accessible-role: checkbox;
+                            accessible-checked: tile.pinned;
+                            accessible-enabled: pin-touch.enabled;
+                            accessible-label: (tile.pinned ? "Unpin " : "Pin ") + tile.label;
+                            accessible-action-default => {
+                                if !root.blocked { root.pin-toggle-requested(tile.key, !tile.pinned); }
+                            }
+                        }
+                    }
+                }
+
+                if root.tiles.length == 0: Text {
+                    x: 0;
+                    y: (grid-scroll.visible-height - self.preferred-height) / 2;
+                    width: grid-scroll.visible-width;
+                    text: root.blocked ? "Working; results appear after the current refresh." : "No matching applications.";
+                    color: SeelenPalette.secondary;
+                    font-italic: true;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    accessible-role: text;
+                }
+            }
+            }
+
+            // Status line and footer: settings/recovery, refresh, exit — all
+            // reachable even while refreshing or stale (rescue actions).
+            if root.notice != "": Text {
+                text: root.notice;
+                color: SeelenPalette.secondary;
+                font-size: 11px;
+                wrap: word-wrap;
+                accessible-role: text;
+            }
+            Text {
+                text: root.status;
+                color: SeelenPalette.secondary;
+                font-size: 11px;
+                overflow: elide;
+                accessible-role: text;
+            }
+            HorizontalLayout {
+                spacing: root.pad;
+                alignment: end;
+
+                Button {
+                    text: root.user-name == "" ? "Settings" : root.user-name;
+                    accessible-label: "Open settings and recovery";
+                    clicked => { root.open-settings-requested(); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Refresh";
+                    enabled: !root.refreshing;
+                    accessible-label: "Refresh the desktop";
+                    clicked => { root.refresh-requested(); }
+                }
+                Button {
+                    text: "Exit";
+                    accessible-label: "Exit Tessera";
+                    clicked => { root.exit-requested(); }
+                }
+            }
+        }
+        }
+    }
+}

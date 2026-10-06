@@ -50,9 +50,11 @@ pub use snapshot::{DesktopSnapshot, MonitorId, ObservedMonitor, ObservedWindow};
 
 #[cfg(windows)]
 pub use shell_runtime::ShellHeartbeat;
+pub use shell_runtime::{DesktopIdentity, run_desktop_session, start_desktop_session};
+pub use shell_runtime::{OwnedShellSurface, ShellSurfaceKind, request_owned_foreground};
 pub use shell_runtime::{
-    ShellRuntimeError, open_file_manager, open_task_manager, restore_explorer, run_shell,
-    verify_runtime,
+    ShellRuntimeError, clock_text, desktop_identity, open_file_manager, open_task_manager,
+    restore_explorer, run_shell, verify_runtime,
 };
 
 /// Captures one best-effort, read-only observation pass; this is not an atomic

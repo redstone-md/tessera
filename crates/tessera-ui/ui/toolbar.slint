@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+import { DockStatus } from "dock.slint";
+import { TileButton } from "tiles.slint";
+
+// One top toolbar, full monitor bounds width, 32 logical pixels tall
+// (Seelen fancy-toolbar default: item 16 + padding 8 * 2 + margin 0).
+// Left: user and foreground app. Center: native clock. Right: language and
+// settings/recovery. Only genuine host values appear; absent slots stay empty.
+export component Toolbar inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera toolbar";
+    min-width: 1px;
+    min-height: 1px;
+
+    in property <string> user-name;
+    in property <string> focused-app;
+    in property <string> clock;
+    in property <string> language;
+    in property <DockStatus> surface-status;
+    callback open-panel-requested(); // settings/recovery access
+
+    property <length> pad: 8px;
+    property <length> side-pad: 16px;
+    property <length> item: 16px;
+    property <length> tile-radius: 4.8px; // Seelen: item * 0.3
+
+    Rectangle {
+        background: SeelenPalette.bar.with-alpha(0.9);
+
+        HorizontalLayout {
+            x: root.side-pad;
+            y: root.pad;
+            width: max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad);
+            height: root.item;
+            spacing: root.pad;
+            alignment: start;
+            Text {
+                text: root.user-name;
+                color: SeelenPalette.foreground;
+                font-size: 12.8px;
+                font-weight: 500;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: text;
+            }
+            Rectangle {
+                width: 1px;
+                background: SeelenPalette.muted.with-alpha(0.5);
+                accessible-role: none;
+            }
+            Text {
+                text: root.focused-app;
+                color: SeelenPalette.secondary;
+                font-size: 12.8px;
+                font-weight: 500;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+                accessible-role: text;
+            }
+        }
+        clock-text := Text {
+            x: (parent.width - self.width) / 2;
+            y: root.pad;
+            width: min(self.preferred-width, parent.width / 3);
+            height: root.item;
+            text: root.clock;
+            color: SeelenPalette.foreground;
+            font-size: 12.8px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: text;
+        }
+        HorizontalLayout {
+            x: parent.width / 2 + clock-text.width / 2 + root.pad;
+            y: root.pad;
+            width: max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad);
+            height: root.item;
+            spacing: root.pad;
+            alignment: end;
+            if root.language != "": Text {
+                text: root.language;
+                color: SeelenPalette.secondary;
+                font-size: 12.8px;
+                font-weight: 500;
+                vertical-alignment: center;
+                accessible-role: text;
+            }
+            TileButton {
+                width: root.item;
+                height: root.item;
+                radius: root.tile-radius;
+                filled: false;
+                accessible-text: "Open settings and recovery";
+                clicked => { root.open-panel-requested(); }
+                // Own vector glyph, independent of source assets and OS fonts.
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 5px;
+                    border-width: 2px;
+                    border-color: SeelenPalette.foreground;
+                    accessible-role: none;
+                }
+                for tooth[i] in [0, 1, 2, 3]: Rectangle {
+                    width: i < 2 ? 2px : 4px;
+                    height: i < 2 ? 4px : 2px;
+                    x: i < 2 ? 7px : i == 2 ? 1px : 11px;
+                    y: i >= 2 ? 7px : i == 0 ? 1px : 11px;
+                    background: SeelenPalette.foreground;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+}

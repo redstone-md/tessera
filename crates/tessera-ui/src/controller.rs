@@ -1,41 +1,120 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::generated::{AppRow, Dock, DockApp, DockStatus, DockWindow, Palette, Row};
+use crate::generated::{
+    AppRow, Dock, DockApp, DockStatus, DockWindow, LaunchTile, Launcher, Palette, Row,
+    SeelenPalette, Toolbar,
+};
 use crate::projection::{AppProjection, PanelProjection, RowProjection};
 use crate::state::{Routes, SurfaceCore};
 use crate::{
-    DesktopHost, Panel, PanelPreferences, PanelSnapshot, RunOptions, SystemAction, sanitize,
-    system_action_from_index,
+    DesktopHost, Panel, PanelPreferences, PanelSnapshot, RunOptions, SurfaceKind, SystemAction,
+    sanitize, system_action_from_index,
 };
 
 type Host = dyn DesktopHost;
 
+/// Native leases, keyed by [`SurfaceKind`], retained by the controller.
+///
+/// A lease is the `Box<dyn Any>` returned by
+/// [`DesktopHost::configure_surface`] (the adapter's RAII native attachment).
+/// Dropping it is the detach: it happens strictly before a hide, before a
+/// geometry re-reservation, and before the HWND closes (run teardown).
+///
+/// The registry never leaves the UI thread. Worker completion carries only a
+/// weak component signal; the component callback accesses this registry locally.
+///
+/// Each surface also remembers the physical rect it was last attached with,
+/// so a geometry change is detected in the UI and re-reservation (a real
+/// drop + attach cycle against the new RECT) happens only when the geometry
+/// actually changed — never on unchanged foreground observations.
+#[derive(Default)]
+pub(crate) struct SurfaceLeases {
+    leases: [Option<Box<dyn std::any::Any>>; 3],
+    attached_rect: [Option<(i32, i32, u32, u32)>; 3],
+}
+
+impl SurfaceLeases {
+    fn index(kind: SurfaceKind) -> usize {
+        match kind {
+            SurfaceKind::Dock => 0,
+            SurfaceKind::Toolbar => 1,
+            SurfaceKind::Launcher => 2,
+        }
+    }
+
+    /// Attaches `window` for `kind` and retains the returned lease. A `None`
+    /// lease (diagnostics hosts) is stored as "attached without native".
+    pub(crate) fn attach(
+        &mut self,
+        kind: SurfaceKind,
+        host: &Host,
+        window: &slint::Window,
+        rect: (i32, i32, u32, u32),
+    ) -> Result<(), String> {
+        let index = Self::index(kind);
+        self.detach(kind);
+        self.leases[index] = host.configure_surface(kind, window)?;
+        self.attached_rect[index] = Some(rect);
+        Ok(())
+    }
+
+    /// Drops the lease for `kind` (the native detach) if one is held.
+    pub(crate) fn detach(&mut self, kind: SurfaceKind) {
+        self.leases[Self::index(kind)] = None;
+        self.attached_rect[Self::index(kind)] = None;
+    }
+
+    /// Whether `rect` differs from the last attached rect for `kind`.
+    pub(crate) fn geometry_changed(&self, kind: SurfaceKind, rect: (i32, i32, u32, u32)) -> bool {
+        self.attached_rect[Self::index(kind)] != Some(rect)
+    }
+}
+
+struct SurfaceLeaseScope(Rc<RefCell<SurfaceLeases>>);
+
+impl Drop for SurfaceLeaseScope {
+    fn drop(&mut self) {
+        *self.0.borrow_mut() = SurfaceLeases::default();
+    }
+}
+
 /// One controller drives both surfaces.
 ///
-/// In panel mode only the panel window exists. In dock mode a slim icon strip
-/// (`Dock`) is the always-present surface and the panel is the launcher and
-/// settings window, opened from the strip's Applications button and hidden —
-/// not closed — by its close button, so the dock keeps running.
+/// In panel mode only the panel window exists. In dock mode the always-present
+/// native Seelen-style surfaces are the dock strip and the top toolbar; the
+/// frameless launcher window opens from the dock's start tile (or the
+/// toolbar's settings entry) and is hidden — not closed — until used again.
+/// The framed Panel remains the settings/recovery window and developer mode.
 ///
 /// The panel's `refreshing`/`stale`/`has-snapshot` properties remain the
-/// single source of truth for both surfaces; the dock status is a mirror kept
-/// in sync by [`PanelController::render`]. There is exactly one observation
-/// worker, one notification bus, and one retained snapshot — never two
-/// independent observers.
+/// single source of truth for every surface; the dock/toolbar/launcher status
+/// mirrors are kept in sync by [`PanelController::render`]. There is exactly
+/// one observation worker, one notification bus, and one retained snapshot —
+/// never two independent observers.
 ///
 /// Retained snapshots, the catalog, and pins live in the shared
-/// [`SurfaceCore`]; the controller owns only the two weak handles.
+/// [`SurfaceCore`]; the controller owns only the weak handles. Native leases
+/// live in the controller's UI-thread [`SurfaceLeases`] registry: bar leases
+/// attach on the first real-geometry observation (and re-attach on actual
+/// geometry changes — the native reservation binds to the attach-time RECT),
+/// and the launcher lease attaches on show and drops before hide.
 #[derive(Clone)]
 pub(crate) struct PanelController {
     panel: slint::Weak<Panel>,
     dock: Option<slint::Weak<Dock>>,
+    toolbar: Option<slint::Weak<Toolbar>>,
+    launcher: Option<slint::Weak<Launcher>>,
     core: Arc<SurfaceCore>,
-    icon_cache: Arc<parking_lot::Mutex<crate::icons::IconCache>>,
+    icon_cache: Rc<RefCell<crate::icons::IconCache>>,
+    leases: Rc<RefCell<SurfaceLeases>>,
+    surface_failure: Rc<RefCell<Option<String>>>,
 }
 
 impl PanelController {
@@ -43,24 +122,73 @@ impl PanelController {
         let controller = Self {
             panel: panel.as_weak(),
             dock: None,
+            toolbar: None,
+            launcher: None,
             core,
-            icon_cache: Arc::default(),
+            icon_cache: Rc::default(),
+            leases: Rc::default(),
+            surface_failure: Rc::default(),
         };
         controller.wire_panel(panel);
+        controller.wire_completion(panel);
         controller
     }
 
-    /// Dock mode: the same controller, plus a weak strip handle.
-    pub(crate) fn new_with_dock(panel: &Panel, dock: &Dock, core: Arc<SurfaceCore>) -> Self {
+    /// Dock mode: the same controller, plus weak handles for the three
+    /// native surfaces (dock strip, toolbar, launcher).
+    pub(crate) fn new_with_dock(
+        panel: &Panel,
+        dock: &Dock,
+        toolbar: &Toolbar,
+        launcher: &Launcher,
+        core: Arc<SurfaceCore>,
+    ) -> Self {
         let controller = Self {
             panel: panel.as_weak(),
             dock: Some(dock.as_weak()),
+            toolbar: Some(toolbar.as_weak()),
+            launcher: Some(launcher.as_weak()),
             core,
-            icon_cache: Arc::default(),
+            icon_cache: Rc::default(),
+            leases: Rc::default(),
+            surface_failure: Rc::default(),
         };
         controller.wire_panel(panel);
         controller.wire_dock(dock);
+        controller.wire_toolbar(toolbar);
+        controller.wire_launcher(launcher);
+        controller.wire_completion(panel);
         controller
+    }
+
+    fn wire_completion(&self, panel: &Panel) {
+        let controller = self.clone();
+        panel.on_observation_result_ready(move || {
+            let Some(panel) = controller.panel.upgrade() else {
+                return;
+            };
+            let Some(result) = controller.core.take_observation() else {
+                return;
+            };
+            if controller.dock.is_some() {
+                apply_result_to_both(&controller, &panel, result);
+            } else {
+                apply_result(&controller, &panel, result);
+            }
+        });
+        let panel = panel.as_weak();
+        self.core.install_apply_route(Arc::new(move || {
+            if let Some(panel) = panel.upgrade() {
+                panel.invoke_observation_result_ready();
+            }
+        }));
+    }
+
+    /// Arms the retained heartbeat through a UI-thread component callback.
+    fn pulse_readiness(&self) {
+        if let Some(panel) = self.panel.upgrade() {
+            panel.invoke_readiness_pulse();
+        }
     }
 
     fn wire_panel(&self, panel: &Panel) {
@@ -84,11 +212,9 @@ impl PanelController {
         panel.on_system_action_requested(move |action| {
             weak.system_action(system_action_from_index(action));
         });
-        // The dock's own Palette global follows the panel's live theme preview
-        // so both surfaces share one appearance at all times (dock mode only;
-        // the sync is a no-op without a live strip).
+        // All surfaces preview one appearance without writing preferences.
         let weak = self.clone();
-        panel.on_theme_changed(move || weak.sync_dock_theme());
+        panel.on_appearance_changed(move || weak.sync_appearance());
     }
 
     fn wire_dock(&self, dock: &Dock) {
@@ -97,15 +223,7 @@ impl PanelController {
         let weak = self.clone();
         dock.on_window_activate_requested(move |key| weak.activate(&key));
         let weak = self.clone();
-        dock.on_system_action_requested(move |action| {
-            weak.system_action(system_action_from_index(action));
-        });
-        let weak = self.clone();
-        dock.on_open_applications_requested(move || weak.open_applications());
-        let weak = self.clone();
-        dock.on_refresh_requested(move || {
-            let _ = weak.refresh();
-        });
+        dock.on_open_applications_requested(move || weak.open_launcher());
         let weak = self.clone();
         dock.on_exit_requested(move || {
             // Explicit exit: quitting the loop ends the run; the retained
@@ -115,12 +233,35 @@ impl PanelController {
         });
     }
 
-    /// Busy means a worker runs right now; the panel property is the truth.
-    fn busy(&self) -> bool {
-        self.panel
-            .upgrade()
-            .map(|panel| panel.get_refreshing())
-            .unwrap_or(true)
+    fn wire_toolbar(&self, toolbar: &Toolbar) {
+        let weak = self.clone();
+        toolbar.on_open_panel_requested(move || weak.open_panel());
+    }
+
+    fn wire_launcher(&self, launcher: &Launcher) {
+        let weak = self.clone();
+        launcher.on_launch_requested(move |key| weak.launch(&key));
+        let weak = self.clone();
+        launcher.on_pin_toggle_requested(move |key, pinned| weak.toggle_pin(&key, pinned));
+        let weak = self.clone();
+        launcher.on_search_changed(move || weak.apply_launcher_filter());
+        let weak = self.clone();
+        launcher.on_open_settings_requested(move || weak.open_panel());
+        let weak = self.clone();
+        launcher.on_refresh_requested(move || {
+            let _ = weak.refresh();
+        });
+        let weak = self.clone();
+        // Escape hides the launcher (dropping its lease first, because a
+        // hidden window may lose its HWND); the loop keeps running.
+        launcher.on_hide_requested(move || weak.hide_launcher());
+        let weak = self.clone();
+        // The footer's explicit Exit button quits the run (the host
+        // supervisor follows by restoring the Explorer shell).
+        launcher.on_exit_requested(move || {
+            let _ = slint::quit_event_loop();
+            let _ = weak;
+        });
     }
 
     fn guarded(&self) -> bool {
@@ -146,6 +287,131 @@ impl PanelController {
         if !panel.get_stale() && !panel.get_refreshing() {
             panel.set_status(projection.status.as_str().into());
         }
+        self.show_launcher_tiles();
+    }
+
+    /// Applies the launcher's own search box to the retained catalog.
+    /// Filtering never re-observes the desktop and never renumbers keys.
+    pub(crate) fn apply_launcher_filter(&self) {
+        self.show_launcher_tiles();
+    }
+
+    /// Renders the launcher grid tiles for the launcher's own search over the
+    /// retained catalog (bounded by the projection module's `MAX_APPS`).
+    fn show_launcher_tiles(&self) {
+        let Some(launcher) = self.launcher_and_upgrade() else {
+            return;
+        };
+        let search = launcher.get_search().to_string();
+        let catalog = self.core.catalog();
+        let apps = crate::projection::project_apps(&catalog, &self.core.pins(), &search);
+        let tiles: Vec<LaunchTile> = apps
+            .iter()
+            .map(|app| LaunchTile {
+                key: app.key.as_str().into(),
+                label: app.label.as_str().into(),
+                icon: dock_icon(self, app.icon.as_ref()),
+                pinned: app.pinned,
+            })
+            .collect();
+        launcher.set_tiles(ModelRc::new(VecModel::from(tiles)));
+    }
+
+    /// Shows (creates not; already constructed) the frameless launcher
+    /// window in dock mode. Its Escape key hides it; the loop keeps running.
+    ///
+    /// Lease lifecycle: the launcher window is a tool-window but activatable
+    /// (no no-activate, unlike the bars); its HWND may be released while
+    /// hidden, so the lease is attached after every show and dropped before
+    /// every hide.
+    pub(crate) fn open_launcher(&self) {
+        if let Some(launcher) = self.launcher_and_upgrade() {
+            self.show_launcher_tiles();
+            self.leases.borrow_mut().detach(SurfaceKind::Launcher);
+            let rect = self.core.dock_context().map(|context| {
+                crate::dock::launcher_rect(context, launcher.window().scale_factor())
+            });
+            if let Some(rect) = rect {
+                launcher
+                    .window()
+                    .set_size(slint::PhysicalSize::new(rect.width, rect.height));
+                launcher
+                    .window()
+                    .set_position(slint::PhysicalPosition::new(rect.x, rect.y));
+            }
+            if let Err(error) = launcher.show() {
+                self.fail_surface(error.to_string());
+                return;
+            }
+            let rect = rect
+                .map(|rect| (rect.x, rect.y, rect.width, rect.height))
+                .unwrap_or((0, 0, 0, 0));
+            if self.attach_lease(SurfaceKind::Launcher, launcher.window(), rect) {
+                self.request_ui_focus(launcher.window());
+                launcher.invoke_focus_search();
+            }
+        }
+    }
+
+    /// Hides the launcher (Escape path): the lease drops first because
+    /// Slint/winit may release or recreate the HWND while hidden.
+    pub(crate) fn hide_launcher(&self) {
+        if let Some(launcher) = self.launcher_and_upgrade() {
+            self.leases.borrow_mut().detach(SurfaceKind::Launcher);
+            let _ = launcher.hide();
+        }
+    }
+
+    /// Attaches one surface lease through the registry (UI-thread only).
+    /// A diagnostics host returns no lease; storing `None` is fine.
+    fn attach_lease(
+        &self,
+        kind: SurfaceKind,
+        window: &slint::Window,
+        rect: (i32, i32, u32, u32),
+    ) -> bool {
+        if let Err(error) =
+            self.leases
+                .borrow_mut()
+                .attach(kind, self.core.host().as_ref(), window, rect)
+        {
+            self.fail_surface(error);
+            return false;
+        }
+        true
+    }
+
+    fn fail_surface(&self, error: String) {
+        let message = format!(
+            "Surface attach failed: {}",
+            sanitize::bounded_text(&error, 200)
+        );
+        self.report_message(&message);
+        *self.surface_failure.borrow_mut() = Some(message);
+        let _ = slint::quit_event_loop();
+    }
+
+    /// Shows the framed Panel: the native settings/recovery window.
+    pub(crate) fn open_panel(&self) {
+        if let Some(panel) = self.panel.upgrade() {
+            match panel.show() {
+                Ok(()) => self.request_ui_focus(panel.window()),
+                Err(error) => self.report_message(&format!("Could not show settings: {error}")),
+            }
+        }
+    }
+
+    fn request_ui_focus(&self, window: &slint::Window) {
+        if let Err(error) = self.core.host().request_ui_focus(window) {
+            self.report_message(&sanitize::bounded_text(&error, 200));
+            self.sync_launcher_status();
+        }
+    }
+
+    fn launcher_and_upgrade(&self) -> Option<Launcher> {
+        self.launcher
+            .as_ref()
+            .and_then(|launcher| launcher.upgrade())
     }
 
     /// Renders the launcher rows for the current search over the retained
@@ -162,10 +428,20 @@ impl PanelController {
     /// gone, or the worker could not be spawned.
     pub(crate) fn refresh(&self) -> Option<std::thread::JoinHandle<()>> {
         let panel = self.panel.upgrade()?;
+        let worker = Self::refresh_from(&panel, &self.core);
+        self.render();
+        worker
+    }
+
+    /// The single-flight refresh body over Send pieces only (panel weak
+    /// handle + core): shared by the controller entry and the notification
+    /// bus so the busy/stale/worker logic exists exactly once.
+    fn refresh_from(panel: &Panel, core: &Arc<SurfaceCore>) -> Option<std::thread::JoinHandle<()>> {
         if panel.get_refreshing() {
             return None;
         }
-        self.set_busy(
+        Self::set_busy_on(
+            Some(panel),
             true,
             if panel.get_has_snapshot() {
                 "Refreshing; activation is paused..."
@@ -176,52 +452,31 @@ impl PanelController {
         // While refreshing, activation is disabled even on retained data.
         panel.set_stale(true);
 
-        let weak = self.panel.clone();
-        let controller = self.clone();
-        let core = Arc::clone(&self.core);
+        let worker_core = Arc::clone(core);
         let spawned = std::thread::Builder::new()
             .name("tessera-observation".into())
             .spawn(move || {
-                let result = core.observe_safely();
-                // Closing the window/event loop legitimately drops this
-                // result. On the creating thread (tests have no event loop)
-                // the upgrade succeeds directly; otherwise the result is
-                // marshalled to the event loop.
-                if let Some(panel) = weak.upgrade() {
-                    controller.apply_observation_on(&panel, result);
-                } else {
-                    let _ = weak.upgrade_in_event_loop(move |panel| {
-                        controller.apply_observation_on(&panel, result)
-                    });
-                }
+                let result = worker_core.observe_safely();
+                worker_core.apply_observation(result);
             });
         match spawned {
             Ok(worker) => Some(worker),
             Err(error) => {
-                self.apply_observation_on(
-                    &panel,
-                    Err(format!("Could not start observation: {error}")),
-                );
+                core.apply_observation(Err(format!("Could not start observation: {error}")));
                 None
             }
         }
     }
 
-    /// Sets the busy flag and status text on every live surface.
-    fn set_busy(&self, busy: bool, message: &str) {
-        if let Some(panel) = self.panel.upgrade() {
-            panel.set_refreshing(busy);
-            if !message.is_empty() {
-                panel.set_status(message.into());
-            }
-        }
-        if let Some(dock) = self.dock_and_upgrade() {
-            let mut status = dock.get_surface_status();
-            status.refreshing = busy;
-            if !message.is_empty() {
-                status.status = message.into();
-            }
-            dock.set_surface_status(status);
+    /// The Send-safe busy setter over the panel alone (used by the
+    /// notification-bus refresh entry; mirrors are refreshed by `render`).
+    fn set_busy_on(panel: Option<&Panel>, busy: bool, message: &str) {
+        let Some(panel) = panel else {
+            return;
+        };
+        panel.set_refreshing(busy);
+        if !message.is_empty() {
+            panel.set_status(message.into());
         }
     }
 
@@ -235,6 +490,8 @@ impl PanelController {
             status.status = message.into();
             dock.set_surface_status(status);
         }
+        self.sync_launcher_status();
+        self.sync_toolbar_status();
     }
 
     /// Reports one host-command outcome to every live surface.
@@ -256,21 +513,46 @@ impl PanelController {
             status.status = message.as_str().into();
             dock.set_surface_status(status);
         }
+        self.sync_launcher_status();
+        self.sync_toolbar_status();
+    }
+
+    /// Mirrors refreshing/stale/status into the launcher surface.
+    fn sync_launcher_status(&self) {
+        let Some(launcher) = self.launcher_and_upgrade() else {
+            return;
+        };
+        let Some(panel) = self.panel.upgrade() else {
+            return;
+        };
+        launcher.set_refreshing(panel.get_refreshing());
+        launcher.set_stale(panel.get_stale());
+        launcher.set_status(panel.get_status());
+        launcher.set_notice(panel.get_startup_notice());
+    }
+
+    /// Mirrors status into the toolbar surface.
+    fn sync_toolbar_status(&self) {
+        let Some(toolbar) = self.toolbar_and_upgrade() else {
+            return;
+        };
+        let Some(panel) = self.panel.upgrade() else {
+            return;
+        };
+        toolbar.set_surface_status(DockStatus {
+            notice: "".into(),
+            status: panel.get_status(),
+            refreshing: panel.get_refreshing(),
+            stale: panel.get_stale(),
+        });
     }
 
     fn dock_and_upgrade(&self) -> Option<Dock> {
         self.dock.as_ref().and_then(|dock| dock.upgrade())
     }
 
-    /// Applies one finished observation: panel rows and launcher when the
-    /// panel is live, otherwise the dock strip alone (a dropped panel cannot
-    /// render, but the dock still needs the result).
-    fn apply_observation_on(&self, panel: &Panel, result: Result<PanelSnapshot, String>) {
-        if let Some(dock) = self.dock_and_upgrade() {
-            apply_result_to_both(self, panel, &dock, result);
-        } else {
-            apply_result(self, panel, result);
-        }
+    fn toolbar_and_upgrade(&self) -> Option<Toolbar> {
+        self.toolbar.as_ref().and_then(|toolbar| toolbar.upgrade())
     }
 
     /// Mirrors the panel's busy/stale/status state into the dock and repaints
@@ -288,7 +570,43 @@ impl PanelController {
         status.status = panel.get_status();
         dock.set_surface_status(status);
 
+        // Identity text on the toolbar; the focused key drives the dock's
+        // accent indicator (only keys present in the snapshot are eligible).
+        let identity = self.core.identity();
+        let focused_key = identity
+            .focused_window_key
+            .as_deref()
+            .filter(|key| {
+                self.core.retained_snapshot().is_some_and(|snapshot| {
+                    snapshot.windows().iter().any(|window| window.key() == *key)
+                })
+            })
+            .unwrap_or_default();
+        if let Some(toolbar) = self.toolbar_and_upgrade() {
+            toolbar.set_user_name(identity.user_name.as_str().into());
+            toolbar.set_focused_app(
+                self.core
+                    .retained_snapshot()
+                    .and_then(|snapshot| {
+                        identity.focused_window_key.as_deref().and_then(|key| {
+                            snapshot
+                                .windows()
+                                .iter()
+                                .find(|window| window.key() == key)
+                                .map(|window| sanitize::caption(window.title()))
+                        })
+                    })
+                    .unwrap_or_default()
+                    .as_str()
+                    .into(),
+            );
+            toolbar.set_clock(identity.clock.as_str().into());
+            toolbar.set_language(identity.language.as_str().into());
+        }
+        dock.set_focused_key(focused_key.into());
+
         self.refresh_strip(&dock);
+        self.show_launcher_tiles();
     }
 
     fn refresh_strip(&self, dock: &Dock) {
@@ -326,71 +644,139 @@ impl PanelController {
         dock.set_running_windows(ModelRc::new(VecModel::from(windows)));
     }
 
-    /// Places the strip inside the work area and applies the fullscreen hide.
-    /// Called after show (so the monitor's DPI scale is known), after every
-    /// successful observation, and immediately after an explicit Save that
-    /// changed the edge. A fullscreen work area hides the strip entirely; the
-    /// UI, subscription, and heartbeat keep running, and the next passive
-    /// notification-driven observation shows it again when fullscreen ends.
-    fn apply_geometry(&self, context: Option<crate::DockContext>) {
+    /// Places the dock and toolbar windows inside the monitor bounds and
+    /// applies the fullscreen hide. Called after show (so the monitor's DPI
+    /// scale is known), after every successful observation, and immediately
+    /// after an explicit Save that changed the edge.
+    ///
+    /// Re-reservation is change-driven: only when the desired physical rect
+    /// differs from the last attached one is the old lease dropped and the
+    /// surface re-attached against the new RECT (the native side reserves at
+    /// attach time only). Unchanged-geometry observations touch nothing
+    /// native. Fullscreen hides both bars (their leases drop first); the
+    /// heartbeat, watcher, and loop keep running, and the next
+    /// non-fullscreen observation shows both bars again.
+    fn apply_geometry(&self, context: Option<crate::DockContext>) -> Result<bool, String> {
         let Some(dock) = self.dock_and_upgrade() else {
-            return;
+            return Ok(false);
         };
         let Some(context) = context else {
-            return;
+            return Ok(false);
         };
-        if context.fullscreen_active() {
-            let _ = dock.hide();
-            return;
-        }
-        let edge = self.core.applied_dock_edge();
-        // Left/right strips lay out vertically; bottom/top horizontally.
-        dock.set_vertical(matches!(
-            edge,
-            crate::DockEdge::Left | crate::DockEdge::Right
-        ));
+        let scale = dock.window().scale_factor();
+        let tile_count =
+            dock.get_pinned_apps().row_count() + dock.get_running_windows().row_count();
         let compact = dock.get_compact();
-        let base_thickness = if compact {
-            crate::dock::DOCK_THICKNESS_COMPACT
+        // Preview positioning uses the current UI edge; pin saves still use
+        // the independent last-saved edge from the core.
+        let edge = self
+            .panel
+            .upgrade()
+            .map(|panel| crate::dock_edge_from_index(panel.get_dock_edge_index()))
+            .unwrap_or_else(|| self.core.applied_dock_edge());
+        dock.set_edge(crate::dock_edge_to_index(edge));
+        let rect = crate::dock::dock_rect(context, edge, tile_count, compact, scale);
+        let fullscreen = context.fullscreen_active();
+        let mut leases = self.leases.borrow_mut();
+
+        if !fullscreen {
+            // Dock: never reserves (Seelen OnOverlap default), but its lease
+            // tracks the geometry for the shared registry bookkeeping.
+            let dock_rect_tuple = (rect.x, rect.y, rect.width, rect.height);
+            if leases.geometry_changed(SurfaceKind::Dock, dock_rect_tuple) {
+                leases.detach(SurfaceKind::Dock);
+                dock.window()
+                    .set_size(slint::WindowSize::Physical(slint::PhysicalSize::new(
+                        rect.width,
+                        rect.height,
+                    )));
+                dock.window().set_position(slint::WindowPosition::Physical(
+                    slint::PhysicalPosition::new(rect.x, rect.y),
+                ));
+                dock.show().map_err(|error| error.to_string())?;
+                leases.attach(
+                    SurfaceKind::Dock,
+                    self.core.host().as_ref(),
+                    dock.window(),
+                    dock_rect_tuple,
+                )?;
+            } else {
+                dock.show().map_err(|error| error.to_string())?;
+            }
+            // Toolbar: full monitor bounds width at the top edge (32px).
+            if let Some(toolbar) = self.toolbar_and_upgrade() {
+                let rect = crate::dock::toolbar_rect(context, scale);
+                let toolbar_rect_tuple = (rect.x, rect.y, rect.width, rect.height);
+                if leases.geometry_changed(SurfaceKind::Toolbar, toolbar_rect_tuple) {
+                    leases.detach(SurfaceKind::Toolbar);
+                    toolbar.window().set_size(slint::WindowSize::Physical(
+                        slint::PhysicalSize::new(rect.width, rect.height),
+                    ));
+                    toolbar
+                        .window()
+                        .set_position(slint::WindowPosition::Physical(
+                            slint::PhysicalPosition::new(rect.x, rect.y),
+                        ));
+                    toolbar.show().map_err(|error| error.to_string())?;
+                    leases.attach(
+                        SurfaceKind::Toolbar,
+                        self.core.host().as_ref(),
+                        toolbar.window(),
+                        toolbar_rect_tuple,
+                    )?;
+                } else {
+                    toolbar.show().map_err(|error| error.to_string())?;
+                }
+            }
         } else {
-            crate::dock::DOCK_THICKNESS
-        };
-        // Vertical command labels need room beside a stock scrollbar.
-        let thickness = base_thickness + if dock.get_vertical() { 24 } else { 0 };
-        let rect = crate::dock::dock_rect(context, edge, thickness, dock.window().scale_factor());
-        dock.window()
-            .set_size(slint::WindowSize::Physical(slint::PhysicalSize::new(
-                rect.width,
-                rect.height,
-            )));
-        dock.window().set_position(slint::WindowPosition::Physical(
-            slint::PhysicalPosition::new(rect.x, rect.y),
-        ));
-        let _ = dock.show();
+            // Fullscreen: drop both leases before the hides (the windows may
+            // lose their HWNDs); recovery stays possible via the launcher's
+            // rescue/menu actions once it is reopened.
+            leases.detach(SurfaceKind::Dock);
+            leases.detach(SurfaceKind::Toolbar);
+            dock.hide().map_err(|error| error.to_string())?;
+            if let Some(toolbar) = self.toolbar_and_upgrade() {
+                toolbar.hide().map_err(|error| error.to_string())?;
+            }
+        }
+        drop(leases);
+        Ok(true)
     }
 
-    /// Opens (creates not; already constructed) and shows the launcher and
-    /// settings window in dock mode. Its close button hides only the window.
-    fn open_applications(&self) {
-        if let Some(panel) = self.panel.upgrade() {
-            let _ = panel.show();
+    fn update_geometry(&self) {
+        if let Err(error) = self.apply_geometry(self.core.dock_context()) {
+            self.fail_surface(error);
         }
     }
 
-    /// Copies the panel's current theme preview into the dock's Palette.
-    fn sync_dock_theme(&self) {
-        let Some(dock) = self.dock_and_upgrade() else {
-            return;
-        };
-        let Some(panel) = self.panel.upgrade() else {
-            return;
-        };
-        let scheme = match crate::theme_from_index(panel.get_theme_index()) {
+    /// Apply the shared live color/density/edge preview without saving it.
+    fn sync_appearance(&self) {
+        let scheme = match crate::theme_from_index(
+            self.panel
+                .upgrade()
+                .map(|panel| panel.get_theme_index())
+                .unwrap_or(0),
+        ) {
             crate::Theme::Light => slint::language::ColorScheme::Light,
             crate::Theme::Dark => slint::language::ColorScheme::Dark,
             crate::Theme::System => slint::language::ColorScheme::Unknown,
         };
-        dock.global::<Palette>().set_color_scheme(scheme);
+        if let Some(dock) = self.dock_and_upgrade() {
+            dock.global::<Palette>().set_color_scheme(scheme);
+            dock.global::<SeelenPalette>().set_color_scheme(scheme);
+            if let Some(panel) = self.panel.upgrade() {
+                dock.set_compact(panel.get_compact());
+            }
+        }
+        if let Some(toolbar) = self.toolbar_and_upgrade() {
+            toolbar.global::<Palette>().set_color_scheme(scheme);
+            toolbar.global::<SeelenPalette>().set_color_scheme(scheme);
+        }
+        if let Some(launcher) = self.launcher_and_upgrade() {
+            launcher.global::<Palette>().set_color_scheme(scheme);
+            launcher.global::<SeelenPalette>().set_color_scheme(scheme);
+        }
+        self.update_geometry();
     }
 
     /// Activates a window through the host. Guarded twice: the panel refresh
@@ -474,7 +860,9 @@ impl PanelController {
                 if let Some(panel) = self.panel.upgrade() {
                     self.show_apps(&panel, &panel.get_search());
                 }
+                self.show_launcher_tiles();
                 self.render();
+                self.update_geometry();
             }
             Err(error) => self.report_message(&format!(
                 "Could not save pins: {}",
@@ -515,11 +903,7 @@ impl PanelController {
             Ok(()) => {
                 self.core.record_applied(&preferences);
                 panel.set_status("Preferences saved".into());
-                let context = self
-                    .core
-                    .retained_snapshot()
-                    .and_then(|snapshot| snapshot.dock_context());
-                self.apply_geometry(context);
+                self.update_geometry();
                 self.render();
             }
             Err(error) => {
@@ -536,21 +920,41 @@ impl PanelController {
             .panel
             .upgrade()
             .and_then(|panel| model_key(&panel.get_apps(), key, |row| row.key.to_string()));
-        panel_key.or_else(|| {
-            self.dock_and_upgrade()
-                .and_then(|dock| model_key(&dock.get_pinned_apps(), key, |app| app.key.to_string()))
-        })
+        panel_key
+            .or_else(|| {
+                self.launcher_and_upgrade().and_then(|launcher| {
+                    model_key(&launcher.get_tiles(), key, |tile| tile.key.to_string())
+                })
+            })
+            .or_else(|| {
+                self.dock_and_upgrade().and_then(|dock| {
+                    model_key(&dock.get_pinned_apps(), key, |app| app.key.to_string())
+                })
+            })
     }
 
     /// UI-thread routes for the shared notification bus. A gone panel reports
     /// busy so the bus never spawns work after the surface is dropped.
+    ///
+    /// Send+Sync closures capture only weak component handles. The scheduled
+    /// UI callback owns the controller; its thread-affine state never crosses
+    /// a thread, and the core never strongly captures itself in stored routes.
     pub(crate) fn routes(&self) -> Routes {
-        let busy_controller = self.clone();
-        let refresh_controller = self.clone();
+        let busy_panel = self.panel.clone();
+        let refresh_panel = self.panel.clone();
+        // Route back through the component callback; never capture the core
+        // strongly inside its own stored routes or send UI-only leases.
         Routes {
-            is_refreshing: Arc::new(move || busy_controller.busy()),
+            is_refreshing: Arc::new(move || {
+                busy_panel
+                    .upgrade()
+                    .map(|panel| panel.get_refreshing())
+                    .unwrap_or(true)
+            }),
             start_refresh: Arc::new(move || {
-                let _ = refresh_controller.refresh();
+                if let Some(panel) = refresh_panel.upgrade() {
+                    panel.invoke_refresh_requested();
+                }
             }),
         }
     }
@@ -560,7 +964,7 @@ impl PanelController {
 fn dock_icon(controller: &PanelController, icon: Option<&crate::PixelIcon>) -> slint::Image {
     controller
         .icon_cache
-        .lock()
+        .borrow_mut()
         .optional(icon)
         .unwrap_or_default()
 }
@@ -618,14 +1022,17 @@ pub(crate) fn apply_result(
 ) {
     match result {
         Ok(snapshot) => {
+            // Identity text arrives with each successful observation; the
+            // focused key is validated against this snapshot in `render`.
+            controller.core.refresh_identity();
             let projection = crate::projection::project(&snapshot, &panel.get_search());
+            // Publish the fresh catalog before projecting application rows.
+            controller.core.store_snapshot(snapshot);
             show(panel, &projection);
             controller.show_apps(panel, &panel.get_search());
             panel.set_status(projection.status.as_str().into());
             panel.set_has_snapshot(true);
             panel.set_stale(false);
-            // Retain the full snapshot for filtering without new observation.
-            controller.core.store_snapshot(snapshot);
         }
         Err(error) => {
             let prefix = if panel.get_has_snapshot() {
@@ -649,30 +1056,48 @@ pub(crate) fn apply_result(
     }
 }
 
-/// Both-surfaces completion: panel state first (it is the truth), then dock
-/// mirror, strip, and geometry. Stale/busy handling is identical.
+/// Apply a fresh observation on the UI thread and announce readiness only
+/// after real monitor geometry and native bar leases are established.
 fn apply_result_to_both(
     controller: &PanelController,
     panel: &Panel,
-    _dock: &Dock,
     result: Result<PanelSnapshot, String>,
 ) {
+    let fresh = result.is_ok();
     apply_result(controller, panel, result);
     controller.render();
-    let context = controller
-        .core
-        .retained_snapshot()
-        .and_then(|snapshot| snapshot.dock_context());
-    controller.apply_geometry(context);
+    if !fresh {
+        return;
+    }
+    let context = controller.core.dock_context();
+    match controller.apply_geometry(context) {
+        Err(error) => {
+            controller.fail_surface(error);
+        }
+        Ok(applied) => {
+            if applied {
+                // Real monitor geometry applied + bar leases attached:
+                // the immediate readiness pulse (steps 4-5 of the startup
+                // order; arm() is one-shot so later observations are no-ops).
+                controller.pulse_readiness();
+            }
+        }
+    }
 }
 
-/// Builds the requested surface pair, installs callbacks, and runs the loop.
+/// Builds the requested surfaces, installs callbacks, and runs the loop.
 ///
 /// Panel mode runs the panel normally (closing it quits). Dock mode shows the
-/// strip and keeps the loop alive with `run_event_loop_until_quit`: hiding
-/// the strip (fullscreen work area) or the launcher panel must never
-/// terminate the UI or the watchdog; exit is the strip's explicit Exit
-/// button, which the host supervisor follows by restoring the Explorer shell.
+/// dock strip, the top toolbar, and the frameless launcher, keeps the loop
+/// alive with `run_event_loop_until_quit`: hiding any surface (fullscreen,
+/// Escape in the launcher) must never terminate the UI or the watchdog; exit
+/// is an explicit Exit button, which the host supervisor follows by restoring
+/// the Explorer shell.
+///
+/// The heartbeat stays unarmed until startup is provably ready: the first
+/// successful observation whose real monitor geometry applied and whose bar
+/// leases attached. Setup failure exits for immediate taskbar restoration;
+/// never-arriving geometry instead reaches the supervisor's startup timeout.
 pub(crate) fn run(
     host: Arc<Host>,
     preferences: PanelPreferences,
@@ -705,53 +1130,111 @@ pub(crate) fn run(
             .into(),
     );
 
-    let heartbeat_timer = crate::start_heartbeat(&run_options);
+    // The heartbeat is created but never armed on failure paths; the timer
+    // stays retained until the loop ends (the drop below makes that
+    // explicit). In dock mode the controller arms it after the first
+    // successful observation with real geometry and both bar leases.
+    let heartbeat = std::rc::Rc::new(std::cell::RefCell::new(crate::Heartbeat::unarmed(
+        &run_options,
+    )));
+    // The readiness-pulse armer: a UI-thread panel callback (the heartbeat
+    // is deliberately not Send; the Send observation route reaches it only
+    // through this indirection). `Heartbeat::arm` is one-shot (it takes the
+    // closure), so repeated invocations are harmless.
+    {
+        let heartbeat = std::rc::Rc::clone(&heartbeat);
+        panel.on_readiness_pulse(move || heartbeat.borrow_mut().arm());
+    }
 
     match run_options.surface {
         crate::SurfaceMode::Panel => {
             let controller = PanelController::new(&panel, Arc::clone(&core));
             core.install_routes(controller.routes());
             controller.apply_filter();
+            // Panel mode pulses immediately: its only surface is ready.
+            heartbeat.borrow_mut().arm();
             let _ = controller.refresh();
             panel.run()?;
         }
         crate::SurfaceMode::Dock => {
             let dock = Dock::new()?;
+            let toolbar = Toolbar::new()?;
+            let launcher = Launcher::new()?;
             dock.set_compact(preferences.compact());
             // Single-flight starts idle; refresh() below owns the busy flag.
-            dock.set_surface_status(DockStatus {
+            let initial_status = DockStatus {
                 notice: "".into(),
                 status: "Ready to observe".into(),
                 refreshing: false,
                 stale: false,
-            });
-            let controller = PanelController::new_with_dock(&panel, &dock, Arc::clone(&core));
+            };
+            dock.set_surface_status(initial_status.clone());
+            toolbar.set_surface_status(initial_status);
+            launcher.set_version(env!("CARGO_PKG_VERSION").into());
+            launcher.set_status("Ready to observe".into());
+            launcher.set_notice(panel.get_startup_notice());
+            let controller = PanelController::new_with_dock(
+                &panel,
+                &dock,
+                &toolbar,
+                &launcher,
+                Arc::clone(&core),
+            );
+            // Drop native leases before any component/HWND is destroyed, even
+            // if another component callback still retains the controller.
+            let _surface_scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
             core.install_routes(controller.routes());
             controller.apply_filter();
-            controller.sync_dock_theme();
-            // The launcher panel starts hidden in dock mode; the strip's
-            // Applications button shows it, and its close button only hides.
-            dock.window().on_close_requested(|| {
-                // The strip leaves the screen only via the explicit Exit
-                // button (which quits the loop); a system close request just
-                // hides the window and the loop keeps running.
-                slint::CloseRequestResponse::HideWindow
+            controller.sync_appearance();
+            // The launcher starts hidden in dock mode; the dock's start tile
+            // or the toolbar's settings entry shows it.
+            // Closing a bar ends the session; hiding a launcher drops its
+            // thread-affine native lease before the HWND can disappear.
+            for window in [dock.window(), toolbar.window()] {
+                window.on_close_requested(|| {
+                    let _ = slint::quit_event_loop();
+                    slint::CloseRequestResponse::KeepWindowShown
+                });
+            }
+            launcher.window().on_close_requested({
+                let controller = controller.clone();
+                move || {
+                    controller.hide_launcher();
+                    slint::CloseRequestResponse::KeepWindowShown
+                }
             });
-            panel.window().on_close_requested(|| {
-                // In dock mode the panel is a secondary launcher window:
-                // closing it hides only the panel, the strip keeps running.
-                slint::CloseRequestResponse::HideWindow
+            // The clock timer refreshes only the toolbar's clock text.
+            let _clock_guard = crate::start_clock_timer(&core, {
+                let toolbar = toolbar.as_weak();
+                std::sync::Arc::new(move |clock| {
+                    if let Some(toolbar) = toolbar.upgrade() {
+                        toolbar.set_clock(clock.as_str().into());
+                    }
+                })
             });
-            let _ = controller.refresh();
-            // Show the strip after the loop data is set; geometry (which may
-            // hide it for a fullscreen work area) runs on each observation.
+            // Exact startup order (contract): (1) show the recovery-capable
+            // bars with NO leases and NO pulse; (2) the single-flight first
+            // observation runs asynchronously (the UI thread stays
+            // responsive); (3) its completion applies the REAL monitor
+            // position/size and then (4) attaches both bar leases through
+            // the UI-thread registry, and (5) pulses and arms the timer
+            // immediately. No provisional/default appbar registration ever
+            // happens. Attach errors exit for immediate restoration; geometry
+            // that never arrives instead reaches the supervisor's timeout.
             dock.show()?;
+            toolbar.show()?;
+            // (2) Async first observation: its completion handler does
+            // steps (3)-(5): real geometry, bar leases, immediate pulse.
+            let _ = controller.refresh();
             slint::run_event_loop_until_quit()?;
+            if let Some(error) = controller.surface_failure.borrow_mut().take() {
+                return Err(slint::PlatformError::Other(error));
+            }
         }
     }
     // The heartbeat timer is retained until the loop has ended; dropping it
     // earlier would silently stop the two-second watchdog signal.
-    drop(heartbeat_timer);
+    drop(heartbeat);
     Ok(())
 }
 
