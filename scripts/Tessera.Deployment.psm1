@@ -394,7 +394,7 @@ function Get-DeploymentShellProblems {
             $problems += "The per-user Winlogon Shell value has an unsupported registry type ($($raw.Kind)); shell activation is refused."
         } elseif (Test-DeploymentExplorerCommand -Raw $raw) {
             return $problems
-        } elseif (Test-DeploymentOwnShellCommand -Value $raw.Value) {
+        } elseif (Test-DeploymentOwnShellCommand -Raw $raw -Kind $raw.Kind) {
             return $problems
         } else {
             $problems += "The per-user Winlogon Shell value is already set to another program; shell activation is refused."
@@ -418,14 +418,58 @@ function Test-DeploymentExplorerCommand {
 
 # True when the current per-user Shell value is exactly the command this
 # deployment previously recorded and the backup is still active, so
-# re-running preflight stays idempotent.
+# re-running preflight stays idempotent. Ownership is typed: the value must
+# be a present REG_SZ whose bytes equal the recorded command; a foreign
+# REG_EXPAND_SZ with identical bytes is not accepted.
 function Test-DeploymentOwnShellCommand {
-    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+    param(
+        [Parameter(Mandatory)]$Raw,
+        [Parameter(Mandatory)][AllowNull()][Microsoft.Win32.RegistryValueKind]$Kind
+    )
+    if (-not $Raw.Present -or $null -eq $Raw.Value) { return $false }
     $state = Get-ShellRecoveryState
     if (-not $state.Exists -or -not $state.Active) { return $false }
+    if (-not $state.Fields.ContainsKey('ShellCommand')) { return $false }
     $shellCommand = [string]$state.Fields['ShellCommand']
     if ([string]::IsNullOrWhiteSpace($shellCommand)) { return $false }
-    return $Value -eq $shellCommand
+    return ($Kind -eq [Microsoft.Win32.RegistryValueKind]::String -and
+        [string]::Equals($Raw.Value, $shellCommand, [StringComparison]::Ordinal))
+}
+
+# Decode helper: strict fail-closed read of one recovery field. Fields must
+# exist; DWORD counters (SchemaVersion, Active, OriginalPresent, Kind) must
+# be REG_DWORD with an in-range non-negative value; string fields must be
+# REG_SZ. No normalization, no coercion, and no unbounded string data.
+function Get-DeploymentRecoveryField {
+    param(
+        [Parameter(Mandatory)][Microsoft.Win32.RegistryKey]$Key,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][bool]$IsCounter
+    )
+    $raw = Get-DeploymentRawValue -Key $Key -Name $Name
+    if (-not $raw.Present) {
+        throw "The recovery field $Name is missing from the backup."
+    }
+    if ($IsCounter) {
+        if ($raw.Kind -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
+            throw "The recovery field $Name is not a REG_DWORD value."
+        }
+        $value = [int]$Key.GetValue($Name)
+        if ($value -lt 0) {
+            throw "The recovery field $Name is negative and cannot be decoded."
+        }
+        return $value
+    }
+    if ($raw.Kind -ne [Microsoft.Win32.RegistryValueKind]::String) {
+        throw "The recovery field $Name is not a REG_SZ value."
+    }
+    $value = [string]$raw.Value
+    if ($value.Length -ge 32768 -or $value.Contains([char]0)) {
+        throw "The recovery field $Name is not a bounded, NUL-free UTF-16 string."
+    }
+    # Refuse unpaired surrogates rather than replacing the stored data.
+    $null = [Text.UTF8Encoding]::new($false, $true).GetByteCount($value)
+    return $value
 }
 
 function Get-ShellRecoveryState {
@@ -437,16 +481,47 @@ function Get-ShellRecoveryState {
         return [pscustomobject]@{ Exists = $false; Active = $false; Fields = @{} }
     }
     try {
+        if (@($key.GetValueNames()).Count -eq 0) {
+            return [pscustomobject]@{ Exists = $false; Active = $false; Fields = @{} }
+        }
         $fields = @{}
         foreach ($name in $script:RequiredRecoveryFields) {
-            $raw = Get-DeploymentRawValue -Key $key -Name $name
-            if ($raw.Present -and $raw.Kind -eq [Microsoft.Win32.RegistryValueKind]::DWord) {
-                $fields[$name] = [int]$key.GetValue($name)
-            } elseif ($raw.Present) {
-                $fields[$name] = [string]$raw.Value
+            $isCounter = $name -in 'SchemaVersion', 'Active', 'OriginalPresent', 'OriginalKind'
+            $fields[$name] = Get-DeploymentRecoveryField -Key $key -Name $name -IsCounter $isCounter
+        }
+        if ([int]$fields['SchemaVersion'] -ne $script:RecoverySchemaVersion) {
+            throw "The recovery backup uses schema version $($fields['SchemaVersion']); only schema $script:RecoverySchemaVersion is supported."
+        }
+        if ([int]$fields['OriginalPresent'] -ne 0 -and [int]$fields['OriginalPresent'] -ne 1) {
+            throw "The recovery field OriginalPresent must be 0 or 1; found $($fields['OriginalPresent'])."
+        }
+        if ([int]$fields['Active'] -ne 0 -and [int]$fields['Active'] -ne 1) {
+            throw "The recovery field Active must be 0 or 1; found $($fields['Active'])."
+        }
+        if ([int]$fields['OriginalPresent'] -eq 1) {
+            $originalKind = [int]$fields['OriginalKind']
+            if ($null -eq (ConvertFrom-RegistryTypeCode -TypeCode $originalKind)) {
+                throw "The recovery field OriginalKind is not a supported registry type: $originalKind."
             }
         }
-        $active = $fields.ContainsKey('Active') -and [int]$fields['Active'] -eq 1
+        elseif ([int]$fields['OriginalKind'] -ne 1 -or [string]$fields['OriginalValue'] -ne '') {
+            throw 'The recovery backup has inconsistent absent-original fields.'
+        }
+        $directory = [string]$fields['InstallDirectory']
+        $command = [string]$fields['ShellCommand']
+        if ($directory -notmatch '^(?:[A-Za-z]:[\\/]|\\\\)' -or
+            $directory -match '[\x00-\x1f"]' -or
+            $command.Length -lt 3 -or -not $command.StartsWith('"') -or -not $command.EndsWith('"')) {
+            throw 'The recovery backup does not name an absolute installed supervisor.'
+        }
+        $executable = $command.Substring(1, $command.Length - 2)
+        $separator = $executable.LastIndexOfAny([char[]]@('\', '/'))
+        if ($separator -lt 1 -or $executable -match '[\x00-\x1f"]' -or
+            -not [string]::Equals($executable.Substring(0, $separator), $directory.TrimEnd([char[]]@('\', '/')), [StringComparison]::Ordinal) -or
+            -not [string]::Equals($executable.Substring($separator + 1), 'tessera-shell.exe', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The recovery command must name only tessera-shell.exe in the recorded installation directory.'
+        }
+        $active = [int]$fields['Active'] -eq 1
         return [pscustomobject]@{
             Exists = $true
             Active = $active
@@ -608,6 +683,9 @@ function Publish-RecoveryRuntime {
 # readback, publishes Active=1, and only then overrides Shell with the
 # quoted supervisor command. Any failure after activation rolls the shell
 # value and the Active flag back without touching unrelated values.
+# The BeforeShellOverride hook (test-only) runs inside the same owned
+# region as the override, so an injected failure exercises exactly the
+# production rollback path.
 #
 # The caller must pass -PreflightPassed after running Test-ShellSupport and
 # the supervisor runtime verification; the engine itself performs no
@@ -643,16 +721,18 @@ function Invoke-ShellActivation {
             if ($current.Present -and $null -eq $current.Value) {
                 throw "The existing Shell value has registry type $($current.Kind), which this deployment does not manage."
             }
+            $original = Resolve-DeploymentActivationBackup -Current $current -ShellCommand $shellCommand -InstallDirectory $installDirectory
             $recovery = Open-DeploymentRegistryKey -Scope User -SubKey $script:DeploymentContext.RecoverySubKey -Writable
             try {
-                $original = Resolve-DeploymentActivationBackup -Current $current -ShellCommand $shellCommand -InstallDirectory $installDirectory
                 Write-DeploymentRecoveryFields -Key $recovery -ShellCommand $shellCommand -InstallDirectory $installDirectory -Original $original
                 if (-not $script:DryRun) {
                     $backup = Read-DeploymentBackupKey
-                    foreach ($name in $script:RequiredRecoveryFields) {
-                        if (-not $backup.Fields.ContainsKey($name)) {
-                            throw "The recovery backup field $name could not be verified after writing."
-                        }
+                    if ([int]$backup.Fields['OriginalPresent'] -ne [int]$original.Present -or
+                        [int]$backup.Fields['OriginalKind'] -ne [int]$original.Kind -or
+                        -not [string]::Equals($backup.Fields['OriginalValue'], $original.Value, [StringComparison]::Ordinal) -or
+                        -not [string]::Equals($backup.Fields['ShellCommand'], $shellCommand, [StringComparison]::Ordinal) -or
+                        -not [string]::Equals($backup.Fields['InstallDirectory'], $installDirectory, [StringComparison]::Ordinal)) {
+                        throw 'The recovery backup does not match the original and deployment identity after writing.'
                     }
                 }
                 Set-DeploymentActiveState -Key $recovery -Active $true
@@ -662,17 +742,20 @@ function Invoke-ShellActivation {
                     return
                 }
 
-                if ($script:DeploymentContext.Hooks.ContainsKey('BeforeShellOverride')) {
-                    # Test hook: injects a failure after the Active flag is
-                    # published but before the override, exercising rollback.
-                    & $script:DeploymentContext.Hooks['BeforeShellOverride']
-                }
                 $overrideError = $null
                 $rollbackError = $null
                 try {
+                    if ($script:DeploymentContext.Hooks.ContainsKey('BeforeShellOverride')) {
+                        # Test hook: injects a failure inside the same owned
+                        # override region, so an injected fault rolls the
+                        # shell value and the Active flag back exactly like
+                        # a real write failure.
+                        & $script:DeploymentContext.Hooks['BeforeShellOverride']
+                    }
                     $winlogon.SetValue($script:ShellValueName, $shellCommand, [Microsoft.Win32.RegistryValueKind]::String)
                     $after = Get-DeploymentRawValue -Key $winlogon -Name $script:ShellValueName
-                    if (-not $after.Present -or $after.Value -ne $shellCommand) {
+                    if (-not $after.Present -or $after.Kind -ne [Microsoft.Win32.RegistryValueKind]::String -or
+                        -not [string]::Equals($after.Value, $shellCommand, [StringComparison]::Ordinal)) {
                         throw 'the new Shell value did not verify after being written'
                     }
                 } catch {
@@ -701,15 +784,16 @@ function Invoke-ShellActivation {
     }
 }
 
-# Decides the Original* backup fields for this activation. An existing backup
-# is protected: original fields are never replaced, and an active deployment
-# only accepts an idempotent rerun with the same shell command.
+# Decides the Original* backup fields before opening a writable recovery key.
+# A truly empty key is no record; incomplete or unknown nonempty records are
+# refused by the decoder. Preserve the original across idempotent attempts.
 function Resolve-DeploymentActivationBackup {
     param(
         [Parameter(Mandatory)]$Current,
         [Parameter(Mandatory)][string]$ShellCommand,
         [Parameter(Mandatory)][string]$InstallDirectory
     )
+    # State was decoded read-only before any recovery key creation.
     $existing = Read-DeploymentBackupKey
     if (-not $existing.Exists) {
         return @{
@@ -727,22 +811,26 @@ function Resolve-DeploymentActivationBackup {
         }
     }
     if ($existing.Active) {
-        if ($existing.Fields['ShellCommand'] -ne $ShellCommand) {
+        if (-not [string]::Equals($existing.Fields['ShellCommand'], $ShellCommand, [StringComparison]::Ordinal)) {
             throw 'A Tessera shell is already active; restore it first before activating again.'
         }
-        if (-not $Current.Present -or $Current.Value -ne $ShellCommand) {
+        # Ownership means the exact REG_SZ command; a foreign value with the
+        # same bytes but a different registry type is not ours to keep.
+        $isOwnOverride = ($Current.Present -and
+            $Current.Kind -eq [Microsoft.Win32.RegistryValueKind]::String -and
+            [string]::Equals($Current.Value, $ShellCommand, [StringComparison]::Ordinal))
+        if (-not $isOwnOverride) {
             throw 'The active shell configuration was changed outside this deployment; restore it first.'
         }
     } else {
         $expectedPresent = [int]$existing.Fields['OriginalPresent'] -eq 1
-        if ($expectedPresent -ne [bool]$Current.Present) {
-            throw 'The shell configuration no longer matches the stored original; restore it first.'
+        $storedOriginal = @{
+            Present = $expectedPresent
+            Kind = [int]$existing.Fields['OriginalKind']
+            Value = [string]$existing.Fields['OriginalValue']
         }
-        if ($expectedPresent) {
-            $kind = ConvertFrom-RegistryTypeCode -TypeCode ([int]$existing.Fields['OriginalKind'])
-            if ($null -eq $kind -or $Current.Kind -ne $kind -or $Current.Value -ne [string]$existing.Fields['OriginalValue']) {
-                throw 'The shell configuration no longer matches the stored original; restore it first.'
-            }
+        if (-not (Test-DeploymentRestoreMatches -Current $Current -Original $storedOriginal)) {
+            throw 'The shell configuration no longer matches the stored original; restore it first.'
         }
     }
     return @{
@@ -754,7 +842,7 @@ function Resolve-DeploymentActivationBackup {
 
 function Read-DeploymentBackupKey {
     $state = Get-ShellRecoveryState
-    return @{ Exists = [bool]$state.Exists; Fields = $state.Fields }
+    return @{ Exists = [bool]$state.Exists; Active = [bool]$state.Active; Fields = $state.Fields }
 }
 
 function Write-DeploymentRecoveryFields {
@@ -764,18 +852,19 @@ function Write-DeploymentRecoveryFields {
         [Parameter(Mandatory)][string]$InstallDirectory,
         [Parameter(Mandatory)]$Original
     )
+    $existing = Read-DeploymentBackupKey
     if ($script:DryRun) {
         # A WhatIf run opens the recovery key read-only; it may be null when
-        # no backup exists yet, and a plan must not create it. Writing the
-        # backup fields is the first real (non-WhatIf) side effect.
-        if ($null -eq $Key) {
+        # no backup exists yet, and a plan must not create it. A blank
+        # record (no SchemaVersion yet) is likewise nothing to update, so
+        # WhatIf writes nothing in either case. Writing the backup fields
+        # is the first real (non-WhatIf) side effect.
+        if ($null -eq $Key -or -not $existing.Fields.ContainsKey('SchemaVersion')) {
             Write-Host 'WHATIF: Would create the shell recovery backup key and record the deployment fields.'
         }
         return
     }
-    $existing = Read-DeploymentBackupKey
-    if (-not $existing.Exists -or -not $existing.Fields.ContainsKey('SchemaVersion')) {
-        if ($script:DryRun) { return }
+    if (-not $existing.Exists) {
         $Key.SetValue('SchemaVersion', $script:RecoverySchemaVersion, [Microsoft.Win32.RegistryValueKind]::DWord)
         $Key.SetValue('Active', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
         $Key.SetValue('OriginalPresent', [int]$Original.Present, [Microsoft.Win32.RegistryValueKind]::DWord)
@@ -785,11 +874,11 @@ function Write-DeploymentRecoveryFields {
         $Key.SetValue('InstallDirectory', $InstallDirectory, [Microsoft.Win32.RegistryValueKind]::String)
         return
     }
-    if ($existing.Fields['ShellCommand'] -ne $ShellCommand -or $existing.Fields['InstallDirectory'] -ne $InstallDirectory) {
+    if (-not [string]::Equals($existing.Fields['ShellCommand'], $ShellCommand, [StringComparison]::Ordinal) -or
+        -not [string]::Equals($existing.Fields['InstallDirectory'], $InstallDirectory, [StringComparison]::Ordinal)) {
         if ($existing.Active) {
             throw 'The stored recovery backup points to a different deployment; restore it first.'
         }
-        if ($script:DryRun) { return }
         # A new deployment on a restored (inactive) backup updates only the
         # deployment identity fields; the original fields stay protected.
         $Key.SetValue('ShellCommand', $ShellCommand, [Microsoft.Win32.RegistryValueKind]::String)
@@ -804,6 +893,32 @@ function Set-DeploymentActiveState {
     )
     if ($script:DryRun) { return }
     $Key.SetValue('Active', [int][bool]$Active, [Microsoft.Win32.RegistryValueKind]::DWord)
+    $raw = Get-DeploymentRawValue -Key $Key -Name 'Active'
+    if (-not $raw.Present -or $raw.Kind -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+        [int]$Key.GetValue('Active') -ne [int][bool]$Active) {
+        throw 'The recovery Active flag did not verify after writing.'
+    }
+}
+
+# Pure typed comparison of a raw shell value against the recorded original.
+# Returns $true only for exact presence, registry kind, and byte-equal data.
+# Callers that may accept an alternative (for example the recorded Tessera
+# command) check it separately; this helper is the single definition of
+# 'the shell configuration equals the stored original'.
+function Test-DeploymentRestoreMatches {
+    param(
+        [Parameter(Mandatory)]$Current,
+        [Parameter(Mandatory)]$Original
+    )
+    $expectedPresent = [bool]$Original.Present
+    if ([bool]$Current.Present -ne $expectedPresent) { return $false }
+    if (-not $expectedPresent) { return $true }
+    $kindCode = $null
+    try { $kindCode = [int]$Original.Kind } catch { $kindCode = $null }
+    if ($null -eq $kindCode) { throw "The stored original registry type code '$($Original.Kind)' is not an integer." }
+    $kind = ConvertFrom-RegistryTypeCode -TypeCode $kindCode
+    if ($null -eq $kind) { throw "The stored original registry type code $kindCode is not supported." }
+    return ($Current.Kind -eq $kind -and [string]::Equals($Current.Value, $Original.Value, [StringComparison]::Ordinal))
 }
 
 function Restore-DeploymentShellValue {
@@ -811,18 +926,32 @@ function Restore-DeploymentShellValue {
         [Parameter(Mandatory)][Microsoft.Win32.RegistryKey]$Winlogon,
         [Parameter(Mandatory)]$Original
     )
+    # Writes or deletes the recorded original and verifies the exact result
+    # (presence, kind, and bytes) by readback before returning. The caller
+    # must only publish Active=0 after this helper has confirmed the
+    # restore, so the same typed policy governs rollback and recovery.
     if ($Original.Present) {
-        $kind = ConvertFrom-RegistryTypeCode -TypeCode ([int]$Original.Kind)
-        if ($null -eq $kind) { throw "The stored original registry type code $($Original.Kind) is not supported." }
+        $kindCode = $null
+        try { $kindCode = [int]$Original.Kind } catch { $kindCode = $null }
+        if ($null -eq $kindCode) { throw "The stored original registry type code '$($Original.Kind)' is not an integer." }
+        $kind = ConvertFrom-RegistryTypeCode -TypeCode $kindCode
+        if ($null -eq $kind) { throw "The stored original registry type code $kindCode is not supported." }
         $Winlogon.SetValue($script:ShellValueName, [string]$Original.Value, $kind)
     } elseif (@($Winlogon.GetValueNames()) -contains $script:ShellValueName) {
         $Winlogon.DeleteValue($script:ShellValueName, $false)
     }
+    $restored = Get-DeploymentRawValue -Key $Winlogon -Name $script:ShellValueName
+    $verified = Test-DeploymentRestoreMatches -Current $restored -Original $Original
+    if (-not $verified) {
+        throw "The restored Shell value did not verify after being written; expected present=$($Original.Present) kind=$($Original.Kind)."
+    }
 }
 
 # Restores the recorded original shell value and clears Active only after
-# the exact original value and registry kind are confirmed. The backup is
-# retained as evidence; the Winlogon key itself is never deleted.
+# the exact original value and registry kind are confirmed. Ownership is
+# typed (exact REG_SZ command or the exact stored original); a foreign
+# same-bytes REG_EXPAND_SZ value or a foreign deletion is refused and the
+# backup retained. The Winlogon key itself is never deleted.
 function Invoke-ShellRestore {
     [CmdletBinding(SupportsShouldProcess)][OutputType([pscustomobject])]
     param()
@@ -834,14 +963,10 @@ function Invoke-ShellRestore {
         if (-not $backup.Exists) {
             throw 'No Tessera shell recovery backup exists; there is nothing to restore.'
         }
-        foreach ($name in $script:RequiredRecoveryFields) {
-            if (-not $backup.Fields.ContainsKey($name)) {
-                throw "The recovery backup is incomplete; the field $name is missing. Follow the emergency recovery documentation instead."
-            }
-        }
-        if ([int]$backup.Fields['SchemaVersion'] -ne $script:RecoverySchemaVersion) {
-            throw "The recovery backup uses schema version $($backup.Fields['SchemaVersion']); only schema $script:RecoverySchemaVersion is supported."
-        }
+        # Read-DeploymentBackupKey decodes every required field strictly and
+        # fail-closed: a missing field, a wrong registry type, an out-of-range
+        # counter, or an unsupported schema version throws before any policy
+        # decision, so the former manual completeness loop is redundant.
         if (-not $backup.Active) {
             Write-Verbose 'The Tessera shell is not marked active; nothing to restore.'
             return New-DeploymentRestoreResult -Action 'AlreadyRestored'
@@ -863,34 +988,42 @@ function Invoke-ShellRestore {
             if ($current.Present -and $null -eq $current.Value) {
                 throw "The current Shell value has registry type $($current.Kind), which this deployment does not manage; refusing to overwrite it."
             }
-            if ($current.Present -and $current.Value -ne $shellCommand) {
-                $originalKind = ConvertFrom-RegistryTypeCode -TypeCode $original.Kind
-                if ($current.Kind -eq $originalKind -and $current.Value -eq $original.Value) {
-                    $recovery = Open-DeploymentRegistryKey -Scope User -SubKey $script:DeploymentContext.RecoverySubKey -Writable
-                    try {
-                        Set-DeploymentActiveState -Key $recovery -Active $false
-                    } finally {
-                        if ($null -ne $recovery) { $recovery.Dispose() }
-                    }
-                    Write-Verbose 'The shell value already equals the recorded original; only the active flag was cleared.'
-                    return New-DeploymentRestoreResult -Action 'AlreadyOriginal'
-                }
+            # Typed ownership policy. The current value belongs to this
+            # deployment only when it is exactly the recorded command with
+            # the recorded REG_SZ kind, or already equals the recorded
+            # original with the exact original kind and presence. A mere
+            # string match with a different registry type (for example a
+            # foreign REG_EXPAND_SZ with the same bytes) is a foreign
+            # change and is refused; a missing value that the original
+            # recorded as present is likewise a foreign deletion.
+            $currentIsOwnCommand = ($current.Present -and
+                $current.Kind -eq [Microsoft.Win32.RegistryValueKind]::String -and
+                [string]::Equals($current.Value, $shellCommand, [StringComparison]::Ordinal))
+            $currentMatchesOriginal = Test-DeploymentRestoreMatches -Current $current -Original $original
+            if (-not $currentIsOwnCommand -and -not $currentMatchesOriginal) {
                 throw 'The shell value was changed by something other than this deployment; refusing to overwrite it and keeping the backup.'
+            }
+            if ($currentMatchesOriginal) {
+                # The shell already equals the recorded original; only the
+                # active flag is cleared.
+                $recovery = Open-DeploymentRegistryKey -Scope User -SubKey $script:DeploymentContext.RecoverySubKey -Writable
+                try {
+                    Set-DeploymentActiveState -Key $recovery -Active $false
+                } finally {
+                    if ($null -ne $recovery) { $recovery.Dispose() }
+                }
+                Write-Verbose 'The shell value already equals the recorded original; only the active flag was cleared.'
+                return New-DeploymentRestoreResult -Action 'AlreadyOriginal'
             }
             if ($script:DryRun) {
                 Write-Host 'WHATIF: Would restore the recorded original shell value'
                 return New-DeploymentRestoreResult -Action 'WouldRestore'
             }
+            # Ownership held (exact REG_SZ command); write the recorded
+            # original. Restore-DeploymentShellValue verifies the exact
+            # typed presence, kind, and bytes by readback, so Active is
+            # cleared only after that proof.
             Restore-DeploymentShellValue -Winlogon $winlogon -Original $original
-            $restored = Get-DeploymentRawValue -Key $winlogon -Name $script:ShellValueName
-            if ($original.Present) {
-                $expectedKind = ConvertFrom-RegistryTypeCode -TypeCode $original.Kind
-                if (-not $restored.Present -or $restored.Kind -ne $expectedKind -or $restored.Value -ne $original.Value) {
-                    throw 'The restored shell value does not match the recorded original; the backup is retained.'
-                }
-            } elseif ($restored.Present) {
-                throw 'The shell value is still present after restoring the recorded absence; the backup is retained.'
-            }
             $recovery = Open-DeploymentRegistryKey -Scope User -SubKey $script:DeploymentContext.RecoverySubKey -Writable
             try {
                 Set-DeploymentActiveState -Key $recovery -Active $false

@@ -238,6 +238,28 @@ function Get-ModuleRequiredRecoveryFields {
     & $module { return $script:RequiredRecoveryFields }
 }
 
+# Restores one backup field to its previously captured typed content so the
+# strict-decode test cases stay independent.
+function Restore-FixtureRecoveryField {
+    param(
+        [Parameter(Mandatory)]$Fixture,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Before
+    )
+    if (-not $Before.ContainsKey($Name)) {
+        $Fixture.RecoveryKey.DeleteValue($Name, $false)
+        return
+    }
+    $value = $Before[$Name]
+    $isCounter = $Name -in 'SchemaVersion', 'Active', 'OriginalPresent', 'OriginalKind'
+    $kind = if ($isCounter) {
+        [Microsoft.Win32.RegistryValueKind]::DWord
+    } else {
+        [Microsoft.Win32.RegistryValueKind]::String
+    }
+    $Fixture.RecoveryKey.SetValue($Name, $value, $kind)
+}
+
 # ---------------------------------------------------------------- test cases
 
 function Test-PackageValidation {
@@ -380,6 +402,132 @@ function Test-IdempotentRerunAndForeignShellRefusal {
     }
 }
 
+function Test-TypedOwnershipOfForeignExpandString {
+    # A foreign REG_EXPAND_SZ value with byte-identical data is NOT owned by
+    # this deployment: reactivation, restore, and preflight all refuse, and
+    # the Active flag is retained. The recorded original REG_SZ with the same
+    # bytes stays untouched.
+    foreach ($pair in @(
+        @{ OriginalKind = [Microsoft.Win32.RegistryValueKind]::String; OriginalValue = 'explorer.exe' },
+        @{ OriginalKind = [Microsoft.Win32.RegistryValueKind]::ExpandString; OriginalValue = '%SystemRoot%\explorer.exe' }
+    )) {
+        $fixture = New-DeploymentFixture
+        try {
+            Set-FixtureShellValue -Fixture $fixture -Value $pair.OriginalValue -Kind $pair.OriginalKind
+            $installed = Copy-TesseraPackage -PackagePath $fixture.PackagePath -Version '0.1.0-alpha.2'
+            Invoke-ShellActivation -InstallDirectory $installed -PreflightPassed
+            $fields = Get-FixtureRecoveryFields -Fixture $fixture
+            $expectedKind = if ($pair.OriginalKind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) { 2 } else { 1 }
+            Assert-DeploymentEqual $fields.OriginalKind $expectedKind 'The original kind is recorded before the foreign rewrite.'
+
+            # A foreign REG_EXPAND_SZ carrying the exact override bytes.
+            Set-FixtureShellValue -Fixture $fixture -Value ('"' + $installed + '\tessera-shell.exe"') -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+            Assert-DeploymentThrows {
+                Invoke-ShellActivation -InstallDirectory $installed -PreflightPassed
+            } 'changed outside' 'Reactivation refuses the same-bytes REG_EXPAND_SZ value.'
+
+            Assert-DeploymentThrows {
+                Invoke-ShellRestore
+            } 'changed by something other' 'Restore refuses the same-bytes REG_EXPAND_SZ value.'
+
+            $shell = Get-FixtureShellValue -Fixture $fixture
+            Assert-DeploymentEqual $shell.Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString) 'The foreign kind is retained.'
+            $fields = Get-FixtureRecoveryFields -Fixture $fixture
+            Assert-DeploymentEqual $fields.Active 1 'The backup stays active after the foreign typed rewrite.'
+            Assert-DeploymentEqual $fields.OriginalKind $expectedKind 'The original kind is retained after the foreign typed rewrite.'
+            $changedCase = ('"' + $installed + '\tessera-shell.exe"').ToUpperInvariant()
+            Set-FixtureShellValue -Fixture $fixture -Value $changedCase
+            Assert-DeploymentThrows { Invoke-ShellRestore } 'changed by something other' 'Raw command ownership is ordinal, even on a case-insensitive filesystem.'
+            Assert-DeploymentEqual (Get-FixtureShellValue -Fixture $fixture).Value $changedCase 'A case-only foreign rewrite is retained.'
+        } finally {
+            Remove-DeploymentFixture $fixture
+        }
+    }
+}
+
+function Test-RestoreRefusesForeignDeletion {
+    # A value the backup records as present must not be treated as restored
+    # when a third party deleted it: the foreign deletion is refused and the
+    # backup stays active.
+    $fixture = New-DeploymentFixture
+    try {
+        Set-FixtureShellValue -Fixture $fixture -Value 'explorer.exe'
+        $installed = Copy-TesseraPackage -PackagePath $fixture.PackagePath -Version '0.1.0-alpha.2'
+        Invoke-ShellActivation -InstallDirectory $installed -PreflightPassed
+        $fields = Get-FixtureRecoveryFields -Fixture $fixture
+        Assert-DeploymentEqual $fields.OriginalPresent 1 'The original presence is recorded before the deletion.'
+
+        $fixture.WinlogonKey.DeleteValue('Shell', $false)
+        Assert-DeploymentThrows {
+            Invoke-ShellRestore
+        } 'changed by something other' 'Restore refuses a foreign deletion of a recorded-present original.'
+        $fields = Get-FixtureRecoveryFields -Fixture $fixture
+        Assert-DeploymentEqual $fields.Active 1 'The backup stays active after a foreign deletion.'
+        Assert-DeploymentFalse (Get-FixtureShellValue -Fixture $fixture).Present 'The deletion is not silently accepted as a restore.'
+    } finally {
+        Remove-DeploymentFixture $fixture
+    }
+}
+
+function Test-StrictRecoveryStateDecoding {
+    # The recovery decode is fail-closed: malformed field types, Active
+    # states other than 0/1, unsupported original kinds, missing fields, and
+    # unsupported schema versions are all refused; a valid backup still
+    # decodes with exact values and the Active flag.
+    $fixture = New-DeploymentFixture
+    try {
+        Assert-DeploymentFalse (Get-ShellRecoveryState).Exists 'A truly empty recovery key is not a backup record.'
+        $fixture.RecoveryKey.SetValue('Unrelated', 'foreign', [Microsoft.Win32.RegistryValueKind]::String)
+        Assert-DeploymentThrows { Get-ShellRecoveryState } 'recovery' 'A nonempty unknown record is not treated as a fresh backup.'
+        Assert-DeploymentThrows {
+            Invoke-ShellActivation -InstallDirectory $fixture.PackagePath -PreflightPassed
+        } 'recovery' 'Activation refuses a nonempty unknown record before replacing it.'
+        Assert-DeploymentEqual $fixture.RecoveryKey.GetValue('Unrelated') 'foreign' 'The unknown record is preserved.'
+        $fixture.RecoveryKey.DeleteValue('Unrelated', $false)
+        $installed = Copy-TesseraPackage -PackagePath $fixture.PackagePath -Version '0.1.0-alpha.2'
+        Invoke-ShellActivation -InstallDirectory $installed -PreflightPassed
+        $state = Get-ShellRecoveryState
+        Assert-DeploymentTrue $state.Exists 'An activated backup exists.'
+        Assert-DeploymentTrue $state.Active 'An activated backup is active.'
+        Assert-DeploymentEqual $state.Fields.SchemaVersion 1 'The schema version decodes exactly.'
+
+        foreach ($case in @(
+            @{ Name = 'Active'; Write = { param($k) $k.SetValue('Active', 2, [Microsoft.Win32.RegistryValueKind]::DWord) } },
+            @{ Name = 'Active'; Write = { param($k) $k.SetValue('Active', 7, [Microsoft.Win32.RegistryValueKind]::DWord) } },
+            @{ Name = 'Active'; Write = { param($k) $k.SetValue('Active', 'one', [Microsoft.Win32.RegistryValueKind]::String) } },
+            @{ Name = 'OriginalPresent'; Write = { param($k) $k.SetValue('OriginalPresent', 5, [Microsoft.Win32.RegistryValueKind]::DWord) } },
+            @{ Name = 'OriginalKind'; Write = { param($k) $k.SetValue('OriginalKind', 9, [Microsoft.Win32.RegistryValueKind]::DWord) } },
+            @{ Name = 'OriginalKind'; Write = { param($k) $k.SetValue('OriginalKind', 'expand', [Microsoft.Win32.RegistryValueKind]::String) } },
+            @{ Name = 'ShellCommand'; Write = { param($k) $k.SetValue('ShellCommand', 12345, [Microsoft.Win32.RegistryValueKind]::DWord) } },
+            @{ Name = 'ShellCommand'; Write = { param($k) $k.DeleteValue('ShellCommand', $false) } },
+            @{ Name = 'SchemaVersion'; Write = { param($k) $k.SetValue('SchemaVersion', 2, [Microsoft.Win32.RegistryValueKind]::DWord) } }
+        )) {
+            $before = Get-FixtureRecoveryFields -Fixture $fixture
+            & $case.Write $fixture.RecoveryKey
+            Assert-DeploymentThrows {
+                Get-ShellRecoveryState
+            } 'recovery' "A malformed $($case.Name) field is refused by the strict decode."
+            Assert-DeploymentThrows {
+                Invoke-ShellActivation -InstallDirectory $installed -PreflightPassed
+            } '.' "Reactivation refuses a malformed $($case.Name) field."
+            Assert-DeploymentThrows {
+                Invoke-ShellRestore
+            } '.' "Restore refuses a malformed $($case.Name) field."
+            # Restore the valid field content for the next case.
+            Restore-FixtureRecoveryField -Fixture $fixture -Name $case.Name -Before $before
+        }
+        # A foreign Active=0 record is NOT silently re-activated by a rerun.
+        $fixture.RecoveryKey.SetValue('Active', 0, [Microsoft.Win32.RegistryValueKind]::DWord)
+        Set-FixtureShellValue -Fixture $fixture -Value 'explorer.exe'
+        Assert-DeploymentThrows {
+            Invoke-ShellActivation -InstallDirectory $installed -PreflightPassed
+        } 'no longer matches the stored original' 'An inactive backup still enforces the stored original match.'
+        Assert-DeploymentEqual (Get-FixtureRecoveryFields -Fixture $fixture).Active 0 'A refused rerun does not flip the foreign Active flag.'
+    } finally {
+        Remove-DeploymentFixture $fixture
+    }
+}
+
 function Test-RollbackOnOverrideFailure {
     $fixture = New-DeploymentFixture
     try {
@@ -456,11 +604,12 @@ function Test-WhatIfChangesNothing {
         $before = Get-FixtureRecoveryFields -Fixture $fixture
         Copy-TesseraPackage -PackagePath $fixture.PackagePath -Version '0.1.0-alpha.2' -WhatIf
         Invoke-ShellActivation -InstallDirectory $fixture.PackagePath -WhatIf -PreflightPassed
-        # The fixture recovery key exists but has no backup fields yet, so a
-        # WhatIf restore must refuse the incomplete backup without mutating.
+        # The fixture recovery key exists but has no backup fields yet; an
+        # empty record is a missing record, so a WhatIf restore must refuse
+        # it without mutating anything.
         Assert-DeploymentThrows {
             Invoke-ShellRestore -WhatIf
-        } 'recovery backup is incomplete' 'Restore-WhatIf with no backup fields mutates nothing.'
+        } 'No Tessera shell recovery backup exists' 'Restore-WhatIf with an empty recovery key mutates nothing.'
         $shell = Get-FixtureShellValue -Fixture $fixture
         Assert-DeploymentEqual $shell.Value 'explorer.exe' 'WhatIf does not change the shell value.'
         Assert-DeploymentEqual (Get-FixtureRecoveryFields -Fixture $fixture) $before 'WhatIf leaves no backup fields.'
@@ -673,6 +822,9 @@ foreach ($test in @(
     'Test-ActivationAndRestoreWithoutShellValue',
     'Test-ActivationAndRestoreWithStringAndExpandString',
     'Test-IdempotentRerunAndForeignShellRefusal',
+    'Test-TypedOwnershipOfForeignExpandString',
+    'Test-RestoreRefusesForeignDeletion',
+    'Test-StrictRecoveryStateDecoding',
     'Test-RollbackOnOverrideFailure',
     'Test-UnsupportedActivationHasNoSideEffects',
     'Test-PolicyShellIsRefused',
