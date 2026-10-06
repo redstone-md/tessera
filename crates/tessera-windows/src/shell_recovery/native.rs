@@ -214,8 +214,13 @@ fn query_raw(key: HKEY, value_name: &str) -> Result<Option<(u32, Vec<u8>)>, Depl
             buffer.truncate(size as usize);
             Ok(Some((kind, buffer)))
         }
-        // The documented missing-value code.
+        // The documented missing-value code. `ERROR_MORE_DATA` means the value
+        // exceeded the bounded buffer: a size violation, reported through the
+        // out-of-bounds arm of `InvalidUtf16` by the callers.
         ERROR_FILE_NOT_FOUND => Ok(None),
+        windows_sys::Win32::Foundation::ERROR_MORE_DATA => Err(DeploymentError::InvalidUtf16 {
+            context: to_static_field(value_name),
+        }),
         code => Err(DeploymentError::Windows {
             operation: "RegQueryValueExW",
             code,
@@ -649,13 +654,23 @@ impl DeploymentLock {
             .write(true)
             .share_mode(0)
             .open(&path)
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied => {
-                    DeploymentError::LockBusy
+            .map_err(|error| {
+                // A sharing violation (the lock file held with share mode 0)
+                // means another deployment owns the lock. `raw_os_error` is
+                // checked explicitly: Windows maps ERROR_SHARING_VIOLATION
+                // (32) and ERROR_LOCK_VIOLATION (33) to uncategorized
+                // io::Error kinds, which must never read as a path problem.
+                match error.raw_os_error() {
+                    Some(32 | 33) => DeploymentError::LockBusy,
+                    _ => match error.kind() {
+                        io::ErrorKind::AlreadyExists | io::ErrorKind::PermissionDenied => {
+                            DeploymentError::LockBusy
+                        }
+                        _ => DeploymentError::UnusablePath {
+                            context: "deployment.lock",
+                        },
+                    },
                 }
-                _ => DeploymentError::UnusablePath {
-                    context: "deployment.lock",
-                },
             })?;
         Ok(Self { _file: file })
     }

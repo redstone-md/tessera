@@ -216,7 +216,9 @@ pub fn decode_utf16_bytes(raw: &[u8]) -> Option<String> {
         return None;
     }
     let units: Vec<u16> = raw
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     let end = units

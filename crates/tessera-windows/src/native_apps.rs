@@ -235,7 +235,7 @@ fn bitmap_rgba(bitmap: SYS_HBITMAP) -> Option<IconPixels> {
                 rgba.push(pixels[offset + 3]);
             }
         }
-        if rgba.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+        if rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
             return None;
         }
         IconPixels::new(width as u32, rows as u32, rgba)
@@ -530,11 +530,13 @@ fn icon_from_handle(icon: HICON) -> Option<IconPixels> {
         };
         // GDI DIBs are BGRA. Older mask-only icons may leave every alpha
         // byte zero; a labeled control is safer than an invisible image.
-        if bytes.chunks_exact(4).all(|pixel| pixel[3] == 0) {
+        if bytes.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0) {
             return None;
         }
         let rgba = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
             .collect();
         IconPixels::new(width as u32, height as u32, rgba)

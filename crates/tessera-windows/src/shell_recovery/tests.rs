@@ -55,7 +55,7 @@ impl Drop for TestTree {
 /// One Winlogon-like subkey plus one recovery subkey under a private tree,
 /// so the exact production restore path runs without real Winlogon access.
 struct Fixture {
-    tree: TestTree,
+    _tree: TestTree,
     winlogon: String,
     recovery: String,
 }
@@ -66,10 +66,21 @@ impl Fixture {
         let winlogon = format!("{}\\{WINLOGON_SUBKEY}", tree.path());
         let recovery = format!("{}\\{RECOVERY_SUBKEY}", tree.path());
         Self {
-            tree,
+            _tree: tree,
             winlogon,
             recovery,
         }
+    }
+
+    fn seed_shell(&self, value: &str) {
+        let key = OwnedKey::create(HKEY_CURRENT_USER, &self.winlogon).expect("create winlogon");
+        set_raw(
+            key.0,
+            SHELL_VALUE_NAME,
+            windows_sys::Win32::System::Registry::REG_SZ,
+            &crate::shell_recovery::utf16_bytes(value),
+        )
+        .expect("seed live shell");
     }
 }
 
@@ -85,8 +96,10 @@ fn valid_backup() -> ShellRecoveryBackup {
     .expect("valid backup")
 }
 
-fn write_all(tree: &TestTree, fields: &[(&'static str, RegistryType, Vec<u8>)]) {
-    let key = OwnedKey::create(HKEY_CURRENT_USER, tree.path()).expect("create");
+/// Writes fixture fields at an explicit subkey path (a tree root for the
+/// pure read/write tests, the recovery subkey for restore-path tests).
+fn write_all(subkey: &str, fields: &[(&'static str, RegistryType, Vec<u8>)]) {
+    let key = OwnedKey::create(HKEY_CURRENT_USER, subkey).expect("create");
     for (name, kind, payload) in fields {
         set_raw(key.0, name, kind.as_raw(), payload).expect("write");
     }
@@ -151,7 +164,15 @@ fn backup_roundtrip_preserves_expand_string_kind() {
     let backup =
         ShellRecoveryBackup::new(SUPERVISOR.to_string(), original, INSTALL_DIR.to_string())
             .expect("valid");
-    write_all(&tree, &backup.encode());
+    let mut fields = backup.encode();
+    // The fixture starts inactive so the read gate is exercised: a complete
+    // record is only reported as a backup while Active is 1.
+    for (name, _, payload) in fields.iter_mut() {
+        if *name == FIELD_ACTIVE {
+            *payload = 0u32.to_le_bytes().to_vec();
+        }
+    }
+    write_all(tree.path(), &fields);
     let key = OwnedKey::open(
         HKEY_CURRENT_USER,
         tree.path(),
@@ -159,7 +180,6 @@ fn backup_roundtrip_preserves_expand_string_kind() {
     )
     .expect("open")
     .expect("key exists");
-    // A complete record is only reported as a backup while Active is 1.
     assert!(read_backup_from(&key).expect("read inactive").is_none());
     set_raw(key.0, FIELD_ACTIVE, REG_DWORD, &1u32.to_le_bytes()).expect("activate");
     let record = read_backup_from(&key).expect("read activated");
@@ -176,7 +196,7 @@ fn backup_with_wrong_schema_is_refused() {
             *payload = 99u32.to_le_bytes().to_vec();
         }
     }
-    write_all(&tree, &fields);
+    write_all(tree.path(), &fields);
     let key = OwnedKey::open(
         HKEY_CURRENT_USER,
         tree.path(),
@@ -201,7 +221,7 @@ fn backup_with_inconsistent_kind_is_refused() {
             *payload = 42u32.to_le_bytes().to_vec();
         }
     }
-    write_all(&tree, &fields);
+    write_all(tree.path(), &fields);
     let key = OwnedKey::open(
         HKEY_CURRENT_USER,
         tree.path(),
@@ -223,7 +243,7 @@ fn backup_with_missing_field_is_refused() {
         .into_iter()
         .filter(|(name, _, _)| *name != FIELD_INSTALL_DIRECTORY)
         .collect();
-    write_all(&tree, &fields);
+    write_all(tree.path(), &fields);
     let key = OwnedKey::open(
         HKEY_CURRENT_USER,
         tree.path(),
@@ -259,17 +279,9 @@ fn missing_keys_read_as_none_not_error() {
 #[test]
 fn restore_writes_exact_string_and_reads_back() {
     let fixture = Fixture::new("restore_string");
-    write_all(&fixture.tree, &valid_backup().encode());
+    write_all(&fixture.recovery, &valid_backup().encode());
     // Live value is the owned supervisor command: a clean takeover restore.
-    let key = OwnedKey::create(HKEY_CURRENT_USER, &fixture.winlogon).expect("create winlogon");
-    set_raw(
-        key.0,
-        SHELL_VALUE_NAME,
-        windows_sys::Win32::System::Registry::REG_SZ,
-        &crate::shell_recovery::utf16_bytes(SUPERVISOR),
-    )
-    .expect("seed live");
-    drop(key);
+    fixture.seed_shell(SUPERVISOR);
     restore(&fixture, &valid_backup(), &RestoreDecision::RestoreOriginal);
     assert_eq!(
         live_shell(&fixture),
@@ -302,7 +314,9 @@ fn restore_writes_exact_expand_string_kind() {
         INSTALL_DIR.to_string(),
     )
     .expect("valid");
-    write_all(&fixture.tree, &backup.encode());
+    write_all(&fixture.recovery, &backup.encode());
+    // Live value is the owned supervisor command: a clean takeover restore.
+    fixture.seed_shell(SUPERVISOR);
     restore(&fixture, &backup, &RestoreDecision::RestoreOriginal);
     assert_eq!(live_shell(&fixture), Some(original));
 }
@@ -316,16 +330,8 @@ fn restore_absent_deletes_value_and_reads_back_gone() {
         INSTALL_DIR.to_string(),
     )
     .expect("valid");
-    write_all(&fixture.tree, &backup.encode());
-    let key = OwnedKey::create(HKEY_CURRENT_USER, &fixture.winlogon).expect("create winlogon");
-    set_raw(
-        key.0,
-        SHELL_VALUE_NAME,
-        windows_sys::Win32::System::Registry::REG_SZ,
-        &crate::shell_recovery::utf16_bytes(SUPERVISOR),
-    )
-    .expect("seed live");
-    drop(key);
+    write_all(&fixture.recovery, &backup.encode());
+    fixture.seed_shell(SUPERVISOR);
     restore(&fixture, &backup, &RestoreDecision::RestoreOriginal);
     assert!(live_shell(&fixture).is_none());
 }
@@ -334,16 +340,8 @@ fn restore_absent_deletes_value_and_reads_back_gone() {
 fn restore_refuses_to_clobber_foreign_value() {
     let fixture = Fixture::new("restore_refuse");
     let backup = valid_backup();
-    write_all(&fixture.tree, &backup.encode());
-    let key = OwnedKey::create(HKEY_CURRENT_USER, &fixture.winlogon).expect("create winlogon");
-    set_raw(
-        key.0,
-        SHELL_VALUE_NAME,
-        windows_sys::Win32::System::Registry::REG_SZ,
-        &crate::shell_recovery::utf16_bytes("other-shell.exe"),
-    )
-    .expect("seed foreign live");
-    drop(key);
+    write_all(&fixture.recovery, &backup.encode());
+    fixture.seed_shell("other-shell.exe");
     // A refusal must leave the live value untouched.
     restore(&fixture, &backup, &RestoreDecision::RefuseClobber);
     // A stale caller decision must not bypass the native ownership recheck.
@@ -379,16 +377,8 @@ fn restore_refuses_to_clobber_foreign_value() {
 fn already_restored_clears_active_only() {
     let fixture = Fixture::new("already_restored");
     let backup = valid_backup();
-    write_all(&fixture.tree, &backup.encode());
-    let key = OwnedKey::create(HKEY_CURRENT_USER, &fixture.winlogon).expect("create winlogon");
-    set_raw(
-        key.0,
-        SHELL_VALUE_NAME,
-        windows_sys::Win32::System::Registry::REG_SZ,
-        &crate::shell_recovery::utf16_bytes("explorer.exe"),
-    )
-    .expect("seed restored live");
-    drop(key);
+    write_all(&fixture.recovery, &backup.encode());
+    fixture.seed_shell("explorer.exe");
     restore(&fixture, &backup, &RestoreDecision::AlreadyRestored);
     let recovery = OwnedKey::open(
         HKEY_CURRENT_USER,
@@ -412,7 +402,8 @@ fn already_restored_clears_active_only() {
 fn clear_active_never_clobbers_foreign_flag() {
     let fixture = Fixture::new("foreign_flag");
     let backup = valid_backup();
-    write_all(&fixture.tree, &backup.encode());
+    write_all(&fixture.recovery, &backup.encode());
+    fixture.seed_shell("explorer.exe");
     // Replace the Active flag with a foreign DWORD payload (7): not ours.
     let key = OwnedKey::open(
         HKEY_CURRENT_USER,
@@ -439,7 +430,9 @@ fn clear_active_never_clobbers_foreign_flag() {
 fn missing_recovery_key_during_clear_is_a_no_op() {
     let fixture = Fixture::new("clear_no_key");
     // No recovery subtree was created: clearing must not fail and must not
-    // implicitly create it.
+    // implicitly create it. The live value already matches the backup's
+    // original, so the fresh recheck decides AlreadyRestored.
+    fixture.seed_shell("explorer.exe");
     restore(&fixture, &valid_backup(), &RestoreDecision::AlreadyRestored);
     assert!(
         OwnedKey::open(
@@ -455,9 +448,10 @@ fn missing_recovery_key_during_clear_is_a_no_op() {
 #[test]
 fn missing_winlogon_key_during_restore_is_an_error() {
     let fixture = Fixture::new("restore_no_winlogon");
-    write_all(&fixture.tree, &valid_backup().encode());
-    // RestoreOriginal needs to write the live value, but the Winlogon-like
-    // subtree does not exist: an error, never an implicit key creation.
+    write_all(&fixture.recovery, &valid_backup().encode());
+    // Missing live state cannot authorize a write, so the fresh ownership
+    // check must refuse the stale RestoreOriginal decision without creating
+    // a Winlogon-like subtree.
     assert!(matches!(
         apply_restore_at(
             HKEY_CURRENT_USER,
@@ -468,6 +462,15 @@ fn missing_winlogon_key_during_restore_is_an_error() {
         ),
         Err(DeploymentError::ShellOwnershipChanged)
     ));
+    assert!(
+        OwnedKey::open(
+            HKEY_CURRENT_USER,
+            &fixture.winlogon,
+            windows_sys::Win32::System::Registry::KEY_READ,
+        )
+        .expect("open")
+        .is_none()
+    );
 }
 
 /// Writes through delete_value must actually remove the value.
