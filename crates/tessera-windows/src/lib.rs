@@ -16,7 +16,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod activation;
+mod apps;
 mod error;
+mod events;
 #[cfg(any(windows, test))]
 mod helpers;
 #[cfg(windows)]
@@ -25,12 +27,33 @@ mod native;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_activation;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_apps;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_events;
+#[cfg(any(windows, test))]
+mod shell_recovery;
+mod shell_runtime;
 mod snapshot;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};
 
+pub use apps::{
+    Application, ApplicationError, IconPixels, catalog, foreground_window_id, launch, window_icon,
+};
+
 pub use error::{ObservationError, ObservationWarning};
+pub use events::{DesktopEventCallback, DesktopWatcher, watch_desktop};
 pub use snapshot::{DesktopSnapshot, MonitorId, ObservedMonitor, ObservedWindow};
+
+#[cfg(windows)]
+pub use shell_runtime::ShellHeartbeat;
+pub use shell_runtime::{
+    ShellRuntimeError, open_file_manager, open_task_manager, restore_explorer, run_shell,
+    verify_runtime,
+};
 
 /// Captures one best-effort, read-only observation pass; this is not an atomic
 /// snapshot. Invisible and calling-process windows are excluded.
