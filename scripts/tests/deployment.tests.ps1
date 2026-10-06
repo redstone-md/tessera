@@ -808,8 +808,10 @@ function Test-InstallerProbeDoesNotHoldRecoveryLock {
             try { throw 'probe-lock-released-stop-before-prompt' }
             finally { $probeLock.Dispose() }
         }
+        # Suppress only the generic installation confirmation in the CI host;
+        # the injected probe stops before the separate shell-activation prompt.
         Assert-DeploymentThrows {
-            & (Join-Path $repoRoot 'scripts\Install-Tessera.ps1') -PackagePath $fixture.PackagePath -EnableShell -NoStartMenuShortcut
+            & (Join-Path $repoRoot 'scripts\Install-Tessera.ps1') -PackagePath $fixture.PackagePath -EnableShell -NoStartMenuShortcut -Confirm:$false
         } 'probe-lock-released-stop-before-prompt' 'The actual installer releases the recovery lock before GUI verification.'
         Assert-DeploymentFalse (Get-FixtureShellValue $fixture).Present 'A failed probe does not change the shell.'
         Assert-DeploymentEqual (Get-FixtureRecoveryFields $fixture).Count 0 'A failed probe publishes no active registry backup.'
