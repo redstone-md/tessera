@@ -110,7 +110,7 @@ try {
     # Carry actual notices with the binaries, not only SPDX expressions/links.
     Get-ChildItem $vendor -Recurse -File | Where-Object {
         $_.Name -match '^(LICENSE|LICENCE|COPYING|COPYRIGHT|NOTICE)([._-].*)?$' -or
-        $_.Name -match '^(OFL|Apache-2\\.0|MIT)\\.txt$'
+        $_.Name -match '^(OFL|Apache-2\.0|MIT)\.txt$'
     } | Sort-Object FullName | ForEach-Object {
         $relative = [IO.Path]::GetRelativePath($source, $_.FullName)
         @("", "----- $relative -----", (Get-Content -LiteralPath $_.FullName -Raw)) |

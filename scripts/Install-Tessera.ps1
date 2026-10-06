@@ -142,7 +142,11 @@ if ($EnableShell) {
     try {
         # Recheck current policy/shell state under the lock after the prompt;
         # an earlier preflight is not authorization to ignore later changes.
-        Invoke-ShellActivation -InstallDirectory $installDirectory
+        $support = Test-ShellSupport
+        if (-not $support.Supported) {
+            throw 'Shell activation was refused; rerun without -EnableShell to install the package only.'
+        }
+        Invoke-ShellActivation -InstallDirectory $installDirectory -PreflightPassed
     } finally {
         if ($null -ne $lock) { $lock.Dispose() }
     }
