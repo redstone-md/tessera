@@ -30,7 +30,7 @@ Before distributing a consumer binary or installer:
 5. Use a consistent publisher identity and an authenticated distribution channel. Evaluate Microsoft Store distribution where its policies fit the shell capabilities; it is not an assumed deployment mechanism. Microsoft-managed signing services or a trusted certificate issuer require real identity validation and eligibility checks.
 6. Make installation and any startup/shell integration explicit, reversible, and removable without disabling Windows protection. Do not add application directories to Defender exclusions or instruct users to turn off UAC, Defender, SmartScreen, or Smart App Control.
 
-Signing, a trusted publisher identity, consumer installation, and clean-machine security validation are **not implemented yet**. Test-alpha packaging is implemented. Ordinary source commits do not run GitHub Actions; release tags matching `v*` start checks. Maintainer-authorized numbered alpha tags package and publish explicitly unsigned test assets only after checks pass. Alpha.2 is explicitly approved as a public experimental prerelease. There is no unsigned stable/consumer publication path.
+Signing, a trusted publisher identity, consumer installation, and clean-machine security validation are **not implemented yet**. Test-alpha packaging is implemented. Ordinary source commits do not run GitHub Actions; release tags matching `v*` start checks. Maintainer-authorized numbered alpha tags package and publish explicitly unsigned experimental test assets only after checks pass. There is no unsigned stable/consumer publication path.
 
 ## Informed tester alpha exception
 
