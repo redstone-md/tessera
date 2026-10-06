@@ -7,7 +7,7 @@
 //! carried alongside the caption and re-read on activation, so search can
 //! only hide rows, never renumber them.
 
-use crate::{PanelSnapshot, PanelWindow, sanitize};
+use crate::{PanelApplication, PanelSnapshot, PanelWindow, sanitize};
 
 /// One display row: cleaned caption plus the opaque activation key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,18 @@ pub(crate) struct RowProjection {
     pub(crate) caption: String,
     pub(crate) minimized: bool,
 }
+
+/// One launcher row: cleaned application name plus the opaque launch key and
+/// whether the key is currently pinned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppProjection {
+    pub(crate) key: String,
+    pub(crate) label: String,
+    pub(crate) pinned: bool,
+}
+
+/// Maximum number of application rows shown at once.
+pub(crate) const MAX_APPS: usize = 64;
 
 /// What the panel renders for a snapshot under the current search filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +91,30 @@ fn project_row(window: &PanelWindow) -> RowProjection {
     }
 }
 
+/// Projects the capped catalog into launcher rows, filtered case-insensitively
+/// over **raw** names (empty search matches everything). Display labels are
+/// sanitized here; search never sees the sanitized form, and keys are copied
+/// verbatim — never re-derived from truncated labels.
+pub(crate) fn project_apps(
+    applications: &[PanelApplication],
+    pins: &[String],
+    search: &str,
+) -> Vec<AppProjection> {
+    let needle = search.trim().to_lowercase();
+    applications
+        .iter()
+        .filter(|application| {
+            needle.is_empty() || application.title().to_lowercase().contains(&needle)
+        })
+        .take(MAX_APPS)
+        .map(|application| AppProjection {
+            key: application.key().to_string(),
+            label: sanitize::caption(application.title()),
+            pinned: pins.iter().any(|pin| pin == application.key()),
+        })
+        .collect()
+}
+
 /// Cleaned title, never empty, with a minimized marker for clarity.
 fn caption_with_state(window: &PanelWindow) -> String {
     let caption = sanitize::caption(window.title());
@@ -92,6 +128,41 @@ fn caption_with_state(window: &PanelWindow) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PixelIcon;
+
+    fn app(key: &str, title: &str) -> PanelApplication {
+        PanelApplication::new(key.to_string(), title.to_string(), None).unwrap()
+    }
+
+    #[test]
+    fn apps_search_matches_raw_names_but_labels_are_sanitized() {
+        let catalog = vec![app("a", "Rust \u{202e}Editor"), app("b", "Web Browser")];
+        let rows = project_apps(&catalog, &[], "EDITOR");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "a");
+        assert_eq!(rows[0].label, "Rust Editor");
+        assert!(project_apps(&catalog, &[], "no match").is_empty());
+    }
+
+    #[test]
+    fn apps_rows_are_capped_and_pins_are_reported() {
+        let catalog: Vec<_> = (0..MAX_APPS + 10)
+            .map(|index| app(&format!("k{index}"), &format!("App {index}")))
+            .collect();
+        let rows = project_apps(&catalog, &["k0".to_string()], "");
+        assert_eq!(rows.len(), MAX_APPS);
+        assert!(rows[0].pinned);
+        assert!(!rows[1].pinned);
+    }
+
+    #[test]
+    fn icon_dto_validation_rejects_bad_shapes() {
+        assert!(PixelIcon::new(0, 4, vec![0; 16]).is_none());
+        assert!(PixelIcon::new(129, 1, vec![0; 129 * 4]).is_none());
+        assert!(PixelIcon::new(2, 2, vec![0; 15]).is_none());
+        assert!(PixelIcon::new(2, 2, vec![0; 16]).is_some());
+        assert!(PanelApplication::new(String::new(), "x".into(), None).is_none());
+    }
 
     fn snapshot(titles: &[(&str, &str, bool)]) -> PanelSnapshot {
         PanelSnapshot::new(

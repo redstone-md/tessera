@@ -6,7 +6,7 @@ rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
 readme.workspace = true
-description = "Native desktop panel and validation tools for Tessera"
+description = "Native desktop shell, recovery supervisor, and validation tools for Tessera"
 publish = false
 default-run = "tessera"
 

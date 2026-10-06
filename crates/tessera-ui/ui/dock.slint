@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { Button, Palette, ScrollView } from "std-widgets.slint";
+
+export struct DockApp { key: string, label: string, icon: image, pinned: bool }
+export struct DockWindow { key: string, caption: string, icon: image }
+export struct DockStatus { notice: string, status: string, refreshing: bool, stale: bool }
+struct DockCommand { text: string, label: string, action: int }
+
+// One bounded floating strip; the existing framed Panel remains the launcher.
+// Scroll overflow rather than letting layout minimums grow beyond the monitor.
+export component Dock inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: Palette.control-background;
+    title: "Tessera dock";
+    min-width: 1px;
+    min-height: 1px;
+    preferred-width: 640px;
+    preferred-height: 72px;
+
+    in property <[DockApp]> pinned-apps;
+    in property <[DockWindow]> running-windows;
+    in property <DockStatus> surface-status;
+    in-out property <bool> compact;
+    in property <bool> vertical;
+    callback launch-requested(string);
+    callback window-activate-requested(string);
+    callback system-action-requested(int);
+    callback open-applications-requested();
+    callback refresh-requested();
+    callback exit-requested();
+
+    property <length> pad: root.compact ? 4px : 8px;
+    property <length> button-size: root.compact ? 32px : 40px;
+    property <length> icon-step: root.button-size + root.pad;
+    property <length> tool-width: root.vertical ? scroll.visible-width - 2 * root.pad : 80px;
+    property <length> tool-step: (root.vertical ? root.button-size : root.tool-width) + root.pad;
+    property <[DockCommand]> commands: [
+        { text: "Apps", label: "Open applications and settings", action: 0 },
+        { text: "Files", label: "Open File Explorer", action: 1 },
+        { text: "Tasks", label: "Open Task Manager", action: 2 },
+        { text: "Restore", label: "Restore Explorer for this session and future sign-in", action: 3 },
+        { text: "Refresh", label: "Refresh the desktop", action: 4 },
+        { text: "Exit", label: "Exit Tessera dock", action: 5 },
+    ];
+    property <length> content-length: root.pad + root.commands.length * root.tool-step
+        + (root.pinned-apps.length + root.running-windows.length) * root.icon-step;
+
+    scroll := ScrollView {
+        width: parent.width;
+        height: parent.height;
+        mouse-drag-pan-enabled: true;
+        horizontal-scrollbar-policy: root.vertical ? ScrollBarPolicy.always-off : ScrollBarPolicy.as-needed;
+        vertical-scrollbar-policy: root.vertical ? ScrollBarPolicy.as-needed : ScrollBarPolicy.always-off;
+        content-width: root.vertical ? self.visible-width : max(self.visible-width, root.content-length);
+        content-height: root.vertical ? max(self.visible-height, root.content-length) : self.visible-height;
+
+        for command[i] in root.commands: Button {
+            x: root.pad + (root.vertical ? 0px : i * root.tool-step);
+            y: root.pad + (root.vertical ? i * root.tool-step : 0px);
+            width: root.tool-width;
+            height: root.button-size;
+            text: command.text;
+            accessible-label: command.label;
+            enabled: command.action != 4 || !root.surface-status.refreshing;
+            clicked => {
+                if command.action == 0 { root.open-applications-requested(); }
+                else if command.action == 4 { root.refresh-requested(); }
+                else if command.action == 5 { root.exit-requested(); }
+                else { root.system-action-requested(command.action - 1); }
+            }
+        }
+        for app[i] in root.pinned-apps: Button {
+            property <length> offset: root.commands.length * root.tool-step + i * root.icon-step;
+            x: root.pad + (root.vertical ? 0px : self.offset);
+            y: root.pad + (root.vertical ? self.offset : 0px);
+            width: root.button-size;
+            height: root.button-size;
+            icon: app.icon;
+            icon-size: root.button-size - 12px;
+            text: app.icon.width > 0 ? "" : app.label;
+            accessible-label: "Launch " + app.label;
+            enabled: !root.surface-status.refreshing && !root.surface-status.stale;
+            clicked => { root.launch-requested(app.key); }
+        }
+        for window[i] in root.running-windows: Button {
+            property <length> offset: root.commands.length * root.tool-step
+                + (root.pinned-apps.length + i) * root.icon-step;
+            x: root.pad + (root.vertical ? 0px : self.offset);
+            y: root.pad + (root.vertical ? self.offset : 0px);
+            width: root.button-size;
+            height: root.button-size;
+            icon: window.icon;
+            icon-size: root.button-size - 12px;
+            text: window.icon.width > 0 ? "" : window.caption;
+            accessible-label: "Switch to " + window.caption;
+            enabled: !root.surface-status.refreshing && !root.surface-status.stale;
+            clicked => { root.window-activate-requested(window.key); }
+        }
+    }
+}

@@ -19,8 +19,8 @@ fn main() {
     let manifest =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo package directory"))
             .join("app.manifest");
-    // Both launchers keep the same privilege/DPI contract. Embed before signing.
-    for binary in ["tessera", "tessera-desktop"] {
+    // The CLI, native dock, and recovery supervisor keep one privilege/DPI contract.
+    for binary in ["tessera", "tessera-desktop", "tessera-shell"] {
         println!("cargo:rustc-link-arg-bin={binary}=/MANIFEST:EMBED");
         println!(
             "cargo:rustc-link-arg-bin={binary}=/MANIFESTINPUT:{}",

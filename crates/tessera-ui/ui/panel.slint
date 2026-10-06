@@ -3,24 +3,37 @@
 
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 
+export { Dock, DockApp, DockWindow, DockStatus } from "dock.slint";
+// Re-export the style Palette global so Rust can drive the dock strip's
+// scheme from the panel's live preview without a second settings surface.
+export { Palette } from "std-widgets.slint";
+
 export struct Row {
     key: string,
     caption: string,
     minimized: bool,
 }
 
+export struct AppRow {
+    key: string,
+    label: string,
+    pinned: bool,
+}
+
 export component Panel inherits Window {
     title: "Tessera " + root.version + " — alpha";
     background: Palette.background;
     preferred-width: 640px;
-    preferred-height: 460px;
+    preferred-height: 520px;
     min-width: 560px;
-    min-height: 300px;
+    min-height: 340px;
 
     // In/out state (the controller reads and writes these).
     in-out property <[Row]> rows;
+    in-out property <[AppRow]> apps;
     in-out property <string> search;
     in-out property <int> theme-index;
+    in-out property <int> dock-edge-index;
     in-out property <bool> compact;
 
     // Inputs from the controller.
@@ -38,14 +51,23 @@ export component Panel inherits Window {
     callback filter-requested();
     changed search => { root.filter-requested(); }
     callback activate-requested(string /* key */);
+    callback launch-requested(string /* key */);
+    callback pin-toggle-requested(string /* key */, bool /* pinned */);
+    callback system-action-requested(int /* action */);
     callback save-preferences-requested();
+    // Fires whenever the live theme preview changes, so the dock strip can
+    // follow the panel's Palette without a second settings surface.
+    callback theme-changed();
 
     // Live preview: only explicit Save persists through the host. The
     // two-way binding keeps the user's choice while propagating to Palette.
     property <ColorScheme> color-scheme <=> Palette.color-scheme;
     property <ColorScheme> theme-derived: root.theme-index == 1 ? ColorScheme.light :
         root.theme-index == 2 ? ColorScheme.dark : ColorScheme.unknown;
-    changed theme-derived => { color-scheme = theme-derived; }
+    changed theme-derived => {
+        color-scheme = theme-derived;
+        root.theme-changed();
+    }
 
     property <length> row-height: root.compact ? 24px : 32px;
     property <length> gap: root.compact ? 6px : 12px;
@@ -82,6 +104,11 @@ export component Panel inherits Window {
                 model: ["System", "Light", "Dark"];
                 current-index <=> root.theme-index;
             }
+            ComboBox {
+                accessible-label: "Dock edge (saved with preferences)";
+                model: ["Bottom", "Top", "Left", "Right"];
+                current-index <=> root.dock-edge-index;
+            }
             CheckBox {
                 text: "Compact";
                 checked <=> root.compact;
@@ -96,7 +123,7 @@ export component Panel inherits Window {
             spacing: root.gap;
             LineEdit {
                 accessible-label: "Search window titles";
-                placeholder-text: "Search window titles (case-insensitive)";
+                placeholder-text: "Search window and application names (case-insensitive)";
                 text <=> root.search;
             }
             Button {
@@ -113,6 +140,24 @@ export component Panel inherits Window {
             wrap: word-wrap;
         }
 
+        // System actions stay directly visible; restoring the Windows
+        // Explorer shell affects this session and future logins.
+        HorizontalLayout {
+            spacing: root.gap;
+            Button {
+                text: "File Explorer";
+                clicked => { root.system-action-requested(0); }
+            }
+            Button {
+                text: "Task Manager";
+                clicked => { root.system-action-requested(1); }
+            }
+            Button {
+                text: "Restore Windows Explorer (session + future logins)";
+                clicked => { root.system-action-requested(2); }
+            }
+        }
+
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
@@ -126,11 +171,30 @@ export component Panel inherits Window {
                     enabled: !root.refreshing && !root.stale && root.has-snapshot;
                     clicked => { root.activate-requested(row.key); }
                 }
+                for app in root.apps: HorizontalLayout {
+                    height: root.row-height;
+                    spacing: root.gap;
+                    Button {
+                        text: app.label;
+                        horizontal-stretch: 1;
+                        // Launching is an explicit action for a currently
+                        // displayed application only.
+                        enabled: !root.refreshing && !root.stale;
+                        clicked => { root.launch-requested(app.key); }
+                    }
+                    Button {
+                        text: app.pinned ? "Unpin" : "Pin";
+                        accessible-label: (app.pinned ? "Unpin " : "Pin ") + app.label;
+                        clicked => {
+                            root.pin-toggle-requested(app.key, app.pinned);
+                        }
+                    }
+                }
             }
         }
 
         Text {
-            text: "Tessera " + root.version + " — unsigned test alpha. Windows activate only on explicit input; Explorer is unchanged.";
+            text: "Tessera " + root.version + " — unsigned test alpha. Windows activate only on explicit input; Explorer is unchanged unless you press the restore button.";
             wrap: word-wrap;
             font-size: 12px;
         }

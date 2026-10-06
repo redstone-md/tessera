@@ -13,3 +13,8 @@ mod settings;
 pub fn run_panel() -> Result<(), Box<dyn std::error::Error>> {
     panel::run()
 }
+
+/// Opens the native dock. A heartbeat name is accepted only from the installed supervisor.
+pub fn run_desktop(heartbeat: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    panel::run_desktop(heartbeat)
+}
