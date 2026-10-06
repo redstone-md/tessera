@@ -8,6 +8,14 @@ A modular desktop environment for Windows. Its primary product is a customizable
 The environment through which the user launches applications, switches windows, and interacts with the desktop.
 _Avoid_: "window manager" as the name for the whole environment.
 
+**Shell activation**:
+An explicit choice to use Tessera instead of the default desktop shell for a user's sign-in session.
+_Avoid_: treating installation or a theme change as activation.
+
+**Shell recovery**:
+Returning the user to their previous working shell when Tessera is stopped, fails, or is no longer wanted.
+_Avoid_: treating recovery as dependent on the failed shell's UI.
+
 **Window management**:
 Organizing the position, size, and interaction of application windows.
 _Avoid_: using "shell" as a synonym for window management.

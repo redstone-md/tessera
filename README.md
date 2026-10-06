@@ -4,9 +4,9 @@ A modular, native desktop environment for Windows 11, built in Rust. Tessera foc
 
 ## Status
 
-**Private test alpha; not a daily-driver shell.** The first alpha adds a native window switcher with title search, explicit activation, and saved appearance preferences to the layout/inspection foundation. See the [alpha tester guide](docs/alpha-testing.md) for the portable package, security limitations, and checklist.
+**Public, unsigned shell test alpha; not a daily-driver shell.** Alpha.2 adds a native dock/launcher, installed-application icons, pins, passive desktop updates, per-user installation, and independent recovery. See the [alpha tester guide](docs/alpha-testing.md) before trying the experimental sign-in-shell mode.
 
-Tessera does not automatically rearrange application windows or modify Explorer. The panel is a normal utility window, not a dock or taskbar replacement. Only choosing an application requests foreground activation and, if minimized, asynchronous restoration. Shell replacement and the plugin runtime are not implemented. Windows 11 x64 with the MSVC toolchain is the initial platform target; other architectures need separate validation.
+Ordinary launch and installation leave Explorer as the sign-in shell. Only explicit `Install-Tessera.ps1 -EnableShell` may replace it for the current user, after backup and a real supervisor/GUI heartbeat probe; it applies at the next sign-in and never kills the current Explorer session. Tessera does not replace DWM or automatically rearrange application windows. Windows 11 x64 with MSVC is the initial target; shell activation refuses Windows Server, domain-managed hosts, conflicting policies, and unsupported security states.
 
 ## Product direction
 
@@ -38,6 +38,7 @@ Start with working modules, then add layers. Do not create empty crates for hypo
 - [Shell activation and recovery](docs/adr/0003-shell-activation-and-recovery.md)
 - [Conventional desktop and native customization](docs/adr/0004-conventional-native-desktop.md)
 - [Native presentation toolkit](docs/adr/0005-native-presentation.md)
+- [Per-user installation and independent recovery](docs/adr/0006-per-user-shell-recovery.md)
 - [Distribution, trust, and user comfort](docs/distribution-and-trust.md)
 
 ## Development
@@ -49,9 +50,9 @@ Linux workspace builds (including headless UI tests and cross-target builds) req
 | Crate | Responsibility |
 | --- | --- |
 | `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
-| `tessera-windows` | Read-only desktop observation and separately scoped explicit foreground activation; handwritten Win32 FFI stays here. |
-| `tessera-ui` | Native Slint presentation, portable window rows, asynchronous observation, search, and preference preview; no Windows-adapter dependency. |
-| `tessera` | Shared application host, bounded atomic preferences, GUI launcher, and developer CLI. |
+| `tessera-windows` | Desktop observation, explicit activation/launch, native application icons/events, and isolated shell supervision/recovery. |
+| `tessera-ui` | Native Slint dock/launcher, portable models, coalesced asynchronous observation, and preference preview; no Windows-adapter dependency. |
+| `tessera` | Application composition, bounded atomic preferences, GUI dock, recovery supervisor, and developer CLI. |
 
 ```sh
 cargo run -p tessera -- demo
@@ -85,7 +86,7 @@ cargo run -p tessera -- inspect
 
 The adapter uses documented [EnumWindows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumwindows), [GetWindowRect](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect), and [SetThreadDpiAwarenessContext](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext) APIs. Observation does not write settings, save captions to files, or launch applications.
 
-### Open the native panel
+### Open the native dock or utility panel
 
 On Windows:
 
@@ -95,33 +96,33 @@ cargo run -p tessera -- panel
 cargo run -p tessera --bin tessera-desktop
 ```
 
-The native Slint window shows ordinary application candidates and monitor/application/warning counts. It observes at startup and on **Refresh**, off the UI thread with one request in flight. Search uses retained data, not a new observation. Failed refreshes retain explicitly stale data and disable activation until a successful refresh. Captions are bounded plain text, never commands or markup.
+The GUI binary opens a floating primary-monitor dock; `panel` opens the ordinary utility/launcher window. Search uses retained data, not a new observation. Native out-of-context desktop notifications coalesce into single-flight background observations, with manual Refresh fallback. Failed refreshes retain explicitly stale data and disable data-dependent actions. Captions and names are bounded plain text, never commands or markup. The installed-application catalog and icons are cached separately from window observations; newly installed apps may take a refresh after the cache interval or a restart to appear.
 
 Choose a row to request foreground activation; the platform revalidates its transient HWND/PID and eligibility. Minimized targets may be restored asynchronously only on that explicit input. Windows foreground restrictions are respected and reported, not bypassed. Observation and activation cannot be made atomic; same-process handle reuse remains a race.
 
-System/light/dark and compact spacing preview live. **Save preferences** writes only versioned appearance data to `%LOCALAPPDATA%\Tessera\settings.json`, atomically; invalid or future files stay untouched until an explicit save. No captions or system identities are stored.
+System/light/dark, compact spacing, and dock edge preview live. **Save preferences** atomically stores these choices and pins in `%LOCALAPPDATA%\Tessera\settings.json`; a pin click persists pins with the last saved appearance, not an unsaved preview. No captions, HWNDs, PIDs, or sign-in commands are stored there. Launch targets resolve only through the trusted current catalog, never directly from a preferences string.
 
-The panel has native decorations and normal move/resize/minimize/close behavior. It is not always-on-top and does not hide Explorer, reserve work area, install autostart, run plugins, or perform periodic background polling. Linux rejects native launch rather than showing a fake desktop. Qt, WebView, GPU renderers, and inspection servers remain disabled. Both Windows launchers embed `asInvoker`, `uiAccess=false`, and PerMonitorV2; unsigned alpha artifacts are not antivirus-approved.
+The dock is frameless and above normal windows, hides for a conservative primary-monitor fullscreen hint, and currently does not reserve work area. Its launcher/settings use native controls; the utility panel has normal decorations. There is no periodic desktop polling, fixed-frame-rate idle rendering, injection, low-level input hook, telemetry, update process, or plugin execution. A two-second UI-thread heartbeat exists only for the explicitly supervised shell. All three Windows executables embed `asInvoker`, `uiAccess=false`, and PerMonitorV2; unsigned builds are not antivirus-approved. Installation/recovery usage and emergency steps are in the [tester guide](docs/alpha-testing.md).
 
 ### Verification and limitations
 
 `Cargo.lock` is committed. CI runs **only when a release tag matching `v*` is pushed**, not on ordinary branch commits or pull requests. Its matrix covers Linux stable, Windows stable, and Windows Rust 1.92. Run the local checks above before pushing changes. Headless UI tests cover refresh behavior and error states. A Windows test creates a controlled window, reads it from another process, checks caption escaping and unchanged geometry, then destroys the fixture. Callback-panic handling and DPI restoration are also tested.
 
-After all checks pass, numbered `v*-alpha.N` tags in the private repository also build verified unsigned portable assets, complete corresponding source with vendored dependencies, and SHA-256 checksums. The packaging script checks x64 GUI/console PE subsystems, product version, embedded privilege/DPI manifests, static CRT imports, and packaged CLI commands. This private-alpha path does not publish unsigned consumer/stable releases. See [distribution and trust](docs/distribution-and-trust.md).
+After all checks pass, maintainer-authorized numbered `v*-alpha.N` tags build verified unsigned test assets, complete vendored source, and SHA-256 checksums. Alpha.2 is explicitly approved as a public experimental prerelease, not a consumer release. Packaging verifies all three executable subsystems/resources/manifests, static CRT imports, CLI commands, deployment completeness, and the real two-heartbeat runtime probe without changing sign-in settings. Windows deployment tests use isolated registry subtrees, never real Winlogon. There is no unsigned stable/consumer publication path. See [distribution and trust](docs/distribution-and-trust.md).
 
-These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for panel rendering, native accessibility, keyboard/focus behavior, idle resource use, mixed DPI, multiple monitors, privilege boundaries, games, the notification area, recovery, and security-product compatibility. A Linux cross-target check is not a Windows runtime test.
+These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 
-Home and Pro are target editions, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. Shell activation mechanisms have not been selected.
+Home and Pro are targets, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. The selected isolated per-user Winlogon integration is experimental, not an edition-independent Microsoft support guarantee; machine shell configuration and security policies remain untouched.
 
 ## Roadmap
 
 1. Pure layout calculation and a side-effect-free demo — implemented.
 2. Real Windows observation — implemented.
-3. Native panel alongside Explorer with explicit window switching and title search — implemented; a dock and application launching are next.
-4. System/light/dark and compact preferences — implemented; broader profiles, replaceable presentation, themes, and motion remain.
+3. Native dock/launcher alongside Explorer, application icons/launch/pins, explicit window switching, and passive updates — implemented.
+4. System/light/dark, compact, dock edge, and pin preferences — implemented; broader profiles, replaceable presentation, and motion remain.
 5. An isolated host with one useful plugin, followed by replaceable modules.
 6. Workspaces, system integrations, and optional window-placement commands with application rules and safety checks.
-7. Remaining shell modules and opt-in shell replacement after recovery has been verified.
+7. Independent install/restore and supervised opt-in shell activation — implemented experimentally; Windows 11 sign-in validation and remaining shell modules remain.
 
 Each layer builds on a working previous layer.
 
@@ -130,6 +131,7 @@ Each layer builds on a working previous layer.
 - [Seelen UI](https://seelen.io/apps/seelen-ui): functional reference for customizable docks, toolbars, launchers, widgets, themes, and notification panels. Its [upstream README](https://github.com/eythaann/Seelen-UI) documents a required WebView runtime; Tessera adopts the product direction, not its web UI stack.
 - [komorebi](https://github.com/LGUG2Z/komorebi): window management on top of DWM, separated commands and panels, and reversible changes.
 - [GlazeWM](https://github.com/glzr-io/glazewm): layouts, window rules, and independent panel integration.
+- [Cairo Desktop](https://github.com/cairoshell/cairoshell): an established alternate Explorer-shell product; independent recovery and conventional desktop behavior inform the product constraints.
 
 These projects inform separation of responsibilities; their implementations are not copied into Tessera.
 
@@ -137,7 +139,7 @@ These projects inform separation of responsibilities; their implementations are 
 
 English is the project language. Read the [contribution guide](CONTRIBUTING.md) for setup, architecture expectations, tests, and pull requests. Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security concerns according to the [security policy](SECURITY.md), not the normal bug-report process.
 
-The repository remains private during early development. These files prepare it for public OSS collaboration; they do not announce a public release.
+The repository is public and open to OSS collaboration. Public test alphas remain experimental; trusted signing and interactive Windows 11 release gates are not waived by repository visibility.
 
 ## License
 

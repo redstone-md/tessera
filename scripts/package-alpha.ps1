@@ -68,14 +68,19 @@ try {
     New-Item -ItemType Directory -Path $package | Out-Null
     Copy-Item 'target/x86_64-pc-windows-msvc/release/tessera-desktop.exe' (Join-Path $package 'Tessera.exe')
     Copy-Item 'target/x86_64-pc-windows-msvc/release/tessera.exe' (Join-Path $package 'tessera-cli.exe')
+    Copy-Item 'target/x86_64-pc-windows-msvc/release/tessera-shell.exe' (Join-Path $package 'tessera-shell.exe')
     Assert-Executable (Join-Path $package 'Tessera.exe') 2 $version
     Assert-Executable (Join-Path $package 'tessera-cli.exe') 3 $version
+    Assert-Executable (Join-Path $package 'tessera-shell.exe') 2 $version
     $actualVersion = Invoke-Checked (Join-Path $package 'tessera-cli.exe') @('--version')
     if ($actualVersion.Trim() -ne "Tessera $version") { throw 'Packaged CLI version does not match the release.' }
     Invoke-Checked (Join-Path $package 'tessera-cli.exe') @('demo')
     Invoke-Checked (Join-Path $package 'tessera-cli.exe') @('inspect') | Out-Null
     Copy-Item 'LICENSE' (Join-Path $package 'LICENSE.txt')
     Copy-Item 'docs/alpha-testing.md' (Join-Path $package 'START-HERE.txt')
+    foreach ($deploymentScript in 'Install-Tessera.ps1', 'Restore-Tessera.ps1', 'Tessera.Deployment.psm1') {
+        Copy-Item (Join-Path 'scripts' $deploymentScript) (Join-Path $package $deploymentScript)
+    }
     @("Tessera $version", "Source commit: $commit", 'Target: x86_64-pc-windows-msvc', 'Toolchain: Rust 1.92.0', 'Signing: UNSIGNED TEST BUILD', 'CRT: statically linked; system Windows DLLs remain required') | Set-Content (Join-Path $package 'BUILD-INFO.txt') -Encoding utf8
 
     # Complete corresponding source, including locked dependencies and their notices.
@@ -111,6 +116,11 @@ try {
         @("", "----- $relative -----", (Get-Content -LiteralPath $_.FullName -Raw)) |
             Add-Content $noticePath -Encoding utf8
     }
+    # Validate the exact shipped payload only after its required notices are complete.
+    Import-Module (Join-Path $package 'Tessera.Deployment.psm1')
+    $validated = Test-TesseraPackage -PackagePath $package
+    if ($validated.Version -ne $version -or $validated.Commit -ne $commit) { throw 'Deployment metadata does not match the tagged build.' }
+    Invoke-SupervisorRuntimeVerification -SupervisorPath $validated.SupervisorPath
     Compress-Archive -Path $package -DestinationPath (Join-Path $output "$packageName.zip") -CompressionLevel Optimal
     Compress-Archive -Path $source -DestinationPath (Join-Path $output "tessera-$version-source.zip") -CompressionLevel Optimal
     Get-ChildItem $output -Filter '*.zip' | Sort-Object Name | ForEach-Object {

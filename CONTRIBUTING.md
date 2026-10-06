@@ -1,6 +1,6 @@
 # Contributing to Tessera
 
-Tessera is in early development. The repository is currently private; these guidelines prepare it for a public open-source release and apply to current collaborators.
+Tessera is a public open-source project in early development. These guidelines apply to maintainers and contributors; experimental public test alphas are not consumer-ready releases.
 
 ## Project language and communication
 
@@ -38,11 +38,13 @@ cargo run -p tessera -- panel
 cargo run -p tessera --bin tessera-desktop
 ```
 
+Deployment fixtures run with `powershell -NoProfile -File scripts/tests/deployment.tests.ps1` on Windows. They use temporary registry subtrees, never real Winlogon. The packaged supervisor's `--verify-runtime` starts the production GUI, requires two UI-thread pulses, and stops only that diagnostic child without touching sign-in configuration.
+
 Linux can validate domain behavior, portable helpers, and unsupported-platform handling. It cannot validate native Windows behavior. Describe what you actually tested; do not present a cross-target type check as a completed Windows runtime test.
 
 Run the local checks before pushing changes. GitHub Actions CI runs only for pushed release tags matching `v*` (for example, `v0.1.0`), not for ordinary branch commits or pull requests. The release matrix covers Linux stable, Windows stable, and Windows Rust 1.92. Keep the minimum supported Rust version working, and commit `Cargo.lock` changes when dependencies change. Packages remain `publish = false` while the interfaces are experimental. Do not create a release tag just to validate an ordinary commit.
 
-Numbered alpha tags in the private repository also run `scripts/package-alpha.ps1` after all checks. This native Windows-only path produces explicitly unsigned portable test assets, corresponding source, and checksums; it verifies resources/manifests/subsystems and static CRT imports. Read the [tester guide](docs/alpha-testing.md) before distributing an alpha. A release tag is an outward-facing publication decision, not a workaround for ordinary local checks.
+Maintainer-authorized numbered alpha tags run `scripts/package-alpha.ps1` after checks. This native path verifies the three executables, deployment payload, static CRT, resources/manifests/subsystems, and real GUI heartbeat preflight, then produces unsigned test ZIPs, complete source, and checksums. Alpha.2 is approved as a public experimental prerelease. Read the [tester guide](docs/alpha-testing.md); never activate a hosted runner's real sign-in shell. A release tag is an outward-facing publication decision, not a workaround for ordinary checks.
 
 ## Architecture and code
 
@@ -75,6 +77,6 @@ Tessera is licensed under [GPL-3.0-only](LICENSE). By submitting a contribution,
 
 Third-party code and assets need compatible licensing and preserved notices. Do not copy code from a project simply because its source is visible online. In particular, architectural references in the README are not permission to reuse their implementations.
 
-Before distributing binaries, include the license and required dependency notices, and provide the corresponding source as required by GPL version 3. This project does not currently provide a binary-release or installer process.
+Before distributing binaries, include license/dependency notices and complete corresponding source as required by GPL version 3. Test-alpha packaging and experimental per-user install/restore exist; trusted publisher signing and consumer-ready installation remain separate gates.
 
 Participation follows the [Code of Conduct](CODE_OF_CONDUCT.md).

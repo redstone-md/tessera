@@ -11,7 +11,7 @@ jobs:
   check:
     name: ${{ matrix.os }} / Rust ${{ matrix.toolchain }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -47,11 +47,15 @@ jobs:
       - name: Inspect the Windows desktop without modifying it
         if: runner.os == 'Windows'
         run: cargo +${{ matrix.toolchain }} run -p tessera --locked -- inspect
+      - name: Verify reversible deployment with isolated registry fixtures
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/tests/deployment.tests.ps1
 
   alpha:
-    name: Package private Windows test alpha
+    name: Package Windows test alpha
     needs: check
-    if: github.event.repository.private && contains(github.ref_name, '-alpha.')
+    if: contains(github.ref_name, '-alpha.')
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
@@ -69,7 +73,7 @@ jobs:
       - name: Build and verify portable unsigned test assets
         shell: pwsh
         run: ./scripts/package-alpha.ps1 -Tag $env:RELEASE_TAG
-      - name: Publish private prerelease assets
+      - name: Publish test prerelease assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -78,4 +82,4 @@ jobs:
           $assets = @(Get-ChildItem $directory -File | Where-Object { $_.Extension -eq '.zip' -or $_.Name -eq 'SHA256SUMS.txt' } | ForEach-Object FullName)
           if ($assets.Count -ne 3) { throw 'Expected portable ZIP, corresponding source ZIP, and checksums.' }
           gh release create $env:RELEASE_TAG @assets --verify-tag --prerelease --title "Tessera $env:RELEASE_TAG — test alpha" --notes-file docs/alpha-testing.md
-          if ($LASTEXITCODE -ne 0) { throw 'Private alpha publication failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Test alpha publication failed.' }

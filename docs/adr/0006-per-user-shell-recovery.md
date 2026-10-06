@@ -1,0 +1,14 @@
+# Per-user shell activation requires independent recovery
+
+Installation and activation are separate: alpha.2 installs immutable per-user version directories, then only an explicit, compatibility-gated action may set the current-user Winlogon `Shell` to the quoted native supervisor path. DWM and machine sign-in configuration stay untouched; an independent PowerShell restore module/script and Task Manager emergency route must exist before activation, because an unsigned or deleted supervisor cannot recover a session it never starts.
+
+The isolated Home/Pro integration is experimental rather than a universal support claim. [Microsoft Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is edition-limited; Microsoft's [CustomShell policy](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-admx-winlogon#customshell) documents an alternate user interface on Pro and higher, not Home. We do not silently modify policy keys or request elevation as an alternative: conflicting policies, domain-managed hosts, unsupported Windows/client versions, and enforcing or unverifiable Smart App Control refuse activation.
+
+## Recovery contract
+
+- Before takeover, verify the production GUI with two UI-thread heartbeats and stop only that diagnostic child. A failed or blocked launch prevents persistence; current-policy success does not guarantee future sign-ins.
+- Publish and verify the original per-user value's presence, raw data, and registry type before setting the active marker and override. Preserve that original backup across idempotent attempts; restore before changing active versions.
+- PowerShell and native recovery share one small registry record and an exclusive per-user deployment file lock. Reload state under the lock, restore exact string/expand-string/absence, verify, then clear active. Refuse unrelated subsequent shell changes rather than clobbering them.
+- Supervise one owned GUI process using a local kernel event and process handle, with bounded startup/heartbeat waits. Exit or failure attempts persisted rollback before starting system Explorer, without restart loops, services, foreign process termination, injection, or security weakening.
+
+The dock and launcher share one presentation controller, observation worker, cached snapshot, and notification subscription. Native out-of-context hooks register and run their blocking message pump on the same owned thread ([Microsoft's thread-affinity contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwineventhook)); the UI coalesces notifications. Fullscreen hiding retains the event loop and heartbeat. Actual Windows 11 sign-in, updates, application startup behavior, and security compatibility remain interactive test requirements.

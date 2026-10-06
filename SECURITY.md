@@ -4,26 +4,24 @@
 
 Tessera is pre-release software with no supported stable release. Security work currently targets the latest `main`. Older snapshots are not maintained, and the project is not ready for use as a primary desktop shell.
 
-## Reporting during private development
+## Confidential vulnerability reporting
 
-The repository is currently private, and there is no public security-reporting address or response-time commitment.
+GitHub private vulnerability reporting is enabled for this public repository. Use [Report a vulnerability](https://github.com/redstone-md/tessera/security/advisories/new), also available under **Security → Advisories**, instead of a public issue for exploit details or sensitive information. Reports are shared privately with maintainers; there is no response-time commitment yet.
 
-If you have repository access, open an issue requesting a confidential security conversation. Include only a high-level description of the affected area, without exploit steps, credentials, personal data, or unredacted desktop output. Repository issues are visible to other collaborators; they are not a confidential reporting channel.
+Include the affected commit/release, Windows version/build, expected impact, and a minimal reproduction with personal data removed. Do not include credentials or unrelated private desktop output, and do not send reports to GitHub `noreply` addresses.
 
-Wait for a maintainer to arrange a private follow-up before sharing sensitive details. In that follow-up, provide the affected commit, Windows version/build, expected impact, and a minimal reproduction. Do not send reports to GitHub `noreply` addresses.
-
-Before a public release, maintainers must configure a working confidential reporting channel, enable GitHub private vulnerability reporting where available, and update this policy with the actual reporting instructions.
+If GitHub's confidential form is unavailable, open only a high-level public request to arrange a safe follow-up; do not publish exploit details or secrets there. Allow coordinated assessment and disclosure before sharing vulnerability details publicly.
 
 ## Security scope
 
 Relevant areas include Win32 memory safety, FFI callback boundaries, DPI-context restoration, untrusted desktop text, dependency vulnerabilities, and future window-management or plugin permissions.
 
-The current implementation observes desktop state, calculates synthetic layouts, and displays a native window switcher. Observation remains read-only. Explicit row activation revalidates a transient HWND/PID, may restore a minimized target asynchronously, and requests foreground without bypassing Windows restrictions. Explicit Save writes only appearance preferences. No automatic layout, Explorer replacement, plugin execution, autostart, or security-setting changes are implemented. Activation is non-atomic; same-process handle reuse remains a risk to test.
+The implementation observes desktop state, calculates synthetic layouts, and presents a native dock/launcher. Observation remains read-only; scoped out-of-context WinEvent notifications trigger coalesced refreshes, not input interception. Explicit activation revalidates HWND/PID and respects foreground restrictions; launch resolves a trusted catalog item. Explicit Save/pin changes write bounded per-user preferences. Experimental shell activation requires a separate installer action, verified backup, and a production two-heartbeat runtime probe; its current-user override is restored by the native supervisor or independent scripts. No DWM replacement, automatic layout, plugin execution, implicit autostart, or security-setting changes are implemented. Activation is non-atomic; same-process handle reuse remains a risk.
 
 Avoid publishing desktop captions, file paths, screenshots, or tokens as part of a report. Please allow maintainers to assess a report and coordinate disclosure before making exploit details public.
 
 ## Security-product compatibility
 
-The Windows executable requests `asInvoker` with `uiAccess=false`; normal use does not require elevation or protected-UI bypass. The panel has no global input hooks, injection, background polling, network operations, or toolkit inspection server. Read the [distribution and trust policy](docs/distribution-and-trust.md) for signing requirements, consumer-release gates, and detection handling.
+All Windows executables request `asInvoker` with `uiAccess=false`; normal use does not require elevation. There are no low-level global input hooks, injection, desktop polling, network operations, or toolkit inspection server. Only the supervisor's own failed/diagnostic GUI child may be terminated. Registry recovery refuses unrelated subsequent shell changes and retains the backup; a blocked supervisor cannot execute fallback, so independent Task Manager recovery is required. Read the [distribution and trust policy](docs/distribution-and-trust.md).
 
-Private alpha builds are explicitly unsigned and not certified as antivirus-safe. The private prerelease includes corresponding source and checksums; some protected machines cannot run it until trusted signing is available. Do not recommend disabling Windows protection or adding exclusions. Investigate detections before calling them false positives, and obtain approval before uploading private artifacts to a vendor or third-party scanner.
+Public test alphas are explicitly unsigned and not certified as antivirus-safe. The prerelease includes corresponding source and checksums; some protected machines cannot run it until trusted signing is available. Never disable Windows protection or add exclusions for a test. Investigate detections before calling them false positives, and obtain approval before uploading modified private artifacts or private desktop data to a vendor or third-party scanner.
