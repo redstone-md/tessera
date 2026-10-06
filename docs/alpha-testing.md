@@ -1,4 +1,4 @@
-# Tessera 0.1.0-alpha.5 — public shell test alpha
+# Tessera 0.1.0-alpha.6 — public shell test alpha
 
 This is an **unsigned, experimental test build**, not a daily-driver shell or a signed consumer release. Windows 11 x64 Home/Pro is the target. A successful hosted Windows build or the earlier alpha's server smoke test does not validate Windows 11 sign-in recovery, security-product compatibility, or every display configuration.
 
@@ -15,7 +15,7 @@ This does not replace DWM, automatically tile/move application windows, provide 
 
 ## Download and run alongside Explorer first
 
-1. Download `tessera-0.1.0-alpha.5-windows-x64.zip` and `SHA256SUMS.txt` from the matching **test prerelease**. Compare `Get-FileHash <zip> -Algorithm SHA256` with the checksum. A checksum detects corruption, not publisher identity.
+1. Download `tessera-0.1.0-alpha.6-windows-x64.zip` and `SHA256SUMS.txt` from the matching **test prerelease**. Compare `Get-FileHash <zip> -Algorithm SHA256` with the checksum. A checksum detects corruption, not publisher identity.
 2. Extract the entire directory. Run `Tessera.exe` as your ordinary user, without administrator privileges. The package uses a verified static CRT; system Windows DLLs are still required.
 3. Leave Defender, UAC, SmartScreen, Smart App Control, and signing/execution policies enabled. **Executables and scripts are unsigned.** If protection blocks them, stop and report the exact warning. Do not disable protection, add exclusions, change execution policy, or unblock downloaded scripts. Never upload private desktop data or modified private artifacts to a scanner. A protected machine may need a signed build before testing.
 4. Use the dock's launcher/settings and recovery controls. Closing the utility does not alter sign-in configuration unless shell activation was separately enabled.
@@ -31,7 +31,7 @@ From a permitted Windows PowerShell 5.1 or PowerShell 7 session in the extracted
 .\Install-Tessera.ps1 -PackagePath $PWD.Path
 ```
 
-Installation copies the complete package to `%LOCALAPPDATA%\Programs\Tessera\0.1.0-alpha.5`, publishes the recovery script/module to `%LOCALAPPDATA%\Tessera\Recovery`, and optionally creates a normal Start-menu shortcut. It does **not** change the sign-in shell, create a Run entry, service, scheduled task, or log off the current session. Immutable version directories reject differing-content replacement; restore an active earlier shell before switching versions. Appearance data is retained.
+Installation copies the complete package to `%LOCALAPPDATA%\Programs\Tessera\0.1.0-alpha.6`, publishes the recovery script/module to `%LOCALAPPDATA%\Tessera\Recovery`, and optionally creates a normal Start-menu shortcut. It does **not** change the sign-in shell, create a Run entry, service, scheduled task, or log off the current session. Immutable version directories reject differing-content replacement; restore an active earlier shell before switching versions. Appearance data is retained.
 
 `-WhatIf` is read-only: no file lock, copied files, shortcut, registry value, or process launch. If the script cannot run under the current execution policy, stop rather than weakening that policy.
 
@@ -94,6 +94,6 @@ This emergency route restores the default Explorer fallback, not necessarily the
 
 Include version, commit, Windows build, edition, session type, DPI/monitor setup, reproduction steps, and exact security warnings. Titles, paths, screenshots and `inspect` output may be private: redact them. There is no automatic log upload.
 
-`tessera-0.1.0-alpha.5-source.zip` includes tracked source, lockfile, vendored dependencies/license files, and portable Cargo source replacement. Keep corresponding source available alongside redistributed binaries as required by GPL version 3. Dependency notices are in `THIRD-PARTY-NOTICES.txt`.
+`tessera-0.1.0-alpha.6-source.zip` includes tracked source, lockfile, vendored dependencies/license files, and portable Cargo source replacement. Keep corresponding source available alongside redistributed binaries as required by GPL version 3. Dependency notices are in `THIRD-PARTY-NOTICES.txt`.
 
 For an offline Windows build, install Rust 1.92.0 plus MSVC/Windows SDK tools, enter the source directory, set `RUSTFLAGS=-C target-feature=+crt-static` using your shell's syntax, and run `cargo +1.92.0 build -p tessera --bins --release --target x86_64-pc-windows-msvc --frozen --offline`. Native signing, interactive Windows 11 sign-in validation, and security-product approval remain separate release gates.
