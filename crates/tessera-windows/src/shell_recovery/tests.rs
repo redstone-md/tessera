@@ -176,7 +176,8 @@ fn backup_roundtrip_preserves_expand_string_kind() {
     let key = OwnedKey::open(
         HKEY_CURRENT_USER,
         tree.path(),
-        windows_sys::Win32::System::Registry::KEY_READ,
+        windows_sys::Win32::System::Registry::KEY_READ
+            | windows_sys::Win32::System::Registry::KEY_SET_VALUE,
     )
     .expect("open")
     .expect("key exists");
