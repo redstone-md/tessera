@@ -475,7 +475,10 @@ function Test-SpaceAndUnicodeInstallDirectory {
     # cycle verbatim in the quoted command and install-directory fields.
     $fixture = New-DeploymentFixture
     try {
-        $unicodeRoot = Join-Path $fixture.FileRoot ('Té ssera — плёночный')
+        # PowerShell 5.1 reads BOM-less source as ANSI; build real Unicode
+        # characters from ASCII code points without weakening this fixture.
+        $unicodeName = 'Tessera ' + [char]0x00E9 + ' ' + [char]0x2014 + ' ' + [char]0x043F + [char]0x044F
+        $unicodeRoot = Join-Path $fixture.FileRoot $unicodeName
         $null = [IO.Directory]::CreateDirectory($unicodeRoot)
         foreach ($file in [IO.Directory]::EnumerateFiles($fixture.PackagePath)) {
             [IO.File]::Copy($file, (Join-Path $unicodeRoot ([IO.Path]::GetFileName($file))))
