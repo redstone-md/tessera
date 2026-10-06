@@ -554,7 +554,7 @@ function Test-UnsupportedActivationHasNoSideEffects {
     # module-bound probe hook instead of pre-approving the engine.
     $fixture = New-DeploymentFixture
     try {
-        Set-FixtureShellValue -Fixture $fixture -Value 'C:\not-explorer.exe'
+        Set-FixtureShellValue -Fixture $fixture -Value 'C:\third-party\explorer.exe'
         Set-DeploymentHook -Name 'SupervisorRuntimeProbe' -Body {
             param([Parameter(Mandatory)][string]$SupervisorPath)
             throw "The supervisor probe must never run for a refused activation: $SupervisorPath"
@@ -565,7 +565,7 @@ function Test-UnsupportedActivationHasNoSideEffects {
         Assert-DeploymentThrows {
             & (Join-Path $repoRoot 'scripts\Install-Tessera.ps1') -PackagePath $fixture.PackagePath -EnableShell
         } 'Shell activation was refused' 'The entrypoint refuses the unsupported activation.'
-        Assert-DeploymentEqual (Get-FixtureShellValue -Fixture $fixture).Value 'C:\not-explorer.exe' 'The foreign shell value is untouched by refusal.'
+        Assert-DeploymentEqual (Get-FixtureShellValue -Fixture $fixture).Value 'C:\third-party\explorer.exe' 'A foreign executable named explorer.exe is untouched by refusal.'
         Assert-DeploymentFalse (Test-Path -LiteralPath (Get-TesseraInstallRoot)) 'Nothing is installed when the shell activation is refused.'
         Assert-DeploymentFalse (Test-Path -LiteralPath (Get-DeploymentLockPath)) 'The lock file is released after the refused run.'
     } finally {
@@ -779,10 +779,13 @@ function Test-SmartAppControlStateMapping {
                 Assert-DeploymentFalse $support.Supported "SAC state $($case.State) is refused."
             } else {
                 Assert-DeploymentTrue ($sacProblem.Count -eq 0) "SAC state $($case.State) does not refuse."
+                Assert-DeploymentTrue $support.Supported "The supported client fixture accepts verified SAC state $($case.State)."
             }
         }
 
         # A non-DWORD or corrupted value cannot be verified and refuses.
+        $fixture.SmartAppControlPolicyKey.SetValue('VerifiedAndReputablePolicyState', '0', [Microsoft.Win32.RegistryValueKind]::String)
+        Assert-DeploymentFalse (Test-ShellSupport).Supported 'A string pretending to be SAC Off is not a verified DWORD.'
         $fixture.SmartAppControlPolicyKey.DeleteValue('VerifiedAndReputablePolicyState', $false)
         $support = Test-ShellSupport
         Assert-DeploymentFalse $support.Supported 'An unreadable SAC state is refused conservatively.'

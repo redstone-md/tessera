@@ -286,13 +286,12 @@ function Get-DeploymentSmartAppControlProblems {
     }
     try {
         $raw = Get-DeploymentRawValue -Key $key -Name 'VerifiedAndReputablePolicyState'
-        if (-not $raw.Present -or $null -eq $raw.Value) {
+        if (-not $raw.Present -or $raw.Kind -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
             return @('The Smart App Control policy state could not be read; the shell activation is refused because the state cannot be verified.')
         }
-        $state = -1
-        if (-not [int]::TryParse($raw.Value.Trim(), [ref]$state)) {
-            return @("The Smart App Control policy state is not readable as a DWORD; the shell activation is refused because the state cannot be verified. Raw value: $($raw.Value)")
-        }
+        # The shared raw shell-value reader deliberately exposes strings only.
+        # Read this verified DWORD as its native integer, never parse REG_SZ.
+        $state = [int]$key.GetValue('VerifiedAndReputablePolicyState')
         switch ($state) {
             0 { return @() }    # Off: documented, probe still mandatory.
             1 {
@@ -412,8 +411,16 @@ function Test-DeploymentExplorerCommand {
     if ($Raw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) {
         $expanded = [Environment]::ExpandEnvironmentVariables($Raw.Value)
     }
-    $name = [IO.Path]::GetFileName($expanded.Trim('"').Trim())
-    return $name -ieq 'explorer.exe'
+    $literal = $expanded.Trim().Trim('"')
+    if ([string]::Equals($literal, 'explorer.exe', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    # An arbitrary third-party executable named explorer.exe is not the
+    # Windows shell. Accept only the actual system directory, without args.
+    $windows = [Environment]::GetFolderPath('Windows')
+    if ([string]::IsNullOrWhiteSpace($windows) -or -not [IO.Path]::IsPathRooted($literal)) { return $false }
+    try {
+        return [string]::Equals([IO.Path]::GetFullPath($literal),
+            (Join-Path $windows 'explorer.exe'), [StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
 }
 
 # True when the current per-user Shell value is exactly the command this
