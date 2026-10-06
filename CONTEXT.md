@@ -2,6 +2,8 @@
 
 A modular desktop environment for Windows. Its primary product is a customizable native shell with conventional floating-window behavior. Automatic tiling is an optional capability, not the baseline interaction model.
 
+The presentation target is full Seelen UI behavior and appearance, independently implemented on the native stack. Current missing modules remain work to do, not exclusions from that target; [the native presentation decision](docs/adr/0005-native-presentation.md) records the reference and acceptance contract.
+
 ## Terminology
 
 **Shell**:
@@ -80,6 +82,22 @@ _Avoid_: "active window"; focus and position in the layout are independent.
 **Shell module**:
 A replaceable part of the environment, such as a taskbar, launcher, or desktop.
 _Avoid_: using "plugin" as a mandatory synonym; a module may ship with Tessera.
+
+**Widget**:
+A shell module presenting a focused piece of information or interaction, optionally with a popup. A widget's appearance or configuration does not grant extra permissions.
+_Avoid_: treating arbitrary web-script execution as necessary for widget behavior.
+
+**Application**:
+A launchable program with an identity suitable for saved preferences. It may have several windows or processes.
+_Avoid_: equating an application identity with a window title or process identifier.
+
+**Application group**:
+A dock entry representing related windows of one application.
+_Avoid_: grouping unrelated windows merely because they share a hosting executable.
+
+**Popup**:
+A transient shell surface for details or actions, such as a calendar, device selector or context menu.
+_Avoid_: treating it as a managed application window.
 
 **Theme**:
 Appearance settings for shell surfaces, including colors, typography, icons, spacing, and motion. A theme does not grant system permissions or automatically restyle foreign application windows.
