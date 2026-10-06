@@ -12,6 +12,10 @@ _Avoid_: "window manager" as the name for the whole environment.
 An explicit choice to use Tessera instead of the default desktop shell for a user's sign-in session.
 _Avoid_: treating installation or a theme change as activation.
 
+**Desktop session**:
+A temporary use of Tessera's dock, toolbar, and launcher within the current Windows session, without changing which shell starts at the next sign-in. Leaving the session restores the prior taskbar presentation.
+_Avoid_: "shell activation" for ordinary launch.
+
 **Shell recovery**:
 Returning the user to their previous working shell when Tessera is stopped, fails, or is no longer wanted.
 _Avoid_: treating recovery as dependent on the failed shell's UI.

@@ -4,9 +4,9 @@ A modular, native desktop environment for Windows 11, built in Rust. Tessera foc
 
 ## Status
 
-**Public, unsigned shell test alpha; not a daily-driver shell.** Alpha.2 adds a native dock/launcher, installed-application icons, pins, passive desktop updates, per-user installation, and independent recovery. See the [alpha tester guide](docs/alpha-testing.md) before trying the experimental sign-in-shell mode.
+**Public, unsigned shell test alpha; not a daily-driver shell.** The published alpha.8 package provides the earlier alongside-Explorer dock. The working source is adopting Seelen UI's standard dock, toolbar, and application-menu presentation in native Rust/Slint; these changes are not part of that existing binary. See the [alpha tester guide](docs/alpha-testing.md) before trying the experimental sign-in-shell mode.
 
-Ordinary launch and installation leave Explorer as the sign-in shell. Only explicit `Install-Tessera.ps1 -EnableShell` may replace it for the current user, after backup and a real supervisor/GUI heartbeat probe; it applies at the next sign-in and never kills the current Explorer session. Tessera does not replace DWM or automatically rearrange application windows. Windows 11 x64 with MSVC is the initial target; shell activation refuses Windows Server, domain-managed hosts, conflicting policies, and unsupported security states.
+Ordinary launch and installation leave Explorer as the sign-in shell. In the working source, ordinary GUI launch starts a supervised temporary desktop session: Tessera owns the primary-monitor presentation and restores Explorer's prior taskbar state on exit. Only explicit `Install-Tessera.ps1 -EnableShell` may replace the sign-in shell for the current user, after backup and a real supervisor/GUI heartbeat probe; it applies at the next sign-in and never kills the current Explorer session. Tessera does not replace DWM or automatically rearrange application windows. Windows 11 x64 with MSVC is the initial target; shell activation refuses Windows Server, domain-managed hosts, conflicting policies, and unsupported security states.
 
 ## Product direction
 
@@ -51,8 +51,8 @@ Linux workspace builds (including headless UI tests and cross-target builds) req
 | --- | --- |
 | `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
 | `tessera-windows` | Desktop observation, explicit activation/launch, native application icons/events, and isolated shell supervision/recovery. |
-| `tessera-ui` | Native Slint dock/launcher, portable models, coalesced asynchronous observation, and preference preview; no Windows-adapter dependency. |
-| `tessera` | Application composition, bounded atomic preferences, GUI dock, recovery supervisor, and developer CLI. |
+| `tessera-ui` | Native Slint dock, toolbar, application menu, portable models, shared asynchronous observation, and preferences; no Windows-adapter dependency. |
+| `tessera` | Application composition, bounded atomic preferences, GUI session, recovery supervisor, and developer CLI. |
 
 ```sh
 cargo run -p tessera -- demo
@@ -96,13 +96,13 @@ cargo run -p tessera -- panel
 cargo run -p tessera --bin tessera-desktop
 ```
 
-The GUI binary opens a floating primary-monitor dock; `panel` opens the ordinary utility/launcher window. Search uses retained data, not a new observation. Native out-of-context desktop notifications coalesce into single-flight background observations, with manual Refresh fallback. Failed refreshes retain explicitly stale data and disable data-dependent actions. Captions and names are bounded plain text, never commands or markup. The installed-application catalog and icons are cached separately from window observations; newly installed apps may take a refresh after the cache interval or a restart to appear.
+The GUI binary starts a temporary desktop session with a centered icon dock, top toolbar, and application menu based on Seelen UI's standard theme; `panel` opens the ordinary utility/settings window. A sibling supervisor owns the GUI heartbeat and Explorer taskbar restoration. Build both Windows binaries together with `cargo build -p tessera --bins` before directly launching the development GUI. Search uses retained data, not a new observation. Native out-of-context desktop notifications coalesce into single-flight background observations, with manual Refresh fallback. Failed refreshes retain explicitly stale data and disable data-dependent actions. Captions and names are bounded plain text, never commands or markup. Installed-application and window icons are cached separately from window observations; newly installed apps may take a refresh after the cache interval or a restart to appear.
 
 Choose a row to request foreground activation; the platform revalidates its transient HWND/PID and eligibility. Minimized targets may be restored asynchronously only on that explicit input. Windows foreground restrictions are respected and reported, not bypassed. Observation and activation cannot be made atomic; same-process handle reuse remains a race.
 
 System/light/dark, compact spacing, and dock edge preview live. **Save preferences** atomically stores these choices and pins in `%LOCALAPPDATA%\Tessera\settings.json`; a pin click persists pins with the last saved appearance, not an unsaved preview. No captions, HWNDs, PIDs, or sign-in commands are stored there. Launch targets resolve only through the trusted current catalog, never directly from a preferences string.
 
-The dock is frameless and above normal windows, hides for a conservative primary-monitor fullscreen hint, and currently does not reserve work area. Its launcher/settings use native controls; the utility panel has normal decorations. There is no periodic desktop polling, fixed-frame-rate idle rendering, injection, low-level input hook, telemetry, update process, or plugin execution. A two-second UI-thread heartbeat exists only for the explicitly supervised shell. All three Windows executables embed `asInvoker`, `uiAccess=false`, and PerMonitorV2; unsigned builds are not antivirus-approved. Installation/recovery usage and emergency steps are in the [tester guide](docs/alpha-testing.md).
+The primary-monitor toolbar reserves its top work-area strip; the dock remains floating and hides for a conservative fullscreen hint. The application menu is frameless, while the recovery/settings utility keeps normal decorations. Only validated Tessera-owned windows receive native surface styling. Ordinary-session exit restores the original primary taskbar visibility and auto-hide state without changing Winlogon or killing Explorer. Other monitors retain their Windows taskbars. There is no periodic desktop polling, fixed-frame-rate idle rendering, injection, low-level input hook, telemetry, update process, or plugin execution. Supervised sessions use a two-second UI-thread heartbeat; the clock updates at most once per minute. The installer's separate diagnostic mode does not hide taskbars or reserve work area. All three Windows executables embed `asInvoker`, `uiAccess=false`, and PerMonitorV2; unsigned builds are not antivirus-approved. Installation/recovery usage and emergency steps are in the [tester guide](docs/alpha-testing.md).
 
 ### Verification and limitations
 
@@ -118,7 +118,7 @@ Home and Pro are targets, but Microsoft's [Shell Launcher](https://learn.microso
 
 1. Pure layout calculation and a side-effect-free demo — implemented.
 2. Real Windows observation — implemented.
-3. Native dock/launcher alongside Explorer, application icons/launch/pins, explicit window switching, and passive updates — implemented.
+3. Native application icons/launch/pins, explicit window switching, and passive updates — implemented; the Seelen-style desktop presentation and transient taskbar handoff are under interactive Windows validation.
 4. System/light/dark, compact, dock edge, and pin preferences — implemented; broader profiles, replaceable presentation, and motion remain.
 5. An isolated host with one useful plugin, followed by replaceable modules.
 6. Workspaces, system integrations, and optional window-placement commands with application rules and safety checks.
@@ -128,7 +128,7 @@ Each layer builds on a working previous layer.
 
 ## Architectural references
 
-- [Seelen UI](https://seelen.io/apps/seelen-ui): functional reference for customizable docks, toolbars, launchers, widgets, themes, and notification panels. Its [upstream README](https://github.com/eythaann/Seelen-UI) documents a required WebView runtime; Tessera adopts the product direction, not its web UI stack.
+- [Seelen UI](https://seelen.io/apps/seelen-ui/customizable-shell): the visual reference for the default dock, toolbar, and application menu, as well as the broader customizable-shell direction. Source measurements are pinned in the [presentation decision](docs/adr/0005-native-presentation.md). Its [upstream README](https://github.com/eythaann/Seelen-UI) documents a required WebView runtime; Tessera independently implements the native presentation without copying its AGPL source or artwork.
 - [komorebi](https://github.com/LGUG2Z/komorebi): window management on top of DWM, separated commands and panels, and reversible changes.
 - [GlazeWM](https://github.com/glzr-io/glazewm): layouts, window rules, and independent panel integration.
 - [Cairo Desktop](https://github.com/cairoshell/cairoshell): an established alternate Explorer-shell product; independent recovery and conventional desktop behavior inform the product constraints.

@@ -2,6 +2,8 @@
 
 This is an **unsigned, experimental test build**, not a daily-driver shell or a signed consumer release. Windows 11 x64 Home/Pro is the target. A successful hosted Windows build or the earlier alpha's server smoke test does not validate Windows 11 sign-in recovery, security-product compatibility, or every display configuration.
 
+**Working-source distinction:** the existing alpha.8 download is unchanged. New source work targets Seelen UI's standard icon dock, top toolbar and application menu, with a supervised temporary primary-taskbar handoff during ordinary launch. It does not enable persistent sign-in-shell replacement. Do not use the older package to judge these unreleased changes.
+
 ## Available capabilities
 
 - Native dock and launcher, real installed-application catalog and best-effort Windows icons; no WebView.
