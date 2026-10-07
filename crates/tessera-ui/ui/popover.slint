@@ -15,10 +15,23 @@ export global PopoverTokens {
     in-out property <length> shadow-offset-x: 2px;
     in-out property <length> shadow-offset-y: 2px;
     in-out property <length> shadow-blur: 8px;
+    in-out property <duration> show-duration: 150ms;
+}
+
+// The native lifetime boundary owns these states; direct component previews
+// remain settled and motion-free until a presenter explicitly opts in.
+export global PopoverMotion {
+    in-out property <bool> enabled: false;
+    in-out property <bool> presented: true;
 }
 
 export component PopoverBody inherits Rectangle {
     accessible-role: none;
+    opacity: PopoverMotion.presented ? 1 : 0;
+    animate opacity {
+        duration: PopoverMotion.enabled ? PopoverTokens.show-duration : 0ms;
+        easing: ease-out;
+    }
     // Transcluded children refer to this component as `parent`, not its inner
     // frame. Publish the usable body bounds explicitly, excluding the shadow.
     out property <length> content-width: frame.width;

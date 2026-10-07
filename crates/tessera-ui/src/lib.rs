@@ -363,6 +363,14 @@ pub trait DesktopHost: Send + Sync + 'static {
         Ok(String::new())
     }
 
+    /// Reads the current system/user permission for optional UI motion.
+    /// Called on the UI thread for a presentation, never for desktop polling.
+    /// Unknown/unsupported hosts conservatively skip animations; production
+    /// adapters must also skip them when the system requests reduced motion.
+    fn ui_animations_enabled(&self) -> bool {
+        false
+    }
+
     /// Attaches one shown UI window to its native shell surface.
     ///
     /// Called on the main UI thread after the window is shown and native

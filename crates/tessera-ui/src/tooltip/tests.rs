@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
-use crate::generated::{Dock, Palette, SeelenPalette};
+use crate::generated::{Dock, Palette, PopoverMotion, SeelenPalette};
 use crate::{PanelPreferences, PanelSnapshot, SystemAction};
 use parking_lot::Mutex;
 use std::cell::RefCell;
@@ -13,6 +13,7 @@ struct Host {
     events: Arc<Mutex<Vec<&'static str>>>,
     deny_attach: AtomicBool,
     close_during_attach: AtomicBool,
+    allow_motion: AtomicBool,
 }
 
 struct Lease(Arc<Mutex<Vec<&'static str>>>);
@@ -40,6 +41,9 @@ impl DesktopHost for Host {
     }
     fn request_ui_focus(&self, _: &slint::Window) -> Result<(), String> {
         panic!("Tooltip must never request focus")
+    }
+    fn ui_animations_enabled(&self) -> bool {
+        self.allow_motion.load(Ordering::Relaxed)
     }
     fn configure_surface(
         &self,
@@ -97,6 +101,7 @@ fn delay_uses_current_owner_theme_and_scale_then_leave_releases_without_focus() 
     advance(99);
     assert!(!tooltip.surface.is_visible());
     assert!(host.events.lock().is_empty());
+    host.allow_motion.store(true, Ordering::Relaxed);
     owner
         .global::<Palette>()
         .set_color_scheme(slint::language::ColorScheme::Light);
@@ -129,11 +134,22 @@ fn delay_uses_current_owner_theme_and_scale_then_leave_releases_without_focus() 
         tooltip.surface.global::<SeelenPalette>().get_color_scheme(),
         slint::language::ColorScheme::Dark
     );
+    let motion = tooltip.surface.global::<PopoverMotion>();
+    assert!(motion.get_presented());
+    assert!(
+        motion.get_enabled(),
+        "permission is read at presentation, not scheduling"
+    );
     tooltip.dismiss(true);
     advance(99);
     assert!(tooltip.surface.is_visible());
     advance(1);
     assert!(!tooltip.surface.is_visible());
+    assert!(!motion.get_presented());
+    assert!(
+        !motion.get_enabled(),
+        "dismissal cancels optional motion immediately"
+    );
     assert_eq!(&*host.events.lock(), &["attach", "detach"]);
 }
 

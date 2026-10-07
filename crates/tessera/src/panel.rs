@@ -294,6 +294,10 @@ mod desktop {
             .map_err(|error| error.to_string())
         }
 
+        fn ui_animations_enabled(&self) -> bool {
+            tessera_windows::ui_animations_enabled().unwrap_or(false)
+        }
+
         fn subscribe(
             &self,
             callback: Arc<dyn Fn() + Send + Sync>,

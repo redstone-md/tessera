@@ -17,6 +17,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
@@ -28,6 +29,7 @@ use crate::generated::{
     LaunchTile, Launcher, Toolbar, TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
+use crate::transient_window::TransientComponent;
 
 /// Exports the drawn buffer as a binary PPM (P6) when the opt-in env var is
 /// set; otherwise a no-op. Never writes inside the repository.
@@ -47,14 +49,22 @@ fn export_screenshot(name: &str, pixels: &[Rgb8Pixel], width: usize, height: usi
 /// so every renderer test installs its own platform — no cross-thread
 /// sharing, no process-wide state.
 fn software_window() -> Rc<MinimalSoftwareWindow> {
-    struct TestPlatform(Rc<MinimalSoftwareWindow>);
+    software_window_with_clock(Rc::new(Cell::new(Duration::ZERO)))
+}
+
+fn software_window_with_clock(clock: Rc<Cell<Duration>>) -> Rc<MinimalSoftwareWindow> {
+    struct TestPlatform(Rc<MinimalSoftwareWindow>, Rc<Cell<Duration>>);
     impl Platform for TestPlatform {
         fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
             Ok(self.0.clone())
         }
+
+        fn duration_since_start(&self) -> Duration {
+            self.1.get()
+        }
     }
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(TestPlatform(window.clone())))
+    slint::platform::set_platform(Box::new(TestPlatform(window.clone(), clock)))
         .expect("one software platform per test thread");
     window
 }
@@ -852,4 +862,69 @@ fn dock_hover_reports_bounds_and_dismisses_on_click_disable_and_scrolling() {
         tile.absolute_position().x < origin.x,
         "rejecting the tile wheel event preserves real parent scrolling"
     );
+}
+
+#[test]
+fn popover_show_motion_settles_cancels_and_skips_when_not_permitted() {
+    let clock = Rc::new(Cell::new(Duration::ZERO));
+    let window = software_window_with_clock(clock.clone());
+    let tooltip = TooltipSurface::new().unwrap();
+    tooltip.apply_presentation_theme(PresentationTheme::uniform(
+        slint::language::ColorScheme::Dark,
+    ));
+    tooltip.set_content("Native hover".into());
+    tooltip.reset_presentation();
+    tooltip.show().unwrap();
+    let width = tooltip.get_tooltip_width().ceil() as u32;
+    let height = tooltip.get_tooltip_height().ceil() as u32;
+    window.set_size(slint::PhysicalSize::new(width, height));
+    let index = height as usize / 2 * width as usize + 12;
+    let pixel = |frame: &[Rgb8Pixel]| [frame[index].r, frame[index].g, frame[index].b];
+    assert_eq!(pixel(&draw(&window, width, height)), [0, 0, 0]);
+
+    tooltip.reveal(true);
+    assert_eq!(pixel(&draw(&window, width, height)), [0, 0, 0]);
+    clock.set(Duration::from_millis(75));
+    slint::platform::update_timers_and_animations();
+    let middle = pixel(&draw(&window, width, height));
+    assert!(middle.iter().all(|channel| *channel > 0 && *channel < 24));
+    clock.set(Duration::from_millis(150));
+    slint::platform::update_timers_and_animations();
+    let settled = draw(&window, width, height);
+    assert_eq!(pixel(&settled), [24, 24, 24]);
+    assert!(!window.window().has_active_animations());
+    assert!(!window.draw_if_needed(|renderer| {
+        let mut pixels = settled.clone();
+        renderer.render(&mut pixels, width as usize);
+    }));
+    export_screenshot(
+        "tooltip-show-settled",
+        &settled,
+        width as usize,
+        height as usize,
+    );
+
+    tooltip.reset_presentation();
+    assert_eq!(pixel(&draw(&window, width, height)), [0, 0, 0]);
+    tooltip.reveal(true);
+    draw(&window, width, height);
+    clock.set(Duration::from_millis(225));
+    slint::platform::update_timers_and_animations();
+    draw(&window, width, height);
+    tooltip.reset_presentation();
+    assert_eq!(pixel(&draw(&window, width, height)), [0, 0, 0]);
+    // Slint's driver caches activity for the current tick. Cancellation has
+    // already drawn zero opacity; the next loop tick clears the prior flag.
+    clock.set(Duration::from_millis(226));
+    slint::platform::update_timers_and_animations();
+    assert!(!window.window().has_active_animations());
+
+    tooltip.reveal(false);
+    let skipped = draw(&window, width, height);
+    assert_eq!(pixel(&skipped), [24, 24, 24]);
+    assert!(!window.window().has_active_animations());
+    assert!(!window.draw_if_needed(|renderer| {
+        let mut pixels = skipped.clone();
+        renderer.render(&mut pixels, width as usize);
+    }));
 }

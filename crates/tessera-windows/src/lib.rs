@@ -44,9 +44,11 @@ mod native_window_actions;
 mod shell_recovery;
 mod shell_runtime;
 mod snapshot;
+mod ui_preferences;
 mod window_actions;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};
+pub use ui_preferences::ui_animations_enabled;
 pub use window_actions::{WindowAction, WindowActionError, window_action};
 
 pub use apps::{
