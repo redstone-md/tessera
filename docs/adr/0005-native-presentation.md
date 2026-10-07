@@ -58,7 +58,7 @@ Each capability is checked in normal, empty, unavailable/denied, loading, error 
 
 Implementation grows in working layers: bounded diagnostics first; then complete native actions and reusable surface/token/popup boundaries; then actual system providers and their popups; then configuration, resources, workspaces, wallpaper and optional tiling. A new capability is not complete merely because its menu entry or setting exists. System-module events must not turn unrelated desktop-window observation into continuous polling.
 
-## Native interaction layer (unreleased)
+## Native interaction layer (alpha.10)
 
 Dock context menus use one lazily created, separately owned Slint `Window`, shared palette/tile primitives and typed actions. On the pinned winit backend, built-in popups are rendered inside their parent and clip to narrow bars; platform `TrackPopupMenu` also blocks the UI timer loop. Neither path is used. The transient `Popup` role is an activatable tool window, unlike the nonactivating bars; user-triggered foreground requests respect Windows denial, and no synthetic input or force-focus API is used. Only the open popup's own focus is sampled for dismissal, not foreign windows or desktop observation.
 

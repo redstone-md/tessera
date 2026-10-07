@@ -4,7 +4,7 @@ A modular, native desktop environment for Windows 11, built in Rust. Tessera foc
 
 ## Status
 
-**Public, unsigned native desktop test alpha; not a daily-driver shell.** Alpha.9 introduces Seelen UI's standard dock, toolbar, and application-menu presentation in native Rust/Slint, with a reversible temporary taskbar handoff. The older alpha.8 package is unchanged. See the [alpha tester guide](docs/alpha-testing.md) before testing in a disposable VM; sign-in-shell activation is not needed for the normal desktop session.
+**Public, unsigned native desktop test alpha; not a daily-driver shell.** Alpha.10 adds separate native dock context menus, validated window commands and read-only geometry checks to the Seelen-style native Rust/Slint presentation introduced in alpha.9. The older alpha.8 and alpha.9 packages are unchanged. See the [alpha tester guide](docs/alpha-testing.md) before testing in a disposable VM; sign-in-shell activation is not needed for the normal desktop session.
 
 Ordinary launch and installation leave Explorer as the sign-in shell. Ordinary GUI launch starts a supervised temporary desktop session: Tessera owns the primary-monitor presentation and restores Explorer's prior taskbar state on exit. Only explicit `Install-Tessera.ps1 -EnableShell` may replace the sign-in shell for the current user, after backup and a real supervisor/GUI heartbeat probe; it applies at the next sign-in and never kills the current Explorer session. Tessera does not replace DWM or automatically rearrange application windows. Windows 11 x64 with MSVC is the initial target; shell activation refuses Windows Server, domain-managed hosts, conflicting policies, and unsupported security states.
 
@@ -78,7 +78,7 @@ cargo run -p tessera -- inspect
 
 Current development builds also accept `cargo run -p tessera -- inspect --check-surfaces`. This read-only diagnostic prints the named Tessera surfaces' physical rectangles, monitor bounds/work areas, DPI, styles and show state, and checks the toolbar against the full monitor origin/width and `round(32 * DPI / 96)` height. Missing, ambiguous, stale or incomplete toolbar data fails instead of producing a vacuous pass. Captions are diagnostic hints, never authorization to control a window.
 
-The check does not capture Slint's internal scale or AppBar query/approved-position history and cannot by itself establish the cause of a toolbar offset. The controlled Windows fixture exercises conformant → deliberately offset → restored geometry without changing Explorer, AppBars or foreign windows; cross-compiling that fixture is not evidence that it ran on Windows. The published alpha.9 package predates this development diagnostic.
+The check does not capture Slint's internal scale or AppBar query/approved-position history and cannot by itself establish the cause of a toolbar offset. The controlled Windows fixture exercises conformant → deliberately offset → restored geometry without changing Explorer, AppBars or foreign windows; cross-compiling that fixture is not evidence that it ran on Windows. Alpha.10 includes this diagnostic; the unchanged alpha.9 package predates it.
 
 - Observation is sequential, not atomic. Windows can close and monitors can disconnect during collection.
 - Invisible windows and windows belonging to the calling process are excluded. Tool, owned, and system windows can appear: observation is not permission to manage them.

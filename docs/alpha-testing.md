@@ -1,17 +1,17 @@
-# Tessera 0.1.0-alpha.9 — native desktop test alpha
+# Tessera 0.1.0-alpha.10 — native desktop test alpha
 
 This is an **unsigned, experimental test build**, not a daily-driver shell or a signed consumer release. Windows 11 x64 Home/Pro is the target. A successful hosted Windows build or the earlier alpha's server smoke test does not validate Windows 11 sign-in recovery, security-product compatibility, or every display configuration.
 
-**New in alpha.9:** native Seelen-style icon dock, top toolbar and application menu, sharing one event-driven controller/cache without a WebView. Ordinary launch now starts a supervised temporary primary-taskbar handoff; it does not replace the sign-in shell. Alpha.8 remains unchanged. Take a disposable Windows 11 VM snapshot before testing; do not enable sign-in-shell replacement for the first UI test.
+**New in alpha.10:** separate native dock context menus, pinned-item middle-click launch, explicit activate/minimize/ordinary-close requests, and a read-only toolbar geometry diagnostic. Pending appearance callbacks no longer recursively borrow window leases during geometry updates. The Seelen-style dock/toolbar/application menu and supervised temporary primary-taskbar handoff introduced in alpha.9 remain native, with no WebView and no sign-in-shell replacement on ordinary launch. Alpha.8 and alpha.9 remain unchanged. Take a disposable Windows 11 VM snapshot; do not enable sign-in-shell replacement for the first UI test.
 
 ## Available capabilities
 
 - Native dock, top toolbar and application menu, real installed-application catalog and best-effort Windows icons; no WebView, Tauri, or Electron.
-- Search, explicit application launch, up to 32 pinned applications, and explicit window activation/restoration. Windows foreground restrictions are respected.
+- Search, explicit application launch, up to 32 pinned applications, and explicit window activation/restoration. Dock menus add minimize and ordinary close requests; success means a request was accepted, not that an application finished saving or closing. Windows foreground restrictions are respected.
 - Live system/light/dark appearance, compact spacing, and primary-monitor dock edge previews. **Save** persists preferences; pin clicks save pins using the last saved appearance, not an unsaved preview.
 - Passive out-of-context desktop notifications and coalesced background observations, with manual Refresh fallback. No low-level keyboard/mouse hooks, injection, or periodic desktop polling.
 - Per-user install and independent restore scripts; an optional supervised sign-in shell with Explorer fallback.
-- Separate developer CLI: `--version`, `demo`, `inspect`, and `panel`.
+- Separate developer CLI: `--version`, `demo`, `inspect`, `inspect --check-surfaces`, and `panel`.
 
 This does not replace DWM, automatically tile/move application windows, provide the Windows notification area/Start flyouts, run plugins, or bypass security. The dock is floating; the 32-logical-pixel top toolbar reserves work area only when an Explorer appbar host is available. Fullscreen hiding covers both bars and is a conservative foreground geometry hint, not universal game compatibility. Taskbar visibility calls target the primary monitor, but Windows appbar auto-hide state may also affect secondary taskbars.
 
@@ -19,10 +19,10 @@ This is not a complete or pixel-certified 1:1 Seelen replacement. Application gr
 
 ## Download and test a temporary desktop session
 
-1. Download `tessera-0.1.0-alpha.9-windows-x64.zip` and `SHA256SUMS.txt` from the matching **test prerelease**. Compare `Get-FileHash <zip> -Algorithm SHA256` with the checksum. A checksum detects corruption, not publisher identity.
+1. Download `tessera-0.1.0-alpha.10-windows-x64.zip` and `SHA256SUMS.txt` from the matching **test prerelease**. Compare `Get-FileHash <zip> -Algorithm SHA256` with the checksum. A checksum detects corruption, not publisher identity.
 2. Extract the entire directory and keep `Tessera.exe`, `tessera-shell.exe`, `tessera-cli.exe` and all accompanying files together. Run `Tessera.exe` as your ordinary user, without administrator privileges. The package uses a verified static CRT; system Windows DLLs are still required.
 3. Leave Defender, UAC, SmartScreen, Smart App Control, and signing/execution policies enabled. **Executables and scripts are unsigned.** If protection blocks them, stop and report the exact warning. Do not disable protection, add exclusions, change execution policy, or unblock downloaded scripts. Never upload private desktop data or modified private artifacts to a scanner. A protected machine may need a signed build before testing.
-4. The native dock and toolbar should appear, then the Explorer taskbar should hide. Open the application menu with the dock's start tile; test search, pins, window switching and settings. Choose **Exit** or **Restore Explorer** in Tessera: the supervisor should restore the original taskbar visibility and auto-hide state. Ordinary launch never changes sign-in configuration.
+4. The native dock and toolbar should appear, then the Explorer taskbar should hide. Open applications with the start tile. Right-click Start for settings/recovery/exit, a pinned tile for Open/Unpin, or a running window for Activate/Minimize/Close; middle-click a pinned tile to launch another instance. Test search, pins and window switching. Choose **Exit** or **Restore Explorer** in Tessera: the supervisor should restore the original taskbar visibility and auto-hide state. Ordinary launch never changes sign-in configuration.
 
 Settings live in `%LOCALAPPDATA%\Tessera\settings.json`. Old alpha appearance files load with default dock/pin fields. Invalid or future files stay untouched until an explicit save. No captions, HWNDs, PIDs, or shell commands are stored in preferences. Back up this file before downgrading; the earlier alpha does not understand new fields.
 
@@ -35,7 +35,7 @@ From a permitted Windows PowerShell 5.1 or PowerShell 7 session in the extracted
 .\Install-Tessera.ps1 -PackagePath $PWD.Path
 ```
 
-Installation copies the complete package to `%LOCALAPPDATA%\Programs\Tessera\0.1.0-alpha.9`, publishes the recovery script/module to `%LOCALAPPDATA%\Tessera\Recovery`, and optionally creates a normal Start-menu shortcut. It does **not** change the sign-in shell, create a Run entry, service, scheduled task, or log off the current session. Immutable version directories reject differing-content replacement; restore an active earlier shell before switching versions. Appearance data is retained.
+Installation copies the complete package to `%LOCALAPPDATA%\Programs\Tessera\0.1.0-alpha.10`, publishes the recovery script/module to `%LOCALAPPDATA%\Tessera\Recovery`, and optionally creates a normal Start-menu shortcut. It does **not** change the sign-in shell, create a Run entry, service, scheduled task, or log off the current session. Immutable version directories reject differing-content replacement; restore an active earlier shell before switching versions. Appearance data is retained.
 
 `-WhatIf` is read-only: no file lock, copied files, shortcut, registry value, or process launch. If the script cannot run under the current execution policy, stop rather than weakening that policy.
 
@@ -92,6 +92,8 @@ This emergency route restores the default Explorer fallback, not necessarily the
 
 - Confirm version/commit with `tessera-cli.exe --version` and `BUILD-INFO.txt`.
 - Test the portable temporary session before activation: native toolbar/dock/menu, search, correct launch/pin/unpin, window switching and minimized restoration; closed windows must fail safely. Notifications should update the view without idle polling.
+- Keep a dock menu open for at least 40 seconds: it must not freeze the UI or cause a heartbeat timeout. Check mouse and arrows/Home/End/Enter/Escape, dismissal, focus-denial behavior and 1x/2x sizing; menus must not clip to the dock's height.
+- If the toolbar is displaced, run `.\tessera-cli.exe inspect --check-surfaces` from the extracted directory. Capture redacted output, a full screenshot, Windows display scaling, and whether it occurs at startup or after fullscreen return. The command only reads native geometry and metadata; it neither repairs placement nor records Slint scale/AppBar history. No toolbar, ambiguous titles, incomplete data or a mismatch intentionally returns failure.
 - Record the original taskbar visibility and auto-hide setting before launch. Verify exact restoration after Exit, GUI crash and heartbeat loss while the supervisor remains alive. Confirm no ordinary-launch Winlogon change and no startup/fullscreen-return focus steal.
 - Preview without Save, then save/restart: theme, compact mode, edge, and pins must persist correctly. Pinning must not accidentally save an unsaved theme preview.
 - Check all dock edges, negative-origin/mixed-DPI monitors, keyboard/screen-reader navigation, overflow, and actual idle CPU/RAM.
@@ -103,6 +105,6 @@ This emergency route restores the default Explorer fallback, not necessarily the
 
 Include version, commit, Windows build, edition, session type, DPI/monitor setup, reproduction steps, and exact security warnings. Titles, paths, screenshots and `inspect` output may be private: redact them. There is no automatic log upload.
 
-`tessera-0.1.0-alpha.9-source.zip` includes tracked source, lockfile, vendored dependencies/license files, and portable Cargo source replacement. Keep corresponding source available alongside redistributed binaries as required by GPL version 3. Dependency notices are in `THIRD-PARTY-NOTICES.txt`.
+`tessera-0.1.0-alpha.10-source.zip` includes tracked source, lockfile, vendored dependencies/license files, and portable Cargo source replacement. Keep corresponding source available alongside redistributed binaries as required by GPL version 3. Dependency and bundled-icon notices are in `THIRD-PARTY-NOTICES.txt`.
 
 For an offline Windows build, install Rust 1.92.0 plus MSVC/Windows SDK tools, enter the source directory, set `RUSTFLAGS=-C target-feature=+crt-static` using your shell's syntax, and run `cargo +1.92.0 build -p tessera --bins --release --target x86_64-pc-windows-msvc --frozen --offline`. Native signing, interactive Windows 11 sign-in validation, and security-product approval remain separate release gates.
