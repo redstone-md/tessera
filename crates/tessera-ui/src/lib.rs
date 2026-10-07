@@ -19,6 +19,7 @@ pub(crate) mod controller;
 pub(crate) mod dock;
 pub(crate) mod dto;
 pub(crate) mod icons;
+pub(crate) mod motion;
 pub(crate) mod popup_placement;
 pub(crate) mod projection;
 // Renderer-backed tests: test-only (they need the software renderer and the
@@ -369,6 +370,17 @@ pub trait DesktopHost: Send + Sync + 'static {
     /// adapters must also skip them when the system requests reduced motion.
     fn ui_animations_enabled(&self) -> bool {
         false
+    }
+
+    /// Subscribes only to effective motion-permission changes. Delivery may
+    /// originate on another thread; it must never trigger desktop observation.
+    /// The returned guard owns the registration. `None` means unavailable;
+    /// presentations still query [`DesktopHost::ui_animations_enabled`].
+    fn subscribe_ui_motion(
+        &self,
+        _callback: std::sync::Arc<dyn Fn(bool) + Send + Sync>,
+    ) -> Result<Option<Box<dyn Send>>, String> {
+        Ok(None)
     }
 
     /// Attaches one shown UI window to its native shell surface.

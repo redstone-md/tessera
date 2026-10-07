@@ -21,6 +21,9 @@ export component TooltipSurface inherits Window {
     out property <length> tooltip-height: max(1px, label.preferred-height + 8px) + 2 * PopoverTokens.shadow-margin;
     preferred-width: root.tooltip-width;
     preferred-height: root.tooltip-height;
+    public function set-presentation-opacity(value: float) {
+        body.set-presentation-opacity(value);
+    }
 
     body := PopoverBody {
         label := Text {

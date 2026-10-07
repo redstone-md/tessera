@@ -123,6 +123,9 @@ impl ContextMenuController {
         self.focus_watch.stop();
         self.surface.hide();
     }
+    pub(crate) fn disable_motion(&self) {
+        self.surface.disable_motion();
+    }
 
     fn execute(&self, action: DockMenuAction) {
         if !self.surface.is_visible() || !allowed(self.surface.get_kind(), action) {

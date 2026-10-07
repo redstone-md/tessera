@@ -48,7 +48,9 @@ mod ui_preferences;
 mod window_actions;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};
-pub use ui_preferences::ui_animations_enabled;
+pub use ui_preferences::{
+    UiMotionCallback, UiMotionWatcher, ui_animations_enabled, watch_ui_motion,
+};
 pub use window_actions::{WindowAction, WindowActionError, window_action};
 
 pub use apps::{

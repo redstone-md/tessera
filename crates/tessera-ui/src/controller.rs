@@ -145,6 +145,7 @@ impl PanelController {
         };
         controller.wire_panel(panel);
         controller.wire_completion(panel);
+        controller.wire_motion(panel);
         controller
     }
 
@@ -175,6 +176,7 @@ impl PanelController {
         controller.wire_toolbar(toolbar);
         controller.wire_launcher(launcher);
         controller.wire_completion(panel);
+        controller.wire_motion(panel);
         controller
     }
 
@@ -199,6 +201,23 @@ impl PanelController {
                 panel.invoke_observation_result_ready();
             }
         }));
+    }
+
+    fn wire_motion(&self, panel: &Panel) {
+        let controller = self.clone();
+        panel.on_motion_policy_changed(move |enabled| {
+            if enabled {
+                return;
+            }
+            let tooltip = controller.tooltips.borrow().clone();
+            if let Some(tooltip) = tooltip {
+                tooltip.disable_motion();
+            }
+            let menu = controller.menus.borrow().clone();
+            if let Some(menu) = menu {
+                menu.disable_motion();
+            }
+        });
     }
 
     /// Arms the retained heartbeat through a UI-thread component callback.
@@ -1266,6 +1285,19 @@ pub(crate) fn run(
                 Rc::clone(&controller.tooltips),
                 crate::tooltip::TooltipController::hide,
             );
+            let _motion_scope = match crate::motion::MotionSubscription::new(
+                core.host().as_ref(),
+                &panel,
+                Panel::invoke_motion_policy_changed,
+            ) {
+                Ok(scope) => Some(scope),
+                Err(error) => {
+                    controller.report_message(&format!(
+                        "System motion notifications unavailable: {error}"
+                    ));
+                    None
+                }
+            };
             core.install_routes(controller.routes());
             controller.apply_filter();
             controller.sync_appearance();

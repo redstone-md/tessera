@@ -42,6 +42,9 @@ export component ContextMenuSurface inherits Window {
     ];
 
     public function focus-menu() { keyboard.focus(); }
+    public function set-presentation-opacity(value: float) {
+        body.set-presentation-opacity(value);
+    }
     forward-focus: keyboard;
     keyboard := FocusScope {
         capture-key-pressed(event) => {

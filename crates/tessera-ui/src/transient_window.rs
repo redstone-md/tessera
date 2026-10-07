@@ -8,30 +8,53 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Global, PhysicalPosition, PhysicalSize};
+use slint::{ComponentHandle, PhysicalPosition, PhysicalSize};
 
-use crate::generated::PopoverMotion;
+use crate::generated::{ContextMenuSurface, PopoverMotion, TooltipSurface};
 use crate::{DesktopHost, SurfaceKind};
 
 pub(crate) trait TransientComponent: ComponentHandle {
-    fn reset_presentation(&self);
-    fn reveal(&self, motion_enabled: bool);
-}
+    fn motion(&self) -> PopoverMotion<'_>;
+    fn set_presentation_opacity(&self, opacity: f32);
 
-impl<C: ComponentHandle> TransientComponent for C
-where
-    for<'a> PopoverMotion<'a>: Global<'a, C>,
-{
     fn reset_presentation(&self) {
-        let motion = self.global::<PopoverMotion>();
+        let motion = self.motion();
         motion.set_enabled(false);
         motion.set_presented(false);
+        self.set_presentation_opacity(0.0);
     }
 
     fn reveal(&self, motion_enabled: bool) {
-        let motion = self.global::<PopoverMotion>();
+        let motion = self.motion();
         motion.set_enabled(motion_enabled);
         motion.set_presented(true);
+        self.set_presentation_opacity(1.0);
+    }
+
+    fn disable_motion(&self) {
+        let motion = self.motion();
+        motion.set_enabled(false);
+        self.set_presentation_opacity(if motion.get_presented() { 1.0 } else { 0.0 });
+    }
+}
+
+impl TransientComponent for TooltipSurface {
+    fn motion(&self) -> PopoverMotion<'_> {
+        self.global::<PopoverMotion>()
+    }
+
+    fn set_presentation_opacity(&self, opacity: f32) {
+        self.invoke_set_presentation_opacity(opacity);
+    }
+}
+
+impl TransientComponent for ContextMenuSurface {
+    fn motion(&self) -> PopoverMotion<'_> {
+        self.global::<PopoverMotion>()
+    }
+
+    fn set_presentation_opacity(&self, opacity: f32) {
+        self.invoke_set_presentation_opacity(opacity);
     }
 }
 
@@ -115,6 +138,9 @@ impl<C: TransientComponent> TransientWindow<C> {
 
     pub(crate) fn is_visible(&self) -> bool {
         self.visibility.get() == Visibility::Visible
+    }
+    pub(crate) fn disable_motion(&self) {
+        self.component.disable_motion();
     }
 
     /// Request only for an explicitly opened interactive popup. Passive

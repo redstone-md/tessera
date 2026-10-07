@@ -158,6 +158,9 @@ impl TooltipController {
         self.source.set(None);
         self.surface.hide();
     }
+    pub(crate) fn disable_motion(&self) {
+        self.surface.disable_motion();
+    }
 
     fn window(&self) -> &slint::Window {
         self.surface.window()

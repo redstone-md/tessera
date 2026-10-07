@@ -70,6 +70,7 @@ export component Panel inherits Window {
     // Send, so the Send observation route reaches it only through here).
     callback readiness-pulse();
     callback observation-result-ready();
+    callback motion-policy-changed(bool /* enabled */);
 
     // Live preview: only explicit Save persists through the host. The
     // two-way binding keeps the user's choice while propagating to Palette.

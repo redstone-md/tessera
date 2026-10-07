@@ -911,6 +911,12 @@ fn popover_show_motion_settles_cancels_and_skips_when_not_permitted() {
     clock.set(Duration::from_millis(225));
     slint::platform::update_timers_and_animations();
     draw(&window, width, height);
+    tooltip.disable_motion();
+    assert_eq!(
+        pixel(&draw(&window, width, height)),
+        [24, 24, 24],
+        "live reduced-motion opt-out must settle the shown content, not keep fading or hide it"
+    );
     tooltip.reset_presentation();
     assert_eq!(pixel(&draw(&window, width, height)), [0, 0, 0]);
     // Slint's driver caches activity for the current tick. Cancellation has

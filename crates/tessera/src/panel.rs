@@ -298,6 +298,15 @@ mod desktop {
             tessera_windows::ui_animations_enabled().unwrap_or(false)
         }
 
+        fn subscribe_ui_motion(
+            &self,
+            callback: Arc<dyn Fn(bool) + Send + Sync>,
+        ) -> Result<Option<Box<dyn Send>>, String> {
+            tessera_windows::watch_ui_motion(callback)
+                .map(|watcher| Some(Box::new(watcher) as Box<dyn Send>))
+                .map_err(|error| error.to_string())
+        }
+
         fn subscribe(
             &self,
             callback: Arc<dyn Fn() + Send + Sync>,

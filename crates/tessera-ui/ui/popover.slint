@@ -27,10 +27,14 @@ export global PopoverMotion {
 
 export component PopoverBody inherits Rectangle {
     accessible-role: none;
-    opacity: PopoverMotion.presented ? 1 : 0;
+    opacity: 1;
     animate opacity {
-        duration: PopoverMotion.enabled ? PopoverTokens.show-duration : 0ms;
+        enabled: PopoverMotion.enabled;
+        duration: PopoverTokens.show-duration;
         easing: ease-out;
+    }
+    public function set-presentation-opacity(value: float) {
+        self.opacity = value;
     }
     // Transcluded children refer to this component as `parent`, not its inner
     // frame. Publish the usable body bounds explicitly, excluding the shadow.
