@@ -14,6 +14,7 @@ use crate::generated::{
     ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockSystemCommand, DockWindowCommand,
     Palette, SeelenPalette,
 };
+use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
 mod placement;
@@ -21,12 +22,9 @@ mod placement;
 mod tests;
 
 pub(crate) struct ContextMenuController {
-    surface: ContextMenuSurface,
+    surface: TransientWindow<ContextMenuSurface>,
     dock: slint::Weak<Dock>,
-    host: Arc<dyn DesktopHost>,
-    lease: RefCell<Option<Box<dyn std::any::Any>>>,
     key: RefCell<SharedString>,
-    visible: Cell<bool>,
     focus_seen: Cell<bool>,
     focus_watch: slint::Timer,
 }
@@ -37,12 +35,9 @@ impl ContextMenuController {
         dock: &Dock,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let menu = Rc::new(Self {
-            surface: ContextMenuSurface::new()?,
+            surface: TransientWindow::new(host, ContextMenuSurface::new()?, SurfaceKind::Popup),
             dock: dock.as_weak(),
-            host,
-            lease: RefCell::default(),
             key: RefCell::default(),
-            visible: Cell::new(false),
             focus_seen: Cell::new(false),
             focus_watch: slint::Timer::default(),
         });
@@ -98,22 +93,9 @@ impl ContextMenuController {
             ),
             dock.window().scale_factor(),
         )?;
-        self.surface.window().set_position(rect.position);
-        self.surface.window().set_size(rect.size);
-        self.surface.show().map_err(|error| error.to_string())?;
-        match self
-            .host
-            .configure_surface(SurfaceKind::Popup, self.surface.window())
-        {
-            Ok(lease) => *self.lease.borrow_mut() = lease,
-            Err(error) => {
-                let _ = self.surface.hide();
-                return Err(error);
-            }
-        }
-        self.visible.set(true);
+        self.surface.present(rect.position, rect.size)?;
         self.surface.invoke_focus_menu();
-        let focus = self.host.request_ui_focus(self.surface.window());
+        let focus = self.surface.request_focus();
         self.focus_seen.set(self.is_focused() == Some(true));
         // Only the owned popup's cached focus is sampled, only while open.
         // No desktop scan, foreign hook, forced focus, or idle observer work.
@@ -137,15 +119,12 @@ impl ContextMenuController {
     }
 
     pub(crate) fn hide(&self) {
-        self.visible.set(false);
         self.focus_watch.stop();
-        let lease = self.lease.borrow_mut().take();
-        drop(lease);
-        let _ = self.surface.hide();
+        self.surface.hide();
     }
 
     fn execute(&self, action: DockMenuAction) {
-        if !self.visible.get() || !allowed(self.surface.get_kind(), action) {
+        if !self.surface.is_visible() || !allowed(self.surface.get_kind(), action) {
             return;
         }
         let key = self.key.borrow().clone();

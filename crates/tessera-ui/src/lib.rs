@@ -26,6 +26,7 @@ pub(crate) mod projection;
 mod render_tests;
 pub(crate) mod sanitize;
 pub(crate) mod state;
+pub(crate) mod transient_window;
 
 // Slint owns its generated code; handwritten presentation remains safe Rust.
 #[allow(unsafe_code)]
@@ -381,7 +382,7 @@ pub trait DesktopHost: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Requests foreground for a user-opened launcher/settings window only.
+    /// Requests foreground for an explicitly user-opened launcher or popup.
     ///
     /// Windows may refuse activation; the adapter must respect that decision
     /// without synthetic input or focus-policy workarounds. Bars never call it.
