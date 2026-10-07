@@ -115,6 +115,12 @@ mod desktop {
             let cache = cache.as_ref().expect("Catalog is initialized above");
             (cache.presentation.clone(), cache.failed)
         }
+
+        fn window_target(&self, key: &str) -> Result<ActivationTarget, String> {
+            self.targets.lock().get(key).copied().ok_or_else(|| {
+                "This window is no longer in the observation. Refresh and retry".to_owned()
+            })
+        }
     }
 
     impl DesktopHost for AppHost {
@@ -213,6 +219,7 @@ mod desktop {
                 SurfaceKind::Dock => tessera_windows::ShellSurfaceKind::Dock,
                 SurfaceKind::Toolbar => tessera_windows::ShellSurfaceKind::Toolbar,
                 SurfaceKind::Launcher => tessera_windows::ShellSurfaceKind::Launcher,
+                SurfaceKind::Popup => tessera_windows::ShellSurfaceKind::Popup,
             };
             let lease = tessera_windows::OwnedShellSurface::attach(handle.get(), kind)
                 .map_err(|error| error.to_string())?;
@@ -233,10 +240,21 @@ mod desktop {
         }
 
         fn activate(&self, key: &str) -> Result<(), String> {
-            let target = self.targets.lock().get(key).copied().ok_or_else(|| {
-                "This window is no longer in the observation. Refresh and retry".to_owned()
-            })?;
+            let target = self.window_target(key)?;
             tessera_windows::activate(target).map_err(|error| error.to_string())
+        }
+
+        fn window_action(&self, key: &str, action: tessera_ui::WindowAction) -> Result<(), String> {
+            let target = self.window_target(key)?;
+            let action = match action {
+                tessera_ui::WindowAction::Activate => tessera_windows::WindowAction::Activate,
+                tessera_ui::WindowAction::ActivateOrMinimize => {
+                    tessera_windows::WindowAction::ActivateOrMinimize
+                }
+                tessera_ui::WindowAction::Minimize => tessera_windows::WindowAction::Minimize,
+                tessera_ui::WindowAction::Close => tessera_windows::WindowAction::Close,
+            };
+            tessera_windows::window_action(target, action).map_err(|error| error.to_string())
         }
 
         fn launch(&self, key: &str) -> Result<(), String> {

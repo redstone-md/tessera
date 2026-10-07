@@ -107,8 +107,9 @@ try {
     }
     $noticePath = Join-Path $package 'THIRD-PARTY-NOTICES.txt'
     $notices | Set-Content $noticePath -Encoding utf8
-    # Carry actual notices with the binaries, not only SPDX expressions/links.
-    Get-ChildItem $vendor -Recurse -File | Where-Object {
+    # Carry actual crate and bundled-asset notices with the binaries.
+    $assetRoot = Join-Path $source 'crates/tessera-ui/assets'
+    Get-ChildItem -LiteralPath @($vendor, $assetRoot) -Recurse -File | Where-Object {
         $_.Name -match '^(LICENSE|LICENCE|COPYING|COPYRIGHT|NOTICE)([._-].*)?$' -or
         $_.Name -match '^(OFL|Apache-2\.0|MIT)\.txt$'
     } | Sort-Object FullName | ForEach-Object {

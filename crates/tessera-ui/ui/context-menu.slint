@@ -1,0 +1,123 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton } from "tiles.slint";
+import { DockMenuKind, DockMenuAction } from "shell-commands.slint";
+
+struct MenuEntry { label: string, action: DockMenuAction }
+
+// A separate native Window: winit's built-in popups are clipped inside the
+// parent bar, and its platform menu blocks the UI event loop.
+export component ContextMenuSurface inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera context menu";
+    min-width: 1px;
+    min-height: 1px;
+    in property <DockMenuKind> kind;
+    in-out property <int> selected-index;
+    out property <length> menu-width: root.kind == DockMenuKind.bar ? 220px : 180px;
+    out property <length> menu-height: 32px + root.entries.length * 30px;
+    preferred-width: root.menu-width;
+    preferred-height: root.menu-height;
+    callback action-requested(DockMenuAction);
+    callback dismiss-requested();
+    property <[MenuEntry]> entries: root.kind == DockMenuKind.bar ? [
+        { label: @tr("Settings"), action: DockMenuAction.settings },
+        { label: @tr("File Explorer"), action: DockMenuAction.file-manager },
+        { label: @tr("Task Manager"), action: DockMenuAction.task-manager },
+        { label: @tr("Restore Explorer"), action: DockMenuAction.restore },
+        { label: @tr("Exit Tessera"), action: DockMenuAction.exit }
+    ] : root.kind == DockMenuKind.pinned ? [
+        { label: @tr("Open"), action: DockMenuAction.launch },
+        { label: @tr("Unpin"), action: DockMenuAction.unpin }
+    ] : [
+        { label: @tr("Switch to window"), action: DockMenuAction.activate },
+        { label: @tr("Minimize"), action: DockMenuAction.minimize },
+        { label: @tr("Close"), action: DockMenuAction.close }
+    ];
+
+    public function focus-menu() { keyboard.focus(); }
+    forward-focus: keyboard;
+    keyboard := FocusScope {
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.dismiss-requested();
+                return accept;
+            }
+            if event.text == Key.DownArrow || event.text == Key.UpArrow {
+                root.selected-index = event.text == Key.DownArrow
+                    ? (root.selected-index >= root.entries.length - 1 ? 0 : root.selected-index + 1)
+                    : (root.selected-index <= 0 ? root.entries.length - 1 : root.selected-index - 1);
+                return accept;
+            }
+            if event.text == Key.Home || event.text == Key.End {
+                root.selected-index = event.text == Key.Home ? 0 : root.entries.length - 1;
+                return accept;
+            }
+            if event.text == Key.Return || event.text == Key.Space {
+                if root.selected-index >= 0 && root.selected-index < root.entries.length {
+                    root.action-requested(root.entries[root.selected-index].action);
+                }
+                return accept;
+            }
+            if event.text == Key.Tab { return accept; }
+            return reject;
+        }
+
+        Rectangle {
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            height: parent.height - 16px;
+            border-radius: 10px;
+            background: SeelenPalette.tile;
+            drop-shadow-color: #00000029;
+            drop-shadow-offset-x: 2px;
+            drop-shadow-offset-y: 2px;
+            drop-shadow-blur: 8px;
+            ScrollView {
+                x: 8px;
+                y: 8px;
+                width: parent.width - 16px;
+                height: parent.height - 16px;
+                content-width: self.visible-width;
+                content-height: root.entries.length * 30px;
+                content-y: -max(0px, min(root.selected-index * 30px,
+                    self.content-height - self.visible-height));
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                for entry[index] in root.entries: Rectangle {
+                    y: index * 30px;
+                    width: parent.width;
+                    height: 30px;
+                    border-radius: 4px;
+                    background: index == root.selected-index ? SeelenPalette.hover : transparent;
+                    TileButton {
+                        radius: 4px;
+                        filled: false;
+                        show-focus-ring: false;
+                        accessible-text: entry.label;
+                        changed hovered => {
+                            if self.hovered { root.selected-index = index; }
+                        }
+                        clicked => { root.action-requested(entry.action); }
+                        Text {
+                            x: 8px;
+                            width: parent.width - 16px;
+                            text: entry.label;
+                            color: SeelenPalette.foreground;
+                            font-size: 12.8px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

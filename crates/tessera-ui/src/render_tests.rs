@@ -23,7 +23,10 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, ModelRc, Rgb8Pixel, VecModel};
 
-use crate::generated::{Dock, DockApp, DockStatus, DockWindow, LaunchTile, Launcher, Toolbar};
+use crate::generated::{
+    ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
+    LaunchTile, Launcher, Toolbar,
+};
 
 /// Exports the drawn buffer as a binary PPM (P6) when the opt-in env var is
 /// set; otherwise a no-op. Never writes inside the repository.
@@ -194,6 +197,18 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
         });
     assert_eq!(launches.get(), 2, "pointer click launches");
 
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Middle,
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: center,
+            button: PointerEventButton::Middle,
+        });
+    assert_eq!(launches.get(), 3, "middle click requests one new instance");
+
     // Disabled while refreshing: neither pointer nor accessibility acts.
     dock.set_surface_status(DockStatus {
         notice: "".into(),
@@ -211,10 +226,10 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
             position: center,
             button: PointerEventButton::Left,
         });
-    assert_eq!(launches.get(), 2, "refreshing disables the tile");
+    assert_eq!(launches.get(), 3, "refreshing disables the tile");
     assert_eq!(launch.accessible_enabled(), Some(false));
     launch.invoke_accessible_default_action();
-    assert_eq!(launches.get(), 2, "disabled accessibility action is inert");
+    assert_eq!(launches.get(), 3, "disabled accessibility action is inert");
 
     // Rescue controls stay enabled while busy.
     let button = ElementHandle::find_by_accessible_label(&dock, "Open applications and settings")
@@ -444,4 +459,111 @@ fn dark_palette_renders_the_source_neutral_tile_color() {
     let inside_tile = pixels[36 * 120 + 84];
     assert_eq!([inside_tile.r, inside_tile.g, inside_tile.b], [31, 31, 31]);
     export_screenshot("dock-dark", &pixels, 120, 72);
+}
+
+#[test]
+fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
+    let window = software_window();
+    let menu = ContextMenuSurface::new().unwrap();
+    menu.set_kind(DockMenuKind::Bar);
+    menu.global::<crate::generated::SeelenPalette>()
+        .set_color_scheme(slint::language::ColorScheme::Dark);
+    let selected = Rc::new(Cell::new(None));
+    let recorded = Rc::clone(&selected);
+    menu.on_action_requested(move |action| recorded.set(Some(action)));
+    menu.show().unwrap();
+    menu.invoke_focus_menu();
+
+    for (name, scale) in [("dock-context-menu-1x", 1.0), ("dock-context-menu-2x", 2.0)] {
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (menu.get_menu_width() * scale) as u32;
+        let height = (menu.get_menu_height() * scale) as u32;
+        assert!(
+            height > (72.0 * scale) as u32,
+            "menu is not clipped to the dock"
+        );
+        window.set_size(slint::PhysicalSize::new(width, height));
+        let pixels = draw(&window, width, height);
+        assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+        for label in [
+            "Settings",
+            "File Explorer",
+            "Task Manager",
+            "Restore Explorer",
+            "Exit Tessera",
+        ] {
+            let button = ElementHandle::find_by_accessible_label(&menu, label)
+                .next()
+                .unwrap();
+            assert_eq!(button.accessible_role(), Some(AccessibleRole::Button));
+            let position = button.absolute_position();
+            assert!(position.y >= 0.0 && position.y + 30.0 <= menu.get_menu_height());
+        }
+        export_screenshot(name, &pixels, width as usize, height as usize);
+        assert!(
+            !window.draw_if_needed(|renderer| {
+                let mut unchanged = pixels.clone();
+                renderer.render(&mut unchanged, width as usize);
+            }),
+            "the open menu does not continuously render unchanged pixels"
+        );
+    }
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::End.into(),
+    });
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
+    assert_eq!(selected.get(), Some(DockMenuAction::Exit));
+    drop(menu);
+}
+
+#[test]
+fn dock_right_click_emits_actual_window_relative_anchor_without_launching() {
+    let window = software_window();
+    let dock = Dock::new().unwrap();
+    dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
+        key: "editor".into(),
+        label: "Editor".into(),
+        icon: slint::Image::default(),
+        pinned: true,
+    }])));
+    let launched = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&launched);
+    dock.on_launch_requested(move |_| counter.set(counter.get() + 1));
+    let requested = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let records = Rc::clone(&requested);
+    dock.on_context_menu_requested(move |kind, key, point| {
+        records.borrow_mut().push((kind, key, point))
+    });
+    dock.show().unwrap();
+    window.set_size(slint::PhysicalSize::new(248, 72));
+    let _ = draw(&window, 248, 72);
+    let tile = ElementHandle::find_by_accessible_label(&dock, "Launch Editor")
+        .next()
+        .unwrap();
+    let origin = tile.absolute_position();
+    let point = slint::LogicalPosition::new(origin.x + 10.0, origin.y + 10.0);
+    for event in [
+        WindowEvent::PointerPressed {
+            position: point,
+            button: PointerEventButton::Right,
+        },
+        WindowEvent::PointerReleased {
+            position: point,
+            button: PointerEventButton::Right,
+        },
+    ] {
+        window.window().dispatch_event(event);
+    }
+    assert_eq!(
+        &*requested.borrow(),
+        &[(DockMenuKind::Pinned, "editor".into(), point)]
+    );
+    assert_eq!(launched.get(), 0);
+    drop(dock);
 }

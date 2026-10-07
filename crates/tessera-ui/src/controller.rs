@@ -8,15 +8,20 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::generated::{
-    AppRow, Dock, DockApp, DockStatus, DockWindow, LaunchTile, Launcher, Palette, Row,
-    SeelenPalette, Toolbar,
+    AppRow, Dock, DockApp, DockStatus, DockSystemCommand, DockWindow, DockWindowCommand,
+    LaunchTile, Launcher, Palette, Row, SeelenPalette, Toolbar,
 };
 use crate::projection::{AppProjection, PanelProjection, RowProjection};
 use crate::state::{Routes, SurfaceCore};
 use crate::{
     DesktopHost, Panel, PanelPreferences, PanelSnapshot, RunOptions, SurfaceKind, SystemAction,
-    sanitize, system_action_from_index,
+    WindowAction, sanitize, system_action_from_index,
 };
+
+mod actions;
+mod context_menu;
+mod geometry;
+use context_menu::{MenuScope, Menus};
 
 type Host = dyn DesktopHost;
 
@@ -36,8 +41,8 @@ type Host = dyn DesktopHost;
 /// actually changed — never on unchanged foreground observations.
 #[derive(Default)]
 pub(crate) struct SurfaceLeases {
-    leases: [Option<Box<dyn std::any::Any>>; 3],
-    attached_rect: [Option<(i32, i32, u32, u32)>; 3],
+    leases: [Option<Box<dyn std::any::Any>>; 4],
+    attached_rect: [Option<(i32, i32, u32, u32)>; 4],
 }
 
 impl SurfaceLeases {
@@ -46,6 +51,7 @@ impl SurfaceLeases {
             SurfaceKind::Dock => 0,
             SurfaceKind::Toolbar => 1,
             SurfaceKind::Launcher => 2,
+            SurfaceKind::Popup => 3,
         }
     }
 
@@ -115,6 +121,8 @@ pub(crate) struct PanelController {
     icon_cache: Rc<RefCell<crate::icons::IconCache>>,
     leases: Rc<RefCell<SurfaceLeases>>,
     surface_failure: Rc<RefCell<Option<String>>>,
+    menus: Menus,
+    geometry: Rc<geometry::GeometryUpdates>,
 }
 
 impl PanelController {
@@ -128,6 +136,8 @@ impl PanelController {
             icon_cache: Rc::default(),
             leases: Rc::default(),
             surface_failure: Rc::default(),
+            menus: Rc::default(),
+            geometry: Rc::default(),
         };
         controller.wire_panel(panel);
         controller.wire_completion(panel);
@@ -152,6 +162,8 @@ impl PanelController {
             icon_cache: Rc::default(),
             leases: Rc::default(),
             surface_failure: Rc::default(),
+            menus: Rc::default(),
+            geometry: Rc::default(),
         };
         controller.wire_panel(panel);
         controller.wire_dock(dock);
@@ -221,7 +233,32 @@ impl PanelController {
         let weak = self.clone();
         dock.on_launch_requested(move |key| weak.launch(&key));
         let weak = self.clone();
-        dock.on_window_activate_requested(move |key| weak.activate(&key));
+        dock.on_window_command_requested(move |key, command| {
+            let action = match command {
+                DockWindowCommand::Activate => WindowAction::Activate,
+                DockWindowCommand::Toggle => WindowAction::ActivateOrMinimize,
+                DockWindowCommand::Minimize => WindowAction::Minimize,
+                DockWindowCommand::Close => WindowAction::Close,
+            };
+            weak.window_action(&key, action);
+        });
+        let weak = self.clone();
+        dock.on_open_settings_requested(move || weak.open_panel());
+        let weak = self.clone();
+        dock.on_pin_toggle_requested(move |key, pin| weak.toggle_pin(&key, pin));
+        let weak = self.clone();
+        dock.on_system_command_requested(move |command| {
+            let action = match command {
+                DockSystemCommand::FileManager => SystemAction::OpenFileManager,
+                DockSystemCommand::TaskManager => SystemAction::OpenTaskManager,
+                DockSystemCommand::Restore => SystemAction::RestoreExplorer,
+            };
+            weak.system_action(action);
+        });
+        let weak = self.clone();
+        dock.on_context_menu_requested(move |kind, key, point| {
+            weak.open_dock_menu(kind, &key, (point.x, point.y));
+        });
         let weak = self.clone();
         dock.on_open_applications_requested(move || weak.open_launcher());
         let weak = self.clone();
@@ -656,11 +693,8 @@ impl PanelController {
     /// native. Fullscreen hides both bars (their leases drop first); the
     /// heartbeat, watcher, and loop keep running, and the next
     /// non-fullscreen observation shows both bars again.
-    fn apply_geometry(&self, context: Option<crate::DockContext>) -> Result<bool, String> {
+    fn place_geometry(&self, context: crate::DockContext) -> Result<bool, String> {
         let Some(dock) = self.dock_and_upgrade() else {
-            return Ok(false);
-        };
-        let Some(context) = context else {
             return Ok(false);
         };
         let scale = dock.window().scale_factor();
@@ -1183,6 +1217,7 @@ pub(crate) fn run(
             // Drop native leases before any component/HWND is destroyed, even
             // if another component callback still retains the controller.
             let _surface_scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+            let _menu_scope = MenuScope(Rc::clone(&controller.menus));
             core.install_routes(controller.routes());
             controller.apply_filter();
             controller.sync_appearance();

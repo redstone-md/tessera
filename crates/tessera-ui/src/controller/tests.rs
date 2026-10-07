@@ -30,6 +30,8 @@ struct FixtureHost {
     observe_calls: AtomicUsize,
     activations: Mutex<Vec<String>>,
     activation_result: Mutex<Result<(), String>>,
+    window_actions: Mutex<Vec<(String, WindowAction)>>,
+    window_action_result: Mutex<Result<(), String>>,
     saves: Mutex<Vec<PanelPreferences>>,
     save_result: Mutex<Result<(), String>>,
     launches: Mutex<Vec<String>>,
@@ -53,6 +55,8 @@ impl FixtureHost {
             observe_calls: AtomicUsize::new(0),
             activations: Mutex::new(Vec::new()),
             activation_result: Mutex::new(Ok(())),
+            window_actions: Mutex::default(),
+            window_action_result: Mutex::new(Ok(())),
             saves: Mutex::new(Vec::new()),
             save_result: Mutex::new(Ok(())),
             launches: Mutex::new(Vec::new()),
@@ -81,6 +85,11 @@ impl DesktopHost for FixtureHost {
     fn activate(&self, key: &str) -> Result<(), String> {
         self.activations.lock().push(key.to_owned());
         self.activation_result.lock().clone()
+    }
+
+    fn window_action(&self, key: &str, action: WindowAction) -> Result<(), String> {
+        self.window_actions.lock().push((key.to_owned(), action));
+        self.window_action_result.lock().clone()
     }
 
     fn launch(&self, key: &str) -> Result<(), String> {
@@ -368,10 +377,6 @@ fn initial_failure_is_not_stale_data_and_visible_rows_are_bounded() {
     );
     assert!(panel.get_status().contains("128 of 140"));
 }
-
-// New dock/launcher interface tests below are NOT EXECUTED in this run (the
-// parent owns the single integration build); they compile against the same
-// fixture as the existing suite.
 
 fn app_snapshot() -> PanelSnapshot {
     PanelSnapshot::new(
@@ -867,4 +872,142 @@ fn live_density_edge_and_pin_changes_resize_without_observing_or_saving_preview(
     panel.invoke_save_preferences_requested();
     assert!(core.applied_appearance().compact);
     assert_eq!(core.applied_dock_edge(), crate::DockEdge::Left);
+}
+
+#[test]
+fn dock_window_commands_use_displayed_keys_and_reject_queued_stale_intents() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(app_snapshot());
+    let core = controller_for(&panel, host.clone()).core;
+    let dock = Dock::new().unwrap();
+    let toolbar = Toolbar::new().unwrap();
+    let launcher = Launcher::new().unwrap();
+    let controller = PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core);
+    let _scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    apply_result_to_both(&controller, &panel, Ok(app_snapshot()));
+
+    for key in ["", "0", "fabricated"] {
+        dock.invoke_window_command_requested(key.into(), DockWindowCommand::Close);
+    }
+    assert!(host.window_actions.lock().is_empty());
+    for (command, action) in [
+        (DockWindowCommand::Activate, WindowAction::Activate),
+        (DockWindowCommand::Toggle, WindowAction::ActivateOrMinimize),
+        (DockWindowCommand::Minimize, WindowAction::Minimize),
+        (DockWindowCommand::Close, WindowAction::Close),
+    ] {
+        dock.invoke_window_command_requested("w1".into(), command);
+        assert_eq!(
+            host.window_actions.lock().last(),
+            Some(&("w1".into(), action))
+        );
+    }
+    assert!(panel.get_status().contains("close requested"));
+    assert!(
+        host.activations.lock().is_empty(),
+        "dock uses the typed command path"
+    );
+
+    *host.window_action_result.lock() = Err("Windows denied the request".into());
+    dock.invoke_window_command_requested("w1".into(), DockWindowCommand::Close);
+    assert!(panel.get_status().contains("Window command failed"));
+    assert!(launcher.get_status().contains("denied"));
+    let count = host.window_actions.lock().len();
+    panel.set_refreshing(true);
+    dock.invoke_window_command_requested("w1".into(), DockWindowCommand::Close);
+    panel.set_refreshing(false);
+    panel.set_stale(true);
+    dock.invoke_window_command_requested("w1".into(), DockWindowCommand::Minimize);
+    panel.set_stale(false);
+    assert_eq!(host.window_actions.lock().len(), count);
+
+    // A row retained only in the panel is not a displayed dock command target.
+    dock.set_running_windows(ModelRc::new(VecModel::<DockWindow>::default()));
+    dock.invoke_window_command_requested("w1".into(), DockWindowCommand::Close);
+    assert_eq!(host.window_actions.lock().len(), count);
+    assert!(panel.get_status().contains("no longer displayed"));
+    assert_eq!(host.observe_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn dock_pin_and_recovery_menu_commands_reuse_real_saved_and_host_actions() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(app_snapshot());
+    let preferences = PanelPreferences::new(Theme::System, false)
+        .with_dock(crate::DockEdge::Bottom, vec!["app-editor".into()]);
+    let mut subscription_error = None;
+    let (core, _watcher) = SurfaceCore::new(host.clone(), &preferences, &mut subscription_error);
+    let dock = Dock::new().unwrap();
+    let toolbar = Toolbar::new().unwrap();
+    let launcher = Launcher::new().unwrap();
+    let controller = PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core);
+    let _scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    apply_result_to_both(&controller, &panel, Ok(app_snapshot()));
+    panel.set_theme_index(2);
+    panel.set_compact(true);
+    dock.invoke_pin_toggle_requested("app-editor".into(), false);
+    let saved = host.saves.lock();
+    assert!(saved.last().unwrap().pinned_apps().is_empty());
+    assert_eq!(saved.last().unwrap().theme(), Theme::System);
+    assert!(!saved.last().unwrap().compact());
+    drop(saved);
+
+    panel.set_stale(true);
+    for command in [
+        DockSystemCommand::FileManager,
+        DockSystemCommand::TaskManager,
+        DockSystemCommand::Restore,
+    ] {
+        dock.invoke_system_command_requested(command);
+    }
+    assert_eq!(
+        host.system_actions.lock().as_slice(),
+        [
+            SystemAction::OpenFileManager,
+            SystemAction::OpenTaskManager,
+            SystemAction::RestoreExplorer,
+        ]
+    );
+    dock.invoke_open_settings_requested();
+    assert_eq!(host.ui_focus_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(host.observe_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn appearance_callbacks_during_show_apply_latest_geometry_without_reentrant_leases() {
+    i_slint_backend_testing::init_no_event_loop();
+    let panel = Panel::new().unwrap();
+    let host = FixtureHost::returning(app_snapshot());
+    let core = controller_for(&panel, host.clone()).core;
+    let dock = Dock::new().unwrap();
+    let toolbar = Toolbar::new().unwrap();
+    let launcher = Launcher::new().unwrap();
+    let controller = PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core);
+    let _scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+    apply_result_to_both(&controller, &panel, Ok(app_snapshot()));
+    // The pending changed handler is synchronously flushed by Dock.show().
+    panel.set_compact(true);
+    let context = controller.core.dock_context().unwrap();
+    assert!(controller.apply_geometry(Some(context)).unwrap());
+    assert!(dock.get_compact());
+    let rect = crate::dock::dock_rect(
+        context,
+        crate::DockEdge::Bottom,
+        dock.get_pinned_apps().row_count() + dock.get_running_windows().row_count(),
+        true,
+        dock.window().scale_factor(),
+    );
+    assert_eq!(
+        dock.window().size(),
+        slint::PhysicalSize::new(rect.width, rect.height)
+    );
+    assert!(
+        !controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Dock, (rect.x, rect.y, rect.width, rect.height),)
+    );
+    assert_eq!(host.observe_calls.load(Ordering::SeqCst), 0);
 }

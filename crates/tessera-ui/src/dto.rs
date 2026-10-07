@@ -123,16 +123,16 @@ pub enum DockEdge {
     Bottom,
     /// Along the top of the primary work area.
     Top,
-    /// Along the left of the primary work area.
+    /// Along the left of the primary monitor bounds.
     Left,
-    /// Along the right of the primary work area.
+    /// Along the right of the primary monitor bounds.
     Right,
 }
 
-/// The primary monitor's current work area in physical pixels.
+/// The primary monitor's full bounds in physical pixels.
 ///
-/// This is the viewport the dock is bounded to; it never carries monitor
-/// enumeration or other desktop geometry.
+/// Bars and the launcher anchor to these bounds, not to the work area that
+/// already excludes space reserved by appbars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DockContext {
     x: i32,
@@ -143,7 +143,7 @@ pub struct DockContext {
 }
 
 impl DockContext {
-    /// Builds a work-area viewport; a zero-sized area is rejected.
+    /// Builds a monitor-bounds viewport; a zero-sized area is rejected.
     pub fn new(x: i32, y: i32, width: u32, height: u32, fullscreen_active: bool) -> Option<Self> {
         if width == 0 || height == 0 {
             return None;
@@ -157,27 +157,27 @@ impl DockContext {
         })
     }
 
-    /// Left edge of the work area; may be negative.
+    /// Left edge of the monitor bounds; may be negative.
     pub fn x(&self) -> i32 {
         self.x
     }
 
-    /// Top edge of the work area; may be negative.
+    /// Top edge of the monitor bounds; may be negative.
     pub fn y(&self) -> i32 {
         self.y
     }
 
-    /// Work-area width in physical pixels.
+    /// Monitor width in physical pixels.
     pub fn width(&self) -> u32 {
         self.width
     }
 
-    /// Work-area height in physical pixels.
+    /// Monitor height in physical pixels.
     pub fn height(&self) -> u32 {
         self.height
     }
 
-    /// Whether a fullscreen window currently covers the work area.
+    /// Whether a fullscreen window currently covers the monitor.
     pub fn fullscreen_active(&self) -> bool {
         self.fullscreen_active
     }
@@ -189,7 +189,7 @@ pub enum SurfaceMode {
     /// The original closable panel window: launcher, settings, and switcher.
     #[default]
     Panel,
-    /// A slim floating dock strip on the primary monitor work area.
+    /// A floating dock strip and toolbar anchored to primary monitor bounds.
     Dock,
 }
 
@@ -208,6 +208,8 @@ pub enum SurfaceKind {
     Toolbar,
     /// Frameless centered icon-grid launcher.
     Launcher,
+    /// Separate activatable native window for transient shell interactions.
+    Popup,
 }
 
 /// Genuine identity text the host supplies on observations.
@@ -261,6 +263,23 @@ pub enum SystemAction {
     OpenTaskManager,
     /// Restore the Windows Explorer shell for this session and future logins.
     RestoreExplorer,
+}
+
+/// Explicit command for an observed application window.
+///
+/// Keys remain snapshot-local; the host revalidates native identity and
+/// eligibility before an effect. Success means a request was accepted, not
+/// that an application finished closing or saving its documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowAction {
+    /// Restore/activate without toggling an already focused window.
+    Activate,
+    /// Minimize a genuinely focused window, otherwise restore/activate it.
+    ActivateOrMinimize,
+    /// Request asynchronous minimization without acquiring foreground.
+    Minimize,
+    /// Ask the application to close normally; never terminate its process.
+    Close,
 }
 
 /// Validates one opaque key: preserved **exactly** — never sanitized,

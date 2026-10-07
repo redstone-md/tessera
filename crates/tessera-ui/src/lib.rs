@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub(crate) mod context_menu;
 pub(crate) mod controller;
 pub(crate) mod dock;
 pub(crate) mod dto;
@@ -35,7 +36,7 @@ use generated::Panel;
 
 pub use dto::{
     DockContext, DockEdge, MAX_PINS, PanelApplication, PixelIcon, RunOptions, ShellIdentity,
-    SurfaceKind, SurfaceMode, SystemAction,
+    SurfaceKind, SurfaceMode, SystemAction, WindowAction,
 };
 
 /// Preferred color scheme for the panel.
@@ -274,7 +275,7 @@ impl PanelSnapshot {
         self
     }
 
-    /// Builder for the primary-monitor work-area viewport the dock needs.
+    /// Builder for the primary-monitor bounds viewport the dock needs.
     pub fn with_dock_context(mut self, dock_context: DockContext) -> Self {
         self.dock_context = Some(dock_context);
         self
@@ -300,7 +301,7 @@ impl PanelSnapshot {
         self.applications.as_deref()
     }
 
-    /// Primary-monitor work-area viewport carried by this observation, if any.
+    /// Primary-monitor bounds viewport carried by this observation, if any.
     pub fn dock_context(&self) -> Option<DockContext> {
         self.dock_context
     }
@@ -322,6 +323,12 @@ pub trait DesktopHost: Send + Sync + 'static {
     /// Activates the window behind `key`; may restore a minimized window only
     /// for this explicit user action.
     fn activate(&self, key: &str) -> Result<(), String>;
+    /// Performs one explicit command on an eligible, currently displayed
+    /// observed window. The platform revalidates its live identity; an
+    /// accepted asynchronous request is not proof that it completed.
+    fn window_action(&self, _key: &str, _action: WindowAction) -> Result<(), String> {
+        Err("This host does not support window commands".into())
+    }
     /// Launches the application behind `key` — an identity the host itself
     /// enumerated. The presentation only ever forwards keys currently shown.
     fn launch(&self, key: &str) -> Result<(), String>;

@@ -14,11 +14,22 @@ import { SeelenPalette } from "palette.slint";
 export component TileButton inherits Rectangle {
     in property <string> accessible-text;
     in property <bool> enabled: true;
+    out property <bool> hovered: touch.has-hover;
     in property <length> radius;
     in property <bool> show-focus-ring: true;
     /// false renders no idle background (transparent until hover/press).
     in property <bool> filled: true;
     callback clicked;
+    callback middle-clicked;
+    callback context-requested(Point);
+    property <bool> right-armed;
+    property <bool> middle-armed;
+    changed enabled => {
+        if !root.enabled {
+            root.middle-armed = false;
+            root.right-armed = false;
+        }
+    }
 
     border-radius: root.radius;
     background: !root.enabled ? (root.filled ? SeelenPalette.tile : transparent) :
@@ -32,6 +43,7 @@ export component TileButton inherits Rectangle {
     accessible-label: root.accessible-text;
     accessible-action-default => { if root.enabled { root.clicked(); } }
 
+
     keyboard := FocusScope {
         // Zero-size: must not react on clicks (only key events); the stock
         // StateLayer pattern from the toolkit's own widgets.
@@ -39,6 +51,14 @@ export component TileButton inherits Rectangle {
         key-pressed(event) => {
             if root.enabled && (event.text == Key.Space || event.text == Key.Return) {
                 root.clicked();
+                return accept;
+            }
+            if root.enabled && (event.text == Key.Menu
+                || (event.text == Key.F10 && event.modifiers.shift)) {
+                root.context-requested({
+                    x: root.absolute-position.x + root.width / 2,
+                    y: root.absolute-position.y + root.height / 2
+                });
                 return accept;
             }
             return reject;
@@ -50,15 +70,42 @@ export component TileButton inherits Rectangle {
         enabled: root.enabled;
         clicked => { root.clicked(); }
         forward-focus: keyboard;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.cancel {
+                root.middle-armed = false;
+                root.right-armed = false;
+            } else if event.button == PointerEventButton.middle {
+                if event.kind == PointerEventKind.down {
+                    root.middle-armed = root.enabled;
+                } else if event.kind == PointerEventKind.up {
+                    if root.middle-armed && root.enabled && self.has-hover {
+                        root.middle-clicked();
+                    }
+                    root.middle-armed = false;
+                }
+            } else if event.button == PointerEventButton.right {
+                if event.kind == PointerEventKind.down {
+                    root.right-armed = root.enabled;
+                } else if event.kind == PointerEventKind.up {
+                    if root.right-armed && root.enabled && self.has-hover {
+                        root.context-requested({
+                            x: root.absolute-position.x + self.mouse-x,
+                            y: root.absolute-position.y + self.mouse-y
+                        });
+                    }
+                    root.right-armed = false;
+                }
+            }
+        }
     }
 
     if root.show-focus-ring && keyboard.has-focus && root.enabled: Rectangle {
-        x: -3px;
-        y: -3px;
-        width: parent.width + 6px;
-        height: parent.height + 6px;
-        border-radius: root.radius + 3px;
-        border-width: 1px;
+        x: -2px;
+        y: -2px;
+        width: parent.width + 4px;
+        height: parent.height + 4px;
+        border-radius: root.radius + 2px;
+        border-width: 2px;
         border-color: SeelenPalette.accent;
         accessible-role: none;
     }
