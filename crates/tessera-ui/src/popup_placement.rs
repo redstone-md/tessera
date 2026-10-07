@@ -5,12 +5,12 @@ use crate::DockContext;
 use slint::{PhysicalPosition, PhysicalSize};
 
 #[derive(Debug, PartialEq)]
-pub(super) struct PopupRect {
-    pub(super) position: PhysicalPosition,
-    pub(super) size: PhysicalSize,
+pub(crate) struct PopupRect {
+    pub(crate) position: PhysicalPosition,
+    pub(crate) size: PhysicalSize,
 }
 
-pub(super) fn place(
+pub(crate) fn place(
     context: DockContext,
     anchor: PhysicalPosition,
     logical_size: (f32, f32),
@@ -46,6 +46,26 @@ pub(super) fn place(
     })
 }
 
+pub(crate) fn physical_anchor(
+    origin: slint::PhysicalPosition,
+    scale: f32,
+    point: (f32, f32),
+) -> Result<slint::PhysicalPosition, &'static str> {
+    const INVALID: &str = "The context-menu input position is invalid.";
+    if !scale.is_finite() || scale <= 0.0 || !point.0.is_finite() || !point.1.is_finite() {
+        return Err(INVALID);
+    }
+    let coordinate = |origin: i32, offset: f32| {
+        let value = (f64::from(origin) + f64::from(offset) * f64::from(scale)).round();
+        (value >= f64::from(i32::MIN) && value <= f64::from(i32::MAX))
+            .then_some(value as i32)
+            .ok_or(INVALID)
+    };
+    Ok(slint::PhysicalPosition::new(
+        coordinate(origin.x, point.0)?,
+        coordinate(origin.y, point.1)?,
+    ))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -19,6 +19,7 @@ pub(crate) mod controller;
 pub(crate) mod dock;
 pub(crate) mod dto;
 pub(crate) mod icons;
+pub(crate) mod popup_placement;
 pub(crate) mod projection;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
@@ -26,6 +27,7 @@ pub(crate) mod projection;
 mod render_tests;
 pub(crate) mod sanitize;
 pub(crate) mod state;
+pub(crate) mod tooltip;
 pub(crate) mod transient_window;
 
 // Slint owns its generated code; handwritten presentation remains safe Rust.

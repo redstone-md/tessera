@@ -251,6 +251,10 @@ fn toolbar_renders_identity_and_settings_access() {
     let opened = Rc::new(Cell::new(0));
     let counter = opened.clone();
     toolbar.on_open_panel_requested(move || counter.set(counter.get() + 1));
+    let hints = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let records = Rc::clone(&hints);
+    toolbar
+        .on_tooltip_requested(move |content, bounds| records.borrow_mut().push((content, bounds)));
     for (scale, width, height) in [(1.0, 640u32, 32u32), (2.0, 1280u32, 64u32)] {
         window
             .window()
@@ -277,6 +281,23 @@ fn toolbar_renders_identity_and_settings_access() {
             }),
             "the settings vector renders inside its 16px tile at each DPI"
         );
+        for point in [
+            slint::LogicalPosition::new(0.0, 0.0),
+            slint::LogicalPosition::new(origin.x + 8.0, origin.y + 8.0),
+        ] {
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved { position: point });
+            slint::platform::update_timers_and_animations();
+        }
+        let requested = hints.borrow();
+        let (content, bounds) = requested
+            .last()
+            .expect("actual settings hover requests a hint");
+        assert_eq!(content, "Settings and recovery");
+        assert_eq!(bounds.origin, origin);
+        assert_eq!((bounds.width, bounds.height), (16.0, 16.0));
+        drop(requested);
         export_screenshot(
             &format!("toolbar-{scale}x"),
             &pixels,
@@ -635,4 +656,101 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
             renderer.render(&mut unchanged, width as usize);
         }));
     }
+}
+
+#[test]
+fn dock_hover_reports_bounds_and_dismisses_on_click_disable_and_scrolling() {
+    let window = software_window();
+    let dock = Dock::new().unwrap();
+    let label = "An editor label that is much longer than the forty-pixel tile";
+    let mut apps = vec![DockApp {
+        key: "editor".into(),
+        label: label.into(),
+        icon: slint::Image::default(),
+        pinned: true,
+    }];
+    apps.extend((0..5).map(|index| DockApp {
+        key: format!("extra-{index}").into(),
+        label: format!("App {index}").into(),
+        icon: slint::Image::default(),
+        pinned: true,
+    }));
+    dock.set_pinned_apps(ModelRc::new(VecModel::from(apps)));
+    let hints = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let records = Rc::clone(&hints);
+    dock.on_tooltip_requested(move |content, bounds| records.borrow_mut().push((content, bounds)));
+    let dismissed = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let records = Rc::clone(&dismissed);
+    dock.on_tooltip_dismissed(move |delayed, origin| records.borrow_mut().push((delayed, origin)));
+    dock.show().unwrap();
+    window
+        .window()
+        .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
+    window.set_size(slint::PhysicalSize::new(496, 144));
+    let _ = draw(&window, 496, 144);
+    let tile = ElementHandle::find_by_accessible_label(&dock, &format!("Launch {label}"))
+        .next()
+        .unwrap();
+    let origin = tile.absolute_position();
+    let point = slint::LogicalPosition::new(origin.x + 10.0, origin.y + 10.0);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: point });
+    slint::platform::update_timers_and_animations();
+    let requested = hints.borrow();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(requested[0].0, label);
+    assert_eq!(requested[0].1.origin, origin);
+    assert_eq!((requested[0].1.width, requested[0].1.height), (40.0, 40.0));
+    drop(requested);
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position: point,
+        button: PointerEventButton::Left,
+    });
+    assert_eq!(dismissed.borrow().last(), Some(&(false, origin)));
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: point,
+            button: PointerEventButton::Left,
+        });
+    window.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(0.0, 0.0),
+    });
+    slint::platform::update_timers_and_animations();
+    assert_eq!(dismissed.borrow().last(), Some(&(true, origin)));
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: point });
+    slint::platform::update_timers_and_animations();
+    dismissed.borrow_mut().clear();
+    let mut status = dock.get_surface_status();
+    status.refreshing = true;
+    dock.set_surface_status(status);
+    slint::platform::update_timers_and_animations();
+    assert!(dismissed.borrow().contains(&(false, origin)));
+    let mut status = dock.get_surface_status();
+    status.refreshing = false;
+    dock.set_surface_status(status);
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: point });
+    slint::platform::update_timers_and_animations();
+    dismissed.borrow_mut().clear();
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerScrolled {
+            position: point,
+            delta_x: -48.0,
+            delta_y: 0.0,
+        });
+    slint::platform::update_timers_and_animations();
+    assert!(
+        dismissed.borrow().iter().any(|(delayed, _)| !delayed),
+        "wheel cancels stale native hints immediately"
+    );
+    assert!(
+        tile.absolute_position().x < origin.x,
+        "rejecting the tile wheel event preserves real parent scrolling"
+    );
 }

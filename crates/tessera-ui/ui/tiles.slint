@@ -11,8 +11,11 @@ import { SeelenPalette } from "palette.slint";
 // `clicked` fires only when enabled; disabled tiles dim and reject input.
 // `accessible-role`/label make every tile a real button for the platform's
 // accessibility tree.
+export struct TileBounds { origin: Point, width: length, height: length }
+
 export component TileButton inherits Rectangle {
     in property <string> accessible-text;
+    in property <string> tooltip-text;
     in property <bool> enabled: true;
     out property <bool> hovered: touch.has-hover;
     in property <length> radius;
@@ -22,12 +25,41 @@ export component TileButton inherits Rectangle {
     callback clicked;
     callback middle-clicked;
     callback context-requested(Point);
+    callback tooltip-requested(string, TileBounds);
+    callback tooltip-dismissed(bool, Point); // delay and source tile origin
+    function dismiss-tooltip(delayed: bool) {
+        root.tooltip-dismissed(delayed, root.absolute-position);
+    }
+    function update-tooltip() {
+        if root.enabled && root.hovered && root.tooltip-text != "" {
+            root.tooltip-requested(root.tooltip-text, {
+                origin: root.absolute-position,
+                width: root.width,
+                height: root.height
+            });
+        } else {
+            root.dismiss-tooltip(false);
+        }
+    }
+    function activate() {
+        root.dismiss-tooltip(false);
+        root.clicked();
+    }
+    changed hovered => {
+        if root.hovered {
+            root.update-tooltip();
+        } else if root.tooltip-text != "" {
+            root.dismiss-tooltip(true);
+        }
+    }
+    changed tooltip-text => { if root.hovered { root.update-tooltip(); } }
     property <bool> right-armed;
     property <bool> middle-armed;
     changed enabled => {
         if !root.enabled {
             root.middle-armed = false;
             root.right-armed = false;
+            root.dismiss-tooltip(false);
         }
     }
 
@@ -41,7 +73,7 @@ export component TileButton inherits Rectangle {
     accessible-role: button;
     accessible-enabled: root.enabled;
     accessible-label: root.accessible-text;
-    accessible-action-default => { if root.enabled { root.clicked(); } }
+    accessible-action-default => { if root.enabled { root.activate(); } }
 
 
     keyboard := FocusScope {
@@ -50,11 +82,12 @@ export component TileButton inherits Rectangle {
         width: 0px;
         key-pressed(event) => {
             if root.enabled && (event.text == Key.Space || event.text == Key.Return) {
-                root.clicked();
+                root.activate();
                 return accept;
             }
             if root.enabled && (event.text == Key.Menu
                 || (event.text == Key.F10 && event.modifiers.shift)) {
+                root.dismiss-tooltip(false);
                 root.context-requested({
                     x: root.absolute-position.x + root.width / 2,
                     y: root.absolute-position.y + root.height / 2
@@ -68,9 +101,16 @@ export component TileButton inherits Rectangle {
 
     touch := TouchArea {
         enabled: root.enabled;
-        clicked => { root.clicked(); }
+        clicked => { root.activate(); }
         forward-focus: keyboard;
+        scroll-event(event) => {
+            root.dismiss-tooltip(false);
+            return reject; // preserve the parent ScrollView's real scrolling
+        }
         pointer-event(event) => {
+            if event.kind == PointerEventKind.down || event.kind == PointerEventKind.cancel {
+                root.dismiss-tooltip(false);
+            }
             if event.kind == PointerEventKind.cancel {
                 root.middle-armed = false;
                 root.right-armed = false;

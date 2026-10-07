@@ -3,7 +3,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { ApplicationIcon, TileButton } from "tiles.slint";
+import { ApplicationIcon, TileButton, TileBounds } from "tiles.slint";
 import { DockWindowCommand, DockSystemCommand, DockMenuKind } from "shell-commands.slint";
 
 export struct DockApp { key: string, label: string, icon: image, pinned: bool }
@@ -39,6 +39,8 @@ export component Dock inherits Window {
     callback pin-toggle-requested(string, bool);
     callback system-command-requested(DockSystemCommand);
     callback context-menu-requested(DockMenuKind, string, Point);
+    callback tooltip-requested(string, TileBounds);
+    callback tooltip-dismissed(bool, Point);
 
     // Seelen tokens (exact defaults; compact shrinks proportionally).
     property <float> factor: root.compact ? 0.8 : 1;
@@ -71,6 +73,9 @@ export component Dock inherits Window {
             height: root.item;
             radius: root.tile-radius;
             accessible-text: "Open applications and settings";
+            tooltip-text: @tr("Applications");
+            tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+            tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
             clicked => { root.open-applications-requested(); }
             context-requested(position) => {
                 root.context-menu-requested(DockMenuKind.bar, "", position);
@@ -93,7 +98,9 @@ export component Dock inherits Window {
             y: root.vertical ? root.pad + root.item + root.gap : root.pad;
             width: parent.width - 2 * root.pad - (root.vertical ? 0px : root.item + root.gap);
             height: parent.height - 2 * root.pad - (root.vertical ? root.item + root.gap : 0px);
-            mouse-drag-pan-enabled: true;
+            // Desktop tiles own button-down; overflow uses wheel/scrollbars,
+            // not a competing mouse-pan gesture that delays those events.
+            mouse-drag-pan-enabled: false;
             horizontal-scrollbar-policy: root.vertical ? ScrollBarPolicy.always-off : ScrollBarPolicy.as-needed;
             vertical-scrollbar-policy: root.vertical ? ScrollBarPolicy.as-needed : ScrollBarPolicy.always-off;
             property <length> content-length: max(0px,
@@ -117,6 +124,9 @@ export component Dock inherits Window {
                     radius: root.tile-radius;
                     enabled: !root.blocked;
                     accessible-text: "Launch " + tile.label;
+                    tooltip-text: tile.label;
+                    tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                    tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                     clicked => { root.launch-requested(tile.key); }
                     middle-clicked => { root.launch-requested(tile.key); }
                     context-requested(position) => {
@@ -149,6 +159,9 @@ export component Dock inherits Window {
                     radius: root.tile-radius;
                     enabled: !root.blocked;
                     accessible-text: "Switch to " + tile.caption;
+                    tooltip-text: tile.caption;
+                    tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                    tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                     clicked => { root.window-command-requested(tile.key, DockWindowCommand.toggle); }
                     context-requested(position) => {
                         root.context-menu-requested(DockMenuKind.window, tile.key, position);

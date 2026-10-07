@@ -3,7 +3,7 @@
 
 import { SeelenPalette } from "palette.slint";
 import { DockStatus } from "dock.slint";
-import { TileButton } from "tiles.slint";
+import { TileButton, TileBounds } from "tiles.slint";
 
 // One top toolbar, full monitor bounds width, 32 logical pixels tall
 // (Seelen fancy-toolbar default: item 16 + padding 8 * 2 + margin 0).
@@ -23,6 +23,8 @@ export component Toolbar inherits Window {
     in property <string> language;
     in property <DockStatus> surface-status;
     callback open-panel-requested(); // settings/recovery access
+    callback tooltip-requested(string, TileBounds);
+    callback tooltip-dismissed(bool, Point);
 
     property <length> pad: 8px;
     property <length> side-pad: 16px;
@@ -99,6 +101,9 @@ export component Toolbar inherits Window {
                 radius: root.tile-radius;
                 filled: false;
                 accessible-text: "Open settings and recovery";
+                tooltip-text: @tr("Settings and recovery");
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                 clicked => { root.open-panel-requested(); }
                 Image {
                     width: parent.width;

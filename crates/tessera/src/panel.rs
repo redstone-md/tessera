@@ -331,6 +331,14 @@ mod desktop {
         presentation: Presentation,
         heartbeat: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if presentation != Presentation::Utility {
+            // Shell surfaces start passive, including their first native
+            // show. Interactive windows request foreground explicitly only
+            // after their validated role is attached; never activate a hint.
+            slint::BackendSelector::new()
+                .with_winit_window_attributes_hook(|attributes| attributes.with_active(false))
+                .select()?;
+        }
         let (settings, preferences, notice) = match SettingsStore::for_current_user() {
             Ok(store) => {
                 let (preferences, notice) = match store.load() {

@@ -21,7 +21,9 @@ use crate::{
 mod actions;
 mod context_menu;
 mod geometry;
-use context_menu::{MenuScope, Menus};
+mod tooltip;
+use context_menu::Menus;
+use tooltip::Tooltips;
 
 type Host = dyn DesktopHost;
 
@@ -121,6 +123,7 @@ pub(crate) struct PanelController {
     leases: Rc<RefCell<SurfaceLeases>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     menus: Menus,
+    tooltips: Tooltips,
     geometry: Rc<geometry::GeometryUpdates>,
 }
 
@@ -136,6 +139,7 @@ impl PanelController {
             leases: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
+            tooltips: Rc::default(),
             geometry: Rc::default(),
         };
         controller.wire_panel(panel);
@@ -162,6 +166,7 @@ impl PanelController {
             leases: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
+            tooltips: Rc::default(),
             geometry: Rc::default(),
         };
         controller.wire_panel(panel);
@@ -258,6 +263,23 @@ impl PanelController {
         dock.on_context_menu_requested(move |kind, key, point| {
             weak.open_dock_menu(kind, &key, (point.x, point.y));
         });
+        let controller = self.clone();
+        let owner = dock.as_weak();
+        dock.on_tooltip_requested(move |content, bounds| {
+            if let Some(dock) = owner.upgrade() {
+                let side = match crate::dock_edge_from_index(dock.get_edge()) {
+                    crate::DockEdge::Bottom => crate::tooltip::Side::Top,
+                    crate::DockEdge::Top => crate::tooltip::Side::Bottom,
+                    crate::DockEdge::Left => crate::tooltip::Side::Right,
+                    crate::DockEdge::Right => crate::tooltip::Side::Left,
+                };
+                controller.show_tooltip(&dock, SurfaceKind::Dock, &content, bounds, side);
+            }
+        });
+        let controller = self.clone();
+        dock.on_tooltip_dismissed(move |delayed, origin| {
+            controller.dismiss_hover_tooltip(SurfaceKind::Dock, origin, delayed);
+        });
         let weak = self.clone();
         dock.on_open_applications_requested(move || weak.open_launcher());
         let weak = self.clone();
@@ -272,6 +294,23 @@ impl PanelController {
     fn wire_toolbar(&self, toolbar: &Toolbar) {
         let weak = self.clone();
         toolbar.on_open_panel_requested(move || weak.open_panel());
+        let controller = self.clone();
+        let owner = toolbar.as_weak();
+        toolbar.on_tooltip_requested(move |content, bounds| {
+            if let Some(toolbar) = owner.upgrade() {
+                controller.show_tooltip(
+                    &toolbar,
+                    SurfaceKind::Toolbar,
+                    &content,
+                    bounds,
+                    crate::tooltip::Side::Bottom,
+                );
+            }
+        });
+        let controller = self.clone();
+        toolbar.on_tooltip_dismissed(move |delayed, origin| {
+            controller.dismiss_hover_tooltip(SurfaceKind::Toolbar, origin, delayed);
+        });
     }
 
     fn wire_launcher(&self, launcher: &Launcher) {
@@ -361,6 +400,7 @@ impl PanelController {
     /// hidden, so the lease is attached after every show and dropped before
     /// every hide.
     pub(crate) fn open_launcher(&self) {
+        self.dismiss_tooltip(false);
         if let Some(launcher) = self.launcher_and_upgrade() {
             self.show_launcher_tiles();
             self.leases.borrow_mut().detach(SurfaceKind::Launcher);
@@ -429,6 +469,7 @@ impl PanelController {
 
     /// Shows the framed Panel: the native settings/recovery window.
     pub(crate) fn open_panel(&self) {
+        self.dismiss_tooltip(false);
         if let Some(panel) = self.panel.upgrade() {
             match panel.show() {
                 Ok(()) => self.request_ui_focus(panel.window()),
@@ -594,6 +635,7 @@ impl PanelController {
     /// Mirrors the panel's busy/stale/status state into the dock and repaints
     /// the strip models. Called after every state change.
     fn render(&self) {
+        self.dismiss_tooltip(false);
         let Some(dock) = self.dock_and_upgrade() else {
             return;
         };
@@ -693,6 +735,7 @@ impl PanelController {
     /// heartbeat, watcher, and loop keep running, and the next
     /// non-fullscreen observation shows both bars again.
     fn place_geometry(&self, context: crate::DockContext) -> Result<bool, String> {
+        self.dismiss_tooltip(false);
         let Some(dock) = self.dock_and_upgrade() else {
             return Ok(false);
         };
@@ -1216,7 +1259,14 @@ pub(crate) fn run(
             // Drop native leases before any component/HWND is destroyed, even
             // if another component callback still retains the controller.
             let _surface_scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
-            let _menu_scope = MenuScope(Rc::clone(&controller.menus));
+            let _menu_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.menus),
+                crate::context_menu::ContextMenuController::hide,
+            );
+            let _tooltip_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.tooltips),
+                crate::tooltip::TooltipController::hide,
+            );
             core.install_routes(controller.routes());
             controller.apply_filter();
             controller.sync_appearance();

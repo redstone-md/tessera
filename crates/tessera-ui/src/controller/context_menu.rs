@@ -3,28 +3,18 @@
 
 //! Lazy popup ownership and conversion of real dock-relative input anchors.
 
-use super::{PanelController, Rc, RefCell, model_key};
+use super::{PanelController, Rc, model_key};
 use crate::context_menu::ContextMenuController;
 use crate::generated::DockMenuKind;
+use crate::popup_placement::physical_anchor;
+use crate::transient_window::TransientCache;
 use slint::ComponentHandle;
 
-pub(super) type Menus = Rc<RefCell<Option<Rc<ContextMenuController>>>>;
-
-/// Callback captures may outlive the event loop. Clear their shared popup
-/// before any main component/native window is destroyed, including error exits.
-pub(super) struct MenuScope(pub(super) Menus);
-
-impl Drop for MenuScope {
-    fn drop(&mut self) {
-        let menu = self.0.borrow_mut().take();
-        if let Some(menu) = menu {
-            menu.hide();
-        }
-    }
-}
+pub(super) type Menus = TransientCache<ContextMenuController>;
 
 impl PanelController {
     pub(super) fn open_dock_menu(&self, kind: DockMenuKind, key: &str, point: (f32, f32)) {
+        self.dismiss_tooltip(false);
         if kind != DockMenuKind::Bar && self.guarded() {
             return;
         }
@@ -78,27 +68,6 @@ impl PanelController {
             self.report_message(&format!("Context menu: {error}"));
         }
     }
-}
-
-fn physical_anchor(
-    origin: slint::PhysicalPosition,
-    scale: f32,
-    point: (f32, f32),
-) -> Result<slint::PhysicalPosition, &'static str> {
-    const INVALID: &str = "The context-menu input position is invalid.";
-    if !scale.is_finite() || scale <= 0.0 || !point.0.is_finite() || !point.1.is_finite() {
-        return Err(INVALID);
-    }
-    let coordinate = |origin: i32, offset: f32| {
-        let value = (f64::from(origin) + f64::from(offset) * f64::from(scale)).round();
-        (value >= f64::from(i32::MIN) && value <= f64::from(i32::MAX))
-            .then_some(value as i32)
-            .ok_or(INVALID)
-    };
-    Ok(slint::PhysicalPosition::new(
-        coordinate(origin.x, point.0)?,
-        coordinate(origin.y, point.1)?,
-    ))
 }
 
 #[cfg(test)]

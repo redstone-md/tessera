@@ -17,7 +17,7 @@ use crate::generated::{
 use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
-mod placement;
+use crate::popup_placement as placement;
 #[cfg(test)]
 mod tests;
 
@@ -30,6 +30,9 @@ pub(crate) struct ContextMenuController {
 }
 
 impl ContextMenuController {
+    pub(crate) fn is_open(&self) -> bool {
+        self.surface.is_visible()
+    }
     pub(crate) fn new(
         host: Arc<dyn DesktopHost>,
         dock: &Dock,
@@ -93,7 +96,9 @@ impl ContextMenuController {
             ),
             dock.window().scale_factor(),
         )?;
-        self.surface.present(rect.position, rect.size)?;
+        if !self.surface.present(rect.position, rect.size)? {
+            return Ok(());
+        }
         self.surface.invoke_focus_menu();
         let focus = self.surface.request_focus();
         self.focus_seen.set(self.is_focused() == Some(true));
