@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, IsWindow, SetWindowLongPtrW, SetWindowPos,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 
 use crate::shell_runtime::error::ShellRuntimeError;
@@ -320,7 +320,17 @@ fn configure_styles(window: HWND, kind: ShellSurfaceKind) -> Result<(), ShellRun
         window,
         windows_sys::Win32::UI::WindowsAndMessaging::HWND_TOPMOST,
     )?;
-    let mask = (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST) as isize;
+    let mut mask = (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST) as isize;
+    if kind == ShellSurfaceKind::Tooltip {
+        let input_mask = (WS_EX_LAYERED | WS_EX_TRANSPARENT) as isize;
+        if styles & input_mask != input_mask {
+            return Err(ShellRuntimeError::Windows {
+                operation: "tooltip renderer cursor pass-through missing",
+                code: 13,
+            });
+        }
+        mask |= input_mask;
+    }
     if read_styles(window)? & mask != styles & mask {
         return Err(ShellRuntimeError::Windows {
             operation: "owned surface style readback mismatch",
@@ -454,13 +464,17 @@ mod tests {
             ShellSurfaceKind::Toolbar,
             ShellSurfaceKind::Launcher,
             ShellSurfaceKind::Popup,
+            ShellSurfaceKind::Tooltip,
         ] {
             let styles = surface_styles(0, kind) as u32;
             assert_ne!(styles & WS_EX_TOOLWINDOW, 0);
             assert_ne!(styles & WS_EX_TOPMOST, 0);
             assert_eq!(
                 styles & WS_EX_NOACTIVATE != 0,
-                matches!(kind, ShellSurfaceKind::Dock | ShellSurfaceKind::Toolbar)
+                matches!(
+                    kind,
+                    ShellSurfaceKind::Dock | ShellSurfaceKind::Toolbar | ShellSurfaceKind::Tooltip
+                )
             );
         }
         assert_eq!(

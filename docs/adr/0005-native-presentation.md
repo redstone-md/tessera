@@ -66,6 +66,19 @@ Window menus activate without toggling, request asynchronous minimize, and post 
 
 `inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the DPI-scaled 32px token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
 
+The immutable [alpha.10 CI run](https://github.com/redstone-md/tessera/actions/runs/37675695227) passed on Windows stable and Rust 1.92.0, including actual execution of the controlled toolbar green/offset-red/restored-green CLI fixture, and published only after native packaging/runtime preflight passed. This verifies the diagnostic feedback loop, not the cause or correction of the user's VM toolbar offset.
+
+## Next native appearance layer (development)
+
+Post-alpha.10 source uses the independently licensed Lucide Settings2 vector instead of a handmade toolbar gear, alongside the existing Bootstrap Windows vector. Full ISC/MIT notices are bundled and included by the existing package notice scan; no old release asset is replaced.
+
+Interactive popups and passive tooltips share a small native transient-window lifetime boundary. It releases the native lease before hide/replacement/component teardown and rejects foreground requests for passive roles. Required main-window attachments are keyed by their semantic surface role, not fixed array indices.
+
+A standalone tooltip primitive now wraps real accessible text, measures against its intended content width before the first native size is assigned, and renders outside the dock bounds at 1x and 2x without idle redraw. Its passive role retains NOACTIVATE; the production host uses Winit's documented cursor hit-test API and native style readback requires both layered and transparent pass-through flags. See [the documented Windows layered-window input rule](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#layered-windows).
+
+This primitive is not yet connected to dock/toolbar hover delay, dismissal or anchor placement; those are the next working layer. Its visual conventions follow [the noninteractive tooltip pattern](https://ant.design/components/tooltip), not a claim that every reference override, arrow or animation is already reproduced. Actual Windows GL/software composition and mouse pass-through still require native runtime/interactive verification. Neither this development primitive nor the earlier release completes the appearance or full parity rows.
+
+
 ## Verification and limits
 
 The official [preliminary headless testing backend](https://docs.slint.dev/latest/docs/rust/i_slint_backend_testing/) is a development-only dependency. Its version must exactly match Slint and the compiler, so all three are pinned to 1.18.1 and upgraded together. It tests callbacks and UI state without a display; it does not render pixels or validate Windows accessibility, focus, DPI, or antivirus behavior. The production binary must not include its testing or inspection facilities.

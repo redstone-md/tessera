@@ -45,9 +45,9 @@ pub(crate) fn detached_surface_styles(original: u32, kind: super::ShellSurfaceKi
     // Documented Win32 extended style; portable fixtures do not call Win32.
     const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
     match kind {
-        super::ShellSurfaceKind::Dock | super::ShellSurfaceKind::Toolbar => {
-            original | WS_EX_NOACTIVATE
-        }
+        super::ShellSurfaceKind::Dock
+        | super::ShellSurfaceKind::Toolbar
+        | super::ShellSurfaceKind::Tooltip => original | WS_EX_NOACTIVATE,
         super::ShellSurfaceKind::Launcher | super::ShellSurfaceKind::Popup => original,
     }
 }
@@ -98,7 +98,11 @@ mod tests {
         use super::super::ShellSurfaceKind;
         const NOACTIVATE: u32 = 0x0800_0000;
         for original in [0, 0x80, 0x8, 0x40000, NOACTIVATE] {
-            for kind in [ShellSurfaceKind::Dock, ShellSurfaceKind::Toolbar] {
+            for kind in [
+                ShellSurfaceKind::Dock,
+                ShellSurfaceKind::Toolbar,
+                ShellSurfaceKind::Tooltip,
+            ] {
                 let detached = detached_surface_styles(original, kind);
                 assert_ne!(detached & NOACTIVATE, 0);
                 assert_eq!(detached & !NOACTIVATE, original & !NOACTIVATE);

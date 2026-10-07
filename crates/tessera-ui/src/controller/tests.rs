@@ -864,9 +864,11 @@ fn live_density_edge_and_pin_changes_resize_without_observing_or_saving_preview(
         true,
         1.0,
     );
-    assert_eq!(
-        controller.leases.borrow().attached_rect[0],
-        Some((rect.x, rect.y, rect.width, rect.height))
+    assert!(
+        !controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Dock, (rect.x, rect.y, rect.width, rect.height))
     );
     assert_eq!(host.observe_calls.load(Ordering::SeqCst), 0);
     panel.invoke_save_preferences_requested();

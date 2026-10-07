@@ -42,6 +42,8 @@ pub enum ShellSurfaceKind {
     Launcher,
     /// Activatable tool window for shell-owned menus and module popups.
     Popup,
+    /// Passive tooltip. The renderer must enable cursor pass-through first.
+    Tooltip,
 }
 
 #[cfg(not(windows))]

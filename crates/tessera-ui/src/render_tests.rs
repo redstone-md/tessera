@@ -25,7 +25,7 @@ use slint::{ComponentHandle, ModelRc, Rgb8Pixel, VecModel};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
-    LaunchTile, Launcher, Toolbar,
+    LaunchTile, Launcher, Toolbar, TooltipSurface,
 };
 
 /// Exports the drawn buffer as a binary PPM (P6) when the opt-in env var is
@@ -594,4 +594,45 @@ fn dock_right_click_emits_actual_window_relative_anchor_without_launching() {
     );
     assert_eq!(launched.get(), 0);
     drop(dock);
+}
+
+#[test]
+fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
+    let window = software_window();
+    let tooltip = TooltipSurface::new().unwrap();
+    let caption =
+        "A genuine long application window title that wraps without adding actions. ".repeat(4);
+    tooltip.set_content(caption.clone().into());
+    tooltip.show().unwrap();
+    for (name, scale) in [("tooltip-1x", 1.0), ("tooltip-2x", 2.0)] {
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (tooltip.get_tooltip_width() * scale).ceil() as u32;
+        let height = (tooltip.get_tooltip_height() * scale).ceil() as u32;
+        assert!(width > 16 && width <= (266.0 * scale) as u32);
+        assert!(
+            height < (500.0 * scale) as u32,
+            "first-show measurement must wrap to the declared tooltip width, not a provisional 1px window"
+        );
+        assert!(
+            height > (72.0 * scale) as u32,
+            "wrapped text is not dock-clipped"
+        );
+        window.set_size(slint::PhysicalSize::new(width, height));
+        window.request_redraw();
+        let pixels = draw(&window, width, height);
+        assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+        let text = ElementHandle::find_by_accessible_label(&tooltip, &caption)
+            .next()
+            .unwrap();
+        assert_eq!(text.accessible_role(), Some(AccessibleRole::Text));
+        export_screenshot(name, &pixels, width as usize, height as usize);
+        assert!(!window.draw_if_needed(|renderer| {
+            let mut unchanged = pixels.clone();
+            renderer.render(&mut unchanged, width as usize);
+        }));
+    }
 }

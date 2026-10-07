@@ -215,11 +215,19 @@ mod desktop {
                 return Ok(None);
             }
             let handle = native_window_handle(window)?;
+            if kind == SurfaceKind::Tooltip {
+                use slint::winit_030::WinitWindowAccessor;
+                window
+                    .with_winit_window(|native| native.set_cursor_hittest(false))
+                    .ok_or("The tooltip native window is unavailable")?
+                    .map_err(|error| format!("Tooltip cursor pass-through failed: {error}"))?;
+            }
             let kind = match kind {
                 SurfaceKind::Dock => tessera_windows::ShellSurfaceKind::Dock,
                 SurfaceKind::Toolbar => tessera_windows::ShellSurfaceKind::Toolbar,
                 SurfaceKind::Launcher => tessera_windows::ShellSurfaceKind::Launcher,
                 SurfaceKind::Popup => tessera_windows::ShellSurfaceKind::Popup,
+                SurfaceKind::Tooltip => tessera_windows::ShellSurfaceKind::Tooltip,
             };
             let lease = tessera_windows::OwnedShellSurface::attach(handle.get(), kind)
                 .map_err(|error| error.to_string())?;

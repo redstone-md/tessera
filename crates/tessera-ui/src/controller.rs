@@ -41,20 +41,15 @@ type Host = dyn DesktopHost;
 /// actually changed — never on unchanged foreground observations.
 #[derive(Default)]
 pub(crate) struct SurfaceLeases {
-    leases: [Option<Box<dyn std::any::Any>>; 4],
-    attached_rect: [Option<(i32, i32, u32, u32)>; 4],
+    attachments: std::collections::HashMap<SurfaceKind, SurfaceAttachment>,
+}
+
+struct SurfaceAttachment {
+    _lease: Option<Box<dyn std::any::Any>>,
+    rect: (i32, i32, u32, u32),
 }
 
 impl SurfaceLeases {
-    fn index(kind: SurfaceKind) -> usize {
-        match kind {
-            SurfaceKind::Dock => 0,
-            SurfaceKind::Toolbar => 1,
-            SurfaceKind::Launcher => 2,
-            SurfaceKind::Popup => 3,
-        }
-    }
-
     /// Attaches `window` for `kind` and retains the returned lease. A `None`
     /// lease (diagnostics hosts) is stored as "attached without native".
     pub(crate) fn attach(
@@ -64,22 +59,26 @@ impl SurfaceLeases {
         window: &slint::Window,
         rect: (i32, i32, u32, u32),
     ) -> Result<(), String> {
-        let index = Self::index(kind);
         self.detach(kind);
-        self.leases[index] = host.configure_surface(kind, window)?;
-        self.attached_rect[index] = Some(rect);
+        let lease = host.configure_surface(kind, window)?;
+        self.attachments.insert(
+            kind,
+            SurfaceAttachment {
+                _lease: lease,
+                rect,
+            },
+        );
         Ok(())
     }
 
     /// Drops the lease for `kind` (the native detach) if one is held.
     pub(crate) fn detach(&mut self, kind: SurfaceKind) {
-        self.leases[Self::index(kind)] = None;
-        self.attached_rect[Self::index(kind)] = None;
+        self.attachments.remove(&kind);
     }
 
     /// Whether `rect` differs from the last attached rect for `kind`.
     pub(crate) fn geometry_changed(&self, kind: SurfaceKind, rect: (i32, i32, u32, u32)) -> bool {
-        self.attached_rect[Self::index(kind)] != Some(rect)
+        self.attachments.get(&kind).map(|attached| attached.rect) != Some(rect)
     }
 }
 

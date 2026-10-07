@@ -199,7 +199,7 @@ pub enum SurfaceMode {
 /// native crate's `OwnedShellSurface::attach` (via
 /// [`crate::DesktopHost::configure_surface`]); the UI crate never touches
 /// native handles.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum SurfaceKind {
     /// Bottom-center MinContent dock bar.
     #[default]
@@ -210,6 +210,8 @@ pub enum SurfaceKind {
     Launcher,
     /// Separate activatable native window for transient shell interactions.
     Popup,
+    /// Passive tooltip: never activates and passes cursor input through.
+    Tooltip,
 }
 
 /// Genuine identity text the host supplies on observations.

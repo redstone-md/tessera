@@ -1,0 +1,50 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+// A native top-level surface. The host supplies NOACTIVATE and documented
+// cursor pass-through; no FocusScope, TouchArea, or actions live here.
+export component TooltipSurface inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera tooltip";
+    min-width: 1px;
+    min-height: 1px;
+
+    in property <string> content;
+    in property <length> max-content-width: 250px;
+    property <length> body-width: min(root.max-content-width, max(32px, label.preferred-width + 16px));
+    out property <length> tooltip-width: root.body-width + 16px;
+    out property <length> tooltip-height: max(32px, label.preferred-height + 12px) + 16px;
+    preferred-width: root.tooltip-width;
+    preferred-height: root.tooltip-height;
+
+    Rectangle {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        height: parent.height - 16px;
+        border-radius: 6px;
+        background: #000000d9;
+        drop-shadow-color: #00000029;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-blur: 8px;
+        clip: true;
+        label := Text {
+            x: 8px;
+            y: 6px;
+            // Measure against the intended body width, even before the native
+            // window receives its first physical size.
+            width: max(0px, root.body-width - 16px);
+            height: parent.height - 12px;
+            text: root.content;
+            color: #ffffff;
+            font-size: 14px;
+            font-family: "Segoe UI";
+            vertical-alignment: center;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-label: root.content;
+        }
+    }
+}

@@ -13,6 +13,7 @@ struct Host {
     observations: AtomicUsize,
     deny_focus: AtomicBool,
     deny_attach: AtomicBool,
+    tooltip_role: AtomicBool,
 }
 
 struct Lease(Arc<Mutex<Vec<String>>>);
@@ -44,7 +45,14 @@ impl DesktopHost for Host {
         kind: SurfaceKind,
         _: &slint::Window,
     ) -> Result<Option<Box<dyn std::any::Any>>, String> {
-        assert_eq!(kind, SurfaceKind::Popup);
+        assert_eq!(
+            kind,
+            if self.tooltip_role.load(Ordering::Relaxed) {
+                SurfaceKind::Tooltip
+            } else {
+                SurfaceKind::Popup
+            }
+        );
         if self.deny_attach.load(Ordering::Relaxed) {
             self.events.lock().push("attach-denied".into());
             return Err("Native surface attachment denied".into());
@@ -215,5 +223,29 @@ fn attachment_failure_hides_without_focus_and_a_later_show_can_recover() {
     menu.hide();
     assert!(!menu.surface.is_visible());
     assert_eq!(host.events.lock().last().unwrap(), "detach");
+    assert_eq!(host.observations.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn passive_transient_surface_never_forwards_a_focus_request() {
+    let (host, _dock, _menu) = setup();
+    host.tooltip_role.store(true, Ordering::Relaxed);
+    let tooltip = TransientWindow::new(
+        host.clone(),
+        crate::generated::TooltipSurface::new().unwrap(),
+        SurfaceKind::Tooltip,
+    );
+    tooltip.set_content("A genuine title".into());
+    tooltip
+        .present(
+            slint::PhysicalPosition::new(100, 100),
+            slint::PhysicalSize::new(160, 48),
+        )
+        .unwrap();
+    assert!(tooltip.is_visible());
+    assert!(tooltip.request_focus().is_err());
+    assert_eq!(&*host.events.lock(), &["attach"]);
+    drop(tooltip);
+    assert_eq!(&*host.events.lock(), &["attach", "detach"]);
     assert_eq!(host.observations.load(Ordering::Relaxed), 0);
 }
