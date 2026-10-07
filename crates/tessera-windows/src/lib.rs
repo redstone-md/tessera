@@ -11,12 +11,16 @@
 //! Activation is deliberately narrow: [`ActivationTarget::from_window`]
 //! captures one qualified candidate from an observation pass and [`activate`]
 //! brings it to the foreground on an explicit user action from the panel's UI
-//! input thread. See the `activation` module docs for the exact contract.
+//! input thread. [`window_action`] applies further explicit user actions
+//! (minimize, close request, foreground toggle) behind the same live
+//! validation. See the `activation` and `window_actions` module docs for the
+//! exact contracts.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod activation;
 mod apps;
+mod diagnostics;
 mod error;
 mod events;
 #[cfg(any(windows, test))]
@@ -33,17 +37,23 @@ mod native_apps;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_events;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_window_actions;
 #[cfg(any(windows, test))]
 mod shell_recovery;
 mod shell_runtime;
 mod snapshot;
+mod window_actions;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};
+pub use window_actions::{WindowAction, WindowActionError, window_action};
 
 pub use apps::{
     Application, ApplicationError, IconPixels, catalog, foreground_window_id, launch, window_icon,
 };
 
+pub use diagnostics::{DiagnosticError, WindowDiagnostics, diagnose_window};
 pub use error::{ObservationError, ObservationWarning};
 pub use events::{DesktopEventCallback, DesktopWatcher, watch_desktop};
 pub use snapshot::{DesktopSnapshot, MonitorId, ObservedMonitor, ObservedWindow};

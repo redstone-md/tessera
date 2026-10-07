@@ -76,6 +76,10 @@ cargo run -p tessera -- inspect
 
 `inspect` reports monitor bounds and work areas, visible top-level desktop-app windows, PIDs, captions, classes, rectangles, and observed window flags. On other operating systems, it reports an unsupported-platform error instead of returning a fake empty desktop.
 
+Current development builds also accept `cargo run -p tessera -- inspect --check-surfaces`. This read-only diagnostic prints the named Tessera surfaces' physical rectangles, monitor bounds/work areas, DPI, styles and show state, and checks the toolbar against the full monitor origin/width and `round(32 * DPI / 96)` height. Missing, ambiguous, stale or incomplete toolbar data fails instead of producing a vacuous pass. Captions are diagnostic hints, never authorization to control a window.
+
+The check does not capture Slint's internal scale or AppBar query/approved-position history and cannot by itself establish the cause of a toolbar offset. The controlled Windows fixture exercises conformant → deliberately offset → restored geometry without changing Explorer, AppBars or foreign windows; cross-compiling that fixture is not evidence that it ran on Windows. The published alpha.9 package predates this development diagnostic.
+
 - Observation is sequential, not atomic. Windows can close and monitors can disconnect during collection.
 - Invisible windows and windows belonging to the calling process are excluded. Tool, owned, and system windows can appear: observation is not permission to manage them.
 - Coordinates use physical pixels under a temporary thread-local DPI context, restored on exit. `GetWindowRect` includes invisible resize borders.

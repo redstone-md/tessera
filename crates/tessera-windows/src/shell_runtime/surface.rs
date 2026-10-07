@@ -11,7 +11,7 @@
 //! Appbar reservation rules (per parent review):
 //! - Only the Toolbar surface reserves, and only on the top edge.
 //! - Dock surfaces never reserve (they do not strip the work area).
-//! - Launcher is a tool window but stays activatable (search/keyboard).
+//! - Launcher and Popup are activatable tool windows (search/keyboard).
 //! - Bars are tool windows and no-activate.
 //! - Without a validated Explorer appbar host, reservation is skipped.
 //! - DWM corner cosmetics are best-effort; no backdrop override is installed.
@@ -332,7 +332,7 @@ fn configure_styles(window: HWND, kind: ShellSurfaceKind) -> Result<(), ShellRun
 
 fn surface_styles(previous: isize, kind: ShellSurfaceKind) -> isize {
     let styles = previous as u32 | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
-    (if kind == ShellSurfaceKind::Launcher {
+    (if matches!(kind, ShellSurfaceKind::Launcher | ShellSurfaceKind::Popup) {
         styles & !WS_EX_NOACTIVATE
     } else {
         styles | WS_EX_NOACTIVATE
@@ -448,18 +448,19 @@ mod tests {
     use windows_sys::Win32::Foundation::RECT;
 
     #[test]
-    fn bars_are_tool_noactivate_and_launcher_is_tool_activatable() {
+    fn bars_are_nonactivating_and_launcher_and_popups_are_activatable() {
         for kind in [
             ShellSurfaceKind::Dock,
             ShellSurfaceKind::Toolbar,
             ShellSurfaceKind::Launcher,
+            ShellSurfaceKind::Popup,
         ] {
             let styles = surface_styles(0, kind) as u32;
             assert_ne!(styles & WS_EX_TOOLWINDOW, 0);
             assert_ne!(styles & WS_EX_TOPMOST, 0);
             assert_eq!(
                 styles & WS_EX_NOACTIVATE != 0,
-                kind != ShellSurfaceKind::Launcher
+                matches!(kind, ShellSurfaceKind::Dock | ShellSurfaceKind::Toolbar)
             );
         }
         assert_eq!(

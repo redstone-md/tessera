@@ -5,9 +5,14 @@
 //! for those paths lives here; observation FFI is in `native.rs`.
 //!
 //! Every side effect is gated on revalidation of the recorded identity, and
-//! the only mutations are an explicit user-action restore and
-//! `SetForegroundWindow`. No hooks, no `AttachThreadInput`, no
+//! the only mutations are an explicit user-action restore,
+//! `SetForegroundWindow`, and asynchronous window commands posted for other
+//! user-requested actions. No hooks, no `AttachThreadInput`, no
 //! `AllowSetForegroundWindow`, no synchronous cross-process messages.
+//!
+//! [`validate_target`] is the shared live-validation seam used by every
+//! window-action effect; it returns the live HWND only after a final
+//! process-identity recheck at the effect boundary.
 
 use std::mem::size_of;
 
@@ -23,21 +28,27 @@ use crate::activation::{ActivationError, ActivationTarget};
 use crate::helpers::utf16_to_string_lossy;
 
 pub(crate) fn activate(target: ActivationTarget) -> Result<(), ActivationError> {
-    let raw =
-        usize::try_from(target.window_id().value()).map_err(|_| ActivationError::Unavailable)?;
-    let hwnd = raw as HWND;
-    let mut process_id = 0;
-    // SAFETY: user32 validates transient handles; the PID output is valid.
-    if unsafe { IsWindow(hwnd) } == 0
-        || unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) } == 0
-        || process_id != target.process_id()
-    {
+    let hwnd = validate_target(target)?;
+    // SAFETY: IsIconic is a query. Restore is an explicitly requested,
+    // asynchronous operation, so a hung target does not block on ShowWindow.
+    if unsafe { IsIconic(hwnd) } != 0 && unsafe { ShowWindowAsync(hwnd, SW_RESTORE) } == 0 {
         return Err(ActivationError::Unavailable);
     }
-    // Reject our own process before GetWindowText, which can message own windows.
-    if process_id == std::process::id() {
-        return Err(ActivationError::NotApplication);
+    // SAFETY: only this explicit input path requests foreground activation.
+    // Respect Windows denial; no input attachment or simulated keystrokes.
+    unsafe { SetLastError(0) };
+    if unsafe { SetForegroundWindow(hwnd) } == 0 {
+        return Err(ActivationError::ForegroundDenied { code: last_error() });
     }
+    Ok(())
+}
+
+/// Revalidates a recorded target against the live window (handle validity,
+/// owning process, root/visible/no-owner eligibility, bounded title/class, no
+/// tool/shell/cloak state) and returns the live HWND only after a final
+/// process-identity recheck, so callers act on it as the effect boundary.
+pub(crate) fn validate_target(target: ActivationTarget) -> Result<HWND, ActivationError> {
+    let hwnd = live_hwnd(target)?;
     // SAFETY: these are documented handle queries, not memory dereferences.
     if unsafe { GetAncestor(hwnd, GA_ROOT) } != hwnd
         || unsafe { IsWindowVisible(hwnd) } == 0
@@ -82,26 +93,38 @@ pub(crate) fn activate(target: ActivationTarget) -> Result<(), ActivationError> 
     if cloak != 0 {
         return Err(ActivationError::NotApplication);
     }
-    // Recheck ownership immediately before effects. HWND/PID checks reduce
-    // stale-target risk; they cannot make observation and activation atomic.
+    // Recheck ownership immediately before handing the handle to the caller's
+    // effect. HWND/PID checks reduce stale-target risk; they cannot make
+    // observation and the effect atomic.
+    let mut process_id = 0;
     // SAFETY: the PID output remains valid; user32 revalidates the handle.
     if unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) } == 0
         || process_id != target.process_id()
     {
         return Err(ActivationError::Unavailable);
     }
-    // SAFETY: IsIconic is a query. Restore is an explicitly requested,
-    // asynchronous operation, so a hung target does not block on ShowWindow.
-    if unsafe { IsIconic(hwnd) } != 0 && unsafe { ShowWindowAsync(hwnd, SW_RESTORE) } == 0 {
+    Ok(hwnd)
+}
+
+/// Resolves a recorded target to the live HWND and owning process, rejecting
+/// destroyed or recycled identities.
+pub(crate) fn live_hwnd(target: ActivationTarget) -> Result<HWND, ActivationError> {
+    let raw =
+        usize::try_from(target.window_id().value()).map_err(|_| ActivationError::Unavailable)?;
+    let hwnd = raw as HWND;
+    let mut process_id = 0;
+    // SAFETY: user32 validates transient handles; the PID output is valid.
+    if unsafe { IsWindow(hwnd) } == 0
+        || unsafe { GetWindowThreadProcessId(hwnd, &mut process_id) } == 0
+        || process_id != target.process_id()
+    {
         return Err(ActivationError::Unavailable);
     }
-    // SAFETY: only this explicit input path requests foreground activation.
-    // Respect Windows denial; no input attachment or simulated keystrokes.
-    unsafe { SetLastError(0) };
-    if unsafe { SetForegroundWindow(hwnd) } == 0 {
-        return Err(ActivationError::ForegroundDenied { code: last_error() });
+    // Reject our own process before GetWindowText, which can message own windows.
+    if process_id == std::process::id() {
+        return Err(ActivationError::NotApplication);
     }
-    Ok(())
+    Ok(hwnd)
 }
 
 /// Fixed title of the startup-failure dialog.

@@ -16,12 +16,14 @@ const HELP: &str = "Tessera — desktop environment foundation
 
 Usage: tessera demo
        tessera inspect
+       tessera inspect --check-surfaces
        tessera panel
        tessera --help
        tessera --version
 
 demo     Calculate a layout for synthetic windows.
 inspect  Read real Windows monitors and visible windows (Windows only).
+         --check-surfaces additionally verifies the toolbar geometry contract.
 panel    Open the native alpha window switcher (Windows only).
 
 Observation never changes other windows. The panel activates only on explicit input.";
@@ -43,6 +45,9 @@ fn main() -> ExitCode {
         }
         [command] if command == "demo" => demo(io::stdout().lock()),
         [command] if command == "inspect" => inspection::inspect(io::stdout().lock()),
+        [command, flag] if command == "inspect" && flag == "--check-surfaces" => {
+            inspection::check_surfaces(io::stdout().lock()).map_err(|error| error.into())
+        }
         [command] if command == "panel" => tessera::run_panel(),
         _ => {
             eprintln!("tessera: unsupported arguments\n\n{HELP}");

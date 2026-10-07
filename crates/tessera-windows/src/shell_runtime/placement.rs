@@ -48,7 +48,7 @@ pub(crate) fn detached_surface_styles(original: u32, kind: super::ShellSurfaceKi
         super::ShellSurfaceKind::Dock | super::ShellSurfaceKind::Toolbar => {
             original | WS_EX_NOACTIVATE
         }
-        super::ShellSurfaceKind::Launcher => original,
+        super::ShellSurfaceKind::Launcher | super::ShellSurfaceKind::Popup => original,
     }
 }
 
@@ -105,6 +105,10 @@ mod tests {
             }
             assert_eq!(
                 detached_surface_styles(original, ShellSurfaceKind::Launcher),
+                original
+            );
+            assert_eq!(
+                detached_surface_styles(original, ShellSurfaceKind::Popup),
                 original
             );
         }

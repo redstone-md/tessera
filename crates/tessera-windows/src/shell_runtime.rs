@@ -40,6 +40,8 @@ pub enum ShellSurfaceKind {
     Toolbar,
     /// Activatable tool window for search.
     Launcher,
+    /// Activatable tool window for shell-owned menus and module popups.
+    Popup,
 }
 
 #[cfg(not(windows))]
