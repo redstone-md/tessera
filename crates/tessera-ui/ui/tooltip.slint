@@ -33,7 +33,8 @@ export component TooltipSurface inherits Window {
             text: root.content;
             color: SeelenPalette.foreground;
             font-size: PopoverTokens.font-size;
-            font-family: "Segoe UI";
+            font-family: PopoverTokens.font-family;
+            line-height-factor: body.text-line-height-factor;
             vertical-alignment: center;
             wrap: word-wrap;
             accessible-role: text;

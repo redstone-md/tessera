@@ -9,6 +9,8 @@ export global PopoverTokens {
     in-out property <length> shadow-margin: 10px;
     in-out property <length> radius: 10px;
     in-out property <length> font-size: 12.8px;
+    in-out property <string> font-family: "";
+    in-out property <float> line-height: 1.4;
     in-out property <color> shadow-color: #00000029;
     in-out property <length> shadow-offset-x: 2px;
     in-out property <length> shadow-offset-y: 2px;
@@ -21,6 +23,19 @@ export component PopoverBody inherits Rectangle {
     // frame. Publish the usable body bounds explicitly, excluding the shadow.
     out property <length> content-width: frame.width;
     out property <length> content-height: frame.height;
+    // CSS scales font size; Slint scales the font's natural height, including
+    // line gap. Use the renderer's own single-line measurement to convert.
+    out property <float> text-line-height-factor: font-probe.preferred-height > 0px
+        ? PopoverTokens.font-size * PopoverTokens.line-height / font-probe.preferred-height : 1;
+    font-probe := Text {
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: "M";
+        font-size: PopoverTokens.font-size;
+        font-family: PopoverTokens.font-family;
+        accessible-role: none;
+    }
     frame := Rectangle {
         x: PopoverTokens.shadow-margin;
         y: PopoverTokens.shadow-margin;

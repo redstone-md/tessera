@@ -693,6 +693,21 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
             .dispatch_event(WindowEvent::ScaleFactorChanged {
                 scale_factor: scale,
             });
+        let tokens = tooltip.global::<crate::generated::PopoverTokens>();
+        for lines in [1, 2, 9] {
+            tooltip.set_content(vec!["Measured line"; lines].join("\n").into());
+            let expected_height = lines as f32 * tokens.get_font_size() * 1.4
+                + 8.0
+                + 2.0 * tokens.get_shadow_margin();
+            // Software intrinsic heights snap to logical pixels, before the
+            // native window size is scaled to physical pixels.
+            assert_eq!(
+                tooltip.get_tooltip_height(),
+                expected_height.round(),
+                "font-size-relative line-height: lines={lines}, scale={scale}"
+            );
+        }
+        tooltip.set_content(caption.clone().into());
         let width = (tooltip.get_tooltip_width() * scale).ceil() as u32;
         let height = (tooltip.get_tooltip_height() * scale).ceil() as u32;
         assert!(width > 20 && width <= (520.0 * scale) as u32);
@@ -708,7 +723,6 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
         window.request_redraw();
         let pixels = draw(&window, width, height);
         assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
-        let tokens = tooltip.global::<crate::generated::PopoverTokens>();
         assert_eq!(tokens.get_font_size(), 12.8);
         assert_eq!(tokens.get_shadow_margin(), 10.0);
         let inset = ((tokens.get_shadow_margin() + 2.0) * scale) as usize;
