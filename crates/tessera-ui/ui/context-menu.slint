@@ -4,6 +4,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { TileButton } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
 import { DockMenuKind, DockMenuAction } from "shell-commands.slint";
 
 struct MenuEntry { label: string, action: DockMenuAction }
@@ -20,7 +21,7 @@ export component ContextMenuSurface inherits Window {
     in property <DockMenuKind> kind;
     in-out property <int> selected-index;
     out property <length> menu-width: root.kind == DockMenuKind.bar ? 220px : 180px;
-    out property <length> menu-height: 32px + root.entries.length * 30px;
+    out property <length> menu-height: 2 * PopoverTokens.shadow-margin + 16px + root.entries.length * 30px;
     preferred-width: root.menu-width;
     preferred-height: root.menu-height;
     callback action-requested(DockMenuAction);
@@ -68,22 +69,12 @@ export component ContextMenuSurface inherits Window {
             return reject;
         }
 
-        Rectangle {
-            x: 8px;
-            y: 8px;
-            width: parent.width - 16px;
-            height: parent.height - 16px;
-            border-radius: 10px;
-            background: SeelenPalette.tile;
-            drop-shadow-color: #00000029;
-            drop-shadow-offset-x: 2px;
-            drop-shadow-offset-y: 2px;
-            drop-shadow-blur: 8px;
+        body := PopoverBody {
             ScrollView {
                 x: 8px;
                 y: 8px;
-                width: parent.width - 16px;
-                height: parent.height - 16px;
+                width: max(0px, body.content-width - 16px);
+                height: max(0px, body.content-height - 16px);
                 content-width: self.visible-width;
                 content-height: root.entries.length * 30px;
                 content-y: -max(0px, min(root.selected-index * 30px,
@@ -110,7 +101,7 @@ export component ContextMenuSurface inherits Window {
                             width: parent.width - 16px;
                             text: entry.label;
                             color: SeelenPalette.foreground;
-                            font-size: 12.8px;
+                            font-size: PopoverTokens.font-size;
                             vertical-alignment: center;
                             overflow: elide;
                             accessible-role: none;

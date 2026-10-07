@@ -3,14 +3,14 @@
 
 use super::{PanelController, Rc};
 use crate::generated::TileBounds;
+use crate::theme::ThemedComponent;
 use crate::tooltip::{Side, TooltipController};
 use crate::transient_window::TransientCache;
-use slint::ComponentHandle;
 
 pub(super) type Tooltips = TransientCache<TooltipController>;
 
 impl PanelController {
-    pub(super) fn show_tooltip<C: ComponentHandle + 'static>(
+    pub(super) fn show_tooltip<C: ThemedComponent + 'static>(
         &self,
         owner: &C,
         source: crate::SurfaceKind,

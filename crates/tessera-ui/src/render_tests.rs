@@ -27,6 +27,7 @@ use crate::generated::{
     ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
     LaunchTile, Launcher, Toolbar, TooltipSurface,
 };
+use crate::theme::{PresentationTheme, ThemedComponent};
 
 /// Exports the drawn buffer as a binary PPM (P6) when the opt-in env var is
 /// set; otherwise a no-op. Never writes inside the repository.
@@ -515,15 +516,39 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     let window = software_window();
     let menu = ContextMenuSurface::new().unwrap();
     menu.set_kind(DockMenuKind::Bar);
-    menu.global::<crate::generated::SeelenPalette>()
-        .set_color_scheme(slint::language::ColorScheme::Dark);
     let selected = Rc::new(Cell::new(None));
     let recorded = Rc::clone(&selected);
     menu.on_action_requested(move |action| recorded.set(Some(action)));
     menu.show().unwrap();
     menu.invoke_focus_menu();
 
-    for (name, scale) in [("dock-context-menu-1x", 1.0), ("dock-context-menu-2x", 2.0)] {
+    for (name, scheme, scale, background) in [
+        (
+            "dock-context-menu-1x",
+            slint::language::ColorScheme::Dark,
+            1.0,
+            [24, 24, 24],
+        ),
+        (
+            "dock-context-menu-2x",
+            slint::language::ColorScheme::Dark,
+            2.0,
+            [24, 24, 24],
+        ),
+        (
+            "dock-context-menu-light-1x",
+            slint::language::ColorScheme::Light,
+            1.0,
+            [242, 242, 242],
+        ),
+        (
+            "dock-context-menu-light-2x",
+            slint::language::ColorScheme::Light,
+            2.0,
+            [242, 242, 242],
+        ),
+    ] {
+        menu.apply_presentation_theme(PresentationTheme::uniform(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -538,6 +563,16 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
         window.set_size(slint::PhysicalSize::new(width, height));
         let pixels = draw(&window, width, height);
         assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+        let margin = menu
+            .global::<crate::generated::PopoverTokens>()
+            .get_shadow_margin();
+        let inset = ((margin + 2.0) * scale) as usize;
+        let pixel = pixels[(height as usize / 2) * width as usize + inset];
+        assert_eq!(
+            [pixel.r, pixel.g, pixel.b],
+            background,
+            "the shared menu body is opaque and theme-adaptive"
+        );
         for label in [
             "Settings",
             "File Explorer",
@@ -550,7 +585,8 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
                 .unwrap();
             assert_eq!(button.accessible_role(), Some(AccessibleRole::Button));
             let position = button.absolute_position();
-            assert!(position.y >= 0.0 && position.y + 30.0 <= menu.get_menu_height());
+            assert!(position.x >= margin + 8.0 && position.y >= margin + 8.0);
+            assert!(position.y + 30.0 <= menu.get_menu_height() - margin - 8.0);
         }
         export_screenshot(name, &pixels, width as usize, height as usize);
         assert!(
@@ -625,7 +661,33 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
         "A genuine long application window title that wraps without adding actions. ".repeat(4);
     tooltip.set_content(caption.clone().into());
     tooltip.show().unwrap();
-    for (name, scale) in [("tooltip-1x", 1.0), ("tooltip-2x", 2.0)] {
+    for (name, scheme, scale, background) in [
+        (
+            "tooltip-dark-1x",
+            slint::language::ColorScheme::Dark,
+            1.0,
+            [24, 24, 24],
+        ),
+        (
+            "tooltip-dark-2x",
+            slint::language::ColorScheme::Dark,
+            2.0,
+            [24, 24, 24],
+        ),
+        (
+            "tooltip-light-1x",
+            slint::language::ColorScheme::Light,
+            1.0,
+            [242, 242, 242],
+        ),
+        (
+            "tooltip-light-2x",
+            slint::language::ColorScheme::Light,
+            2.0,
+            [242, 242, 242],
+        ),
+    ] {
+        tooltip.apply_presentation_theme(PresentationTheme::uniform(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -633,7 +695,7 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
             });
         let width = (tooltip.get_tooltip_width() * scale).ceil() as u32;
         let height = (tooltip.get_tooltip_height() * scale).ceil() as u32;
-        assert!(width > 16 && width <= (266.0 * scale) as u32);
+        assert!(width > 20 && width <= (520.0 * scale) as u32);
         assert!(
             height < (500.0 * scale) as u32,
             "first-show measurement must wrap to the declared tooltip width, not a provisional 1px window"
@@ -646,6 +708,29 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
         window.request_redraw();
         let pixels = draw(&window, width, height);
         assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+        let tokens = tooltip.global::<crate::generated::PopoverTokens>();
+        assert_eq!(tokens.get_font_size(), 12.8);
+        assert_eq!(tokens.get_shadow_margin(), 10.0);
+        let inset = ((tokens.get_shadow_margin() + 2.0) * scale) as usize;
+        let pixel = pixels[(height as usize / 2) * width as usize + inset];
+        assert_eq!(
+            [pixel.r, pixel.g, pixel.b],
+            background,
+            "the body is opaque and follows the selected theme at each DPI"
+        );
+        let bottom = height as usize - (tokens.get_shadow_margin() * scale) as usize;
+        let padding_top = bottom - (4.0 * scale) as usize;
+        let corner_inset =
+            ((tokens.get_shadow_margin() + tokens.get_radius() + 1.0) * scale) as usize;
+        assert!(
+            (padding_top..bottom).all(|row| {
+                pixels
+                    [row * width as usize + corner_inset..(row + 1) * width as usize - corner_inset]
+                    .iter()
+                    .all(|pixel| [pixel.r, pixel.g, pixel.b] == background)
+            }),
+            "all wrapped lines must fit before the body's bottom padding, not be clipped into it"
+        );
         let text = ElementHandle::find_by_accessible_label(&tooltip, &caption)
             .next()
             .unwrap();

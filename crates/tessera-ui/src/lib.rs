@@ -27,6 +27,7 @@ pub(crate) mod projection;
 mod render_tests;
 pub(crate) mod sanitize;
 pub(crate) mod state;
+pub(crate) mod theme;
 pub(crate) mod tooltip;
 pub(crate) mod transient_window;
 

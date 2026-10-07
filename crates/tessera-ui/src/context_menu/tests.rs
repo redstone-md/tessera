@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
+use crate::generated::SeelenPalette;
 use crate::{PanelPreferences, PanelSnapshot, SystemAction};
 use parking_lot::Mutex;
 use slint::platform::{Key, WindowEvent};

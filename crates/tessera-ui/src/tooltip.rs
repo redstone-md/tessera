@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use slint::ComponentHandle;
 
-use crate::generated::{TileBounds, TooltipSurface};
+use crate::generated::{PopoverTokens, TileBounds, TooltipSurface};
+use crate::theme::ThemedComponent;
 use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind, sanitize};
 
@@ -47,7 +48,7 @@ impl TooltipController {
         Ok(tooltip)
     }
 
-    pub(crate) fn schedule<C: ComponentHandle + 'static>(
+    pub(crate) fn schedule<C: ThemedComponent + 'static>(
         self: &Rc<Self>,
         owner: &C,
         source: SurfaceKind,
@@ -80,9 +81,7 @@ impl TooltipController {
                 if !owner.window().is_visible() {
                     return;
                 }
-                if let Err(error) =
-                    tooltip.present_for(owner.window(), &content, &bounds, context, side)
-                {
+                if let Err(error) = tooltip.present_for(&owner, &content, &bounds, context, side) {
                     (tooltip.on_error)(format!("Tooltip: {error}"));
                 }
             },
@@ -90,19 +89,24 @@ impl TooltipController {
         Ok(())
     }
 
-    fn present_for(
+    fn present_for<C: ThemedComponent>(
         &self,
-        owner: &slint::Window,
+        owner: &C,
         content: &str,
         bounds: &TileBounds,
         context: DockContext,
         side: Side,
     ) -> Result<(), String> {
+        self.surface
+            .apply_presentation_theme(owner.presentation_theme());
+        let owner = owner.window();
         let scale = owner.scale_factor();
         let tile = placement::tile_rect(owner.position(), scale, bounds)?;
         self.surface.set_content(content.into());
-        self.surface
-            .set_max_content_width((context.width() as f32 / scale - 16.0).clamp(32.0, 250.0));
+        let margin = self.surface.global::<PopoverTokens>().get_shadow_margin();
+        self.surface.set_max_content_width(
+            (context.width() as f32 / scale - 2.0 * margin).clamp(16.0, 500.0),
+        );
         let rect = placement::place(
             context,
             tile,

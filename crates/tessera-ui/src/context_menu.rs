@@ -12,8 +12,8 @@ use slint::{ComponentHandle, SharedString};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockSystemCommand, DockWindowCommand,
-    Palette, SeelenPalette,
 };
+use crate::theme::ThemedComponent;
 use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
@@ -82,11 +82,7 @@ impl ContextMenuController {
         self.surface.set_selected_index(0);
         *self.key.borrow_mut() = key;
         self.surface
-            .global::<SeelenPalette>()
-            .set_color_scheme(dock.global::<SeelenPalette>().get_color_scheme());
-        self.surface
-            .global::<Palette>()
-            .set_color_scheme(dock.global::<Palette>().get_color_scheme());
+            .apply_presentation_theme(dock.presentation_theme());
         let rect = placement::place(
             context,
             anchor,

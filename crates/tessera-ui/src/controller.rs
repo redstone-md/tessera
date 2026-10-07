@@ -9,10 +9,11 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::generated::{
     AppRow, Dock, DockApp, DockStatus, DockSystemCommand, DockWindow, DockWindowCommand,
-    LaunchTile, Launcher, Palette, Row, SeelenPalette, Toolbar,
+    LaunchTile, Launcher, Row, Toolbar,
 };
 use crate::projection::{AppProjection, PanelProjection, RowProjection};
 use crate::state::{Routes, SurfaceCore};
+use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::{
     DesktopHost, Panel, PanelPreferences, PanelSnapshot, RunOptions, SurfaceKind, SystemAction,
     WindowAction, sanitize, system_action_from_index,
@@ -837,20 +838,18 @@ impl PanelController {
             crate::Theme::Dark => slint::language::ColorScheme::Dark,
             crate::Theme::System => slint::language::ColorScheme::Unknown,
         };
+        let theme = PresentationTheme::uniform(scheme);
         if let Some(dock) = self.dock_and_upgrade() {
-            dock.global::<Palette>().set_color_scheme(scheme);
-            dock.global::<SeelenPalette>().set_color_scheme(scheme);
+            dock.apply_presentation_theme(theme);
             if let Some(panel) = self.panel.upgrade() {
                 dock.set_compact(panel.get_compact());
             }
         }
         if let Some(toolbar) = self.toolbar_and_upgrade() {
-            toolbar.global::<Palette>().set_color_scheme(scheme);
-            toolbar.global::<SeelenPalette>().set_color_scheme(scheme);
+            toolbar.apply_presentation_theme(theme);
         }
         if let Some(launcher) = self.launcher_and_upgrade() {
-            launcher.global::<Palette>().set_color_scheme(scheme);
-            launcher.global::<SeelenPalette>().set_color_scheme(scheme);
+            launcher.apply_presentation_theme(theme);
         }
         self.update_geometry();
     }

@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+
+// Shared presentation values stay behind a theme boundary, not baked into
+// each popup. Defaults follow the pinned reference's standard surface roles.
+export global PopoverTokens {
+    in-out property <length> shadow-margin: 10px;
+    in-out property <length> radius: 10px;
+    in-out property <length> font-size: 12.8px;
+    in-out property <color> shadow-color: #00000029;
+    in-out property <length> shadow-offset-x: 2px;
+    in-out property <length> shadow-offset-y: 2px;
+    in-out property <length> shadow-blur: 8px;
+}
+
+export component PopoverBody inherits Rectangle {
+    accessible-role: none;
+    // Transcluded children refer to this component as `parent`, not its inner
+    // frame. Publish the usable body bounds explicitly, excluding the shadow.
+    out property <length> content-width: frame.width;
+    out property <length> content-height: frame.height;
+    frame := Rectangle {
+        x: PopoverTokens.shadow-margin;
+        y: PopoverTokens.shadow-margin;
+        width: max(0px, parent.width - 2 * PopoverTokens.shadow-margin);
+        height: max(0px, parent.height - 2 * PopoverTokens.shadow-margin);
+        border-radius: PopoverTokens.radius;
+        background: SeelenPalette.surface;
+        drop-shadow-color: PopoverTokens.shadow-color;
+        drop-shadow-offset-x: PopoverTokens.shadow-offset-x;
+        drop-shadow-offset-y: PopoverTokens.shadow-offset-y;
+        drop-shadow-blur: PopoverTokens.shadow-blur;
+        clip: true;
+        accessible-role: none;
+        @children
+    }
+}

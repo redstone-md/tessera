@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
-use crate::generated::Dock;
+use crate::generated::{Dock, Palette, SeelenPalette};
 use crate::{PanelPreferences, PanelSnapshot, SystemAction};
 use parking_lot::Mutex;
 use std::cell::RefCell;
@@ -77,7 +77,7 @@ fn bounds() -> TileBounds {
 }
 
 #[test]
-fn delay_uses_current_owner_scale_and_leave_releases_without_focus() {
+fn delay_uses_current_owner_theme_and_scale_then_leave_releases_without_focus() {
     i_slint_backend_testing::init_no_event_loop();
     let host = Arc::new(Host::default());
     let owner = Dock::new().unwrap();
@@ -98,6 +98,12 @@ fn delay_uses_current_owner_scale_and_leave_releases_without_focus() {
     assert!(!tooltip.surface.is_visible());
     assert!(host.events.lock().is_empty());
     owner
+        .global::<Palette>()
+        .set_color_scheme(slint::language::ColorScheme::Light);
+    owner
+        .global::<SeelenPalette>()
+        .set_color_scheme(slint::language::ColorScheme::Dark);
+    owner
         .window()
         .dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: 1.5 });
     advance(1);
@@ -115,6 +121,14 @@ fn delay_uses_current_owner_scale_and_leave_releases_without_focus() {
     .unwrap();
     assert_eq!(tooltip.window().size(), expected.size);
     assert_eq!(tooltip.surface.get_content(), "Editor — full label");
+    assert_eq!(
+        tooltip.surface.global::<Palette>().get_color_scheme(),
+        slint::language::ColorScheme::Light
+    );
+    assert_eq!(
+        tooltip.surface.global::<SeelenPalette>().get_color_scheme(),
+        slint::language::ColorScheme::Dark
+    );
     tooltip.dismiss(true);
     advance(99);
     assert!(tooltip.surface.is_visible());

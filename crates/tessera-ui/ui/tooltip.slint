@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
+import { SeelenPalette } from "palette.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+
 // A native top-level surface. The host supplies NOACTIVATE and documented
 // cursor pass-through; no FocusScope, TouchArea, or actions live here.
 export component TooltipSurface inherits Window {
@@ -12,34 +15,24 @@ export component TooltipSurface inherits Window {
     min-height: 1px;
 
     in property <string> content;
-    in property <length> max-content-width: 250px;
-    property <length> body-width: min(root.max-content-width, max(32px, label.preferred-width + 16px));
-    out property <length> tooltip-width: root.body-width + 16px;
-    out property <length> tooltip-height: max(32px, label.preferred-height + 12px) + 16px;
+    in property <length> max-content-width: 500px;
+    property <length> body-width: min(root.max-content-width, max(16px, label.preferred-width + 16px));
+    out property <length> tooltip-width: root.body-width + 2 * PopoverTokens.shadow-margin;
+    out property <length> tooltip-height: max(1px, label.preferred-height + 8px) + 2 * PopoverTokens.shadow-margin;
     preferred-width: root.tooltip-width;
     preferred-height: root.tooltip-height;
 
-    Rectangle {
-        x: 8px;
-        y: 8px;
-        width: parent.width - 16px;
-        height: parent.height - 16px;
-        border-radius: 6px;
-        background: #000000d9;
-        drop-shadow-color: #00000029;
-        drop-shadow-offset-y: 2px;
-        drop-shadow-blur: 8px;
-        clip: true;
+    body := PopoverBody {
         label := Text {
             x: 8px;
-            y: 6px;
+            y: 4px;
             // Measure against the intended body width, even before the native
             // window receives its first physical size.
             width: max(0px, root.body-width - 16px);
-            height: parent.height - 12px;
+            height: max(0px, body.content-height - 8px);
             text: root.content;
-            color: #ffffff;
-            font-size: 14px;
+            color: SeelenPalette.foreground;
+            font-size: PopoverTokens.font-size;
             font-family: "Segoe UI";
             vertical-alignment: center;
             wrap: word-wrap;

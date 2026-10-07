@@ -11,7 +11,8 @@ export global SeelenPalette {
     out property <bool> dark: self.color-scheme == ColorScheme.dark
         || (self.color-scheme == ColorScheme.unknown
             && Palette.background.to-oklch().lightness < 0.5);
-    out property <color> bar: self.dark ? #181818 : #f2f2f2;
+    out property <color> surface: self.dark ? #181818 : #f2f2f2;
+    out property <color> bar: self.surface;
     out property <color> tile: self.dark ? #1f1f1f : #fcfcfc;
     out property <color> hover: self.dark ? #121212 : #e8e8e8;
     out property <color> pressed: self.dark ? #0a0a0a : #dcdcdc;
