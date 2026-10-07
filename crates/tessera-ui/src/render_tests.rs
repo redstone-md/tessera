@@ -248,20 +248,48 @@ fn toolbar_renders_identity_and_settings_access() {
     toolbar.set_clock("12:34".into());
     toolbar.set_language("en-US".into());
     toolbar.show().unwrap();
-    window.set_size(slint::PhysicalSize::new(640, 32));
-    let pixels = draw(&window, 640, 32);
-    assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
-    export_screenshot("toolbar", &pixels, 640, 32);
-
-    let settings = ElementHandle::find_by_accessible_label(&toolbar, "Open settings and recovery")
-        .next()
-        .unwrap();
-    assert_eq!(settings.accessible_role(), Some(AccessibleRole::Button));
     let opened = Rc::new(Cell::new(0));
     let counter = opened.clone();
     toolbar.on_open_panel_requested(move || counter.set(counter.get() + 1));
-    settings.invoke_accessible_default_action();
-    assert_eq!(opened.get(), 1, "accessible settings entry opens the panel");
+    for (scale, width, height) in [(1.0, 640u32, 32u32), (2.0, 1280u32, 64u32)] {
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        window.set_size(slint::PhysicalSize::new(width, height));
+        window.request_redraw();
+        let pixels = draw(&window, width, height);
+        let settings =
+            ElementHandle::find_by_accessible_label(&toolbar, "Open settings and recovery")
+                .next()
+                .unwrap();
+        assert_eq!(settings.accessible_role(), Some(AccessibleRole::Button));
+        let origin = settings.absolute_position();
+        let (x, y) = ((origin.x * scale) as usize, (origin.y * scale) as usize);
+        let inset = (3.0 * scale) as usize;
+        let end = (13.0 * scale) as usize;
+        assert!(
+            (y + inset..y + end).any(|row| {
+                pixels[row * width as usize + x + inset..row * width as usize + x + end]
+                    .iter()
+                    .any(|pixel| *pixel != pixels[0])
+            }),
+            "the settings vector renders inside its 16px tile at each DPI"
+        );
+        export_screenshot(
+            &format!("toolbar-{scale}x"),
+            &pixels,
+            width as usize,
+            height as usize,
+        );
+        settings.invoke_accessible_default_action();
+    }
+    assert_eq!(
+        opened.get(),
+        2,
+        "settings opens the real panel at both scales"
+    );
     drop(toolbar);
 }
 

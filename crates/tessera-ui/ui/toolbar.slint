@@ -100,23 +100,11 @@ export component Toolbar inherits Window {
                 filled: false;
                 accessible-text: "Open settings and recovery";
                 clicked => { root.open-panel-requested(); }
-                // Own vector glyph, independent of source assets and OS fonts.
-                Rectangle {
-                    width: 10px;
-                    height: 10px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 5px;
-                    border-width: 2px;
-                    border-color: SeelenPalette.foreground;
-                    accessible-role: none;
-                }
-                for tooth[i] in [0, 1, 2, 3]: Rectangle {
-                    width: i < 2 ? 2px : 4px;
-                    height: i < 2 ? 4px : 2px;
-                    x: i < 2 ? 7px : i == 2 ? 1px : 11px;
-                    y: i >= 2 ? 7px : i == 0 ? 1px : 11px;
-                    background: SeelenPalette.foreground;
+                Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: @image-url("../assets/icons/lucide-0.468.0/settings-2.svg");
+                    colorize: SeelenPalette.foreground;
                     accessible-role: none;
                 }
             }
