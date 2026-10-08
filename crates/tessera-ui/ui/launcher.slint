@@ -4,7 +4,7 @@
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody } from "popover.slint";
-import { ApplicationIcon, TileButton } from "tiles.slint";
+import { ApplicationIcon, TileButton, FocusTokens } from "tiles.slint";
 
 export struct LaunchTile {
     key: string,
@@ -81,27 +81,30 @@ export component Launcher inherits Window {
 
             // Grid: 7 columns of square tiles; overflow scrolls.
             HorizontalLayout {
-                padding: root.pad;
+                // Reserve outline space inside the viewport without moving
+                // the grid or changing its reference content padding.
+                padding: max(0px, root.pad - FocusTokens.outer-margin);
                 vertical-stretch: 1;
             grid-scroll := ScrollView {
                 vertical-stretch: 1;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
 
-                property <length> tile: (self.visible-width - (root.columns - 1) * root.gap) / root.columns;
+                property <length> tile: (self.visible-width - 2 * FocusTokens.outer-margin
+                    - (root.columns - 1) * root.gap) / root.columns;
                 property <int> rows: ceil(root.tiles.length / root.columns);
                 content-width: self.visible-width;
-                content-height: max(self.visible-height, self.rows * (self.tile + root.gap));
+                content-height: max(self.visible-height, 2 * FocusTokens.outer-margin
+                    + max(0px, self.rows * (self.tile + root.gap) - root.gap));
 
                 for tile[i] in root.tiles: Rectangle {
                     property <int> column-index: mod(i, root.columns);
                     property <int> row-index: floor(i / root.columns);
                     property <length> size: grid-scroll.tile;
-                    x: self.column-index * (self.size + root.gap);
-                    y: self.row-index * (self.size + root.gap);
+                    x: FocusTokens.outer-margin + self.column-index * (self.size + root.gap);
+                    y: FocusTokens.outer-margin + self.row-index * (self.size + root.gap);
                     width: self.size;
                     height: self.size;
-                    clip: true;
 
                     TileButton {
                         width: parent.width;
@@ -112,20 +115,26 @@ export component Launcher inherits Window {
                         accessible-text: "Launch " + tile.label;
                         clicked => { root.launch-requested(tile.key); }
 
-                        VerticalLayout {
-                            padding: root.pad;
-                            spacing: root.gap;
-                            ApplicationIcon { source: tile.icon; }
-                            Text {
-                                text: tile.label;
-                                color: SeelenPalette.foreground;
-                                font-size: 12.8px;
-                                font-weight: 600;
-                                horizontal-alignment: center;
-                                wrap: word-wrap;
-                                height: 35.2px;
-                                overflow: elide;
-                                accessible-role: none;
+                        // Clip icon/name content, not the external focus ring.
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.height;
+                            clip: true;
+                            VerticalLayout {
+                                padding: root.pad;
+                                spacing: root.gap;
+                                ApplicationIcon { source: tile.icon; }
+                                Text {
+                                    text: tile.label;
+                                    color: SeelenPalette.foreground;
+                                    font-size: 12.8px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                    height: 35.2px;
+                                    overflow: elide;
+                                    accessible-role: none;
+                                }
                             }
                         }
 

@@ -571,6 +571,119 @@ fn launcher_renders_grid_search_and_escape_hides() {
 }
 
 #[test]
+fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
+    let window = software_window();
+    let launcher = Launcher::new().unwrap();
+    let mut bitmap = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
+    bitmap.make_mut_slice().fill(slint::Rgba8Pixel {
+        r: 255,
+        g: 0,
+        b: 255,
+        a: 255,
+    });
+    let icon = slint::Image::from_rgba8(bitmap);
+    launcher.set_tiles(ModelRc::new(VecModel::from(
+        (0..7)
+            .map(|i| LaunchTile {
+                icon: icon.clone(),
+                ..app(&format!("app-{i}"), &format!("App {i}"))
+            })
+            .collect::<Vec<_>>(),
+    )));
+    let launches = Rc::new(Cell::new(0));
+    let count = launches.clone();
+    launcher.on_launch_requested(move |_| count.set(count.get() + 1));
+    launcher.show().unwrap();
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    for theme in [
+        slint::language::ColorScheme::Light,
+        slint::language::ColorScheme::Dark,
+    ] {
+        launcher.apply_presentation_theme(PresentationTheme::uniform(theme));
+        for scale in [1.0_f32, 2.0] {
+            window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            let width = (560.0 * scale) as u32;
+            let height = (420.0 * scale) as u32;
+            window.set_size(slint::PhysicalSize::new(width, height));
+            let baseline = draw(&window, width, height);
+            assert!(
+                baseline
+                    .iter()
+                    .any(|pixel| pixel.r == 255 && pixel.g == 0 && pixel.b == 255),
+                "the nonempty icon must actually render before checking its clipping",
+            );
+            for i in [0, 6] {
+                let tile =
+                    ElementHandle::find_by_accessible_label(&launcher, &format!("Launch App {i}"))
+                        .next()
+                        .unwrap();
+                let position = tile.absolute_position();
+                let size = tile.size();
+                assert!((size.width - 460.0 / 7.0).abs() < 0.01);
+                assert!((size.width - size.height).abs() < 0.01);
+                let edge = if i == 0 {
+                    position.x
+                } else {
+                    position.x + size.width
+                };
+                assert!((edge - if i == 0 { 26.0 } else { 534.0 }).abs() < 0.01);
+                let outside = edge + if i == 0 { -2.5 } else { 2.5 };
+                let y = position.y + size.height / 2.0;
+                let index = (y * scale) as usize * width as usize + (outside * scale) as usize;
+                let body_color = baseline
+                    [(y * scale) as usize * width as usize + ((position.x - 5.5) * scale) as usize];
+                let left = (position.x * scale).ceil() as usize;
+                let right = ((position.x + size.width) * scale).floor() as usize;
+                let bottom = position.y + size.height;
+                for row in ((bottom + 1.0) * scale).ceil() as usize
+                    ..((bottom + 7.0) * scale).floor() as usize
+                {
+                    assert!(
+                        baseline[row * width as usize + left..row * width as usize + right]
+                            .iter()
+                            .all(|pixel| *pixel == body_color),
+                        "real icon/name content stays inside its square, not the outline gutter",
+                    );
+                }
+                let center = slint::LogicalPosition::new(position.x + size.width / 2.0, y);
+                let before = launches.get();
+                window.window().dispatch_event(WindowEvent::PointerPressed {
+                    position: center,
+                    button: PointerEventButton::Left,
+                });
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerReleased {
+                        position: center,
+                        button: PointerEventButton::Left,
+                    });
+                window.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::Space.into(),
+                });
+                window.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: Key::Space.into(),
+                });
+                assert_eq!(launches.get(), before + 2);
+                let focused = draw(&window, width, height);
+                assert_ne!(
+                    focused[index], baseline[index],
+                    "the {i} edge tile's external keyboard outline must not be clipped ({theme:?}, {scale}x)",
+                );
+                assert_eq!(tile.absolute_position(), position);
+                assert_eq!(tile.size(), size, "focus does not resize or move the grid");
+            }
+            launcher.invoke_focus_search();
+        }
+    }
+}
+
+#[test]
 fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scales() {
     use slint::platform::software_renderer::PremultipliedRgbaColor;
 

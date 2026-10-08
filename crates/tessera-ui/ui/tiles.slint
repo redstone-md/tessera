@@ -13,6 +13,13 @@ import { SeelenPalette } from "palette.slint";
 // accessibility tree.
 export struct TileBounds { origin: Point, width: length, height: length }
 
+// External outlines need the same reserved space in clipped viewports.
+export global FocusTokens {
+    in-out property <length> outline-width: 2px;
+    in-out property <length> outline-offset: 2px;
+    out property <length> outer-margin: self.outline-width + self.outline-offset;
+}
+
 export component TileButton inherits Rectangle {
     in property <string> accessible-text;
     in property <string> tooltip-text;
@@ -159,12 +166,12 @@ export component TileButton inherits Rectangle {
     }
 
     if root.show-focus-ring && root.keyboard-focus && keyboard.has-focus && root.enabled: Rectangle {
-        x: -4px;
-        y: -4px;
-        width: parent.width + 8px;
-        height: parent.height + 8px;
-        border-radius: root.radius + 4px;
-        border-width: 2px;
+        x: -FocusTokens.outer-margin;
+        y: -FocusTokens.outer-margin;
+        width: parent.width + 2 * FocusTokens.outer-margin;
+        height: parent.height + 2 * FocusTokens.outer-margin;
+        border-radius: root.radius + FocusTokens.outer-margin;
+        border-width: FocusTokens.outline-width;
         border-color: SeelenPalette.accent;
         accessible-role: none;
     }
