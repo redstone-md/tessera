@@ -1,0 +1,13 @@
+[package]
+name = "tessera-system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+readme.workspace = true
+description = "Portable system capability contracts for the Tessera desktop environment"
+publish = false
+
+[lints]
+workspace = true

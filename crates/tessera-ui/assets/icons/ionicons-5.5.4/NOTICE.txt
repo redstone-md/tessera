@@ -1,4 +1,4 @@
-Ionicons open-outline graphical image
+Ionicons graphical images
 
 Upstream: https://github.com/ionic-team/ionicons
 Release: v5.5.4
@@ -6,6 +6,20 @@ Immutable revision: 728aa746a0bcd49badc6bbf256994cdb41cdc927
 
 Unmodified artwork source: src/svg/open-outline.svg
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/open-outline.svg
+
+Unmodified default-multimedia audio control artwork sources:
+src/svg/volume-high-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/volume-high-outline.svg
+SHA-256: 9937584ec55c780fe51f667898aecb06262e6885d7c5d9bffbd3b28a61edc5f5
+src/svg/volume-mute-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/volume-mute-outline.svg
+SHA-256: bfaa46f9c2819378be4aab6be35debf8a7738b2fcea00cf0b8769de22a44b61e
+src/svg/mic-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/mic-outline.svg
+SHA-256: a176545d850b8c74307a271c47df59f1c0ab7700b30001bd80fd958a7ddb2a27
+src/svg/mic-off-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/mic-off-outline.svg
+SHA-256: 35f851f981501853af925c3b360de6f5ecd5c62703b56b18aca4cfd2aa7462b1
 
 Full original MIT grant is retained in the adjacent LICENSE:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/LICENSE

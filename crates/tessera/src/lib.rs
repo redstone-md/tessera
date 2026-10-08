@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(windows, test))]
+mod audio_provider;
 mod panel;
 #[cfg(any(windows, test))]
 mod settings;

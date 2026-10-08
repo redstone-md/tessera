@@ -1,0 +1,330 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { Slider, ScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+
+export enum AudioRoute { output, input }
+
+component AudioText inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    accessible-role: none;
+    accessible-label: "";
+}
+
+// The public 1.18.1 Slider exposes no track/thumb styling. Keep its native
+// appearance behind this seam rather than importing private SliderBase or
+// replacing its pointer, focus, keyboard and accessibility implementation.
+// Its changed/released callbacks are user actions, NOT property observers:
+// projecting `value` never calls SliderBase.set-value or emits a request.
+component AudioSlider inherits Slider {
+    minimum: 0;
+    maximum: 100;
+    step: 1;
+    orientation: horizontal;
+    height: 24px;
+}
+
+component AudioRow inherits Rectangle {
+    in property <AudioRoute> route;
+    in property <bool> enabled;
+    in property <bool> muted;
+    in property <image> icon;
+    in-out property <float> percent;
+    callback volume-requested(float);
+    callback volume-released(float);
+    callback mute-requested(bool);
+    height: 30px;
+    accessible-role: none;
+
+    HorizontalLayout {
+        spacing: 8px;
+        mute := TileButton {
+            width: 30px;
+            height: 30px;
+            radius: 6px;
+            filled: false;
+            enabled: root.enabled;
+            accessible-text: root.route == AudioRoute.output
+                ? (root.muted ? @tr("Unmute output") : @tr("Mute output"))
+                : (root.muted ? @tr("Unmute input") : @tr("Mute input"));
+            accessible-description: root.muted ? @tr("Muted") : @tr("Unmuted");
+            accessible-checkable: true;
+            accessible-checked: root.muted;
+            clicked => { root.mute-requested(!root.muted); }
+            if root.icon.width > 0: Image {
+                x: 6px;
+                y: 6px;
+                width: 18px;
+                height: 18px;
+                source: root.icon;
+                image-fit: contain;
+                colorize: SeelenPalette.foreground;
+                accessible-role: none;
+            }
+            if root.icon.width == 0: AudioText {
+                text: root.muted ? @tr("Off") : root.route == AudioRoute.output ? @tr("Out") : @tr("In");
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        slider := AudioSlider {
+            horizontal-stretch: 1;
+            enabled: root.enabled;
+            value <=> root.percent;
+            accessible-label: root.route == AudioRoute.output ? @tr("Output volume") : @tr("Input volume");
+            accessible-description: (root.muted ? @tr("Muted") + "; " : "")
+                + round(clamp(root.percent, 0, 100)) + @tr(" percent");
+            changed(value) => { if root.enabled { root.volume-requested(value); } }
+            released(value) => { if root.enabled { root.volume-released(value); } }
+        }
+        AudioText {
+            width: 30px;
+            height: 30px;
+            font-size: 11px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            text: round(clamp(root.percent, 0, 100)) + "%";
+        }
+    }
+}
+
+// Only genuine default endpoint data creates controls. The local focus gate
+// routes Escape; native placement, focus loss and lifetime stay presenter-owned.
+export component QuickSettings inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera quick settings";
+    min-width: 1px;
+    min-height: 1px;
+    in property <bool> loading;
+    in property <bool> watch-live;
+    in property <string> status;
+    in property <bool> output-ready;
+    in property <bool> input-ready;
+    in property <bool> output-muted;
+    in property <bool> input-muted;
+    in-out property <float> output-percent;
+    in-out property <float> input-percent;
+    in property <string> output-status;
+    in property <string> input-status;
+    in property <image> output-icon: @image-url("../assets/icons/ionicons-5.5.4/volume-high-outline.svg");
+    in property <image> output-muted-icon: @image-url("../assets/icons/ionicons-5.5.4/volume-mute-outline.svg");
+    in property <image> input-icon: @image-url("../assets/icons/ionicons-5.5.4/mic-outline.svg");
+    in property <image> input-muted-icon: @image-url("../assets/icons/ionicons-5.5.4/mic-off-outline.svg");
+    in property <image> settings-icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg");
+    out property <length> preferred-popup-width: 300px + 2 * PopoverTokens.shadow-margin;
+    out property <length> preferred-popup-height: min(700px,
+        root.natural-content-height + 2 * viewport-inset) + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.preferred-popup-width;
+    preferred-height: root.preferred-popup-height;
+    callback volume-requested(AudioRoute, float);
+    callback volume-released(AudioRoute, float);
+    callback mute-requested(AudioRoute, bool);
+    callback app-settings-requested();
+    callback refresh-requested();
+    callback dismiss-requested();
+    // Internal UI-thread mailbox wakeup; not a user or hardware command.
+    callback audio-event-ready();
+    // Layout projection may settle after a host result or a DPI/font change.
+    // The presenter coalesces these signals without changing the native lease.
+    callback preferred-size-changed();
+    changed preferred-popup-width => { root.preferred-size-changed(); }
+    changed preferred-popup-height => { root.preferred-size-changed(); }
+
+    property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
+    property <string> feedback: root.status != "" ? root.status
+        : root.loading ? @tr("Loading audio devices…")
+        : !root.output-ready && !root.input-ready && root.output-status == "" && root.input-status == ""
+            ? @tr("No audio endpoints available") : "";
+    property <bool> can-refresh: !root.watch-live || root.status != ""
+        || root.output-status != "" || root.input-status != "";
+    property <string> output-feedback: root.output-status != ""
+        ? @tr("Output: ") + root.output-status
+        : !root.output-ready && !root.loading && root.input-ready ? @tr("Output: Unavailable") : "";
+    property <string> input-feedback: root.input-status != ""
+        ? @tr("Input: ") + root.input-status
+        : !root.input-ready && !root.loading && root.output-ready ? @tr("Input: Unavailable") : "";
+    property <int> ready-count: (root.output-ready ? 1 : 0) + (root.input-ready ? 1 : 0);
+    property <int> block-count: (root.ready-count > 0 ? 1 : 0)
+        + (root.feedback != "" ? 1 : 0) + root.ready-count
+        + (root.output-feedback != "" ? 1 : 0) + (root.input-feedback != "" ? 1 : 0) + 1;
+    // Static probes can be measured before conditional children are created.
+    // Using repeater/layout preferred-height here gives the presenter the old
+    // height for one event, clipping real rows or footer controls after a read.
+    property <length> measure-width: max(1px,
+        (root.width > 0px ? min(root.width, root.preferred-popup-width) : root.preferred-popup-width)
+        - 2 * PopoverTokens.shadow-margin - 2 * viewport-inset - 2 * FocusTokens.outer-margin);
+    property <length> natural-content-height: 2 * FocusTokens.outer-margin
+        + (root.ready-count > 0 ? heading-metrics.preferred-height : 0px)
+        + (root.feedback != "" ? feedback-metrics.preferred-height : 0px)
+        + root.ready-count * 30px
+        + (root.output-feedback != "" ? output-metrics.preferred-height : 0px)
+        + (root.input-feedback != "" ? input-metrics.preferred-height : 0px)
+        + 30px + max(0, root.block-count - 1) * 8px;
+    heading-metrics := AudioText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: @tr("Volume");
+        font-weight: 600;
+    }
+    feedback-metrics := AudioText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.feedback;
+        wrap: word-wrap;
+    }
+    output-metrics := AudioText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.output-feedback;
+        wrap: word-wrap;
+    }
+    input-metrics := AudioText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.input-feedback;
+        wrap: word-wrap;
+    }
+    public function set-presentation-opacity(value: float) {
+        body.set-presentation-opacity(value);
+    }
+    public function focus-content() {
+        escape-scope.focus();
+    }
+    forward-focus: escape-scope;
+
+    // Parent scope receives rejected child keys without stealing their
+    // native slider/button semantics or highlighting a footer button.
+    escape-scope := FocusScope {
+        width: root.width;
+        height: root.height;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.dismiss-requested();
+                return accept;
+            }
+            return reject;
+        }
+    body := PopoverBody {
+        ScrollView {
+            x: root.viewport-inset;
+            y: root.viewport-inset;
+            width: max(0px, body.content-width - 2 * root.viewport-inset);
+            height: max(0px, body.content-height - 2 * root.viewport-inset);
+            horizontal-scrollbar-policy: always-off;
+            vertical-scrollbar-policy: as-needed;
+            content-width: self.visible-width;
+            content-height: root.natural-content-height;
+            content := VerticalLayout {
+                width: parent.width;
+                height: root.natural-content-height;
+                padding: FocusTokens.outer-margin;
+                spacing: 8px;
+                if root.output-ready || root.input-ready: AudioText {
+                    text: @tr("Volume");
+                    accessible-role: text;
+                    accessible-label: self.text;
+                    font-weight: 600;
+                }
+                if root.feedback != "": AudioText {
+                    text: root.feedback;
+                    accessible-role: text;
+                    accessible-label: self.text;
+                    wrap: word-wrap;
+                    color: SeelenPalette.secondary;
+                }
+                if root.output-ready: AudioRow {
+                    route: AudioRoute.output;
+                    enabled: !root.loading;
+                    muted: root.output-muted;
+                    icon: root.output-muted ? root.output-muted-icon : root.output-icon;
+                    percent <=> root.output-percent;
+                    volume-requested(value) => { root.volume-requested(AudioRoute.output, value); }
+                    volume-released(value) => { root.volume-released(AudioRoute.output, value); }
+                    mute-requested(desired) => { root.mute-requested(AudioRoute.output, desired); }
+                }
+                if root.output-feedback != "": AudioText {
+                    text: root.output-feedback;
+                    accessible-role: text;
+                    accessible-label: self.text;
+                    wrap: word-wrap;
+                    color: SeelenPalette.secondary;
+                }
+                if root.input-ready: AudioRow {
+                    route: AudioRoute.input;
+                    enabled: !root.loading;
+                    muted: root.input-muted;
+                    icon: root.input-muted ? root.input-muted-icon : root.input-icon;
+                    percent <=> root.input-percent;
+                    volume-requested(value) => { root.volume-requested(AudioRoute.input, value); }
+                    volume-released(value) => { root.volume-released(AudioRoute.input, value); }
+                    mute-requested(desired) => { root.mute-requested(AudioRoute.input, desired); }
+                }
+                if root.input-feedback != "": AudioText {
+                    text: root.input-feedback;
+                    accessible-role: text;
+                    accessible-label: self.text;
+                    wrap: word-wrap;
+                    color: SeelenPalette.secondary;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TileButton {
+                        height: 30px;
+                        horizontal-stretch: 1;
+                        radius: 6px;
+                        accessible-text: @tr("App Settings");
+                        clicked => { root.app-settings-requested(); }
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 8px;
+                            alignment: center;
+                            if root.settings-icon.width > 0: Image {
+                                width: 16px;
+                                height: 16px;
+                                source: root.settings-icon;
+                                image-fit: contain;
+                                colorize: SeelenPalette.foreground;
+                                accessible-role: none;
+                            }
+                            AudioText {
+                                text: @tr("App Settings");
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    if root.can-refresh: TileButton {
+                        height: 30px;
+                        width: 72px;
+                        radius: 6px;
+                        enabled: !root.loading;
+                        accessible-text: root.status != "" || root.output-status != "" || root.input-status != ""
+                            ? @tr("Retry audio") : @tr("Refresh audio");
+                        clicked => { root.refresh-requested(); }
+                        AudioText {
+                            text: root.status != "" || root.output-status != "" || root.input-status != ""
+                                ? @tr("Retry") : @tr("Refresh");
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    }
+}

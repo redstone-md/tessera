@@ -20,6 +20,7 @@
 
 mod activation;
 mod apps;
+mod audio;
 mod diagnostics;
 mod error;
 mod events;
@@ -36,6 +37,9 @@ mod native_activation;
 mod native_apps;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+mod native_audio;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 mod native_events;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -48,6 +52,7 @@ mod ui_preferences;
 mod window_actions;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};
+pub use audio::AudioService;
 pub use ui_preferences::{
     UiMotionCallback, UiMotionWatcher, ui_animations_enabled, watch_ui_motion,
 };

@@ -1015,12 +1015,14 @@ fn appearance_callbacks_during_show_apply_latest_geometry_without_reentrant_leas
 }
 
 struct LauncherFixture {
-    // Drop attachments before the owned component windows.
+    // Drop transient and bar attachments before the owned component windows.
+    _quick_scope:
+        crate::transient_window::TransientScope<crate::quick_settings::QuickSettingsController>,
     _scope: SurfaceLeaseScope,
     controller: PanelController,
     panel: Panel,
     dock: Dock,
-    _toolbar: Toolbar,
+    toolbar: Toolbar,
     launcher: Launcher,
     host: Arc<FixtureHost>,
 }
@@ -1036,17 +1038,102 @@ impl LauncherFixture {
         let launcher = Launcher::new().unwrap();
         let controller = PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core);
         let scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+        let quick_scope = crate::transient_window::TransientScope::new(
+            Rc::clone(&controller.quick_settings),
+            crate::quick_settings::QuickSettingsController::hide,
+        );
         apply_result_to_both(&controller, &panel, Ok(launcher_snapshot()));
         Self {
+            _quick_scope: quick_scope,
             _scope: scope,
             controller,
             panel,
             dock,
-            _toolbar: toolbar,
+            toolbar,
             launcher,
             host,
         }
     }
+}
+
+#[test]
+fn genuine_toolbar_trigger_opens_independent_popup_and_rejects_hidden_geometry() {
+    let fixture = LauncherFixture::new();
+    fixture.panel.set_refreshing(true);
+    fixture.panel.set_stale(true);
+    let trigger = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.toolbar,
+        "Open quick settings",
+    )
+    .next()
+    .unwrap();
+    let click = || {
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let origin = trigger.absolute_position();
+        let size = trigger.size();
+        let center =
+            slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
+        fixture
+            .toolbar
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: center,
+                button: PointerEventButton::Left,
+            });
+        fixture
+            .toolbar
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: center,
+                button: PointerEventButton::Left,
+            });
+    };
+    click();
+    let first = fixture.controller.quick_settings.borrow().clone().unwrap();
+    assert!(
+        first.is_open(),
+        "audio is independent from desktop busy/stale state"
+    );
+    assert!(
+        !fixture.panel.window().is_visible(),
+        "toolbar does not open the framed Panel"
+    );
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), 1);
+    click();
+    let reused = fixture.controller.quick_settings.borrow().clone().unwrap();
+    assert!(
+        Rc::ptr_eq(&first, &reused),
+        "the shown popup is cached, not recreated"
+    );
+    assert!(
+        reused.is_open(),
+        "the reference trigger shows rather than toggles"
+    );
+    let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    fixture
+        .toolbar
+        .invoke_quick_settings_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(f32::NAN, 8.0),
+            width: 16.0,
+            height: 16.0,
+        });
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), focus);
+    first.hide();
+    fixture.toolbar.hide().unwrap();
+    fixture
+        .toolbar
+        .invoke_quick_settings_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(100.0, 8.0),
+            width: 16.0,
+            height: 16.0,
+        });
+    assert!(
+        !first.is_open(),
+        "a queued hidden-bar callback never opens hardware UI"
+    );
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), focus);
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.host.saves.lock().is_empty());
 }
 
 #[test]

@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 tessera-core.workspace = true
+tessera-system.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -18,11 +19,17 @@ windows = { workspace = true, features = [
     "UI_ViewManagement",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Registry",
+    "Win32_System_Variant",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
 ] }
+# The implement macro emits ::windows_core paths for our native COM callbacks.
+windows-core = "=0.62.2"
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -46,6 +53,9 @@ windows-sys = { workspace = true, features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+parking_lot.workspace = true
 
 
 [target.'cfg(windows)'.dev-dependencies]

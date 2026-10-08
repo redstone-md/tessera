@@ -534,7 +534,7 @@ fn toolbar_renders_identity_and_settings_access() {
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
     let opened = Rc::new(Cell::new(0));
     let counter = opened.clone();
-    toolbar.on_open_panel_requested(move || counter.set(counter.get() + 1));
+    toolbar.on_quick_settings_requested(move |_| counter.set(counter.get() + 1));
     let hints = Rc::new(std::cell::RefCell::new(Vec::new()));
     let records = Rc::clone(&hints);
     toolbar
@@ -555,10 +555,9 @@ fn toolbar_renders_identity_and_settings_access() {
         window.window().dispatch_event(WindowEvent::PointerExited);
         window.request_redraw();
         let pixels = draw(&window, width, height);
-        let settings =
-            ElementHandle::find_by_accessible_label(&toolbar, "Open settings and recovery")
-                .next()
-                .unwrap();
+        let settings = ElementHandle::find_by_accessible_label(&toolbar, "Open quick settings")
+            .next()
+            .unwrap();
         assert_eq!(settings.accessible_role(), Some(AccessibleRole::Button));
         let origin = settings.absolute_position();
         let size = settings.size();
@@ -604,7 +603,7 @@ fn toolbar_renders_identity_and_settings_access() {
         let (content, bounds) = requested
             .last()
             .expect("actual settings hover requests a hint");
-        assert_eq!(content, "Settings and recovery");
+        assert_eq!(content, "Quick settings");
         assert_eq!(bounds.origin, origin);
         assert_eq!((bounds.width, bounds.height), (16.0, 16.0));
         drop(requested);

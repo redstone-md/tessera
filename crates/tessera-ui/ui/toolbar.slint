@@ -8,7 +8,7 @@ import { TileButton, TileBounds } from "tiles.slint";
 // One top toolbar, full monitor bounds width, 32 logical pixels tall
 // (Seelen fancy-toolbar default: item 16 + padding 8 * 2 + margin 0).
 // Left: user and foreground app. Center: native clock. Right: language and
-// settings/recovery. Only genuine host values appear; absent slots stay empty.
+// quick settings. Only genuine host values appear; absent slots stay empty.
 export component Toolbar inherits Window {
     no-frame: true;
     always-on-top: true;
@@ -22,7 +22,7 @@ export component Toolbar inherits Window {
     in property <string> clock;
     in property <string> language;
     in property <DockStatus> surface-status;
-    callback open-panel-requested(); // settings/recovery access
+    callback quick-settings-requested(TileBounds);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
 
@@ -105,11 +105,15 @@ export component Toolbar inherits Window {
                 background: !self.enabled ? transparent :
                     self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
                     self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
-                accessible-text: "Open settings and recovery";
-                tooltip-text: @tr("Settings and recovery");
+                accessible-text: "Open quick settings";
+                tooltip-text: @tr("Quick settings");
                 tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                 tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
-                clicked => { root.open-panel-requested(); }
+                clicked => { root.quick-settings-requested({
+                    origin: self.absolute-position,
+                    width: self.width,
+                    height: self.height
+                }); }
                 Image {
                     width: parent.width;
                     height: parent.height;

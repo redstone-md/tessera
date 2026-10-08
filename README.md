@@ -28,7 +28,7 @@ Customization applies first to Tessera-owned surfaces. Animating foreign applica
 
 ## Architecture
 
-The domain model calculates rules and placement plans without OS calls. Platform integration observes windows and eventually applies validated commands. Native presentation displays state. The plugin host will expose a restricted interface without handing third-party code control over safety.
+The geometry domain calculates rules and placement plans without OS calls. Portable capability contracts keep typed audio intent independent from both layout and native UI. Platform adapters validate explicit effects; native presentation displays confirmed state and pending user intent. The plugin host will expose a restricted interface without handing third-party code control over safety.
 
 Start with working modules, then add layers. Do not create empty crates for hypothetical features or freeze a plugin interface before reviewing its threat model.
 
@@ -43,15 +43,16 @@ Start with working modules, then add layers. Do not create empty crates for hypo
 
 ## Development
 
-Install Rust 1.92 or newer. The current Slint release requires this version; earlier versions of the CLI foundation supported Rust 1.85. `rust-toolchain.toml` selects stable Rust with `rustfmt` and Clippy. The workspace contains four crates:
+Install Rust 1.92 or newer. The current Slint release requires this version; earlier versions of the CLI foundation supported Rust 1.85. `rust-toolchain.toml` selects stable Rust with `rustfmt` and Clippy. The workspace contains five crates:
 
 Linux workspace builds (including headless UI tests and cross-target builds) require `pkg-config` and Fontconfig development files. On Debian/Ubuntu, install them with `sudo apt-get install pkg-config libfontconfig1-dev`. Windows builds use the system's native font support; this is not an additional Windows runtime dependency.
 
 | Crate | Responsibility |
 | --- | --- |
 | `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
-| `tessera-windows` | Desktop observation, explicit activation/launch, native application icons/events, and isolated shell supervision/recovery. |
-| `tessera-ui` | Native Slint dock, toolbar, application menu, portable models, shared asynchronous observation, and preferences; no Windows-adapter dependency. |
+| `tessera-system` | Portable typed system-capability contracts; currently asynchronous default-multimedia audio, with no OS/UI dependencies. |
+| `tessera-windows` | Desktop observation, explicit activation/launch, native application icons/events, worker-owned audio, and isolated shell supervision/recovery. |
+| `tessera-ui` | Native Slint dock, toolbar, application menu, independent audio popup, portable models, asynchronous observation, and preferences; no Windows-adapter dependency. |
 | `tessera` | Application composition, bounded atomic preferences, GUI session, recovery supervisor, and developer CLI. |
 
 ```sh
@@ -107,6 +108,8 @@ Choose a row to request foreground activation; the platform revalidates its tran
 System/light/dark, compact spacing, and dock edge preview live. **Save preferences** atomically stores these choices and pins in `%LOCALAPPDATA%\Tessera\settings.json`; a pin click persists pins with the last saved appearance, not an unsaved preview. No captions, HWNDs, PIDs, or sign-in commands are stored there. Launch targets resolve only through the trusted current catalog, never directly from a preferences string.
 
 The primary-monitor toolbar reserves its top work-area strip; the dock remains floating and hides for a conservative fullscreen hint. The application menu is frameless, while the recovery/settings utility keeps normal decorations. Only validated Tessera-owned windows receive native surface styling. Ordinary-session exit restores the original primary taskbar visibility and auto-hide state without changing Winlogon or killing Explorer. Other monitors retain their Windows taskbars. There is no periodic desktop polling, fixed-frame-rate idle rendering, injection, low-level input hook, telemetry, update process, or plugin execution. Supervised sessions use a two-second UI-thread heartbeat; the clock updates at most once per minute. The installer's separate diagnostic mode does not hide taskbars or reserve work area. All three Windows executables embed `asInvoker`, `uiAccess=false`, and PerMonitorV2; unsigned builds are not antivirus-approved. Installation/recovery usage and emergency steps are in the [tester guide](docs/alpha-testing.md).
+
+Unpublished development work adds an independently owned toolbar quick-settings popup with real default-multimedia output/input volume and mute. Typed commands revalidate the expected endpoint, and a single native COM worker performs hardware I/O and confirmed readback without desktop observation. Watching reports actual readiness/failure, rather than treating accepted registration as live updates. This is **not included in alpha.10** and is not complete quick-settings parity: native hardware/driver behavior, exact flat-slider styling, radios, brightness, OS theme/nightlight, power and the remaining system modules still need validation or implementation.
 
 ### Verification and limitations
 

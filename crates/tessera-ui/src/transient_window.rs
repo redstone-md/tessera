@@ -143,6 +143,18 @@ impl<C: TransientComponent> TransientWindow<C> {
         self.component.disable_motion();
     }
 
+    /// Refit an already attached transient without replaying show/focus/motion.
+    /// Unlike a bar's AppBar lease, this lease configures a static native role.
+    /// The caller validates placement; closed/in-flight windows stay closed.
+    pub(crate) fn reposition(&self, position: PhysicalPosition, size: PhysicalSize) -> bool {
+        if !self.is_visible() {
+            return false;
+        }
+        self.component.window().set_position(position);
+        self.component.window().set_size(size);
+        self.is_visible()
+    }
+
     /// Request only for an explicitly opened interactive popup. Passive
     /// transient surfaces never get a foreground request through this boundary.
     pub(crate) fn request_focus(&self) -> Result<(), String> {

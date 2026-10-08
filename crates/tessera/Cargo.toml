@@ -13,6 +13,8 @@ default-run = "tessera"
 [dependencies]
 tessera-core.workspace = true
 tessera-windows.workspace = true
+tessera-system.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -21,7 +23,6 @@ tempfile.workspace = true
 tessera-ui.workspace = true
 slint = { workspace = true, features = ["raw-window-handle-06", "renderer-femtovg"] }
 raw-window-handle.workspace = true
-parking_lot.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = [

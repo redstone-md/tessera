@@ -23,8 +23,10 @@ mod actions;
 mod context_menu;
 mod geometry;
 mod launcher;
+mod quick_settings;
 mod tooltip;
 use context_menu::Menus;
+use quick_settings::QuickPopups;
 use tooltip::Tooltips;
 
 type Host = dyn DesktopHost;
@@ -98,14 +100,15 @@ impl Drop for SurfaceLeaseScope {
 ///
 /// In panel mode only the panel window exists. In dock mode the always-present
 /// native Seelen-style surfaces are the dock strip and the top toolbar; the
-/// frameless launcher window opens from the dock's start tile (or the
-/// toolbar's settings entry) and is hidden — not closed — until used again.
+/// frameless launcher opens from the dock's start tile; a separately owned
+/// quick-settings popup opens from the toolbar's audio/settings entry.
 /// The framed Panel remains the settings/recovery window and developer mode.
 ///
 /// The panel's `refreshing`/`stale`/`has-snapshot` properties remain the
-/// single source of truth for every surface; the dock/toolbar/launcher status
-/// mirrors are kept in sync by [`PanelController::render`]. There is exactly
-/// one observation worker, one notification bus, and one retained snapshot —
+/// single source of truth for observational surfaces; dock/toolbar/launcher
+/// mirrors are kept in sync by [`PanelController::render`]. Independent audio
+/// never observes the desktop or borrows its busy/stale state. There is one
+/// observation worker, one notification bus, and one retained snapshot —
 /// never two independent observers.
 ///
 /// Retained snapshots, the catalog, and pins live in the shared
@@ -126,6 +129,7 @@ pub(crate) struct PanelController {
     launcher_state: Rc<RefCell<launcher::LauncherState>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     menus: Menus,
+    quick_settings: QuickPopups,
     tooltips: Tooltips,
     geometry: Rc<geometry::GeometryUpdates>,
 }
@@ -143,6 +147,7 @@ impl PanelController {
             launcher_state: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
+            quick_settings: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -172,6 +177,7 @@ impl PanelController {
             launcher_state: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
+            quick_settings: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -220,6 +226,10 @@ impl PanelController {
             let menu = controller.menus.borrow().clone();
             if let Some(menu) = menu {
                 menu.disable_motion();
+            }
+            let quick = controller.quick_settings.borrow().clone();
+            if let Some(quick) = quick {
+                quick.disable_motion();
             }
         });
     }
@@ -317,7 +327,7 @@ impl PanelController {
 
     fn wire_toolbar(&self, toolbar: &Toolbar) {
         let weak = self.clone();
-        toolbar.on_open_panel_requested(move || weak.open_panel());
+        toolbar.on_quick_settings_requested(move |bounds| weak.open_quick_settings(bounds));
         let controller = self.clone();
         let owner = toolbar.as_weak();
         toolbar.on_tooltip_requested(move |content, bounds| {
@@ -678,6 +688,10 @@ impl PanelController {
         dock.set_edge(crate::dock_edge_to_index(edge));
         let rect = crate::dock::dock_rect(context, edge, tile_count, compact, scale);
         let fullscreen = context.fullscreen_active();
+        let quick = self.quick_settings.borrow().clone();
+        if let Some(quick) = quick {
+            quick.close_if_geometry_changed(context, scale);
+        }
         let mut leases = self.leases.borrow_mut();
 
         if !fullscreen {
@@ -774,6 +788,10 @@ impl PanelController {
         }
         if let Some(launcher) = self.launcher_and_upgrade() {
             launcher.apply_presentation_theme(theme);
+        }
+        let quick = self.quick_settings.borrow().clone();
+        if let Some(quick) = quick {
+            quick.apply_theme(theme);
         }
         self.update_geometry();
     }
@@ -1192,6 +1210,10 @@ pub(crate) fn run(
                 Rc::clone(&controller.menus),
                 crate::context_menu::ContextMenuController::hide,
             );
+            let _quick_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.quick_settings),
+                crate::quick_settings::QuickSettingsController::hide,
+            );
             let _tooltip_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.tooltips),
                 crate::tooltip::TooltipController::hide,
@@ -1212,8 +1234,8 @@ pub(crate) fn run(
             core.install_routes(controller.routes());
             controller.apply_filter();
             controller.sync_appearance();
-            // The launcher starts hidden in dock mode; the dock's start tile
-            // or the toolbar's settings entry shows it.
+            // The launcher starts hidden; the dock's start tile shows it.
+            // Toolbar settings has its own independently loaded audio popup.
             // Closing a bar ends the session; hiding a launcher drops its
             // thread-affine native lease before the HWND can disappear.
             for window in [dock.window(), toolbar.window()] {

@@ -12,7 +12,8 @@ use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
-    ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchTile, Launcher, TooltipSurface,
+    ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchTile, Launcher, QuickSettings,
+    TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -58,6 +59,16 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         menu.get_menu_height(),
     ));
     menu.show().unwrap();
+    let quick = QuickSettings::new().unwrap();
+    quick.set_output_ready(true);
+    quick.set_output_percent(37.0);
+    quick.set_input_ready(true);
+    quick.set_input_percent(62.0);
+    quick.window().set_size(slint::LogicalSize::new(
+        quick.get_preferred_popup_width(),
+        quick.get_preferred_popup_height(),
+    ));
+    quick.show().unwrap();
 
     let completed = Rc::new(Cell::new(false));
     let result = Rc::clone(&completed);
@@ -65,9 +76,11 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         launcher.window().winit_window().await.unwrap();
         tooltip.window().winit_window().await.unwrap();
         menu.window().winit_window().await.unwrap();
+        quick.window().winit_window().await.unwrap();
         verify_frame("launcher", &launcher);
         verify_frame("tooltip", &tooltip);
         verify_frame("context-menu", &menu);
+        verify_frame("quick-settings", &quick);
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
@@ -85,6 +98,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                 launcher.hide().unwrap();
                 tooltip.hide().unwrap();
                 menu.hide().unwrap();
+                quick.hide().unwrap();
                 result.set(true);
                 slint::quit_event_loop().unwrap();
             });

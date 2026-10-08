@@ -4198,6 +4198,7 @@ dependencies = [
  "slint",
  "tempfile",
  "tessera-core",
+ "tessera-system",
  "tessera-ui",
  "tessera-windows",
  "windows-sys 0.61.2",
@@ -4209,6 +4210,10 @@ name = "tessera-core"
 version = "0.1.0-alpha.10"
 
 [[package]]
+name = "tessera-system"
+version = "0.1.0-alpha.10"
+
+[[package]]
 name = "tessera-ui"
 version = "0.1.0-alpha.10"
 dependencies = [
@@ -4216,14 +4221,18 @@ dependencies = [
  "parking_lot",
  "slint",
  "slint-build",
+ "tessera-system",
 ]
 
 [[package]]
 name = "tessera-windows"
 version = "0.1.0-alpha.10"
 dependencies = [
+ "parking_lot",
  "tessera-core",
+ "tessera-system",
  "windows",
+ "windows-core",
  "windows-sys 0.61.2",
 ]
 

@@ -23,10 +23,13 @@ pub(crate) mod launcher;
 pub(crate) mod motion;
 pub(crate) mod popup_placement;
 pub(crate) mod projection;
+pub(crate) mod quick_settings;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
 #[cfg(all(test, target_os = "linux"))]
 mod gl_render_tests;
+#[cfg(test)]
+mod quick_settings_render_tests;
 #[cfg(test)]
 mod render_tests;
 pub(crate) mod sanitize;
@@ -356,6 +359,18 @@ pub trait DesktopHost: Send + Sync + 'static {
         &self,
         _callback: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Option<Box<dyn Send>>, String> {
+        Ok(None)
+    }
+
+    /// Returns an optional independent audio capability, initialized on demand.
+    /// This hook and the capability's requests return promptly; hardware I/O
+    /// belongs to its native worker, never observation or the UI input thread.
+    fn audio_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::audio::AudioHost>>,
+        tessera_system::audio::AudioError,
+    > {
         Ok(None)
     }
 

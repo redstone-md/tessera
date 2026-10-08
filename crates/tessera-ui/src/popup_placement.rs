@@ -16,6 +16,26 @@ pub(crate) fn place(
     logical_size: (f32, f32),
     scale: f32,
 ) -> Result<PopupRect, String> {
+    place_aligned(context, anchor, logical_size, scale, false)
+}
+
+/// An interactive popup is centered on its tile, while menus retain start alignment.
+pub(crate) fn place_centered(
+    context: DockContext,
+    anchor: PhysicalPosition,
+    logical_size: (f32, f32),
+    scale: f32,
+) -> Result<PopupRect, String> {
+    place_aligned(context, anchor, logical_size, scale, true)
+}
+
+fn place_aligned(
+    context: DockContext,
+    anchor: PhysicalPosition,
+    logical_size: (f32, f32),
+    scale: f32,
+    centered: bool,
+) -> Result<PopupRect, String> {
     const INVALID: &str = "Popup monitor bounds or scale are invalid.";
     if !scale.is_finite() || scale <= 0.0 {
         return Err(INVALID.into());
@@ -29,18 +49,23 @@ pub(crate) fn place(
     };
     let width = dimension(logical_size.0, context.width())?;
     let height = dimension(logical_size.1, context.height())?;
-    let axis = |origin: i32, extent: u32, size: u32, anchor: i32| {
+    let axis = |origin: i32, extent: u32, size: u32, anchor: i64| {
         let end = i64::from(origin) + i64::from(extent);
         if end - 1 > i64::from(i32::MAX) {
             return Err(INVALID.to_string());
         }
-        i32::try_from(i64::from(anchor).clamp(i64::from(origin), end - i64::from(size)))
+        i32::try_from(anchor.clamp(i64::from(origin), end - i64::from(size)))
             .map_err(|_| INVALID.to_string())
     };
     Ok(PopupRect {
         position: PhysicalPosition::new(
-            axis(context.x(), context.width(), width, anchor.x)?,
-            axis(context.y(), context.height(), height, anchor.y)?,
+            axis(
+                context.x(),
+                context.width(),
+                width,
+                i64::from(anchor.x) - if centered { i64::from(width) / 2 } else { 0 },
+            )?,
+            axis(context.y(), context.height(), height, i64::from(anchor.y))?,
         ),
         size: PhysicalSize::new(width, height),
     })
@@ -108,5 +133,51 @@ mod tests {
         ] {
             assert!(place(context, PhysicalPosition::new(0, 0), size, scale).is_err());
         }
+    }
+
+    #[test]
+    fn centered_popup_uses_fitted_native_width_and_keeps_negative_monitor_bounds() {
+        let context = DockContext::new(-1920, -1080, 1920, 1080, false).unwrap();
+        let rect = place_centered(
+            context,
+            PhysicalPosition::new(-1200, -1030),
+            (320.0, 160.0),
+            1.5,
+        )
+        .unwrap();
+        assert_eq!(rect.position, PhysicalPosition::new(-1440, -1030));
+        assert_eq!(rect.size, PhysicalSize::new(480, 240));
+        let rect = place_centered(
+            context,
+            PhysicalPosition::new(-10, -10),
+            (320.0, 160.0),
+            1.5,
+        )
+        .unwrap();
+        assert_eq!(rect.position, PhysicalPosition::new(-480, -240));
+        let tiny = DockContext::new(-80, -60, 80, 60, false).unwrap();
+        let rect =
+            place_centered(tiny, PhysicalPosition::new(-40, -30), (320.0, 160.0), 2.0).unwrap();
+        assert_eq!(rect.position, PhysicalPosition::new(-80, -60));
+        assert_eq!(rect.size, PhysicalSize::new(80, 60));
+    }
+
+    #[test]
+    fn centered_popup_rejects_overflow_and_shadow_offset_uses_real_dpi() {
+        let overflowing = DockContext::new(i32::MAX - 10, 0, 20, 80, false).unwrap();
+        assert!(
+            place_centered(
+                overflowing,
+                PhysicalPosition::new(i32::MAX, 0),
+                (10.0, 10.0),
+                1.0
+            )
+            .is_err()
+        );
+        let context = DockContext::new(-1920, 0, 1920, 1080, false).unwrap();
+        let anchor = physical_anchor(PhysicalPosition::new(-960, 60), 1.5, (0.0, -10.0)).unwrap();
+        let rect = place_centered(context, anchor, (320.0, 160.0), 1.5).unwrap();
+        assert_eq!(rect.position, PhysicalPosition::new(-1200, 45));
+        assert!(physical_anchor(PhysicalPosition::new(0, i32::MIN), 2.0, (0.0, -10.0)).is_err());
     }
 }

@@ -6,16 +6,18 @@ use std::error::Error;
 #[cfg(windows)]
 mod desktop {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock};
     use std::time::{Duration, Instant};
 
     use parking_lot::Mutex;
+    use tessera_system::audio::{AudioError, AudioHost};
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
         PixelIcon, RunOptions, ShellIdentity, SurfaceKind, SurfaceMode, SystemAction,
     };
     use tessera_windows::{ActivationTarget, Application, IconPixels};
 
+    use crate::audio_provider::AudioProvider;
     use crate::settings::{DockEdge, Preferences, SettingsStore, Theme};
 
     struct CatalogCache {
@@ -43,6 +45,7 @@ mod desktop {
         settings: Option<SettingsStore>,
         presentation: Presentation,
         window_icons: Mutex<HashMap<String, CachedWindowIcon>>,
+        audio: LazyLock<AudioProvider>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -124,6 +127,15 @@ mod desktop {
     }
 
     impl DesktopHost for AppHost {
+        fn audio_host(&self) -> Result<Option<Arc<dyn AudioHost>>, AudioError> {
+            self.audio
+                .get(|| {
+                    tessera_windows::AudioService::new()
+                        .map(|host| -> Arc<dyn AudioHost> { Arc::new(host) })
+                })
+                .map(Some)
+        }
+
         fn observe(&self) -> Result<PanelSnapshot, String> {
             let snapshot = tessera_windows::observe().map_err(|error| error.to_string())?;
             let candidates: Vec<_> = snapshot
@@ -399,6 +411,7 @@ mod desktop {
             settings,
             presentation,
             window_icons: Mutex::new(HashMap::new()),
+            audio: LazyLock::new(AudioProvider::default),
         };
         tessera_ui::run(
             host,
