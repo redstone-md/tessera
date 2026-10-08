@@ -925,6 +925,58 @@ fn launcher_pin_toggle_routes_the_key() {
     });
     pin.invoke_accessible_default_action();
     assert_eq!(pins.get(), 3, "stale pin controls reject all actions");
+
+    let actions = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = actions.clone();
+    launcher.on_open_settings_requested(move || log.borrow_mut().push("settings"));
+    let log = actions.clone();
+    launcher.on_refresh_requested(move || log.borrow_mut().push("refresh"));
+    let log = actions.clone();
+    launcher.on_exit_requested(move || log.borrow_mut().push("exit"));
+    let hides = Rc::new(Cell::new(0));
+    let count = hides.clone();
+    launcher.on_hide_requested(move || count.set(count.get() + 1));
+    let key = |text: slint::SharedString| {
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    for (stale, refreshing, expected) in [
+        (true, false, vec!["settings", "refresh", "exit"]),
+        (false, true, vec!["settings", "exit"]),
+    ] {
+        launcher.set_stale(stale);
+        launcher.set_refreshing(refreshing);
+        launcher.set_search("".into());
+        actions.borrow_mut().clear();
+        launcher.invoke_focus_search();
+        for index in 0..expected.len() {
+            key(Key::Tab.into());
+            key(Key::Return.into());
+            assert_eq!(
+                actions.borrow().as_slice(),
+                &expected[..=index],
+                "Tab must skip blocked application and pin scopes",
+            );
+        }
+        key(Key::Tab.into());
+        key("z".into());
+        assert_eq!(
+            launcher.get_search(),
+            "z",
+            "Tab must wrap straight to search, not the Escape wrapper",
+        );
+        key(Key::Escape.into());
+    }
+    assert_eq!(hides.get(), 2, "Escape still bubbles from the search field");
+    assert_eq!(pins.get(), 3, "blocked traversal never toggles a pin");
+    assert_eq!(launches.get(), 0, "blocked traversal never launches an app");
     drop(launcher);
 }
 

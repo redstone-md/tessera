@@ -59,6 +59,7 @@ export component Launcher inherits Window {
         escape-scope := FocusScope {
             width: body.content-width;
             height: body.content-height;
+            focus-on-tab-navigation: false;
             key-pressed(event) => {
                 if event.text == Key.Escape {
                     root.hide-requested();
@@ -164,6 +165,7 @@ export component Launcher inherits Window {
                             }
                             pin-key := FocusScope {
                                 width: 0px;
+                                enabled: !root.blocked;
                                 key-pressed(event) => {
                                     if root.blocked == false
                                         && (event.text == Key.Space || event.text == Key.Return) {
