@@ -941,11 +941,7 @@ impl PanelController {
             .upgrade()
             .and_then(|panel| model_key(&panel.get_apps(), key, |row| row.key.to_string()));
         panel_key
-            .or_else(|| {
-                self.launcher_and_upgrade().and_then(|launcher| {
-                    model_key(&launcher.get_tiles(), key, |tile| tile.key.to_string())
-                })
-            })
+            .or_else(|| self.resolve_launcher_key(key))
             .or_else(|| {
                 self.dock_and_upgrade().and_then(|dock| {
                     model_key(&dock.get_pinned_apps(), key, |app| app.key.to_string())

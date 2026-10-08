@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use std::rc::Rc;
 
-use super::{PanelController, dock_icon};
+use slint::{ComponentHandle, ModelRc};
+
+use super::PanelController;
 use crate::SurfaceKind;
-use crate::generated::{LaunchTile, Launcher, LauncherNavigation, LauncherView};
-use crate::launcher::{LauncherSelection, Navigation};
+use crate::generated::{Launcher, LauncherNavigation, LauncherView};
+use crate::launcher::{LauncherInventory, LauncherRows, LauncherSelection, Navigation};
 
 #[derive(Default)]
 pub(super) struct LauncherState {
     view: LauncherView,
     selection: LauncherSelection,
     query: String,
+    inventory: Rc<LauncherInventory>,
 }
 
 impl LauncherState {
@@ -25,7 +28,14 @@ impl LauncherState {
         }
     }
 
-    fn project(&mut self, keys: &[String], query: &str, view: LauncherView) -> Option<usize> {
+    fn project(
+        &mut self,
+        inventory: Rc<LauncherInventory>,
+        query: &str,
+        view: LauncherView,
+    ) -> Option<usize> {
+        self.inventory = inventory;
+        let keys = self.inventory.keys();
         let active_query = view == LauncherView::All && !query.trim().is_empty();
         // Slint can deliver an earlier changed callback after a projection.
         // Only a genuinely different query/view discards selected identity.
@@ -36,6 +46,23 @@ impl LauncherState {
         } else {
             self.selection.reconcile(keys, active_query)
         }
+    }
+
+    fn select(&mut self, key: &str) -> Option<usize> {
+        self.selection.select(self.inventory.keys(), key)
+    }
+
+    fn navigate(&mut self, direction: Navigation, columns: usize) -> Option<usize> {
+        self.selection
+            .navigate(self.inventory.keys(), direction, columns)
+    }
+
+    fn resolve(&self, key: &str) -> Option<String> {
+        self.inventory
+            .keys()
+            .iter()
+            .find(|current| current.as_str() == key)
+            .cloned()
     }
 
     fn switch(&mut self, view: LauncherView) {
@@ -92,8 +119,8 @@ impl PanelController {
         self.show_launcher_tiles();
     }
 
-    /// Resolves the active view against the full retained catalog, then applies
-    /// the bounded grid projection without mutating saved favorite identities.
+    /// Publishes complete logical results with lazy native row presentation.
+    /// Key authority never retrieves rows or converts offscreen images.
     pub(super) fn show_launcher_tiles(&self) {
         let Some(launcher) = self.launcher_and_upgrade() else {
             return;
@@ -108,28 +135,27 @@ impl PanelController {
             LauncherView::Favorites => {
                 crate::projection::project_favorite_apps(&catalog, &favorites, &pins)
             }
-            LauncherView::All => crate::projection::project_apps(&catalog, &pins, &search),
+            LauncherView::All => crate::projection::project_launcher_apps(&catalog, &pins, &search),
         };
-        let tiles: Vec<LaunchTile> = apps
-            .iter()
-            .map(|app| LaunchTile {
-                key: app.key.as_str().into(),
-                label: app.label.as_str().into(),
-                icon: dock_icon(self, app.icon.as_ref()),
-                favorite: favorites.iter().any(|key| key == &app.key),
-            })
-            .collect();
-        let keys = tiles
-            .iter()
-            .map(|tile| tile.key.to_string())
-            .collect::<Vec<_>>();
+        let inventory = Rc::new(LauncherInventory::new(apps));
+        let count = i32::try_from(inventory.len())
+            .expect("retained native catalog fits the Slint model index range");
         let index = self
             .launcher_state
             .borrow_mut()
-            .project(&keys, &search, view);
+            .project(Rc::clone(&inventory), &search, view);
+        let icons = Rc::clone(&self.icon_cache);
+        let saved_favorites_present = !favorites.is_empty();
+        let rows = LauncherRows::new(
+            inventory,
+            favorites,
+            launcher.get_grid_columns().max(1) as usize,
+            move |icon| icons.borrow_mut().optional(icon).unwrap_or_default(),
+        );
         launcher.set_view(view);
-        launcher.set_saved_favorites_present(!favorites.is_empty());
-        launcher.set_tiles(ModelRc::new(VecModel::from(tiles)));
+        launcher.set_saved_favorites_present(saved_favorites_present);
+        launcher.set_application_count(count);
+        launcher.set_rows(ModelRc::new(rows));
         if view_changed {
             launcher.invoke_reset_scroll();
         }
@@ -150,13 +176,21 @@ impl PanelController {
         launcher.invoke_focus_search();
     }
 
+    /// Resolves current logical result membership, not materialized delegates.
+    /// The caller separately guards visibility/state and revalidates the target.
+    pub(super) fn resolve_launcher_key(&self, key: &str) -> Option<String> {
+        self.launcher_and_upgrade()?;
+        self.launcher_state.borrow().resolve(key)
+    }
+
     /// Favorites are immediate saves of the complete applied record, never
     /// dock pins or an appearance preview. Stored IDs are not launch authority.
     fn toggle_launcher_favorite(&self, key: &str, favorite: bool) {
         let Some(launcher) = self.interactive_launcher() else {
             return;
         };
-        let Some(key) = super::model_key(&launcher.get_tiles(), key, |tile| tile.key.to_string())
+        let Some(key) = self
+            .resolve_launcher_key(key)
             .filter(|key| self.core.catalog().iter().any(|app| app.key() == key))
         else {
             self.report_message("That application is no longer in the current launcher results.");
@@ -281,12 +315,7 @@ impl PanelController {
         let Some(launcher) = self.interactive_launcher() else {
             return;
         };
-        let keys = displayed_keys(&launcher);
-        let index = self
-            .launcher_state
-            .borrow_mut()
-            .selection
-            .select(&keys, key);
+        let index = self.launcher_state.borrow_mut().select(key);
         self.project_launcher_selection(&launcher, index);
     }
 
@@ -300,13 +329,11 @@ impl PanelController {
             LauncherNavigation::Left => Navigation::Left,
             LauncherNavigation::Right => Navigation::Right,
         };
-        let keys = displayed_keys(&launcher);
         let columns = launcher.get_grid_columns().max(1) as usize;
         let index = self
             .launcher_state
             .borrow_mut()
-            .selection
-            .navigate(&keys, direction, columns);
+            .navigate(direction, columns);
         self.project_launcher_selection(&launcher, index);
     }
 
@@ -341,11 +368,10 @@ impl PanelController {
     }
 
     fn launch_launcher(&self, key: &str) {
-        let Some(launcher) = self.interactive_launcher() else {
+        let Some(_launcher) = self.interactive_launcher() else {
             return;
         };
-        let Some(key) = super::model_key(&launcher.get_tiles(), key, |tile| tile.key.to_string())
-        else {
+        let Some(key) = self.resolve_launcher_key(key) else {
             self.report_message("That application is no longer in the current launcher results.");
             return;
         };
@@ -353,12 +379,4 @@ impl PanelController {
             self.hide_launcher();
         }
     }
-}
-
-fn displayed_keys(launcher: &Launcher) -> Vec<String> {
-    launcher
-        .get_tiles()
-        .iter()
-        .map(|tile| tile.key.to_string())
-        .collect()
 }

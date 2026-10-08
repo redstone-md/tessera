@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, ListView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody } from "popover.slint";
 import { ApplicationIcon, TileButton, FocusTokens } from "tiles.slint";
@@ -11,6 +11,10 @@ export struct LaunchTile {
     label: string,
     icon: image,
     favorite: bool,
+}
+
+export struct LaunchRow {
+    tiles: [LaunchTile],
 }
 
 export enum LauncherNavigation { up, down, left, right }
@@ -29,7 +33,8 @@ export component Launcher inherits Window {
     min-width: 1px;
     min-height: 1px;
 
-    in property <[LaunchTile]> tiles;
+    in property <[LaunchRow]> rows;
+    in property <int> application-count;
     in property <LauncherView> view: LauncherView.favorites;
     in property <bool> saved-favorites-present;
     in property <string> status;
@@ -66,15 +71,15 @@ export component Launcher inherits Window {
     // Nearest-row scrolling includes the shared external outline gutter.
     // Selection stays host-owned; scrolling never changes keyboard focus.
     public function ensure-visible(index: int) {
-        if index >= 0 && index < root.tiles.length {
+        if index >= 0 && index < root.application-count {
             let top = floor(index / root.grid-columns) * (grid-scroll.tile + root.gap);
             let bottom = top + grid-scroll.tile + 2 * FocusTokens.outer-margin;
             let visible-top = -grid-scroll.content-y;
-            let target = top < visible-top ? top :
-                bottom > visible-top + grid-scroll.visible-height ?
-                    bottom - grid-scroll.visible-height : visible-top;
-            grid-scroll.content-y = -clamp(target, 0px,
-                max(0px, grid-scroll.content-height - grid-scroll.visible-height));
+            if top < visible-top || bottom > visible-top + grid-scroll.visible-height {
+                let target = top < visible-top ? top : bottom - grid-scroll.visible-height;
+                grid-scroll.content-y = -clamp(target, 0px,
+                    max(0px, grid-scroll.content-height - grid-scroll.visible-height));
+            }
         }
     }
     property <length> gap: 8px;
@@ -184,103 +189,111 @@ export component Launcher inherits Window {
                     // Return/Space belong to each tile or its favorite control.
                     return reject;
                 }
-            grid-scroll := ScrollView {
+            grid-scroll := ListView {
                 width: parent.width;
                 height: parent.height;
                 vertical-stretch: 1;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
 
-                property <length> tile: (self.visible-width - 2 * FocusTokens.outer-margin
-                    - (root.grid-columns - 1) * root.gap) / root.grid-columns;
-                property <int> rows: ceil(root.tiles.length / root.grid-columns);
+                property <length> tile: max(1px, (self.visible-width - 2 * FocusTokens.outer-margin
+                    - (root.grid-columns - 1) * root.gap) / root.grid-columns);
                 content-width: self.visible-width;
-                content-height: max(self.visible-height, 2 * FocusTokens.outer-margin
-                    + max(0px, self.rows * (self.tile + root.gap) - root.gap));
 
-                for tile[i] in root.tiles: Rectangle {
-                    property <int> column-index: mod(i, root.grid-columns);
-                    property <int> row-index: floor(i / root.grid-columns);
-                    property <length> size: grid-scroll.tile;
-                    x: FocusTokens.outer-margin + self.column-index * (self.size + root.gap);
-                    y: FocusTokens.outer-margin + self.row-index * (self.size + root.gap);
-                    width: self.size;
-                    height: self.size;
+                // Native ListView owns row placement, extent and retention.
+                // The 8px gap reserves both 4px external outline gutters.
+                for row[row-index] in root.rows: Rectangle {
+                    width: grid-scroll.visible-width;
+                    height: grid-scroll.tile + root.gap;
 
-                    TileButton {
-                        width: parent.width;
-                        height: parent.height;
-                        radius: 10px;
-                        filled: false;
-                        enabled: !root.blocked;
-                        selected: tile.key == root.selected-key;
-                        property <bool> keyboard-selected: root.grid-navigation && self.selected;
-                        changed keyboard-selected => {
-                            if self.keyboard-selected { self.focus-for-keyboard(); }
-                        }
-                        focus-acquired => { root.select-requested(tile.key); }
-                        transform-scale: self.pressed ? 0.95 : 1;
-                        background: !self.enabled ? transparent :
-                            (self.selected || self.focus-visible) ? SeelenPalette.accent.with-alpha(0.1) :
-                            self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
-                        accessible-text: "Launch " + tile.label;
-                        clicked => { root.launch-requested(tile.key); }
+                    for tile[column-index] in row.tiles: Rectangle {
+                        property <length> size: grid-scroll.tile;
+                        x: FocusTokens.outer-margin + column-index * (self.size + root.gap);
+                        y: FocusTokens.outer-margin;
+                        width: self.size;
+                        height: self.size;
 
-                        // Clip icon/name content, not the external focus ring.
-                        Rectangle {
+                        TileButton {
                             width: parent.width;
                             height: parent.height;
-                            clip: true;
-                            VerticalLayout {
-                                padding: root.pad;
-                                spacing: root.gap;
-                                ApplicationIcon { source: tile.icon; }
-                                Text {
-                                    text: tile.label;
-                                    color: SeelenPalette.foreground;
-                                    font-size: 12.8px;
-                                    font-weight: 600;
-                                    horizontal-alignment: center;
-                                    wrap: word-wrap;
-                                    height: 35.2px;
-                                    overflow: elide;
+                            radius: 10px;
+                            filled: false;
+                            enabled: !root.blocked;
+                            selected: tile.key == root.selected-key;
+                            property <bool> keyboard-selected: root.grid-navigation && self.selected;
+                            // A virtual row can be created already selected;
+                            // changed callbacks only track subsequent changes.
+                            init => {
+                                if self.keyboard-selected { self.focus-for-keyboard(); }
+                            }
+                            changed keyboard-selected => {
+                                if self.keyboard-selected { self.focus-for-keyboard(); }
+                            }
+                            focus-acquired => { root.select-requested(tile.key); }
+                            transform-scale: self.pressed ? 0.95 : 1;
+                            background: !self.enabled ? transparent :
+                                (self.selected || self.focus-visible) ? SeelenPalette.accent.with-alpha(0.1) :
+                                self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+                            accessible-text: "Launch " + tile.label;
+                            clicked => { root.launch-requested(tile.key); }
+
+                            // Clip icon/name content, not the external focus ring.
+                            Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                clip: true;
+                                VerticalLayout {
+                                    padding: root.pad;
+                                    spacing: root.gap;
+                                    ApplicationIcon { source: tile.icon; }
+                                    Text {
+                                        text: tile.label;
+                                        color: SeelenPalette.foreground;
+                                        font-size: 12.8px;
+                                        font-weight: 600;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                        height: 35.2px;
+                                        overflow: elide;
+                                        accessible-role: none;
+                                    }
+                                }
+                            }
+
+                            // A genuine favorite action using the shared native
+                            // tile's focus, Space release and accessible activation.
+                            TileButton {
+                                width: 16px;
+                                height: 16px;
+                                x: parent.width - self.width;
+                                y: 0px;
+                                radius: 4px;
+                                filled: false;
+                                enabled: !root.blocked;
+                                accessible-role: checkbox;
+                                accessible-checked: tile.favorite;
+                                accessible-text: (tile.favorite ? "Remove from favorites: " :
+                                    "Add to favorites: ") + tile.label;
+                                clicked => {
+                                    root.favorite-toggle-requested(tile.key, !tile.favorite);
+                                }
+
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    x: (parent.width - 8px) / 2;
+                                    y: (parent.height - 8px) / 2;
+                                    border-radius: 4px;
+                                    background: tile.favorite ? SeelenPalette.accent : SeelenPalette.muted;
                                     accessible-role: none;
                                 }
                             }
                         }
-
-                        // A genuine favorite action using the shared native
-                        // tile's focus, Space release and accessible activation.
-                        TileButton {
-                            width: 16px;
-                            height: 16px;
-                            x: parent.width - self.width;
-                            y: 0px;
-                            radius: 4px;
-                            filled: false;
-                            enabled: !root.blocked;
-                            accessible-role: checkbox;
-                            accessible-checked: tile.favorite;
-                            accessible-text: (tile.favorite ? "Remove from favorites: " :
-                                "Add to favorites: ") + tile.label;
-                            clicked => {
-                                root.favorite-toggle-requested(tile.key, !tile.favorite);
-                            }
-
-                            Rectangle {
-                                width: 8px;
-                                height: 8px;
-                                x: (parent.width - 8px) / 2;
-                                y: (parent.height - 8px) / 2;
-                                border-radius: 4px;
-                                background: tile.favorite ? SeelenPalette.accent : SeelenPalette.muted;
-                                accessible-role: none;
-                            }
-                        }
                     }
                 }
+            }
 
-                if root.tiles.length == 0: Text {
+                if root.application-count == 0: Text {
                     x: 0;
                     y: (grid-scroll.visible-height - self.preferred-height) / 2;
                     width: grid-scroll.visible-width;
@@ -294,7 +307,6 @@ export component Launcher inherits Window {
                     wrap: word-wrap;
                     accessible-role: text;
                 }
-            }
             }
             }
 

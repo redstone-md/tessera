@@ -17,8 +17,8 @@ pub(crate) struct RowProjection {
     pub(crate) minimized: bool,
 }
 
-/// One launcher row: cleaned application name plus the opaque launch key,
-/// whether the key is currently pinned, and the icon pixels to render.
+/// Application metadata: cleaned name plus the opaque launch key, whether the
+/// key is currently pinned, and retained icon pixels (not presentation images).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AppProjection {
     pub(crate) key: String,
@@ -27,7 +27,7 @@ pub(crate) struct AppProjection {
     pub(crate) icon: Option<crate::PixelIcon>,
 }
 
-/// Maximum number of application rows shown at once.
+/// Maximum number of application rows shown by the eager recovery panel.
 pub(crate) const MAX_APPS: usize = 64;
 
 /// What the panel renders for a snapshot under the current search filter.
@@ -92,29 +92,46 @@ fn project_row(window: &PanelWindow) -> RowProjection {
     }
 }
 
-/// Projects the capped catalog into launcher rows, filtered case-insensitively
-/// over **raw** names (empty search matches everything). Display labels are
-/// sanitized here; search never sees the sanitized form, and keys are copied
-/// verbatim — never re-derived from truncated labels.
+/// Projects at most [`MAX_APPS`] applications for the eager recovery panel.
+/// Matching and metadata are identical to the complete launcher projection.
 pub(crate) fn project_apps(
     applications: &[PanelApplication],
     pins: &[String],
     search: &str,
 ) -> Vec<AppProjection> {
+    projected_apps(applications, pins, search)
+        .take(MAX_APPS)
+        .collect()
+}
+
+/// Projects the complete retained catalog in catalog order, filtered
+/// case-insensitively over **raw** names (empty search matches everything).
+/// Labels are sanitized; opaque keys are copied verbatim, never re-derived.
+pub(crate) fn project_launcher_apps(
+    applications: &[PanelApplication],
+    pins: &[String],
+    search: &str,
+) -> Vec<AppProjection> {
+    projected_apps(applications, pins, search).collect()
+}
+
+fn projected_apps<'a>(
+    applications: &'a [PanelApplication],
+    pins: &'a [String],
+    search: &str,
+) -> impl Iterator<Item = AppProjection> + 'a {
     let needle = search.trim().to_lowercase();
     applications
         .iter()
-        .filter(|application| {
+        .filter(move |application| {
             needle.is_empty() || application.title().to_lowercase().contains(&needle)
         })
-        .take(MAX_APPS)
-        .map(|application| project_app(application, pins))
-        .collect()
+        .map(move |application| project_app(application, pins))
 }
 
 /// Resolves exact favorite identities against the full trusted catalog, in
 /// preference order. Unavailable identities produce no synthetic launch rows;
-/// the display cap applies only after resolution. Favorites have no query.
+/// every resolved favorite is included. Favorites have no query.
 pub(crate) fn project_favorite_apps(
     applications: &[PanelApplication],
     favorites: &[String],
@@ -123,7 +140,6 @@ pub(crate) fn project_favorite_apps(
     favorites
         .iter()
         .filter_map(|favorite| applications.iter().find(|app| app.key() == favorite))
-        .take(MAX_APPS)
         .map(|application| project_app(application, pins))
         .collect()
 }
@@ -178,6 +194,53 @@ mod tests {
     }
 
     #[test]
+    fn launcher_projects_complete_catalog_order_and_preserves_metadata() {
+        let icon = PixelIcon::new(1, 1, vec![1, 2, 3, 255]).unwrap();
+        let mut catalog: Vec<_> = (0..1024)
+            .map(|index| app(&format!("opaque:{index}"), &format!("App {index}")))
+            .collect();
+        catalog[1023] = PanelApplication::new(
+            "Exact:Tail/身份".into(),
+            "  Tail \u{202e}App  ".into(),
+            Some(icon.clone()),
+        )
+        .unwrap();
+        let rows = project_launcher_apps(&catalog, &["Exact:Tail/身份".into()], "");
+        assert_eq!(rows.len(), catalog.len());
+        assert_eq!(
+            rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>(),
+            catalog
+                .iter()
+                .map(PanelApplication::key)
+                .collect::<Vec<_>>()
+        );
+        let tail = rows.last().unwrap();
+        assert_eq!(tail.key, "Exact:Tail/身份");
+        assert_eq!(tail.label, "Tail App");
+        assert!(tail.pinned);
+        assert_eq!(tail.icon.as_ref(), Some(&icon));
+        assert_eq!(project_apps(&catalog, &[], "").len(), MAX_APPS);
+    }
+
+    #[test]
+    fn launcher_search_includes_every_raw_title_match_beyond_the_recovery_cap() {
+        let mut catalog: Vec<_> = (0..MAX_APPS)
+            .map(|index| app(&format!("earlier:{index}"), "Unrelated"))
+            .collect();
+        let raw_title = format!("{}\u{202e}TailMatch", "x".repeat(140));
+        catalog.extend((0..80).map(|index| app(&format!("match:{index}"), &raw_title)));
+        let rows = project_launcher_apps(&catalog, &[], " TAILMATCH ");
+        assert_eq!(rows.len(), 80);
+        assert_eq!(rows.first().unwrap().key, "match:0");
+        assert_eq!(rows.last().unwrap().key, "match:79");
+        let expected_label = format!("{}…", "x".repeat(128));
+        assert!(rows.iter().all(|row| row.label == expected_label));
+        assert!(project_launcher_apps(&catalog, &[], "no match").is_empty());
+        let recovery = project_apps(&catalog, &[], "tailmatch");
+        assert_eq!(recovery, rows[..MAX_APPS]);
+    }
+
+    #[test]
     fn favorites_resolve_full_catalog_in_saved_order_and_report_only_dock_pins() {
         let mut catalog: Vec<_> = (0..80)
             .map(|index| app(&format!("k{index}"), &format!("App {index}")))
@@ -200,16 +263,22 @@ mod tests {
     }
 
     #[test]
-    fn favorite_cap_follows_resolution_without_losing_preference_tail() {
+    fn favorites_resolve_complete_preference_tail_without_mutating_saved_keys() {
         let catalog: Vec<_> = (0..80)
             .map(|index| app(&format!("k{index}"), &format!("App {index}")))
             .collect();
         let mut favorites: Vec<_> = (0..70).map(|index| format!("missing-{index}")).collect();
         favorites.extend((0..80).rev().map(|index| format!("k{index}")));
         let rows = project_favorite_apps(&catalog, &favorites, &[]);
-        assert_eq!(rows.len(), MAX_APPS);
-        assert_eq!(rows[0].key, "k79");
-        assert_eq!(rows[MAX_APPS - 1].key, "k16");
+        assert_eq!(rows.len(), catalog.len());
+        assert_eq!(
+            rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>(),
+            catalog
+                .iter()
+                .rev()
+                .map(PanelApplication::key)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(favorites.len(), 150);
         assert_eq!(favorites.last().unwrap(), "k0");
     }

@@ -15,19 +15,21 @@
 //! (Slint allows one platform per thread) and instantiates exactly one live
 //! component on it.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, Model, ModelRc, Rgb8Pixel, VecModel};
+use slint::{ComponentHandle, ModelRc, Rgb8Pixel, VecModel};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
-    LaunchTile, Launcher, LauncherNavigation, LauncherView, Toolbar, TooltipSurface,
+    LaunchRow, LaunchTile, Launcher, LauncherNavigation, LauncherView, Toolbar, TooltipSurface,
 };
+use crate::icons::IconCache;
+use crate::launcher::{LauncherInventory, LauncherRows, LauncherSelection, Navigation};
 use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientComponent;
 
@@ -99,6 +101,276 @@ fn app(key: &str, label: &str) -> LaunchTile {
         label: label.into(),
         icon: slint::Image::default(),
         favorite: false,
+    }
+}
+
+/// Short row fixtures preserve native ListView layout without changing the
+/// existing standalone tests into image-cache/model tests.
+fn set_launcher_tiles(launcher: &Launcher, tiles: Vec<LaunchTile>) {
+    launcher.set_application_count(tiles.len() as i32);
+    let columns = launcher.get_grid_columns() as usize;
+    let rows = tiles
+        .chunks(columns)
+        .map(|tiles| LaunchRow {
+            tiles: ModelRc::new(VecModel::from(tiles.to_vec())),
+        })
+        .collect::<Vec<_>>();
+    launcher.set_rows(ModelRc::new(VecModel::from(rows)));
+}
+
+fn native_key(window: &MinimalSoftwareWindow, text: slint::SharedString) {
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyReleased { text });
+}
+
+fn native_click(window: &MinimalSoftwareWindow, element: &ElementHandle) {
+    let position = element.absolute_position();
+    let size = element.size();
+    let center = slint::LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    );
+    window.window().dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+}
+
+fn launch_elements(launcher: &Launcher) -> Vec<ElementHandle> {
+    ElementQuery::from_root(launcher)
+        .match_predicate(|element| {
+            element
+                .accessible_label()
+                .is_some_and(|label| label.starts_with("Launch Inventory "))
+        })
+        .find_all()
+}
+
+fn favorite_elements(launcher: &Launcher) -> Vec<ElementHandle> {
+    ElementQuery::from_root(launcher)
+        .match_predicate(|element| {
+            element.accessible_label().is_some_and(|label| {
+                label.starts_with("Add to favorites: Inventory ")
+                    || label.starts_with("Remove from favorites: Inventory ")
+            })
+        })
+        .find_all()
+}
+
+/// Public element queries omit viewport-clipped items. A launch square can
+/// still intersect the viewport after its 16px favorite corner is clipped.
+/// Match the exact expected corner identities, not a row-alignment count.
+fn assert_favorite_viewport_visibility(launcher: &Launcher) -> usize {
+    let viewport = ElementHandle::find_by_element_id(launcher, "ScrollView::flickable")
+        .next()
+        .expect("the native list has its pinned ScrollView viewport");
+    let origin = viewport.absolute_position();
+    let size = viewport.size();
+    let expected = launch_elements(launcher)
+        .iter()
+        .filter(|tile| {
+            let position = tile.absolute_position();
+            let tile_size = tile.size();
+            let corner_x = position.x + tile_size.width - 16.0;
+            let corner_y = position.y;
+            // Slint 1.18.1 ItemRc::is_visible includes touching boundaries.
+            corner_x <= origin.x + size.width
+                && corner_x + 16.0 >= origin.x
+                && corner_y <= origin.y + size.height
+                && corner_y + 16.0 >= origin.y
+        })
+        .map(inventory_index)
+        .collect::<std::collections::BTreeSet<_>>();
+    let favorites = favorite_elements(launcher);
+    let actual = favorites
+        .iter()
+        .map(|favorite| {
+            let label = favorite.accessible_label().unwrap();
+            label
+                .strip_prefix("Add to favorites: Inventory ")
+                .or_else(|| label.strip_prefix("Remove from favorites: Inventory "))
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        actual.len(),
+        favorites.len(),
+        "each exposed native favorite has one exact application identity"
+    );
+    assert_eq!(
+        actual, expected,
+        "queried favorite identities must exactly match the native 16px corner/viewport intersections"
+    );
+    favorites.len()
+}
+
+fn inventory_index(element: &ElementHandle) -> usize {
+    element
+        .accessible_label()
+        .unwrap()
+        .strip_prefix("Launch Inventory ")
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+fn inventory_tile(launcher: &Launcher, index: usize) -> ElementHandle {
+    ElementHandle::find_by_accessible_label(launcher, &format!("Launch Inventory {index}"))
+        .next()
+        .unwrap_or_else(|| panic!("inventory tile {index} must be exposed in the native viewport"))
+}
+
+fn inventory_key(index: usize) -> String {
+    format!("opaque::{index:04}::retained/launch")
+}
+
+/// The actual immutable row adapter and bounded production cache are under
+/// test. Only the host's selection/callback seam is supplied by this fixture.
+struct NativeLauncherInventory {
+    launcher: Launcher,
+    inventory: Rc<LauncherInventory>,
+    converted: Rc<RefCell<std::collections::BTreeSet<usize>>>,
+    launches: Rc<RefCell<Vec<String>>>,
+    favorites: Rc<RefCell<Vec<(String, bool)>>>,
+}
+
+impl NativeLauncherInventory {
+    fn new(count: usize) -> Self {
+        let launcher = Launcher::new().unwrap();
+        let applications = (0..count)
+            .map(|index| crate::projection::AppProjection {
+                key: inventory_key(index),
+                label: format!("Inventory {index}"),
+                pinned: false,
+                icon: Some(
+                    crate::PixelIcon::new(1, 1, vec![index as u8, (index >> 8) as u8, 180, 255])
+                        .unwrap(),
+                ),
+            })
+            .collect();
+        let inventory = Rc::new(LauncherInventory::new(applications));
+        let converted = Rc::new(RefCell::new(std::collections::BTreeSet::new()));
+        let visits = converted.clone();
+        let cache = Rc::new(RefCell::new(IconCache::default()));
+        let rows = LauncherRows::new(
+            inventory.clone(),
+            vec![inventory_key(count.saturating_sub(1))],
+            launcher.get_grid_columns() as usize,
+            move |icon| {
+                let icon = icon.expect("every inventory fixture has unique native pixels");
+                let bytes = icon.rgba();
+                visits
+                    .borrow_mut()
+                    .insert(usize::from(bytes[0]) | (usize::from(bytes[1]) << 8));
+                cache.borrow_mut().image(icon)
+            },
+        );
+        launcher.set_view(LauncherView::All);
+        launcher.set_application_count(inventory.len() as i32);
+        launcher.set_rows(ModelRc::new(rows));
+
+        let selection = Rc::new(RefCell::new(LauncherSelection::default()));
+        let weak = launcher.as_weak();
+        let state = selection.clone();
+        let current = inventory.clone();
+        launcher.on_select_requested(move |key| {
+            let launcher = weak.upgrade().unwrap();
+            Self::update_selection(&launcher, &state, |state| {
+                state.select(current.keys(), &key)
+            });
+        });
+        let weak = launcher.as_weak();
+        let state = selection.clone();
+        let current = inventory.clone();
+        launcher.on_navigate_requested(move |direction| {
+            let launcher = weak.upgrade().unwrap();
+            let direction = match direction {
+                LauncherNavigation::Up => Navigation::Up,
+                LauncherNavigation::Down => Navigation::Down,
+                LauncherNavigation::Left => Navigation::Left,
+                LauncherNavigation::Right => Navigation::Right,
+            };
+            Self::update_selection(&launcher, &state, |state| {
+                state.navigate(
+                    current.keys(),
+                    direction,
+                    launcher.get_grid_columns() as usize,
+                )
+            });
+        });
+        let weak = launcher.as_weak();
+        let state = selection.clone();
+        let current = inventory.clone();
+        launcher.on_search_changed(move || {
+            let launcher = weak.upgrade().unwrap();
+            Self::update_selection(&launcher, &state, |state| {
+                state.search_changed(current.keys(), !launcher.get_search().is_empty())
+            });
+        });
+        let launches = Rc::new(RefCell::new(Vec::new()));
+        let log = launches.clone();
+        let current = inventory.clone();
+        launcher.on_launch_requested(move |key| {
+            assert!(current.keys().iter().any(|current| current == key.as_str()));
+            log.borrow_mut().push(key.to_string());
+        });
+        let weak = launcher.as_weak();
+        let log = launches.clone();
+        let current = inventory.clone();
+        launcher.on_activate_selected_requested(move || {
+            let key = weak.upgrade().unwrap().get_selected_key().to_string();
+            assert!(current.keys().contains(&key));
+            log.borrow_mut().push(key);
+        });
+        let favorites = Rc::new(RefCell::new(Vec::new()));
+        let log = favorites.clone();
+        launcher.on_favorite_toggle_requested(move |key, desired| {
+            log.borrow_mut().push((key.to_string(), desired));
+        });
+        Self {
+            launcher,
+            inventory,
+            converted,
+            launches,
+            favorites,
+        }
+    }
+
+    fn update_selection(
+        launcher: &Launcher,
+        state: &RefCell<LauncherSelection>,
+        update: impl FnOnce(&mut LauncherSelection) -> Option<usize>,
+    ) {
+        let (key, index) = {
+            let mut state = state.borrow_mut();
+            let index = update(&mut state);
+            (state.key().unwrap_or_default().to_owned(), index)
+        };
+        launcher.set_selected_key(key.into());
+        if let Some(index) = index {
+            launcher.invoke_ensure_visible(index as i32);
+        }
+    }
+
+    fn show(&self, window: &MinimalSoftwareWindow, width: u32, height: u32) {
+        self.launcher.show().unwrap();
+        window
+            .window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        window.set_size(slint::PhysicalSize::new(width, height));
+        self.launcher.invoke_focus_search();
     }
 }
 
@@ -682,10 +954,13 @@ fn toolbar_renders_identity_and_settings_access() {
 fn launcher_renders_grid_search_and_escape_hides() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
-    launcher.set_tiles(ModelRc::new(VecModel::from(vec![
-        app("app-editor", "Rust Editor"),
-        app("app-browser", "Web Browser"),
-    ])));
+    set_launcher_tiles(
+        &launcher,
+        vec![
+            app("app-editor", "Rust Editor"),
+            app("app-browser", "Web Browser"),
+        ],
+    );
     let launched = Rc::new(Cell::new(0));
     let counter = launched.clone();
     launcher.on_launch_requested(move |_| counter.set(counter.get() + 1));
@@ -785,7 +1060,7 @@ fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus()
         launcher.set_selected_key("".into());
         let mut editor = app("editor", "Editor");
         editor.favorite = true;
-        launcher.set_tiles(ModelRc::new(VecModel::from(vec![editor.clone()])));
+        set_launcher_tiles(&launcher, vec![editor.clone()]);
         launcher.set_saved_favorites_present(true);
         launcher.invoke_reset_scroll();
         launcher.invoke_focus_search();
@@ -816,11 +1091,12 @@ fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus()
 
         // The parent accepts the requested view and supplies its real data.
         launcher.set_view(LauncherView::All);
-        launcher.set_tiles(ModelRc::new(VecModel::from(
+        set_launcher_tiles(
+            &launcher,
             (0..23)
                 .map(|i| app(&format!("app-{i}"), &format!("App {i}")))
-                .collect::<Vec<_>>(),
-        )));
+                .collect(),
+        );
         launcher.invoke_reset_scroll();
         launcher.invoke_focus_search();
         let _ = draw(&window, width, height);
@@ -843,20 +1119,51 @@ fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus()
             .next()
             .unwrap();
         let initial_position = first.absolute_position();
-        click(&first);
+        // Offscreen delegates may be destroyed; never use their handles to
+        // infer viewport motion or focus preservation.
         launcher.invoke_ensure_visible(22);
         let _ = draw(&window, width, height);
+        let last = ElementHandle::find_by_accessible_label(&launcher, "Launch App 22")
+            .next()
+            .unwrap();
+        assert!(last.absolute_position().y > initial_position.y);
         assert!(
-            first.absolute_position().y < initial_position.y,
-            "ensure-visible scrolls the real grid"
+            ElementHandle::find_by_accessible_label(&launcher, "Launch App 0")
+                .next()
+                .is_none(),
+            "ensure-visible moves the first row out of the real viewport"
         );
         launcher.invoke_reset_scroll();
         let _ = draw(&window, width, height);
+        let first = ElementHandle::find_by_accessible_label(&launcher, "Launch App 0")
+            .next()
+            .unwrap();
         assert_eq!(
             first.absolute_position(),
             initial_position,
             "reset-scroll returns the native viewport to its top"
         );
+        click(&first);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(
+                    initial_position.x + first.size().width / 2.0,
+                    initial_position.y + first.size().height / 2.0,
+                ),
+                delta_x: 0.0,
+                delta_y: -8.0,
+            });
+        let _ = draw(&window, width, height);
+        assert!(
+            first.is_valid(),
+            "a small scroll retains the genuinely focused row"
+        );
+        assert!(
+            (first.absolute_position().y - initial_position.y + 8.0).abs() < 0.01,
+            "the focus-preservation check starts from a nonzero native scroll offset"
+        );
+        launcher.invoke_reset_scroll();
         key(Key::Space.into());
         assert_eq!(
             launches.borrow().as_slice(),
@@ -878,7 +1185,7 @@ fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus()
             "Back is also host-accepted"
         );
         launcher.set_view(LauncherView::Favorites);
-        launcher.set_tiles(ModelRc::new(VecModel::from(vec![editor])));
+        set_launcher_tiles(&launcher, vec![editor]);
         launcher.set_selected_key("".into());
         launcher.set_search("".into());
         launcher.invoke_reset_scroll();
@@ -984,6 +1291,455 @@ fn launcher_empty_unavailable_and_no_match_states_are_distinct_and_keep_recovery
 }
 
 #[test]
+fn launcher_native_list_boundary_arrow_return_and_space_target_exact_new_keys_without_draw() {
+    let window = software_window();
+    let fixture = NativeLauncherInventory::new(1024);
+    assert!(
+        fixture.converted.borrow().is_empty(),
+        "constructing the logical inventory does not produce Slint images"
+    );
+    fixture.show(&window, 560, 300);
+    let _ = draw(&window, 560, 300);
+    let initially_visible = launch_elements(&fixture.launcher);
+    let last_visible_index = initially_visible.iter().map(inventory_index).max().unwrap();
+    let last_converted_index = *fixture.converted.borrow().last().unwrap();
+    let first_offscreen_row = last_visible_index.max(last_converted_index) / 7 + 1;
+    let boundary_index = first_offscreen_row * 7;
+    assert!(boundary_index < 64);
+    assert!(
+        !fixture.converted.borrow().contains(&boundary_index),
+        "the boundary target is not an eagerly converted native row"
+    );
+    assert!(
+        ElementHandle::find_by_accessible_label(
+            &fixture.launcher,
+            &format!("Launch Inventory {boundary_index}"),
+        )
+        .next()
+        .is_none(),
+        "the unconverted target is also absent from the initial visible native controls"
+    );
+    native_key(&window, Key::Tab.into()); // Genuine header control.
+    native_key(&window, Key::Tab.into()); // Genuine first application tile.
+    assert_eq!(fixture.launcher.get_selected_key(), inventory_key(0));
+
+    // No draw, event-loop pump, getter, accessible query, or callback
+    // invocation between these native arrows and the immediate Return.
+    for _ in 0..first_offscreen_row {
+        native_key(&window, Key::DownArrow.into());
+    }
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        fixture.launches.borrow().as_slice(),
+        &[inventory_key(boundary_index)],
+        "crossing a lazy native row boundary launches the new opaque key once"
+    );
+    assert!(fixture.converted.borrow().contains(&boundary_index));
+
+    for _ in 0..first_offscreen_row {
+        native_key(&window, Key::UpArrow.into());
+    }
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        fixture.launches.borrow().as_slice(),
+        &[inventory_key(boundary_index), inventory_key(0)],
+        "upward materialization restores actual tile focus without a draw"
+    );
+    for _ in 0..20 {
+        native_key(&window, Key::DownArrow.into());
+    }
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        fixture.launches.borrow().as_slice(),
+        &[
+            inventory_key(boundary_index),
+            inventory_key(0),
+            inventory_key(140)
+        ],
+        "rapid arrows reach the full retained tail beyond the former UI cap"
+    );
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Space.into(),
+    });
+    for _ in 0..3 {
+        native_key(&window, Key::DownArrow.into());
+    }
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Space.into(),
+    });
+    assert_eq!(fixture.launcher.get_selected_key(), inventory_key(161));
+    assert_eq!(
+        fixture.launches.borrow().len(),
+        3,
+        "evicting an armed Space tile launches neither its old key nor its replacement"
+    );
+    native_key(&window, Key::Tab.into()); // Current tile's own favorite.
+    native_key(&window, Key::Return.into());
+    native_key(&window, Key::Space.into());
+    assert_eq!(
+        fixture.favorites.borrow().as_slice(),
+        &[(inventory_key(161), true), (inventory_key(161), true)],
+        "real Tab reaches the newly materialized favorite and keeps activation isolated"
+    );
+    assert_eq!(fixture.launches.borrow().len(), 3);
+    native_key(&window, Key::Tab.into()); // Next currently instantiated tile.
+    native_key(&window, Key::Return.into());
+    assert_eq!(fixture.launches.borrow().last(), Some(&inventory_key(162)));
+    assert_eq!(fixture.launches.borrow().len(), 4);
+    assert!(
+        !fixture.converted.borrow().contains(&1023),
+        "logical selection/authorization never walks the unvisited image tail"
+    );
+}
+
+#[test]
+fn launcher_native_rows_bound_delegates_and_lazy_images_across_large_seeks() {
+    let window = software_window();
+    let small_counts = {
+        let fixture = NativeLauncherInventory::new(70);
+        fixture.show(&window, 560, 300);
+        let _ = draw(&window, 560, 300);
+        let counts = (
+            launch_elements(&fixture.launcher).len(),
+            assert_favorite_viewport_visibility(&fixture.launcher),
+        );
+        assert!(counts.0 > 0 && counts.0 < 70);
+        assert_eq!(counts.0, counts.1);
+        counts
+    };
+    let fixture = NativeLauncherInventory::new(1024);
+    fixture.show(&window, 560, 300);
+    let _ = draw(&window, 560, 300);
+    assert_eq!(fixture.inventory.len(), 1024);
+    assert_eq!(
+        (
+            launch_elements(&fixture.launcher).len(),
+            assert_favorite_viewport_visibility(&fixture.launcher),
+        ),
+        small_counts,
+        "identical native geometry exposes identical controls, not catalog-sized visible UI"
+    );
+    let mut previous = launch_elements(&fixture.launcher);
+    let initial_converted = fixture.converted.borrow().len();
+    assert!(initial_converted < 64);
+    assert!(!fixture.converted.borrow().contains(&1023));
+    for target in [511, 1023, 126, 768, 0] {
+        fixture.launcher.invoke_ensure_visible(target);
+        let _ = draw(&window, 560, 300);
+        let tile = inventory_tile(&fixture.launcher, target as usize);
+        assert!(tile.size().height > 0.0);
+        assert!(
+            previous.iter().all(|element| !element.is_valid()),
+            "native row eviction destroys former delegates, not merely their accessibility exposure"
+        );
+        let current = launch_elements(&fixture.launcher);
+        assert!(
+            current.len() <= small_counts.0 + 7,
+            "only one partially intersecting native row may differ at another scroll offset"
+        );
+        assert_favorite_viewport_visibility(&fixture.launcher);
+        assert!(fixture.converted.borrow().contains(&(target as usize)));
+        previous = current;
+    }
+    assert!(fixture.converted.borrow().len() > initial_converted);
+    assert!(
+        fixture.converted.borrow().len() < 256,
+        "isolated seeks do not eagerly convert the skipped native inventory"
+    );
+    // Visit more unique icons than the real cache capacity, while proving
+    // exposed native controls stay bounded after earlier delegates died.
+    for target in (0..1024).step_by(35).skip(1) {
+        fixture.launcher.invoke_ensure_visible(target);
+        let _ = draw(&window, 560, 300);
+        assert!(launch_elements(&fixture.launcher).len() <= small_counts.0 + 7);
+        assert!(assert_favorite_viewport_visibility(&fixture.launcher) <= small_counts.1 + 7);
+    }
+    assert!(fixture.converted.borrow().len() > 256);
+    fixture.launcher.invoke_reset_scroll();
+    let _ = draw(&window, 560, 300);
+    assert_eq!(
+        (
+            launch_elements(&fixture.launcher).len(),
+            assert_favorite_viewport_visibility(&fixture.launcher),
+        ),
+        small_counts,
+        "returning after cache eviction restores the same bounded visible controls"
+    );
+    assert_eq!(
+        inventory_tile(&fixture.launcher, 0).absolute_position().x,
+        26.0
+    );
+}
+
+#[test]
+fn launcher_native_wheel_scrollbar_partial_tail_outlines_and_resize_preserve_geometry() {
+    let window = software_window();
+    let fixture = NativeLauncherInventory::new(1024);
+    fixture.show(&window, 560, 300);
+    for scheme in [
+        slint::language::ColorScheme::Light,
+        slint::language::ColorScheme::Dark,
+    ] {
+        fixture
+            .launcher
+            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+        for scale in [1.0_f32, 2.0] {
+            window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            for (logical_width, logical_height) in [(560.0, 300.0), (640.0, 420.0)] {
+                let width = (logical_width * scale) as u32;
+                let height = (logical_height * scale) as u32;
+                window.set_size(slint::PhysicalSize::new(width, height));
+                fixture.launcher.invoke_reset_scroll();
+                fixture.launcher.invoke_focus_search();
+                let _ = draw(&window, width, height);
+                let grid =
+                    ElementHandle::find_by_element_id(&fixture.launcher, "Launcher::grid-scroll")
+                        .next()
+                        .unwrap();
+                let grid_position = grid.absolute_position();
+                let grid_size = grid.size();
+                let wheel_position = slint::LogicalPosition::new(
+                    grid_position.x + grid_size.width / 2.0,
+                    grid_position.y + grid_size.height / 2.0,
+                );
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerScrolled {
+                        position: wheel_position,
+                        delta_x: 0.0,
+                        delta_y: -100_000.0,
+                    });
+                let _ = draw(&window, width, height);
+                let tail = inventory_tile(&fixture.launcher, 1023);
+                let last_position = tail.absolute_position();
+                let last_size = tail.size();
+                assert!(last_size.height > 0.0);
+                assert!((last_size.width - last_size.height).abs() < 0.01);
+                assert!(
+                    (last_position.y + last_size.height + 4.0
+                        - (grid_position.y + grid_size.height))
+                        .abs()
+                        < 0.05,
+                    "native wheel reaches the real final row with exactly its outline gutter, not a fake page gap"
+                );
+                let first_partial = inventory_tile(&fixture.launcher, 1022);
+                assert!((first_partial.absolute_position().y - last_position.y).abs() < 0.01);
+                assert!(
+                    (last_position.x - first_partial.absolute_position().x - last_size.width - 8.0)
+                        .abs()
+                        < 0.01
+                );
+                let partial_count = launch_elements(&fixture.launcher)
+                    .iter()
+                    .filter(|element| inventory_index(element) >= 1022)
+                    .count();
+                assert_eq!(
+                    partial_count, 2,
+                    "the incomplete tail has no invented cells"
+                );
+                let favorite = ElementHandle::find_by_accessible_label(
+                    &fixture.launcher,
+                    "Remove from favorites: Inventory 1023",
+                )
+                .next()
+                .unwrap();
+                assert_eq!(favorite.accessible_checked(), Some(true));
+                assert!(favorite.absolute_position().y >= grid_position.y);
+                let footer = ElementHandle::find_by_accessible_label(
+                    &fixture.launcher,
+                    "Open settings and recovery",
+                )
+                .next()
+                .unwrap();
+                assert!(last_position.y + last_size.height + 4.0 < footer.absolute_position().y);
+
+                // The last complete row exercises both outer columns at
+                // the real native end-of-inventory scroll position.
+                for index in [1015, 1021] {
+                    let tile = inventory_tile(&fixture.launcher, index);
+                    let position = tile.absolute_position();
+                    let size = tile.size();
+                    assert_eq!(size, last_size);
+                    let edge = if index == 1015 {
+                        position.x
+                    } else {
+                        position.x + size.width
+                    };
+                    assert!(
+                        (edge
+                            - if index == 1015 {
+                                26.0
+                            } else {
+                                logical_width - 26.0
+                            })
+                        .abs()
+                            < 0.01
+                    );
+                    native_click(&window, &tile);
+                    let pixels = draw(&window, width, height);
+                    let outside = edge + if index == 1015 { -2.5 } else { 2.5 };
+                    let ring = ((position.y + size.height / 2.0) * scale) as usize * width as usize
+                        + (outside * scale) as usize;
+                    let accent = fixture
+                        .launcher
+                        .global::<crate::generated::SeelenPalette>()
+                        .get_accent()
+                        .color()
+                        .to_argb_u8();
+                    assert_eq!(
+                        pixels[ring],
+                        Rgb8Pixel {
+                            r: accent.red,
+                            g: accent.green,
+                            b: accent.blue
+                        },
+                        "the full tail row's external column outline renders unclipped ({scheme:?}, {scale}x)"
+                    );
+                    assert_eq!(
+                        inventory_tile(&fixture.launcher, index).absolute_position(),
+                        position
+                    );
+                    assert_eq!(inventory_tile(&fixture.launcher, index).size(), size);
+                }
+                let before = inventory_tile(&fixture.launcher, 1023).absolute_position();
+                fixture.launcher.invoke_ensure_visible(1023);
+                fixture.launcher.invoke_ensure_visible(-1);
+                fixture.launcher.invoke_ensure_visible(1024);
+                assert_eq!(
+                    inventory_tile(&fixture.launcher, 1023).absolute_position(),
+                    before,
+                    "visible and invalid full-inventory indices do not move the viewport"
+                );
+
+                // Exercise the actual pinned native scrollbar independently
+                // of ensure-visible and wheel scrolling.
+                fixture.launcher.invoke_reset_scroll();
+                let _ = draw(&window, width, height);
+                let bar = ElementHandle::find_by_element_type_name(&fixture.launcher, "ScrollBar")
+                    .find(|element| element.size().height > element.size().width)
+                    .expect("the pinned native vertical scrollbar must exist");
+                let thumb =
+                    ElementHandle::find_by_element_id(&fixture.launcher, "ScrollBar::thumb")
+                        .find(|element| element.size().height > element.size().width)
+                        .unwrap();
+                let bar_position = bar.absolute_position();
+                let bar_size = bar.size();
+                let thumb_position = thumb.absolute_position();
+                let thumb_size = thumb.size();
+                let start = slint::LogicalPosition::new(
+                    bar_position.x + bar_size.width / 2.0,
+                    thumb_position.y + thumb_size.height / 2.0,
+                );
+                let end = slint::LogicalPosition::new(
+                    start.x,
+                    bar_position.y + bar_size.height - 16.0 - thumb_size.height / 2.0,
+                );
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: start });
+                window.window().dispatch_event(WindowEvent::PointerPressed {
+                    position: start,
+                    button: PointerEventButton::Left,
+                });
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: end });
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerReleased {
+                        position: end,
+                        button: PointerEventButton::Left,
+                    });
+                let _ = draw(&window, width, height);
+                assert!(
+                    (inventory_tile(&fixture.launcher, 1023)
+                        .absolute_position()
+                        .y
+                        - last_position.y)
+                        .abs()
+                        < 0.05,
+                    "dragging the real scrollbar reaches the same genuine final partial row"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn launcher_native_final_partial_row_keys_tab_footer_and_narrow_rows_remain_real() {
+    let window = software_window();
+    let fixture = NativeLauncherInventory::new(1024);
+    fixture.show(&window, 560, 300);
+    let _ = draw(&window, 560, 300);
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Tab.into());
+    // Reach the complete retained inventory through native grid input, not
+    // a synthetic callback or an eagerly traversed image-bearing model.
+    for _ in 0..146 {
+        native_key(&window, Key::DownArrow.into());
+    }
+    native_key(&window, Key::RightArrow.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(fixture.launches.borrow().as_slice(), &[inventory_key(1023)]);
+    native_key(&window, Key::RightArrow.into());
+    native_key(&window, Key::DownArrow.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        fixture.launches.borrow().as_slice(),
+        &[inventory_key(1023), inventory_key(1023)],
+        "the incomplete final row neither wraps nor invents an inaccessible next application"
+    );
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Space.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        fixture.favorites.borrow().as_slice(),
+        &[(inventory_key(1023), false), (inventory_key(1023), false)],
+        "the actual last favorite remains keyboard-accessible and requests removal only"
+    );
+    let settings = Rc::new(Cell::new(0));
+    let requests = settings.clone();
+    fixture.launcher.on_open_settings_requested(move || {
+        requests.set(requests.get() + 1);
+    });
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        settings.get(),
+        1,
+        "native Tab after the real final favorite reaches recovery, not a fabricated next cell"
+    );
+    assert_eq!(fixture.launches.borrow().len(), 2);
+    assert_eq!(fixture.favorites.borrow().len(), 2);
+    for width in [128, 96, 560] {
+        fixture.launcher.invoke_focus_search();
+        fixture.launcher.invoke_reset_scroll();
+        window.set_size(slint::PhysicalSize::new(width, 300));
+        let _ = draw(&window, width, 300);
+        let first = inventory_tile(&fixture.launcher, 0);
+        let next_row = inventory_tile(&fixture.launcher, 7);
+        assert!(first.size().width > 0.0 && first.size().height > 0.0);
+        assert!((first.size().width - first.size().height).abs() < 0.01);
+        assert!(
+            (next_row.absolute_position().y
+                - first.absolute_position().y
+                - first.size().height
+                - 8.0)
+                .abs()
+                < 0.01,
+            "narrow and restored layouts retain uniform positive native row pitch"
+        );
+        fixture.launcher.invoke_ensure_visible(1023);
+        let _ = draw(&window, width, 300);
+        assert!(inventory_tile(&fixture.launcher, 1023).size().height > 0.0);
+    }
+}
+
+#[test]
 fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
     use std::cell::RefCell;
 
@@ -994,16 +1750,12 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
     fn update_selection(
         launcher: &Launcher,
         state: &RefCell<LauncherSelection>,
+        keys: &[String],
         update: impl FnOnce(&mut LauncherSelection, &[String]) -> Option<usize>,
     ) {
-        let keys = launcher
-            .get_tiles()
-            .iter()
-            .map(|tile| tile.key.to_string())
-            .collect::<Vec<_>>();
         let (key, index) = {
             let mut state = state.borrow_mut();
-            let index = update(&mut state, &keys);
+            let index = update(&mut state, keys);
             (state.key().unwrap_or_default().to_owned(), index)
         };
         launcher.set_selected_key(key.into());
@@ -1014,25 +1766,34 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
 
     let window = software_window();
     let launcher = Launcher::new().unwrap();
-    launcher.set_tiles(ModelRc::new(VecModel::from(
+    set_launcher_tiles(
+        &launcher,
         (0..23)
             .map(|i| app(&format!("app-{i}"), &format!("App {i}")))
-            .collect::<Vec<_>>(),
-    )));
+            .collect(),
+    );
+    let keys = Rc::new(RefCell::new(
+        (0..23).map(|i| format!("app-{i}")).collect::<Vec<_>>(),
+    ));
     let selection = Rc::new(RefCell::new(LauncherSelection::default()));
     let weak = launcher.as_weak();
     let state = selection.clone();
+    let inventory_keys = keys.clone();
     launcher.on_search_changed(move || {
         let launcher = weak.upgrade().unwrap();
         let active = !launcher.get_search().is_empty();
-        update_selection(&launcher, &state, |state, keys| {
-            state.search_changed(keys, active)
-        });
+        update_selection(
+            &launcher,
+            &state,
+            &inventory_keys.borrow(),
+            |state, keys| state.search_changed(keys, active),
+        );
     });
     let directions = Rc::new(RefCell::new(Vec::new()));
     let log = directions.clone();
     let weak = launcher.as_weak();
     let state = selection.clone();
+    let inventory_keys = keys.clone();
     launcher.on_navigate_requested(move |direction| {
         log.borrow_mut().push(direction);
         let launcher = weak.upgrade().unwrap();
@@ -1042,15 +1803,24 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
             LauncherNavigation::Left => Navigation::Left,
             LauncherNavigation::Right => Navigation::Right,
         };
-        update_selection(&launcher, &state, |state, keys| {
-            state.navigate(keys, direction, launcher.get_grid_columns() as usize)
-        });
+        update_selection(
+            &launcher,
+            &state,
+            &inventory_keys.borrow(),
+            |state, keys| state.navigate(keys, direction, launcher.get_grid_columns() as usize),
+        );
     });
     let weak = launcher.as_weak();
     let state = selection.clone();
+    let inventory_keys = keys.clone();
     launcher.on_select_requested(move |key| {
         let launcher = weak.upgrade().unwrap();
-        update_selection(&launcher, &state, |state, keys| state.select(keys, &key));
+        update_selection(
+            &launcher,
+            &state,
+            &inventory_keys.borrow(),
+            |state, keys| state.select(keys, &key),
+        );
     });
     let activations = Rc::new(RefCell::new(Vec::new()));
     let log = activations.clone();
@@ -1084,9 +1854,7 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
                 panic!("visible launcher tile {i} must expose its exact launch label")
             })
     };
-    // Accessible searches intentionally omit viewport-clipped elements.
-    // Retain the genuine initially visible handle to inspect its position
-    // after nearest scrolling moves this first row out of the viewport.
+    // Inspect handles only while their native row remains materialized.
     let first_tile = tile(0);
     let first_position = first_tile.absolute_position();
     let first_size = first_tile.size();
@@ -1229,8 +1997,10 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
         "the scrolled last-row outline actually renders without clipping"
     );
     assert!(
-        first_tile.absolute_position().y < first_position.y,
-        "nearest selection scrolls the actual grid"
+        ElementHandle::find_by_accessible_label(&launcher, "Launch App 0")
+            .next()
+            .is_none(),
+        "nearest selection scrolls the first row out of the actual viewport"
     );
     key(Key::RightArrow.into());
     key(Key::DownArrow.into());
@@ -1272,7 +2042,8 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
     }
     launcher.set_stale(false);
     launcher.set_refreshing(false);
-    launcher.set_tiles(ModelRc::new(VecModel::from(Vec::<LaunchTile>::new())));
+    keys.borrow_mut().clear();
+    set_launcher_tiles(&launcher, Vec::new());
     launcher.set_search("none".into());
     // Process the real pending query callback at the next input boundary;
     // neither a getter nor a forced draw should stand in for native input.
@@ -1310,14 +2081,15 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
         a: 255,
     });
     let icon = slint::Image::from_rgba8(bitmap);
-    launcher.set_tiles(ModelRc::new(VecModel::from(
+    set_launcher_tiles(
+        &launcher,
         (0..7)
             .map(|i| LaunchTile {
                 icon: icon.clone(),
                 ..app(&format!("app-{i}"), &format!("App {i}"))
             })
-            .collect::<Vec<_>>(),
-    )));
+            .collect(),
+    );
     let launches = Rc::new(Cell::new(0));
     let count = launches.clone();
     launcher.on_launch_requested(move |_| count.set(count.get() + 1));
@@ -1460,10 +2232,7 @@ fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scale
 
     let window = software_window();
     let launcher = Launcher::new().unwrap();
-    launcher.set_tiles(ModelRc::new(VecModel::from(vec![app(
-        "editor",
-        "Rust Editor",
-    )])));
+    set_launcher_tiles(&launcher, vec![app("editor", "Rust Editor")]);
     launcher.show().unwrap();
     for (scheme, scale, background) in [
         (slint::language::ColorScheme::Dark, 1.0, 24),
@@ -1604,10 +2373,7 @@ fn dock_compact_and_stale_states_change_rendering_and_keep_rescue() {
 fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
-    launcher.set_tiles(ModelRc::new(VecModel::from(vec![app(
-        "app-editor",
-        "Rust Editor",
-    )])));
+    set_launcher_tiles(&launcher, vec![app("app-editor", "Rust Editor")]);
     let favorites = Rc::new(Cell::new(0));
     let counter = favorites.clone();
     let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -1705,7 +2471,7 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
     );
     let mut saved = app("app-editor", "Rust Editor");
     saved.favorite = true;
-    launcher.set_tiles(ModelRc::new(VecModel::from(vec![saved])));
+    set_launcher_tiles(&launcher, vec![saved]);
     let _ = draw(&window, 560, 420);
     assert_eq!(favorites.get(), 4, "programmatic projection is silent");
     let favorite =

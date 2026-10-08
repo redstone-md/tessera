@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
+mod model;
+
+pub(crate) use model::{LauncherInventory, LauncherRows};
+
 /// Direction within the caller's row-major launcher grid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Navigation {

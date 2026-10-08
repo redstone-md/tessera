@@ -12,8 +12,8 @@ use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
-    ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchTile, Launcher, QuickSettings,
-    TooltipSurface,
+    ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher,
+    QuickSettings, TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -32,12 +32,15 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         .unwrap();
 
     let launcher = Launcher::new().unwrap();
-    launcher.set_tiles(slint::ModelRc::new(slint::VecModel::from(vec![
-        LaunchTile {
-            key: "native-app".into(),
-            label: "Native app".into(),
-            icon: slint::Image::default(),
-            favorite: false,
+    launcher.set_application_count(1);
+    launcher.set_rows(slint::ModelRc::new(slint::VecModel::from(vec![
+        LaunchRow {
+            tiles: slint::ModelRc::new(slint::VecModel::from(vec![LaunchTile {
+                key: "native-app".into(),
+                label: "Native app".into(),
+                icon: slint::Image::default(),
+                favorite: false,
+            }])),
         },
     ])));
     launcher

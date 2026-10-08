@@ -1033,9 +1033,13 @@ impl LauncherFixture {
     }
 
     fn with_preferences(preferences: PanelPreferences) -> Self {
+        Self::with_snapshot(preferences, launcher_snapshot())
+    }
+
+    fn with_snapshot(preferences: PanelPreferences, snapshot: PanelSnapshot) -> Self {
         i_slint_backend_testing::init_no_event_loop();
         let panel = Panel::new().unwrap();
-        let host = FixtureHost::returning(launcher_snapshot());
+        let host = FixtureHost::returning(snapshot.clone());
         let mut subscription_error = None;
         let (core, _guard) = SurfaceCore::new(host.clone(), &preferences, &mut subscription_error);
         let dock = Dock::new().unwrap();
@@ -1049,7 +1053,7 @@ impl LauncherFixture {
             Rc::clone(&controller.quick_settings),
             crate::quick_settings::QuickSettingsController::hide,
         );
-        apply_result_to_both(&controller, &panel, Ok(launcher_snapshot()));
+        apply_result_to_both(&controller, &panel, Ok(snapshot));
         Self {
             _quick_scope: quick_scope,
             _scope: scope,
@@ -1060,6 +1064,17 @@ impl LauncherFixture {
             launcher,
             host,
         }
+    }
+
+    fn tile(&self, index: usize) -> crate::generated::LaunchTile {
+        let columns = self.launcher.get_grid_columns().max(1) as usize;
+        self.launcher
+            .get_rows()
+            .row_data(index / columns)
+            .unwrap()
+            .tiles
+            .row_data(index % columns)
+            .unwrap()
     }
 
     fn click_launcher(&self, label: &str) {
@@ -1084,6 +1099,16 @@ impl LauncherFixture {
                 position,
                 button: PointerEventButton::Left,
             });
+    }
+
+    fn key(&self, text: slint::SharedString) {
+        use slint::platform::WindowEvent;
+        self.launcher
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        self.launcher
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
     }
 }
 
@@ -1295,7 +1320,7 @@ fn launcher_selection_reconciles_current_results_and_rejects_cross_surface_keys(
     let browser = PanelApplication::new("app-browser".into(), "Web Browser".into(), None).unwrap();
     let changed = launcher_snapshot().with_applications(vec![browser.clone()]);
     apply_result_to_both(&fixture.controller, &fixture.panel, Ok(changed));
-    assert_eq!(fixture.launcher.get_tiles().row_count(), 0);
+    assert_eq!(fixture.launcher.get_application_count(), 0);
     assert_eq!(fixture.launcher.get_selected_key(), "");
     fixture.launcher.invoke_activate_selected_requested();
     fixture
@@ -1313,10 +1338,7 @@ fn launcher_selection_reconciles_current_results_and_rejects_cross_surface_keys(
         browser,
     ]);
     apply_result_to_both(&fixture.controller, &fixture.panel, Ok(reordered));
-    assert_eq!(
-        fixture.launcher.get_tiles().row_data(1).unwrap().key,
-        "app-browser"
-    );
+    assert_eq!(fixture.tile(1).key, "app-browser");
     assert_eq!(
         fixture.launcher.get_selected_key(),
         "app-browser",
@@ -1365,18 +1387,15 @@ fn launcher_native_views_search_and_reopen_use_independent_favorites() {
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
     assert_eq!(fixture.launcher.get_view(), LauncherView::Favorites);
     assert!(fixture.launcher.get_saved_favorites_present());
-    assert_eq!(fixture.launcher.get_tiles().row_count(), 1);
-    assert_eq!(
-        fixture.launcher.get_tiles().row_data(0).unwrap().key,
-        "app-editor"
-    );
-    assert!(fixture.launcher.get_tiles().row_data(0).unwrap().favorite);
+    assert_eq!(fixture.launcher.get_application_count(), 1);
+    assert_eq!(fixture.tile(0).key, "app-editor");
+    assert!(fixture.tile(0).favorite);
     assert_eq!(fixture.controller.core.pins(), ["app-browser"]);
     assert_eq!(fixture.launcher.get_selected_key(), "");
 
     fixture.click_launcher("All Apps");
     assert_eq!(fixture.launcher.get_view(), LauncherView::All);
-    assert_eq!(fixture.launcher.get_tiles().row_count(), 3);
+    assert_eq!(fixture.launcher.get_application_count(), 3);
     assert_eq!(fixture.launcher.get_selected_key(), "");
     fixture.launcher.set_search("browser".into());
     fixture.controller.apply_launcher_filter();
@@ -1388,7 +1407,7 @@ fn launcher_native_views_search_and_reopen_use_independent_favorites() {
     fixture.launcher.set_search(" ".into());
     fixture.controller.apply_launcher_filter();
     assert_eq!(fixture.launcher.get_view(), LauncherView::All);
-    assert_eq!(fixture.launcher.get_tiles().row_count(), 3);
+    assert_eq!(fixture.launcher.get_application_count(), 3);
     assert_eq!(fixture.launcher.get_selected_key(), "");
     fixture.click_launcher("Back to favorites");
     fixture
@@ -1483,8 +1502,8 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
     fixture.click_launcher("Remove from favorites: Rust Editor");
     assert_eq!(fixture.controller.core.applied_preferences(), appearance);
     assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
-    assert_eq!(fixture.launcher.get_tiles().row_count(), 1);
-    assert!(fixture.launcher.get_tiles().row_data(0).unwrap().favorite);
+    assert_eq!(fixture.launcher.get_application_count(), 1);
+    assert!(fixture.tile(0).favorite);
     assert!(
         fixture
             .launcher
@@ -1500,7 +1519,7 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
         ["uninstalled"]
     );
     assert_eq!(fixture.launcher.get_selected_key(), "");
-    assert_eq!(fixture.launcher.get_tiles().row_count(), 0);
+    assert_eq!(fixture.launcher.get_application_count(), 0);
     assert!(fixture.launcher.get_saved_favorites_present());
     assert!(fixture.host.launches.lock().is_empty());
     assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
@@ -1548,13 +1567,18 @@ fn launcher_favorite_authority_rejects_hidden_busy_stale_and_other_surface_keys(
         .launcher
         .invoke_favorite_toggle_requested("app-editor".into(), true);
     // Even a malicious adapter-injected presentation row is not authority.
+    fixture.launcher.set_application_count(1);
     fixture
         .launcher
-        .set_tiles(slint::ModelRc::new(slint::VecModel::from(vec![
-            crate::generated::LaunchTile {
-                key: "app-editor".into(),
-                label: "Fabricated retained presentation".into(),
-                ..Default::default()
+        .set_rows(slint::ModelRc::new(slint::VecModel::from(vec![
+            crate::generated::LaunchRow {
+                tiles: slint::ModelRc::new(slint::VecModel::from(vec![
+                    crate::generated::LaunchTile {
+                        key: "app-editor".into(),
+                        label: "Fabricated retained presentation".into(),
+                        ..Default::default()
+                    },
+                ])),
             },
         ])));
     fixture
@@ -1563,5 +1587,157 @@ fn launcher_favorite_authority_rejects_hidden_busy_stale_and_other_surface_keys(
     assert!(fixture.host.saves.lock().is_empty());
     assert!(fixture.controller.core.launcher_favorites().is_empty());
     assert!(fixture.host.launches.lock().is_empty());
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn launcher_complete_inventory_reaches_favorite_tail_and_preserves_panel_bound() {
+    use slint::platform::{Key, WindowEvent};
+
+    let applications = (0..1024)
+        .map(|index| {
+            PanelApplication::new(
+                format!("app-{index:04}"),
+                format!("Retained App {index}"),
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut favorites = (100..200)
+        .rev()
+        .map(|index| format!("app-{index:04}"))
+        .collect::<Vec<_>>();
+    favorites.insert(50, "uninstalled".into());
+    let preferences = seeded_preferences()
+        .with_launcher_favorites(favorites.clone())
+        .unwrap();
+    let snapshot = launcher_snapshot().with_applications(applications);
+    let fixture = LauncherFixture::with_snapshot(preferences, snapshot);
+    fixture.controller.open_launcher();
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    assert_eq!(fixture.launcher.get_application_count(), 100);
+    assert_eq!(fixture.launcher.get_rows().row_count(), 15);
+    assert_eq!(fixture.tile(99).key, "app-0100");
+    assert_eq!(
+        fixture
+            .controller
+            .resolve_launcher_key("app-0100")
+            .as_deref(),
+        Some("app-0100")
+    );
+    assert!(
+        fixture
+            .controller
+            .resolve_launcher_key("app-1023")
+            .is_none()
+    );
+
+    // Native traversal enters the grid; arrows cross real virtual row boundaries.
+    fixture.key(Key::Tab.into());
+    fixture.key(Key::Tab.into());
+    for _ in 0..14 {
+        fixture.key(Key::DownArrow.into());
+    }
+    fixture.key(Key::RightArrow.into());
+    assert_eq!(fixture.launcher.get_selected_key(), "app-0100");
+    fixture.click_launcher("Remove from favorites: Retained App 100");
+    favorites.retain(|key| key != "app-0100");
+    assert_eq!(fixture.controller.core.launcher_favorites(), favorites);
+    assert_eq!(fixture.launcher.get_application_count(), 99);
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(fixture.host.saves.lock()[0].launcher_favorites(), favorites);
+    assert!(fixture.host.launches.lock().is_empty());
+
+    fixture.click_launcher("All Apps");
+    assert_eq!(fixture.launcher.get_application_count(), 1024);
+    assert_eq!(fixture.launcher.get_rows().row_count(), 147);
+    assert_eq!(fixture.tile(1023).key, "app-1023");
+    assert_eq!(
+        fixture
+            .launcher
+            .get_rows()
+            .row_data(146)
+            .unwrap()
+            .tiles
+            .row_count(),
+        2
+    );
+    assert_eq!(
+        fixture.panel.get_apps().row_count(),
+        crate::projection::MAX_APPS
+    );
+    assert_eq!(
+        fixture
+            .controller
+            .resolve_launcher_key("app-1023")
+            .as_deref(),
+        Some("app-1023")
+    );
+    fixture.launcher.set_search("Retained App".into());
+    fixture.controller.apply_launcher_filter();
+    assert_eq!(
+        fixture.launcher.get_application_count(),
+        1024,
+        "query precedes complete row presentation"
+    );
+    fixture.launcher.set_search("1023".into());
+    fixture.controller.apply_launcher_filter();
+    assert_eq!(fixture.launcher.get_application_count(), 1);
+    assert_eq!(fixture.launcher.get_selected_key(), "app-1023");
+    assert!(
+        fixture
+            .controller
+            .resolve_launcher_key("app-0100")
+            .is_none()
+    );
+    // Same-query reprojection preserves the selected opaque identity.
+    fixture.controller.show_launcher_tiles();
+    fixture.key(Key::Return.into());
+    assert_eq!(fixture.host.launches.lock().as_slice(), ["app-1023"]);
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.host.subscription_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn launcher_native_grid_to_header_switch_resets_selection_before_virtual_init() {
+    use crate::generated::LauncherView;
+    use slint::platform::{Key, WindowEvent};
+
+    let preferences = seeded_preferences()
+        .with_launcher_favorites(vec!["app-browser".into(), "app-editor".into()])
+        .unwrap();
+    let fixture = LauncherFixture::with_preferences(preferences);
+    fixture.controller.open_launcher();
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    fixture.key(Key::Tab.into());
+    fixture.key(Key::Tab.into());
+    fixture.key(Key::RightArrow.into());
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+    fixture.click_launcher("All Apps");
+    assert_eq!(fixture.launcher.get_view(), LauncherView::All);
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    assert_eq!(fixture.launcher.get_search(), "");
+    fixture.key(Key::Return.into());
+    assert!(fixture.host.launches.lock().is_empty());
+    // All and Favorites have different orders; another fresh mount is blank.
+    fixture.key(Key::Tab.into());
+    fixture.key(Key::Tab.into());
+    fixture.key(Key::RightArrow.into());
+    assert_eq!(fixture.launcher.get_selected_key(), "app-browser");
+    fixture.click_launcher("Back to favorites");
+    assert_eq!(fixture.launcher.get_view(), LauncherView::Favorites);
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    fixture.key(Key::Return.into());
+    assert!(fixture.host.launches.lock().is_empty());
+    assert!(fixture.host.saves.lock().is_empty());
     assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
 }
