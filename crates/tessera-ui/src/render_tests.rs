@@ -1045,49 +1045,89 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
             .dispatch_event(WindowEvent::ScaleFactorChanged {
                 scale_factor: scale,
             });
-        let width = (menu.get_menu_width() * scale) as u32;
-        let height = (menu.get_menu_height() * scale) as u32;
-        assert!(
-            height > (72.0 * scale) as u32,
-            "menu is not clipped to the dock"
-        );
-        window.set_size(slint::PhysicalSize::new(width, height));
-        let pixels = draw(&window, width, height);
-        assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
-        let margin = menu
-            .global::<crate::generated::PopoverTokens>()
-            .get_shadow_margin();
-        let inset = ((margin + 2.0) * scale) as usize;
-        let pixel = pixels[(height as usize / 2) * width as usize + inset];
-        assert_eq!(
-            [pixel.r, pixel.g, pixel.b],
-            background,
-            "the shared menu body is opaque and theme-adaptive"
-        );
-        for label in [
-            "Settings",
-            "File Explorer",
-            "Task Manager",
-            "Restore Explorer",
-            "Exit Tessera",
+        for (kind, labels) in [
+            (
+                DockMenuKind::Bar,
+                [
+                    "Settings",
+                    "File Explorer",
+                    "Task Manager",
+                    "Restore Explorer",
+                    "Exit Tessera",
+                ]
+                .as_slice(),
+            ),
+            (DockMenuKind::Pinned, ["Open", "Unpin"].as_slice()),
+            (
+                DockMenuKind::Window,
+                ["Switch to window", "Minimize", "Close"].as_slice(),
+            ),
         ] {
-            let button = ElementHandle::find_by_accessible_label(&menu, label)
-                .next()
-                .unwrap();
-            assert_eq!(button.accessible_role(), Some(AccessibleRole::Button));
-            let position = button.absolute_position();
-            assert!(position.x >= margin + 8.0 && position.y >= margin + 8.0);
-            assert!(position.y + 30.0 <= menu.get_menu_height() - margin - 8.0);
+            menu.set_kind(kind);
+            let tokens = menu.global::<crate::generated::PopoverTokens>();
+            let margin = tokens.get_shadow_margin();
+            let row_height = tokens.get_font_size() * tokens.get_line_height() + 16.0;
+            let expected_height = 2.0 * margin
+                + 16.0
+                + labels.len() as f32 * row_height
+                + labels.len().saturating_sub(1) as f32 * 8.0;
+            assert!(
+                menu.get_menu_width() >= 200.0 + 2.0 * margin,
+                "all reference menus reserve a minimum 200px body",
+            );
+            assert!(
+                (menu.get_menu_height() - expected_height).abs() < 0.001,
+                "menu rows derive from the shared font line height, 8px padding and gaps",
+            );
+            // Match production placement's ceil before rendering fractional
+            // font-derived dimensions; truncation invents a clipped viewport.
+            let width = (menu.get_menu_width() * scale).ceil() as u32;
+            let height = (menu.get_menu_height() * scale).ceil() as u32;
+            assert!(
+                height > (72.0 * scale) as u32,
+                "menu is not clipped to the dock"
+            );
+            window.set_size(slint::PhysicalSize::new(width, height));
+            let pixels = draw(&window, width, height);
+            assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
+            let inset = ((margin + 2.0) * scale) as usize;
+            let pixel = pixels[(height as usize / 2) * width as usize + inset];
+            assert_eq!(
+                [pixel.r, pixel.g, pixel.b],
+                background,
+                "the shared menu body is opaque and theme-adaptive"
+            );
+            for (index, label) in labels.iter().enumerate() {
+                let button = ElementHandle::find_by_accessible_label(&menu, label)
+                    .next()
+                    .unwrap();
+                assert_eq!(button.accessible_role(), Some(AccessibleRole::Button));
+                let position = button.absolute_position();
+                let size = button.size();
+                assert!((position.x - margin - 8.0).abs() < 0.001);
+                assert!(
+                    (position.y - margin - 8.0 - index as f32 * (row_height + 8.0)).abs() < 0.001,
+                    "real rows preserve the reference 8px gap",
+                );
+                assert!((size.height - row_height).abs() < 0.001);
+                assert!(position.y + size.height <= menu.get_menu_height() - margin - 8.0 + 0.001);
+            }
+            export_screenshot(
+                &format!("{name}-{kind:?}"),
+                &pixels,
+                width as usize,
+                height as usize,
+            );
+            assert!(
+                !window.draw_if_needed(|renderer| {
+                    let mut unchanged = pixels.clone();
+                    renderer.render(&mut unchanged, width as usize);
+                }),
+                "the open menu does not continuously render unchanged pixels"
+            );
         }
-        export_screenshot(name, &pixels, width as usize, height as usize);
-        assert!(
-            !window.draw_if_needed(|renderer| {
-                let mut unchanged = pixels.clone();
-                renderer.render(&mut unchanged, width as usize);
-            }),
-            "the open menu does not continuously render unchanged pixels"
-        );
     }
+    menu.set_kind(DockMenuKind::Bar);
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::End.into(),
     });
