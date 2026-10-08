@@ -67,6 +67,12 @@ cargo doc --workspace --no-deps --locked
 
 Invalid geometry, duplicate identities, and insufficient space return a layout error without a partial plan. Real application size constraints and applying plans are not implemented yet.
 
+### Maintained Slint core patch
+
+All coupled Slint SDK pins remain exactly **1.18.1**. The root [`[patch.crates-io]`](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html#the-patch-section) selects the checked-in `third-party/i-slint-core` source for that one crate; it is excluded from the five-member first-party workspace. This maintained library patch corrects native `ListView` coordinate/height bookkeeping and offscreen retention, without replacing the application's native list, ensure-visible or reset architecture with manual viewport logic, polling or timers.
+
+**Third-party core modified on 2026-10-08.** The published crate's 100 baseline files are retained; only `Cargo.toml`, `model/repeater.rs` and `item_tree.rs` differ. The manifest records the immutable upstream revision, archive SHA-256 and changed-file receipt. Original upstream attribution, licenses and sidecars remain intact; Tessera selects the original `GPL-3.0-only` option. See the [patch provenance and focused test recipe](docs/adr/0005-native-presentation.md#maintained-slint-core-source-patch) and [source/notice packaging requirements](docs/distribution-and-trust.md#patched-sdk-source-and-notices). This unpublished patch does not change alpha.10 or certify Windows composition or complete launcher parity.
+
 ### Inspect a Windows desktop
 
 On Windows:

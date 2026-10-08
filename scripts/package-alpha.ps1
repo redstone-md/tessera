@@ -96,27 +96,12 @@ try {
         Set-Content (Join-Path $source '.cargo/config.toml') -Encoding utf8
     Push-Location $source
     try {
-        Invoke-Checked cargo @('+1.92.0', 'metadata', '--locked', '--offline', '--format-version', '1') | Out-Null
+        $dependencies = Invoke-Checked cargo @('+1.92.0', 'metadata', '--locked', '--offline', '--format-version', '1') | Out-String | ConvertFrom-Json
     } finally { Pop-Location }
     $commit | Set-Content (Join-Path $source 'SOURCE-COMMIT.txt') -Encoding utf8
-    $dependencies = Invoke-Checked cargo @('+1.92.0', 'metadata', '--locked', '--format-version', '1') | Out-String | ConvertFrom-Json
-    $notices = @('Dependency inventory; full source and license files are included in the matching source archive.', 'This inventory includes build/test and other-platform dependencies, not only runtime imports.', '')
-    $notices += $dependencies.packages | Sort-Object name, version | ForEach-Object {
-        $license = if ($_.license) { $_.license } else { 'See license files in corresponding source' }
-        "$($_.name) $($_.version) | $license"
-    }
-    $noticePath = Join-Path $package 'THIRD-PARTY-NOTICES.txt'
-    $notices | Set-Content $noticePath -Encoding utf8
-    # Carry actual crate and bundled-asset notices with the binaries.
-    $assetRoot = Join-Path $source 'crates/tessera-ui/assets'
-    Get-ChildItem -LiteralPath @($vendor, $assetRoot) -Recurse -File | Where-Object {
-        $_.Name -match '^(LICENSE|LICENCE|COPYING|COPYRIGHT|NOTICE)([._-].*)?$' -or
-        $_.Name -match '^(OFL|Apache-2\.0|MIT)\.txt$'
-    } | Sort-Object FullName | ForEach-Object {
-        $relative = [IO.Path]::GetRelativePath($source, $_.FullName)
-        @("", "----- $relative -----", (Get-Content -LiteralPath $_.FullName -Raw)) |
-            Add-Content $noticePath -Encoding utf8
-    }
+    Import-Module (Join-Path $PSScriptRoot 'Tessera.Notices.psm1')
+    Write-TesseraThirdPartyNotices -SourcePath $source -VendorPath $vendor `
+        -DestinationPath (Join-Path $package 'THIRD-PARTY-NOTICES.txt') -DependencyPackages $dependencies.packages
     # Validate the exact shipped payload only after its required notices are complete.
     Import-Module (Join-Path $package 'Tessera.Deployment.psm1')
     $validated = Test-TesseraPackage -PackagePath $package

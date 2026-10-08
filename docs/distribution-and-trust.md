@@ -38,6 +38,14 @@ A maintainer-approved test prerelease may distribute an explicitly unsigned buil
 
 This exception does not imply security-product approval. Smart App Control, SmartScreen, antivirus, or enterprise policy may block it; report the block rather than weakening protection. Machines requiring trusted signing must wait for a signed build. Stable/consumer distribution still requires every gate above; a public repository or successful CI does not waive them.
 
+## Patched SDK source and notices
+
+Unpublished development source maintains one Cargo path override for `i-slint-core` 1.18.1; all coupled SDK pins remain unchanged. The [native presentation decision](adr/0005-native-presentation.md#maintained-slint-core-source-patch) records the immutable upstream source, archive hash, focused test recipe and scope. **The core was modified on 2026-10-08**; its manifest receipt identifies exactly `Cargo.toml`, `model/repeater.rs` and `item_tree.rs` among the 100 retained baseline files. Tessera selects Slint's original `GPL-3.0-only` option, without removing upstream copyrights, license texts or attribution. This does not grant rights to unrelated reference artwork or source.
+
+Binary dependency notices obtain the GPL-only selection and modification receipt from Cargo metadata and carry texts under `LICENSES/` and existing `.license` sidecars alongside dependency and asset notices. Notices are not a substitute for corresponding source: the source archive must contain the actual patched core, preserved upstream license files and attribution, and the build inputs required for the distributed binaries.
+
+The root Git source archive includes the checked-in path crate. `cargo vendor` supplies registry dependencies, not this path crate, so packaging must retain both rather than treating the registry vendor directory as complete source by itself. The production vendor set follows the root lockfile and runtime/build graph; it does not promise the private core test dependencies or empty-cache offline execution of the separate core test recipe. These are requirements for future packages containing the patch, not a claim that an existing alpha asset was rebuilt or that a release/deployment gate has run.
+
 
 ## Handling a detection
 

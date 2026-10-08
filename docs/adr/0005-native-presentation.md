@@ -6,6 +6,26 @@ Slint and Iced were evaluated as maintained native Rust toolkits. Slint was sele
 
 Default toolkit features are disabled. The workspace enables `std`, `backend-winit`, `renderer-software`, `accessibility`, and `compat-1-18`; Windows composition adds `renderer-femtovg` and the documented `raw-window-handle-06` bridge for validated owned surfaces. Windows presentation also uses the pinned toolkit's `unstable-winit-030` creation hook; development tests enable the same feature for pure window-attribute assertions. Qt, browser rendering, Skia, WGPU, tray support, live inspection servers, and system-testing servers are not enabled. FemtoVG uses the toolkit's existing transparent GL surface support rather than handwritten layered-window presentation. Slint falls back to software when the initial GL driver probe or window creation fails; this is not a runtime GPU-crash recovery mechanism. Both paths remain event-driven with no fixed-frame-rate idle loop.
 
+## Maintained Slint core source patch
+
+The established [Cargo path-patch mechanism](https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html#the-patch-section) replaces only `i-slint-core` through the root `[patch.crates-io]`. All coupled SDK pins remain exactly **1.18.1**; the checked-in core is excluded from the first-party workspace. Root metadata resolves five workspace members and one path-based core. The running application uses the root `Cargo.lock` and its actual feature graph, not the core's separate published lockfile.
+
+**Modified third-party source: 2026-10-08.** The baseline is the [published 1.18.1 crate archive](https://static.crates.io/crates/i-slint-core/i-slint-core-1.18.1.crate), SHA-256 `ed2ea15059d70bc31b1a8b1eb4c34f2c5df04cb7e53f36179b43c0261231d646`, corresponding to immutable upstream [`internal/core` at `372cf0ee5577c3dfec309a45e7b778ba4e81b734`](https://github.com/slint-ui/slint/tree/372cf0ee5577c3dfec309a45e7b778ba4e81b734/internal/core). All 100 baseline files are retained. Only `Cargo.toml` (GPL-only selection from the original offered licenses and provenance metadata), `model/repeater.rs` (native list bookkeeping and focused cases), and `item_tree.rs` (test-only mock feature gate and dated modification notice) differ. The machine-readable receipt is `[package.metadata.tessera-source-patch]` in the core manifest. Original authorship, license texts, original manifest, published lockfile and VCS provenance are preserved.
+
+The native repeater correction preserves residual scroll coordinates, measures current instances before seeking, repairs end/top coordinates, and avoids retaining an unnecessary offscreen prefix. The application still uses native `ListView`, its existing ensure-visible path and scroll reset; no application-owned viewport, polling or timer is added. Variable-height first seeks can still require transient prefix measurement/materialization: eliminating kept-prefix retention does **not** make that cost constant. This is maintenance behind the existing toolkit interface, not a planned application list replacement; no production API field or C++ ABI is changed.
+
+### Focused private core tests
+
+With Rust 1.92.0 installed and the core's development dependencies already cached, a clean checkout can run:
+
+```sh
+cargo +1.92.0 test --manifest-path third-party/i-slint-core/Cargo.toml --lib --no-default-features --features std,unicode --locked --offline model::repeater::listview_tests
+```
+
+For an uncached checkout, fetch the core dependencies first with `cargo +1.92.0 fetch --manifest-path third-party/i-slint-core/Cargo.toml --locked` without `--offline`. This uses the core's own lockfile, separately from runtime/workspace resolution. The recipe runs only the focused private list cases, not the entire upstream SDK or root workspace, and needs no additional application font. The test-only `shared-parley` gate prevents an upstream mock from calling a method absent in this reduced feature set; production behavior is unchanged.
+
+These focused cases establish native list bookkeeping, not scroll physics, whole-SDK compatibility, Windows/MSVC runtime behavior, native GL composition, actual VM geometry or complete applications-menu parity. Before changing coupled SDK pins, re-audit the actual upstream native implementation and rerun these cases alongside application verification. Source and binary notice obligations are described in [distribution and trust](../distribution-and-trust.md#patched-sdk-source-and-notices).
+
 ## Presentation seam
 
 `tessera-ui` receives portable snapshots, application identities/pixels, and monitor context from a `DesktopHost` adapter, not executable command strings. One controller serves the icon dock, toolbar, application menu, and existing framed recovery/settings panel, sharing the observation worker, cached snapshot, scoped event subscription, search, and stale-action guards. Startup, manual Refresh, and coalesced desktop notifications use one asynchronous path. Search projects retained data without observing again or rewriting opaque keys. Explicit activation/launch stays on the input path; Windows owns validation and foreground denial. Preference preview is independent of Save. Weak component handles deliver worker results without retaining a closed surface.
