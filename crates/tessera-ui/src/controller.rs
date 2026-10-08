@@ -22,6 +22,7 @@ use crate::{
 mod actions;
 mod calendar;
 mod context_menu;
+mod dock_utilities;
 mod geometry;
 mod launcher;
 mod popups;
@@ -30,6 +31,7 @@ mod tooltip;
 mod user_menu;
 use calendar::CalendarPopups;
 use context_menu::Menus;
+use dock_utilities::DockUtilities;
 use quick_settings::QuickPopups;
 use tooltip::Tooltips;
 use user_menu::UserPopups;
@@ -134,6 +136,7 @@ pub(crate) struct PanelController {
     quick_settings: QuickPopups,
     user_menu: UserPopups,
     calendar: CalendarPopups,
+    dock_utilities: DockUtilities,
     tooltips: Tooltips,
     geometry: Rc<geometry::GeometryUpdates>,
 }
@@ -174,6 +177,7 @@ impl PanelController {
             quick_settings: Rc::default(),
             user_menu: Rc::default(),
             calendar: Rc::default(),
+            dock_utilities: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -207,6 +211,7 @@ impl PanelController {
             quick_settings: Rc::default(),
             user_menu: Rc::default(),
             calendar: Rc::default(),
+            dock_utilities: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -330,6 +335,10 @@ impl PanelController {
             };
             weak.system_action(action);
         });
+        let weak = self.clone();
+        dock.on_reserved_action_requested(move |action| weak.request_dock_utility(action));
+        let weak = self.clone();
+        dock.on_utility_event_ready(move || weak.dock_utility_event_ready());
         let weak = self.clone();
         dock.on_context_menu_requested(move |kind, key, point| {
             weak.open_dock_menu(kind, &key, (point.x, point.y));
@@ -1271,6 +1280,10 @@ pub(crate) fn run(
             // Drop native leases before any component/HWND is destroyed, even
             // if another component callback still retains the controller.
             let _surface_scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+            let _dock_utility_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.dock_utilities),
+                crate::dock_utilities::DockUtilitiesController::close,
+            );
             let _menu_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.menus),
                 crate::context_menu::ContextMenuController::hide,

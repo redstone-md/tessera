@@ -42,8 +42,10 @@ pub(crate) const LAUNCHER_MAX_SIDE: f32 = 1200.0;
 pub(crate) const LAUNCHER_MONITOR_FRACTION: f32 = 0.55;
 /// Proportional shrink for compact density.
 pub(crate) const COMPACT_FACTOR: f32 = 0.8;
-/// Hard cap on dock tiles the UI renders; overflow scrolls, never grows.
+/// Visible window-slot cap; retained overflow content scrolls, never truncates.
 pub(crate) const MAX_DOCK_TILES: usize = 32;
+/// Start and Show Desktop are reserved effects, not application model rows.
+pub(crate) const RESERVED_DOCK_TILES: usize = 2;
 
 /// A non-positive or non-finite scale falls back to 1.0.
 pub(crate) fn scale_or_fallback(scale: f32) -> f32 {
@@ -66,11 +68,11 @@ pub(crate) fn dock_thickness(compact: bool) -> f32 {
     (2.0 * DOCK_MARGIN + 2.0 * DOCK_PAD + DOCK_ITEM) * factor
 }
 
-/// Logical window length for the content tiles plus its always-present start
-/// tile. Overflow content scrolls; this cap bounds the visible window slots.
+/// Logical window length for content plus the fixed reserved Dock items.
+/// Overflow content scrolls; the cap bounds visible slots, not saved pins.
 pub(crate) fn dock_length(tile_count: usize, compact: bool) -> f32 {
     let factor = if compact { COMPACT_FACTOR } else { 1.0 };
-    let tiles = tile_count.min(MAX_DOCK_TILES - 1) as f32 + 1.0;
+    let tiles = (tile_count.min(MAX_DOCK_TILES - RESERVED_DOCK_TILES) + RESERVED_DOCK_TILES) as f32;
     (2.0 * DOCK_MARGIN + 2.0 * DOCK_PAD + tiles * DOCK_ITEM + (tiles - 1.0) * DOCK_GAP) * factor
 }
 
@@ -178,7 +180,7 @@ mod tests {
 
     #[test]
     fn mincontent_dock_is_centered_and_sized_by_tile_count() {
-        // Five content tiles + start: 2*8 margins + 2*8 padding + 6*40 + 5*8.
+        // Five content tiles + two reserved: margins/padding + 7*40 + 6*8.
         let rect = dock_rect(
             bounds(0, 0, 1920, 1040),
             DockEdge::Bottom,
@@ -186,17 +188,21 @@ mod tests {
             false,
             1.0,
         );
-        assert_eq!(rect.width, 312);
+        assert_eq!(rect.width, 360);
         assert_eq!(rect.height, 72); // 2*8 margin + 2*8 pad + 40 item
         // Centered on the monitor bounds, hugging the bottom edge.
-        assert_eq!(rect.x, (1920 - 312) / 2);
+        assert_eq!(rect.x, (1920 - 360) / 2);
         assert_eq!(rect.y + rect.height as i32, 1040);
 
-        // One content tile + start: 16 + 16 + 2*40 + 8 = 120.
+        // One content tile + two reserved: 16 + 16 + 3*40 + 2*8 = 168.
         let one = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 1, false, 1.0);
-        assert_eq!(one.width, 120);
-        assert_eq!(one.x, (1920 - 120) / 2);
+        assert_eq!(one.width, 168);
+        assert_eq!(one.x, (1920 - 168) / 2);
         assert_eq!(one.height, 72);
+
+        let empty = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 0, false, 1.0);
+        assert_eq!(empty.width, 120);
+        assert_eq!(empty.height, 72);
     }
 
     #[test]
@@ -208,7 +214,7 @@ mod tests {
             false,
             1.0,
         );
-        assert_eq!(rect.x, -1920 + (1920 - 312) / 2);
+        assert_eq!(rect.x, -1920 + (1920 - 360) / 2);
         assert_eq!(rect.y + rect.height as i32, -1080 + 2160);
         assert!(rect.x >= -1920);
         assert!(rect.width >= 1 && rect.height >= 1);
@@ -218,7 +224,7 @@ mod tests {
     fn dpi_scale_multiplies_tokens() {
         let rect = dock_rect(bounds(0, 0, 3840, 2160), DockEdge::Bottom, 1, false, 2.0);
         assert_eq!(rect.height, 144); // 72 * 2
-        assert_eq!(rect.width, 240); // (start + one content tile) * 2
+        assert_eq!(rect.width, 336); // (two reserved + one content tile) * 2
         assert_eq!(rect.y + rect.height as i32, 2160);
     }
 
@@ -226,7 +232,9 @@ mod tests {
     fn compact_shrinks_proportionally_and_bad_scale_falls_back() {
         let compact = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 1, true, 1.0);
         assert_eq!(compact.height, 58); // 72 * 0.8, rounded from 57.6
+        assert_eq!(compact.width, 134); // 168 * 0.8, rounded from 134.4
         let fallback = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 1, false, 0.0);
+        assert_eq!(fallback.width, 168);
         assert_eq!(fallback.height, 72);
     }
 
@@ -237,6 +245,11 @@ mod tests {
         assert_eq!(rect.width, 200 - 2 * 8);
         assert_eq!(rect.x, 8);
         assert!(rect.y + rect.height as i32 <= 100);
+        assert_eq!(
+            dock_length(MAX_DOCK_TILES - RESERVED_DOCK_TILES, false),
+            1560.0
+        );
+        assert_eq!(dock_length(usize::MAX, false), 1560.0);
     }
 
     #[test]
@@ -244,18 +257,18 @@ mod tests {
         // Top: hugging the top, centered horizontally.
         let top = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Top, 1, false, 1.0);
         assert_eq!(top.y, 0);
-        assert_eq!(top.x, (1920 - 120) / 2);
+        assert_eq!(top.x, (1920 - 168) / 2);
         assert_eq!(top.height, 72);
         // Left: hugging the left edge, centered vertically.
         let left = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Left, 1, false, 1.0);
         assert_eq!(left.x, 0);
         assert_eq!(left.width, 72);
-        assert_eq!(left.y, (1040 - 120) / 2);
-        assert_eq!(left.height, 120);
+        assert_eq!(left.y, (1040 - 168) / 2);
+        assert_eq!(left.height, 168);
         // Right: hugging the right edge, centered vertically.
         let right = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Right, 1, false, 1.0);
         assert_eq!(right.x + right.width as i32, 1920);
-        assert_eq!(right.y, (1040 - 120) / 2);
+        assert_eq!(right.y, (1040 - 168) / 2);
         // Negative origin on a vertical edge stays inside the bounds.
         let off = dock_rect(
             bounds(-1920, -1080, 1920, 2160),
@@ -265,7 +278,7 @@ mod tests {
             1.0,
         );
         assert_eq!(off.x, -1920);
-        assert_eq!(off.y, -1080 + (2160 - 312) / 2);
+        assert_eq!(off.y, -1080 + (2160 - 360) / 2);
     }
 
     #[test]

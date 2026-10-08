@@ -20,6 +20,9 @@ mod calendar_render_tests;
 pub(crate) mod context_menu;
 pub(crate) mod controller;
 pub(crate) mod dock;
+pub(crate) mod dock_utilities;
+#[cfg(test)]
+mod dock_utilities_render_tests;
 pub(crate) mod dto;
 pub(crate) mod icons;
 pub(crate) mod launcher;
@@ -420,6 +423,17 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::calendar::CalendarHost>>,
         tessera_system::calendar::CalendarError,
+    > {
+        Ok(None)
+    }
+
+    /// Independent reserved Dock effects; native Shell calls run only after
+    /// explicit user intent on the capability's bounded worker.
+    fn dock_utilities_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::dock_utilities::DockUtilitiesHost>>,
+        tessera_system::dock_utilities::DockUtilityError,
     > {
         Ok(None)
     }

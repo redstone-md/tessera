@@ -8,6 +8,9 @@
 /// Gregorian calendar projection and asynchronous real-date/locale capability.
 pub mod calendar;
 
+/// Explicit reserved Dock effects, independent of application identities.
+pub mod dock_utilities;
+
 /// Current-user known-folder observations and identity-bound opening.
 pub mod folders;
 

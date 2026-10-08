@@ -1,0 +1,17 @@
+Phosphor Icons core 2.1.1 — desktop-duotone.svg
+Copyright (c) 2023 Phosphor Icons. Licensed under the complete adjacent MIT LICENSE.
+Official upstream: https://github.com/phosphor-icons/core
+Immutable source commit: 7790ae563ef83ac36094b15b5e109d89fef09337
+Imported directly from official upstream; both files are byte-unmodified.
+desktop-duotone.svg: https://raw.githubusercontent.com/phosphor-icons/core/7790ae563ef83ac36094b15b5e109d89fef09337/assets/duotone/desktop-duotone.svg
+Bytes: 433; Git blob SHA-1: 8bc78a3bedff0cab8e6bb6268dc212b800571b6f; raw-file SHA-256: bf8a8a436772763ff5e430428c3c2850c601057fef1009dee7a24a02ed709c3b
+LICENSE: https://raw.githubusercontent.com/phosphor-icons/core/7790ae563ef83ac36094b15b5e109d89fef09337/LICENSE
+Bytes: 1071; Git blob SHA-1: 78c9810819776e135d314adc0ff26eda7bec8b38; raw-file SHA-256: b5b1f1da112d18ea2147decfd48ddc1bf2b5aeb6c265381579340e95b15a2bb2
+
+Artwork correspondence: react-icons 5.7.0 generator commit 87470d588c5624bf3e291f17527c3ecd1419c8ae
+pins Phosphor source 2b75f3ad12b420c9504ef05df8d2564a28f8500e, containing the identical SVG Git blob.
+Generator: https://github.com/react-icons/react-icons/blob/87470d588c5624bf3e291f17527c3ecd1419c8ae/packages/react-icons/src/icons/index.ts#L755-L778
+SVG: https://raw.githubusercontent.com/phosphor-icons/core/2b75f3ad12b420c9504ef05df8d2564a28f8500e/assets/duotone/desktop-duotone.svg
+No artwork or implementation was copied from Seelen's AGPL source checkout.
+Tessera applies semantic foreground tint to the original alpha mask at presentation time.
+No endorsement or browser/Windows raster equivalence is implied.

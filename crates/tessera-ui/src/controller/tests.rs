@@ -56,6 +56,9 @@ struct FixtureHost {
     launcher_attachment_result: Mutex<Result<(), String>>,
     folder_provider: Mutex<Option<Arc<dyn tessera_system::folders::FolderHost>>>,
     calendar_provider: Mutex<Option<Arc<dyn tessera_system::calendar::CalendarHost>>>,
+    dock_utility_provider:
+        Mutex<Option<Arc<dyn tessera_system::dock_utilities::DockUtilitiesHost>>>,
+    dock_utility_provider_calls: AtomicUsize,
 }
 
 impl FixtureHost {
@@ -85,6 +88,8 @@ impl FixtureHost {
             launcher_attachment_result: Mutex::new(Ok(())),
             folder_provider: Mutex::default(),
             calendar_provider: Mutex::default(),
+            dock_utility_provider: Mutex::default(),
+            dock_utility_provider_calls: AtomicUsize::new(0),
         })
     }
 
@@ -115,6 +120,17 @@ impl DesktopHost for FixtureHost {
         tessera_system::calendar::CalendarError,
     > {
         Ok(self.calendar_provider.lock().clone())
+    }
+
+    fn dock_utilities_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::dock_utilities::DockUtilitiesHost>>,
+        tessera_system::dock_utilities::DockUtilityError,
+    > {
+        self.dock_utility_provider_calls
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(self.dock_utility_provider.lock().clone())
     }
 
     fn activate(&self, key: &str) -> Result<(), String> {
@@ -1068,6 +1084,8 @@ fn appearance_callbacks_during_show_apply_latest_geometry_without_reentrant_leas
 
 struct LauncherFixture {
     // Drop transient and bar attachments before the owned component windows.
+    _dock_utility_scope:
+        crate::transient_window::TransientScope<crate::dock_utilities::DockUtilitiesController>,
     _calendar_scope: crate::transient_window::TransientScope<crate::calendar::CalendarController>,
     _user_scope: crate::transient_window::TransientScope<crate::user_menu::UserMenuController>,
     _quick_scope:
@@ -1119,8 +1137,13 @@ impl LauncherFixture {
             Rc::clone(&controller.calendar),
             crate::calendar::CalendarController::hide,
         );
+        let dock_utility_scope = crate::transient_window::TransientScope::new(
+            Rc::clone(&controller.dock_utilities),
+            crate::dock_utilities::DockUtilitiesController::close,
+        );
         apply_result_to_both(&controller, &panel, Ok(snapshot));
         Self {
+            _dock_utility_scope: dock_utility_scope,
             _calendar_scope: calendar_scope,
             _user_scope: user_scope,
             _quick_scope: quick_scope,
@@ -1203,6 +1226,144 @@ fn click_component<C: slint::ComponentHandle>(component: &C, label: &str) {
             position,
             button: PointerEventButton::Left,
         });
+}
+
+#[test]
+fn dock_native_show_desktop_pointer_and_space_use_shell_capability_not_application_or_recovery() {
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use tessera_system::dock_utilities::{
+        DockUtilitiesHost, DockUtilityCompletion, DockUtilityError, DockUtilityErrorKind,
+    };
+
+    struct RecordingDesktop {
+        requests: AtomicUsize,
+        completion: Mutex<Option<DockUtilityCompletion>>,
+    }
+    impl DockUtilitiesHost for RecordingDesktop {
+        fn toggle_desktop(
+            &self,
+            completion: DockUtilityCompletion,
+        ) -> Result<(), DockUtilityError> {
+            self.requests.fetch_add(1, Ordering::SeqCst);
+            assert!(self.completion.lock().replace(completion).is_none());
+            Ok(())
+        }
+    }
+
+    let f = LauncherFixture::new();
+    let desktop = Arc::new(RecordingDesktop {
+        requests: AtomicUsize::new(0),
+        completion: Mutex::default(),
+    });
+    *f.host.dock_utility_provider.lock() = Some(desktop.clone());
+    assert!(f.dock.window().is_visible());
+    assert_eq!(f.host.dock_utility_provider_calls.load(Ordering::SeqCst), 0);
+    let focus_before = f.host.ui_focus_calls.load(Ordering::SeqCst);
+    f.panel.set_stale(true);
+    f.panel.set_refreshing(true);
+    let mut status = f.dock.get_surface_status();
+    status.stale = true;
+    status.refreshing = true;
+    f.dock.set_surface_status(status);
+
+    click_component(&f.dock, "Show desktop");
+    assert_eq!(desktop.requests.load(Ordering::SeqCst), 1);
+    assert!(f.dock.get_show_desktop_busy());
+    let start = ElementHandle::find_by_accessible_label(&f.dock, "Open applications and settings")
+        .find(|element| element.accessible_enabled() == Some(true))
+        .unwrap();
+    assert_eq!(start.accessible_enabled(), Some(true));
+    click_component(&f.dock, "Show desktop");
+    for event in [
+        WindowEvent::KeyPressed {
+            text: Key::Space.into(),
+        },
+        WindowEvent::KeyReleased {
+            text: Key::Space.into(),
+        },
+        WindowEvent::KeyPressed {
+            text: Key::Return.into(),
+        },
+        WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        },
+    ] {
+        f.dock.window().dispatch_event(event);
+    }
+    assert_eq!(desktop.requests.load(Ordering::SeqCst), 1);
+    f.dock.hide().unwrap();
+    f.dock
+        .invoke_reserved_action_requested(crate::generated::DockReservedAction::ShowDesktop);
+    assert_eq!(desktop.requests.load(Ordering::SeqCst), 1);
+    f.dock.show().unwrap();
+    assert!(f.dock.get_show_desktop_busy());
+    desktop.completion.lock().take().unwrap()(Ok(()));
+    assert!(
+        f.dock.get_show_desktop_busy(),
+        "completion is queued, not projected inline"
+    );
+    f.dock.invoke_utility_event_ready();
+    assert!(!f.dock.get_show_desktop_busy());
+    assert_eq!(f.panel.get_status(), "Desktop toggle requested");
+
+    // A real focus press cancelled outside the tile requests no toggle; the
+    // following Space gesture is the second explicit native button action.
+    let utility = ElementHandle::find_by_accessible_label(&f.dock, "Show desktop")
+        .find(|element| element.accessible_enabled() == Some(true))
+        .unwrap();
+    let origin = utility.absolute_position();
+    let size = utility.size();
+    f.dock.window().dispatch_event(WindowEvent::PointerPressed {
+        position: slint::LogicalPosition::new(
+            origin.x + size.width / 2.0,
+            origin.y + size.height / 2.0,
+        ),
+        button: PointerEventButton::Left,
+    });
+    f.dock
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: slint::LogicalPosition::new(1.0, 1.0),
+            button: PointerEventButton::Left,
+        });
+    f.dock
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert_eq!(
+        desktop.requests.load(Ordering::SeqCst),
+        1,
+        "held Return cannot retry once completion re-enables the utility",
+    );
+    f.dock.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Return.into(),
+    });
+    assert_eq!(desktop.requests.load(Ordering::SeqCst), 1);
+    f.dock.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Space.into(),
+    });
+    assert_eq!(desktop.requests.load(Ordering::SeqCst), 1);
+    f.dock.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Space.into(),
+    });
+    assert_eq!(desktop.requests.load(Ordering::SeqCst), 2);
+    desktop.completion.lock().take().unwrap()(Err(DockUtilityError::new(
+        DockUtilityErrorKind::AccessDenied,
+        "private native detail must not enter UI",
+    )));
+    f.dock.invoke_utility_event_ready();
+    assert!(!f.dock.get_show_desktop_busy());
+    assert!(f.panel.get_status().starts_with("Desktop toggle failed:"));
+    assert!(!f.panel.get_status().contains("private native detail"));
+    assert_eq!(f.host.dock_utility_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(f.host.ui_focus_calls.load(Ordering::SeqCst), focus_before);
+    assert_eq!(f.host.observe_calls.load(Ordering::SeqCst), 0);
+    assert!(f.host.launches.lock().is_empty());
+    assert!(f.host.window_actions.lock().is_empty());
+    assert!(f.host.activations.lock().is_empty());
+    assert!(f.host.saves.lock().is_empty());
+    assert!(f.host.system_actions.lock().is_empty());
 }
 
 #[test]

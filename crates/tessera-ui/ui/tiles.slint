@@ -26,6 +26,8 @@ export component TileButton inherits Rectangle {
     in property <bool> enabled: true;
     // Passive presentation keeps enabled appearance without input or AX actions.
     in property <bool> interactive: true;
+    // Non-idempotent actions may require a fresh Return press for each effect.
+    in property <bool> allow-return-repeat: true;
     // Semantic selection is independent of real focus and input modality.
     in property <bool> selected: false;
     // Optional metadata only: the stable parent DragArea owns recognition.
@@ -145,7 +147,7 @@ export component TileButton inherits Rectangle {
             }
             if root.interactive && root.enabled && event.text == Key.Return {
                 root.keyboard-focus = true;
-                root.activate();
+                if !event.repeat || root.allow-return-repeat { root.activate(); }
                 return accept;
             }
             if root.interactive && root.enabled && (event.text == Key.Menu

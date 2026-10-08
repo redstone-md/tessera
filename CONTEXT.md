@@ -127,6 +127,10 @@ _Avoid_: treating a local user identity as a saved configuration profile, or imp
 A dock entry representing related windows of one application.
 _Avoid_: grouping unrelated windows merely because they share a hosting executable.
 
+**Desktop toggle**:
+An explicit Windows Shell action that shows or hides the desktop using Shell-owned open-window restoration. Its successful native call does not expose an authoritative current toggle state.
+_Avoid_: equating it with Minimize All, tracking a saved HWND restoration list, or confusing it with the separate Explorer shell-recovery action.
+
 **Popup**:
 A transient shell surface for details or actions, such as a calendar, device selector or context menu.
 _Avoid_: treating it as a managed application window.

@@ -12,9 +12,10 @@ use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
-    CalendarDayCell, CalendarMenu, CalendarWeekRow, ContextMenuSurface, DockMenuAction,
-    DockMenuKind, LaunchRow, LaunchTile, Launcher, LauncherDisplayMode, LauncherDragVisual,
-    QuickSettings, TileBounds, TooltipSurface, UserFolderKind, UserFolderRow, UserMenu,
+    CalendarDayCell, CalendarMenu, CalendarWeekRow, ContextMenuSurface, Dock, DockApp,
+    DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher, LauncherDisplayMode,
+    LauncherDragVisual, QuickSettings, TileBounds, TooltipSurface, UserFolderKind, UserFolderRow,
+    UserMenu,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -140,6 +141,17 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     ));
     calendar.show().unwrap();
 
+    // Paint-only recording fixture: no DesktopHost/native Shell is wired here.
+    let dock = Dock::new().unwrap();
+    dock.set_pinned_apps(slint::ModelRc::new(slint::VecModel::from(vec![DockApp {
+        key: "fixture-app".into(),
+        label: "Fixture app".into(),
+        icon: slint::Image::default(),
+        pinned: true,
+    }])));
+    dock.window().set_size(slint::LogicalSize::new(168.0, 72.0));
+    dock.show().unwrap();
+
     let completed = Rc::new(Cell::new(false));
     let result = Rc::clone(&completed);
     slint::spawn_local(async move {
@@ -149,6 +161,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         quick.window().winit_window().await.unwrap();
         user.window().winit_window().await.unwrap();
         calendar.window().winit_window().await.unwrap();
+        dock.window().winit_window().await.unwrap();
         verify_frame("launcher", &launcher);
         verify_launcher_fullscreen_edges(&launcher);
         verify_frame("tooltip", &tooltip);
@@ -156,6 +169,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         verify_frame("quick-settings", &quick);
         verify_frame("user-menu", &user);
         verify_frame("calendar", &calendar);
+        verify_frame("dock", &dock);
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
@@ -179,6 +193,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                         quick.hide().unwrap();
                         user.hide().unwrap();
                         calendar.hide().unwrap();
+                        dock.hide().unwrap();
                         result.set(true);
                         slint::quit_event_loop().unwrap();
                     }),
@@ -228,18 +243,64 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
         let sample =
             |x: f32, y: f32| frame.as_slice()[(y * scale) as usize * width + (x * scale) as usize];
         let body = sample(logical_width / 2.0, 15.0);
-        assert_eq!(
-            (body.r, body.g, body.b, body.a),
-            (background, background, background, 255),
-            "{name} {theme} body"
-        );
+        if name == "dock" {
+            // Native GL snapshots retain premultiplied channels. Account for
+            // separate RGBA8 draw-pass rounding; opaque popup checks stay exact.
+            let body_color = (f32::from(background) * 0.8).round() as u8;
+            for channel in [body.r, body.g, body.b] {
+                assert!(
+                    channel.abs_diff(body_color) <= 1,
+                    "{name} {theme} body: {body:?}"
+                );
+            }
+            assert_eq!(body.a, 204, "{name} {theme} .8-alpha bar");
+            let foreground = if scheme == ColorScheme::Dark { 228 } else { 18 };
+            // TileButton is filled: its opaque neutral tile, not the bare
+            // translucent bar, is the duotone screen's actual substrate.
+            let tile_color = if scheme == ColorScheme::Dark { 31 } else { 252 };
+            let tile = sample(72.0, 20.0);
+            assert_eq!(
+                (tile.r, tile.g, tile.b, tile.a),
+                (tile_color, tile_color, tile_color, 255),
+                "{name} {theme} utility tile"
+            );
+            let tint_color = (f32::from(foreground) * 0.2).round() as u8;
+            let screen = sample(84.0, 33.0);
+            let screen_color = (f32::from(tint_color) + f32::from(tile_color) * 0.8).round() as u8;
+            assert_eq!(screen.a, 255, "{name} {theme} screen over opaque tile");
+            for channel in [screen.r, screen.g, screen.b] {
+                assert!(
+                    channel.abs_diff(screen_color) <= 1,
+                    "{name} {theme} screen tint: {screen:?}"
+                );
+            }
+            let bezel = sample(84.0, 27.0);
+            assert_eq!(bezel.a, 255, "{name} {theme} opaque bezel: {bezel:?}");
+            for channel in [bezel.r, bezel.g, bezel.b] {
+                assert_eq!(channel, foreground, "{name} {theme} bezel tint");
+            }
+        } else {
+            assert_eq!(
+                (body.r, body.g, body.b, body.a),
+                (background, background, background, 255),
+                "{name} {theme} body"
+            );
+        }
         assert_eq!(sample(0.0, 0.0).a, 0, "{name} outside frame");
-        let shadow = sample(logical_width / 2.0, logical_height - 8.0);
-        assert!(
-            shadow.a > 0 && shadow.a < 255,
-            "{name} {theme} {scale}x reference shadow: {shadow:?}"
-        );
-        assert_eq!((shadow.r, shadow.g, shadow.b), (0, 0, 0));
+        if name == "dock" {
+            assert_eq!(
+                sample(logical_width / 2.0, logical_height - 4.0).a,
+                0,
+                "Dock outer margin"
+            );
+        } else {
+            let shadow = sample(logical_width / 2.0, logical_height - 8.0);
+            assert!(
+                shadow.a > 0 && shadow.a < 255,
+                "{name} {theme} {scale}x reference shadow: {shadow:?}"
+            );
+            assert_eq!((shadow.r, shadow.g, shadow.b), (0, 0, 0));
+        }
         export_frame(&format!("gl-{name}-{theme}-{scale}x"), &frame);
     }
 }

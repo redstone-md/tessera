@@ -23,6 +23,7 @@ mod apps;
 mod audio;
 pub mod calendar;
 mod diagnostics;
+pub mod dock_utilities;
 mod error;
 mod events;
 pub mod folders;
@@ -43,6 +44,9 @@ mod native_audio;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_calendar;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_dock_utilities;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_events;

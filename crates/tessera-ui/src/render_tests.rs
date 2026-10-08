@@ -1629,8 +1629,8 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
     dock.show().unwrap();
 
     // 1x: the window holds margins(2x8) + bar(pad+item+pad=56) => 72 high;
-    // the length covers the start tile and three content tiles.
-    for (scale, width, height) in [(1.0, 216u32, 72u32), (2.0, 432u32, 144u32)] {
+    // The length covers two reserved tiles and three content tiles.
+    for (scale, width, height) in [(1.0, 264u32, 72u32), (2.0, 528u32, 144u32)] {
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -1650,7 +1650,7 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
             height as usize,
         );
 
-        // Start tile and every content tile are keyboard-accessible buttons.
+        // Both reserved tiles and every content tile are accessible buttons.
         let start =
             ElementHandle::find_by_accessible_label(&dock, "Open applications and settings")
                 .next()
@@ -1661,7 +1661,7 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
             .next()
             .unwrap();
         assert_eq!(launch.accessible_role(), Some(AccessibleRole::Button));
-        assert_eq!(launch.absolute_position().x, 64.0);
+        assert_eq!(launch.absolute_position().x, 112.0);
         assert_eq!(launch.absolute_position().y, 16.0);
         let switch = ElementHandle::find_by_accessible_label(&dock, "Switch to Browser")
             .next()
@@ -2009,6 +2009,12 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
         assert_eq!(key, "editor");
         count.set(count.get() + 1);
     });
+    let utilities = Rc::new(Cell::new(0));
+    let count = utilities.clone();
+    dock.on_reserved_action_requested(move |action| {
+        assert_eq!(action, crate::generated::DockReservedAction::ShowDesktop);
+        count.set(count.get() + 1);
+    });
     dock.show().unwrap();
     window.set_size(slint::PhysicalSize::new(248, 72));
     window
@@ -2039,6 +2045,9 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
     assert_eq!((opens.get(), launches.get()), (1, 0));
     press(Key::Tab.into());
     press(Key::Return.into());
+    assert_eq!((opens.get(), utilities.get(), launches.get()), (1, 1, 0));
+    press(Key::Tab.into());
+    press(Key::Return.into());
     assert_eq!((opens.get(), launches.get()), (1, 1));
     dock.set_surface_status(DockStatus {
         refreshing: true,
@@ -2049,10 +2058,17 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
     assert_eq!((opens.get(), launches.get()), (2, 1));
     press(Key::Tab.into());
     press(Key::Return.into());
+    assert_eq!((opens.get(), utilities.get(), launches.get()), (2, 2, 1));
+    dock.set_show_desktop_busy(true);
+    press(Key::Tab.into());
+    press(Key::Return.into());
+    assert_eq!((opens.get(), utilities.get(), launches.get()), (3, 2, 1));
+    press(Key::Tab.into());
+    press(Key::Return.into());
     assert_eq!(
-        (opens.get(), launches.get()),
-        (3, 1),
-        "disabled tiles are skipped, not dead keyboard stops",
+        (opens.get(), utilities.get(), launches.get()),
+        (4, 2, 1),
+        "disabled application and pending utility are skipped, not dead stops",
     );
 }
 
@@ -4071,11 +4087,11 @@ fn dark_palette_renders_the_source_neutral_tile_color() {
         pinned: true,
     }])));
     dock.show().unwrap();
-    window.set_size(slint::PhysicalSize::new(120, 72));
-    let pixels = draw(&window, 120, 72);
-    let inside_tile = pixels[36 * 120 + 84];
+    window.set_size(slint::PhysicalSize::new(168, 72));
+    let pixels = draw(&window, 168, 72);
+    let inside_tile = pixels[36 * 168 + 132];
     assert_eq!([inside_tile.r, inside_tile.g, inside_tile.b], [31, 31, 31]);
-    export_screenshot("dock-dark", &pixels, 120, 72);
+    export_screenshot("dock-dark", &pixels, 168, 72);
 }
 
 #[test]

@@ -4,7 +4,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { ApplicationIcon, TileButton, TileBounds } from "tiles.slint";
-import { DockWindowCommand, DockSystemCommand, DockMenuKind } from "shell-commands.slint";
+import { DockWindowCommand, DockSystemCommand, DockReservedAction, DockMenuKind } from "shell-commands.slint";
 
 export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
@@ -30,6 +30,8 @@ export component Dock inherits Window {
     in property <string> focused-key;
     in property <bool> compact;
     in property <int> edge;
+    in property <bool> show-desktop-busy;
+    in property <string> show-desktop-notice;
     property <bool> vertical: root.edge >= 2;
     callback launch-requested(string);
     callback window-command-requested(string, DockWindowCommand);
@@ -38,6 +40,8 @@ export component Dock inherits Window {
     callback open-settings-requested();
     callback pin-toggle-requested(string, bool);
     callback system-command-requested(DockSystemCommand);
+    callback reserved-action-requested(DockReservedAction);
+    callback utility-event-ready();
     callback context-menu-requested(DockMenuKind, string, Point);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
@@ -54,13 +58,13 @@ export component Dock inherits Window {
     property <bool> blocked: root.surface-status.refreshing || root.surface-status.stale;
 
     // The bar itself: an inner rounded rectangle inside the transparent
-    // window's outer margin. The start tile lives inside the bar before the
-    // scrollable tile area.
+    // window's outer margin. Start and Show desktop stay fixed before the
+    // scrollable application/window tile area.
     Rectangle {
         x: root.margin;
         y: root.margin;
-        width: parent.width - 2 * root.margin;
-        height: parent.height - 2 * root.margin;
+        width: max(0px, parent.width - 2 * root.margin);
+        height: max(0px, parent.height - 2 * root.margin);
         border-radius: root.bar-radius;
         background: SeelenPalette.bar.with-alpha(0.8);
         clip: true;
@@ -93,11 +97,40 @@ export component Dock inherits Window {
             }
         }
 
-        scroll := ScrollView {
+        TileButton {
             x: root.vertical ? root.pad : root.pad + root.item + root.gap;
             y: root.vertical ? root.pad + root.item + root.gap : root.pad;
-            width: parent.width - 2 * root.pad - (root.vertical ? 0px : root.item + root.gap);
-            height: parent.height - 2 * root.pad - (root.vertical ? root.item + root.gap : 0px);
+            width: root.item;
+            height: root.item;
+            radius: root.tile-radius;
+            enabled: !root.show-desktop-busy;
+            allow-return-repeat: false;
+            accessible-text: "Show desktop";
+            tooltip-text: @tr("Show desktop") + (root.show-desktop-notice == "" ? "" : "\n" + root.show-desktop-notice);
+            tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+            tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+            clicked => { root.reserved-action-requested(DockReservedAction.show-desktop); }
+            context-requested(position) => {
+                root.context-menu-requested(DockMenuKind.bar, "", position);
+            }
+            // Phosphor Icons (MIT), independently imported unmodified artwork.
+            Image {
+                x: root.icon-pad;
+                y: root.icon-pad;
+                width: parent.width - 2 * root.icon-pad;
+                height: parent.height - 2 * root.icon-pad;
+                source: @image-url("../assets/icons/phosphor-core-2.1.1/desktop-duotone.svg");
+                image-fit: contain;
+                colorize: SeelenPalette.foreground;
+                accessible-role: none;
+            }
+        }
+
+        scroll := ScrollView {
+            x: root.vertical ? root.pad : root.pad + 2 * (root.item + root.gap);
+            y: root.vertical ? root.pad + 2 * (root.item + root.gap) : root.pad;
+            width: max(0px, parent.width - 2 * root.pad - (root.vertical ? 0px : 2 * (root.item + root.gap)));
+            height: max(0px, parent.height - 2 * root.pad - (root.vertical ? 2 * (root.item + root.gap) : 0px));
             // Desktop tiles own button-down; overflow uses wheel/scrollbars,
             // not a competing mouse-pan gesture that delays those events.
             mouse-drag-pan-enabled: false;
