@@ -20,12 +20,15 @@ use crate::{
 };
 
 mod actions;
+mod calendar;
 mod context_menu;
 mod geometry;
 mod launcher;
+mod popups;
 mod quick_settings;
 mod tooltip;
 mod user_menu;
+use calendar::CalendarPopups;
 use context_menu::Menus;
 use quick_settings::QuickPopups;
 use tooltip::Tooltips;
@@ -130,6 +133,7 @@ pub(crate) struct PanelController {
     menus: Menus,
     quick_settings: QuickPopups,
     user_menu: UserPopups,
+    calendar: CalendarPopups,
     tooltips: Tooltips,
     geometry: Rc<geometry::GeometryUpdates>,
 }
@@ -169,6 +173,7 @@ impl PanelController {
             menus: Rc::default(),
             quick_settings: Rc::default(),
             user_menu: Rc::default(),
+            calendar: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -201,6 +206,7 @@ impl PanelController {
             menus: Rc::default(),
             quick_settings: Rc::default(),
             user_menu: Rc::default(),
+            calendar: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -257,6 +263,10 @@ impl PanelController {
             let user = controller.user_menu.borrow().clone();
             if let Some(user) = user {
                 user.disable_motion();
+            }
+            let calendar = controller.calendar.borrow().clone();
+            if let Some(calendar) = calendar {
+                calendar.disable_motion();
             }
         });
     }
@@ -355,6 +365,8 @@ impl PanelController {
     fn wire_toolbar(&self, toolbar: &Toolbar) {
         let weak = self.clone();
         toolbar.on_quick_settings_requested(move |bounds| weak.open_quick_settings(bounds));
+        let weak = self.clone();
+        toolbar.on_calendar_requested(move |bounds| weak.open_calendar(bounds));
         let controller = self.clone();
         let owner = toolbar.as_weak();
         toolbar.on_tooltip_requested(move |content, bounds| {
@@ -730,6 +742,12 @@ impl PanelController {
         {
             user.close_if_geometry_changed(context, launcher.window().scale_factor());
         }
+        let calendar = self.calendar.borrow().clone();
+        if let Some(calendar) = calendar
+            && let Some(toolbar) = self.toolbar_and_upgrade()
+        {
+            calendar.close_if_geometry_changed(context, toolbar.window().scale_factor());
+        }
 
         if !fullscreen {
             // Dock: never reserves (Seelen OnOverlap default), but its lease
@@ -835,6 +853,10 @@ impl PanelController {
         let user = self.user_menu.borrow().clone();
         if let Some(user) = user {
             user.apply_theme(theme);
+        }
+        let calendar = self.calendar.borrow().clone();
+        if let Some(calendar) = calendar {
+            calendar.apply_theme(theme);
         }
         self.update_geometry();
     }
@@ -1260,6 +1282,10 @@ pub(crate) fn run(
             let _user_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.user_menu),
                 crate::user_menu::UserMenuController::hide,
+            );
+            let _calendar_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.calendar),
+                crate::calendar::CalendarController::hide,
             );
             let _tooltip_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.tooltips),

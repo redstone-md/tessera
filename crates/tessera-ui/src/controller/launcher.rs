@@ -1425,7 +1425,7 @@ impl PanelController {
             return Ok(true);
         }
         self.cancel_launcher_reorder();
-        self.hide_user_menu();
+        self.dismiss_popups_except(None);
         session.presenting.set(true);
         let mut presentation = LauncherPresentation {
             controller: self,

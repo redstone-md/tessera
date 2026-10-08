@@ -1,0 +1,477 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView as NativeScrollView, Palette } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
+
+export enum CalendarMode { Month, Year }
+export struct CalendarDayCell {
+    key: string,
+    label: string,
+    description: string,
+    off-month: bool,
+    today: bool,
+    selected: bool,
+}
+export struct CalendarWeekRow { days: [CalendarDayCell] }
+export struct CalendarMonthCell { key: string, label: string, current: bool }
+export struct CalendarMonthRow { months: [CalendarMonthCell] }
+
+// The native palette exposes no Windows accent-dark/light shade roles.
+// This local derivative preserves the hover distinction, not exact shade parity.
+global CalendarColors {
+    out property <brush> selected-hover: SeelenPalette.dark
+        ? SeelenPalette.accent.brighter(0.2) : SeelenPalette.accent.darker(0.2);
+}
+
+component CalendarText inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    accessible-role: none;
+}
+
+component CalendarNavigator inherits TileButton {
+    in property <string> glyph;
+    radius: 6px;
+    filled: false;
+    background: transparent;
+    // Transform only the paint, not its fixed hit slot or keyboard outline.
+    Rectangle {
+        x: 0px;
+        y: root.pressed ? 1px : 0px;
+        width: root.width;
+        height: root.height;
+        transform-scale: root.pressed ? 0.98 : 1;
+        border-radius: root.radius;
+        background: !root.enabled ? transparent
+            : root.pressed ? SeelenPalette.accent.with-alpha(0.3)
+            : root.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+        accessible-role: none;
+        CalendarText {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            text: root.glyph;
+            font-size: 16px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+component CalendarDayButton inherits TileButton {
+    in property <CalendarDayCell> day;
+    in property <float> text-line-height-factor;
+    radius: 6px;
+    filled: false;
+    selected: false;
+    opacity: 1;
+    accessible-text: root.day.description;
+    // Source priority is selected > today > off-month > ordinary day.
+    // Day cells have hover, but deliberately no common button press transform.
+    background: root.day.selected
+        ? (root.hovered ? CalendarColors.selected-hover : SeelenPalette.accent)
+        : root.hovered && root.enabled ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+    CalendarText {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        text: root.day.label;
+        color: root.day.selected ? Palette.accent-foreground
+            : root.day.today ? SeelenPalette.accent
+            : root.day.off-month ? SeelenPalette.muted : SeelenPalette.foreground;
+        font-weight: root.day.selected ? 600 : root.day.today ? 700 : 400;
+        line-height-factor: root.text-line-height-factor;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+component CalendarMonthButton inherits TileButton {
+    in property <CalendarMonthCell> month;
+    in property <length> text-height;
+    in property <float> text-line-height-factor;
+    radius: 6px;
+    filled: false;
+    selected: false;
+    opacity: 1;
+    accessible-text: root.month.label;
+    background: root.hovered && root.enabled ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+    CalendarText {
+        x: 12px;
+        y: 16px;
+        width: max(0px, root.width - 24px);
+        height: root.text-height;
+        text: root.month.label;
+        color: root.month.current ? SeelenPalette.accent : SeelenPalette.foreground;
+        font-weight: root.month.current ? 700 : 500;
+        line-height-factor: root.text-line-height-factor;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// Models contain presentation only; opaque keys gain authority exclusively in
+// the controller's current projection. No dates or localized names are invented.
+export component CalendarMenu inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera calendar";
+    min-width: 1px;
+    min-height: 1px;
+
+    in property <string> title-text;
+    in property <CalendarMode> view-mode: CalendarMode.Month;
+    in property <[string]> weekdays;
+    in property <[CalendarWeekRow]> weeks;
+    in property <[CalendarMonthRow]> month-rows;
+    in property <string> action-key;
+    in property <bool> loading;
+    in property <string> notice;
+    in property <bool> retry-enabled;
+    in property <bool> can-previous;
+    in property <bool> can-next;
+    callback navigate-requested(bool, string);
+    callback toggle-view-requested(string);
+    callback today-requested(string);
+    callback day-selected(string);
+    callback month-selected(string);
+    callback retry-requested();
+    callback hide-requested();
+    callback preferred-size-changed();
+    // UI-thread mailbox wake, never a calendar action.
+    callback calendar-event-ready();
+
+    out property <length> popup-content-width: 300px + 2 * PopoverTokens.shadow-margin;
+    // Preferred size describes the unreserved source layout, never the
+    // smaller rendered grid inside an already constrained native viewport.
+    out property <length> popup-content-height: min(700px,
+        root.unreserved-content-height + 2 * root.viewport-inset) + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.popup-content-width;
+    preferred-height: root.popup-content-height;
+    changed popup-content-width => { root.preferred-size-changed(); }
+    changed popup-content-height => { root.preferred-size-changed(); }
+
+    property <bool> interactive: !root.loading && root.action-key != "";
+    property <string> caption: root.title-text != "" ? root.title-text : @tr("Calendar");
+    property <string> feedback: root.notice != "" ? root.notice
+        : root.loading ? @tr("Loading calendar…") : "";
+    property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
+    property <length> text-height: max(1px, PopoverTokens.font-size * PopoverTokens.line-height);
+    property <length> header-height: 8px + root.text-height;
+    property <length> weekday-height: 16px + root.text-height;
+    property <length> month-height: 32px + root.text-height;
+    property <length> measure-width: max(0px,
+        min(root.width > 0px ? root.width : root.popup-content-width, root.popup-content-width)
+        - 2 * PopoverTokens.shadow-margin - 2 * root.viewport-inset - 2 * FocusTokens.outer-margin);
+    // Reserve Fluent's audited scrollbar input gutter only on overflow.
+    // Measure the unreserved layout first, avoiding a width/height feedback loop.
+    property <length> unreserved-day-size: max(0px, (root.measure-width - 6 * min(4px, root.measure-width / 6)) / 7);
+    property <length> unreserved-content-height: root.content-height-for(
+        root.unreserved-day-size, unreserved-feedback-metrics.preferred-height);
+    property <length> content-measure-width: root.height > 0px
+        ? Slint1181FluentNativeGridMetrics.source-width(root.measure-width,
+            root.unreserved-content-height, scroll.visible-height, ScrollBarPolicy.as-needed)
+        : root.measure-width;
+    // Collapse gaps before cells acquire negative widths in a tiny viewport.
+    property <length> day-gap: min(4px, root.content-measure-width / 6);
+    property <length> day-size: max(0px, (root.content-measure-width - 6 * root.day-gap) / 7);
+    property <int> week-count: min(6, root.weeks.length);
+    property <bool> show-navigators: root.title-text != "" || root.show-grid;
+    property <int> month-row-count: min(4, root.month-rows.length);
+    property <bool> show-grid: root.view-mode == CalendarMode.Month
+        ? root.week-count > 0 : root.month-row-count > 0;
+    property <length> grid-height: root.grid-height-for(root.day-size);
+    property <length> grid-top: FocusTokens.outer-margin + root.header-height + 16px;
+    property <length> calendar-height: root.header-height + (root.show-grid ? 16px + root.grid-height : 0px);
+    property <length> feedback-top: FocusTokens.outer-margin + root.calendar-height + 8px;
+    property <length> retry-top: FocusTokens.outer-margin + root.calendar-height
+        + (root.feedback != "" ? 8px + feedback-metrics.preferred-height : 0px) + 8px;
+    property <length> natural-content-height: root.content-height-for(
+        root.day-size, feedback-metrics.preferred-height);
+
+    function grid-height-for(size: length) -> length {
+        return root.view-mode == CalendarMode.Month
+            ? root.weekday-height + 8px + root.week-count * size + max(0, root.week-count - 1) * 4px
+            : 8px + root.month-row-count * root.month-height + max(0, root.month-row-count - 1) * 8px;
+    }
+    function content-height-for(size: length, feedback-height: length) -> length {
+        return 2 * FocusTokens.outer-margin + root.header-height
+            + (root.show-grid ? 16px + root.grid-height-for(size) : 0px)
+            + (root.feedback != "" ? 8px + feedback-height : 0px)
+            + (root.retry-enabled ? 8px + 16px + root.text-height : 0px);
+    }
+    title-metrics := CalendarText {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: root.caption;
+        font-weight: 600;
+    }
+    unreserved-feedback-metrics := CalendarText {
+        x: 0px;
+        y: 0px;
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.feedback;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    feedback-metrics := CalendarText {
+        x: 0px;
+        y: 0px;
+        width: root.content-measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.feedback;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    function reveal-focused(top: length, item-height: length) {
+        let visible-top = -scroll.content-y;
+        let desired-top = top - FocusTokens.outer-margin;
+        let desired-bottom = top + item-height + FocusTokens.outer-margin;
+        if desired-top < visible-top {
+            scroll.content-y = -max(0px, desired-top);
+        } else if desired-bottom > visible-top + scroll.visible-height {
+            scroll.content-y = -max(0px,
+                min(desired-bottom - scroll.visible-height, scroll.content-height - scroll.visible-height));
+        }
+    }
+    public function set-presentation-opacity(value: float) {
+        body.set-presentation-opacity(value);
+    }
+    public function focus-content() {
+        scroll.content-y = 0px;
+        escape-scope.focus();
+    }
+    forward-focus: escape-scope;
+
+    escape-scope := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.hide-requested();
+                return accept;
+            }
+            return reject;
+        }
+        body := PopoverBody {
+            x: max(0px, (root.width - self.width) / 2);
+            y: 0px;
+            width: min(root.width, root.popup-content-width);
+            height: root.height;
+            scroll := NativeScrollView {
+                x: root.viewport-inset;
+                y: root.viewport-inset;
+                width: max(0px, body.content-width - 2 * root.viewport-inset);
+                height: max(0px, body.content-height - 2 * root.viewport-inset);
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                content-width: max(0px, self.visible-width - (root.measure-width - root.content-measure-width));
+                content-height: root.natural-content-height;
+                // A parent of the genuine controls receives their rejected
+                // wheel events before the native scrolling ancestor does.
+                wheel := TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: scroll.content-width;
+                    height: root.natural-content-height;
+                    scroll-event(event) => {
+                        if root.interactive && event.delta-y != 0 {
+                            if (event.delta-y > 0 && root.can-next) || (event.delta-y < 0 && root.can-previous) {
+                                root.navigate-requested(event.delta-y > 0, root.action-key);
+                            }
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    header := Rectangle {
+                        x: FocusTokens.outer-margin;
+                        y: FocusTokens.outer-margin;
+                        width: max(0px, wheel.width - 2 * FocusTokens.outer-margin);
+                        height: root.header-height;
+                        accessible-role: none;
+                        property <length> nav-gap: min(4px, max(0px, (self.width - 8px) / 2));
+                        property <length> nav-slot: min(28.8px, max(0px, (self.width - 8px - 2 * self.nav-gap) / 3));
+                        property <length> nav-width: root.show-navigators ? 3 * self.nav-slot + 2 * self.nav-gap : 0px;
+                        TileButton {
+                            x: 4px;
+                            y: 0px;
+                            width: min(title-metrics.preferred-width + 16px, max(0px, header.width - 8px - header.nav-width));
+                            height: root.header-height;
+                            radius: 6px;
+                            filled: false;
+                            opacity: 1;
+                            background: self.hovered && self.enabled ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+                            enabled: root.interactive;
+                            accessible-text: @tr("Toggle calendar view");
+                            accessible-description: root.caption;
+                            clicked => { root.toggle-view-requested(root.action-key); }
+                            focus-acquired => { root.reveal-focused(FocusTokens.outer-margin, self.height); }
+                            CalendarText {
+                                x: 8px;
+                                y: 4px;
+                                width: max(0px, parent.width - 16px);
+                                height: root.text-height;
+                                text: root.caption;
+                                font-weight: 600;
+                                line-height-factor: body.text-line-height-factor;
+                                overflow: elide;
+                            }
+                        }
+                        if root.show-navigators: Rectangle {
+                            x: max(0px, header.width - 4px - header.nav-width);
+                            y: (header.height - self.height) / 2;
+                            width: header.nav-width;
+                            height: 22.4px;
+                            accessible-role: none;
+                            for glyph[index] in ["‹", "⌂", "›"]: CalendarNavigator {
+                                x: index * (header.nav-slot + header.nav-gap);
+                                y: 0px;
+                                width: header.nav-slot;
+                                height: 22.4px;
+                                glyph: glyph;
+                                enabled: root.interactive && (index == 0 ? root.can-previous : index == 2 ? root.can-next : true);
+                                accessible-text: index == 1 ? @tr("Today")
+                                    : index == 0 ? (root.view-mode == CalendarMode.Month ? @tr("Previous month") : @tr("Previous year"))
+                                    : (root.view-mode == CalendarMode.Month ? @tr("Next month") : @tr("Next year"));
+                                clicked => {
+                                    if index == 1 { root.today-requested(root.action-key); }
+                                    else { root.navigate-requested(index == 2, root.action-key); }
+                                }
+                                focus-acquired => { root.reveal-focused(FocusTokens.outer-margin, root.header-height); }
+                            }
+                        }
+                    }
+                    if root.show-grid && root.view-mode == CalendarMode.Month: Rectangle {
+                        x: FocusTokens.outer-margin;
+                        y: root.grid-top;
+                        width: max(0px, wheel.width - 2 * FocusTokens.outer-margin);
+                        height: root.grid-height;
+                        accessible-role: none;
+                        for label[index] in root.weekdays: CalendarText {
+                            x: index * (root.day-size + root.day-gap);
+                            y: 8px;
+                            width: root.day-size;
+                            height: root.text-height;
+                            visible: index < 7;
+                            text: label;
+                            color: SeelenPalette.secondary;
+                            font-weight: 600;
+                            line-height-factor: body.text-line-height-factor;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            accessible-role: text;
+                            accessible-label: label;
+                        }
+                        for week[row-index] in root.weeks: Rectangle {
+                            x: 0px;
+                            y: root.weekday-height + 8px + row-index * (root.day-size + 4px);
+                            width: parent.width;
+                            height: root.day-size;
+                            visible: row-index < 6;
+                            accessible-role: none;
+                            for day[column] in week.days: CalendarDayButton {
+                                x: column * (root.day-size + root.day-gap);
+                                y: 0px;
+                                width: root.day-size;
+                                height: root.day-size;
+                                visible: column < 7;
+                                day: day;
+                                text-line-height-factor: body.text-line-height-factor;
+                                enabled: root.interactive && day.key != "";
+                                clicked => { root.day-selected(day.key); }
+                                focus-acquired => { root.reveal-focused(root.grid-top + root.weekday-height + 8px
+                                    + row-index * (root.day-size + 4px), self.height); }
+                            }
+                        }
+                    }
+                    if root.show-grid && root.view-mode == CalendarMode.Year: year-grid := Rectangle {
+                        x: FocusTokens.outer-margin;
+                        y: root.grid-top;
+                        width: max(0px, wheel.width - 2 * FocusTokens.outer-margin);
+                        height: root.grid-height;
+                        accessible-role: none;
+                        property <length> month-padding: min(4px, self.width / 2);
+                        property <length> month-gap: min(8px, max(0px, (self.width - 2 * self.month-padding) / 2));
+                        property <length> month-width: max(0px, (self.width - 2 * self.month-padding - 2 * self.month-gap) / 3);
+                        for row[row-index] in root.month-rows: Rectangle {
+                            x: year-grid.month-padding;
+                            y: 4px + row-index * (root.month-height + 8px);
+                            width: max(0px, parent.width - 2 * year-grid.month-padding);
+                            height: root.month-height;
+                            visible: row-index < 4;
+                            accessible-role: none;
+                            for month[column] in row.months: CalendarMonthButton {
+                                x: column * (year-grid.month-width + year-grid.month-gap);
+                                y: 0px;
+                                width: year-grid.month-width;
+                                height: root.month-height;
+                                visible: column < 3;
+                                month: month;
+                                text-height: root.text-height;
+                                text-line-height-factor: body.text-line-height-factor;
+                                enabled: root.interactive && month.key != "";
+                                clicked => { root.month-selected(month.key); }
+                                focus-acquired => { root.reveal-focused(root.grid-top + 4px
+                                    + row-index * (root.month-height + 8px), self.height); }
+                            }
+                        }
+                    }
+                    if root.feedback != "": CalendarText {
+                        x: FocusTokens.outer-margin;
+                        y: root.feedback-top;
+                        width: max(0px, wheel.width - 2 * FocusTokens.outer-margin);
+                        height: feedback-metrics.preferred-height;
+                        text: root.feedback;
+                        color: SeelenPalette.secondary;
+                        wrap: word-wrap;
+                        line-height-factor: body.text-line-height-factor;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                    }
+                    if root.retry-enabled: TileButton {
+                        x: FocusTokens.outer-margin;
+                        y: root.retry-top;
+                        width: max(0px, wheel.width - 2 * FocusTokens.outer-margin);
+                        height: 16px + root.text-height;
+                        radius: 6px;
+                        filled: false;
+                        enabled: root.retry-enabled && !root.loading;
+                        accessible-text: @tr("Retry calendar");
+                        clicked => { root.retry-requested(); }
+                        focus-acquired => { root.reveal-focused(root.retry-top, self.height); }
+                        CalendarText {
+                            x: 8px;
+                            y: 8px;
+                            width: max(0px, parent.width - 16px);
+                            height: root.text-height;
+                            text: @tr("Retry calendar");
+                            line-height-factor: body.text-line-height-factor;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

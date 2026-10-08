@@ -9,5 +9,8 @@ readme.workspace = true
 description = "Portable system capability contracts for the Tessera desktop environment"
 publish = false
 
+[dependencies]
+chrono.workspace = true
+
 [lints]
 workspace = true

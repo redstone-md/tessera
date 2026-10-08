@@ -3,6 +3,7 @@
 
 //! Lazy popup ownership and conversion of real dock-relative input anchors.
 
+use super::popups::PopupKind;
 use super::{PanelController, Rc, model_key};
 use crate::context_menu::ContextMenuController;
 use crate::generated::DockMenuKind;
@@ -50,7 +51,6 @@ impl PanelController {
                 return;
             }
         };
-        self.hide_user_menu();
         let existing = self.menus.borrow().clone();
         let menu = match existing {
             Some(menu) => menu,
@@ -65,9 +65,8 @@ impl PanelController {
                 }
             },
         };
-        if let Err(error) = menu.show(kind, key.into(), anchor, context) {
-            self.report_message(&format!("Context menu: {error}"));
-        }
+        let result = menu.show(kind, key.into(), anchor, context);
+        self.popup_presentation_finished(PopupKind::DockMenu, menu.is_open(), result);
     }
 }
 

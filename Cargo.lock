@@ -4210,6 +4210,9 @@ version = "0.1.0-alpha.10"
 [[package]]
 name = "tessera-system"
 version = "0.1.0-alpha.10"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "tessera-ui"

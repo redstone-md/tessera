@@ -3,6 +3,7 @@
 
 //! Launcher-origin ownership of the independent current-user folder popup.
 
+use super::popups::PopupKind;
 use super::{PanelController, Rc};
 use crate::generated::TileBounds;
 use crate::theme::ThemedComponent;
@@ -34,14 +35,6 @@ impl PanelController {
             self.report_message("The user menu needs the launcher's real monitor geometry.");
             return;
         };
-        let menu = self.menus.borrow().clone();
-        if let Some(menu) = menu {
-            menu.hide();
-        }
-        let quick = self.quick_settings.borrow().clone();
-        if let Some(quick) = quick {
-            quick.hide();
-        }
         let existing = self.user_menu.borrow().clone();
         let user = match existing {
             Some(user) => user,
@@ -57,14 +50,13 @@ impl PanelController {
             },
         };
         user.apply_theme(launcher.presentation_theme());
-        if let Err(error) = user.show(
+        let result = user.show(
             launcher.window(),
             bounds,
             context,
             &launcher.get_user_name(),
-        ) {
-            self.report_message(&format!("User menu: {error}"));
-        }
+        );
+        self.popup_presentation_finished(PopupKind::User, user.is_open(), result);
     }
 
     pub(super) fn hide_user_menu(&self) {

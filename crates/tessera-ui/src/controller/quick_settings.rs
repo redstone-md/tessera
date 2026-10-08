@@ -3,6 +3,7 @@
 
 //! Toolbar-origin placement and lazy ownership of independent audio controls.
 
+use super::popups::PopupKind;
 use super::{PanelController, Rc};
 use crate::generated::TileBounds;
 use crate::popup_placement::physical_anchor;
@@ -16,7 +17,6 @@ pub(super) type QuickPopups = TransientCache<QuickSettingsController>;
 impl PanelController {
     pub(super) fn open_quick_settings(&self, bounds: TileBounds) {
         self.dismiss_tooltip(false);
-        self.hide_user_menu();
         let Some(toolbar) = self.toolbar_and_upgrade() else {
             return;
         };
@@ -58,10 +58,6 @@ impl PanelController {
                     return;
                 }
             };
-        let menu = self.menus.borrow().clone();
-        if let Some(menu) = menu {
-            menu.hide();
-        }
         let existing = self.quick_settings.borrow().clone();
         let quick = match existing {
             Some(quick) => quick,
@@ -76,8 +72,7 @@ impl PanelController {
                 }
             },
         };
-        if let Err(error) = quick.show(toolbar.presentation_theme(), anchor, context, scale) {
-            self.report_message(&format!("Quick settings: {error}"));
-        }
+        let result = quick.show(toolbar.presentation_theme(), anchor, context, scale);
+        self.popup_presentation_finished(PopupKind::QuickSettings, quick.is_open(), result);
     }
 }

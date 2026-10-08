@@ -5,6 +5,9 @@
 
 #![forbid(unsafe_code)]
 
+/// Gregorian calendar projection and asynchronous real-date/locale capability.
+pub mod calendar;
+
 /// Current-user known-folder observations and identity-bound opening.
 pub mod folders;
 

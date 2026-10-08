@@ -12,9 +12,9 @@ use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
-    ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher,
-    LauncherDisplayMode, LauncherDragVisual, QuickSettings, TileBounds, TooltipSurface,
-    UserFolderKind, UserFolderRow, UserMenu,
+    CalendarDayCell, CalendarMenu, CalendarWeekRow, ContextMenuSurface, DockMenuAction,
+    DockMenuKind, LaunchRow, LaunchTile, Launcher, LauncherDisplayMode, LauncherDragVisual,
+    QuickSettings, TileBounds, TooltipSurface, UserFolderKind, UserFolderRow, UserMenu,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -102,6 +102,43 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         user.get_popup_content_height(),
     ));
     user.show().unwrap();
+    // Closed six-week paint fixture, not an OS date/locale fallback.
+    let calendar = CalendarMenu::new().unwrap();
+    calendar.set_title_text("Native calendar".into());
+    calendar.set_action_key("gl-calendar-actions".into());
+    calendar.set_can_previous(true);
+    calendar.set_can_next(true);
+    calendar.set_weekdays(slint::ModelRc::new(slint::VecModel::from(
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            .map(slint::SharedString::from)
+            .to_vec(),
+    )));
+    calendar.set_weeks(slint::ModelRc::new(slint::VecModel::from(
+        (0..6)
+            .map(|week| CalendarWeekRow {
+                days: slint::ModelRc::new(slint::VecModel::from(
+                    (0..7)
+                        .map(|column| {
+                            let index = week * 7 + column;
+                            CalendarDayCell {
+                                key: format!("gl-calendar-day-{index}").into(),
+                                label: (index % 31 + 1).to_string().into(),
+                                description: format!("GL civil day {index}").into(),
+                                off_month: week == 5,
+                                today: index == 10,
+                                selected: index == 10,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+            })
+            .collect::<Vec<_>>(),
+    )));
+    calendar.window().set_size(slint::LogicalSize::new(
+        calendar.get_popup_content_width(),
+        calendar.get_popup_content_height(),
+    ));
+    calendar.show().unwrap();
 
     let completed = Rc::new(Cell::new(false));
     let result = Rc::clone(&completed);
@@ -111,12 +148,14 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         menu.window().winit_window().await.unwrap();
         quick.window().winit_window().await.unwrap();
         user.window().winit_window().await.unwrap();
+        calendar.window().winit_window().await.unwrap();
         verify_frame("launcher", &launcher);
         verify_launcher_fullscreen_edges(&launcher);
         verify_frame("tooltip", &tooltip);
         verify_frame("context-menu", &menu);
         verify_frame("quick-settings", &quick);
         verify_frame("user-menu", &user);
+        verify_frame("calendar", &calendar);
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
@@ -139,6 +178,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                         menu.hide().unwrap();
                         quick.hide().unwrap();
                         user.hide().unwrap();
+                        calendar.hide().unwrap();
                         result.set(true);
                         slint::quit_event_loop().unwrap();
                     }),

@@ -14,6 +14,9 @@
 
 #![deny(unsafe_code)]
 
+pub(crate) mod calendar;
+#[cfg(test)]
+mod calendar_render_tests;
 pub(crate) mod context_menu;
 pub(crate) mod controller;
 pub(crate) mod dock;
@@ -406,6 +409,17 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::folders::FolderHost>>,
         tessera_system::folders::FolderError,
+    > {
+        Ok(None)
+    }
+
+    /// Supplies genuine local-date/locale reads independently of application
+    /// observation. Native work runs on the capability's bounded worker.
+    fn calendar_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::calendar::CalendarHost>>,
+        tessera_system::calendar::CalendarError,
     > {
         Ok(None)
     }

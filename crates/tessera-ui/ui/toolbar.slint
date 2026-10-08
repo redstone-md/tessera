@@ -23,6 +23,7 @@ export component Toolbar inherits Window {
     in property <string> language;
     in property <DockStatus> surface-status;
     callback quick-settings-requested(TileBounds);
+    callback calendar-requested(TileBounds);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
 
@@ -66,19 +67,41 @@ export component Toolbar inherits Window {
                 accessible-role: text;
             }
         }
-        clock-text := Text {
+        clock-text := TileButton {
             x: (parent.width - self.width) / 2;
             y: root.pad;
-            width: min(self.preferred-width, parent.width / 3);
+            width: min(clock-label.preferred-width, parent.width / 3);
             height: root.item;
-            text: root.clock;
-            color: SeelenPalette.foreground;
-            font-size: 12.8px;
-            font-weight: 500;
-            vertical-alignment: center;
-            horizontal-alignment: center;
-            overflow: elide;
-            accessible-role: text;
+            radius: root.tile-radius;
+            filled: false;
+            enabled: root.clock != "";
+            // Like the reference toolbar wrapper, not a common press-scale button.
+            background: !self.enabled ? transparent :
+                self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
+                self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+            accessible-text: @tr("Open calendar");
+            tooltip-text: @tr("Calendar");
+            tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+            tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+            clicked => { root.calendar-requested({
+                origin: self.absolute-position,
+                width: self.width,
+                height: self.height
+            }); }
+            clock-label := Text {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
+                text: root.clock;
+                color: SeelenPalette.foreground;
+                font-size: 12.8px;
+                font-weight: 500;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                overflow: elide;
+                accessible-role: text;
+            }
         }
         HorizontalLayout {
             x: parent.width / 2 + clock-text.width / 2 + root.pad;

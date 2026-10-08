@@ -131,6 +131,14 @@ _Avoid_: grouping unrelated windows merely because they share a hosting executab
 A transient shell surface for details or actions, such as a calendar, device selector or context menu.
 _Avoid_: treating it as a managed application window.
 
+**Civil date**:
+A validated Gregorian year, month and day, without a clock time, timezone or UTC instant. The Calendar's real Today is acquired from the current OS-local date.
+_Avoid_: deriving Today by parsing displayed clock text, or substituting an arbitrary date when acquisition fails.
+
+**Calendar selection**:
+The day selected within the Calendar's transient state, independent of the displayed month/year and real Today. Browsing or selecting does not set the system clock or save a preference.
+_Avoid_: equating navigation, displayed date, selection and current OS date.
+
 **Audio endpoint**:
 An independently identified destination for output sound or source for input sound, with its own volume and mute state. It is not an application's audio session.
 _Avoid_: treating every endpoint as a distinct physical device or an application-volume control.

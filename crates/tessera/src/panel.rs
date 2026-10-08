@@ -97,6 +97,7 @@ mod desktop {
 
     use parking_lot::Mutex;
     use tessera_system::audio::{AudioError, AudioHost};
+    use tessera_system::calendar::{CalendarError, CalendarHost};
     use tessera_system::folders::{FolderError, FolderHost};
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
@@ -134,6 +135,7 @@ mod desktop {
         window_icons: Mutex<HashMap<String, CachedWindowIcon>>,
         audio: LazyLock<Provider<dyn AudioHost>>,
         folders: LazyLock<Provider<dyn FolderHost>>,
+        calendar: LazyLock<Provider<dyn CalendarHost>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -227,6 +229,12 @@ mod desktop {
         fn folder_host(&self) -> Result<Option<Arc<dyn FolderHost>>, FolderError> {
             self.folders
                 .get(tessera_windows::folders::native_folder_host)
+                .map(Some)
+        }
+
+        fn calendar_host(&self) -> Result<Option<Arc<dyn CalendarHost>>, CalendarError> {
+            self.calendar
+                .get(tessera_windows::calendar::native_calendar_host)
                 .map(Some)
         }
 
@@ -463,6 +471,7 @@ mod desktop {
             window_icons: Mutex::new(HashMap::new()),
             audio: LazyLock::new(Provider::default),
             folders: LazyLock::new(Provider::default),
+            calendar: LazyLock::new(Provider::default),
         };
         tessera_ui::run(
             host,

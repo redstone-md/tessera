@@ -21,6 +21,7 @@
 mod activation;
 mod apps;
 mod audio;
+pub mod calendar;
 mod diagnostics;
 mod error;
 mod events;
@@ -39,6 +40,9 @@ mod native_apps;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_audio;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_calendar;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_events;

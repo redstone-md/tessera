@@ -55,6 +55,7 @@ struct FixtureHost {
     launcher_attach_calls: AtomicUsize,
     launcher_attachment_result: Mutex<Result<(), String>>,
     folder_provider: Mutex<Option<Arc<dyn tessera_system::folders::FolderHost>>>,
+    calendar_provider: Mutex<Option<Arc<dyn tessera_system::calendar::CalendarHost>>>,
 }
 
 impl FixtureHost {
@@ -83,6 +84,7 @@ impl FixtureHost {
             launcher_attach_calls: AtomicUsize::new(0),
             launcher_attachment_result: Mutex::new(Ok(())),
             folder_provider: Mutex::default(),
+            calendar_provider: Mutex::default(),
         })
     }
 
@@ -104,6 +106,15 @@ impl DesktopHost for FixtureHost {
         tessera_system::folders::FolderError,
     > {
         Ok(self.folder_provider.lock().clone())
+    }
+
+    fn calendar_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::calendar::CalendarHost>>,
+        tessera_system::calendar::CalendarError,
+    > {
+        Ok(self.calendar_provider.lock().clone())
     }
 
     fn activate(&self, key: &str) -> Result<(), String> {
@@ -1057,6 +1068,7 @@ fn appearance_callbacks_during_show_apply_latest_geometry_without_reentrant_leas
 
 struct LauncherFixture {
     // Drop transient and bar attachments before the owned component windows.
+    _calendar_scope: crate::transient_window::TransientScope<crate::calendar::CalendarController>,
     _user_scope: crate::transient_window::TransientScope<crate::user_menu::UserMenuController>,
     _quick_scope:
         crate::transient_window::TransientScope<crate::quick_settings::QuickSettingsController>,
@@ -1103,8 +1115,13 @@ impl LauncherFixture {
             Rc::clone(&controller.user_menu),
             crate::user_menu::UserMenuController::hide,
         );
+        let calendar_scope = crate::transient_window::TransientScope::new(
+            Rc::clone(&controller.calendar),
+            crate::calendar::CalendarController::hide,
+        );
         apply_result_to_both(&controller, &panel, Ok(snapshot));
         Self {
+            _calendar_scope: calendar_scope,
             _user_scope: user_scope,
             _quick_scope: quick_scope,
             _scope: scope,
@@ -1140,27 +1157,7 @@ impl LauncherFixture {
     }
 
     fn click_launcher(&self, label: &str) {
-        use slint::platform::{PointerEventButton, WindowEvent};
-        let button =
-            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&self.launcher, label)
-                .next()
-                .unwrap_or_else(|| panic!("missing native launcher control: {label}"));
-        let origin = button.absolute_position();
-        let size = button.size();
-        let position =
-            slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
-        self.launcher
-            .window()
-            .dispatch_event(WindowEvent::PointerPressed {
-                position,
-                button: PointerEventButton::Left,
-            });
-        self.launcher
-            .window()
-            .dispatch_event(WindowEvent::PointerReleased {
-                position,
-                button: PointerEventButton::Left,
-            });
+        click_component(&self.launcher, label);
     }
 
     fn key(&self, text: slint::SharedString) {
@@ -1172,6 +1169,210 @@ impl LauncherFixture {
             .window()
             .dispatch_event(WindowEvent::KeyReleased { text });
     }
+}
+
+fn click_component<C: slint::ComponentHandle>(component: &C, label: &str) {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let mut controls =
+        ElementHandle::find_by_accessible_label(component, label).filter(|element| {
+            element
+                .accessible_role()
+                .is_some_and(|role| role != AccessibleRole::None)
+        });
+    let control = controls
+        .next()
+        .unwrap_or_else(|| panic!("missing native control: {label}"));
+    assert!(
+        controls.next().is_none(),
+        "duplicate genuine native control: {label}"
+    );
+    let origin = control.absolute_position();
+    let size = control.size();
+    let position =
+        slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
+    component
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+    component
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+}
+
+#[test]
+fn toolbar_native_clock_reads_calendar_not_clock_text_and_routes_current_day_input() {
+    use tessera_system::calendar::{
+        CalendarError, CalendarHost, CalendarReadCompletion, CalendarSnapshot, CivilDate, WeekStart,
+    };
+    struct NativeDateFixture {
+        reads: AtomicUsize,
+        snapshot: CalendarSnapshot,
+    }
+    impl CalendarHost for NativeDateFixture {
+        fn read(&self, completion: CalendarReadCompletion) -> Result<(), CalendarError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            completion(Ok(self.snapshot.clone()));
+            Ok(())
+        }
+    }
+    // Deliberately unrelated clock text: the actual date comes only from the
+    // capability. These explicit recording-fixture labels are not OS fallbacks.
+    let date = Arc::new(NativeDateFixture {
+        reads: AtomicUsize::new(0),
+        snapshot: CalendarSnapshot::new(
+            CivilDate::new(2024, 1, 31).unwrap(),
+            "en-US".into(),
+            [
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ]
+            .map(str::to_owned),
+            [
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
+            ]
+            .map(str::to_owned),
+            ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(str::to_owned),
+            WeekStart::Monday,
+        )
+        .unwrap(),
+    });
+    let fixture = LauncherFixture::new();
+    *fixture.host.calendar_provider.lock() = Some(date.clone());
+    fixture.controller.open_launcher();
+    fixture.toolbar.set_clock("Native clock format".into());
+    let observations = fixture.host.observe_calls.load(Ordering::SeqCst);
+    assert!(fixture.toolbar.window().is_visible());
+    click_component(&fixture.toolbar, "Open calendar");
+    let calendar = fixture.controller.calendar.borrow().clone().unwrap();
+    assert!(calendar.is_open());
+    calendar.component().invoke_calendar_event_ready();
+    assert_eq!(date.reads.load(Ordering::SeqCst), 1);
+    assert!(!calendar.component().get_loading());
+    assert_eq!(
+        calendar.component().get_title_text().as_str(),
+        "January 2024"
+    );
+    assert!(fixture.launcher.window().is_visible());
+    fixture
+        .launcher
+        .invoke_open_user_menu_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(f32::MAX, 10.0),
+            width: 80.0,
+            height: 32.0,
+        });
+    assert!(
+        calendar.is_open(),
+        "invalid User native placement retains Calendar"
+    );
+    assert!(
+        !fixture
+            .controller
+            .user_menu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .is_open()
+    );
+    assert_eq!(date.reads.load(Ordering::SeqCst), 1);
+    click_component(calendar.component(), "Next month");
+    assert_eq!(
+        calendar.component().get_title_text().as_str(),
+        "February 2024"
+    );
+    let off_month = calendar
+        .component()
+        .get_weeks()
+        .iter()
+        .flat_map(|week| week.days.iter().collect::<Vec<_>>())
+        .find(|day| day.off_month && day.label == "31")
+        .unwrap();
+    click_component(calendar.component(), &off_month.description);
+    assert_eq!(
+        calendar.component().get_title_text().as_str(),
+        "January 2024"
+    );
+    assert_eq!(
+        date.reads.load(Ordering::SeqCst),
+        1,
+        "browsing is pure, not desktop observation"
+    );
+    assert!(!fixture.panel.window().is_visible());
+    click_component(&fixture.toolbar, "Open quick settings");
+    assert!(
+        !calendar.is_open(),
+        "accepted competing popup displaces Calendar"
+    );
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    assert!(quick.is_open());
+    fixture
+        .toolbar
+        .invoke_calendar_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(f32::MAX, 8.0),
+            width: 80.0,
+            height: 16.0,
+        });
+    assert!(!calendar.is_open());
+    assert!(
+        quick.is_open(),
+        "invalid native placement retains the existing popup"
+    );
+    assert_eq!(date.reads.load(Ordering::SeqCst), 1);
+    *fixture.host.ui_focus_result.lock() = Err("Foreground was refused".into());
+    click_component(&fixture.toolbar, "Open calendar");
+    assert!(
+        calendar.is_open(),
+        "foreground denial still leaves an honest visible Calendar"
+    );
+    assert!(
+        !quick.is_open(),
+        "visible Calendar displaces Quick despite its focus error"
+    );
+    calendar.component().invoke_calendar_event_ready();
+    assert_eq!(date.reads.load(Ordering::SeqCst), 2);
+    click_component(&fixture.toolbar, "Open quick settings");
+    assert!(!calendar.is_open());
+    fixture.toolbar.hide().unwrap();
+    fixture
+        .toolbar
+        .invoke_calendar_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(10.0, 8.0),
+            width: 80.0,
+            height: 16.0,
+        });
+    assert!(
+        !calendar.is_open(),
+        "queued hidden clock cannot reopen Calendar"
+    );
+    assert_eq!(date.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        fixture.host.observe_calls.load(Ordering::SeqCst),
+        observations
+    );
+    assert!(fixture.host.launches.lock().is_empty());
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(fixture.host.system_actions.lock().is_empty());
 }
 
 #[test]
