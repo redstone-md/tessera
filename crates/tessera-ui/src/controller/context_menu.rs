@@ -14,6 +14,13 @@ use slint::ComponentHandle;
 pub(super) type Menus = TransientCache<ContextMenuController>;
 
 impl PanelController {
+    pub(super) fn refresh_recycle_actions(&self) {
+        let menu = self.menus.borrow().clone();
+        if let Some(menu) = menu {
+            menu.refresh_recycle_actions();
+        }
+    }
+
     pub(super) fn open_dock_menu(&self, kind: DockMenuKind, key: &str, point: (f32, f32)) {
         self.dismiss_tooltip(false);
         if matches!(kind, DockMenuKind::Pinned | DockMenuKind::Window) && self.guarded() {

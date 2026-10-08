@@ -349,6 +349,8 @@ impl PanelController {
         let weak = self.clone();
         dock.on_recycle_event_ready(move || weak.recycle_bin_event_ready());
         let weak = self.clone();
+        dock.on_recycle_projection_changed(move || weak.refresh_recycle_actions());
+        let weak = self.clone();
         dock.on_context_menu_requested(move |kind, key, point| {
             weak.open_dock_menu(kind, &key, (point.x, point.y));
         });

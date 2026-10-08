@@ -2021,6 +2021,13 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
         assert_eq!(action, crate::generated::DockRecycleAction::Open);
         count.set(count.get() + 1);
     });
+    let trash_contexts = Rc::new(Cell::new(0));
+    let count = trash_contexts.clone();
+    dock.on_context_menu_requested(move |kind, key, _| {
+        assert_eq!(kind, crate::generated::DockMenuKind::Recycle);
+        assert!(key.is_empty());
+        count.set(count.get() + 1);
+    });
     dock.show().unwrap();
     window.set_size(slint::PhysicalSize::new(248, 72));
     window
@@ -2088,11 +2095,34 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
     press(Key::Tab.into());
     press(Key::Return.into());
     assert_eq!(
-        (opens.get(), utilities.get(), launches.get()),
-        (4, 2, 1),
-        "disabled application and both pending utilities are skipped, not dead stops",
+        (
+            opens.get(),
+            utilities.get(),
+            launches.get(),
+            trash_opens.get()
+        ),
+        (3, 2, 1, 2),
+        "disabled app/Desktop are skipped, but busy Trash keeps its context focus stop",
     );
     assert_eq!(trash_opens.get(), 2, "pending Trash cannot activate again");
+    press(Key::Menu.into());
+    assert_eq!(
+        trash_contexts.get(),
+        1,
+        "the busy focus stop is genuinely Trash"
+    );
+    press(Key::Tab.into());
+    press(Key::Return.into());
+    assert_eq!(
+        (
+            opens.get(),
+            utilities.get(),
+            launches.get(),
+            trash_opens.get()
+        ),
+        (4, 2, 1, 2),
+        "the next Tab wraps from actionable Trash to Start without replaying Open",
+    );
 }
 
 #[test]

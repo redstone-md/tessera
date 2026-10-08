@@ -40,6 +40,9 @@ export component Dock inherits Window {
     in property <string> recycle-read-notice;
     in property <string> recycle-watch-notice;
     in property <string> recycle-open-notice;
+    in-out property <bool> recycle-empty-busy: false;
+    in-out property <bool> recycle-empty-enabled: false;
+    in-out property <string> recycle-empty-notice: "";
     property <bool> vertical: root.edge >= 2;
     callback launch-requested(string);
     callback window-command-requested(string, DockWindowCommand);
@@ -52,6 +55,8 @@ export component Dock inherits Window {
     callback utility-event-ready();
     callback recycle-action-requested(DockRecycleAction);
     callback recycle-event-ready();
+    callback recycle-projection-changed();
+    changed recycle-empty-enabled => { root.recycle-projection-changed(); }
     callback context-menu-requested(DockMenuKind, string, Point);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
@@ -67,7 +72,7 @@ export component Dock inherits Window {
     property <length> icon-pad: 6px * root.factor;
     property <bool> blocked: root.surface-status.refreshing || root.surface-status.stale;
     // Only confirmed projections carry counts. Notices retain independent
-    // read/watch/open health; the generic glyph does not certify emptiness.
+    // read/watch/open/empty health; the generic glyph does not certify emptiness.
     property <string> recycle-description: @tr("Recycle Bin") + "\n"
         + (root.recycle-state == DockRecycleState.unknown
             ? (root.recycle-read-busy ? @tr("Loading") : @tr("Unknown"))
@@ -75,7 +80,8 @@ export component Dock inherits Window {
         + (root.recycle-stale ? "\n" + @tr("Stale") : "")
         + (root.recycle-read-notice == "" ? "" : "\n" + root.recycle-read-notice)
         + (root.recycle-watch-notice == "" ? "" : "\n" + root.recycle-watch-notice)
-        + (root.recycle-open-notice == "" ? "" : "\n" + root.recycle-open-notice);
+        + (root.recycle-open-notice == "" ? "" : "\n" + root.recycle-open-notice)
+        + (root.recycle-empty-notice == "" ? "" : "\n" + root.recycle-empty-notice);
 
     // The bar itself: an inner rounded rectangle inside the transparent
     // window's outer margin. Start/Show desktop lead, Trash trails, and only
@@ -252,13 +258,16 @@ export component Dock inherits Window {
             width: root.item;
             height: root.item;
             radius: root.tile-radius;
-            enabled: !root.recycle-open-busy;
             allow-return-repeat: false;
             accessible-text: root.recycle-description;
             tooltip-text: root.recycle-description;
             tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
             tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
-            clicked => { root.recycle-action-requested(DockRecycleAction.open); }
+            clicked => {
+                if !root.recycle-open-busy {
+                    root.recycle-action-requested(DockRecycleAction.open);
+                }
+            }
             context-requested(position) => {
                 root.context-menu-requested(DockMenuKind.recycle, "", position);
             }

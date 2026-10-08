@@ -5,6 +5,6 @@ export enum DockWindowCommand { activate, toggle, minimize, close }
 export enum DockSystemCommand { file-manager, task-manager, restore }
 export enum DockReservedAction { show-desktop }
 export enum DockRecycleState { unknown, empty, full }
-export enum DockRecycleAction { open, retry }
+export enum DockRecycleAction { open, retry, empty }
 export enum DockMenuKind { bar, pinned, window, recycle }
-export enum DockMenuAction { activate, minimize, close, launch, unpin, settings, file-manager, task-manager, restore, exit, recycle-retry }
+export enum DockMenuAction { activate, minimize, close, launch, unpin, settings, file-manager, task-manager, restore, exit, recycle-retry, recycle-empty }

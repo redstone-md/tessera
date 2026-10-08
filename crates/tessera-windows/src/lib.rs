@@ -56,10 +56,14 @@ mod native_folders;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_recycle_bin_mutation;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_window_actions;
 pub mod recycle_bin;
+pub mod recycle_bin_mutation;
 #[cfg(any(windows, test))]
 mod shell_recovery;
 mod shell_runtime;

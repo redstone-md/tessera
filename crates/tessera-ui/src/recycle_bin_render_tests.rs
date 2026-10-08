@@ -179,6 +179,16 @@ fn recycle_fixed_trailing_layout_all_edges_compact_themes_and_dpi() {
                     };
                     let physical_width = (width * factor * scale).ceil() as u32;
                     let physical_height = (height * factor * scale).ceil() as u32;
+                    let baseline = fixture.render(physical_width, physical_height, scale);
+                    fixture.dock.set_recycle_empty_busy(true);
+                    fixture.dock.set_recycle_empty_enabled(true);
+                    assert_eq!(
+                        fixture.render(physical_width, physical_height, scale),
+                        baseline,
+                        "mutation projection must not change dock geometry or artwork"
+                    );
+                    fixture.dock.set_recycle_empty_busy(false);
+                    fixture.dock.set_recycle_empty_enabled(false);
                     fixture.render(physical_width, physical_height, scale);
                     for (tile, along, trailing) in [
                         (
@@ -250,8 +260,11 @@ fn recycle_unknown_confirmed_count_stale_and_independent_safe_notices() {
     fixture
         .dock
         .set_recycle_open_notice("Open unavailable".into());
+    fixture
+        .dock
+        .set_recycle_empty_notice("Native operation returned; refreshing state".into());
     fixture.render(216, 72, 1.0);
-    let expected = "Recycle Bin\n18446744073709551615 items\nStale\nRead unavailable\nLive updates unavailable\nOpen unavailable";
+    let expected = "Recycle Bin\n18446744073709551615 items\nStale\nRead unavailable\nLive updates unavailable\nOpen unavailable\nNative operation returned; refreshing state";
     assert_eq!(
         fixture.trash().accessible_label().as_deref(),
         Some(expected)
@@ -325,6 +338,8 @@ fn recycle_real_input_tab_ax_context_and_open_independence() {
     });
     fixture.dock.set_show_desktop_busy(true);
     fixture.dock.set_recycle_read_busy(true);
+    fixture.dock.set_recycle_empty_busy(true);
+    fixture.dock.set_recycle_empty_enabled(false);
     fixture
         .dock
         .set_recycle_watch_notice("Live updates unavailable".into());
@@ -340,17 +355,47 @@ fn recycle_real_input_tab_ax_context_and_open_independence() {
     );
     fixture.dock.set_recycle_open_busy(true);
     fixture.render(216, 72, 1.0);
-    assert_eq!(fixture.trash().accessible_enabled(), Some(false));
+    assert_eq!(fixture.trash().accessible_enabled(), Some(true));
     fixture.pointer(&fixture.trash(), PointerEventButton::Left);
     fixture.trash().invoke_accessible_default_action();
     fixture.key(Key::Return);
     assert!(fixture.take().is_empty());
+    fixture.key(Key::Space);
+    assert!(
+        fixture.take().is_empty(),
+        "busy Open denies only the primary action"
+    );
+    fixture.key(Key::Menu);
+    assert_eq!(
+        fixture.take(),
+        vec![Request::Context(DockMenuKind::Recycle, String::new())]
+    );
+    fixture.event(WindowEvent::KeyPressed {
+        text: Key::Shift.into(),
+    });
+    fixture.key(Key::F10);
+    fixture.event(WindowEvent::KeyReleased {
+        text: Key::Shift.into(),
+    });
+    assert_eq!(
+        fixture.take(),
+        vec![Request::Context(DockMenuKind::Recycle, String::new())]
+    );
+    fixture.pointer(&fixture.trash(), PointerEventButton::Right);
+    assert_eq!(
+        fixture.take(),
+        vec![Request::Context(DockMenuKind::Recycle, String::new())]
+    );
 }
 
 #[test]
 fn recycle_scroll_retains_all_apps_fixed_utilities_and_finite_tiny_bounds() {
     let fixture = Fixture::new();
     fixture.apps(64);
+    fixture.dock.set_recycle_empty_busy(true);
+    fixture
+        .dock
+        .set_recycle_empty_notice("Empty unavailable".into());
     for edge in 0..4 {
         fixture.dock.set_edge(edge);
         let (width, height) = if edge < 2 { (216, 72) } else { (72, 216) };
@@ -397,7 +442,7 @@ fn recycle_scroll_retains_all_apps_fixed_utilities_and_finite_tiny_bounds() {
 }
 
 #[test]
-fn recycle_context_surface_has_only_real_retry_row_and_preserves_other_scopes() {
+fn recycle_context_real_empty_retry_inputs_enabled_repeat_and_other_scopes() {
     use crate::generated::{ContextMenuSurface, DockMenuAction};
 
     let fixture = Fixture::new();
@@ -408,16 +453,150 @@ fn recycle_context_surface_has_only_real_retry_row_and_preserves_other_scopes() 
     menu.on_action_requested(move |action| recorded.borrow_mut().push(action));
     menu.set_kind(DockMenuKind::Recycle);
     menu.show().unwrap();
-    fixture.render(240, 100, 1.0);
+    fixture.render(240, 140, 1.0);
     let buttons = ElementQuery::from_root(&menu)
         .find_all()
         .into_iter()
         .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
         .collect::<Vec<_>>();
-    assert_eq!(buttons.len(), 1);
-    assert_eq!(buttons[0].accessible_label().as_deref(), Some("Retry"));
-    fixture.pointer(&buttons[0], PointerEventButton::Left);
-    assert_eq!(*actions.borrow(), vec![DockMenuAction::RecycleRetry]);
+    assert_eq!(buttons.len(), 2);
+    let empty = ElementHandle::find_by_accessible_label(&menu, "Empty Recycle Bin")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+        .unwrap();
+    let retry = ElementHandle::find_by_accessible_label(&menu, "Retry")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+        .unwrap();
+    assert_eq!(empty.accessible_enabled(), Some(false));
+    assert_eq!(retry.accessible_enabled(), Some(true));
+    assert!(empty.absolute_position().y < retry.absolute_position().y);
+    for button in [&empty, &retry] {
+        let origin = button.absolute_position();
+        let size = button.size();
+        assert!(size.width > 0.0 && size.height > 0.0);
+        assert!(origin.x >= 0.0 && origin.y >= 0.0);
+        assert!(origin.x + size.width <= 240.0);
+        assert!(origin.y + size.height <= 140.0);
+    }
+    fixture.pointer(&empty, PointerEventButton::Left);
+    empty.invoke_accessible_default_action();
+    menu.set_selected_index(0);
+    menu.invoke_focus_menu();
+    fixture.key(Key::Return);
+    fixture.key(Key::Space);
+    fixture.event(WindowEvent::KeyPressRepeated {
+        text: Key::Return.into(),
+    });
+    assert!(actions.borrow().is_empty());
+    for key in [Key::Home, Key::End, Key::UpArrow, Key::DownArrow] {
+        menu.set_selected_index(0);
+        menu.invoke_focus_menu();
+        fixture.key(key);
+        assert_eq!(menu.get_selected_index(), 1);
+    }
+    fixture.pointer(&retry, PointerEventButton::Left);
+    assert_eq!(
+        std::mem::take(&mut *actions.borrow_mut()),
+        vec![DockMenuAction::RecycleRetry]
+    );
+    menu.set_selected_index(1);
+    menu.invoke_focus_menu();
+    fixture.key(Key::Return);
+    fixture.event(WindowEvent::KeyPressRepeated {
+        text: Key::Return.into(),
+    });
+    assert_eq!(
+        std::mem::take(&mut *actions.borrow_mut()),
+        vec![DockMenuAction::RecycleRetry, DockMenuAction::RecycleRetry]
+    );
+
+    // The menu's live input is independent of read/count/Open projections.
+    fixture.dock.set_recycle_read_busy(true);
+    fixture.dock.set_recycle_open_busy(true);
+    fixture.dock.set_recycle_stale(true);
+    fixture.dock.set_recycle_item_count_label("0 items".into());
+    for state in [
+        DockRecycleState::Unknown,
+        DockRecycleState::Empty,
+        DockRecycleState::Full,
+    ] {
+        fixture.dock.set_recycle_state(state);
+        menu.set_recycle_empty_enabled(true);
+        fixture.render(240, 140, 1.0);
+        assert_eq!(empty.accessible_enabled(), Some(true));
+        fixture.pointer(&empty, PointerEventButton::Left);
+        assert_eq!(
+            std::mem::take(&mut *actions.borrow_mut()),
+            vec![DockMenuAction::RecycleEmpty]
+        );
+    }
+    // Exercise the FocusScope fallback before row keyboard focus.
+    for key in [Key::Return, Key::Space] {
+        let text: slint::SharedString = key.into();
+        menu.set_selected_index(0);
+        menu.invoke_focus_menu();
+        fixture.event(WindowEvent::KeyPressRepeated { text: text.clone() });
+        assert!(
+            actions.borrow().is_empty(),
+            "a repeated key is not a fresh Empty intent"
+        );
+        fixture.event(WindowEvent::KeyPressed { text: text.clone() });
+        fixture.event(WindowEvent::KeyPressRepeated { text: text.clone() });
+        assert_eq!(
+            std::mem::take(&mut *actions.borrow_mut()),
+            vec![DockMenuAction::RecycleEmpty]
+        );
+        menu.set_recycle_empty_enabled(false);
+        fixture.render(240, 140, 1.0);
+        menu.set_recycle_empty_enabled(true);
+        fixture.render(240, 140, 1.0);
+        menu.invoke_focus_menu();
+        fixture.event(WindowEvent::KeyPressRepeated { text: text.clone() });
+        assert!(
+            actions.borrow().is_empty(),
+            "completed action must not revive a held key"
+        );
+        fixture.event(WindowEvent::KeyReleased { text });
+    }
+    fixture.key(Key::Home);
+    assert_eq!(menu.get_selected_index(), 0);
+    fixture.render(240, 140, 1.0);
+    fixture.key(Key::Return);
+    fixture.event(WindowEvent::KeyPressRepeated {
+        text: Key::Return.into(),
+    });
+    assert_eq!(
+        std::mem::take(&mut *actions.borrow_mut()),
+        vec![DockMenuAction::RecycleEmpty]
+    );
+    fixture.key(Key::Space);
+    assert_eq!(
+        std::mem::take(&mut *actions.borrow_mut()),
+        vec![DockMenuAction::RecycleEmpty]
+    );
+    menu.set_recycle_empty_enabled(false);
+    fixture.render(240, 140, 1.0);
+    fixture.pointer(&empty, PointerEventButton::Left);
+    fixture.key(Key::Return);
+    fixture.key(Key::Space);
+    fixture.event(WindowEvent::KeyPressRepeated {
+        text: Key::Return.into(),
+    });
+    assert!(actions.borrow().is_empty());
+    fixture.dock.set_recycle_empty_busy(true);
+    assert_eq!(retry.accessible_enabled(), Some(true));
+    fixture.pointer(&retry, PointerEventButton::Left);
+    assert_eq!(
+        std::mem::take(&mut *actions.borrow_mut()),
+        vec![DockMenuAction::RecycleRetry]
+    );
+    menu.set_recycle_empty_enabled(true);
+    fixture.render(240, 140, 1.0);
+    fixture.key(Key::End);
+    assert_eq!(menu.get_selected_index(), 1);
+    fixture.key(Key::DownArrow);
+    assert_eq!(menu.get_selected_index(), 0);
+    fixture.key(Key::UpArrow);
+    assert_eq!(menu.get_selected_index(), 1);
     for (kind, expected) in [
         (DockMenuKind::Bar, 5),
         (DockMenuKind::Pinned, 2),
@@ -431,10 +610,37 @@ fn recycle_context_surface_has_only_real_retry_row_and_preserves_other_scopes() 
             .filter(|element| element.accessible_role() == Some(AccessibleRole::Button))
             .collect::<Vec<_>>();
         assert_eq!(buttons.len(), expected);
+        assert!(buttons.iter().all(|element| !matches!(
+            element.accessible_label().as_deref(),
+            Some("Retry" | "Empty Recycle Bin")
+        )));
         assert!(
             buttons
                 .iter()
-                .all(|element| element.accessible_label().as_deref() != Some("Retry"))
+                .all(|element| element.accessible_enabled() == Some(true))
+        );
+        menu.set_selected_index(0);
+        menu.invoke_focus_menu();
+        fixture.key(Key::Home);
+        assert_eq!(menu.get_selected_index(), 0);
+        fixture.key(Key::End);
+        assert_eq!(menu.get_selected_index(), expected as i32 - 1);
+        fixture.key(Key::DownArrow);
+        assert_eq!(menu.get_selected_index(), 0);
+        fixture.render(240, 360, 1.0);
+        fixture.key(Key::Return);
+        fixture.event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+        let expected_action = match kind {
+            DockMenuKind::Bar => DockMenuAction::Settings,
+            DockMenuKind::Pinned => DockMenuAction::Launch,
+            DockMenuKind::Window => DockMenuAction::Activate,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            std::mem::take(&mut *actions.borrow_mut()),
+            vec![expected_action, expected_action]
         );
     }
     menu.hide().unwrap();
@@ -444,6 +650,8 @@ fn recycle_context_surface_has_only_real_retry_row_and_preserves_other_scopes() 
 fn recycle_empty_and_capped_viewport_never_truncate_models() {
     let fixture = Fixture::new();
     for (count, along) in [(0, 168), (1, 216), (29, 1560), (32, 1560), (64, 1560)] {
+        fixture.dock.set_recycle_empty_enabled(count % 2 == 0);
+        fixture.dock.set_recycle_empty_busy(count % 2 != 0);
         fixture.apps(count);
         for edge in 0..4 {
             fixture.dock.set_edge(edge);

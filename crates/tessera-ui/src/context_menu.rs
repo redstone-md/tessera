@@ -47,6 +47,7 @@ pub(crate) struct ContextMenuController {
     surface: TransientWindow<ContextMenuSurface>,
     dock: slint::Weak<Dock>,
     key: RefCell<SharedString>,
+    scope_generation: Cell<Option<u64>>,
     focus_seen: Cell<bool>,
     focus_watch: slint::Timer,
 }
@@ -71,6 +72,7 @@ impl ContextMenuController {
             ),
             dock: dock.as_weak(),
             key: RefCell::default(),
+            scope_generation: Cell::new(Some(0)),
             focus_seen: Cell::new(false),
             focus_watch: slint::Timer::default(),
         });
@@ -103,7 +105,16 @@ impl ContextMenuController {
         anchor: slint::PhysicalPosition,
         context: DockContext,
     ) -> Result<(), String> {
+        let retired_generation = self
+            .scope_generation
+            .get()
+            .and_then(|generation| generation.checked_add(1));
         self.hide();
+        // Lease Drop may publish a newer scope before this payload is applied.
+        // At exhaustion, a visible replacement still wins; ordinary shows remain usable.
+        if self.scope_generation.get() != retired_generation || self.is_open() {
+            return Ok(());
+        }
         let dock = self
             .dock
             .upgrade()
@@ -130,6 +141,9 @@ impl ContextMenuController {
         };
         self.surface
             .set_target_icon(target_icon.unwrap_or_default());
+        self.surface.set_recycle_empty_enabled(
+            kind == DockMenuKind::Recycle && dock.get_recycle_empty_enabled(),
+        );
         self.surface.set_selected_index(0);
         *self.key.borrow_mut() = key;
         self.surface
@@ -146,6 +160,7 @@ impl ContextMenuController {
         if !self.surface.present(rect.position, rect.size)? {
             return Ok(());
         }
+        self.refresh_recycle_actions();
         self.surface.invoke_focus_menu();
         let focus = self.surface.request_focus();
         self.focus_seen.set(self.is_focused() == Some(true));
@@ -171,8 +186,25 @@ impl ContextMenuController {
     }
 
     pub(crate) fn hide(&self) {
+        self.scope_generation.set(
+            self.scope_generation
+                .get()
+                .and_then(|generation| generation.checked_add(1)),
+        );
+        self.surface.set_recycle_empty_enabled(false);
         self.focus_watch.stop();
         self.surface.hide();
+    }
+
+    /// Refresh only the current recycle popup; this never presents or focuses it.
+    pub(crate) fn refresh_recycle_actions(&self) {
+        if self.is_open() && self.surface.get_kind() == DockMenuKind::Recycle {
+            self.surface.set_recycle_empty_enabled(
+                self.dock
+                    .upgrade()
+                    .is_some_and(|dock| dock.get_recycle_empty_enabled()),
+            );
+        }
     }
     pub(crate) fn disable_motion(&self) {
         self.surface.disable_motion();
@@ -184,6 +216,16 @@ impl ContextMenuController {
         }
         let key = self.key.borrow().clone();
         let dock = self.dock.upgrade();
+        let scope_generation = self.scope_generation.get();
+        if action == DockMenuAction::RecycleEmpty
+            && (scope_generation.is_none()
+                || !key.is_empty()
+                || dock.as_ref().is_some_and(|dock| {
+                    !dock.window().is_visible() || !dock.get_recycle_empty_enabled()
+                }))
+        {
+            return;
+        }
         // Releasing our foreground/native role precedes any parent callback.
         self.hide();
         let Some(dock) = dock else { return };
@@ -210,6 +252,18 @@ impl ContextMenuController {
                 dock.invoke_system_command_requested(DockSystemCommand::Restore)
             }
             DockMenuAction::Exit => dock.invoke_exit_requested(),
+            DockMenuAction::RecycleEmpty => {
+                // Lease Drop may reenter, replace this scope, or retire the dock.
+                let same_scope = scope_generation
+                    .and_then(|generation| generation.checked_add(1))
+                    .is_some_and(|generation| self.scope_generation.get() == Some(generation))
+                    && !self.is_open()
+                    && self.surface.get_kind() == DockMenuKind::Recycle
+                    && self.key.borrow().is_empty();
+                if same_scope && dock.window().is_visible() && dock.get_recycle_empty_enabled() {
+                    dock.invoke_recycle_action_requested(DockRecycleAction::Empty);
+                }
+            }
             DockMenuAction::RecycleRetry => {
                 dock.invoke_recycle_action_requested(DockRecycleAction::Retry)
             }
@@ -251,6 +305,9 @@ fn allowed(kind: DockMenuKind, action: DockMenuAction) -> bool {
             action,
             DockMenuAction::Activate | DockMenuAction::Minimize | DockMenuAction::Close
         ),
-        DockMenuKind::Recycle => action == DockMenuAction::RecycleRetry,
+        DockMenuKind::Recycle => matches!(
+            action,
+            DockMenuAction::RecycleEmpty | DockMenuAction::RecycleRetry
+        ),
     }
 }

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
-use crate::generated::SeelenPalette;
+use crate::generated::{DockRecycleState, DockStatus, SeelenPalette};
 use crate::{PanelPreferences, PanelSnapshot, SystemAction};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use parking_lot::Mutex;
@@ -15,15 +15,24 @@ struct Host {
     observations: AtomicUsize,
     forbidden_calls: AtomicUsize,
     recycle_acquisitions: AtomicUsize,
+    mutation_acquisitions: AtomicUsize,
+    detach_callback: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     deny_focus: AtomicBool,
     deny_attach: AtomicBool,
     tooltip_role: AtomicBool,
 }
 
-struct Lease(Arc<Mutex<Vec<String>>>);
+struct Lease {
+    events: Arc<Mutex<Vec<String>>>,
+    on_drop: Option<Box<dyn FnOnce() + Send>>,
+}
+
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.0.lock().push("detach".into());
+        self.events.lock().push("detach".into());
+        if let Some(callback) = self.on_drop.take() {
+            callback();
+        }
     }
 }
 
@@ -65,6 +74,15 @@ impl DesktopHost for Host {
         self.recycle_acquisitions.fetch_add(1, Ordering::Relaxed);
         Ok(None)
     }
+    fn recycle_bin_mutation_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::recycle_bin_mutation::RecycleBinMutationHost>>,
+        tessera_system::dock_utilities::DockUtilityError,
+    > {
+        self.mutation_acquisitions.fetch_add(1, Ordering::Relaxed);
+        Ok(None)
+    }
     fn configure_surface(
         &self,
         kind: SurfaceKind,
@@ -83,7 +101,10 @@ impl DesktopHost for Host {
             return Err("Native surface attachment denied".into());
         }
         self.events.lock().push("attach".into());
-        Ok(Some(Box::new(Lease(Arc::clone(&self.events)))))
+        Ok(Some(Box::new(Lease {
+            events: Arc::clone(&self.events),
+            on_drop: self.detach_callback.lock().take(),
+        })))
     }
     fn request_ui_focus(&self, _: &slint::Window) -> Result<(), String> {
         self.events.lock().push("focus".into());
@@ -126,15 +147,16 @@ fn assert_no_effects(host: &Host) {
     assert_eq!(host.observations.load(Ordering::Relaxed), 0);
     assert_eq!(host.forbidden_calls.load(Ordering::Relaxed), 0);
     assert_eq!(host.recycle_acquisitions.load(Ordering::Relaxed), 0);
+    assert_eq!(host.mutation_acquisitions.load(Ordering::Relaxed), 0);
 }
 
-fn click_retry(menu: &ContextMenuController) {
-    let mut rows = ElementHandle::find_by_accessible_label(menu.component(), "Retry")
+fn click_row(menu: &ContextMenuController, label: &str) {
+    let mut rows = ElementHandle::find_by_accessible_label(menu.component(), label)
         .filter(|element| element.accessible_role() == Some(AccessibleRole::Button));
     let row = rows
         .next()
-        .expect("Recycle menu must contain its real Retry button");
-    assert!(rows.next().is_none(), "Retry must be unique");
+        .expect("Recycle menu must contain its real command button");
+    assert!(rows.next().is_none(), "Command row must be unique");
     let origin = row.absolute_position();
     let size = row.size();
     assert!(size.width > 0.0 && size.height > 0.0);
@@ -150,6 +172,27 @@ fn click_retry(menu: &ContextMenuController) {
         position,
         button: PointerEventButton::Left,
     });
+}
+
+fn record_other_commands(dock: &Dock) -> Rc<RefCell<Vec<&'static str>>> {
+    let commands = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&commands);
+    dock.on_launch_requested(move |_| recorded.borrow_mut().push("launch"));
+    let recorded = Rc::clone(&commands);
+    dock.on_window_command_requested(move |_, _| recorded.borrow_mut().push("window"));
+    let recorded = Rc::clone(&commands);
+    dock.on_pin_toggle_requested(move |_, _| recorded.borrow_mut().push("pin"));
+    let recorded = Rc::clone(&commands);
+    dock.on_system_command_requested(move |_| recorded.borrow_mut().push("system"));
+    let recorded = Rc::clone(&commands);
+    dock.on_open_settings_requested(move || recorded.borrow_mut().push("settings"));
+    let recorded = Rc::clone(&commands);
+    dock.on_exit_requested(move || recorded.borrow_mut().push("exit"));
+    let recorded = Rc::clone(&commands);
+    dock.on_reserved_action_requested(move |_| recorded.borrow_mut().push("reserved"));
+    let recorded = Rc::clone(&commands);
+    dock.on_open_applications_requested(move || recorded.borrow_mut().push("applications"));
+    commands
 }
 
 #[test]
@@ -350,7 +393,7 @@ fn target_images_are_kind_scoped_and_reset_before_reusing_the_menu() {
 }
 
 #[test]
-fn recycle_scope_authorizes_only_retry_and_detaches_before_typed_dispatch() {
+fn recycle_scope_authorizes_retry_and_detaches_before_typed_dispatch() {
     let (host, dock, menu) = setup();
     let weak = Rc::downgrade(&menu);
     let callback_menu = weak.clone();
@@ -405,6 +448,7 @@ fn recycle_scope_authorizes_only_retry_and_detaches_before_typed_dispatch() {
         assert_eq!(&*host.events.lock(), &["attach", "focus"]);
     }
     assert!(allowed(DockMenuKind::Recycle, DockMenuAction::RecycleRetry));
+    press(&menu, Key::Home);
     press(&menu, Key::Return);
     assert_eq!(&*actions.borrow(), &[DockRecycleAction::Retry]);
     assert_eq!(
@@ -428,7 +472,7 @@ fn recycle_scope_authorizes_only_retry_and_detaches_before_typed_dispatch() {
 }
 
 #[test]
-fn recycle_native_key_navigation_is_single_row_and_escape_is_non_effectful() {
+fn recycle_native_key_navigation_skips_disabled_empty_and_escape_is_non_effectful() {
     let (host, dock, menu) = setup();
     let actions = Rc::new(RefCell::new(Vec::new()));
     let captured = Rc::clone(&actions);
@@ -442,7 +486,7 @@ fn recycle_native_key_navigation_is_single_row_and_escape_is_non_effectful() {
     show(&menu, DockMenuKind::Recycle).unwrap();
     for key in [Key::UpArrow, Key::DownArrow, Key::End, Key::Home] {
         press(&menu, key);
-        assert_eq!(menu.component().get_selected_index(), 0);
+        assert_eq!(menu.component().get_selected_index(), 1);
         assert!(menu.is_open());
     }
     menu.component().set_selected_index(99);
@@ -478,7 +522,7 @@ fn recycle_focus_denial_preserves_real_pointer_retry_and_lease_order() {
     assert!(menu.is_open());
     assert!(actions.borrow().is_empty());
     assert_no_effects(&host);
-    click_retry(&menu);
+    click_row(&menu, "Retry");
     assert!(!menu.is_open());
     assert_eq!(&*actions.borrow(), &[DockRecycleAction::Retry]);
     assert_eq!(
@@ -508,6 +552,7 @@ fn recycle_attachment_denial_rejects_retry_and_later_show_recovers() {
 
     host.deny_attach.store(false, Ordering::Relaxed);
     show(&menu, DockMenuKind::Recycle).unwrap();
+    press(&menu, Key::Home);
     press(&menu, Key::Return);
     assert!(!menu.is_open());
     assert_eq!(&*actions.borrow(), &[DockRecycleAction::Retry]);
@@ -536,5 +581,391 @@ fn recycle_dropped_weak_dock_detaches_without_dispatch_or_resurrection() {
         "The dock is no longer available."
     );
     assert!(!menu.is_open());
+    assert_no_effects(&host);
+}
+
+#[test]
+fn recycle_empty_genuine_inputs_detach_before_dispatch_without_read_or_app_gating() {
+    let (host, dock, menu) = setup();
+    let other_commands = record_other_commands(&dock);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    let callback_menu = Rc::downgrade(&menu);
+    let events = Arc::clone(&host.events);
+    dock.on_recycle_action_requested(move |action| {
+        let menu = callback_menu.upgrade().unwrap();
+        assert!(!menu.is_open());
+        assert_eq!(events.lock().last().unwrap(), "detach");
+        assert_eq!(action, DockRecycleAction::Empty);
+        // No scope borrow may survive into a parent callback.
+        assert!(menu.key.borrow_mut().is_empty());
+        recorded.borrow_mut().push(action);
+        events.lock().push("empty".into());
+    });
+    dock.show().unwrap();
+    dock.set_recycle_empty_enabled(true);
+    dock.set_recycle_read_busy(true);
+    dock.set_recycle_open_busy(true);
+    dock.set_recycle_stale(true);
+    dock.set_recycle_read_notice("Unavailable".into());
+    dock.set_recycle_watch_notice("Unavailable".into());
+    dock.set_surface_status(DockStatus {
+        refreshing: true,
+        stale: true,
+        ..Default::default()
+    });
+    for (state, count, key) in [
+        (DockRecycleState::Unknown, "", None),
+        (DockRecycleState::Empty, "0 items", Some(Key::Return)),
+        (DockRecycleState::Full, "12 items", Some(Key::Space)),
+    ] {
+        dock.set_recycle_state(state);
+        dock.set_recycle_item_count_label(count.into());
+        host.events.lock().clear();
+        show(&menu, DockMenuKind::Recycle).unwrap();
+        assert!(menu.key.borrow().is_empty());
+        assert!(menu.component().get_recycle_empty_enabled());
+        assert_no_effects(&host);
+        if let Some(key) = key {
+            press(&menu, Key::Home);
+            assert_eq!(menu.component().get_selected_index(), 0);
+            press(&menu, key);
+        } else {
+            click_row(&menu, "Empty Recycle Bin");
+        }
+        assert!(!menu.is_open());
+        assert_eq!(
+            &*host.events.lock(),
+            &["attach", "focus", "detach", "empty"]
+        );
+        assert!(other_commands.borrow().is_empty());
+        assert_no_effects(&host);
+    }
+    assert_eq!(&*actions.borrow(), &[DockRecycleAction::Empty; 3]);
+}
+
+#[test]
+fn recycle_empty_revalidates_stale_scope_key_busy_and_hidden_intents() {
+    let (host, dock, menu) = setup();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    dock.on_recycle_action_requested(move |action| recorded.borrow_mut().push(action));
+    dock.show().unwrap();
+    dock.set_recycle_empty_enabled(true);
+    for kind in [
+        DockMenuKind::Bar,
+        DockMenuKind::Pinned,
+        DockMenuKind::Window,
+    ] {
+        assert!(!allowed(kind, DockMenuAction::RecycleEmpty));
+        show(&menu, kind).unwrap();
+        let before = host.events.lock().clone();
+        menu.component()
+            .invoke_action_requested(DockMenuAction::RecycleEmpty);
+        assert!(menu.is_open());
+        assert_eq!(*host.events.lock(), before);
+    }
+    assert!(allowed(DockMenuKind::Recycle, DockMenuAction::RecycleEmpty));
+    show(&menu, DockMenuKind::Recycle).unwrap();
+    let before = host.events.lock().clone();
+    *menu.key.borrow_mut() = "stale application key".into();
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert_eq!(*host.events.lock(), before);
+    *menu.key.borrow_mut() = SharedString::default();
+    // A queued row can still look enabled while the live projection is busy.
+    dock.set_recycle_empty_busy(true);
+    dock.set_recycle_empty_enabled(false);
+    assert!(menu.component().get_recycle_empty_enabled());
+    click_row(&menu, "Empty Recycle Bin");
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(menu.is_open());
+    assert_eq!(*host.events.lock(), before);
+    dock.set_recycle_empty_busy(false);
+    dock.set_recycle_empty_enabled(true);
+    dock.hide().unwrap();
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(menu.is_open());
+    assert_eq!(*host.events.lock(), before);
+    dock.show().unwrap();
+    menu.hide();
+    let before = host.events.lock().clone();
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert_eq!(*host.events.lock(), before);
+    assert!(actions.borrow().is_empty());
+    assert_no_effects(&host);
+    let weak = Rc::downgrade(&menu);
+    let retained = menu.component().clone_strong();
+    drop(menu);
+    assert!(weak.upgrade().is_none());
+    retained.invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(actions.borrow().is_empty());
+    assert_no_effects(&host);
+}
+
+#[test]
+fn recycle_live_refresh_only_sets_current_open_recycle_projection() {
+    let (host, dock, menu) = setup();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    dock.on_recycle_action_requested(move |action| recorded.borrow_mut().push(action));
+    dock.show().unwrap();
+    show(&menu, DockMenuKind::Recycle).unwrap();
+    assert!(!menu.component().get_recycle_empty_enabled());
+    let before = host.events.lock().clone();
+    dock.set_recycle_empty_enabled(true);
+    menu.refresh_recycle_actions();
+    assert!(menu.component().get_recycle_empty_enabled());
+    dock.set_recycle_empty_enabled(false);
+    menu.refresh_recycle_actions();
+    assert!(!menu.component().get_recycle_empty_enabled());
+    menu.component().set_selected_index(0);
+    press(&menu, Key::Return);
+    press(&menu, Key::Space);
+    click_row(&menu, "Empty Recycle Bin");
+    assert!(menu.is_open());
+    assert!(actions.borrow().is_empty());
+    assert_eq!(
+        *host.events.lock(),
+        before,
+        "refresh must not attach or focus"
+    );
+    for key in [Key::UpArrow, Key::DownArrow, Key::Home, Key::End] {
+        press(&menu, key);
+        assert_eq!(menu.component().get_selected_index(), 1);
+    }
+    dock.set_recycle_empty_enabled(true);
+    menu.refresh_recycle_actions();
+    press(&menu, Key::Home);
+    assert_eq!(menu.component().get_selected_index(), 0);
+    press(&menu, Key::Return);
+    assert_eq!(&*actions.borrow(), &[DockRecycleAction::Empty]);
+    assert!(!menu.is_open());
+    let before = host.events.lock().clone();
+    dock.set_recycle_empty_enabled(true);
+    menu.refresh_recycle_actions();
+    assert!(
+        !menu.component().get_recycle_empty_enabled(),
+        "own hide revoked authority; hidden refresh must not restore it"
+    );
+    assert_eq!(*host.events.lock(), before);
+    show(&menu, DockMenuKind::Bar).unwrap();
+    let before = host.events.lock().clone();
+    dock.set_recycle_empty_enabled(true);
+    menu.refresh_recycle_actions();
+    assert!(
+        !menu.component().get_recycle_empty_enabled(),
+        "other scopes are untouched"
+    );
+    assert_eq!(*host.events.lock(), before);
+    assert_no_effects(&host);
+}
+
+#[test]
+fn recycle_empty_focus_denial_keeps_real_pointer_route_and_detach_order() {
+    let (host, dock, menu) = setup();
+    host.deny_focus.store(true, Ordering::Relaxed);
+    dock.show().unwrap();
+    dock.set_recycle_empty_enabled(true);
+    let events = Arc::clone(&host.events);
+    let callback_menu = Rc::downgrade(&menu);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    dock.on_recycle_action_requested(move |action| {
+        assert!(!callback_menu.upgrade().unwrap().is_open());
+        assert_eq!(events.lock().last().unwrap(), "detach");
+        recorded.borrow_mut().push(action);
+        events.lock().push("empty".into());
+    });
+    assert!(
+        show(&menu, DockMenuKind::Recycle)
+            .unwrap_err()
+            .contains("Menu opened")
+    );
+    assert!(menu.is_open());
+    click_row(&menu, "Empty Recycle Bin");
+    assert_eq!(&*actions.borrow(), &[DockRecycleAction::Empty]);
+    assert_eq!(
+        &*host.events.lock(),
+        &["attach", "focus", "detach", "empty"]
+    );
+    assert_no_effects(&host);
+}
+
+#[test]
+fn recycle_empty_attachment_failure_and_dropped_dock_cannot_dispatch() {
+    let (host, dock, menu) = setup();
+    dock.show().unwrap();
+    dock.set_recycle_empty_enabled(true);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    dock.on_recycle_action_requested(move |action| recorded.borrow_mut().push(action));
+    host.deny_attach.store(true, Ordering::Relaxed);
+    assert!(show(&menu, DockMenuKind::Recycle).is_err());
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(!menu.is_open());
+    assert!(actions.borrow().is_empty());
+    assert_eq!(&*host.events.lock(), &["attach-denied"]);
+    host.deny_attach.store(false, Ordering::Relaxed);
+    show(&menu, DockMenuKind::Recycle).unwrap();
+    dock.hide().unwrap();
+    drop(dock);
+    let before = host.events.lock().clone();
+    menu.refresh_recycle_actions();
+    assert!(!menu.component().get_recycle_empty_enabled());
+    assert_eq!(*host.events.lock(), before);
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(!menu.is_open());
+    assert_eq!(host.events.lock().last().unwrap(), "detach");
+    assert!(actions.borrow().is_empty());
+    assert!(show(&menu, DockMenuKind::Recycle).is_err());
+    assert_no_effects(&host);
+}
+
+#[test]
+fn recycle_empty_detach_reentry_retires_live_authority_or_replaced_scope() {
+    let (host, dock, menu) = setup();
+    dock.show().unwrap();
+    dock.set_recycle_empty_enabled(true);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    dock.on_recycle_action_requested(move |action| recorded.borrow_mut().push(action));
+    for (replacement, hide_dock) in [
+        (None, false),
+        (None, true),
+        (Some(DockMenuKind::Bar), false),
+        (Some(DockMenuKind::Recycle), false),
+    ] {
+        let callback_menu = Rc::downgrade(&menu);
+        let callback_dock = dock.as_weak();
+        dock.on_recycle_event_ready(move || {
+            if let Some(kind) = replacement {
+                show(&callback_menu.upgrade().unwrap(), kind).unwrap();
+            } else {
+                let dock = callback_dock.upgrade().unwrap();
+                if hide_dock {
+                    dock.hide().unwrap();
+                } else {
+                    dock.set_recycle_empty_enabled(false);
+                }
+            }
+        });
+        let callback_dock = dock.as_weak();
+        *host.detach_callback.lock() = Some(Box::new(move || {
+            callback_dock
+                .upgrade()
+                .unwrap()
+                .invoke_recycle_event_ready();
+        }));
+        show(&menu, DockMenuKind::Recycle).unwrap();
+        let generation = menu.scope_generation.get();
+        menu.component()
+            .invoke_action_requested(DockMenuAction::RecycleEmpty);
+        assert!(actions.borrow().is_empty());
+        if replacement.is_some() {
+            assert_ne!(
+                menu.scope_generation.get(),
+                generation.and_then(|generation| generation.checked_add(1)),
+                "even a newly opened Recycle scope must retire the old intent"
+            );
+        }
+        menu.hide();
+        dock.show().unwrap();
+        dock.set_recycle_empty_enabled(true);
+        assert_no_effects(&host);
+    }
+}
+
+#[test]
+fn show_retirement_reentry_preserves_newer_scope_and_attachment() {
+    let (host, dock, menu) = setup();
+    for generation in [Some(0), Some(u64::MAX), None] {
+        let callback_menu = Rc::downgrade(&menu);
+        dock.on_recycle_event_ready(move || {
+            let menu = callback_menu.upgrade().unwrap();
+            menu.show(
+                DockMenuKind::Pinned,
+                "new pinned key".into(),
+                slint::PhysicalPosition::new(300, 900),
+                DockContext::new(0, 0, 1920, 1080, false).unwrap(),
+            )
+            .unwrap();
+            menu.component().set_selected_index(1);
+        });
+        let callback_dock = dock.as_weak();
+        *host.detach_callback.lock() = Some(Box::new(move || {
+            callback_dock
+                .upgrade()
+                .unwrap()
+                .invoke_recycle_event_ready();
+        }));
+        host.events.lock().clear();
+        show(&menu, DockMenuKind::Recycle).unwrap();
+        menu.scope_generation.set(generation);
+
+        menu.show(
+            DockMenuKind::Window,
+            "outer window key".into(),
+            slint::PhysicalPosition::new(700, 900),
+            DockContext::new(0, 0, 1920, 1080, false).unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            menu.is_open(),
+            "newer logical popup must survive retirement"
+        );
+        assert!(
+            menu.component().window().is_visible(),
+            "newer Slint window must survive retirement"
+        );
+        assert_eq!(menu.component().get_kind(), DockMenuKind::Pinned);
+        assert_eq!(*menu.key.borrow(), "new pinned key");
+        assert_eq!(menu.component().get_selected_index(), 1);
+        assert_eq!(
+            &*host.events.lock(),
+            &["attach", "focus", "detach", "attach", "focus"],
+            "outer show must not detach, attach, or refocus the replacement"
+        );
+        menu.hide();
+        assert!(!menu.is_open());
+        assert!(!menu.component().window().is_visible());
+        assert_eq!(
+            &*host.events.lock(),
+            &["attach", "focus", "detach", "attach", "focus", "detach"],
+            "replacement attachment must remain owned until its own retirement"
+        );
+        assert_no_effects(&host);
+    }
+}
+
+#[test]
+fn recycle_empty_exhausted_scope_generation_rejects_without_reuse_or_panic() {
+    let (host, dock, menu) = setup();
+    dock.show().unwrap();
+    dock.set_recycle_empty_enabled(true);
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&actions);
+    dock.on_recycle_action_requested(move |action| recorded.borrow_mut().push(action));
+    show(&menu, DockMenuKind::Recycle).unwrap();
+    menu.scope_generation.set(Some(u64::MAX));
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert_eq!(menu.scope_generation.get(), None);
+    assert!(!menu.is_open());
+    assert!(actions.borrow().is_empty());
+    show(&menu, DockMenuKind::Recycle).unwrap();
+    let before = host.events.lock().clone();
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(menu.is_open());
+    assert_eq!(menu.scope_generation.get(), None);
+    assert_eq!(*host.events.lock(), before);
+    assert!(actions.borrow().is_empty());
     assert_no_effects(&host);
 }

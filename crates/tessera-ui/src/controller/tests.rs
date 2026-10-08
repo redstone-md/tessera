@@ -10,6 +10,9 @@ use tessera_system::recycle_bin::{
     RecycleBinCompletion, RecycleBinHost, RecycleBinInfo, RecycleBinReadCompletion,
     RecycleBinWatchCallback, RecycleBinWatchCompletion, RecycleBinWatchEvent, RecycleBinWatchGuard,
 };
+use tessera_system::recycle_bin_mutation::{
+    RecycleBinEmptyCompletion, RecycleBinEmptyOutcome, RecycleBinMutationHost,
+};
 
 #[cfg(debug_assertions)]
 use i_slint_backend_testing::ElementHandle;
@@ -38,6 +41,8 @@ thread_local! {
     static PREFERENCE_SAVE_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static LAUNCHER_BACKEND_INITIALIZED: Cell<bool> = const { Cell::new(false) };
     static RECYCLE_READ_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static RECYCLE_EMPTY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static RECYCLE_MENU_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
 }
 
 struct FixtureHost {
@@ -67,6 +72,8 @@ struct FixtureHost {
     dock_utility_provider_calls: AtomicUsize,
     recycle_provider: Mutex<Option<Arc<dyn tessera_system::recycle_bin::RecycleBinHost>>>,
     recycle_provider_calls: AtomicUsize,
+    recycle_mutation_provider: Mutex<Option<Arc<dyn RecycleBinMutationHost>>>,
+    recycle_mutation_provider_calls: AtomicUsize,
 }
 
 impl FixtureHost {
@@ -100,6 +107,8 @@ impl FixtureHost {
             dock_utility_provider_calls: AtomicUsize::new(0),
             recycle_provider: Mutex::default(),
             recycle_provider_calls: AtomicUsize::new(0),
+            recycle_mutation_provider: Mutex::default(),
+            recycle_mutation_provider_calls: AtomicUsize::new(0),
         })
     }
 
@@ -167,6 +176,14 @@ impl DesktopHost for FixtureHost {
         Ok(self.recycle_provider.lock().clone())
     }
 
+    fn recycle_bin_mutation_host(
+        &self,
+    ) -> Result<Option<Arc<dyn RecycleBinMutationHost>>, DockUtilityError> {
+        self.recycle_mutation_provider_calls
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(self.recycle_mutation_provider.lock().clone())
+    }
+
     fn activate(&self, key: &str) -> Result<(), String> {
         self.activations.lock().push(key.to_owned());
         self.activation_result.lock().clone()
@@ -228,6 +245,12 @@ impl DesktopHost for FixtureHost {
                 self.dropped.fetch_add(1, Ordering::SeqCst);
                 if self.kind == SurfaceKind::Launcher {
                     let hook = LAUNCHER_DROP_HOOK.with(|hook| hook.borrow_mut().take());
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
+                if self.kind == SurfaceKind::Popup {
+                    let hook = RECYCLE_MENU_DROP_HOOK.with(|hook| hook.borrow_mut().take());
                     if let Some(hook) = hook {
                         hook();
                     }
@@ -1450,6 +1473,34 @@ impl RecycleBinHost for RootRecordingRecycleBin {
     }
 }
 
+#[derive(Default)]
+struct RootRecordingRecycleMutation {
+    calls: AtomicUsize,
+    completion: Mutex<Option<RecycleBinEmptyCompletion>>,
+}
+
+impl RootRecordingRecycleMutation {
+    fn finish(&self, result: Result<RecycleBinEmptyOutcome, DockUtilityError>) {
+        let completion = self.completion.lock().take().expect("one accepted Empty");
+        completion(result);
+    }
+}
+
+impl RecycleBinMutationHost for RootRecordingRecycleMutation {
+    fn empty(&self, completion: RecycleBinEmptyCompletion) -> Result<(), DockUtilityError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            self.completion.lock().replace(completion).is_none(),
+            "single Empty flight"
+        );
+        let hook = RECYCLE_EMPTY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(())
+    }
+}
+
 fn recycle_info(item_count: u64) -> RecycleBinInfo {
     RecycleBinInfo {
         item_count,
@@ -1546,6 +1597,27 @@ fn assert_retry_detached_before_read(fixture: &LauncherFixture) {
                         before + 1,
                         "popup lease detached first"
                     );
+                }))
+                .is_none()
+        );
+    });
+}
+
+fn assert_empty_detached_before_dispatch(fixture: &LauncherFixture) {
+    let menu = fixture.controller.menus.borrow().clone().unwrap();
+    let dock = fixture.dock.as_weak();
+    let drops = fixture.host.lease_drops.clone();
+    let before = drops.load(Ordering::SeqCst);
+    RECYCLE_EMPTY_HOOK.with(|hook| {
+        assert!(
+            hook.borrow_mut()
+                .replace(Box::new(move || {
+                    assert!(!menu.is_open(), "Empty hides the real popup first");
+                    assert!(!menu.component().window().is_visible());
+                    assert_eq!(drops.load(Ordering::SeqCst), before + 1);
+                    let dock = dock.upgrade().unwrap();
+                    assert!(dock.get_recycle_empty_busy(), "reserve before dispatch");
+                    assert!(!dock.get_recycle_empty_enabled());
                 }))
                 .is_none()
         );
@@ -1781,13 +1853,13 @@ fn dock_native_trash_open_and_context_retry_reach_typed_recycle_capability_only(
     assert_eq!(fixture.dock.get_recycle_item_count_label(), "0 items");
 
     // The preceding genuine Trash click established item focus. Menu and
-    // Shift+F10 open the existing popup; Home targets its actual visible row.
+    // Shift+F10 open the existing popup; End targets its actual Retry row.
     native_focus_trash(&fixture.dock);
     native_key(&fixture.dock, Key::Menu);
     assert!(menu.is_open());
     assert_eq!(bin.counts(), (1, 2, 2));
     assert_retry_detached_before_read(&fixture);
-    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::End);
     native_key(menu.component(), Key::Return);
     assert_eq!(bin.counts(), (1, 3, 2));
     bin.finish_read(Err(recycle_private_error(DockUtilityErrorKind::Other)));
@@ -1825,7 +1897,7 @@ fn dock_native_trash_open_and_context_retry_reach_typed_recycle_capability_only(
         "keyboard context alone has no native capability"
     );
     assert_retry_detached_before_read(&fixture);
-    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::End);
     native_key(menu.component(), Key::Space);
     assert_eq!(bin.counts(), (1, 4, 2));
     bin.finish_read(Ok(recycle_info(3)));
@@ -1841,6 +1913,14 @@ fn dock_native_trash_open_and_context_retry_reach_typed_recycle_capability_only(
         after_start_focus + 2
     );
     assert_eq!(fixture.host.unrelated_activity(), unrelated);
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        0,
+        "Open, read/watch and genuine Retry never acquire mutation authority"
+    );
     RECYCLE_READ_HOOK.with(|hook| assert!(hook.borrow().is_none()));
 }
 
@@ -1997,6 +2077,13 @@ fn dock_native_trash_watch_throttle_fullscreen_and_closed_root_retire_intents() 
         focus_before
     );
     assert_eq!(fixture.host.unrelated_activity(), unrelated);
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        0
+    );
 
     // Retain only an already-admitted callback, not the controller or window.
     let admitted_event = bin.watches.lock()[0].callback.clone();
@@ -2084,9 +2171,613 @@ fn dock_native_trash_watch_throttle_fullscreen_and_closed_root_retire_intents() 
         focus_before + 1
     );
     assert_eq!(fixture.host.unrelated_activity(), unrelated);
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        0
+    );
     drop(menu);
     drop(fixture);
     assert_eq!(rejected.guard_drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn dock_native_empty_is_lazy_single_flight_and_requires_post_return_aggregate_read() {
+    use crate::generated::DockRecycleState;
+    use i_slint_backend_testing::{AccessibleRole, ElementQuery};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    let bin = Arc::new(RootRecordingRecycleBin::default());
+    let mutation = Arc::new(RootRecordingRecycleMutation::default());
+    let fixture = LauncherFixture::with_snapshot_configured(
+        seeded_preferences(),
+        launcher_snapshot(),
+        |fixture| {
+            *fixture.host.recycle_provider.lock() = Some(bin.clone());
+            *fixture.host.recycle_mutation_provider.lock() = Some(mutation.clone());
+            assert_eq!(
+                fixture
+                    .host
+                    .recycle_mutation_provider_calls
+                    .load(Ordering::SeqCst),
+                0,
+                "construction cannot acquire mutation authority"
+            );
+            fixture
+                .dock
+                .window()
+                .set_size(slint::PhysicalSize::new(168, 72));
+            fixture.dock.show().unwrap();
+            native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+            native_focus_trash(&fixture.dock);
+            native_key(&fixture.dock, Key::Menu);
+            assert!(fixture.controller.menus.borrow().is_none());
+            assert_eq!(mutation.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                fixture
+                    .host
+                    .recycle_mutation_provider_calls
+                    .load(Ordering::SeqCst),
+                0,
+                "provisional generated show is not a placed session"
+            );
+            fixture.dock.hide().unwrap();
+        },
+    );
+    let unrelated = fixture.host.unrelated_activity();
+    let focus_before = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    bin.finish_ready(Ok(()));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(bin.counts(), (1, 1, 0));
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Unknown);
+    native_trash_pointer(&fixture.dock, PointerEventButton::Left);
+    assert_eq!(bin.counts(), (1, 1, 1));
+    assert!(fixture.dock.get_recycle_open_busy());
+    fixture.panel.set_stale(true);
+    fixture.panel.set_refreshing(true);
+    let mut apps_status = fixture.dock.get_surface_status();
+    apps_status.stale = true;
+    apps_status.refreshing = true;
+    fixture.dock.set_surface_status(apps_status);
+    fixture.dock.set_show_desktop_busy(true);
+    let panel_status = fixture.panel.get_status();
+
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    let menu = fixture.controller.menus.borrow().clone().unwrap();
+    assert!(menu.is_open());
+    assert!(menu.component().get_recycle_empty_enabled());
+    let rows = ElementQuery::from_root(menu.component())
+        .match_accessible_role(AccessibleRole::Button)
+        .find_all();
+    let empty = rows
+        .iter()
+        .find(|row| row.accessible_label().as_deref() == Some("Empty Recycle Bin"))
+        .unwrap();
+    let retry = rows
+        .iter()
+        .find(|row| row.accessible_label().as_deref() == Some("Retry"))
+        .unwrap();
+    assert!(empty.absolute_position().y < retry.absolute_position().y);
+    assert_eq!(empty.accessible_enabled(), Some(true));
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.accessible_label().as_deref() == Some("Open"))
+    );
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        0,
+        "show/read/watch/Open/context do not acquire the separate provider"
+    );
+    assert_empty_detached_before_dispatch(&fixture);
+    native_key(menu.component(), Key::Home);
+    assert_eq!(menu.component().get_selected_index(), 0);
+    native_key(menu.component(), Key::Return);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        bin.counts(),
+        (1, 1, 1),
+        "Empty is independent of both busy effects"
+    );
+    assert!(fixture.dock.get_recycle_empty_busy());
+    assert!(!fixture.dock.get_recycle_empty_enabled());
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Unknown);
+
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert!(menu.is_open());
+    assert!(!menu.component().get_recycle_empty_enabled());
+    click_component(menu.component(), "Empty Recycle Bin");
+    native_key(menu.component(), Key::Return);
+    menu.component()
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 1);
+    native_key(menu.component(), Key::Home);
+    assert_eq!(
+        menu.component().get_selected_index(),
+        1,
+        "Home skips disabled Empty"
+    );
+    let focus_before_return = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    mutation.finish(Ok(RecycleBinEmptyOutcome { native_hresult: 0 }));
+    assert!(
+        fixture.dock.get_recycle_empty_busy(),
+        "return is only mailbox data"
+    );
+    fixture.dock.invoke_recycle_event_ready();
+    // Drive the same deferred changed-property relay as the real UI loop.
+    slint::platform::update_timers_and_animations();
+    assert!(
+        menu.is_open(),
+        "pure refresh does not reopen or dismiss the current menu"
+    );
+    assert!(menu.component().get_recycle_empty_enabled());
+    assert!(!fixture.dock.get_recycle_empty_busy());
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_before_return
+    );
+    assert_eq!(
+        fixture.panel.get_status(),
+        panel_status,
+        "Empty is not Open feedback"
+    );
+    assert_eq!(
+        fixture.dock.get_recycle_empty_notice(),
+        "Recycle Bin operation returned 0x00000000. State refresh requested."
+    );
+    assert_eq!(
+        bin.counts(),
+        (1, 1, 1),
+        "old accepted read must drain first"
+    );
+    native_key(menu.component(), Key::Home);
+    assert_eq!(menu.component().get_selected_index(), 0);
+    menu.component()
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert_eq!(
+        mutation.calls.load(Ordering::SeqCst),
+        1,
+        "held Return cannot replay"
+    );
+    native_key(menu.component(), Key::Escape);
+
+    bin.finish_read(Ok(recycle_info(0)));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(
+        bin.counts(),
+        (1, 2, 1),
+        "exactly one fresh post-return read"
+    );
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Unknown);
+    assert_ne!(fixture.dock.get_recycle_item_count_label(), "0 items");
+    bin.finish_read(Ok(recycle_info(3)));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "3 items");
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Full);
+    assert!(!fixture.dock.get_recycle_stale());
+    bin.finish_open(Ok(()));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(fixture.panel.get_status(), "Recycle Bin open requested");
+    let open_feedback = fixture.panel.get_status();
+
+    // A genuine second-row Retry starts another old read. Its queued failure
+    // cannot suppress reconciliation when Empty returns in the same mailbox batch.
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    native_key(menu.component(), Key::End);
+    native_key(menu.component(), Key::Return);
+    assert_eq!(bin.counts(), (1, 3, 1));
+    native_focus_trash(&fixture.dock);
+    native_key(&fixture.dock, Key::Menu);
+    assert_empty_detached_before_dispatch(&fixture);
+    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::Space);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 2);
+    bin.finish_read(Err(recycle_private_error(
+        DockUtilityErrorKind::AccessDenied,
+    )));
+    mutation.finish(Ok(RecycleBinEmptyOutcome { native_hresult: 1 }));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(bin.counts(), (1, 4, 1));
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "3 items");
+    assert!(fixture.dock.get_recycle_stale());
+    assert!(
+        fixture.dock.get_recycle_read_notice().is_empty(),
+        "obsolete error is not projected"
+    );
+    assert_eq!(
+        fixture.dock.get_recycle_empty_notice(),
+        "Recycle Bin operation returned status 0x00000001. State refresh requested."
+    );
+    bin.finish_read(Ok(recycle_info(0)));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Empty);
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "0 items");
+    assert!(
+        fixture.dock.get_recycle_empty_enabled(),
+        "confirmed zero is not deletion authority"
+    );
+
+    native_focus_trash(&fixture.dock);
+    fixture
+        .dock
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Shift.into(),
+        });
+    native_key(&fixture.dock, Key::F10);
+    fixture
+        .dock
+        .window()
+        .dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Shift.into(),
+        });
+    assert!(menu.is_open());
+    assert_empty_detached_before_dispatch(&fixture);
+    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::Return);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 3);
+    mutation.finish(Ok(RecycleBinEmptyOutcome {
+        native_hresult: -2_147_024_891,
+    }));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(bin.counts(), (1, 5, 1));
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Empty);
+    assert!(fixture.dock.get_recycle_stale());
+    assert_eq!(
+        fixture.dock.get_recycle_empty_notice(),
+        "Recycle Bin operation returned failure status 0x80070005. State refresh requested."
+    );
+    bin.finish_read(Ok(recycle_info(7)));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Full);
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "7 items");
+    assert!(!fixture.dock.get_recycle_stale());
+    assert_eq!(fixture.panel.get_status(), open_feedback);
+    assert!(
+        !fixture
+            .dock
+            .get_recycle_empty_notice()
+            .to_lowercase()
+            .contains("canceled")
+    );
+    assert!(
+        !fixture
+            .dock
+            .get_recycle_empty_notice()
+            .to_lowercase()
+            .contains("emptied")
+    );
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        1,
+        "accepted provider is cached independently of read/watch/Open"
+    );
+    assert_eq!(
+        fixture.host.recycle_provider_calls.load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_before + 5
+    );
+    assert_eq!(fixture.host.unrelated_activity(), unrelated);
+    RECYCLE_EMPTY_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+}
+
+#[test]
+fn dock_native_empty_scope_reentry_hidden_readback_and_close_never_replay_or_resurrect() {
+    use crate::generated::{DockMenuKind, DockRecycleState};
+    use i_slint_backend_testing::AccessibleRole;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    let bin = Arc::new(RootRecordingRecycleBin::default());
+    let mutation = Arc::new(RootRecordingRecycleMutation::default());
+    let snapshot = launcher_snapshot();
+    let fixture = LauncherFixture::with_snapshot_configured(
+        seeded_preferences(),
+        snapshot.clone(),
+        |fixture| {
+            *fixture.host.recycle_provider.lock() = Some(bin.clone());
+            *fixture.host.recycle_mutation_provider.lock() = Some(mutation.clone());
+        },
+    );
+    let unrelated = fixture.host.unrelated_activity();
+    let focus_before = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    bin.finish_ready(Ok(()));
+    fixture.dock.invoke_recycle_event_ready();
+    bin.finish_read(Ok(recycle_info(3)));
+    fixture.dock.invoke_recycle_event_ready();
+    let context = snapshot.dock_context().unwrap();
+    let fullscreen = crate::DockContext::new(
+        context.x(),
+        context.y(),
+        context.width(),
+        context.height(),
+        true,
+    )
+    .unwrap();
+
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    let menu = fixture.controller.menus.borrow().clone().unwrap();
+    let dock = fixture.dock.as_weak();
+    RECYCLE_MENU_DROP_HOOK.with(|hook| {
+        assert!(
+            hook.borrow_mut()
+                .replace(Box::new(move || {
+                    let dock = dock.upgrade().unwrap();
+                    let start = ElementHandle::find_by_accessible_label(
+                        &dock,
+                        "Open applications and settings",
+                    )
+                    .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                    .unwrap();
+                    let position = native_center(&start);
+                    for event in [
+                        WindowEvent::PointerMoved { position },
+                        WindowEvent::PointerPressed {
+                            position,
+                            button: PointerEventButton::Right,
+                        },
+                        WindowEvent::PointerReleased {
+                            position,
+                            button: PointerEventButton::Right,
+                        },
+                    ] {
+                        dock.window().dispatch_event(event);
+                    }
+                }))
+                .is_none()
+        );
+    });
+    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::Return);
+    assert!(
+        menu.is_open(),
+        "lease-drop reentry creates a replacement scope"
+    );
+    assert!(
+        menu.component().window().is_visible(),
+        "old retirement must not physically hide the replacement Slint window"
+    );
+    assert_eq!(menu.component().get_kind(), DockMenuKind::Bar);
+    assert!(!menu.component().get_recycle_empty_enabled());
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        0,
+        "replaced scope cannot acquire destructive authority"
+    );
+    assert_eq!(bin.counts(), (1, 1, 0));
+    native_key(menu.component(), Key::Escape);
+
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert!(menu.component().get_recycle_empty_enabled());
+    apply_result_to_both(
+        &fixture.controller,
+        &fixture.panel,
+        Ok(snapshot.clone().with_dock_context(fullscreen)),
+    );
+    slint::platform::update_timers_and_animations();
+    assert!(!fixture.dock.window().is_visible());
+    assert!(!fixture.dock.get_recycle_empty_enabled());
+    assert!(
+        !menu.component().get_recycle_empty_enabled(),
+        "live session refresh disables the row"
+    );
+    click_component(menu.component(), "Empty Recycle Bin");
+    native_key(menu.component(), Key::Return);
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        0
+    );
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(snapshot.clone()));
+    slint::platform::update_timers_and_animations();
+    assert!(fixture.dock.window().is_visible());
+    assert!(menu.component().get_recycle_empty_enabled());
+    assert_eq!(
+        mutation.calls.load(Ordering::SeqCst),
+        0,
+        "resume never replays rejected input"
+    );
+    assert_eq!(bin.counts(), (1, 1, 0));
+    native_key(menu.component(), Key::Escape);
+
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    native_key(menu.component(), Key::End);
+    native_key(menu.component(), Key::Space);
+    assert_eq!(bin.counts(), (1, 2, 0));
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert_empty_detached_before_dispatch(&fixture);
+    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::Space);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 1);
+    apply_result_to_both(
+        &fixture.controller,
+        &fixture.panel,
+        Ok(snapshot.clone().with_dock_context(fullscreen)),
+    );
+    let hidden_projection = (
+        fixture.dock.get_recycle_state(),
+        fixture.dock.get_recycle_item_count_label(),
+        fixture.dock.get_recycle_empty_notice(),
+        fixture.dock.get_recycle_stale(),
+    );
+    mutation.finish(Ok(RecycleBinEmptyOutcome {
+        native_hresult: -2_147_024_891,
+    }));
+    bin.finish_read(Ok(recycle_info(0)));
+    fixture.dock.invoke_recycle_event_ready();
+    advance_recycle_timer(1000);
+    assert_eq!(
+        bin.counts(),
+        (1, 2, 0),
+        "hidden readback is deferred, not dispatched"
+    );
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 1);
+    assert!(!fixture.dock.window().is_visible());
+    assert!(!menu.is_open());
+    assert_eq!(
+        (
+            fixture.dock.get_recycle_state(),
+            fixture.dock.get_recycle_item_count_label(),
+            fixture.dock.get_recycle_empty_notice(),
+            fixture.dock.get_recycle_stale(),
+        ),
+        hidden_projection,
+        "same-mailbox old info and mutation return cannot project while hidden"
+    );
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(snapshot.clone()));
+    assert_eq!(
+        bin.counts(),
+        (1, 3, 0),
+        "resume starts exactly one required new read"
+    );
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "3 items");
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Full);
+    assert!(fixture.dock.get_recycle_stale());
+    assert!(!fixture.dock.get_recycle_empty_busy());
+    assert_eq!(
+        fixture.dock.get_recycle_empty_notice(),
+        "Recycle Bin operation returned failure status 0x80070005. State refresh requested."
+    );
+    bin.finish_read(Ok(recycle_info(0)));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Empty);
+    assert!(!fixture.dock.get_recycle_stale());
+
+    // Safe setup/driver failure also demands real readback, without leaking a
+    // provider string or changing the existing Open-only root feedback channel.
+    let panel_status = fixture.panel.get_status();
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert_empty_detached_before_dispatch(&fixture);
+    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::Return);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 2);
+    mutation.finish(Err(recycle_private_error(
+        DockUtilityErrorKind::AccessDenied,
+    )));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(bin.counts(), (1, 4, 0));
+    assert_eq!(
+        fixture.dock.get_recycle_empty_notice(),
+        "Recycle Bin Empty: was denied. State refresh requested."
+    );
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "0 items");
+    assert!(fixture.dock.get_recycle_stale());
+    assert_eq!(fixture.panel.get_status(), panel_status);
+    bin.finish_read(Ok(recycle_info(5)));
+    fixture.dock.invoke_recycle_event_ready();
+    assert_eq!(fixture.dock.get_recycle_state(), DockRecycleState::Full);
+    assert_eq!(fixture.dock.get_recycle_item_count_label(), "5 items");
+
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    native_key(menu.component(), Key::End);
+    native_key(menu.component(), Key::Space);
+    assert_eq!(bin.counts(), (1, 5, 0));
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert_empty_detached_before_dispatch(&fixture);
+    native_key(menu.component(), Key::Home);
+    native_key(menu.component(), Key::Return);
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 3);
+    let recycle = fixture.controller.recycle_bin.borrow().clone().unwrap();
+    recycle.close();
+    drop(recycle);
+    assert!(!fixture.dock.get_recycle_empty_enabled());
+    native_trash_pointer(&fixture.dock, PointerEventButton::Right);
+    assert!(menu.is_open());
+    assert!(!menu.component().get_recycle_empty_enabled());
+    click_component(menu.component(), "Empty Recycle Bin");
+    native_key(menu.component(), Key::Return);
+    let closed_projection = (
+        fixture.dock.get_recycle_state(),
+        fixture.dock.get_recycle_item_count_label(),
+        fixture.dock.get_recycle_empty_notice(),
+    );
+    bin.finish_read(Ok(recycle_info(0)));
+    fixture.dock.invoke_recycle_event_ready();
+    advance_recycle_timer(1000);
+    assert_eq!(
+        mutation.calls.load(Ordering::SeqCst),
+        3,
+        "closed scope rejects new input and late replay"
+    );
+    assert_eq!(
+        bin.counts(),
+        (1, 5, 0),
+        "close cannot request late readback"
+    );
+    assert_eq!(
+        (
+            fixture.dock.get_recycle_state(),
+            fixture.dock.get_recycle_item_count_label(),
+            fixture.dock.get_recycle_empty_notice(),
+        ),
+        closed_projection
+    );
+    assert_eq!(
+        fixture
+            .host
+            .recycle_mutation_provider_calls
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        fixture.host.recycle_provider_calls.load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_before + 9
+    );
+    assert_eq!(fixture.host.unrelated_activity(), unrelated);
+    RECYCLE_MENU_DROP_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+    RECYCLE_EMPTY_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+    let weak_dock = fixture.dock.as_weak();
+    drop(menu);
+    drop(fixture);
+    assert!(
+        weak_dock.upgrade().is_none(),
+        "accepted fake work owns no Slint root"
+    );
+    assert_eq!(bin.guard_drops.load(Ordering::SeqCst), 1);
+    mutation.finish(Ok(RecycleBinEmptyOutcome { native_hresult: 1 }));
+    advance_recycle_timer(1000);
+    assert!(
+        weak_dock.upgrade().is_none(),
+        "late Empty cannot resurrect the closed root"
+    );
+    assert_eq!(bin.counts(), (1, 5, 0));
+    assert_eq!(mutation.calls.load(Ordering::SeqCst), 3);
 }
 
 #[test]

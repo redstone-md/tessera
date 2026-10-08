@@ -452,6 +452,17 @@ pub trait DesktopHost: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Explicit native-confirmed mutation with its own dialog-owner lifetime.
+    /// Acquisition is lazy user intent, never part of read/open/watch startup.
+    fn recycle_bin_mutation_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::recycle_bin_mutation::RecycleBinMutationHost>>,
+        tessera_system::dock_utilities::DockUtilityError,
+    > {
+        Ok(None)
+    }
+
     /// Refreshes only the clock text. Called on the UI thread by the
     /// low-frequency clock timer (at most once per minute); it must never
     /// observe windows, foreground state, or anything else — one cheap

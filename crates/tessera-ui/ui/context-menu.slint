@@ -64,6 +64,7 @@ export component ContextMenuSurface inherits Window {
     min-height: 1px;
     in property <DockMenuKind> kind;
     in property <image> target-icon;
+    in property <bool> recycle-empty-enabled: false;
     in-out property <int> selected-index;
     out property <length> menu-width: max(200px,
         plain-label-metrics.preferred-width + 32px,
@@ -108,6 +109,7 @@ export component ContextMenuSurface inherits Window {
             application-image: root.target-icon.width > 0 },
         { label: @tr("Unpin"), action: DockMenuAction.unpin }
     ] : root.kind == DockMenuKind.recycle ? [
+        { label: @tr("Empty Recycle Bin"), action: DockMenuAction.recycle-empty, danger: true },
         { label: @tr("Retry"), action: DockMenuAction.recycle-retry }
     ] : [
         { label: @tr("Switch to window"), action: DockMenuAction.activate,
@@ -118,6 +120,23 @@ export component ContextMenuSurface inherits Window {
         { label: @tr("Close"), action: DockMenuAction.close,
             icon: @image-url("../assets/icons/boxicons-font-9ffa913/window-close.svg"), danger: true }
     ];
+
+    pure function entry-enabled(index: int) -> bool {
+        return index >= 0 && index < root.entries.length
+            && (root.entries[index].action != DockMenuAction.recycle-empty
+                || root.recycle-empty-enabled);
+    }
+    pure function adjacent-index(index: int, direction: int) -> int {
+        return direction > 0
+            ? (index >= root.entries.length - 1 ? 0 : index + 1)
+            : (index <= 0 ? root.entries.length - 1 : index - 1);
+    }
+    pure function next-enabled-index(index: int, direction: int) -> int {
+        let candidate = root.adjacent-index(index, direction);
+        // Only Empty can be disabled; every scope retains an enabled row.
+        return root.entry-enabled(candidate) ? candidate
+            : root.adjacent-index(candidate, direction);
+    }
 
     public function focus-menu() {
         root.keyboard-navigation = false;
@@ -134,19 +153,22 @@ export component ContextMenuSurface inherits Window {
                 return accept;
             }
             if event.text == Key.DownArrow || event.text == Key.UpArrow {
-                root.selected-index = event.text == Key.DownArrow
-                    ? (root.selected-index >= root.entries.length - 1 ? 0 : root.selected-index + 1)
-                    : (root.selected-index <= 0 ? root.entries.length - 1 : root.selected-index - 1);
+                root.selected-index = root.next-enabled-index(root.selected-index,
+                    event.text == Key.DownArrow ? 1 : -1);
                 root.keyboard-navigation = true;
                 return accept;
             }
             if event.text == Key.Home || event.text == Key.End {
-                root.selected-index = event.text == Key.Home ? 0 : root.entries.length - 1;
+                root.selected-index = event.text == Key.Home
+                    ? root.next-enabled-index(root.entries.length - 1, 1)
+                    : root.next-enabled-index(0, -1);
                 root.keyboard-navigation = true;
                 return accept;
             }
             if (event.text == Key.Return || event.text == Key.Space)
-                && (root.selected-index < 0 || root.selected-index >= root.entries.length) {
+                && (!root.entry-enabled(root.selected-index)
+                    || (event.repeat
+                        && root.entries[root.selected-index].action == DockMenuAction.recycle-empty)) {
                 return accept;
             }
             if event.text == Key.Tab { return accept; }
@@ -154,7 +176,9 @@ export component ContextMenuSurface inherits Window {
         }
         key-pressed(event) => {
             if event.text == Key.Return || event.text == Key.Space {
-                if root.selected-index >= 0 && root.selected-index < root.entries.length {
+                if root.entry-enabled(root.selected-index)
+                    && !(event.repeat
+                        && root.entries[root.selected-index].action == DockMenuAction.recycle-empty) {
                     root.action-requested(root.entries[root.selected-index].action);
                 }
                 return accept;
@@ -186,6 +210,8 @@ export component ContextMenuSurface inherits Window {
                         transform-scale: self.pressed ? 0.98 : 1;
                         radius: 6px;
                         filled: false;
+                        enabled: root.entry-enabled(index);
+                        allow-return-repeat: entry.action != DockMenuAction.recycle-empty;
                         property <bool> has-icon: entry.icon.width > 0;
                         property <bool> keyboard-selected: root.keyboard-navigation
                             && root.selected-index == index;
@@ -204,7 +230,9 @@ export component ContextMenuSurface inherits Window {
                         changed pressed => {
                             if self.pressed { root.keyboard-navigation = false; }
                         }
-                        clicked => { root.action-requested(entry.action); }
+                        clicked => {
+                            if root.entry-enabled(index) { root.action-requested(entry.action); }
+                        }
                         if entry.icon.width > 0: MenuIcon {
                             x: 8px;
                             y: (parent.height - self.height) / 2;

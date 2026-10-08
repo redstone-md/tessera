@@ -17,6 +17,9 @@ pub mod folders;
 /// Confirmed Recycle Bin information, fixed opening and scoped change hints.
 pub mod recycle_bin;
 
+/// Explicit confirmed Recycle Bin mutation, separate from observation.
+pub mod recycle_bin_mutation;
+
 /// Default-multimedia audio endpoints and their asynchronous host interface.
 pub mod audio {
     use std::fmt;
