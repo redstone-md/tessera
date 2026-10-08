@@ -11,7 +11,9 @@ use slint::language::ColorScheme;
 use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
-use crate::generated::{ContextMenuSurface, DockMenuKind, LaunchTile, Launcher, TooltipSurface};
+use crate::generated::{
+    ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchTile, Launcher, TooltipSurface,
+};
 use crate::theme::{PresentationTheme, ThemedComponent};
 
 #[test]
@@ -69,11 +71,15 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
+        menu.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
         slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
             verify_launcher_controls(ColorScheme::Dark, &launcher);
+            verify_menu_press_scale(&menu);
             launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
+            menu.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
             slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
                 verify_launcher_controls(ColorScheme::Light, &launcher);
+                verify_menu_press_scale(&menu);
                 launcher.hide().unwrap();
                 tooltip.hide().unwrap();
                 menu.hide().unwrap();
@@ -176,14 +182,45 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
 }
 
 fn verify_launcher_press_scale(launcher: &Launcher) {
-    use slint::platform::{PointerEventButton, WindowEvent};
-    let window = launcher.window();
+    let launches = Rc::new(Cell::new(0));
+    let count = launches.clone();
+    launcher.on_launch_requested(move |_| count.set(count.get() + 1));
     let tile = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
         launcher,
         "Launch Native app",
     )
     .next()
     .unwrap();
+    verify_native_press_scale(launcher.window(), &tile, 0.95, 0.0);
+    assert_eq!(launches.get(), 1, "one pointer gesture launches once");
+}
+
+fn verify_menu_press_scale(menu: &ContextMenuSurface) {
+    menu.invoke_focus_menu();
+    let actions = Rc::new(Cell::new(0));
+    let count = actions.clone();
+    menu.on_action_requested(move |action| {
+        assert_eq!(action, DockMenuAction::Settings);
+        count.set(count.get() + 1);
+    });
+    let tile = i_slint_backend_testing::ElementHandle::find_by_accessible_label(menu, "Settings")
+        .next()
+        .unwrap();
+    verify_native_press_scale(menu.window(), &tile, 0.98, 1.0);
+    assert_eq!(
+        actions.get(),
+        1,
+        "one pointer gesture requests one menu action"
+    );
+}
+
+fn verify_native_press_scale(
+    window: &slint::Window,
+    tile: &i_slint_backend_testing::ElementHandle,
+    pressed_scale: f32,
+    translation_y: f32,
+) {
+    use slint::platform::{PointerEventButton, WindowEvent};
     let position = tile.absolute_position();
     let size = tile.size();
     let scale = window.scale_factor();
@@ -200,14 +237,27 @@ fn verify_launcher_press_scale(launcher: &Launcher) {
     let body = sample(&hover, position.x - 5.0);
     let edge = sample(&hover, position.x + 0.5);
     assert_ne!(edge, body, "the original tile edge must actually render");
-    let launches = Rc::new(Cell::new(0));
-    let count = launches.clone();
-    launcher.on_launch_requested(move |_| count.set(count.get() + 1));
     window.dispatch_event(WindowEvent::PointerPressed {
         position: center,
         button: PointerEventButton::Left,
     });
     let pressed = window.take_snapshot().unwrap();
+    assert_eq!(
+        tile.size(),
+        size,
+        "press transforms do not resize layout bounds"
+    );
+    let transformed = tile.absolute_position();
+    assert!(
+        (transformed.x - position.x - size.width * (1.0 - pressed_scale) / 2.0).abs() < 0.01,
+        "native scale {pressed_scale}: original {position:?}, actual {transformed:?}, size {size:?}",
+    );
+    assert!(
+        (transformed.y - position.y - translation_y - size.height * (1.0 - pressed_scale) / 2.0)
+            .abs()
+            < 0.01,
+        "native translation {translation_y}: original {position:?}, actual {transformed:?}, size {size:?}",
+    );
     assert_eq!(
         sample(&pressed, position.x + 0.5),
         body,
@@ -228,12 +278,7 @@ fn verify_launcher_press_scale(launcher: &Launcher) {
     assert_eq!(
         tile.size(),
         size,
-        "the surrounding grid geometry stays fixed"
-    );
-    assert_eq!(
-        launches.get(),
-        1,
-        "one complete pointer gesture launches once"
+        "the surrounding layout geometry stays fixed"
     );
     window.dispatch_event(WindowEvent::PointerExited);
 }

@@ -101,6 +101,10 @@ export component ContextMenuSurface inherits Window {
                     width: max(0px, parent.width - 2 * FocusTokens.outer-margin);
                     height: root.row-height;
                     TileButton {
+                        width: parent.width;
+                        height: parent.height;
+                        y: self.pressed ? 1px : 0px;
+                        transform-scale: self.pressed ? 0.98 : 1;
                         radius: 6px;
                         filled: false;
                         property <bool> keyboard-selected: root.keyboard-navigation
