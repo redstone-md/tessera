@@ -7,7 +7,13 @@ import { TileButton, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { DockMenuKind, DockMenuAction } from "shell-commands.slint";
 
-struct MenuEntry { label: string, action: DockMenuAction }
+struct MenuEntry {
+    label: string,
+    action: DockMenuAction,
+    icon: image,
+    application-image: bool,
+    danger: bool,
+}
 
 component MenuLabel inherits Text {
     color: SeelenPalette.foreground;
@@ -17,6 +23,34 @@ component MenuLabel inherits Text {
     accessible-role: none;
     // Only the button owns a label; metric instances must not match it.
     accessible-label: "";
+}
+
+component MenuIcon inherits Rectangle {
+    in property <image> source;
+    in property <bool> application-image;
+    in property <color> tint;
+    width: 16px;
+    height: 16px;
+    background: transparent;
+    border-radius: root.application-image ? 4px : 0px;
+    clip: root.application-image;
+    accessible-role: none;
+    // Clip real application pixels without applying the named SVG tint.
+    if root.application-image: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.source;
+        image-fit: contain;
+        accessible-role: none;
+    }
+    if !root.application-image: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.source;
+        image-fit: contain;
+        colorize: root.tint;
+        accessible-role: none;
+    }
 }
 
 // A separate native Window: winit's built-in popups are clipped inside the
@@ -29,8 +63,11 @@ export component ContextMenuSurface inherits Window {
     min-width: 1px;
     min-height: 1px;
     in property <DockMenuKind> kind;
+    in property <image> target-icon;
     in-out property <int> selected-index;
-    out property <length> menu-width: max(200px, label-metrics.preferred-width + 32px)
+    out property <length> menu-width: max(200px,
+        plain-label-metrics.preferred-width + 32px,
+        icon-label-metrics.preferred-width + 32px + 16px + 8px)
         + 2 * PopoverTokens.shadow-margin;
     out property <length> menu-height: 2 * PopoverTokens.shadow-margin + 16px + root.rows-height;
     preferred-width: root.menu-width;
@@ -43,27 +80,41 @@ export component ContextMenuSurface inherits Window {
     property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
     callback action-requested(DockMenuAction);
     callback dismiss-requested();
-    pure callback metric-labels([MenuEntry]) -> string;
-    // One direct text probe avoids the SDK's deferred repeater layout updates.
-    label-metrics := MenuLabel {
+    pure callback metric-labels([MenuEntry], bool) -> string;
+    // Direct shared-font probes avoid deferred repeater layout before show.
+    plain-label-metrics := MenuLabel {
         width: 0px;
         height: 0px;
         opacity: 0;
-        text: root.metric-labels(root.entries);
+        text: root.metric-labels(root.entries, false);
+    }
+    icon-label-metrics := MenuLabel {
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: root.metric-labels(root.entries, true);
     }
     property <[MenuEntry]> entries: root.kind == DockMenuKind.bar ? [
-        { label: @tr("Settings"), action: DockMenuAction.settings },
+        { label: @tr("Settings"), action: DockMenuAction.settings,
+            icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg") },
         { label: @tr("File Explorer"), action: DockMenuAction.file-manager },
         { label: @tr("Task Manager"), action: DockMenuAction.task-manager },
         { label: @tr("Restore Explorer"), action: DockMenuAction.restore },
         { label: @tr("Exit Tessera"), action: DockMenuAction.exit }
     ] : root.kind == DockMenuKind.pinned ? [
-        { label: @tr("Open"), action: DockMenuAction.launch },
+        { label: @tr("Open"), action: DockMenuAction.launch,
+            icon: root.target-icon.width > 0 ? root.target-icon :
+                @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg"),
+            application-image: root.target-icon.width > 0 },
         { label: @tr("Unpin"), action: DockMenuAction.unpin }
     ] : [
-        { label: @tr("Switch to window"), action: DockMenuAction.activate },
+        { label: @tr("Switch to window"), action: DockMenuAction.activate,
+            icon: root.target-icon.width > 0 ? root.target-icon :
+                @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg"),
+            application-image: root.target-icon.width > 0 },
         { label: @tr("Minimize"), action: DockMenuAction.minimize },
-        { label: @tr("Close"), action: DockMenuAction.close }
+        { label: @tr("Close"), action: DockMenuAction.close,
+            icon: @image-url("../assets/icons/boxicons-font-9ffa913/window-close.svg"), danger: true }
     ];
 
     public function focus-menu() {
@@ -133,6 +184,7 @@ export component ContextMenuSurface inherits Window {
                         transform-scale: self.pressed ? 0.98 : 1;
                         radius: 6px;
                         filled: false;
+                        property <bool> has-icon: entry.icon.width > 0;
                         property <bool> keyboard-selected: root.keyboard-navigation
                             && root.selected-index == index;
                         changed keyboard-selected => {
@@ -151,10 +203,18 @@ export component ContextMenuSurface inherits Window {
                             if self.pressed { root.keyboard-navigation = false; }
                         }
                         clicked => { root.action-requested(entry.action); }
-                        MenuLabel {
+                        if entry.icon.width > 0: MenuIcon {
                             x: 8px;
-                            width: parent.width - 16px;
+                            y: (parent.height - self.height) / 2;
+                            source: entry.icon;
+                            application-image: entry.application-image;
+                            tint: entry.danger ? SeelenPalette.danger : SeelenPalette.muted;
+                        }
+                        MenuLabel {
+                            x: parent.has-icon ? 32px : 8px;
+                            width: max(0px, parent.width - self.x - 8px);
                             text: entry.label;
+                            color: entry.danger ? SeelenPalette.danger : SeelenPalette.foreground;
                             line-height-factor: body.text-line-height-factor;
                             vertical-alignment: center;
                             overflow: elide;

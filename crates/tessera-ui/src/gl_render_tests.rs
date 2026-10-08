@@ -75,11 +75,13 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
             verify_launcher_controls(ColorScheme::Dark, &launcher);
             verify_menu_press_scale(&menu);
+            verify_menu_application_image(&menu);
             launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
             menu.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
             slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
                 verify_launcher_controls(ColorScheme::Light, &launcher);
                 verify_menu_press_scale(&menu);
+                verify_menu_application_image(&menu);
                 launcher.hide().unwrap();
                 tooltip.hide().unwrap();
                 menu.hide().unwrap();
@@ -217,6 +219,49 @@ fn verify_menu_press_scale(menu: &ContextMenuSurface) {
         2,
         "pointer and Space each request one action"
     );
+}
+
+fn verify_menu_application_image(menu: &ContextMenuSurface) {
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
+    for pixel in pixels.make_mut_bytes().chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[255, 0, 255, 255]);
+    }
+    menu.set_kind(DockMenuKind::Pinned);
+    menu.set_target_icon(slint::Image::from_rgba8(pixels));
+    menu.invoke_focus_menu();
+    let row = i_slint_backend_testing::ElementHandle::find_by_accessible_label(menu, "Open")
+        .next()
+        .unwrap();
+    let point = row.absolute_position();
+    let size = row.size();
+    let x = point.x + 8.0;
+    let y = point.y + (size.height - 16.0) / 2.0;
+    let scale = menu.window().scale_factor();
+    let frame = menu.window().take_snapshot().unwrap();
+    let sample = |x: f32, y: f32| {
+        let pixel =
+            frame.as_slice()[(y * scale) as usize * frame.width() as usize + (x * scale) as usize];
+        (pixel.r, pixel.g, pixel.b, pixel.a)
+    };
+    let background = sample(point.x - 5.0, point.y + size.height / 2.0);
+    assert_eq!(
+        sample(x + 8.0, y + 8.0),
+        (255, 0, 255, 255),
+        "a genuine application image stays untinted on the production renderer"
+    );
+    assert_eq!(
+        sample(x + 0.5, y + 0.5),
+        background,
+        "the production renderer clips the reference 4px application-image corner"
+    );
+    assert_eq!(
+        sample(x + 20.0, y + 8.0),
+        background,
+        "the native image slot preserves the 8px label gap"
+    );
+    menu.set_target_icon(slint::Image::default());
+    menu.set_kind(DockMenuKind::Bar);
+    menu.invoke_focus_menu();
 }
 
 #[derive(Clone, Copy, Debug)]

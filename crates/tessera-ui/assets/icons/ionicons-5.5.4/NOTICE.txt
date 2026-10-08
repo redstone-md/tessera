@@ -1,0 +1,18 @@
+Ionicons open-outline graphical image
+
+Upstream: https://github.com/ionic-team/ionicons
+Release: v5.5.4
+Immutable revision: 728aa746a0bcd49badc6bbf256994cdb41cdc927
+
+Unmodified artwork source: src/svg/open-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/open-outline.svg
+
+Full original MIT grant is retained in the adjacent LICENSE:
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/LICENSE
+Copyright (c) 2015-present Ionic (http://ionic.io/)
+Retain that copyright and complete permission notice with copies or substantial portions of the artwork.
+
+The pinned upstream readme.md identifies the project license as MIT:
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/readme.md
+The SVG title ionicons-v5-k is retained verbatim; it is not a copyright notice.
+No author endorsement or trademark rights are claimed.

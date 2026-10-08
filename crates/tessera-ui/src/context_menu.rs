@@ -24,11 +24,14 @@ mod tests;
 impl ContextMenuSurface {
     pub(crate) fn new_with_metrics() -> Result<Self, slint::PlatformError> {
         let surface = Self::new()?;
-        surface.on_metric_labels(|entries| {
+        surface.on_metric_labels(|entries, decorated| {
             entries.model_tracker().track_row_count_changes();
             let mut labels = String::new();
             for row in 0..entries.row_count() {
-                if let Some(entry) = entries.row_data_tracked(row) {
+                if let Some(entry) = entries
+                    .row_data_tracked(row)
+                    .filter(|entry| (entry.icon.size().width > 0) == decorated)
+                {
                     labels.push_str(entry.label.as_str());
                     labels.push('\n');
                 }
@@ -101,6 +104,22 @@ impl ContextMenuController {
             .upgrade()
             .ok_or("The dock is no longer available.")?;
         self.surface.set_kind(kind);
+        // Reuse only already-resolved typed dock images; no host extraction.
+        let target_icon = match kind {
+            DockMenuKind::Pinned => dock
+                .get_pinned_apps()
+                .iter()
+                .find(|app| app.key == key)
+                .map(|app| app.icon),
+            DockMenuKind::Window => dock
+                .get_running_windows()
+                .iter()
+                .find(|window| window.key == key)
+                .map(|window| window.icon),
+            DockMenuKind::Bar => None,
+        };
+        self.surface
+            .set_target_icon(target_icon.unwrap_or_default());
         self.surface.set_selected_index(0);
         *self.key.borrow_mut() = key;
         self.surface

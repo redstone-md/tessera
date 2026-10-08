@@ -1165,6 +1165,14 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     window
         .window()
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    let mut icon = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
+    icon.make_mut_slice().fill(slint::Rgba8Pixel {
+        r: 255,
+        g: 0,
+        b: 255,
+        a: 255,
+    });
+    let application_icon = slint::Image::from_rgba8(icon);
 
     for (name, scheme, scale, background) in [
         (
@@ -1217,6 +1225,7 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
             ),
         ] {
             menu.set_kind(kind);
+            menu.set_target_icon(slint::Image::default());
             menu.set_selected_index(0);
             menu.invoke_focus_menu();
             let tokens = menu.global::<crate::generated::PopoverTokens>();
@@ -1266,6 +1275,37 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
                 );
                 assert!((size.height - row_height).abs() < 0.001);
                 assert!(position.y + size.height <= menu.get_menu_height() - margin - 8.0 + 0.001);
+                if matches!(*label, "Settings" | "Open" | "Switch to window" | "Close") {
+                    let left = ((position.x + 8.0) * scale).ceil() as usize;
+                    let top = ((position.y + (row_height - 16.0) / 2.0) * scale).ceil() as usize;
+                    let right = ((position.x + 24.0) * scale).floor() as usize;
+                    let bottom =
+                        ((position.y + (row_height + 16.0) / 2.0) * scale).floor() as usize;
+                    let icon_pixels = || {
+                        (top..bottom).flat_map(|row| {
+                            pixels[row * width as usize + left..row * width as usize + right].iter()
+                        })
+                    };
+                    assert!(
+                        icon_pixels().any(|pixel| [pixel.r, pixel.g, pixel.b] != background),
+                        "{label} renders genuine named artwork in its 16px leading slot",
+                    );
+                    if matches!(*label, "Settings" | "Close") {
+                        let palette = menu.global::<crate::generated::SeelenPalette>();
+                        let color = if *label == "Close" {
+                            palette.get_danger()
+                        } else {
+                            palette.get_muted()
+                        };
+                        let color = color.to_argb_u8();
+                        assert!(
+                            icon_pixels().any(|pixel| pixel.r.abs_diff(color.red) <= 2
+                                && pixel.g.abs_diff(color.green) <= 2
+                                && pixel.b.abs_diff(color.blue) <= 2),
+                            "{label} uses the source-proven muted/danger SVG tint",
+                        );
+                    }
+                }
             }
             export_screenshot(
                 &format!("{name}-{kind:?}"),
@@ -1363,6 +1403,36 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
                         renderer.render(&mut unchanged, width as usize);
                     }),
                     "a settled keyboard outline adds no idle redraw",
+                );
+            }
+            if kind != DockMenuKind::Bar {
+                menu.set_target_icon(application_icon.clone());
+                menu.invoke_focus_menu();
+                let application = draw(&window, width, height);
+                let first = ElementHandle::find_by_accessible_label(&menu, labels[0])
+                    .next()
+                    .unwrap();
+                let point = first.absolute_position();
+                let x = point.x + 8.0;
+                let y = point.y + (row_height - 16.0) / 2.0;
+                assert_eq!(
+                    sample(&application, x + 8.0, y + 8.0),
+                    [255, 0, 255],
+                    "genuine application image pixels must not inherit named-SVG tint",
+                );
+                // The pinned software renderer ignores clip radii; the genuine
+                // GL scenario separately proves the application's rounded corner.
+                assert_eq!(
+                    sample(&application, x + 20.0, y + 8.0),
+                    background,
+                    "the 8px icon/name gap stays empty",
+                );
+                menu.set_target_icon(slint::Image::default());
+                let fallback = draw(&window, width, height);
+                assert_ne!(
+                    sample(&fallback, x + 8.0, y + 8.0),
+                    [255, 0, 255],
+                    "missing or stale application images return to real named artwork",
                 );
             }
         }

@@ -254,3 +254,42 @@ fn passive_transient_surface_never_forwards_a_focus_request() {
     assert_eq!(&*host.events.lock(), &["attach", "detach"]);
     assert_eq!(host.observations.load(Ordering::Relaxed), 0);
 }
+
+#[test]
+fn target_images_are_kind_scoped_and_reset_before_reusing_the_menu() {
+    let (host, dock, menu) = setup();
+    let pinned = slint::Image::from_rgba8(slint::SharedPixelBuffer::new(3, 5));
+    let running = slint::Image::from_rgba8(slint::SharedPixelBuffer::new(7, 9));
+    let empty = slint::Image::default().size();
+    dock.set_pinned_apps(slint::ModelRc::new(slint::VecModel::from(vec![
+        crate::generated::DockApp {
+            key: "opaque window key".into(),
+            label: "Pinned application".into(),
+            icon: pinned.clone(),
+            pinned: true,
+        },
+    ])));
+    dock.set_running_windows(slint::ModelRc::new(slint::VecModel::from(vec![
+        crate::generated::DockWindow {
+            key: "opaque window key".into(),
+            caption: "Running application".into(),
+            icon: running.clone(),
+        },
+    ])));
+    for (kind, expected) in [
+        (DockMenuKind::Pinned, pinned.size()),
+        (DockMenuKind::Window, running.size()),
+        (DockMenuKind::Bar, empty),
+    ] {
+        show(&menu, kind).unwrap();
+        assert_eq!(menu.surface.get_target_icon().size(), expected);
+    }
+    dock.set_running_windows(slint::ModelRc::default());
+    show(&menu, DockMenuKind::Window).unwrap();
+    assert_eq!(menu.surface.get_target_icon().size(), empty);
+    dock.set_pinned_apps(slint::ModelRc::default());
+    show(&menu, DockMenuKind::Pinned).unwrap();
+    assert_eq!(menu.surface.get_target_icon().size(), empty);
+    menu.hide();
+    assert_eq!(host.observations.load(Ordering::Relaxed), 0);
+}

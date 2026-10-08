@@ -19,5 +19,7 @@ export global SeelenPalette {
     out property <color> foreground: self.dark ? #e4e4e4 : #121212;
     out property <color> secondary: self.dark ? #bababa : #3d3d3d;
     out property <color> muted: self.dark ? #898989 : #6f6f6f;
+    // Reference red-600: dark/light OKLCH from libs/core/styles/colors.css.
+    out property <color> danger: self.dark ? oklch(0.72, 0.178, 30) : oklch(0.45, 0.161, 30);
     in-out property <brush> accent: Palette.accent-background;
 }

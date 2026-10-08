@@ -1,0 +1,108 @@
+Remix Icon — independently retained historic settings-4-fill.svg
+
+Upstream repository: https://github.com/Remix-Design/RemixIcon
+Immutable source commit: 6da32446c7aacf75c77f2c4e6751b7d4d4688568
+Commit author/committer date: 2018-12-28T15:02:39Z
+Commit message: Create License
+
+Unchanged original files and SHA-256 digests:
+
+settings-4-fill.svg
+  https://raw.githubusercontent.com/Remix-Design/RemixIcon/6da32446c7aacf75c77f2c4e6751b7d4d4688568/icons/System/settings-4-fill.svg
+  d2aa21bb53184c318b41dfcbe85ad960be48d4e5d9c1be95da8e20c86898e93b
+License
+  https://raw.githubusercontent.com/Remix-Design/RemixIcon/6da32446c7aacf75c77f2c4e6751b7d4d4688568/License
+  c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+NOTICE-README-upstream.txt (original upstream README.md, filename changed only)
+  https://raw.githubusercontent.com/Remix-Design/RemixIcon/6da32446c7aacf75c77f2c4e6751b7d4d4688568/README.md
+  62f17a63d2ff5db69c70543e7d7977ab6c7a86cb9f79af51e70bdcef3ac4a162
+NOTICE-package-upstream.json (original upstream package.json, filename changed only)
+  https://raw.githubusercontent.com/Remix-Design/RemixIcon/6da32446c7aacf75c77f2c4e6751b7d4d4688568/package.json
+  89aef8d49103d9bf95e017b433220c4eb731967d2a3a68124a29a1007c779066
+
+Grant and source notices
+
+The complete root License at this exact commit is Apache License, Version 2.0,
+January 2004, including Sections 1–9 and the original appendix. Its placeholder
+Copyright [yyyy] [name of copyright owner] is an upstream example, not an actual
+copyright declaration; it is retained verbatim. No copyright owner/year has
+been invented or substituted.
+
+The full upstream README is retained verbatim. It describes Remix Icon as open
+source neutral-style system symbols, designed in outlined and filled styles
+on a 24x24 grid, and explicitly says: "Of course, all the icons are free to use
+for both personal and commercial."
+
+The root package.json independently states personal/commercial use and names
+its author as "wendygaoyuan <wendygaoyuan@163.com>". Its license metadata says
+"ISC", inconsistent with the root Apache License added by this commit. This
+metadata is preserved, not rewritten. The applicable grant relied upon here
+is the actual complete root Apache License; no unprovided ISC text or extra
+copyright statement is inferred from package metadata.
+
+The complete, non-truncated recursive source inventory has root entries
+License, README.md, fonts, icons, and package.json. No NOTICE file or nested
+license was present. Inventory primary source:
+https://api.github.com/repos/Remix-Design/RemixIcon/git/trees/6da32446c7aacf75c77f2c4e6751b7d4d4688568?recursive=1
+
+The original SVG contains no comments, copyright, attribution, or embedded
+license notices. Neither the root License nor README at this commit contains
+a no-sale/no-resale supplement. These conclusions apply only to this pinned
+historic distribution, not later versions.
+
+Redistribution
+
+When distributing this artwork or object-form derivatives, include the full
+License with the distribution (Apache 2.0 Section 4(a)); a URL alone is not a
+replacement. Retain relevant source notices under Section 4(c), including the
+original context retained here. Modified files must carry prominent change
+notices under Section 4(b). The retained artwork and license are unmodified.
+No upstream NOTICE existed, so this provenance is local informational context,
+not a purported upstream NOTICE. Include this provenance and retained upstream
+context in source distributions and in the application's third-party notices
+bundle alongside License for binary distributions. Integration must arrange
+that bundling; merely keeping these files in a source tree does not do it.
+No trademark license or endorsement is claimed.
+
+Actual rendering comparison — similar, NOT pixel-identical
+
+Reference-only current SVG, independently downloaded into analysis cache:
+https://raw.githubusercontent.com/Remix-Design/RemixIcon/8bc436bdd329cf342958d8effdd078bfa74354c6/icons/System/settings-4-fill.svg
+SHA-256: e24878ccca44c48697aa690d4e30caa369eea99790417207bdb25e0c819491f3
+The current reference is not redistributed here; no current path geometry
+was inserted into, or relabeled as, the retained historic artwork.
+
+Renderer: installed FFmpeg 7.1.5 (Debian 7:7.1.5-0+deb13u1), librsvg 2.60.0
+(Debian 2.60.0+dfsg-1), Cairo 1.18.4 (Debian 1.18.4-1+b1).
+Both independently downloaded, unmodified SVGs were rasterized directly at
+16x16, 32x32, and 64x64 pixels, default black fill/currentColor, transparent
+background, origin-aligned full 24x24 viewBox. No bitmap rescaling was used.
+For each file and size N, the analysis command was:
+  ffmpeg -hide_banner -loglevel error -width N -height N -i FILE.svg -frames:v 1 -y FILE-N.png
+RGBA pixels and 8-bit alpha were compared with existing Pillow/NumPy tools.
+Bounds below are [left, top, right-exclusive, bottom-exclusive].
+
+Size | RGBA-different pixels | Max alpha delta /255 | Mean abs alpha delta /255 | Sum abs alpha delta | Different pixels at alpha >=128
+16   | 22 /256               | 6                    | 0.15234375                | 39                  | 0
+32   | 55 /1024              | 16                   | 0.16015625                | 164                 | 0
+64   | 154 /4096             | 16                   | 0.11083984375             | 454                 | 3
+
+Nonzero-alpha bounds (old and current are the same at each size):
+16: [1, 1, 15, 15]
+32: [2, 3, 30, 29]
+64: [5, 6, 59, 58]
+
+Alpha >=128 bounds (old and current are the same at each size):
+16: [1, 2, 15, 14]
+32: [3, 3, 29, 28]
+64: [5, 7, 59, 57]
+
+For a 16 logical-pixel slot, the 1x/2x studies (16/32 physical pixels) show
+matching half-coverage silhouettes and matching raster bounds, but actual
+antialiasing pixel values differ. This supports an approximate close visual
+match, not equal appearance, identical shape geometry, or pixel equivalence.
+The old arc-based path and current cubic path are distinct. At 64 pixels even
+three half-coverage silhouette pixels differ. These results are specific to
+the stated renderer, alignment, color, and sizes; they do not establish
+parity in the application's native renderer, fractional positions, different
+DPI, or compositing. Native visual integration remains a separate decision.
