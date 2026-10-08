@@ -58,11 +58,21 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         verify_frame("launcher", &launcher);
         verify_frame("tooltip", &tooltip);
         verify_frame("context-menu", &menu);
-        launcher.hide().unwrap();
-        tooltip.hide().unwrap();
-        menu.hide().unwrap();
-        result.set(true);
-        slint::quit_event_loop().unwrap();
+        // Stock control colors have their own 150ms transitions. Let the
+        // genuine loop settle them; cold frame pixels are not theme proof.
+        launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
+        slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+            verify_launcher_controls(ColorScheme::Dark, &launcher);
+            launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
+            slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+                verify_launcher_controls(ColorScheme::Light, &launcher);
+                launcher.hide().unwrap();
+                tooltip.hide().unwrap();
+                menu.hide().unwrap();
+                result.set(true);
+                slint::quit_event_loop().unwrap();
+            });
+        });
     })
     .unwrap();
     slint::run_event_loop().unwrap();
@@ -120,6 +130,40 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
         assert_eq!((shadow.r, shadow.g, shadow.b), (0, 0, 0));
         export_frame(&format!("gl-{name}-{theme}-{scale}x"), &frame);
     }
+}
+
+fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
+    let theme = match scheme {
+        ColorScheme::Dark => "dark",
+        ColorScheme::Light => "light",
+        _ => panic!("The settlement scenario requires an explicit color scheme"),
+    };
+    let frame = launcher.window().take_snapshot().unwrap();
+    let scale = launcher.window().scale_factor();
+    for label in [
+        "Open settings and recovery",
+        "Refresh the desktop",
+        "Exit Tessera",
+    ] {
+        let button =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
+                .next()
+                .unwrap();
+        let position = button.absolute_position();
+        let x = ((position.x + button.size().width / 2.0) * scale) as usize;
+        let y = ((position.y + 4.0) * scale) as usize;
+        let pixel = frame.as_slice()[y * frame.width() as usize + x];
+        assert_eq!(pixel.a, 255, "{label} must be opaque");
+        assert!(
+            if scheme == ColorScheme::Dark {
+                pixel.r < 128 && pixel.g < 128 && pixel.b < 128
+            } else {
+                pixel.r > 200 && pixel.g > 200 && pixel.b > 200
+            },
+            "{label} must settle to its {theme} idle color: {pixel:?}",
+        );
+    }
+    export_frame(&format!("gl-launcher-{theme}-settled-{scale}x"), &frame);
 }
 
 fn export_frame(name: &str, frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>) {
