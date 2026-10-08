@@ -287,7 +287,7 @@ pub enum WindowAction {
 /// Validates one opaque key: preserved **exactly** — never sanitized,
 /// truncated, or re-encoded — and only empty, control-containing, or
 /// over-long (in UTF-16 code units) strings are rejected.
-fn valid_key(raw: &str) -> bool {
+pub(crate) fn valid_key(raw: &str) -> bool {
     !raw.is_empty()
         && raw.encode_utf16().count() <= KEY_BOUND_UTF16
         && !raw.chars().any(|character| character.is_control())
@@ -327,23 +327,13 @@ impl PanelPreferences {
     /// Invalid identities reject the whole collection; no favorite count cap
     /// or silent tail truncation is applied. The host validates storage size.
     pub fn with_launcher_favorites(mut self, favorites: Vec<String>) -> Result<Self, String> {
-        let mut ordered = Vec::with_capacity(favorites.len());
-        let mut seen = std::collections::HashSet::new();
-        for favorite in favorites {
-            if !valid_key(&favorite) {
-                return Err("Launcher favorite identities must be nonempty, control-free, and at most 1024 UTF-16 units".into());
-            }
-            if seen.insert(favorite.clone()) {
-                ordered.push(favorite);
-            }
-        }
-        self.launcher_favorites = ordered;
+        self.launcher = self.launcher.with_favorites(favorites)?;
         Ok(self)
     }
 
     /// Persisted exact application identities in launcher favorite order.
     pub fn launcher_favorites(&self) -> &[String] {
-        &self.launcher_favorites
+        self.launcher.favorites()
     }
 
     /// Screen edge the dock hugs when this preference is applied.
@@ -360,7 +350,7 @@ impl PanelPreferences {
 #[cfg(test)]
 mod preference_tests {
     use super::*;
-    use crate::Theme;
+    use crate::{LauncherDisplayMode, Theme};
 
     #[test]
     fn favorites_preserve_order_case_and_tail_independently_of_dock_and_appearance() {
@@ -368,6 +358,7 @@ mod preference_tests {
         let mut repeated = favorites.clone();
         repeated.extend(["favorite-0".into(), "Favorite-0".into()]);
         let preferences = PanelPreferences::new(Theme::Dark, true)
+            .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
             .with_launcher_favorites(repeated)
             .unwrap()
             .with_dock(DockEdge::Left, vec!["dock-only".into()])
@@ -378,7 +369,15 @@ mod preference_tests {
         assert_eq!(preferences.theme(), Theme::Light);
         assert!(!preferences.compact());
         assert_eq!(preferences.dock_edge(), DockEdge::Right);
+        assert_eq!(
+            preferences.launcher().display_mode(),
+            LauncherDisplayMode::Fullscreen
+        );
         assert!(PanelPreferences::default().launcher_favorites().is_empty());
+        assert_eq!(
+            PanelPreferences::default().launcher().display_mode(),
+            LauncherDisplayMode::Windowed
+        );
     }
 
     #[test]
@@ -400,5 +399,56 @@ mod preference_tests {
                     .is_err()
             );
         }
+        let preferences = PanelPreferences::new(Theme::Dark, true)
+            .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
+            .with_launcher_favorites(vec!["keep".into()])
+            .unwrap();
+        assert!(
+            preferences
+                .clone()
+                .with_launcher_favorites(vec![String::new()])
+                .is_err()
+        );
+        assert_eq!(preferences.launcher_favorites(), ["keep"]);
+        assert_eq!(
+            preferences.launcher().display_mode(),
+            LauncherDisplayMode::Fullscreen
+        );
+    }
+
+    #[test]
+    fn display_mode_builder_changes_only_mode_and_reverse_restores_complete_record() {
+        let mut favorites: Vec<_> = (0..80).map(|index| format!("favorite-{index}")).collect();
+        favorites.extend(["missing-app".into(), "exact".into(), "EXACT".into()]);
+        let windowed = PanelPreferences::new(Theme::Dark, true)
+            .with_dock(DockEdge::Left, vec!["dock-only".into()])
+            .with_launcher_favorites(favorites.clone())
+            .unwrap();
+        let fullscreen = windowed
+            .clone()
+            .with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
+        assert_eq!(
+            fullscreen.launcher().display_mode(),
+            LauncherDisplayMode::Fullscreen
+        );
+        assert_eq!(fullscreen.launcher().favorites(), favorites);
+        assert_eq!(
+            fullscreen.launcher_favorites(),
+            fullscreen.launcher().favorites()
+        );
+        assert_eq!(fullscreen.theme(), windowed.theme());
+        assert_eq!(fullscreen.compact(), windowed.compact());
+        assert_eq!(fullscreen.dock_edge(), windowed.dock_edge());
+        assert_eq!(fullscreen.pinned_apps(), windowed.pinned_apps());
+        assert_eq!(
+            fullscreen
+                .clone()
+                .with_launcher_display_mode(LauncherDisplayMode::Fullscreen),
+            fullscreen
+        );
+        assert_eq!(
+            fullscreen.with_launcher_display_mode(LauncherDisplayMode::Windowed),
+            windowed
+        );
     }
 }

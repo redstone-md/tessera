@@ -25,6 +25,14 @@ fn init_integration_once() {
 
 type Observation = dyn Fn() -> Result<PanelSnapshot, String> + Send + Sync;
 
+type NativeHook = Box<dyn FnOnce(&slint::Window)>;
+type UiHook = Box<dyn FnOnce()>;
+thread_local! {
+    static LAUNCHER_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
+    static LAUNCHER_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static PREFERENCE_SAVE_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+}
+
 struct FixtureHost {
     source: Box<Observation>,
     observe_calls: AtomicUsize,
@@ -43,6 +51,8 @@ struct FixtureHost {
     ui_focus_calls: AtomicUsize,
     ui_focus_result: Mutex<Result<(), String>>,
     lease_drops: Arc<AtomicUsize>,
+    launcher_attach_calls: AtomicUsize,
+    launcher_attachment_result: Mutex<Result<(), String>>,
 }
 
 impl FixtureHost {
@@ -68,6 +78,8 @@ impl FixtureHost {
             ui_focus_calls: AtomicUsize::new(0),
             ui_focus_result: Mutex::new(Ok(())),
             lease_drops: Arc::default(),
+            launcher_attach_calls: AtomicUsize::new(0),
+            launcher_attachment_result: Mutex::new(Ok(())),
         })
     }
 
@@ -104,6 +116,10 @@ impl DesktopHost for FixtureHost {
 
     fn save_preferences(&self, preferences: &PanelPreferences) -> Result<(), String> {
         self.saves.lock().push(preferences.clone());
+        let hook = PREFERENCE_SAVE_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
         self.save_result.lock().clone()
     }
 
@@ -118,21 +134,37 @@ impl DesktopHost for FixtureHost {
 
     fn configure_surface(
         &self,
-        _kind: SurfaceKind,
-        _window: &slint::Window,
+        kind: SurfaceKind,
+        window: &slint::Window,
     ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+        if kind == SurfaceKind::Launcher {
+            self.launcher_attach_calls.fetch_add(1, Ordering::SeqCst);
+            let hook = LAUNCHER_CONFIGURE_HOOK.with(|hook| hook.borrow_mut().take());
+            if let Some(hook) = hook {
+                hook(window);
+            }
+            self.launcher_attachment_result.lock().clone()?;
+        }
         struct Lease {
             dropped: Arc<AtomicUsize>,
             _ui_thread: Rc<()>,
+            kind: SurfaceKind,
         }
         impl Drop for Lease {
             fn drop(&mut self) {
                 self.dropped.fetch_add(1, Ordering::SeqCst);
+                if self.kind == SurfaceKind::Launcher {
+                    let hook = LAUNCHER_DROP_HOOK.with(|hook| hook.borrow_mut().take());
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
             }
         }
         Ok(Some(Box::new(Lease {
             dropped: Arc::clone(&self.lease_drops),
             _ui_thread: Rc::new(()),
+            kind,
         })))
     }
 
@@ -792,23 +824,20 @@ fn thread_affine_leases_survive_attach_and_release_before_window_teardown() {
     let controller = controller_for(&panel, host.clone());
     let core = Arc::downgrade(&controller.core);
     let rect = (0, 0, 1920, 32);
-    {
-        let mut leases = controller.leases.borrow_mut();
-        leases
-            .attach(SurfaceKind::Toolbar, host.as_ref(), panel.window(), rect)
-            .unwrap();
-        assert_eq!(host.lease_drops.load(Ordering::SeqCst), 0);
-        assert!(!leases.geometry_changed(SurfaceKind::Toolbar, rect));
-        leases
-            .attach(
-                SurfaceKind::Toolbar,
-                host.as_ref(),
-                panel.window(),
-                (0, 0, 1920, 64),
-            )
-            .unwrap();
-        assert_eq!(host.lease_drops.load(Ordering::SeqCst), 1);
-    }
+    controller
+        .configure_lease(SurfaceKind::Toolbar, panel.window(), rect)
+        .unwrap();
+    assert_eq!(host.lease_drops.load(Ordering::SeqCst), 0);
+    assert!(
+        !controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Toolbar, rect)
+    );
+    controller
+        .configure_lease(SurfaceKind::Toolbar, panel.window(), (0, 0, 1920, 64))
+        .unwrap();
+    assert_eq!(host.lease_drops.load(Ordering::SeqCst), 1);
     let scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
     drop(scope);
     assert_eq!(host.lease_drops.load(Ordering::SeqCst), 2);
@@ -1075,6 +1104,17 @@ impl LauncherFixture {
             .tiles
             .row_data(index % columns)
             .unwrap()
+    }
+
+    // The portable testing adapter has no screen-position readback. Check the
+    // controller's attached physical RECT instead of claiming native placement.
+    fn attached_launcher_rect(&self) -> Option<(i32, i32, u32, u32)> {
+        self.controller
+            .leases
+            .borrow()
+            .attachments
+            .get(&SurfaceKind::Launcher)
+            .map(|attachment| attachment.rect)
     }
 
     fn click_launcher(&self, label: &str) {
@@ -1448,6 +1488,7 @@ fn launcher_native_views_search_and_reopen_use_independent_favorites() {
 fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_selection() {
     let preferences = PanelPreferences::new(Theme::Light, false)
         .with_dock(crate::DockEdge::Left, vec!["app-browser".into()])
+        .with_launcher_display_mode(crate::LauncherDisplayMode::Fullscreen)
         .with_launcher_favorites(vec!["uninstalled".into()])
         .unwrap();
     let fixture = LauncherFixture::with_preferences(preferences.clone());
@@ -1464,6 +1505,10 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
     assert_eq!(applied.dock_edge(), crate::DockEdge::Left);
     assert_eq!(applied.pinned_apps(), preferences.pinned_apps());
     assert_eq!(applied.launcher_favorites(), ["uninstalled", "app-editor"]);
+    assert_eq!(
+        applied.launcher().display_mode(),
+        crate::LauncherDisplayMode::Fullscreen
+    );
     assert_eq!(fixture.host.saves.lock().last().unwrap(), &applied);
     assert!(fixture.host.launches.lock().is_empty());
     fixture
@@ -1482,6 +1527,10 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
     assert_eq!(with_pin.launcher_favorites(), applied.launcher_favorites());
     assert_eq!(with_pin.theme(), Theme::Light);
     assert_eq!(with_pin.pinned_apps(), ["app-browser", "app-editor"]);
+    assert_eq!(
+        with_pin.launcher().display_mode(),
+        crate::LauncherDisplayMode::Fullscreen
+    );
     fixture.panel.invoke_save_preferences_requested();
     let appearance = fixture.controller.core.applied_preferences();
     assert_eq!(appearance.theme(), Theme::Dark);
@@ -1492,6 +1541,10 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
         applied.launcher_favorites()
     );
     assert_eq!(appearance.pinned_apps(), with_pin.pinned_apps());
+    assert_eq!(
+        appearance.launcher().display_mode(),
+        crate::LauncherDisplayMode::Fullscreen
+    );
     assert_eq!(fixture.host.saves.lock().len(), 3);
 
     fixture.click_launcher("Back to favorites");
@@ -1739,5 +1792,598 @@ fn launcher_native_grid_to_header_switch_resets_selection_before_virtual_init() 
     fixture.key(Key::Return.into());
     assert!(fixture.host.launches.lock().is_empty());
     assert!(fixture.host.saves.lock().is_empty());
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn launcher_native_display_mode_transaction_preserves_full_record_and_logical_authority() {
+    use crate::LauncherDisplayMode;
+    use crate::generated::{LauncherDisplayMode as UiMode, LauncherView};
+    use slint::platform::{Key, WindowEvent};
+
+    let applications = (0..128)
+        .map(|index| {
+            PanelApplication::new(
+                format!("app-{index:04}"),
+                format!("Retained App {index}"),
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut favorites = (0..100)
+        .rev()
+        .map(|index| format!("app-{index:04}"))
+        .collect::<Vec<_>>();
+    favorites.insert(20, "uninstalled".into());
+    let preferences = PanelPreferences::new(Theme::Light, false)
+        .with_dock(crate::DockEdge::Left, vec!["app-0001".into()])
+        .with_launcher_favorites(favorites.clone())
+        .unwrap();
+    let fixture = LauncherFixture::with_snapshot(
+        preferences.clone(),
+        launcher_snapshot().with_applications(applications),
+    );
+    fixture.controller.open_launcher();
+    fixture.launcher.set_search("Retained App".into());
+    fixture.controller.apply_launcher_filter();
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    fixture.key(Key::Tab.into());
+    fixture.key(Key::Tab.into());
+    for _ in 0..18 {
+        fixture.key(Key::DownArrow.into());
+    }
+    fixture.key(Key::RightArrow.into());
+    assert_eq!(fixture.launcher.get_selected_key(), "app-0127");
+    fixture.launcher.invoke_reset_scroll(); // Selected tail stays outside the top viewport.
+    fixture.panel.set_theme_index(2);
+    fixture.panel.set_compact(true);
+    fixture.panel.set_dock_edge_index(3);
+    fixture.panel.invoke_appearance_changed();
+    let rows = fixture.launcher.get_rows();
+    let position = fixture.launcher.window().position();
+    let size = fixture.launcher.window().size();
+    let focus_calls = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    *fixture.host.save_result.lock() = Err(format!("disk full\n\u{1b}{}", "untrusted".repeat(80)));
+    fixture.click_launcher("Expand applications menu");
+    assert_eq!(fixture.controller.core.applied_preferences(), preferences);
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Windowed);
+    assert_eq!(fixture.launcher.window().position(), position);
+    assert_eq!(fixture.launcher.window().size(), size);
+    assert_eq!(
+        fixture.launcher.get_rows(),
+        rows,
+        "mode changes never rebuild inventory/rows"
+    );
+    assert_eq!(fixture.launcher.get_search(), "Retained App");
+    assert_eq!(fixture.launcher.get_view(), LauncherView::All);
+    assert_eq!(fixture.launcher.get_selected_key(), "app-0127");
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops);
+    assert!(
+        fixture
+            .launcher
+            .get_status()
+            .contains("Could not save launcher display mode")
+    );
+    assert!(fixture.launcher.get_status().len() < 300);
+    assert!(!fixture.launcher.get_status().contains('\n'));
+    assert!(!fixture.launcher.get_status().contains('\u{1b}'));
+
+    *fixture.host.save_result.lock() = Ok(());
+    fixture.click_launcher("Expand applications menu");
+    let applied = preferences
+        .clone()
+        .with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
+    assert_eq!(fixture.controller.core.applied_preferences(), applied);
+    assert_eq!(fixture.host.saves.lock().last(), Some(&applied));
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert_eq!(
+        fixture.launcher.window().position(),
+        slint::PhysicalPosition::new(0, 0)
+    );
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1920, 1040)
+    );
+    assert!(
+        !fixture.launcher.window().is_fullscreen(),
+        "product fullscreen is a physical overlay"
+    );
+    assert_eq!(fixture.launcher.get_rows(), rows);
+    assert_eq!(fixture.launcher.get_selected_key(), "app-0127");
+    assert_eq!(fixture.launcher.get_search(), "Retained App");
+    assert_eq!(fixture.controller.core.launcher_favorites(), favorites);
+    assert_eq!(fixture.controller.core.pins(), ["app-0001"]);
+    assert_eq!(fixture.controller.core.catalog().len(), 128);
+    assert_eq!(
+        fixture
+            .controller
+            .resolve_launcher_key("app-0127")
+            .as_deref(),
+        Some("app-0127")
+    );
+    assert!(
+        fixture
+            .controller
+            .resolve_launcher_key("uninstalled")
+            .is_none()
+    );
+    fixture
+        .launcher
+        .invoke_display_mode_requested(UiMode::Fullscreen);
+    assert_eq!(
+        fixture.host.saves.lock().len(),
+        2,
+        "repeated absolute intent has zero saves"
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_calls
+    );
+    assert!(fixture.host.launches.lock().is_empty());
+
+    // Real footer focus survives both refits even after native grid navigation.
+    // Return must toggle the footer, never launch the selected offscreen app.
+    fixture.key(Key::Return.into());
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Windowed);
+    assert_eq!(fixture.launcher.window().size(), size);
+    fixture.key(Key::Return.into());
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert_eq!(fixture.host.saves.lock().len(), 4);
+    assert_eq!(fixture.launcher.get_rows(), rows);
+    assert_eq!(fixture.launcher.get_selected_key(), "app-0127");
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_calls
+    );
+    assert!(fixture.host.launches.lock().is_empty());
+
+    let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    fixture.key(Key::Escape.into());
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops + 1);
+    fixture.controller.open_launcher();
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert_eq!(fixture.launcher.get_view(), LauncherView::Favorites);
+    assert_eq!(fixture.launcher.get_search(), "");
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    fixture.click_launcher("Contract applications menu");
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Windowed);
+    assert_eq!(fixture.launcher.window().position(), position);
+    assert_eq!(fixture.launcher.window().size(), size);
+    assert_eq!(fixture.controller.core.applied_preferences(), preferences);
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.host.subscription_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn launcher_display_mode_guards_busy_stale_hidden_and_missing_monitor_before_save() {
+    use crate::generated::LauncherDisplayMode as UiMode;
+
+    let fixture = LauncherFixture::new();
+    fixture
+        .launcher
+        .invoke_display_mode_requested(UiMode::Fullscreen);
+    fixture.controller.open_launcher();
+    for stale in [false, true] {
+        fixture.panel.set_refreshing(!stale);
+        fixture.panel.set_stale(stale);
+        fixture
+            .launcher
+            .invoke_display_mode_requested(UiMode::Fullscreen);
+    }
+    fixture.panel.set_refreshing(false);
+    fixture.panel.set_stale(false);
+    fixture
+        .controller
+        .core
+        .store_snapshot(PanelSnapshot::new(0, Vec::new(), 0));
+    fixture.controller.render();
+    let size = fixture.launcher.window().size();
+    let position = fixture.launcher.window().position();
+    fixture.click_launcher("Expand applications menu");
+    assert!(fixture.host.saves.lock().is_empty());
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Windowed);
+    assert_eq!(fixture.launcher.window().size(), size);
+    assert_eq!(fixture.launcher.window().position(), position);
+    assert!(
+        fixture
+            .launcher
+            .get_status()
+            .contains("monitor bounds are unavailable")
+    );
+    fixture.controller.hide_launcher();
+}
+
+#[test]
+fn launcher_saved_fullscreen_without_monitor_stays_hidden_until_valid_open() {
+    use crate::LauncherDisplayMode;
+    use crate::generated::LauncherDisplayMode as UiMode;
+
+    let preferences =
+        seeded_preferences().with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
+    let startup =
+        LauncherFixture::with_snapshot(preferences.clone(), PanelSnapshot::new(0, Vec::new(), 0));
+    startup.controller.open_launcher();
+    assert!(
+        !startup.launcher.window().is_visible(),
+        "missing bounds cannot fake fullscreen"
+    );
+    assert_eq!(startup.launcher.get_display_mode(), UiMode::Windowed);
+    assert_eq!(startup.controller.core.applied_preferences(), preferences);
+    assert_eq!(startup.host.launcher_attach_calls.load(Ordering::SeqCst), 0);
+    assert!(startup.host.saves.lock().is_empty());
+    assert!(
+        startup
+            .launcher
+            .get_status()
+            .contains("Could not present saved launcher display mode")
+    );
+    apply_result_to_both(&startup.controller, &startup.panel, Ok(launcher_snapshot()));
+    assert!(!startup.launcher.window().is_visible());
+    startup.controller.open_launcher();
+    assert_eq!(startup.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert_eq!(
+        startup.launcher.window().size(),
+        slint::PhysicalSize::new(1920, 1040)
+    );
+    assert!(!startup.launcher.window().is_fullscreen());
+}
+
+#[test]
+fn launcher_visible_context_and_scale_refit_without_reset_focus_or_hidden_placement() {
+    use crate::LauncherDisplayMode;
+    use crate::generated::LauncherDisplayMode as UiMode;
+    use slint::platform::WindowEvent;
+
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    fixture.launcher.set_search("editor".into());
+    fixture.controller.apply_launcher_filter();
+    let focus_calls = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    let attached = fixture.host.launcher_attach_calls.load(Ordering::SeqCst);
+    fixture.controller.render();
+    fixture.controller.update_geometry();
+    assert_eq!(
+        fixture.host.launcher_attach_calls.load(Ordering::SeqCst),
+        attached
+    );
+    let context = crate::DockContext::new(-3200, -200, 3200, 1800, false).unwrap();
+    apply_result_to_both(
+        &fixture.controller,
+        &fixture.panel,
+        Ok(launcher_snapshot().with_dock_context(context)),
+    );
+    assert_eq!(
+        fixture.attached_launcher_rect(),
+        Some((-2200, 205, 1200, 990))
+    );
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1200, 990)
+    );
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
+    fixture.controller.render();
+    assert_eq!(
+        fixture.attached_launcher_rect(),
+        Some((-2480, 205, 1760, 990))
+    );
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1760, 990)
+    );
+    fixture.click_launcher("Expand applications menu");
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    let context = crate::DockContext::new(-2560, -1440, 2560, 1440, true).unwrap();
+    apply_result_to_both(
+        &fixture.controller,
+        &fixture.panel,
+        Ok(launcher_snapshot().with_dock_context(context)),
+    );
+    assert_eq!(
+        fixture.attached_launcher_rect(),
+        Some((-2560, -1440, 2560, 1440))
+    );
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(2560, 1440)
+    );
+    assert!(
+        !fixture
+            .controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Launcher, (-2560, -1440, 2560, 1440),)
+    );
+    assert_eq!(fixture.launcher.get_search(), "editor");
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_calls
+    );
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(
+        fixture
+            .controller
+            .core
+            .applied_preferences()
+            .launcher()
+            .display_mode(),
+        LauncherDisplayMode::Fullscreen
+    );
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+
+    fixture.controller.hide_launcher();
+    let attached = fixture.host.launcher_attach_calls.load(Ordering::SeqCst);
+    let position = fixture.launcher.window().position();
+    let size = fixture.launcher.window().size();
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(launcher_snapshot()));
+    fixture.controller.update_geometry();
+    assert_eq!(
+        fixture.host.launcher_attach_calls.load(Ordering::SeqCst),
+        attached
+    );
+    assert_eq!(fixture.launcher.window().position(), position);
+    assert_eq!(fixture.launcher.window().size(), size);
+    assert_eq!(fixture.attached_launcher_rect(), None);
+    assert!(!fixture.launcher.window().is_visible());
+    fixture.controller.open_launcher();
+    assert_eq!(
+        fixture.launcher.window().position(),
+        slint::PhysicalPosition::new(0, 0)
+    );
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1920, 1040)
+    );
+    assert_eq!(fixture.launcher.get_search(), "");
+}
+
+#[test]
+fn launcher_mode_save_completion_after_hide_keeps_saved_mode_without_resurrection() {
+    use crate::LauncherDisplayMode;
+    use crate::generated::LauncherDisplayMode as UiMode;
+
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    let controller = fixture.controller.clone();
+    PREFERENCE_SAVE_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(controller.leases.try_borrow_mut().is_ok());
+            assert!(controller.launcher_state.try_borrow_mut().is_ok());
+            controller.hide_launcher();
+        }));
+    });
+    let attached = fixture.host.launcher_attach_calls.load(Ordering::SeqCst);
+    let focus_calls = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    fixture.click_launcher("Expand applications menu");
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(
+        fixture
+            .controller
+            .core
+            .applied_preferences()
+            .launcher()
+            .display_mode(),
+        LauncherDisplayMode::Fullscreen
+    );
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(
+        fixture.host.launcher_attach_calls.load(Ordering::SeqCst),
+        attached
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_calls
+    );
+    fixture.controller.open_launcher();
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1920, 1040)
+    );
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+}
+
+#[test]
+fn launcher_saved_mode_native_attachment_failure_is_truthful_and_recoverable() {
+    use crate::LauncherDisplayMode;
+    use crate::generated::LauncherDisplayMode as UiMode;
+
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    fixture.launcher.set_search("editor".into());
+    fixture.controller.apply_launcher_filter();
+    let focus_calls = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    *fixture.host.launcher_attachment_result.lock() = Err("native denied\n\u{1b}untrusted".into());
+    fixture.click_launcher("Expand applications menu");
+    let applied = fixture.controller.core.applied_preferences();
+    assert_eq!(
+        applied.launcher().display_mode(),
+        LauncherDisplayMode::Fullscreen
+    );
+    assert_eq!(fixture.host.saves.lock().last(), Some(&applied));
+    assert!(!fixture.launcher.window().is_visible());
+    assert!(
+        fixture
+            .controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Launcher, (0, 0, 1920, 1040))
+    );
+    assert!(
+        fixture
+            .launcher
+            .get_status()
+            .contains("Launcher display mode saved, but could not present it")
+    );
+    assert!(!fixture.launcher.get_status().contains('\n'));
+    assert!(!fixture.launcher.get_status().contains('\u{1b}'));
+    assert_eq!(fixture.launcher.get_search(), "editor");
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus_calls
+    );
+    assert!(
+        fixture.controller.surface_failure.borrow().is_none(),
+        "launcher failure keeps recovery bars alive"
+    );
+    *fixture.host.launcher_attachment_result.lock() = Ok(());
+    fixture.controller.open_launcher();
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert!(!fixture.launcher.window().is_fullscreen());
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+}
+
+#[test]
+fn launcher_native_configure_cancellation_discards_late_lease_before_hide() {
+    use crate::LauncherDisplayMode;
+    use slint::platform::WindowEvent;
+
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    let controller = fixture.controller.clone();
+    let owner = fixture.launcher.as_weak();
+    LAUNCHER_CONFIGURE_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |window| {
+            assert!(controller.leases.try_borrow_mut().is_ok());
+            assert!(controller.launcher_state.try_borrow_mut().is_ok());
+            window.dispatch_event(WindowEvent::CloseRequested);
+            assert!(window.is_visible(), "hide waits for the in-flight lease");
+            LAUNCHER_DROP_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    assert!(
+                        owner.upgrade().unwrap().window().is_visible(),
+                        "late lease drops before native hide"
+                    );
+                    assert!(controller.leases.try_borrow_mut().is_ok());
+                    assert!(controller.launcher_state.try_borrow_mut().is_ok());
+                }));
+            });
+        }));
+    });
+    let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    fixture.click_launcher("Expand applications menu");
+    assert_eq!(
+        fixture
+            .controller
+            .core
+            .applied_preferences()
+            .launcher()
+            .display_mode(),
+        LauncherDisplayMode::Fullscreen
+    );
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(
+        fixture.host.lease_drops.load(Ordering::SeqCst),
+        drops + 2,
+        "old and cancelled local leases both released"
+    );
+    assert!(
+        fixture
+            .controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Launcher, (0, 0, 1920, 1040))
+    );
+    fixture.controller.open_launcher();
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1920, 1040)
+    );
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert!(fixture.host.launches.lock().is_empty());
+}
+
+#[test]
+fn launcher_native_reopen_and_lease_drop_reentry_cannot_publish_stale_attachment() {
+    use crate::generated::LauncherDisplayMode as UiMode;
+    use slint::platform::WindowEvent;
+    use std::cell::Cell;
+
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    let controller = fixture.controller.clone();
+    let owner = fixture.launcher.as_weak();
+    let retired = Rc::new(Cell::new(false));
+    let released = Rc::clone(&retired);
+    LAUNCHER_CONFIGURE_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |window| {
+            window.dispatch_event(WindowEvent::CloseRequested);
+            controller.open_launcher();
+            assert!(window.is_visible());
+            LAUNCHER_DROP_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    assert!(owner.upgrade().unwrap().window().is_visible());
+                    released.set(true);
+                }));
+            });
+            LAUNCHER_CONFIGURE_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move |_| {
+                    assert!(
+                        retired.get(),
+                        "new session attaches only after old local lease drops"
+                    );
+                    assert!(controller.leases.try_borrow_mut().is_ok());
+                    assert!(controller.launcher_state.try_borrow_mut().is_ok());
+                }));
+            });
+        }));
+    });
+    let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    fixture.click_launcher("Expand applications menu");
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Fullscreen);
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops + 2);
+    assert!(
+        !fixture
+            .controller
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Launcher, (0, 0, 1920, 1040))
+    );
+
+    let controller = fixture.controller.clone();
+    LAUNCHER_DROP_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(controller.leases.try_borrow_mut().is_ok());
+            assert!(controller.launcher_state.try_borrow_mut().is_ok());
+            controller.hide_launcher();
+        }));
+    });
+    let attached = fixture.host.launcher_attach_calls.load(Ordering::SeqCst);
+    fixture.click_launcher("Contract applications menu");
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(
+        fixture.host.launcher_attach_calls.load(Ordering::SeqCst),
+        attached,
+        "drop cancellation never starts late configure"
+    );
+    assert_eq!(fixture.host.saves.lock().len(), 2);
+    assert_eq!(
+        fixture
+            .controller
+            .core
+            .applied_preferences()
+            .launcher()
+            .display_mode(),
+        crate::LauncherDisplayMode::Windowed
+    );
+    fixture.controller.open_launcher();
+    assert_eq!(fixture.launcher.get_display_mode(), UiMode::Windowed);
+    assert_eq!(
+        fixture.launcher.window().size(),
+        slint::PhysicalSize::new(1056, 572)
+    );
     assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
 }

@@ -56,30 +56,25 @@ struct SurfaceAttachment {
 }
 
 impl SurfaceLeases {
-    /// Attaches `window` for `kind` and retains the returned lease. A `None`
-    /// lease (diagnostics hosts) is stored as "attached without native".
-    pub(crate) fn attach(
+    /// Pure storage: native configuration and attachment destruction must run
+    /// outside the registry's RefCell borrow, since both can synchronously reenter.
+    fn store(
         &mut self,
         kind: SurfaceKind,
-        host: &Host,
-        window: &slint::Window,
+        lease: Option<Box<dyn std::any::Any>>,
         rect: (i32, i32, u32, u32),
-    ) -> Result<(), String> {
-        self.detach(kind);
-        let lease = host.configure_surface(kind, window)?;
+    ) -> Option<SurfaceAttachment> {
         self.attachments.insert(
             kind,
             SurfaceAttachment {
                 _lease: lease,
                 rect,
             },
-        );
-        Ok(())
+        )
     }
 
-    /// Drops the lease for `kind` (the native detach) if one is held.
-    pub(crate) fn detach(&mut self, kind: SurfaceKind) {
-        self.attachments.remove(&kind);
+    fn take(&mut self, kind: SurfaceKind) -> Option<SurfaceAttachment> {
+        self.attachments.remove(&kind)
     }
 
     /// Whether `rect` differs from the last attached rect for `kind`.
@@ -92,7 +87,8 @@ struct SurfaceLeaseScope(Rc<RefCell<SurfaceLeases>>);
 
 impl Drop for SurfaceLeaseScope {
     fn drop(&mut self) {
-        *self.0.borrow_mut() = SurfaceLeases::default();
+        let leases = std::mem::take(&mut *self.0.borrow_mut());
+        drop(leases);
     }
 }
 
@@ -373,23 +369,23 @@ impl PanelController {
         self.show_launcher_tiles();
     }
 
-    /// Attaches one surface lease through the registry (UI-thread only).
-    /// A diagnostics host returns no lease; storing `None` is fine.
-    fn attach_lease(
+    /// Native calls and lease destruction never retain a registry borrow.
+    fn detach_lease(&self, kind: SurfaceKind) {
+        let attachment = self.leases.borrow_mut().take(kind);
+        drop(attachment);
+    }
+
+    fn configure_lease(
         &self,
         kind: SurfaceKind,
         window: &slint::Window,
         rect: (i32, i32, u32, u32),
-    ) -> bool {
-        if let Err(error) =
-            self.leases
-                .borrow_mut()
-                .attach(kind, self.core.host().as_ref(), window, rect)
-        {
-            self.fail_surface(error);
-            return false;
-        }
-        true
+    ) -> Result<(), String> {
+        self.detach_lease(kind);
+        let lease = self.core.host().configure_surface(kind, window)?;
+        let replaced = self.leases.borrow_mut().store(kind, lease, rect);
+        drop(replaced);
+        Ok(())
     }
 
     fn fail_surface(&self, error: String) {
@@ -620,6 +616,7 @@ impl PanelController {
 
         self.refresh_strip(&dock);
         self.show_launcher_tiles();
+        self.update_launcher_geometry();
     }
 
     fn refresh_strip(&self, dock: &Dock) {
@@ -692,14 +689,17 @@ impl PanelController {
         if let Some(quick) = quick {
             quick.close_if_geometry_changed(context, scale);
         }
-        let mut leases = self.leases.borrow_mut();
 
         if !fullscreen {
             // Dock: never reserves (Seelen OnOverlap default), but its lease
             // tracks the geometry for the shared registry bookkeeping.
             let dock_rect_tuple = (rect.x, rect.y, rect.width, rect.height);
-            if leases.geometry_changed(SurfaceKind::Dock, dock_rect_tuple) {
-                leases.detach(SurfaceKind::Dock);
+            let changed = self
+                .leases
+                .borrow()
+                .geometry_changed(SurfaceKind::Dock, dock_rect_tuple);
+            if changed {
+                self.detach_lease(SurfaceKind::Dock);
                 dock.window()
                     .set_size(slint::WindowSize::Physical(slint::PhysicalSize::new(
                         rect.width,
@@ -709,12 +709,7 @@ impl PanelController {
                     slint::PhysicalPosition::new(rect.x, rect.y),
                 ));
                 dock.show().map_err(|error| error.to_string())?;
-                leases.attach(
-                    SurfaceKind::Dock,
-                    self.core.host().as_ref(),
-                    dock.window(),
-                    dock_rect_tuple,
-                )?;
+                self.configure_lease(SurfaceKind::Dock, dock.window(), dock_rect_tuple)?;
             } else {
                 dock.show().map_err(|error| error.to_string())?;
             }
@@ -722,8 +717,12 @@ impl PanelController {
             if let Some(toolbar) = self.toolbar_and_upgrade() {
                 let rect = crate::dock::toolbar_rect(context, scale);
                 let toolbar_rect_tuple = (rect.x, rect.y, rect.width, rect.height);
-                if leases.geometry_changed(SurfaceKind::Toolbar, toolbar_rect_tuple) {
-                    leases.detach(SurfaceKind::Toolbar);
+                let changed = self
+                    .leases
+                    .borrow()
+                    .geometry_changed(SurfaceKind::Toolbar, toolbar_rect_tuple);
+                if changed {
+                    self.detach_lease(SurfaceKind::Toolbar);
                     toolbar.window().set_size(slint::WindowSize::Physical(
                         slint::PhysicalSize::new(rect.width, rect.height),
                     ));
@@ -733,9 +732,8 @@ impl PanelController {
                             slint::PhysicalPosition::new(rect.x, rect.y),
                         ));
                     toolbar.show().map_err(|error| error.to_string())?;
-                    leases.attach(
+                    self.configure_lease(
                         SurfaceKind::Toolbar,
-                        self.core.host().as_ref(),
                         toolbar.window(),
                         toolbar_rect_tuple,
                     )?;
@@ -747,14 +745,13 @@ impl PanelController {
             // Fullscreen: drop both leases before the hides (the windows may
             // lose their HWNDs); recovery stays possible via the launcher's
             // rescue/menu actions once it is reopened.
-            leases.detach(SurfaceKind::Dock);
-            leases.detach(SurfaceKind::Toolbar);
+            self.detach_lease(SurfaceKind::Dock);
+            self.detach_lease(SurfaceKind::Toolbar);
             dock.hide().map_err(|error| error.to_string())?;
             if let Some(toolbar) = self.toolbar_and_upgrade() {
                 toolbar.hide().map_err(|error| error.to_string())?;
             }
         }
-        drop(leases);
         Ok(true)
     }
 
@@ -762,6 +759,7 @@ impl PanelController {
         if let Err(error) = self.apply_geometry(self.core.dock_context()) {
             self.fail_surface(error);
         }
+        self.update_launcher_geometry();
     }
 
     /// Apply the shared live color/density/edge preview without saving it.
@@ -1237,13 +1235,6 @@ pub(crate) fn run(
                     slint::CloseRequestResponse::KeepWindowShown
                 });
             }
-            launcher.window().on_close_requested({
-                let controller = controller.clone();
-                move || {
-                    controller.hide_launcher();
-                    slint::CloseRequestResponse::KeepWindowShown
-                }
-            });
             // The clock timer refreshes only the toolbar's clock text.
             let _clock_guard = crate::start_clock_timer(&core, {
                 let toolbar = toolbar.as_weak();

@@ -99,6 +99,10 @@ _Avoid_: "favorite" as a synonym for a dock pin.
 An application the user has chosen for the launcher's Favorites view, independently from the dock. A saved choice may outlive installation and does not itself authorize a launch.
 _Avoid_: "pinned application" when referring to launcher favorites.
 
+**Launcher display mode**:
+A saved choice between a centered, windowed launcher and a monitor-filling launcher overlay. It does not change the display mode or placement rules of application windows.
+_Avoid_: equating the monitor-filling overlay with exclusive fullscreen or a window backend's fullscreen flag.
+
 **Application group**:
 A dock entry representing related windows of one application.
 _Avoid_: grouping unrelated windows merely because they share a hosting executable.

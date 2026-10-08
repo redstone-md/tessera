@@ -4,8 +4,8 @@
 use std::error::Error;
 
 /// A failed startup read disables ordinary saves for this session, protecting
-/// damaged or newer records from immediate pin/favorite changes. Missing files
-/// still load writable defaults. Recovery is deliberately manual.
+/// damaged or newer records from immediate pin/favorite/display-mode changes.
+/// Missing files still load writable defaults. Recovery is deliberately manual.
 #[cfg(any(windows, test))]
 fn load_preferences(
     store: std::io::Result<crate::settings::SettingsStore>,
@@ -36,6 +36,59 @@ fn load_preferences(
     }
 }
 
+/// Map the complete applied record, never an appearance preview or partial launcher group.
+#[cfg(windows)]
+fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::settings::Preferences {
+    use crate::settings::{DockEdge, LauncherDisplayMode, Preferences, Theme};
+
+    let theme = match preferences.theme() {
+        tessera_ui::Theme::System => Theme::System,
+        tessera_ui::Theme::Light => Theme::Light,
+        tessera_ui::Theme::Dark => Theme::Dark,
+    };
+    let edge = match preferences.dock_edge() {
+        tessera_ui::DockEdge::Bottom => DockEdge::Bottom,
+        tessera_ui::DockEdge::Top => DockEdge::Top,
+        tessera_ui::DockEdge::Left => DockEdge::Left,
+        tessera_ui::DockEdge::Right => DockEdge::Right,
+    };
+    let mode = match preferences.launcher().display_mode() {
+        tessera_ui::LauncherDisplayMode::Windowed => LauncherDisplayMode::Windowed,
+        tessera_ui::LauncherDisplayMode::Fullscreen => LauncherDisplayMode::Fullscreen,
+    };
+    Preferences::new(theme, preferences.compact())
+        .with_dock(edge, preferences.pinned_apps().to_vec())
+        .with_launcher_favorites(preferences.launcher().favorites().to_vec())
+        .with_launcher_display_mode(mode)
+}
+
+#[cfg(windows)]
+fn to_ui_preferences(
+    preferences: &crate::settings::Preferences,
+) -> Result<tessera_ui::PanelPreferences, String> {
+    use crate::settings::{DockEdge, LauncherDisplayMode, Theme};
+
+    let theme = match preferences.theme() {
+        Theme::System => tessera_ui::Theme::System,
+        Theme::Light => tessera_ui::Theme::Light,
+        Theme::Dark => tessera_ui::Theme::Dark,
+    };
+    let edge = match preferences.dock_edge() {
+        DockEdge::Bottom => tessera_ui::DockEdge::Bottom,
+        DockEdge::Top => tessera_ui::DockEdge::Top,
+        DockEdge::Left => tessera_ui::DockEdge::Left,
+        DockEdge::Right => tessera_ui::DockEdge::Right,
+    };
+    let mode = match preferences.launcher_display_mode() {
+        LauncherDisplayMode::Windowed => tessera_ui::LauncherDisplayMode::Windowed,
+        LauncherDisplayMode::Fullscreen => tessera_ui::LauncherDisplayMode::Fullscreen,
+    };
+    tessera_ui::PanelPreferences::new(theme, preferences.compact())
+        .with_dock(edge, preferences.pinned_apps().to_vec())
+        .with_launcher_display_mode(mode)
+        .with_launcher_favorites(preferences.launcher_favorites().to_vec())
+}
+
 #[cfg(windows)]
 mod desktop {
     use std::collections::HashMap;
@@ -51,7 +104,7 @@ mod desktop {
     use tessera_windows::{ActivationTarget, Application, IconPixels};
 
     use crate::audio_provider::AudioProvider;
-    use crate::settings::{DockEdge, Preferences, SettingsStore, Theme};
+    use crate::settings::SettingsStore;
 
     struct CatalogCache {
         checked: Instant,
@@ -365,23 +418,8 @@ mod desktop {
             let store = self.settings.as_ref().ok_or_else(|| {
                 "Preference saving is unavailable for this session; preview still works. Check the startup notice and restart after recovery.".to_owned()
             })?;
-            let theme = match preferences.theme() {
-                tessera_ui::Theme::System => Theme::System,
-                tessera_ui::Theme::Light => Theme::Light,
-                tessera_ui::Theme::Dark => Theme::Dark,
-            };
-            let edge = match preferences.dock_edge() {
-                tessera_ui::DockEdge::Bottom => DockEdge::Bottom,
-                tessera_ui::DockEdge::Top => DockEdge::Top,
-                tessera_ui::DockEdge::Left => DockEdge::Left,
-                tessera_ui::DockEdge::Right => DockEdge::Right,
-            };
             store
-                .save(
-                    &Preferences::new(theme, preferences.compact())
-                        .with_dock(edge, preferences.pinned_apps().to_vec())
-                        .with_launcher_favorites(preferences.launcher_favorites().to_vec()),
-                )
+                .save(&super::from_ui_preferences(preferences))
                 .map_err(|error| error.to_string())
         }
     }
@@ -400,17 +438,6 @@ mod desktop {
         }
         let (settings, preferences, notice) =
             super::load_preferences(SettingsStore::for_current_user());
-        let theme = match preferences.theme() {
-            Theme::System => tessera_ui::Theme::System,
-            Theme::Light => tessera_ui::Theme::Light,
-            Theme::Dark => tessera_ui::Theme::Dark,
-        };
-        let edge = match preferences.dock_edge() {
-            DockEdge::Bottom => tessera_ui::DockEdge::Bottom,
-            DockEdge::Top => tessera_ui::DockEdge::Top,
-            DockEdge::Left => tessera_ui::DockEdge::Left,
-            DockEdge::Right => tessera_ui::DockEdge::Right,
-        };
         let heartbeat = heartbeat
             .map(tessera_windows::ShellHeartbeat::connect)
             .transpose()?
@@ -430,9 +457,7 @@ mod desktop {
         };
         tessera_ui::run(
             host,
-            PanelPreferences::new(theme, preferences.compact())
-                .with_dock(edge, preferences.pinned_apps().to_vec())
-                .with_launcher_favorites(preferences.launcher_favorites().to_vec())?,
+            super::to_ui_preferences(&preferences)?,
             notice,
             RunOptions {
                 surface: if presentation == Presentation::Utility {
@@ -493,6 +518,9 @@ mod preference_tests {
             "damaged",
             r#"{"schema_version":9,"theme":"dark","compact":true}"#,
             r#"{"schema_version":2,"theme":"dark","compact":true}"#,
+            r#"{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"normal","favorites":[]}}"#,
+            r#"{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"fullscreen","favorites":[],"unknown":true}}"#,
+            r#"{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":["fullscreen",["A"]]}"#,
         ] {
             std::fs::write(&path, original).unwrap();
             let (store, preferences, notice) =
@@ -516,5 +544,92 @@ mod preference_tests {
         assert_eq!(preferences, Preferences::default());
         assert!(notice.is_none());
         assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn complete_preferences_map_both_directions_without_losing_launcher_mode_or_tail() {
+        use crate::settings::{DockEdge, LauncherDisplayMode, Theme};
+
+        let mut favorites: Vec<_> = (0..80).map(|index| format!("favorite-{index}")).collect();
+        favorites.extend(["missing-app".into(), "exact".into(), "EXACT".into()]);
+        for (theme, ui_theme) in [
+            (Theme::System, tessera_ui::Theme::System),
+            (Theme::Light, tessera_ui::Theme::Light),
+            (Theme::Dark, tessera_ui::Theme::Dark),
+        ] {
+            for (edge, ui_edge) in [
+                (DockEdge::Bottom, tessera_ui::DockEdge::Bottom),
+                (DockEdge::Top, tessera_ui::DockEdge::Top),
+                (DockEdge::Left, tessera_ui::DockEdge::Left),
+                (DockEdge::Right, tessera_ui::DockEdge::Right),
+            ] {
+                for (mode, ui_mode) in [
+                    (
+                        LauncherDisplayMode::Windowed,
+                        tessera_ui::LauncherDisplayMode::Windowed,
+                    ),
+                    (
+                        LauncherDisplayMode::Fullscreen,
+                        tessera_ui::LauncherDisplayMode::Fullscreen,
+                    ),
+                ] {
+                    for compact in [false, true] {
+                        let stored = Preferences::new(theme, compact)
+                            .with_dock(edge, vec!["dock-only".into()])
+                            .with_launcher_favorites(favorites.clone())
+                            .with_launcher_display_mode(mode);
+                        let ui = to_ui_preferences(&stored).unwrap();
+                        assert_eq!(ui.theme(), ui_theme);
+                        assert_eq!(ui.compact(), compact);
+                        assert_eq!(ui.dock_edge(), ui_edge);
+                        assert_eq!(ui.launcher().display_mode(), ui_mode);
+                        assert_eq!(ui.launcher().favorites(), favorites);
+                        assert_eq!(ui.pinned_apps(), ["dock-only"]);
+                        assert_eq!(from_ui_preferences(&ui), stored);
+                        assert_eq!(to_ui_preferences(&from_ui_preferences(&ui)).unwrap(), ui);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn applied_appearance_pin_and_favorite_edits_keep_complete_group_through_storage_mapping() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(directory.path().join("settings.json"));
+        let favorites: Vec<_> = (0..80).map(|index| format!("favorite-{index}")).collect();
+        let applied = tessera_ui::PanelPreferences::new(tessera_ui::Theme::Dark, true)
+            .with_dock(tessera_ui::DockEdge::Left, vec!["dock-only".into()])
+            .with_launcher_favorites(favorites.clone())
+            .unwrap()
+            .with_launcher_display_mode(tessera_ui::LauncherDisplayMode::Fullscreen);
+        for edited in [
+            applied.clone().with_appearance(
+                tessera_ui::Theme::Light,
+                false,
+                tessera_ui::DockEdge::Right,
+            ),
+            applied
+                .clone()
+                .with_dock(tessera_ui::DockEdge::Top, vec!["new-dock".into()]),
+            applied
+                .clone()
+                .with_launcher_favorites(vec!["missing-app".into()])
+                .unwrap(),
+        ] {
+            store.save(&from_ui_preferences(&edited)).unwrap();
+            let reloaded = to_ui_preferences(&store.load().unwrap()).unwrap();
+            assert_eq!(reloaded, edited);
+            assert_eq!(
+                reloaded.launcher().display_mode(),
+                tessera_ui::LauncherDisplayMode::Fullscreen
+            );
+        }
+        let windowed =
+            applied.with_launcher_display_mode(tessera_ui::LauncherDisplayMode::Windowed);
+        store.save(&from_ui_preferences(&windowed)).unwrap();
+        assert_eq!(to_ui_preferences(&store.load().unwrap()).unwrap(), windowed);
     }
 }

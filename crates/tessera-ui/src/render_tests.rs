@@ -26,7 +26,8 @@ use slint::{ComponentHandle, ModelRc, Rgb8Pixel, VecModel};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
-    LaunchRow, LaunchTile, Launcher, LauncherNavigation, LauncherView, Toolbar, TooltipSurface,
+    LaunchRow, LaunchTile, Launcher, LauncherDisplayMode, LauncherNavigation, LauncherView,
+    Toolbar, TooltipSurface,
 };
 use crate::icons::IconCache;
 use crate::launcher::{LauncherInventory, LauncherRows, LauncherSelection, Navigation};
@@ -2227,6 +2228,117 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
 }
 
 #[test]
+fn launcher_footer_native_input_requests_absolute_modes_without_optimistic_projection() {
+    let window = software_window();
+    let fixture = NativeLauncherInventory::new(1024);
+    let launcher = &fixture.launcher;
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let log = requests.clone();
+    launcher.on_display_mode_requested(move |mode| log.borrow_mut().push(mode));
+    fixture.show(&window, 560, 420);
+    launcher.set_search("Inventory".into());
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Tab.into());
+    for _ in 0..146 {
+        native_key(&window, Key::DownArrow.into());
+    }
+    native_key(&window, Key::RightArrow.into());
+    let selected = launcher.get_selected_key();
+    assert_eq!(selected.as_str(), inventory_key(1023));
+    let _ = draw(&window, 560, 420);
+
+    let expand = ElementHandle::find_by_accessible_label(launcher, "Expand applications menu")
+        .next()
+        .unwrap();
+    assert_eq!(expand.accessible_role(), Some(AccessibleRole::Button));
+    assert_eq!(expand.accessible_checkable(), Some(true));
+    assert_eq!(expand.accessible_checked(), Some(false));
+    assert_eq!(expand.accessible_description().unwrap(), "Windowed");
+    native_click(&window, &expand);
+    native_click(&window, &expand);
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Space.into(),
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Space.into(),
+        });
+    assert_eq!(
+        requests.borrow().len(),
+        2,
+        "Space does not fire until release"
+    );
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Space.into(),
+    });
+    expand.invoke_accessible_default_action();
+    assert_eq!(
+        requests.borrow().as_slice(),
+        &[LauncherDisplayMode::Fullscreen; 4],
+        "every event requests the same absolute intent until the host applies it"
+    );
+    assert_eq!(launcher.get_display_mode(), LauncherDisplayMode::Windowed);
+    assert_eq!(
+        expand.accessible_checked(),
+        Some(false),
+        "no optimistic frame/state"
+    );
+
+    // The host owns persistence and projection; the fixture only supplies
+    // the generated setter after a hypothetical successful save.
+    launcher.set_display_mode(LauncherDisplayMode::Fullscreen);
+    let _ = draw(&window, 560, 420);
+    let contract = ElementHandle::find_by_accessible_label(launcher, "Contract applications menu")
+        .next()
+        .unwrap();
+    assert_eq!(contract.accessible_checked(), Some(true));
+    assert_eq!(contract.accessible_description().unwrap(), "Fullscreen");
+    native_key(&window, Key::Return.into());
+    contract.invoke_accessible_default_action();
+    assert_eq!(
+        &requests.borrow()[4..],
+        &[LauncherDisplayMode::Windowed; 2],
+        "active Return and accessibility request absolute contraction"
+    );
+    for (stale, refreshing) in [(true, false), (false, true)] {
+        launcher.set_stale(stale);
+        launcher.set_refreshing(refreshing);
+        native_click(&window, &contract);
+        contract.invoke_accessible_default_action();
+        native_key(&window, Key::Return.into());
+        native_key(&window, Key::Space.into());
+        assert_eq!(
+            requests.borrow().len(),
+            6,
+            "blocked display-mode input is not an enabled recovery action"
+        );
+    }
+    assert_eq!(launcher.get_display_mode(), LauncherDisplayMode::Fullscreen);
+    assert!(
+        !launcher.window().is_fullscreen(),
+        "product layout never sets native fullscreen"
+    );
+    assert_eq!(launcher.get_selected_key(), selected);
+    assert_eq!(launcher.get_search(), "Inventory");
+    assert_eq!(launcher.get_view(), LauncherView::All);
+    assert_eq!(launcher.get_application_count(), 1024);
+    assert!(fixture.launches.borrow().is_empty());
+    assert!(fixture.favorites.borrow().is_empty());
+    for label in [
+        "Open settings and recovery",
+        "Refresh the desktop",
+        "Exit Tessera",
+    ] {
+        assert!(
+            ElementHandle::find_by_accessible_label(launcher, label)
+                .next()
+                .is_some()
+        );
+    }
+}
+
+#[test]
 fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scales() {
     use slint::platform::software_renderer::PremultipliedRgbaColor;
 
@@ -2269,6 +2381,7 @@ fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scale
             "Open settings and recovery",
             "Refresh the desktop",
             "Exit Tessera",
+            "Expand applications menu",
         ] {
             let element = ElementHandle::find_by_accessible_label(&launcher, label)
                 .next()
@@ -2288,6 +2401,105 @@ fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scale
                 renderer.render(&mut pixels, width);
             }),
             "The settled launcher must not continuously redraw"
+        );
+    }
+}
+
+#[test]
+fn launcher_fullscreen_pixels_fill_every_edge_and_windowed_frame_round_trips() {
+    use slint::language::ColorScheme;
+    use slint::platform::software_renderer::PremultipliedRgbaColor;
+
+    let window = software_window();
+    let fixture = NativeLauncherInventory::new(1024);
+    let launcher = &fixture.launcher;
+    fixture.show(&window, 560, 420);
+    for (scheme, scale, background) in [
+        (ColorScheme::Dark, 1.0, 24),
+        (ColorScheme::Dark, 2.0, 24),
+        (ColorScheme::Light, 1.0, 242),
+        (ColorScheme::Light, 2.0, 242),
+    ] {
+        launcher.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (560.0 * scale) as usize;
+        let height = (420.0 * scale) as usize;
+        window.set_size(slint::PhysicalSize::new(width as u32, height as u32));
+        launcher.set_display_mode(LauncherDisplayMode::Windowed);
+        let mut pixels = vec![PremultipliedRgbaColor::default(); width * height];
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width);
+        }));
+        let windowed = pixels.clone();
+        assert_eq!(windowed[0].alpha, 0);
+        assert_eq!(
+            windowed[height / 2 * width].alpha,
+            0,
+            "10px outer gutter remains"
+        );
+        let search = ElementHandle::find_by_accessible_label(launcher, "Search applications")
+            .next()
+            .unwrap();
+        let windowed_search = (search.absolute_position(), search.size());
+        let tile = inventory_tile(launcher, 0);
+        let windowed_tile = tile.size();
+        let footer = ElementHandle::find_by_accessible_label(launcher, "Expand applications menu")
+            .next()
+            .unwrap();
+        let windowed_footer = footer.absolute_position();
+
+        launcher.set_display_mode(LauncherDisplayMode::Fullscreen);
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width);
+        }));
+        // Software rendering intentionally cannot certify blurred shadows.
+        // These are actual alpha/body pixels; GL covers the native shadow.
+        for index in (0..width)
+            .chain((height - 1) * width..height * width)
+            .chain((0..height).flat_map(|y| [y * width, y * width + width - 1]))
+        {
+            let pixel = pixels[index];
+            assert_eq!(
+                (pixel.red, pixel.green, pixel.blue, pixel.alpha),
+                (background, background, background, 255),
+                "{scheme:?} {scale}x fullscreen edge pixel {index}"
+            );
+        }
+        assert_eq!(launcher.get_grid_columns(), 7);
+        let search = ElementHandle::find_by_accessible_label(launcher, "Search applications")
+            .next()
+            .unwrap();
+        assert!((search.absolute_position().x - windowed_search.0.x + 10.0).abs() < 0.01);
+        assert!((search.absolute_position().y - windowed_search.0.y + 10.0).abs() < 0.01);
+        assert!((search.size().width - windowed_search.1.width - 20.0).abs() < 0.01);
+        assert!(inventory_tile(launcher, 0).size().width > windowed_tile.width);
+        let footer =
+            ElementHandle::find_by_accessible_label(launcher, "Contract applications menu")
+                .next()
+                .unwrap();
+        assert!((footer.absolute_position().y - windowed_footer.y - 10.0).abs() < 0.01);
+        assert!(!launcher.window().is_fullscreen());
+        launcher.set_display_mode(LauncherDisplayMode::Windowed);
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width);
+        }));
+        assert!(
+            pixels.iter().zip(&windowed).all(|(actual, expected)| (
+                actual.red,
+                actual.green,
+                actual.blue,
+                actual.alpha
+            ) == (
+                expected.red,
+                expected.green,
+                expected.blue,
+                expected.alpha
+            )),
+            "Windowed frame, grid and footer restore exactly"
         );
     }
 }
@@ -3069,6 +3281,33 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
         assert!(pixels.iter().any(|pixel| *pixel != pixels[0]));
         assert_eq!(tokens.get_font_size(), 12.8);
         assert_eq!(tokens.get_shadow_margin(), 10.0);
+        assert_eq!(tokens.get_radius(), 10.0);
+        // Default PopoverBody still reserves its gutter and rounded corner;
+        // software pixels do not claim to verify the blurred native shadow.
+        use slint::platform::software_renderer::PremultipliedRgbaColor;
+        let mut alpha_pixels = vec![PremultipliedRgbaColor::default(); (width * height) as usize];
+        window.request_redraw();
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut alpha_pixels, width as usize);
+        }));
+        let alpha_at = |x: f32, y: f32| {
+            alpha_pixels[(y * scale) as usize * width as usize + (x * scale) as usize].alpha
+        };
+        assert_eq!(
+            alpha_at(0.0, 0.0),
+            0,
+            "other popover outer gutter stays transparent"
+        );
+        assert_eq!(
+            alpha_at(10.0, 10.0),
+            0,
+            "other popover keeps its rounded corner"
+        );
+        assert_eq!(
+            alpha_at(20.0, 12.0),
+            255,
+            "other popover body still starts inside 10px margin"
+        );
         let inset = ((tokens.get_shadow_margin() + 2.0) * scale) as usize;
         let pixel = pixels[(height as usize / 2) * width as usize + inset];
         assert_eq!(

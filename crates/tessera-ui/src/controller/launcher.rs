@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use slint::{ComponentHandle, ModelRc};
 
 use super::PanelController;
-use crate::SurfaceKind;
-use crate::generated::{Launcher, LauncherNavigation, LauncherView};
+use crate::generated::{
+    Launcher, LauncherDisplayMode as UiDisplayMode, LauncherNavigation, LauncherView,
+};
 use crate::launcher::{LauncherInventory, LauncherRows, LauncherSelection, Navigation};
+use crate::{LauncherDisplayMode, SurfaceKind};
 
 #[derive(Default)]
 pub(super) struct LauncherState {
@@ -16,6 +19,7 @@ pub(super) struct LauncherState {
     selection: LauncherSelection,
     query: String,
     inventory: Rc<LauncherInventory>,
+    session: Rc<LauncherSession>,
 }
 
 impl LauncherState {
@@ -76,6 +80,74 @@ impl LauncherState {
     }
 }
 
+/// Only launcher presentation is serialized: native calls may synchronously
+/// hide/reopen it. Logical inventory never stays borrowed across those calls.
+#[derive(Default)]
+struct LauncherSession {
+    generation: Cell<u64>,
+    visible: Cell<bool>,
+    presenting: Cell<bool>,
+    reopen: Cell<bool>,
+    refit: Cell<bool>,
+    saving: Cell<bool>,
+}
+
+impl LauncherSession {
+    fn advance(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+    }
+}
+
+struct LauncherPresentation<'a> {
+    controller: &'a PanelController,
+    launcher: &'a Launcher,
+    session: Rc<LauncherSession>,
+    generation: u64,
+    completed: bool,
+}
+
+impl LauncherPresentation<'_> {
+    fn current(&self) -> bool {
+        self.session.visible.get() && self.session.generation.get() == self.generation
+    }
+}
+
+impl Drop for LauncherPresentation<'_> {
+    fn drop(&mut self) {
+        if !self.completed && self.session.generation.get() == self.generation {
+            self.session.visible.set(false);
+            self.session.advance();
+        }
+        if !self.completed || !self.current() {
+            self.controller.detach_lease(SurfaceKind::Launcher);
+            // A cancelled local attachment has already dropped before this
+            // guard. Keep native hide deferred until then; reopening queues.
+            let _ = self.launcher.hide();
+        }
+        self.session.presenting.set(false);
+        if self.session.reopen.replace(false) && self.session.visible.get() {
+            self.session.refit.set(false);
+            self.controller.open_launcher();
+        } else if self.session.refit.replace(false) && self.session.visible.get() {
+            self.controller.update_launcher_geometry();
+        }
+    }
+}
+
+struct ModeSave<'a>(&'a Cell<bool>);
+impl Drop for ModeSave<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
+fn ui_display_mode(mode: LauncherDisplayMode) -> UiDisplayMode {
+    match mode {
+        LauncherDisplayMode::Windowed => UiDisplayMode::Windowed,
+        LauncherDisplayMode::Fullscreen => UiDisplayMode::Fullscreen,
+    }
+}
+
 impl PanelController {
     pub(super) fn wire_launcher(&self, launcher: &Launcher) {
         let weak = self.clone();
@@ -86,6 +158,14 @@ impl PanelController {
         });
         let weak = self.clone();
         launcher.on_view_requested(move |view| weak.switch_launcher_view(view));
+        let weak = self.clone();
+        launcher.on_display_mode_requested(move |mode| {
+            let mode = match mode {
+                UiDisplayMode::Windowed => LauncherDisplayMode::Windowed,
+                UiDisplayMode::Fullscreen => LauncherDisplayMode::Fullscreen,
+            };
+            weak.change_launcher_display_mode(mode);
+        });
         let weak = self.clone();
         launcher.on_search_changed(move || weak.apply_launcher_filter());
         let weak = self.clone();
@@ -104,6 +184,13 @@ impl PanelController {
         // Escape hides the launcher (dropping its lease first, because a
         // hidden window may lose its HWND); the loop keeps running.
         launcher.on_hide_requested(move || weak.hide_launcher());
+        launcher.window().on_close_requested({
+            let controller = self.clone();
+            move || {
+                controller.hide_launcher();
+                slint::CloseRequestResponse::KeepWindowShown
+            }
+        });
         let weak = self.clone();
         // The footer's explicit Exit button quits the run (the host
         // supervisor follows by restoring the Explorer shell).
@@ -241,61 +328,232 @@ impl PanelController {
         }
     }
 
-    /// Shows (creates not; already constructed) the frameless launcher
-    /// window in dock mode. Its Escape key hides it; the loop keeps running.
-    ///
-    /// Lease lifecycle: the launcher window is a tool-window but activatable
-    /// (no no-activate, unlike the bars); its HWND may be released while
-    /// hidden, so the lease is attached after every show and dropped before
-    /// every hide.
-    pub(crate) fn open_launcher(&self) {
-        self.dismiss_tooltip(false);
-        if let Some(launcher) = self.launcher_and_upgrade() {
+    fn launcher_session(&self) -> Rc<LauncherSession> {
+        Rc::clone(&self.launcher_state.borrow().session)
+    }
+
+    /// An absolute footer intent saves the complete applied record first.
+    /// A failed save changes neither logical results nor native presentation.
+    fn change_launcher_display_mode(&self, mode: LauncherDisplayMode) {
+        if self.interactive_launcher().is_none() {
+            return;
+        }
+        let session = self.launcher_session();
+        let applied = self.core.applied_preferences();
+        if applied.launcher().display_mode() == mode || session.saving.get() {
+            return;
+        }
+        if mode == LauncherDisplayMode::Fullscreen && self.core.dock_context().is_none() {
+            self.report_message(
+                "Could not save launcher display mode: monitor bounds are unavailable.",
+            );
+            return;
+        }
+        session.saving.set(true);
+        let _save = ModeSave(&session.saving);
+        let preferences = applied.with_launcher_display_mode(mode);
+        if let Err(error) = self.core.host().save_preferences(&preferences) {
+            self.report_message(&format!(
+                "Could not save launcher display mode: {}",
+                crate::sanitize::bounded_text(&error, 200)
+            ));
+            return;
+        }
+        self.core.record_applied(&preferences);
+        // Publish persistence before native callbacks. A nested cancelled refit
+        // may report a presentation error; never overwrite it with late success.
+        self.report_message("Launcher display mode saved");
+        if let Err(error) = self.present_launcher(false) {
+            self.report_message(&format!(
+                "Launcher display mode saved, but could not present it: {}",
+                crate::sanitize::bounded_text(&error, 200)
+            ));
+        }
+    }
+
+    /// Refit only an existing visible session. No show, focus, search reset,
+    /// inventory projection, desktop observation or toolkit fullscreen setter.
+    pub(super) fn update_launcher_geometry(&self) {
+        if let Err(error) = self.present_launcher(false) {
+            self.report_message(&format!(
+                "Could not present saved launcher display mode: {}",
+                crate::sanitize::bounded_text(&error, 200)
+            ));
+        }
+    }
+
+    fn present_launcher(&self, opening: bool) -> Result<bool, String> {
+        let Some(launcher) = self.launcher_and_upgrade() else {
+            return Ok(false);
+        };
+        let session = self.launcher_session();
+        if opening {
+            session.advance();
+            session.visible.set(true);
+            if session.presenting.get() {
+                session.reopen.set(true);
+                return Ok(false);
+            }
+        } else {
+            if !session.visible.get() || !launcher.window().is_visible() {
+                return Ok(false);
+            }
+            if session.presenting.get() {
+                session.refit.set(true);
+                return Ok(false);
+            }
+        }
+        let mode = self.core.applied_preferences().launcher().display_mode();
+        let context = self.core.dock_context();
+        if mode == LauncherDisplayMode::Fullscreen && context.is_none() {
+            self.hide_launcher();
+            return Err("Monitor bounds are unavailable.".into());
+        }
+        let rect = context.map(|context| {
+            crate::launcher::launcher_rect(context, launcher.window().scale_factor(), mode)
+        });
+        let position = launcher.window().position();
+        let size = launcher.window().size();
+        let rect = rect
+            .map(|rect| (rect.x, rect.y, rect.width, rect.height))
+            .unwrap_or((position.x, position.y, size.width, size.height));
+        let geometry_changed = self
+            .leases
+            .borrow()
+            .geometry_changed(SurfaceKind::Launcher, rect);
+        let mode_changed = launcher.get_display_mode() != ui_display_mode(mode);
+        if !opening && !geometry_changed && !mode_changed {
+            return Ok(true);
+        }
+        session.presenting.set(true);
+        let mut presentation = LauncherPresentation {
+            controller: self,
+            launcher: &launcher,
+            generation: session.generation.get(),
+            session,
+            completed: false,
+        };
+        if opening {
+            self.dismiss_tooltip(false);
             self.launcher_state.borrow_mut().reopen();
             launcher.set_search("".into());
             self.show_launcher_tiles();
             launcher.invoke_reset_scroll();
-            self.leases.borrow_mut().detach(SurfaceKind::Launcher);
-            let rect = self.core.dock_context().map(|context| {
-                crate::dock::launcher_rect(context, launcher.window().scale_factor())
-            });
-            if let Some(rect) = rect {
+        }
+        if opening || geometry_changed {
+            self.detach_lease(SurfaceKind::Launcher);
+            if !presentation.current() {
+                return Ok(false);
+            }
+            if context.is_some() {
                 launcher
                     .window()
-                    .set_size(slint::PhysicalSize::new(rect.width, rect.height));
+                    .set_size(slint::PhysicalSize::new(rect.2, rect.3));
+                if !presentation.current() {
+                    return Ok(false);
+                }
                 launcher
                     .window()
-                    .set_position(slint::PhysicalPosition::new(rect.x, rect.y));
+                    .set_position(slint::PhysicalPosition::new(rect.0, rect.1));
             }
-            if let Err(error) = launcher.show() {
-                self.fail_surface(error.to_string());
-                return;
+        }
+        if !presentation.current() {
+            return Ok(false);
+        }
+        if mode_changed {
+            launcher.set_display_mode(ui_display_mode(mode));
+        }
+        if !presentation.current() {
+            return Ok(false);
+        }
+        if opening {
+            launcher.show().map_err(|error| error.to_string())?;
+        }
+        if !presentation.current() || !launcher.window().is_visible() {
+            return Ok(false);
+        }
+        if opening || geometry_changed {
+            // Configure outside every state/registry borrow. If its callback
+            // cancels this generation, discard the local lease before hide.
+            let attachment = self
+                .core
+                .host()
+                .configure_surface(SurfaceKind::Launcher, launcher.window());
+            if !presentation.current() || !launcher.window().is_visible() {
+                drop(attachment);
+                return Ok(false);
             }
-            let rect = rect
-                .map(|rect| (rect.x, rect.y, rect.width, rect.height))
-                .unwrap_or((0, 0, 0, 0));
-            if self.attach_lease(SurfaceKind::Launcher, launcher.window(), rect) {
-                self.request_ui_focus(launcher.window());
-                launcher.invoke_focus_search();
-                launcher.invoke_reset_scroll();
+            let attachment = attachment?;
+            let rect = if context.is_some() {
+                rect
+            } else {
+                let position = launcher.window().position();
+                let size = launcher.window().size();
+                (position.x, position.y, size.width, size.height)
+            };
+            let replaced = self
+                .leases
+                .borrow_mut()
+                .store(SurfaceKind::Launcher, attachment, rect);
+            drop(replaced);
+            if !presentation.current() {
+                return Ok(false);
             }
+        }
+        if opening {
+            self.request_ui_focus(launcher.window());
+            if !presentation.current() {
+                return Ok(false);
+            }
+            launcher.invoke_focus_search();
+            if !presentation.current() {
+                return Ok(false);
+            }
+            launcher.invoke_reset_scroll();
+        }
+        if !presentation.current() || !launcher.window().is_visible() {
+            return Ok(false);
+        }
+        presentation.completed = true;
+        Ok(true)
+    }
+
+    /// Explicit opens reset Favorites/search; visible refits deliberately do not.
+    pub(crate) fn open_launcher(&self) {
+        if let Err(error) = self.present_launcher(true) {
+            self.report_message(&format!(
+                "Could not present saved launcher display mode: {}",
+                crate::sanitize::bounded_text(&error, 200)
+            ));
         }
     }
 
-    /// Hides the launcher (Escape path): the lease drops first because
-    /// Slint/winit may release or recreate the HWND while hidden.
+    /// Detach before hide; an in-flight configure must drop its late lease
+    /// before native hide, and a synchronous reopen waits for that cleanup.
     pub(crate) fn hide_launcher(&self) {
+        let session = self.launcher_session();
+        session.advance();
+        session.visible.set(false);
+        session.reopen.set(false);
+        session.refit.set(false);
+        if session.presenting.get() {
+            self.detach_lease(SurfaceKind::Launcher);
+            return;
+        }
         if let Some(launcher) = self.launcher_and_upgrade() {
-            self.leases.borrow_mut().detach(SurfaceKind::Launcher);
-            let _ = launcher.hide();
+            session.presenting.set(true);
+            let _presentation = LauncherPresentation {
+                controller: self,
+                launcher: &launcher,
+                generation: session.generation.get(),
+                session,
+                completed: false,
+            };
         }
     }
 
     pub(super) fn toggle_launcher(&self) {
-        if self
-            .launcher_and_upgrade()
-            .is_some_and(|launcher| launcher.window().is_visible())
-        {
+        if self.launcher_session().visible.get() {
             self.hide_launcher();
         } else {
             self.open_launcher();
@@ -304,7 +562,8 @@ impl PanelController {
 
     /// Queued signals from hidden, stale or busy surfaces cannot launch apps.
     fn interactive_launcher(&self) -> Option<Launcher> {
-        if self.guarded() {
+        let session = self.launcher_session();
+        if self.guarded() || !session.visible.get() || session.presenting.get() {
             return None;
         }
         self.launcher_and_upgrade()

@@ -2,8 +2,12 @@
 // Copyright (C) 2026 Tessera contributors.
 
 mod model;
+mod placement;
+mod preferences;
 
 pub(crate) use model::{LauncherInventory, LauncherRows};
+pub(crate) use placement::launcher_rect;
+pub use preferences::{LauncherDisplayMode, LauncherPreferences};
 
 /// Direction within the caller's row-major launcher grid.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

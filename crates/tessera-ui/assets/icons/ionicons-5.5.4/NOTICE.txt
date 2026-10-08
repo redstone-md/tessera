@@ -21,6 +21,12 @@ src/svg/mic-off-outline.svg
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/mic-off-outline.svg
 SHA-256: 35f851f981501853af925c3b360de6f5ecd5c62703b56b18aca4cfd2aa7462b1
 
+Unmodified applications-menu layout control artwork sources:
+src/svg/expand-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/expand-outline.svg
+src/svg/contract-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/contract-outline.svg
+
 Full original MIT grant is retained in the adjacent LICENSE:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/LICENSE
 Copyright (c) 2015-present Ionic (http://ionic.io/)
@@ -28,5 +34,5 @@ Retain that copyright and complete permission notice with copies or substantial 
 
 The pinned upstream readme.md identifies the project license as MIT:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/readme.md
-The SVG title ionicons-v5-k is retained verbatim; it is not a copyright notice.
+The SVG titles ionicons-v5-k and ionicons-v5-b are retained verbatim; they are not copyright notices.
 No author endorsement or trademark rights are claimed.

@@ -3,7 +3,7 @@
 
 import { Button, LineEdit, ListView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { PopoverBody } from "popover.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
 import { ApplicationIcon, TileButton, FocusTokens } from "tiles.slint";
 
 export struct LaunchTile {
@@ -19,6 +19,7 @@ export struct LaunchRow {
 
 export enum LauncherNavigation { up, down, left, right }
 export enum LauncherView { favorites, all }
+export enum LauncherDisplayMode { Windowed, Fullscreen }
 
 // Frameless OPAQUE centered launcher (source apps-menu has no translucency):
 // a search header, a 7-column icon grid of
@@ -36,6 +37,8 @@ export component Launcher inherits Window {
     in property <[LaunchRow]> rows;
     in property <int> application-count;
     in property <LauncherView> view: LauncherView.favorites;
+    // Product layout is monitor geometry, never the Window.fullscreen flag.
+    in property <LauncherDisplayMode> display-mode: LauncherDisplayMode.Windowed;
     in property <bool> saved-favorites-present;
     in property <string> status;
     in property <string> notice;
@@ -53,6 +56,7 @@ export component Launcher inherits Window {
     callback launch-requested(string);
     callback favorite-toggle-requested(string, bool);
     callback view-requested(LauncherView);
+    callback display-mode-requested(LauncherDisplayMode);
     callback open-settings-requested();
     callback refresh-requested();
     callback hide-requested();
@@ -95,7 +99,9 @@ export component Launcher inherits Window {
     }
 
     body := PopoverBody {
-        surface-radius: 16px;
+        surface-radius: root.display-mode == LauncherDisplayMode.Fullscreen ? 0px : 16px;
+        shadow-margin: root.display-mode == LauncherDisplayMode.Fullscreen ? 0px : PopoverTokens.shadow-margin;
+        shadow-enabled: root.display-mode != LauncherDisplayMode.Fullscreen;
 
         // Search receives focus on each show; Escape bubbles from all of
         // this scope's children, including the search field and favorite controls.
@@ -310,8 +316,8 @@ export component Launcher inherits Window {
             }
             }
 
-            // Status line and footer: settings/recovery, refresh, exit — all
-            // reachable even while refreshing or stale (rescue actions).
+            // Recovery actions remain truthful; expand/contract is a separate
+            // persisted layout request, not a substitute for the power menu.
             if root.notice != "": Text {
                 text: root.notice;
                 color: SeelenPalette.secondary;
@@ -346,6 +352,35 @@ export component Launcher inherits Window {
                     text: "Exit";
                     accessible-label: "Exit Tessera";
                     clicked => { root.exit-requested(); }
+                }
+                TileButton {
+                    width: 32px;
+                    height: 32px;
+                    radius: 6px;
+                    filled: false;
+                    enabled: !root.blocked;
+                    accessible-text: root.display-mode == LauncherDisplayMode.Windowed
+                        ? @tr("Expand applications menu") : @tr("Contract applications menu");
+                    accessible-description: root.display-mode == LauncherDisplayMode.Windowed
+                        ? @tr("Windowed") : @tr("Fullscreen");
+                    accessible-checkable: true;
+                    accessible-checked: root.display-mode == LauncherDisplayMode.Fullscreen;
+                    clicked => {
+                        root.display-mode-requested(root.display-mode == LauncherDisplayMode.Windowed
+                            ? LauncherDisplayMode.Fullscreen : LauncherDisplayMode.Windowed);
+                    }
+                    Image {
+                        x: 6px;
+                        y: 6px;
+                        width: 20px;
+                        height: 20px;
+                        source: root.display-mode == LauncherDisplayMode.Windowed
+                            ? @image-url("../assets/icons/ionicons-5.5.4/expand-outline.svg")
+                            : @image-url("../assets/icons/ionicons-5.5.4/contract-outline.svg");
+                        image-fit: contain;
+                        colorize: SeelenPalette.foreground;
+                        accessible-role: none;
+                    }
                 }
             }
         }

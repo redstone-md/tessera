@@ -13,7 +13,7 @@ use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
     ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher,
-    QuickSettings, TooltipSurface,
+    LauncherDisplayMode, QuickSettings, TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -81,6 +81,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         menu.window().winit_window().await.unwrap();
         quick.window().winit_window().await.unwrap();
         verify_frame("launcher", &launcher);
+        verify_launcher_fullscreen_edges(&launcher);
         verify_frame("tooltip", &tooltip);
         verify_frame("context-menu", &menu);
         verify_frame("quick-settings", &quick);
@@ -165,6 +166,59 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
     }
 }
 
+fn verify_launcher_fullscreen_edges(launcher: &Launcher) {
+    let window = launcher.window();
+    for (theme, scheme, background) in [
+        ("dark", ColorScheme::Dark, 24),
+        ("light", ColorScheme::Light, 242),
+    ] {
+        launcher.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        launcher.set_display_mode(LauncherDisplayMode::Windowed);
+        let windowed = window.take_snapshot().expect("actual GL windowed frame");
+        let width = windowed.width() as usize;
+        let height = windowed.height() as usize;
+        let scale = window.scale_factor();
+        let shadow_index = (height - (8.0 * scale) as usize) * width + width / 2;
+        let shadow = windowed.as_slice()[shadow_index];
+        assert_eq!(windowed.as_slice()[0].a, 0);
+        assert!(
+            shadow.a > 0 && shadow.a < 255,
+            "windowed shadow remains real"
+        );
+        launcher.set_display_mode(LauncherDisplayMode::Fullscreen);
+        let frame = window.take_snapshot().expect("actual GL fullscreen frame");
+        assert_eq!(
+            (frame.width(), frame.height()),
+            (windowed.width(), windowed.height())
+        );
+        for index in (0..width)
+            .chain((height - 1) * width..height * width)
+            .chain((0..height).flat_map(|y| [y * width, y * width + width - 1]))
+        {
+            let pixel = frame.as_slice()[index];
+            assert_eq!(
+                (pixel.r, pixel.g, pixel.b, pixel.a),
+                (background, background, background, 255),
+                "native GL {theme} {scale}x fullscreen edge {index}"
+            );
+        }
+        verify_launcher_mode_glyph(launcher, scheme, "Contract applications menu", &frame);
+        assert!(
+            !window.is_fullscreen(),
+            "the monitor overlay is not backend fullscreen"
+        );
+        export_frame(&format!("gl-launcher-fullscreen-{theme}-{scale}x"), &frame);
+        launcher.set_display_mode(LauncherDisplayMode::Windowed);
+        let restored = window.take_snapshot().expect("actual GL restored frame");
+        assert_eq!(restored.as_slice()[0].a, 0);
+        assert_eq!(
+            restored.as_slice()[shadow_index],
+            shadow,
+            "windowed shadow restores"
+        );
+    }
+}
+
 fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
     let theme = match scheme {
         ColorScheme::Dark => "dark",
@@ -177,6 +231,7 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
         "Open settings and recovery",
         "Refresh the desktop",
         "Exit Tessera",
+        "Expand applications menu",
     ] {
         let button =
             i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
@@ -196,8 +251,41 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
             "{label} must settle to its {theme} idle color: {pixel:?}",
         );
     }
+    verify_launcher_mode_glyph(launcher, scheme, "Expand applications menu", &frame);
     export_frame(&format!("gl-launcher-{theme}-settled-{scale}x"), &frame);
     verify_launcher_press_scale(launcher);
+}
+
+fn verify_launcher_mode_glyph(
+    launcher: &Launcher,
+    scheme: ColorScheme,
+    label: &str,
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+) {
+    let mode = i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
+        .next()
+        .unwrap();
+    let position = mode.absolute_position();
+    let scale = launcher.window().scale_factor();
+    let width = frame.width() as usize;
+    let foreground_pixels = (0..20)
+        .flat_map(|y| (0..20).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let x = ((position.x + 6.0 + *x as f32) * scale) as usize;
+            let y = ((position.y + 6.0 + *y as f32) * scale) as usize;
+            let pixel = frame.as_slice()[y * width + x];
+            pixel.a == 255
+                && if scheme == ColorScheme::Dark {
+                    pixel.r > 128 && pixel.g > 128 && pixel.b > 128
+                } else {
+                    pixel.r < 128 && pixel.g < 128 && pixel.b < 128
+                }
+        })
+        .count();
+    assert!(
+        foreground_pixels > 8,
+        "the licensed {label} glyph must actually render/tint"
+    );
 }
 
 fn verify_launcher_press_scale(launcher: &Launcher) {
