@@ -91,6 +91,14 @@ _Avoid_: treating arbitrary web-script execution as necessary for widget behavio
 A launchable program with an identity suitable for saved preferences. It may have several windows or processes.
 _Avoid_: equating an application identity with a window title or process identifier.
 
+**Dock pin**:
+A user's choice to retain an application entry in the dock even when it has no observed windows. It is independent of membership in the launcher's Favorites view.
+_Avoid_: "favorite" as a synonym for a dock pin.
+
+**Favorite application**:
+An application the user has chosen for the launcher's Favorites view, independently from the dock. A saved choice may outlive installation and does not itself authorize a launch.
+_Avoid_: "pinned application" when referring to launcher favorites.
+
 **Application group**:
 A dock entry representing related windows of one application.
 _Avoid_: grouping unrelated windows merely because they share a hosting executable.
@@ -98,6 +106,18 @@ _Avoid_: grouping unrelated windows merely because they share a hosting executab
 **Popup**:
 A transient shell surface for details or actions, such as a calendar, device selector or context menu.
 _Avoid_: treating it as a managed application window.
+
+**Audio endpoint**:
+An independently identified destination for output sound or source for input sound, with its own volume and mute state. It is not an application's audio session.
+_Avoid_: treating every endpoint as a distinct physical device or an application-volume control.
+
+**Default multimedia endpoint**:
+The currently selected endpoint for ordinary media output or input. A separate default may serve communications.
+_Avoid_: equating the multimedia default with every default-device role.
+
+**Audio intent**:
+An explicit user choice of desired volume or mute state for an identified endpoint. Pending intent is not confirmed audio state.
+_Avoid_: treating an accepted request or an optimistic display as proof of an applied change.
 
 **Theme**:
 Appearance settings for shell surfaces, including colors, typography, icons, spacing, and motion. A theme does not grant system permissions or automatically restyle foreign application windows.
