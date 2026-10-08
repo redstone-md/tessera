@@ -1008,6 +1008,11 @@ impl PanelController {
             weak.open_panel();
         });
         let weak = self.clone();
+        launcher.on_open_user_menu_requested(move |bounds| {
+            let _callback = weak.launcher_callback();
+            weak.open_user_menu(bounds);
+        });
+        let weak = self.clone();
         launcher.on_refresh_requested(move || {
             let _callback = weak.launcher_callback();
             let _ = weak.refresh();
@@ -1319,6 +1324,11 @@ impl PanelController {
         Rc::clone(&self.launcher_state.borrow().session)
     }
 
+    pub(super) fn launcher_popup_ready(&self) -> bool {
+        let session = self.launcher_session();
+        session.visible.get() && !session.presenting.get()
+    }
+
     /// An absolute footer intent saves the complete applied record first.
     /// A failed save changes neither logical results nor native presentation.
     fn change_launcher_display_mode(&self, mode: LauncherDisplayMode) {
@@ -1415,6 +1425,7 @@ impl PanelController {
             return Ok(true);
         }
         self.cancel_launcher_reorder();
+        self.hide_user_menu();
         session.presenting.set(true);
         let mut presentation = LauncherPresentation {
             controller: self,
@@ -1529,6 +1540,7 @@ impl PanelController {
         session.reopen.set(false);
         session.refit.set(false);
         self.cancel_launcher_reorder();
+        self.hide_user_menu();
         if session.presenting.get() {
             self.detach_lease(SurfaceKind::Launcher);
             return;

@@ -24,6 +24,7 @@ mod audio;
 mod diagnostics;
 mod error;
 mod events;
+pub mod folders;
 #[cfg(any(windows, test))]
 mod helpers;
 #[cfg(windows)]
@@ -41,6 +42,9 @@ mod native_audio;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_events;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_folders;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_window_actions;

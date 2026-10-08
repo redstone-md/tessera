@@ -25,9 +25,11 @@ mod geometry;
 mod launcher;
 mod quick_settings;
 mod tooltip;
+mod user_menu;
 use context_menu::Menus;
 use quick_settings::QuickPopups;
 use tooltip::Tooltips;
+use user_menu::UserPopups;
 
 type Host = dyn DesktopHost;
 
@@ -127,6 +129,7 @@ pub(crate) struct PanelController {
     surface_failure: Rc<RefCell<Option<String>>>,
     menus: Menus,
     quick_settings: QuickPopups,
+    user_menu: UserPopups,
     tooltips: Tooltips,
     geometry: Rc<geometry::GeometryUpdates>,
 }
@@ -165,6 +168,7 @@ impl PanelController {
             surface_failure: Rc::default(),
             menus: Rc::default(),
             quick_settings: Rc::default(),
+            user_menu: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -196,6 +200,7 @@ impl PanelController {
             surface_failure: Rc::default(),
             menus: Rc::default(),
             quick_settings: Rc::default(),
+            user_menu: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -248,6 +253,10 @@ impl PanelController {
             let quick = controller.quick_settings.borrow().clone();
             if let Some(quick) = quick {
                 quick.disable_motion();
+            }
+            let user = controller.user_menu.borrow().clone();
+            if let Some(user) = user {
+                user.disable_motion();
             }
         });
     }
@@ -715,6 +724,12 @@ impl PanelController {
         if let Some(quick) = quick {
             quick.close_if_geometry_changed(context, scale);
         }
+        let user = self.user_menu.borrow().clone();
+        if let Some(user) = user
+            && let Some(launcher) = self.launcher_and_upgrade()
+        {
+            user.close_if_geometry_changed(context, launcher.window().scale_factor());
+        }
 
         if !fullscreen {
             // Dock: never reserves (Seelen OnOverlap default), but its lease
@@ -816,6 +831,10 @@ impl PanelController {
         let quick = self.quick_settings.borrow().clone();
         if let Some(quick) = quick {
             quick.apply_theme(theme);
+        }
+        let user = self.user_menu.borrow().clone();
+        if let Some(user) = user {
+            user.apply_theme(theme);
         }
         self.update_geometry();
     }
@@ -1237,6 +1256,10 @@ pub(crate) fn run(
             let _quick_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.quick_settings),
                 crate::quick_settings::QuickSettingsController::hide,
+            );
+            let _user_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.user_menu),
+                crate::user_menu::UserMenuController::hide,
             );
             let _tooltip_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.tooltips),

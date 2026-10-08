@@ -107,6 +107,22 @@ _Avoid_: equating a drag preview with an applied preference or tying this order 
 A saved choice between a centered, windowed launcher and a monitor-filling launcher overlay. It does not change the display mode or placement rules of application windows.
 _Avoid_: equating the monitor-filling overlay with exclusive fullscreen or a window backend's fullscreen flag.
 
+**Known folder**:
+An OS-resolved location such as Desktop or Documents, whose current native identity and availability come from the platform adapter rather than an assembled path.
+_Avoid_: equating a known folder with a Favorite application-group folder or treating its displayed label as an open target.
+
+**Favorite folder**:
+A named launcher grouping of Favorite applications, independent of OS directory contents.
+_Avoid_: using it as a synonym for a known folder or an application group of observed windows.
+
+**Folder open intent**:
+An explicit request to open one confirmed known-folder target. Acceptance means the native Shell accepted dispatch, not that a file-manager window became visible.
+_Avoid_: treating pending intent, a Ready label or automatic retry as a completed open.
+
+**User identity**:
+The current OS user's identity displayed by shell presentation; unavailable identity remains unavailable, and a generic profile image is not an account photograph.
+_Avoid_: treating a local user identity as a saved configuration profile, or implying a connected cloud account from a local user name.
+
 **Application group**:
 A dock entry representing related windows of one application.
 _Avoid_: grouping unrelated windows merely because they share a hosting executable.

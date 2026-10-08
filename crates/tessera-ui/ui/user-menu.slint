@@ -1,0 +1,283 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView as NativeScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+
+export enum UserFolderKind { Recent, Desktop, Downloads, Documents, Music, Pictures, Videos }
+
+export struct UserFolderRow {
+    kind: UserFolderKind,
+    key: string,
+    ready: bool,
+    status: string,
+}
+
+component UserMenuText inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    accessible-role: none;
+}
+
+component FolderOpenButton inherits TileButton {
+    in property <string> label;
+    in property <string> feedback;
+    in property <length> text-height;
+    in property <float> text-line-height-factor;
+    height: 16px + root.text-height + (root.feedback != "" ? root.text-height + 4px : 0px);
+    radius: 6px;
+    filled: false;
+    // Unavailable status is still readable, not dimmed with its disabled action.
+    opacity: 1;
+    accessible-description: root.feedback;
+    Image {
+        x: 8px;
+        y: 8px + (root.text-height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        source: @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg");
+        image-fit: contain;
+        colorize: SeelenPalette.secondary;
+        accessible-role: none;
+    }
+    UserMenuText {
+        x: 32px;
+        y: 8px;
+        width: max(0px, parent.width - self.x - 8px);
+        height: root.text-height;
+        text: root.label;
+        font-weight: 500;
+        color: root.enabled ? SeelenPalette.foreground : SeelenPalette.secondary;
+        line-height-factor: root.text-line-height-factor;
+        overflow: elide;
+    }
+    if root.feedback != "": UserMenuText {
+        x: 32px;
+        y: 12px + root.text-height;
+        width: max(0px, parent.width - self.x - 8px);
+        height: root.text-height;
+        text: root.feedback;
+        color: SeelenPalette.secondary;
+        line-height-factor: root.text-line-height-factor;
+        overflow: elide;
+    }
+}
+
+// Folder identities and keys are projections only. The controller owns their
+// current-session authority; no path or command is assembled in presentation.
+export component UserMenu inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera user menu";
+    min-width: 1px;
+    min-height: 1px;
+    in property <string> user-name;
+    in property <[UserFolderRow]> rows;
+    in property <bool> loading;
+    in property <bool> opening;
+    in property <string> notice;
+    in property <bool> retry-enabled;
+    callback folder-open-requested(UserFolderKind, string);
+    callback retry-requested();
+    callback hide-requested();
+    // Internal UI-thread mailbox wakeup, not a folder action or an observer.
+    callback folder-event-ready();
+    callback preferred-size-changed();
+    out property <length> popup-content-width: 350px + 2 * PopoverTokens.shadow-margin;
+    out property <length> popup-content-height: min(700px,
+        root.natural-content-height + 2 * root.viewport-inset) + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.popup-content-width;
+    preferred-height: root.popup-content-height;
+    changed popup-content-width => { root.preferred-size-changed(); }
+    changed popup-content-height => { root.preferred-size-changed(); }
+
+    property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
+    property <length> text-height: max(1px, PopoverTokens.font-size * PopoverTokens.line-height);
+    property <string> identity: root.user-name != "" ? root.user-name : @tr("User name unavailable");
+    property <string> feedback: root.notice != "" ? root.notice
+        : root.loading ? @tr("Loading folders…")
+        : root.opening ? @tr("Opening folder…") : "";
+    property <bool> show-retry: root.retry-enabled;
+    property <length> measure-width: max(1px,
+        min(root.width > 0px ? root.width : root.popup-content-width,
+            400px + 2 * PopoverTokens.shadow-margin)
+        - 2 * PopoverTokens.shadow-margin - 2 * root.viewport-inset - 2 * FocusTokens.outer-margin);
+    property <int> block-count: 1 + root.rows.length + (root.feedback != "" ? 1 : 0)
+        + (root.show-retry ? 1 : 0);
+    // The closed snapshot has seven rows. Measure their projected text before
+    // repeater layout settles, so a read completion cannot refit to old height.
+    property <length> natural-content-height: 2 * FocusTokens.outer-margin + 78px
+        + root.row-height(0) + root.row-height(1) + root.row-height(2)
+        + root.row-height(3) + root.row-height(4) + root.row-height(5) + root.row-height(6)
+        + (root.feedback != "" ? feedback-metrics.preferred-height : 0px)
+        + (root.show-retry ? 16px + root.text-height : 0px)
+        + max(0, root.block-count - 1) * 8px;
+
+    function folder-label(kind: UserFolderKind) -> string {
+        return kind == UserFolderKind.Recent ? @tr("Recent")
+            : kind == UserFolderKind.Desktop ? @tr("Desktop")
+            : kind == UserFolderKind.Downloads ? @tr("Downloads")
+            : kind == UserFolderKind.Documents ? @tr("Documents")
+            : kind == UserFolderKind.Music ? @tr("Music")
+            : kind == UserFolderKind.Pictures ? @tr("Pictures") : @tr("Videos");
+    }
+    function row-feedback(index: int) -> string {
+        if index < 0 || index >= root.rows.length { return ""; }
+        let row = root.rows[index];
+        return row.status != "" ? row.status
+            : root.loading ? @tr("Loading…")
+            : !row.ready ? @tr("Unavailable") : "";
+    }
+    function row-height(index: int) -> length {
+        return index < root.rows.length
+            ? 16px + root.text-height + (root.row-feedback(index) != "" ? root.text-height + 4px : 0px)
+            : 0px;
+    }
+    function reveal-focused(top: length, item-height: length) {
+        let visible-top = -scroll.content-y;
+        let desired-top = top - FocusTokens.outer-margin;
+        let desired-bottom = top + item-height + FocusTokens.outer-margin;
+        if desired-top < visible-top {
+            scroll.content-y = -max(0px, desired-top);
+        } else if desired-bottom > visible-top + scroll.visible-height {
+            scroll.content-y = -max(0px,
+                min(desired-bottom - scroll.visible-height, scroll.content-height - scroll.visible-height));
+        }
+    }
+    feedback-metrics := UserMenuText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.feedback;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    public function set-presentation-opacity(value: float) {
+        body.set-presentation-opacity(value);
+    }
+    public function focus-content() {
+        scroll.content-y = 0px;
+        escape-scope.focus();
+    }
+    forward-focus: escape-scope;
+
+    escape-scope := FocusScope {
+        width: root.width;
+        height: root.height;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.hide-requested();
+                return accept;
+            }
+            return reject;
+        }
+        body := PopoverBody {
+            x: (root.width - self.width) / 2;
+            width: min(root.width, 400px + 2 * PopoverTokens.shadow-margin);
+            height: root.height;
+            scroll := NativeScrollView {
+                x: root.viewport-inset;
+                y: root.viewport-inset;
+                width: max(0px, body.content-width - 2 * root.viewport-inset);
+                height: max(0px, body.content-height - 2 * root.viewport-inset);
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                content-width: self.visible-width;
+                content-height: root.natural-content-height;
+                content := VerticalLayout {
+                    width: parent.width;
+                    height: root.natural-content-height;
+                    padding: FocusTokens.outer-margin;
+                    spacing: 8px;
+                    Rectangle {
+                        height: 78px;
+                        accessible-role: none;
+                        // Original schematic fallback, never an account photo.
+                        profile := Rectangle {
+                            x: 0px;
+                            y: 4px;
+                            width: 70px;
+                            height: 70px;
+                            border-radius: 35px;
+                            background: SeelenPalette.tile;
+                            clip: true;
+                            accessible-role: image;
+                            accessible-label: @tr("Default user profile");
+                            Rectangle {
+                                x: 26px;
+                                y: 14px;
+                                width: 18px;
+                                height: 18px;
+                                border-radius: 9px;
+                                background: SeelenPalette.secondary;
+                                accessible-role: none;
+                            }
+                            Rectangle {
+                                x: 17px;
+                                y: 38px;
+                                width: 36px;
+                                height: 22px;
+                                border-radius: 11px;
+                                background: SeelenPalette.secondary;
+                                accessible-role: none;
+                            }
+                        }
+                        UserMenuText {
+                            x: 82px;
+                            width: max(0px, parent.width - self.x);
+                            height: parent.height;
+                            text: root.identity;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            line-height-factor: body.text-line-height-factor;
+                            overflow: elide;
+                            accessible-role: text;
+                            accessible-label: root.identity;
+                        }
+                    }
+                    for row[index] in root.rows: FolderOpenButton {
+                        label: root.folder-label(row.kind);
+                        feedback: root.row-feedback(index);
+                        text-height: root.text-height;
+                        text-line-height-factor: body.text-line-height-factor;
+                        accessible-text: @tr("Open ") + self.label;
+                        enabled: row.ready && row.key != "" && !root.loading && !root.opening;
+                        clicked => { root.folder-open-requested(row.kind, row.key); }
+                        focus-acquired => { root.reveal-focused(self.y, self.height); }
+                    }
+                    if root.feedback != "": UserMenuText {
+                        text: root.feedback;
+                        color: SeelenPalette.secondary;
+                        wrap: word-wrap;
+                        line-height-factor: body.text-line-height-factor;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                    }
+                    if root.show-retry: TileButton {
+                        height: 16px + root.text-height;
+                        radius: 6px;
+                        filled: false;
+                        accessible-text: @tr("Retry folders");
+                        enabled: root.retry-enabled && !root.loading && !root.opening;
+                        clicked => { root.retry-requested(); }
+                        focus-acquired => { root.reveal-focused(self.y, self.height); }
+                        UserMenuText {
+                            x: 8px;
+                            width: max(0px, parent.width - 16px);
+                            height: parent.height;
+                            text: @tr("Retry folders");
+                            vertical-alignment: center;
+                            line-height-factor: body.text-line-height-factor;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

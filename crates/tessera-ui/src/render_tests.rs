@@ -2974,13 +2974,29 @@ fn launcher_native_final_partial_row_keys_tab_footer_and_narrow_rows_remain_real
     fixture.launcher.on_open_settings_requested(move || {
         requests.set(requests.get() + 1);
     });
+    let user = Rc::new(Cell::new(0));
+    let requests = user.clone();
+    fixture.launcher.on_open_user_menu_requested(move |bounds| {
+        assert!(bounds.origin.x.is_finite() && bounds.origin.y.is_finite());
+        assert!(bounds.width > 0.0 && bounds.height > 0.0);
+        requests.set(requests.get() + 1);
+    });
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        user.get(),
+        1,
+        "native Tab after the real final favorite reaches User, not a fabricated next cell"
+    );
+    assert_eq!(settings.get(), 0, "User no longer masquerades as Settings");
     native_key(&window, Key::Tab.into());
     native_key(&window, Key::Return.into());
     assert_eq!(
         settings.get(),
         1,
-        "native Tab after the real final favorite reaches recovery, not a fabricated next cell"
+        "the distinct Settings footer action remains keyboard-accessible after User"
     );
+    assert_eq!(user.get(), 1);
     assert_eq!(fixture.launches.borrow().len(), 2);
     assert_eq!(fixture.favorites.borrow().len(), 2);
     for width in [128, 96, 560] {
@@ -3977,6 +3993,8 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
 
     let actions = Rc::new(std::cell::RefCell::new(Vec::new()));
     let log = actions.clone();
+    launcher.on_open_user_menu_requested(move |_| log.borrow_mut().push("user"));
+    let log = actions.clone();
     launcher.on_open_settings_requested(move || log.borrow_mut().push("settings"));
     let log = actions.clone();
     launcher.on_refresh_requested(move || log.borrow_mut().push("refresh"));
@@ -3997,8 +4015,8 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
         .window()
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
     for (stale, refreshing, expected) in [
-        (true, false, vec!["settings", "refresh", "exit"]),
-        (false, true, vec!["settings", "exit"]),
+        (true, false, vec!["user", "settings", "refresh", "exit"]),
+        (false, true, vec!["user", "settings", "exit"]),
     ] {
         launcher.set_stale(stale);
         launcher.set_refreshing(refreshing);
@@ -4011,7 +4029,7 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
             assert_eq!(
                 actions.borrow().as_slice(),
                 &expected[..=index],
-                "Tab must skip blocked header, application and favorite scopes",
+                "Tab skips blocked application scopes, retaining independent User and recovery actions",
             );
         }
         key(Key::Tab.into());

@@ -127,6 +127,7 @@ export component Launcher inherits Window {
     callback view-requested(LauncherView);
     callback display-mode-requested(LauncherDisplayMode);
     callback open-settings-requested();
+    callback open-user-menu-requested(TileBounds);
     callback refresh-requested();
     callback hide-requested();
     callback exit-requested();
@@ -474,11 +475,22 @@ export component Launcher inherits Window {
                 alignment: end;
 
                 Button {
-                    text: root.user-name == "" ? "Settings" : root.user-name;
+                    text: root.user-name == "" ? "User" : root.user-name;
+                    accessible-label: "Open user menu";
+                    clicked => {
+                        root.open-user-menu-requested({
+                            origin: self.absolute-position,
+                            width: self.width,
+                            height: self.height
+                        });
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: "Settings";
                     accessible-label: "Open settings and recovery";
                     clicked => { root.open-settings-requested(); }
                 }
-                Rectangle { horizontal-stretch: 1; }
                 Button {
                     text: "Refresh";
                     enabled: !root.refreshing;

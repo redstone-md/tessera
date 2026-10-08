@@ -14,6 +14,7 @@ use winit::platform::x11::EventLoopBuilderExtX11;
 use crate::generated::{
     ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher,
     LauncherDisplayMode, LauncherDragVisual, QuickSettings, TileBounds, TooltipSurface,
+    UserFolderKind, UserFolderRow, UserMenu,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -72,6 +73,35 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         quick.get_preferred_popup_height(),
     ));
     quick.show().unwrap();
+    // Render the genuine popup component with a closed, paint-only fixture:
+    // no OS folder resolution/opening is performed by this renderer test.
+    let user = UserMenu::new().unwrap();
+    user.set_user_name("Native user".into());
+    user.set_rows(slint::ModelRc::new(slint::VecModel::from(
+        [
+            UserFolderKind::Recent,
+            UserFolderKind::Desktop,
+            UserFolderKind::Downloads,
+            UserFolderKind::Documents,
+            UserFolderKind::Music,
+            UserFolderKind::Pictures,
+            UserFolderKind::Videos,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| UserFolderRow {
+            kind,
+            key: format!("gl-folder-{index}").into(),
+            ready: true,
+            status: Default::default(),
+        })
+        .collect::<Vec<_>>(),
+    )));
+    user.window().set_size(slint::LogicalSize::new(
+        user.get_popup_content_width(),
+        user.get_popup_content_height(),
+    ));
+    user.show().unwrap();
 
     let completed = Rc::new(Cell::new(false));
     let result = Rc::clone(&completed);
@@ -80,11 +110,13 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         tooltip.window().winit_window().await.unwrap();
         menu.window().winit_window().await.unwrap();
         quick.window().winit_window().await.unwrap();
+        user.window().winit_window().await.unwrap();
         verify_frame("launcher", &launcher);
         verify_launcher_fullscreen_edges(&launcher);
         verify_frame("tooltip", &tooltip);
         verify_frame("context-menu", &menu);
         verify_frame("quick-settings", &quick);
+        verify_frame("user-menu", &user);
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
@@ -106,6 +138,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                         tooltip.hide().unwrap();
                         menu.hide().unwrap();
                         quick.hide().unwrap();
+                        user.hide().unwrap();
                         result.set(true);
                         slint::quit_event_loop().unwrap();
                     }),

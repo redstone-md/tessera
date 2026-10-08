@@ -1,25 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Cache a successfully queued native provider, never a failed initialization.
+//! Retain successfully accepted native providers, never failed initialization.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use tessera_system::audio::{AudioError, AudioHost};
 
-#[derive(Default)]
-pub(crate) struct AudioProvider {
-    ready: Mutex<Option<Arc<dyn AudioHost>>>,
+pub(crate) struct Provider<T: ?Sized> {
+    ready: Mutex<Option<Arc<T>>>,
 }
 
-impl AudioProvider {
+impl<T: ?Sized> Default for Provider<T> {
+    fn default() -> Self {
+        Self {
+            ready: Mutex::new(None),
+        }
+    }
+}
+
+impl<T: ?Sized> Provider<T> {
     /// Called only on explicit popup open/retry. Factory acceptance is prompt;
-    /// the provider owns asynchronous hardware initialization and requests.
-    pub(crate) fn get(
-        &self,
-        create: impl FnOnce() -> Result<Arc<dyn AudioHost>, AudioError>,
-    ) -> Result<Arc<dyn AudioHost>, AudioError> {
+    /// the provider owns asynchronous native initialization and requests.
+    pub(crate) fn get<E>(&self, create: impl FnOnce() -> Result<Arc<T>, E>) -> Result<Arc<T>, E> {
         let mut ready = self.ready.lock();
         if let Some(host) = &*ready {
             return Ok(Arc::clone(host));
@@ -33,7 +36,9 @@ impl AudioProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tessera_system::audio::{AudioCommand, AudioCompletion, AudioErrorKind};
+    use tessera_system::audio::{
+        AudioCommand, AudioCompletion, AudioError, AudioErrorKind, AudioHost,
+    };
 
     struct RecordingHost;
     impl AudioHost for RecordingHost {
@@ -57,7 +62,7 @@ mod tests {
 
     #[test]
     fn failed_factory_is_retryable_and_success_is_cached() {
-        let provider = AudioProvider::default();
+        let provider = Provider::<dyn AudioHost>::default();
         let failure = AudioError::new(AudioErrorKind::Other, "Worker creation temporarily failed");
         let mut attempts = 0;
         let first = provider.get(|| {
@@ -67,14 +72,14 @@ mod tests {
         assert_eq!(first.err(), Some(failure));
         let host: Arc<dyn AudioHost> = Arc::new(RecordingHost);
         let retry = provider
-            .get(|| {
+            .get::<AudioError>(|| {
                 attempts += 1;
                 Ok(Arc::clone(&host))
             })
             .unwrap();
         assert!(Arc::ptr_eq(&retry, &host));
         let reused = provider
-            .get(|| panic!("a ready provider must not be recreated"))
+            .get::<AudioError>(|| panic!("a ready provider must not be recreated"))
             .unwrap();
         assert!(Arc::ptr_eq(&reused, &host));
         assert_eq!(attempts, 2);

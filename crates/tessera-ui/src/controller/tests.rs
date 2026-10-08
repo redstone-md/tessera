@@ -54,6 +54,7 @@ struct FixtureHost {
     lease_drops: Arc<AtomicUsize>,
     launcher_attach_calls: AtomicUsize,
     launcher_attachment_result: Mutex<Result<(), String>>,
+    folder_provider: Mutex<Option<Arc<dyn tessera_system::folders::FolderHost>>>,
 }
 
 impl FixtureHost {
@@ -81,6 +82,7 @@ impl FixtureHost {
             lease_drops: Arc::default(),
             launcher_attach_calls: AtomicUsize::new(0),
             launcher_attachment_result: Mutex::new(Ok(())),
+            folder_provider: Mutex::default(),
         })
     }
 
@@ -93,6 +95,15 @@ impl DesktopHost for FixtureHost {
     fn observe(&self) -> Result<PanelSnapshot, String> {
         self.observe_calls.fetch_add(1, Ordering::SeqCst);
         (self.source)()
+    }
+
+    fn folder_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::folders::FolderHost>>,
+        tessera_system::folders::FolderError,
+    > {
+        Ok(self.folder_provider.lock().clone())
     }
 
     fn activate(&self, key: &str) -> Result<(), String> {
@@ -1046,6 +1057,7 @@ fn appearance_callbacks_during_show_apply_latest_geometry_without_reentrant_leas
 
 struct LauncherFixture {
     // Drop transient and bar attachments before the owned component windows.
+    _user_scope: crate::transient_window::TransientScope<crate::user_menu::UserMenuController>,
     _quick_scope:
         crate::transient_window::TransientScope<crate::quick_settings::QuickSettingsController>,
     _scope: SurfaceLeaseScope,
@@ -1087,8 +1099,13 @@ impl LauncherFixture {
             Rc::clone(&controller.quick_settings),
             crate::quick_settings::QuickSettingsController::hide,
         );
+        let user_scope = crate::transient_window::TransientScope::new(
+            Rc::clone(&controller.user_menu),
+            crate::user_menu::UserMenuController::hide,
+        );
         apply_result_to_both(&controller, &panel, Ok(snapshot));
         Self {
+            _user_scope: user_scope,
             _quick_scope: quick_scope,
             _scope: scope,
             controller,
@@ -1155,6 +1172,108 @@ impl LauncherFixture {
             .window()
             .dispatch_event(WindowEvent::KeyReleased { text });
     }
+}
+
+#[test]
+fn launcher_native_user_footer_opens_folder_popup_not_settings_and_routes_trusted_folder_input() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use tessera_system::folders::{
+        FolderAvailability, FolderError, FolderHost, FolderId, FolderOpenCompletion,
+        FolderReadCompletion, FolderSnapshot, FolderTarget,
+    };
+
+    #[derive(Default)]
+    struct ReadyFolders {
+        reads: AtomicUsize,
+        opened: Mutex<Vec<FolderId>>,
+    }
+    impl FolderHost for ReadyFolders {
+        fn read(&self, completion: FolderReadCompletion) -> Result<(), FolderError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            completion(Ok(FolderSnapshot::new(std::array::from_fn(|index| {
+                FolderAvailability::Ready(FolderTarget::new(FolderId::ALL[index]))
+            }))));
+            Ok(())
+        }
+        fn open(
+            &self,
+            folder: FolderId,
+            expected: FolderTarget,
+            completion: FolderOpenCompletion,
+        ) -> Result<(), FolderError> {
+            assert_eq!(expected.get::<FolderId>(), Some(&folder));
+            self.opened.lock().push(folder);
+            completion(Ok(()));
+            Ok(())
+        }
+    }
+
+    let fixture = LauncherFixture::new();
+    let folders = Arc::new(ReadyFolders::default());
+    *fixture.host.folder_provider.lock() = Some(folders.clone());
+    fixture.controller.open_launcher();
+    let observations = fixture.host.observe_calls.load(Ordering::SeqCst);
+    assert!(!fixture.panel.window().is_visible());
+    fixture.click_launcher("Open user menu");
+    let user = fixture.controller.user_menu.borrow().clone().unwrap();
+    assert!(user.is_open());
+    assert!(user.component().window().is_visible());
+    assert!(!fixture.panel.window().is_visible(), "User is not Settings");
+    assert_eq!(folders.reads.load(Ordering::SeqCst), 1);
+    // The no-event-loop backend needs the production UI mailbox wakeup
+    // dispatched explicitly; folder data still came from the real host seam.
+    user.component().invoke_folder_event_ready();
+    assert!(!user.component().get_loading());
+    assert_eq!(user.component().get_rows().row_count(), FolderId::ALL.len());
+    let desktop = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        user.component(),
+        "Open Desktop",
+    )
+    .find(|element| {
+        element.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button)
+    })
+    .unwrap();
+    assert_eq!(desktop.accessible_enabled(), Some(true));
+    let origin = desktop.absolute_position();
+    let size = desktop.size();
+    let position =
+        slint::LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
+    user.component()
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+    user.component()
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+    assert_eq!(*folders.opened.lock(), [FolderId::Desktop]);
+    user.component().invoke_folder_event_ready();
+    assert_eq!(
+        fixture.host.observe_calls.load(Ordering::SeqCst),
+        observations
+    );
+    assert!(fixture.host.launches.lock().is_empty());
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(fixture.host.system_actions.lock().is_empty());
+    fixture.controller.hide_launcher();
+    assert!(!user.is_open());
+    assert!(!user.component().window().is_visible());
+    fixture
+        .launcher
+        .invoke_open_user_menu_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(10.0, 10.0),
+            width: 40.0,
+            height: 32.0,
+        });
+    assert!(
+        !user.is_open(),
+        "queued hidden footer cannot reopen its popup"
+    );
+    assert_eq!(*folders.opened.lock(), [FolderId::Desktop]);
 }
 
 #[test]

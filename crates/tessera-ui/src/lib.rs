@@ -24,6 +24,7 @@ pub(crate) mod motion;
 pub(crate) mod popup_placement;
 pub(crate) mod projection;
 pub(crate) mod quick_settings;
+pub(crate) mod user_menu;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
 #[cfg(all(test, target_os = "linux"))]
@@ -37,6 +38,8 @@ pub(crate) mod state;
 pub(crate) mod theme;
 pub(crate) mod tooltip;
 pub(crate) mod transient_window;
+#[cfg(test)]
+mod user_menu_render_tests;
 
 // Slint owns its generated code; handwritten presentation remains safe Rust.
 #[allow(unsafe_code)]
@@ -392,6 +395,17 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::audio::AudioHost>>,
         tessera_system::audio::AudioError,
+    > {
+        Ok(None)
+    }
+
+    /// Independent known-folder capability. Discovery and shell dispatch run
+    /// on its native worker, not the UI or desktop observation path.
+    fn folder_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::folders::FolderHost>>,
+        tessera_system::folders::FolderError,
     > {
         Ok(None)
     }

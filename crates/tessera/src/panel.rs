@@ -97,13 +97,14 @@ mod desktop {
 
     use parking_lot::Mutex;
     use tessera_system::audio::{AudioError, AudioHost};
+    use tessera_system::folders::{FolderError, FolderHost};
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
         PixelIcon, RunOptions, ShellIdentity, SurfaceKind, SurfaceMode, SystemAction,
     };
     use tessera_windows::{ActivationTarget, Application, IconPixels};
 
-    use crate::audio_provider::AudioProvider;
+    use crate::provider::Provider;
     use crate::settings::SettingsStore;
 
     struct CatalogCache {
@@ -131,7 +132,8 @@ mod desktop {
         settings: Option<SettingsStore>,
         presentation: Presentation,
         window_icons: Mutex<HashMap<String, CachedWindowIcon>>,
-        audio: LazyLock<AudioProvider>,
+        audio: LazyLock<Provider<dyn AudioHost>>,
+        folders: LazyLock<Provider<dyn FolderHost>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -219,6 +221,12 @@ mod desktop {
                     tessera_windows::AudioService::new()
                         .map(|host| -> Arc<dyn AudioHost> { Arc::new(host) })
                 })
+                .map(Some)
+        }
+
+        fn folder_host(&self) -> Result<Option<Arc<dyn FolderHost>>, FolderError> {
+            self.folders
+                .get(tessera_windows::folders::native_folder_host)
                 .map(Some)
         }
 
@@ -453,7 +461,8 @@ mod desktop {
             settings,
             presentation,
             window_icons: Mutex::new(HashMap::new()),
-            audio: LazyLock::new(AudioProvider::default),
+            audio: LazyLock::new(Provider::default),
+            folders: LazyLock::new(Provider::default),
         };
         tessera_ui::run(
             host,

@@ -16,6 +16,7 @@ pub(super) type QuickPopups = TransientCache<QuickSettingsController>;
 impl PanelController {
     pub(super) fn open_quick_settings(&self, bounds: TileBounds) {
         self.dismiss_tooltip(false);
+        self.hide_user_menu();
         let Some(toolbar) = self.toolbar_and_upgrade() else {
             return;
         };

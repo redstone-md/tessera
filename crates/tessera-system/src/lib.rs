@@ -5,6 +5,9 @@
 
 #![forbid(unsafe_code)]
 
+/// Current-user known-folder observations and identity-bound opening.
+pub mod folders;
+
 /// Default-multimedia audio endpoints and their asynchronous host interface.
 pub mod audio {
     use std::fmt;

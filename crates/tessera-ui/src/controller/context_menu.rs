@@ -50,6 +50,7 @@ impl PanelController {
                 return;
             }
         };
+        self.hide_user_menu();
         let existing = self.menus.borrow().clone();
         let menu = match existing {
             Some(menu) => menu,
