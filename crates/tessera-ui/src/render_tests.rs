@@ -373,6 +373,75 @@ fn launcher_renders_grid_search_and_escape_hides() {
 }
 
 #[test]
+fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scales() {
+    use slint::platform::software_renderer::PremultipliedRgbaColor;
+
+    let window = software_window();
+    let launcher = Launcher::new().unwrap();
+    launcher.set_tiles(ModelRc::new(VecModel::from(vec![app(
+        "editor",
+        "Rust Editor",
+    )])));
+    launcher.show().unwrap();
+    for (scheme, scale, background) in [
+        (slint::language::ColorScheme::Dark, 1.0, 24),
+        (slint::language::ColorScheme::Dark, 2.0, 24),
+        (slint::language::ColorScheme::Light, 1.0, 242),
+        (slint::language::ColorScheme::Light, 2.0, 242),
+    ] {
+        launcher.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (560.0 * scale) as usize;
+        let height = (420.0 * scale) as usize;
+        window.set_size(slint::PhysicalSize::new(width as u32, height as u32));
+        let mut pixels = vec![PremultipliedRgbaColor::default(); width * height];
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, width);
+        }));
+        let sample = |x: f32, y: f32| pixels[(y * scale) as usize * width + (x * scale) as usize];
+        let surface = sample(280.0, 210.0);
+        assert_eq!(
+            (surface.red, surface.green, surface.blue, surface.alpha),
+            (background, background, background, 255)
+        );
+        assert_eq!(
+            sample(0.0, 0.0).alpha,
+            0,
+            "The outer window remains transparent"
+        );
+        for label in [
+            "Launch Rust Editor",
+            "Open settings and recovery",
+            "Refresh the desktop",
+            "Exit Tessera",
+        ] {
+            let element = ElementHandle::find_by_accessible_label(&launcher, label)
+                .next()
+                .unwrap();
+            let position = element.absolute_position();
+            let size = element.size();
+            assert!(
+                position.x >= 10.0
+                    && position.y >= 10.0
+                    && position.x + size.width <= 550.0
+                    && position.y + size.height <= 410.0,
+                "{label} must stay inside the opaque content bounds: {position:?}"
+            );
+        }
+        assert!(
+            !window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, width);
+            }),
+            "The settled launcher must not continuously redraw"
+        );
+    }
+}
+
+#[test]
 fn no_idle_render_after_draining_unchanged_state() {
     let window = software_window();
     let dock = Dock::new().unwrap();

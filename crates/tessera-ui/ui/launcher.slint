@@ -3,6 +3,7 @@
 
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
+import { PopoverBody } from "popover.slint";
 import { ApplicationIcon, TileButton } from "tiles.slint";
 
 export struct LaunchTile {
@@ -46,22 +47,18 @@ export component Launcher inherits Window {
     property <int> columns: 7;
     property <length> gap: 8px;
     property <length> pad: 8px;
-    property <length> outer: 10px;
     property <bool> blocked: root.refreshing || root.stale;
 
     changed search => { root.search-changed(); }
 
-    Rectangle {
-        x: root.outer;
-        y: root.outer;
-        width: max(0px, parent.width - 2 * root.outer);
-        height: max(0px, parent.height - 2 * root.outer);
-        border-radius: 16px;
-        background: SeelenPalette.bar;
+    body := PopoverBody {
+        surface-radius: 16px;
 
         // Search receives focus on each show; Escape bubbles from all of
         // this scope's children, including the search field and pin controls.
         escape-scope := FocusScope {
+            width: body.content-width;
+            height: body.content-height;
             key-pressed(event) => {
                 if event.text == Key.Escape {
                     root.hide-requested();

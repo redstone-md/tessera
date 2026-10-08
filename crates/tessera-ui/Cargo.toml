@@ -21,7 +21,7 @@ slint-build.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
-slint = { workspace = true, features = ["unstable-winit-030"] }
+slint = { workspace = true, features = ["unstable-winit-030", "renderer-femtovg"] }
 
 [lints]
 workspace = true

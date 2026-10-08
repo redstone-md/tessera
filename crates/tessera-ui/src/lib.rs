@@ -24,6 +24,8 @@ pub(crate) mod popup_placement;
 pub(crate) mod projection;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
+#[cfg(all(test, target_os = "linux"))]
+mod gl_render_tests;
 #[cfg(test)]
 mod render_tests;
 pub(crate) mod sanitize;

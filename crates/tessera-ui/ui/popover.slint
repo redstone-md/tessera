@@ -27,6 +27,7 @@ export global PopoverMotion {
 
 export component PopoverBody inherits Rectangle {
     accessible-role: none;
+    in property <length> surface-radius: PopoverTokens.radius;
     opacity: 1;
     animate opacity {
         enabled: PopoverMotion.enabled;
@@ -58,7 +59,7 @@ export component PopoverBody inherits Rectangle {
         y: PopoverTokens.shadow-margin;
         width: max(0px, parent.width - 2 * PopoverTokens.shadow-margin);
         height: max(0px, parent.height - 2 * PopoverTokens.shadow-margin);
-        border-radius: PopoverTokens.radius;
+        border-radius: root.surface-radius;
         background: SeelenPalette.surface;
         drop-shadow-color: PopoverTokens.shadow-color;
         drop-shadow-offset-x: PopoverTokens.shadow-offset-x;
