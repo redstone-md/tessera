@@ -24,6 +24,8 @@ export component TileButton inherits Rectangle {
     in property <string> accessible-text;
     in property <string> tooltip-text;
     in property <bool> enabled: true;
+    // Semantic selection is independent of real focus and input modality.
+    in property <bool> selected: false;
     out property <bool> hovered: touch.has-hover;
     out property <bool> pressed: root.enabled && (touch.pressed || root.space-armed);
     out property <bool> focus-visible: root.keyboard-focus && keyboard.has-focus && root.enabled;
@@ -41,6 +43,7 @@ export component TileButton inherits Rectangle {
     }
     callback clicked;
     callback middle-clicked;
+    callback focus-acquired;
     callback context-requested(Point);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point); // delay and source tile origin
@@ -107,6 +110,7 @@ export component TileButton inherits Rectangle {
             } else if reason == FocusReason.pointer-click {
                 root.keyboard-focus = false;
             }
+            root.focus-acquired();
         }
         focus-lost(reason) => { root.space-armed = false; }
         key-pressed(event) => {
@@ -192,7 +196,7 @@ export component TileButton inherits Rectangle {
         }
     }
 
-    if root.show-focus-ring && root.focus-visible: Rectangle {
+    if root.show-focus-ring && root.enabled && (root.selected || root.focus-visible): Rectangle {
         x: -FocusTokens.outer-margin;
         y: -FocusTokens.outer-margin;
         width: parent.width + 2 * FocusTokens.outer-margin;

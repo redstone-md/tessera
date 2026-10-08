@@ -13,10 +13,12 @@ export struct LaunchTile {
     pinned: bool,
 }
 
+export enum LauncherNavigation { up, down, left, right }
+
 // Frameless OPAQUE centered launcher (source apps-menu has no translucency):
 // a search header, a 7-column icon grid of
 // genuine cached application icons, and a footer with settings/recovery and
-// exit. Seelen apps-menu facts: 7 columns, gap/padding 8px, square tiles with
+// exit. Seelen apps-menu facts: 7 columns, 8px gap, 16px body inset, square tiles with
 // icon and a 0.8rem name, radius 10. Escape hides the window (FocusScope at
 // the window level). No fake media, tray, or workspace data is rendered.
 export component Launcher inherits Window {
@@ -34,6 +36,11 @@ export component Launcher inherits Window {
     in property <string> user-name;
     in property <string> version;
     in-out property <string> search;
+    in property <string> selected-key: "";
+    out property <int> grid-columns: 7;
+    callback navigate-requested(LauncherNavigation);
+    callback activate-selected-requested();
+    callback select-requested(string);
     callback search-changed();
     callback launch-requested(string);
     callback pin-toggle-requested(string, bool);
@@ -42,14 +49,36 @@ export component Launcher inherits Window {
     callback hide-requested();
     callback exit-requested();
     callback focus-search();
-    focus-search => { search-field.focus(); }
+    focus-search => {
+        root.grid-navigation = false;
+        search-field.focus();
+    }
 
-    property <int> columns: 7;
+    // Nearest-row scrolling includes the shared external outline gutter.
+    // Selection stays host-owned; scrolling never changes keyboard focus.
+    public function ensure-visible(index: int) {
+        if index >= 0 && index < root.tiles.length {
+            let top = floor(index / root.grid-columns) * (grid-scroll.tile + root.gap);
+            let bottom = top + grid-scroll.tile + 2 * FocusTokens.outer-margin;
+            let visible-top = -grid-scroll.content-y;
+            let target = top < visible-top ? top :
+                bottom > visible-top + grid-scroll.visible-height ?
+                    bottom - grid-scroll.visible-height : visible-top;
+            grid-scroll.content-y = -clamp(target, 0px,
+                max(0px, grid-scroll.content-height - grid-scroll.visible-height));
+        }
+    }
     property <length> gap: 8px;
     property <length> pad: 8px;
     property <bool> blocked: root.refreshing || root.stale;
+    // Only arrows originating in the grid move real tile focus. Search
+    // preselection stays semantic so native text editing retains focus.
+    property <bool> grid-navigation: false;
 
-    changed search => { root.search-changed(); }
+    changed search => {
+        root.grid-navigation = false;
+        root.search-changed();
+    }
 
     body := PopoverBody {
         surface-radius: 16px;
@@ -78,29 +107,76 @@ export component Launcher inherits Window {
                 placeholder-text: "Search applications";
                 text <=> root.search;
                 enabled: true;
+                changed has-focus => {
+                    if self.has-focus { root.grid-navigation = false; }
+                }
+                key-pressed(event) => {
+                    if event.modifiers.control || event.modifiers.alt
+                        || event.modifiers.shift || event.modifiers.meta { return reject; }
+                    if event.text == Key.Return {
+                        if !root.blocked && root.selected-key != "" && !event.repeat {
+                            root.activate-selected-requested();
+                        }
+                        return accept;
+                    }
+                    if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                        if !root.blocked {
+                            root.navigate-requested(event.text == Key.UpArrow ?
+                                LauncherNavigation.up : LauncherNavigation.down);
+                        }
+                        return accept;
+                    }
+                    // Native LineEdit exposes no caret getter in the pinned SDK.
+                    // Left/Right remain normal editing, including Right at end.
+                    return reject;
+                }
             }
 
             // Grid: 7 columns of square tiles; overflow scrolls.
             HorizontalLayout {
-                // Reserve outline space inside the viewport without moving
-                // the grid or changing its reference content padding.
+                // Total body inset: root padding 8 + inner padding 4 +
+                // outline gutter 4 = the reference 16px (not an 8px grid).
                 padding: max(0px, root.pad - FocusTokens.outer-margin);
                 vertical-stretch: 1;
+            grid-key := FocusScope {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                min-width: 50px;
+                min-height: 50px;
+                focus-on-tab-navigation: false;
+                key-pressed(event) => {
+                    if event.modifiers.control || event.modifiers.alt
+                        || event.modifiers.shift || event.modifiers.meta { return reject; }
+                    if event.text == Key.UpArrow || event.text == Key.DownArrow
+                        || event.text == Key.LeftArrow || event.text == Key.RightArrow {
+                        if !root.blocked {
+                            root.grid-navigation = true;
+                            root.navigate-requested(event.text == Key.UpArrow ? LauncherNavigation.up :
+                                event.text == Key.DownArrow ? LauncherNavigation.down :
+                                event.text == Key.LeftArrow ? LauncherNavigation.left : LauncherNavigation.right);
+                        }
+                        return accept;
+                    }
+                    // Return/Space belong to each tile or its pin control.
+                    return reject;
+                }
             grid-scroll := ScrollView {
+                width: parent.width;
+                height: parent.height;
                 vertical-stretch: 1;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
 
                 property <length> tile: (self.visible-width - 2 * FocusTokens.outer-margin
-                    - (root.columns - 1) * root.gap) / root.columns;
-                property <int> rows: ceil(root.tiles.length / root.columns);
+                    - (root.grid-columns - 1) * root.gap) / root.grid-columns;
+                property <int> rows: ceil(root.tiles.length / root.grid-columns);
                 content-width: self.visible-width;
                 content-height: max(self.visible-height, 2 * FocusTokens.outer-margin
                     + max(0px, self.rows * (self.tile + root.gap) - root.gap));
 
                 for tile[i] in root.tiles: Rectangle {
-                    property <int> column-index: mod(i, root.columns);
-                    property <int> row-index: floor(i / root.columns);
+                    property <int> column-index: mod(i, root.grid-columns);
+                    property <int> row-index: floor(i / root.grid-columns);
                     property <length> size: grid-scroll.tile;
                     x: FocusTokens.outer-margin + self.column-index * (self.size + root.gap);
                     y: FocusTokens.outer-margin + self.row-index * (self.size + root.gap);
@@ -113,9 +189,15 @@ export component Launcher inherits Window {
                         radius: 10px;
                         filled: false;
                         enabled: !root.blocked;
+                        selected: tile.key == root.selected-key;
+                        property <bool> keyboard-selected: root.grid-navigation && self.selected;
+                        changed keyboard-selected => {
+                            if self.keyboard-selected { self.focus-for-keyboard(); }
+                        }
+                        focus-acquired => { root.select-requested(tile.key); }
                         transform-scale: self.pressed ? 0.95 : 1;
                         background: !self.enabled ? transparent :
-                            self.focus-visible ? SeelenPalette.accent.with-alpha(0.1) :
+                            (self.selected || self.focus-visible) ? SeelenPalette.accent.with-alpha(0.1) :
                             self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
                         accessible-text: "Launch " + tile.label;
                         clicked => { root.launch-requested(tile.key); }
@@ -208,6 +290,7 @@ export component Launcher inherits Window {
                     wrap: word-wrap;
                     accessible-role: text;
                 }
+            }
             }
             }
 

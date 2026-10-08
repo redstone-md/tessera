@@ -19,6 +19,7 @@ pub(crate) mod controller;
 pub(crate) mod dock;
 pub(crate) mod dto;
 pub(crate) mod icons;
+pub(crate) mod launcher;
 pub(crate) mod motion;
 pub(crate) mod popup_placement;
 pub(crate) mod projection;

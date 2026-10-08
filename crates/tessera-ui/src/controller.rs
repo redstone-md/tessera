@@ -8,8 +8,8 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::generated::{
-    AppRow, Dock, DockApp, DockStatus, DockSystemCommand, DockWindow, DockWindowCommand,
-    LaunchTile, Launcher, Row, Toolbar,
+    AppRow, Dock, DockApp, DockStatus, DockSystemCommand, DockWindow, DockWindowCommand, Launcher,
+    Row, Toolbar,
 };
 use crate::projection::{AppProjection, PanelProjection, RowProjection};
 use crate::state::{Routes, SurfaceCore};
@@ -22,6 +22,7 @@ use crate::{
 mod actions;
 mod context_menu;
 mod geometry;
+mod launcher;
 mod tooltip;
 use context_menu::Menus;
 use tooltip::Tooltips;
@@ -122,6 +123,7 @@ pub(crate) struct PanelController {
     core: Arc<SurfaceCore>,
     icon_cache: Rc<RefCell<crate::icons::IconCache>>,
     leases: Rc<RefCell<SurfaceLeases>>,
+    launcher_state: Rc<RefCell<launcher::LauncherState>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     menus: Menus,
     tooltips: Tooltips,
@@ -138,6 +140,7 @@ impl PanelController {
             core,
             icon_cache: Rc::default(),
             leases: Rc::default(),
+            launcher_state: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
             tooltips: Rc::default(),
@@ -166,6 +169,7 @@ impl PanelController {
             core,
             icon_cache: Rc::default(),
             leases: Rc::default(),
+            launcher_state: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
             tooltips: Rc::default(),
@@ -301,7 +305,7 @@ impl PanelController {
             controller.dismiss_hover_tooltip(SurfaceKind::Dock, origin, delayed);
         });
         let weak = self.clone();
-        dock.on_open_applications_requested(move || weak.open_launcher());
+        dock.on_open_applications_requested(move || weak.toggle_launcher());
         let weak = self.clone();
         dock.on_exit_requested(move || {
             // Explicit exit: quitting the loop ends the run; the retained
@@ -333,32 +337,6 @@ impl PanelController {
         });
     }
 
-    fn wire_launcher(&self, launcher: &Launcher) {
-        let weak = self.clone();
-        launcher.on_launch_requested(move |key| weak.launch(&key));
-        let weak = self.clone();
-        launcher.on_pin_toggle_requested(move |key, pinned| weak.toggle_pin(&key, pinned));
-        let weak = self.clone();
-        launcher.on_search_changed(move || weak.apply_launcher_filter());
-        let weak = self.clone();
-        launcher.on_open_settings_requested(move || weak.open_panel());
-        let weak = self.clone();
-        launcher.on_refresh_requested(move || {
-            let _ = weak.refresh();
-        });
-        let weak = self.clone();
-        // Escape hides the launcher (dropping its lease first, because a
-        // hidden window may lose its HWND); the loop keeps running.
-        launcher.on_hide_requested(move || weak.hide_launcher());
-        let weak = self.clone();
-        // The footer's explicit Exit button quits the run (the host
-        // supervisor follows by restoring the Explorer shell).
-        launcher.on_exit_requested(move || {
-            let _ = slint::quit_event_loop();
-            let _ = weak;
-        });
-    }
-
     fn guarded(&self) -> bool {
         self.panel
             .upgrade()
@@ -383,79 +361,6 @@ impl PanelController {
             panel.set_status(projection.status.as_str().into());
         }
         self.show_launcher_tiles();
-    }
-
-    /// Applies the launcher's own search box to the retained catalog.
-    /// Filtering never re-observes the desktop and never renumbers keys.
-    pub(crate) fn apply_launcher_filter(&self) {
-        self.show_launcher_tiles();
-    }
-
-    /// Renders the launcher grid tiles for the launcher's own search over the
-    /// retained catalog (bounded by the projection module's `MAX_APPS`).
-    fn show_launcher_tiles(&self) {
-        let Some(launcher) = self.launcher_and_upgrade() else {
-            return;
-        };
-        let search = launcher.get_search().to_string();
-        let catalog = self.core.catalog();
-        let apps = crate::projection::project_apps(&catalog, &self.core.pins(), &search);
-        let tiles: Vec<LaunchTile> = apps
-            .iter()
-            .map(|app| LaunchTile {
-                key: app.key.as_str().into(),
-                label: app.label.as_str().into(),
-                icon: dock_icon(self, app.icon.as_ref()),
-                pinned: app.pinned,
-            })
-            .collect();
-        launcher.set_tiles(ModelRc::new(VecModel::from(tiles)));
-    }
-
-    /// Shows (creates not; already constructed) the frameless launcher
-    /// window in dock mode. Its Escape key hides it; the loop keeps running.
-    ///
-    /// Lease lifecycle: the launcher window is a tool-window but activatable
-    /// (no no-activate, unlike the bars); its HWND may be released while
-    /// hidden, so the lease is attached after every show and dropped before
-    /// every hide.
-    pub(crate) fn open_launcher(&self) {
-        self.dismiss_tooltip(false);
-        if let Some(launcher) = self.launcher_and_upgrade() {
-            self.show_launcher_tiles();
-            self.leases.borrow_mut().detach(SurfaceKind::Launcher);
-            let rect = self.core.dock_context().map(|context| {
-                crate::dock::launcher_rect(context, launcher.window().scale_factor())
-            });
-            if let Some(rect) = rect {
-                launcher
-                    .window()
-                    .set_size(slint::PhysicalSize::new(rect.width, rect.height));
-                launcher
-                    .window()
-                    .set_position(slint::PhysicalPosition::new(rect.x, rect.y));
-            }
-            if let Err(error) = launcher.show() {
-                self.fail_surface(error.to_string());
-                return;
-            }
-            let rect = rect
-                .map(|rect| (rect.x, rect.y, rect.width, rect.height))
-                .unwrap_or((0, 0, 0, 0));
-            if self.attach_lease(SurfaceKind::Launcher, launcher.window(), rect) {
-                self.request_ui_focus(launcher.window());
-                launcher.invoke_focus_search();
-            }
-        }
-    }
-
-    /// Hides the launcher (Escape path): the lease drops first because
-    /// Slint/winit may release or recreate the HWND while hidden.
-    pub(crate) fn hide_launcher(&self) {
-        if let Some(launcher) = self.launcher_and_upgrade() {
-            self.leases.borrow_mut().detach(SurfaceKind::Launcher);
-            let _ = launcher.hide();
-        }
     }
 
     /// Attaches one surface lease through the registry (UI-thread only).
@@ -911,10 +816,16 @@ impl PanelController {
             self.report_message("That application is no longer in the current catalog.");
             return;
         };
-        let result = self.core.host().launch(&key);
+        self.launch_resolved_app(&key);
+    }
+
+    fn launch_resolved_app(&self, key: &str) -> bool {
+        let result = self.core.host().launch(key);
+        let accepted = result.is_ok();
         self.report(result, "Application launched", |detail| {
             format!("Launch failed: {detail}")
         });
+        accepted
     }
 
     /// Toggles one pin and persists it immediately — reusing the last saved

@@ -1013,3 +1013,219 @@ fn appearance_callbacks_during_show_apply_latest_geometry_without_reentrant_leas
     );
     assert_eq!(host.observe_calls.load(Ordering::SeqCst), 0);
 }
+
+struct LauncherFixture {
+    // Drop attachments before the owned component windows.
+    _scope: SurfaceLeaseScope,
+    controller: PanelController,
+    panel: Panel,
+    dock: Dock,
+    _toolbar: Toolbar,
+    launcher: Launcher,
+    host: Arc<FixtureHost>,
+}
+
+impl LauncherFixture {
+    fn new() -> Self {
+        i_slint_backend_testing::init_no_event_loop();
+        let panel = Panel::new().unwrap();
+        let host = FixtureHost::returning(launcher_snapshot());
+        let core = controller_for(&panel, host.clone()).core;
+        let dock = Dock::new().unwrap();
+        let toolbar = Toolbar::new().unwrap();
+        let launcher = Launcher::new().unwrap();
+        let controller = PanelController::new_with_dock(&panel, &dock, &toolbar, &launcher, core);
+        let scope = SurfaceLeaseScope(Rc::clone(&controller.leases));
+        apply_result_to_both(&controller, &panel, Ok(launcher_snapshot()));
+        Self {
+            _scope: scope,
+            controller,
+            panel,
+            dock,
+            _toolbar: toolbar,
+            launcher,
+            host,
+        }
+    }
+}
+
+#[test]
+fn launcher_keyboard_launch_failure_success_reopen_and_trigger_lifetime() {
+    use slint::platform::{Key, WindowEvent};
+
+    let fixture = LauncherFixture::new();
+    fixture.dock.invoke_open_applications_requested();
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    fixture.launcher.set_search("editor".into());
+    fixture.controller.apply_launcher_filter();
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    *fixture.host.launch_result.lock() = Err("Access denied\n\u{1b}native failure".into());
+    let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Return.into(),
+        });
+    assert_eq!(fixture.host.launches.lock().as_slice(), ["app-editor"]);
+    assert!(
+        fixture.launcher.window().is_visible(),
+        "failed launch keeps actionable feedback visible"
+    );
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops);
+    let status = fixture.launcher.get_status();
+    assert!(status.contains("Launch failed:"));
+    assert!(!status.contains('\n') && !status.contains('\u{1b}'));
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert_eq!(
+        fixture.host.launches.lock().len(),
+        1,
+        "held search Enter must not relaunch"
+    );
+    *fixture.host.launch_result.lock() = Ok(());
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Return.into(),
+        });
+    assert_eq!(
+        fixture.host.launches.lock().as_slice(),
+        ["app-editor", "app-editor"]
+    );
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops + 1);
+    assert!(
+        !fixture
+            .controller
+            .leases
+            .borrow()
+            .attachments
+            .contains_key(&SurfaceKind::Launcher)
+    );
+    fixture.launcher.invoke_activate_selected_requested();
+    fixture
+        .launcher
+        .invoke_launch_requested("app-editor".into());
+    assert_eq!(
+        fixture.host.launches.lock().len(),
+        2,
+        "queued hidden-surface signals cannot launch"
+    );
+
+    fixture.dock.invoke_open_applications_requested();
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(fixture.launcher.get_search(), "");
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), 2);
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Return.into(),
+        });
+    assert_eq!(
+        fixture.host.launches.lock().len(),
+        2,
+        "blank reopen has no implicit first-item launch"
+    );
+    fixture.dock.invoke_open_applications_requested();
+    assert!(
+        !fixture.launcher.window().is_visible(),
+        "the repeated real trigger toggles closed"
+    );
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops + 2);
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn launcher_selection_reconciles_current_results_and_rejects_cross_surface_keys() {
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    fixture.launcher.set_search("editor".into());
+    fixture.controller.apply_launcher_filter();
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+    assert!(
+        fixture.controller.resolve_app_key("app-browser").is_some(),
+        "browser is still displayed on another surface"
+    );
+    fixture
+        .launcher
+        .invoke_launch_requested("app-browser".into());
+    fixture
+        .launcher
+        .invoke_launch_requested("fabricated-key".into());
+    fixture
+        .launcher
+        .invoke_select_requested("fabricated-key".into());
+    assert!(fixture.host.launches.lock().is_empty());
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+
+    let browser = PanelApplication::new("app-browser".into(), "Web Browser".into(), None).unwrap();
+    let changed = launcher_snapshot().with_applications(vec![browser.clone()]);
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(changed));
+    assert_eq!(fixture.launcher.get_tiles().row_count(), 0);
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    fixture.launcher.invoke_activate_selected_requested();
+    fixture
+        .launcher
+        .invoke_launch_requested("app-editor".into());
+    assert!(fixture.host.launches.lock().is_empty());
+    fixture.launcher.set_search("".into());
+    fixture.controller.apply_launcher_filter();
+    fixture
+        .launcher
+        .invoke_navigate_requested(crate::generated::LauncherNavigation::Down);
+    assert_eq!(fixture.launcher.get_selected_key(), "app-browser");
+    let reordered = launcher_snapshot().with_applications(vec![
+        PanelApplication::new("app-first".into(), "A first application".into(), None).unwrap(),
+        browser,
+    ]);
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(reordered));
+    assert_eq!(
+        fixture.launcher.get_tiles().row_data(1).unwrap().key,
+        "app-browser"
+    );
+    assert_eq!(
+        fixture.launcher.get_selected_key(),
+        "app-browser",
+        "selection follows identity, not the old index"
+    );
+
+    for stale in [false, true] {
+        fixture.panel.set_refreshing(!stale);
+        fixture.panel.set_stale(stale);
+        fixture
+            .launcher
+            .invoke_launch_requested("app-browser".into());
+        fixture.launcher.invoke_activate_selected_requested();
+        fixture
+            .launcher
+            .invoke_navigate_requested(crate::generated::LauncherNavigation::Left);
+        assert!(fixture.host.launches.lock().is_empty());
+        assert_eq!(fixture.launcher.get_selected_key(), "app-browser");
+    }
+    fixture.panel.set_refreshing(false);
+    fixture.panel.set_stale(false);
+    fixture.controller.launch("app-browser");
+    assert_eq!(fixture.host.launches.lock().as_slice(), ["app-browser"]);
+    assert!(
+        fixture.launcher.window().is_visible(),
+        "ordinary panel/dock launch does not own launcher lifetime"
+    );
+    assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.host.saves.lock().is_empty());
+}

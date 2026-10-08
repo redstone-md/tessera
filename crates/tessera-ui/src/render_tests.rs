@@ -22,11 +22,11 @@ use std::time::Duration;
 use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, ModelRc, Rgb8Pixel, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Rgb8Pixel, VecModel};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
-    LaunchTile, Launcher, Toolbar, TooltipSurface,
+    LaunchTile, Launcher, LauncherNavigation, Toolbar, TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientComponent;
@@ -727,6 +727,320 @@ fn launcher_renders_grid_search_and_escape_hides() {
 }
 
 #[test]
+fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
+    use std::cell::RefCell;
+
+    use crate::launcher::{LauncherSelection, Navigation};
+
+    // Mock only the authoritative controller boundary; input, focus, layout
+    // and pixels still come from the generated native Launcher.
+    fn update_selection(
+        launcher: &Launcher,
+        state: &RefCell<LauncherSelection>,
+        update: impl FnOnce(&mut LauncherSelection, &[String]) -> Option<usize>,
+    ) {
+        let keys = launcher
+            .get_tiles()
+            .iter()
+            .map(|tile| tile.key.to_string())
+            .collect::<Vec<_>>();
+        let (key, index) = {
+            let mut state = state.borrow_mut();
+            let index = update(&mut state, &keys);
+            (state.key().unwrap_or_default().to_owned(), index)
+        };
+        launcher.set_selected_key(key.into());
+        if let Some(index) = index {
+            launcher.invoke_ensure_visible(index as i32);
+        }
+    }
+
+    let window = software_window();
+    let launcher = Launcher::new().unwrap();
+    launcher.set_tiles(ModelRc::new(VecModel::from(
+        (0..23)
+            .map(|i| app(&format!("app-{i}"), &format!("App {i}")))
+            .collect::<Vec<_>>(),
+    )));
+    let selection = Rc::new(RefCell::new(LauncherSelection::default()));
+    let weak = launcher.as_weak();
+    let state = selection.clone();
+    launcher.on_search_changed(move || {
+        let launcher = weak.upgrade().unwrap();
+        let active = !launcher.get_search().is_empty();
+        update_selection(&launcher, &state, |state, keys| {
+            state.search_changed(keys, active)
+        });
+    });
+    let directions = Rc::new(RefCell::new(Vec::new()));
+    let log = directions.clone();
+    let weak = launcher.as_weak();
+    let state = selection.clone();
+    launcher.on_navigate_requested(move |direction| {
+        log.borrow_mut().push(direction);
+        let launcher = weak.upgrade().unwrap();
+        let direction = match direction {
+            LauncherNavigation::Up => Navigation::Up,
+            LauncherNavigation::Down => Navigation::Down,
+            LauncherNavigation::Left => Navigation::Left,
+            LauncherNavigation::Right => Navigation::Right,
+        };
+        update_selection(&launcher, &state, |state, keys| {
+            state.navigate(keys, direction, launcher.get_grid_columns() as usize)
+        });
+    });
+    let weak = launcher.as_weak();
+    let state = selection.clone();
+    launcher.on_select_requested(move |key| {
+        let launcher = weak.upgrade().unwrap();
+        update_selection(&launcher, &state, |state, keys| state.select(keys, &key));
+    });
+    let activations = Rc::new(RefCell::new(Vec::new()));
+    let log = activations.clone();
+    let weak = launcher.as_weak();
+    launcher.on_activate_selected_requested(move || {
+        log.borrow_mut()
+            .push(weak.upgrade().unwrap().get_selected_key());
+    });
+    let launches = Rc::new(RefCell::new(Vec::new()));
+    let log = launches.clone();
+    launcher.on_launch_requested(move |key| log.borrow_mut().push(key));
+    launcher.show().unwrap();
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    window.set_size(slint::PhysicalSize::new(560, 300));
+    launcher.invoke_focus_search();
+    let baseline = draw(&window, 560, 300);
+    let key = |text: slint::SharedString| {
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    let tile = |i| {
+        ElementHandle::find_by_accessible_label(&launcher, &format!("Launch App {i}"))
+            .next()
+            .unwrap_or_else(|| {
+                panic!("visible launcher tile {i} must expose its exact launch label")
+            })
+    };
+    // Accessible searches intentionally omit viewport-clipped elements.
+    // Retain the genuine initially visible handle to inspect its position
+    // after nearest scrolling moves this first row out of the viewport.
+    let first_tile = tile(0);
+    let first_position = first_tile.absolute_position();
+    let first_size = first_tile.size();
+    let ring_index = (first_position.y + first_size.height / 2.0) as usize * 560
+        + (first_position.x - 2.5) as usize;
+    key(Key::Return.into());
+    assert!(
+        activations.borrow().is_empty(),
+        "empty query has no first-item fallback"
+    );
+    key("q".into());
+    assert_eq!(launcher.get_search(), "q");
+    assert_eq!(launcher.get_selected_key(), "app-0");
+    let selected = draw(&window, 560, 300);
+    assert_ne!(
+        selected[ring_index], baseline[ring_index],
+        "search selection paints a real external outline"
+    );
+    assert_eq!(
+        first_tile.absolute_position(),
+        first_position,
+        "selection does not move a visible row"
+    );
+    key(Key::LeftArrow.into());
+    key("a".into());
+    key(Key::RightArrow.into());
+    assert_eq!(
+        launcher.get_search(),
+        "aq",
+        "native caret editing remains intact"
+    );
+    assert!(
+        directions.borrow().is_empty(),
+        "search Left/Right are not grid navigation"
+    );
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Return.into(),
+    });
+    assert_eq!(
+        activations.borrow().as_slice(),
+        &[slint::SharedString::from("app-0")],
+        "held search Enter activates once"
+    );
+
+    key(Key::DownArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-7");
+    key("b".into());
+    assert_eq!(
+        launcher.get_search(),
+        "aqb",
+        "search arrows keep native input focus"
+    );
+    assert_eq!(launcher.get_selected_key(), "app-0");
+    key(Key::DownArrow.into());
+    key(Key::UpArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-0");
+    key(Key::DownArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-7");
+    key(Key::Tab.into());
+    assert_eq!(
+        launcher.get_selected_key(),
+        "app-0",
+        "actual Tab focus reconciles selection"
+    );
+    key(Key::RightArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-1");
+    // No rendering/event-loop pump between the arrow and Return: routing
+    // must already target the newly selected, genuinely focused tile.
+    key(Key::Return.into());
+    assert_eq!(
+        launches.borrow().as_slice(),
+        &[slint::SharedString::from("app-1")],
+        "grid Arrow then Return launches B, never the formerly focused A"
+    );
+    let moved = draw(&window, 560, 300);
+    assert_eq!(
+        moved[ring_index], baseline[ring_index],
+        "grid navigation removes the former tile's real-focus outline"
+    );
+    key(Key::Tab.into()); // App 1's pin has its own focus scope.
+    key(Key::Tab.into()); // Actual focus on App 2.
+    assert_eq!(launcher.get_selected_key(), "app-2");
+    let reconciled = draw(&window, 560, 300);
+    assert_eq!(
+        reconciled[ring_index], baseline[ring_index],
+        "moving Tab focus removes the stale first-tile outline"
+    );
+    key(Key::LeftArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-1");
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Space.into(),
+    });
+    key(Key::RightArrow.into());
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Space.into(),
+    });
+    assert_eq!(
+        launches.borrow().len(),
+        1,
+        "moving real tile focus cancels the armed Space gesture"
+    );
+    key(Key::LeftArrow.into());
+    key(Key::DownArrow.into());
+    key(Key::DownArrow.into());
+    key(Key::DownArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-22");
+    let last_row = draw(&window, 560, 300);
+    let scrolled = tile(22).absolute_position();
+    assert!(scrolled.y > first_position.y);
+    let footer = ElementHandle::find_by_accessible_label(&launcher, "Open settings and recovery")
+        .next()
+        .unwrap();
+    assert!(
+        scrolled.y + tile(22).size().height + 4.0 < footer.absolute_position().y,
+        "last selected row and outline stay above the footer"
+    );
+    let bottom_ring = (scrolled.y + tile(22).size().height + 2.5) as usize * 560
+        + (scrolled.x + tile(22).size().width / 2.0) as usize;
+    let accent = launcher
+        .global::<crate::generated::SeelenPalette>()
+        .get_accent()
+        .color()
+        .to_argb_u8();
+    assert_eq!(
+        last_row[bottom_ring],
+        Rgb8Pixel {
+            r: accent.red,
+            g: accent.green,
+            b: accent.blue
+        },
+        "the scrolled last-row outline actually renders without clipping"
+    );
+    assert!(
+        first_tile.absolute_position().y < first_position.y,
+        "nearest selection scrolls the actual grid"
+    );
+    key(Key::RightArrow.into());
+    key(Key::DownArrow.into());
+    assert_eq!(
+        launcher.get_selected_key(),
+        "app-22",
+        "incomplete last row does not wrap"
+    );
+    launcher.invoke_ensure_visible(22);
+    launcher.invoke_ensure_visible(-1);
+    launcher.invoke_ensure_visible(23);
+    assert_eq!(
+        tile(22).absolute_position(),
+        scrolled,
+        "visible/invalid targets do not move the viewport"
+    );
+    key(Key::UpArrow.into());
+    key(Key::UpArrow.into());
+    assert_eq!(launcher.get_selected_key(), "app-8");
+    let _ = draw(&window, 560, 300);
+    assert!(
+        (tile(8).absolute_position().y - first_position.y).abs() < 0.01,
+        "nearest upward scrolling aligns the outline gutter, not the tile bottom"
+    );
+
+    launcher.invoke_focus_search();
+    key(Key::DownArrow.into());
+    key("c".into());
+    assert_eq!(
+        launcher.get_search(),
+        "aqbc",
+        "focus-search resets grid-navigation intent before native editing"
+    );
+    let before = activations.borrow().len();
+    for (stale, refreshing) in [(true, false), (false, true)] {
+        launcher.set_stale(stale);
+        launcher.set_refreshing(refreshing);
+        key(Key::Return.into());
+    }
+    launcher.set_stale(false);
+    launcher.set_refreshing(false);
+    launcher.set_tiles(ModelRc::new(VecModel::from(Vec::<LaunchTile>::new())));
+    launcher.set_search("none".into());
+    // Process the real pending query callback at the next input boundary;
+    // neither a getter nor a forced draw should stand in for native input.
+    key(Key::Return.into());
+    assert_eq!(launcher.get_selected_key(), "");
+    assert_eq!(
+        activations.borrow().len(),
+        before,
+        "blocked or empty results never request activation"
+    );
+    assert_eq!(
+        launches.borrow().as_slice(),
+        &[slint::SharedString::from("app-1")],
+        "only explicit Return launches; selection navigation never does"
+    );
+    let _ = draw(&window, 560, 300);
+    assert!(
+        !window.draw_if_needed(|renderer| {
+            let mut pixels = vec![Rgb8Pixel::default(); 560 * 300];
+            renderer.render(&mut pixels, 560);
+        }),
+        "settled keyboard selection does not continuously redraw"
+    );
+}
+
+#[test]
 fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
@@ -1042,6 +1356,10 @@ fn launcher_pin_toggle_routes_the_key() {
     let launches = Rc::new(Cell::new(0));
     let counter = launches.clone();
     launcher.on_launch_requested(move |_| counter.set(counter.get() + 1));
+    let selected_activations = Rc::new(Cell::new(0));
+    let count = selected_activations.clone();
+    launcher.on_activate_selected_requested(move || count.set(count.get() + 1));
+    launcher.set_selected_key("app-editor".into());
     launcher.show().unwrap();
     window.set_size(slint::PhysicalSize::new(560, 420));
     let _ = draw(&window, 560, 420);
@@ -1068,13 +1386,23 @@ fn launcher_pin_toggle_routes_the_key() {
         text: Key::Space.into(),
     });
     assert_eq!(pins.get(), 3, "focused pin accepts keyboard activation");
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Space.into(),
+    });
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Return.into(),
+    });
+    assert_eq!(pins.get(), 4, "focused pin Return remains pin-only");
     assert_eq!(launches.get(), 0, "pin input never bubbles into launch");
     launcher.set_stale(true);
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::Return.into(),
     });
     pin.invoke_accessible_default_action();
-    assert_eq!(pins.get(), 3, "stale pin controls reject all actions");
+    assert_eq!(pins.get(), 4, "stale pin controls reject all actions");
 
     let actions = Rc::new(std::cell::RefCell::new(Vec::new()));
     let log = actions.clone();
@@ -1125,8 +1453,13 @@ fn launcher_pin_toggle_routes_the_key() {
         key(Key::Escape.into());
     }
     assert_eq!(hides.get(), 2, "Escape still bubbles from the search field");
-    assert_eq!(pins.get(), 3, "blocked traversal never toggles a pin");
+    assert_eq!(pins.get(), 4, "blocked traversal never toggles a pin");
     assert_eq!(launches.get(), 0, "blocked traversal never launches an app");
+    assert_eq!(
+        selected_activations.get(),
+        0,
+        "pin and footer Return never request selected-app activation"
+    );
     drop(launcher);
 }
 
