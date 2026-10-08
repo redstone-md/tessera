@@ -136,8 +136,9 @@ impl Driver for NativeFolderDriver {
             ..Default::default()
         };
         // SAFETY: freshly revalidated absolute PIDL, explicit folder open verb,
-        // no parameters/path/working directory. NOASYNC retains ownership until
-        // shell acceptance returns. This does not prove Explorer became visible.
+        // no parameters/path/working directory. Rust keeps the target and call
+        // structure alive through this call. NOASYNC is a file-launch flag, not
+        // a general namespace completion guarantee or proof Explorer is visible.
         unsafe { ShellExecuteExW(&mut info) }
             .map_err(|error| native_error(error.code().0, "Folder open"))
     }
