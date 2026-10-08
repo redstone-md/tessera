@@ -11,7 +11,7 @@ use slint::language::ColorScheme;
 use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
-use crate::generated::{ContextMenuSurface, DockMenuKind, Launcher, TooltipSurface};
+use crate::generated::{ContextMenuSurface, DockMenuKind, LaunchTile, Launcher, TooltipSurface};
 use crate::theme::{PresentationTheme, ThemedComponent};
 
 #[test]
@@ -29,6 +29,14 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         .unwrap();
 
     let launcher = Launcher::new().unwrap();
+    launcher.set_tiles(slint::ModelRc::new(slint::VecModel::from(vec![
+        LaunchTile {
+            key: "native-app".into(),
+            label: "Native app".into(),
+            icon: slint::Image::default(),
+            pinned: false,
+        },
+    ])));
     launcher
         .window()
         .set_size(slint::LogicalSize::new(560.0, 420.0));
@@ -164,6 +172,70 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
         );
     }
     export_frame(&format!("gl-launcher-{theme}-settled-{scale}x"), &frame);
+    verify_launcher_press_scale(launcher);
+}
+
+fn verify_launcher_press_scale(launcher: &Launcher) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let window = launcher.window();
+    let tile = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        launcher,
+        "Launch Native app",
+    )
+    .next()
+    .unwrap();
+    let position = tile.absolute_position();
+    let size = tile.size();
+    let scale = window.scale_factor();
+    let center = slint::LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    );
+    let sample = |frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, x: f32| {
+        frame.as_slice()
+            [(center.y * scale) as usize * frame.width() as usize + (x * scale) as usize]
+    };
+    window.dispatch_event(WindowEvent::PointerMoved { position: center });
+    let hover = window.take_snapshot().unwrap();
+    let body = sample(&hover, position.x - 5.0);
+    let edge = sample(&hover, position.x + 0.5);
+    assert_ne!(edge, body, "the original tile edge must actually render");
+    let launches = Rc::new(Cell::new(0));
+    let count = launches.clone();
+    launcher.on_launch_requested(move |_| count.set(count.get() + 1));
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    let pressed = window.take_snapshot().unwrap();
+    assert_eq!(
+        sample(&pressed, position.x + 0.5),
+        body,
+        "native press scaling must uncover the original tile edge",
+    );
+    assert_ne!(
+        sample(&pressed, position.x + 3.0),
+        body,
+        "press scaling must shrink, not hide, the tile",
+    );
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    let restored = window.take_snapshot().unwrap();
+    assert_eq!(sample(&restored, position.x + 0.5), edge);
+    assert_eq!(tile.absolute_position(), position);
+    assert_eq!(
+        tile.size(),
+        size,
+        "the surrounding grid geometry stays fixed"
+    );
+    assert_eq!(
+        launches.get(),
+        1,
+        "one complete pointer gesture launches once"
+    );
+    window.dispatch_event(WindowEvent::PointerExited);
 }
 
 fn export_frame(name: &str, frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>) {

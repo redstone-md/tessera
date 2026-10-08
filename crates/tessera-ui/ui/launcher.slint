@@ -112,6 +112,7 @@ export component Launcher inherits Window {
                         radius: 10px;
                         filled: false;
                         enabled: !root.blocked;
+                        transform-scale: self.pressed ? 0.95 : 1;
                         background: !self.enabled ? transparent :
                             self.focus-visible ? SeelenPalette.accent.with-alpha(0.1) :
                             self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
