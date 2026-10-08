@@ -3,7 +3,10 @@
 
 //! Complete logical launcher metadata, independent of native row materialization.
 
-use std::{collections::HashSet, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use slint::{Image, Model, ModelNotify, ModelRc, ModelTracker, VecModel};
 
@@ -32,6 +35,26 @@ impl LauncherInventory {
 
     pub(crate) fn len(&self) -> usize {
         self.applications.len()
+    }
+
+    /// Reorders the exact current identities without materializing native rows or images.
+    pub(crate) fn reordered(&self, keys: &[String]) -> Option<Self> {
+        if keys.len() != self.len() {
+            return None;
+        }
+        let mut by_key = self
+            .applications
+            .iter()
+            .map(|app| (app.key.as_str(), app))
+            .collect::<HashMap<_, _>>();
+        if by_key.len() != self.len() {
+            return None;
+        }
+        let applications = keys
+            .iter()
+            .map(|key| by_key.remove(key.as_str()).cloned())
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self::new(applications))
     }
 }
 
@@ -137,6 +160,56 @@ mod tests {
             }));
             Image::default()
         })
+    }
+
+    #[test]
+    fn exact_reorder_clones_metadata_without_native_image_conversion() {
+        let inventory = LauncherInventory::new(applications(3));
+        let keys = ["opaque:2", "opaque:0", "opaque:1"].map(String::from);
+        let reordered = inventory.reordered(&keys).unwrap();
+        assert_eq!(reordered.keys(), keys);
+        assert_eq!(inventory.keys()[0], "opaque:0");
+        for (app, index) in reordered.applications.iter().zip([2, 0, 1]) {
+            assert_eq!(app.label, format!("Label {index}"));
+            assert_eq!(app.pinned, inventory.applications[index].pinned);
+            assert_eq!(
+                app.icon.as_ref().unwrap().rgba(),
+                inventory.applications[index].icon.as_ref().unwrap().rgba()
+            );
+        }
+        let converted = Rc::new(RefCell::new(Vec::new()));
+        let rows = recording_rows(Rc::new(reordered), vec![], 7, converted.clone());
+        assert_eq!(rows.row_count(), 1);
+        assert!(converted.borrow().is_empty());
+    }
+
+    #[test]
+    fn reorder_rejects_partial_duplicate_foreign_and_ambiguous_identity_sets() {
+        let inventory = LauncherInventory::new(applications(3));
+        for keys in [
+            vec![],
+            vec!["opaque:0", "opaque:1"],
+            vec!["opaque:0", "opaque:1", "foreign"],
+            vec!["opaque:0", "opaque:1", "opaque:1"],
+            vec!["opaque:0", "opaque:1", "OPAQUE:2"],
+        ] {
+            let keys = keys.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(inventory.reordered(&keys).is_none());
+        }
+        let mut duplicate = applications(3);
+        duplicate[2].key = duplicate[0].key.clone();
+        assert!(
+            LauncherInventory::new(duplicate)
+                .reordered(inventory.keys())
+                .is_none()
+        );
+        assert!(
+            LauncherInventory::default()
+                .reordered(&[])
+                .unwrap()
+                .keys()
+                .is_empty()
+        );
     }
 
     #[test]

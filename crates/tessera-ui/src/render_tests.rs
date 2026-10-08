@@ -375,6 +375,664 @@ impl NativeLauncherInventory {
     }
 }
 
+// Real SDK routing, using production metrics rather than a host-measured width.
+// These are in-window user-data drags, not Windows/OLE capture evidence.
+mod native_reorder {
+    use super::*;
+    use crate::generated::TileBounds;
+    use slint::language::{ColorScheme, DragAction, DropEvent, PointerEventKind};
+
+    struct Token {
+        key: String,
+        bounds: TileBounds,
+        press: slint::LogicalPosition,
+    }
+
+    #[derive(Default)]
+    struct Routing {
+        token: RefCell<Option<Rc<Token>>>,
+        active: Cell<bool>,
+        drops: RefCell<Vec<(String, slint::LogicalPosition)>>,
+        finishes: RefCell<Vec<(Option<String>, DragAction)>>,
+        trace: RefCell<Vec<String>>,
+    }
+
+    impl Routing {
+        fn drop_event(
+            &self,
+            event: DropEvent,
+            origin: slint::LogicalPosition,
+            drop: bool,
+        ) -> DragAction {
+            let Some(payload) = event
+                .data
+                .user_data()
+                .and_then(|value| value.downcast::<Token>().ok())
+            else {
+                return DragAction::None;
+            };
+            let current = self.token.borrow().clone();
+            if !self.active.get() || !current.is_some_and(|current| Rc::ptr_eq(&current, &payload))
+            {
+                return DragAction::None;
+            }
+            if drop {
+                self.trace.borrow_mut().push("drop".into());
+                self.drops.borrow_mut().push((
+                    payload.key.clone(),
+                    slint::LogicalPosition::new(
+                        origin.x + event.position.x,
+                        origin.y + event.position.y,
+                    ),
+                ));
+            }
+            DragAction::Move
+        }
+    }
+
+    struct Fixture {
+        native: NativeLauncherInventory,
+        routing: Rc<Routing>,
+        scale: f32,
+    }
+
+    impl Fixture {
+        fn new(window: &MinimalSoftwareWindow, scale: f32, count: usize) -> Self {
+            let native = NativeLauncherInventory::new(count);
+            let routing = Rc::new(Routing::default());
+            // Nonempty typed marker exists BEFORE the ancestor's Down filter.
+            // Child Down then replaces it with an immutable per-press token.
+            let mut marker = slint::DataTransfer::default();
+            marker.set_user_data(Rc::new(()));
+            native.launcher.set_reorder_data(marker);
+            native.launcher.set_reorder_enabled(true);
+            let weak = native.launcher.as_weak();
+            let state = routing.clone();
+            native
+                .launcher
+                .on_reorder_origin(move |key, event, bounds, press| {
+                    state.trace.borrow_mut().push(format!("{:?}", event.kind));
+                    if event.kind == PointerEventKind::Down {
+                        let token = (event.button == PointerEventButton::Left && !key.is_empty())
+                            .then(|| {
+                                Rc::new(Token {
+                                    key: key.to_string(),
+                                    bounds,
+                                    press,
+                                })
+                            });
+                        *state.token.borrow_mut() = token.clone();
+                        if let Some(token) = token {
+                            let mut data = slint::DataTransfer::default();
+                            data.set_user_data(token);
+                            weak.upgrade().unwrap().set_reorder_data(data);
+                        }
+                    } else if event.kind == PointerEventKind::Up && !state.active.get() {
+                        state.token.borrow_mut().take();
+                    }
+                    // Child Cancel caused by ancestor takeover precedes dragging=true.
+                });
+            let state = routing.clone();
+            native.launcher.on_reorder_dragging_changed(move |active| {
+                state.active.set(active);
+                state.trace.borrow_mut().push(format!("dragging:{active}"));
+            });
+            let state = routing.clone();
+            native
+                .launcher
+                .on_reorder_can_drop(move |event, origin| state.drop_event(event, origin, false));
+            let state = routing.clone();
+            native
+                .launcher
+                .on_reorder_dropped(move |event, origin| state.drop_event(event, origin, true));
+            let state = routing.clone();
+            native.launcher.on_reorder_finished(move |action| {
+                let token = state.token.borrow_mut().take();
+                state
+                    .finishes
+                    .borrow_mut()
+                    .push((token.map(|token| token.key.clone()), action));
+                state.active.set(false);
+                state.trace.borrow_mut().push(format!("finish:{action:?}"));
+            });
+            window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            native.show(window, (560.0 * scale) as u32, (300.0 * scale) as u32);
+            let fixture = Self {
+                native,
+                routing,
+                scale,
+            };
+            fixture.frame(window);
+            fixture
+        }
+
+        fn frame(&self, window: &MinimalSoftwareWindow) {
+            let _ = draw(
+                window,
+                (560.0 * self.scale) as u32,
+                (300.0 * self.scale) as u32,
+            );
+        }
+
+        fn source(&self, index: usize) -> (ElementHandle, slint::LogicalPosition) {
+            let tile = inventory_tile(&self.native.launcher, index);
+            let origin = tile.absolute_position();
+            (
+                tile,
+                slint::LogicalPosition::new(origin.x + 11.0, origin.y + 13.0),
+            )
+        }
+
+        fn start(&self, window: &MinimalSoftwareWindow, press: slint::LogicalPosition) {
+            press_at(window, press, PointerEventButton::Left);
+            move_to(window, slint::LogicalPosition::new(press.x + 12.0, press.y));
+            slint::platform::update_timers_and_animations();
+            assert!(self.native.launcher.get_reorder_dragging());
+            assert!(self.routing.active.get());
+        }
+    }
+
+    fn press_at(
+        window: &MinimalSoftwareWindow,
+        position: slint::LogicalPosition,
+        button: PointerEventButton,
+    ) {
+        move_to(window, position);
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed { position, button });
+    }
+
+    fn move_to(window: &MinimalSoftwareWindow, position: slint::LogicalPosition) {
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+    }
+
+    fn release_at(
+        window: &MinimalSoftwareWindow,
+        position: slint::LogicalPosition,
+        button: PointerEventButton,
+    ) {
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased { position, button });
+    }
+
+    fn assert_metrics(launcher: &Launcher) {
+        let metrics = launcher.get_reorder_metrics();
+        let source = ElementHandle::find_by_element_id(launcher, "Launcher::grid-drag")
+            .next()
+            .unwrap();
+        let grid = ElementHandle::find_by_element_id(launcher, "Launcher::grid-scroll")
+            .next()
+            .unwrap();
+        assert_eq!(source.absolute_position(), grid.absolute_position());
+        assert_eq!(grid.absolute_position(), metrics.viewport.origin);
+        assert_eq!(source.size().width, metrics.source_width);
+        assert_eq!(grid.size().width, metrics.viewport.width);
+        assert_eq!(grid.size().height, metrics.viewport.height);
+        if metrics.content_height > metrics.viewport.height {
+            // Private widget queries are assertions ONLY, never adapter inputs.
+            let bar = ElementHandle::find_by_element_type_name(launcher, "ScrollBar")
+                .find(|element| element.size().height > element.size().width)
+                .unwrap();
+            assert_eq!(
+                source.absolute_position().x + source.size().width,
+                bar.absolute_position().x
+            );
+            assert_eq!(
+                metrics.viewport.width - metrics.source_width,
+                bar.size().width
+            );
+        } else {
+            assert_eq!(
+                metrics.source_width, metrics.viewport.width,
+                "no absent-bar dead strip"
+            );
+        }
+    }
+
+    #[test]
+    fn native_reorder_below_threshold_click_keyboard_and_sdk_drop_use_immutable_source() {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            let fixture = Fixture::new(&window, scale, 70);
+            assert_metrics(&fixture.native.launcher);
+            let press = fixture.source(0).1;
+            press_at(&window, press, PointerEventButton::Left);
+            let near = slint::LogicalPosition::new(press.x + 4.0, press.y - 2.0);
+            move_to(&window, near);
+            release_at(&window, near, PointerEventButton::Left);
+            native_key(&window, Key::Space.into());
+            native_key(&window, Key::Return.into());
+            assert_eq!(*fixture.native.launches.borrow(), vec![inventory_key(0); 3]);
+            assert!(fixture.routing.finishes.borrow().is_empty());
+            fixture.native.launches.borrow_mut().clear();
+            fixture.routing.trace.borrow_mut().clear();
+            let (tile, press) = fixture.source(1);
+            fixture.start(&window, press);
+            let token = fixture.routing.token.borrow().clone().unwrap();
+            assert_eq!(token.key, inventory_key(1));
+            assert_eq!(token.bounds.origin, tile.absolute_position());
+            assert_eq!(token.press, press);
+            for key in [Key::RightArrow, Key::Return, Key::Space, Key::Tab] {
+                native_key(&window, key.into());
+            }
+            assert_eq!(fixture.native.launcher.get_selected_key(), inventory_key(1));
+            assert!(
+                fixture.native.launches.borrow().is_empty(),
+                "pointer drag is not a keyboard reorder/activation"
+            );
+            let target = fixture.source(2).1;
+            // No draw/getter/query between FINAL movement and release.
+            move_to(&window, target);
+            release_at(&window, target, PointerEventButton::Left);
+            slint::platform::update_timers_and_animations();
+            assert_eq!(
+                *fixture.routing.drops.borrow(),
+                vec![(inventory_key(1), target)]
+            );
+            assert_eq!(
+                *fixture.routing.finishes.borrow(),
+                vec![(Some(inventory_key(1)), DragAction::Move)]
+            );
+            assert!(fixture.native.launches.borrow().is_empty());
+            {
+                let trace = fixture.routing.trace.borrow();
+                let at = |step: &str| trace.iter().position(|entry| entry == step).unwrap();
+                assert!(at("Cancel") < at("dragging:true"));
+                assert!(at("dragging:true") < at("drop") && at("drop") < at("finish:Move"));
+            }
+            // Completion restores genuine selected TileButton focus, not a
+            // parallel Return/Space handler on the stable drag focus scope.
+            native_key(&window, Key::Space.into());
+            native_key(&window, Key::Return.into());
+            assert_eq!(*fixture.native.launches.borrow(), vec![inventory_key(1); 2]);
+            native_key(&window, Key::RightArrow.into());
+            slint::platform::update_timers_and_animations();
+            assert_eq!(fixture.native.launcher.get_selected_key(), inventory_key(2));
+            native_key(&window, Key::Return.into());
+            assert_eq!(
+                *fixture.native.launches.borrow(),
+                vec![inventory_key(1), inventory_key(1), inventory_key(2)]
+            );
+        }
+    }
+
+    #[test]
+    fn native_reorder_corner_gap_nonprimary_and_actual_thumb_veto_without_origin_carryover() {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            let fixture = Fixture::new(&window, scale, 1024);
+            let (tile, press) = fixture.source(0);
+            press_at(&window, press, PointerEventButton::Left);
+            release_at(&window, press, PointerEventButton::Left);
+            fixture.native.launches.borrow_mut().clear();
+            let corner = slint::LogicalPosition::new(
+                tile.absolute_position().x + tile.size().width - 8.0,
+                tile.absolute_position().y + 8.0,
+            );
+            let gap = slint::LogicalPosition::new(
+                tile.absolute_position().x + tile.size().width + 4.0,
+                press.y,
+            );
+            for (position, button) in [
+                (corner, PointerEventButton::Left),
+                (gap, PointerEventButton::Left),
+                (press, PointerEventButton::Right),
+                (press, PointerEventButton::Middle),
+            ] {
+                press_at(&window, position, button);
+                assert!(fixture.routing.token.borrow().is_none());
+                let moved = slint::LogicalPosition::new(position.x, position.y + 20.0);
+                move_to(&window, moved);
+                slint::platform::update_timers_and_animations();
+                assert!(!fixture.native.launcher.get_reorder_dragging());
+                release_at(&window, moved, button);
+            }
+            let thumb =
+                ElementHandle::find_by_element_id(&fixture.native.launcher, "ScrollBar::thumb")
+                    .find(|element| element.size().height > element.size().width)
+                    .unwrap();
+            let position = slint::LogicalPosition::new(
+                thumb.absolute_position().x + thumb.size().width / 2.0,
+                thumb.absolute_position().y + thumb.size().height / 2.0,
+            );
+            let before = fixture.native.launcher.get_reorder_metrics().content_y;
+            press_at(&window, position, PointerEventButton::Left);
+            let moved = slint::LogicalPosition::new(position.x, position.y + 30.0);
+            move_to(&window, moved);
+            release_at(&window, moved, PointerEventButton::Left);
+            slint::platform::update_timers_and_animations();
+            assert!(
+                fixture.native.launcher.get_reorder_metrics().content_y < before,
+                "real native thumb must scroll"
+            );
+            assert!(!fixture.native.launcher.get_reorder_dragging());
+            assert!(fixture.routing.drops.borrow().is_empty());
+            assert!(fixture.routing.finishes.borrow().is_empty());
+            assert!(
+                !fixture
+                    .routing
+                    .trace
+                    .borrow()
+                    .iter()
+                    .any(|step| step == "dragging:true")
+            );
+            assert!(fixture.native.launches.borrow().is_empty());
+            fixture.native.launcher.invoke_ensure_visible(1023);
+            fixture.frame(&window);
+            let tail = inventory_tile(&fixture.native.launcher, 1023);
+            let empty = slint::LogicalPosition::new(
+                tail.absolute_position().x + tail.size().width + 19.0,
+                tail.absolute_position().y + 13.0,
+            );
+            press_at(&window, empty, PointerEventButton::Left);
+            let moved = slint::LogicalPosition::new(empty.x + 20.0, empty.y);
+            move_to(&window, moved);
+            release_at(&window, moved, PointerEventButton::Left);
+            assert!(!fixture.native.launcher.get_reorder_dragging());
+            assert!(fixture.routing.finishes.borrow().is_empty());
+            set_launcher_tiles(
+                &fixture.native.launcher,
+                (0..7)
+                    .map(|index| app(&inventory_key(index), &format!("Inventory {index}")))
+                    .collect(),
+            );
+            fixture.native.launcher.invoke_reset_scroll();
+            fixture.frame(&window);
+            let metrics = fixture.native.launcher.get_reorder_metrics();
+            assert_eq!(metrics.source_width, metrics.viewport.width);
+            let blank = slint::LogicalPosition::new(
+                metrics.viewport.origin.x + 20.0,
+                metrics.viewport.origin.y + metrics.viewport.height - 10.0,
+            );
+            press_at(&window, blank, PointerEventButton::Left);
+            let moved = slint::LogicalPosition::new(blank.x + 20.0, blank.y);
+            move_to(&window, moved);
+            release_at(&window, moved, PointerEventButton::Left);
+            assert!(!fixture.native.launcher.get_reorder_dragging());
+            assert!(
+                fixture.routing.finishes.borrow().is_empty(),
+                "uncovered viewport is a source veto"
+            );
+            let tile = inventory_tile(&fixture.native.launcher, 6);
+            let former_strip = slint::LogicalPosition::new(
+                tile.absolute_position().x + tile.size().width - 2.0,
+                tile.absolute_position().y + tile.size().height / 2.0,
+            );
+            assert!(former_strip.x > metrics.viewport.origin.x + metrics.viewport.width - 14.0);
+            press_at(&window, former_strip, PointerEventButton::Left);
+            move_to(
+                &window,
+                slint::LogicalPosition::new(former_strip.x - 12.0, former_strip.y),
+            );
+            slint::platform::update_timers_and_animations();
+            assert!(
+                fixture.native.launcher.get_reorder_dragging(),
+                "absent native bar must not leave a dead strip"
+            );
+            let target = fixture.source(0).1;
+            move_to(&window, target);
+            release_at(&window, target, PointerEventButton::Left);
+            assert_eq!(
+                *fixture.routing.drops.borrow(),
+                vec![(inventory_key(6), target)]
+            );
+            assert_eq!(
+                *fixture.routing.finishes.borrow(),
+                vec![(Some(inventory_key(6)), DragAction::Move)]
+            );
+        }
+    }
+
+    #[test]
+    fn native_reorder_parent_finish_survives_actual_source_weak_eviction_and_tail_drop() {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            let fixture = Fixture::new(&window, scale, 1024);
+            let (source_weak, press) = fixture.source(0);
+            let visible = launch_elements(&fixture.native.launcher).len();
+            fixture.start(&window, press);
+            // Existing public scroll seam; controller tests own timed autoscroll.
+            fixture.native.launcher.invoke_scroll_reorder(-100_000.0);
+            fixture.frame(&window);
+            assert!(
+                !source_weak.is_valid(),
+                "source delegate must actually be destroyed"
+            );
+            assert!(launch_elements(&fixture.native.launcher).len() <= visible + 7);
+            assert!(fixture.native.converted.borrow().len() < 128);
+            let target = fixture.source(1023).1;
+            move_to(&window, target);
+            release_at(&window, target, PointerEventButton::Left);
+            assert_eq!(
+                *fixture.routing.drops.borrow(),
+                vec![(inventory_key(0), target)]
+            );
+            assert_eq!(
+                *fixture.routing.finishes.borrow(),
+                vec![(Some(inventory_key(0)), DragAction::Move)]
+            );
+            assert!(fixture.native.launches.borrow().is_empty());
+            assert!(!source_weak.is_valid());
+        }
+    }
+
+    #[test]
+    fn native_reorder_public_exit_hide_reopen_immediate_new_press_has_fresh_token() {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            let fixture = Fixture::new(&window, scale, 70);
+            let press = fixture.source(0).1;
+            let target = fixture.source(1).1;
+            fixture.start(&window, press);
+            let old = fixture.routing.token.borrow().clone().unwrap();
+            move_to(&window, target);
+            // Outside SDK dispatch and all fixture borrows.
+            window.window().dispatch_event(WindowEvent::PointerExited);
+            slint::platform::update_timers_and_animations();
+            assert!(!fixture.native.launcher.get_reorder_dragging());
+            fixture.native.launcher.hide().unwrap();
+            fixture
+                .native
+                .show(&window, (560.0 * scale) as u32, (300.0 * scale) as u32);
+            // No old release, draw, or idle delay before the new press.
+            fixture.start(&window, target);
+            assert!(!Rc::ptr_eq(
+                &old,
+                fixture.routing.token.borrow().as_ref().unwrap()
+            ));
+            move_to(&window, press);
+            release_at(&window, press, PointerEventButton::Left);
+            assert_eq!(
+                *fixture.routing.drops.borrow(),
+                vec![(inventory_key(1), press)]
+            );
+            assert_eq!(
+                *fixture.routing.finishes.borrow(),
+                vec![
+                    (Some(inventory_key(0)), DragAction::None),
+                    (Some(inventory_key(1)), DragAction::Move)
+                ]
+            );
+            assert!(fixture.native.launches.borrow().is_empty());
+            window.window().dispatch_event(WindowEvent::PointerExited);
+            assert_eq!(fixture.routing.finishes.borrow().len(), 2);
+        }
+    }
+
+    #[test]
+    fn native_reorder_escape_reaches_stable_scope_after_preview_evicts_focused_source() {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            let fixture = Fixture::new(&window, scale, 70);
+            let hides = Rc::new(Cell::new(0));
+            let count = hides.clone();
+            fixture
+                .native
+                .launcher
+                .on_hide_requested(move || count.set(count.get() + 1));
+            let (source_weak, press) = fixture.source(0);
+            let target = fixture.source(1).1;
+            fixture.start(&window, press);
+            let weak = fixture.native.launcher.as_weak();
+            let routing = fixture.routing.clone();
+            let previewed = Rc::new(Cell::new(false));
+            let preview = previewed.clone();
+            fixture
+                .native
+                .launcher
+                .on_reorder_can_drop(move |event, origin| {
+                    let action = routing.drop_event(event, origin, false);
+                    if action == DragAction::Move && !preview.replace(true) {
+                        // Replacing the visual model destroys the focused delegate,
+                        // just as the controller's transient edge-sort preview does.
+                        let mut tiles = (0..7)
+                            .map(|index| app(&inventory_key(index), &format!("Inventory {index}")))
+                            .collect::<Vec<_>>();
+                        tiles.swap(0, 1);
+                        set_launcher_tiles(&weak.upgrade().unwrap(), tiles);
+                    }
+                    action
+                });
+            move_to(&window, target);
+            fixture.frame(&window);
+            assert!(previewed.get());
+            assert!(
+                !source_weak.is_valid(),
+                "preview must evict the actual focused source delegate"
+            );
+            native_key(&window, Key::Escape.into());
+            assert_eq!(
+                hides.get(),
+                1,
+                "real Escape must still reach the stable ancestor"
+            );
+            assert!(fixture.native.launches.borrow().is_empty());
+            // The fixture only records the hide request. Production controller
+            // tests separately prove logical cancel and zero persistence.
+            window.window().dispatch_event(WindowEvent::PointerExited);
+            assert!(fixture.routing.drops.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn native_reorder_metrics_track_as_needed_filter_resize_scale_and_theme_without_host_sampling()
+    {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            let fixture = Fixture::new(&window, scale, 1024);
+            let changed = Rc::new(Cell::new(0));
+            let count = changed.clone();
+            fixture
+                .native
+                .launcher
+                .on_reorder_metrics_changed(move || count.set(count.get() + 1));
+            for (width, height, applications) in [
+                (560, 300, 1024),
+                (420, 300, 70),
+                (720, 500, 7),
+                (560, 300, 0),
+                (560, 300, 7),
+                (560, 300, 70),
+            ] {
+                set_launcher_tiles(
+                    &fixture.native.launcher,
+                    (0..applications)
+                        .map(|index| app(&inventory_key(index), &format!("Inventory {index}")))
+                        .collect(),
+                );
+                window.set_size(slint::PhysicalSize::new(
+                    (width as f32 * scale) as u32,
+                    (height as f32 * scale) as u32,
+                ));
+                fixture.native.launcher.invoke_reset_scroll();
+                let _ = draw(
+                    &window,
+                    (width as f32 * scale) as u32,
+                    (height as f32 * scale) as u32,
+                );
+                slint::platform::update_timers_and_animations();
+                assert_metrics(&fixture.native.launcher);
+                for scheme in [ColorScheme::Light, ColorScheme::Dark, ColorScheme::Unknown] {
+                    let before = fixture.native.launcher.get_reorder_metrics();
+                    fixture
+                        .native
+                        .launcher
+                        .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                    assert_eq!(
+                        fixture.native.launcher.get_reorder_metrics(),
+                        before,
+                        "color theme is not widget geometry"
+                    );
+                }
+            }
+            // Use an integral native tile first: a fractional seventh makes
+            // exact extent equality unreachable at some f32 resize steps.
+            set_launcher_tiles(
+                &fixture.native.launcher,
+                (0..7)
+                    .map(|index| app(&inventory_key(index), &format!("Inventory {index}")))
+                    .collect(),
+            );
+            window.set_size(slint::PhysicalSize::new(
+                (560.0 * scale) as u32,
+                (300.0 * scale) as u32,
+            ));
+            fixture.frame(&window);
+            let metrics = fixture.native.launcher.get_reorder_metrics();
+            let equal_width =
+                (560.0 + (metrics.tile.ceil() - metrics.tile) * metrics.columns as f32).round();
+            window.window().dispatch_event(WindowEvent::Resized {
+                size: slint::LogicalSize::new(equal_width, 300.0),
+            });
+            let _ = draw(
+                &window,
+                (equal_width * scale) as u32,
+                (300.0 * scale) as u32,
+            );
+            let metrics = fixture.native.launcher.get_reorder_metrics();
+            assert_eq!(
+                metrics.tile,
+                metrics.tile.round(),
+                "integral native tile fixture"
+            );
+            let equal_height = 300.0 + metrics.content_height - metrics.viewport.height;
+            window.window().dispatch_event(WindowEvent::Resized {
+                size: slint::LogicalSize::new(equal_width, equal_height),
+            });
+            let equal = fixture.native.launcher.get_reorder_metrics();
+            assert_eq!(
+                equal.content_height, equal.viewport.height,
+                "native extent equality fixture"
+            );
+            assert_metrics(&fixture.native.launcher);
+            for adjustment in [-1.0, 1.0] {
+                window.window().dispatch_event(WindowEvent::Resized {
+                    size: slint::LogicalSize::new(equal_width, equal_height + adjustment),
+                });
+                let metrics = fixture.native.launcher.get_reorder_metrics();
+                assert_eq!(
+                    metrics.content_height > metrics.viewport.height,
+                    adjustment < 0.0
+                );
+                assert_metrics(&fixture.native.launcher);
+            }
+            slint::platform::update_timers_and_animations();
+            assert!(
+                changed.get() > 0,
+                "public reactive metrics notify the gesture owner"
+            );
+        }
+    }
+}
+
 #[test]
 fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
     let window = software_window();

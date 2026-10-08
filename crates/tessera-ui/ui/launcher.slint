@@ -4,7 +4,8 @@
 import { Button, LineEdit, ListView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
-import { ApplicationIcon, TileButton, FocusTokens } from "tiles.slint";
+import { ApplicationIcon, TileButton, FocusTokens, TileBounds } from "tiles.slint";
+import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
 export struct LaunchTile {
     key: string,
@@ -15,6 +16,18 @@ export struct LaunchTile {
 
 export struct LaunchRow {
     tiles: [LaunchTile],
+}
+
+// Window-logical coordinates, not physical pixels or private widget handles.
+export struct LauncherGridMetrics {
+    viewport: TileBounds,
+    source-width: length,
+    tile: length,
+    gap: length,
+    gutter: length,
+    columns: int,
+    content-y: length,
+    content-height: length,
 }
 
 export enum LauncherNavigation { up, down, left, right }
@@ -49,6 +62,55 @@ export component Launcher inherits Window {
     in-out property <string> search;
     in property <string> selected-key: "";
     out property <int> grid-columns: 7;
+    in property <bool> reorder-enabled: false;
+    in property <data-transfer> reorder-data;
+    out property <bool> reorder-dragging: grid-drag.dragging;
+    // Source geometry must not depend on the metrics' own window transform.
+    property <length> reorder-source-width: Slint1181FluentNativeGridMetrics.source-width(
+        grid-scroll.visible-width, grid-scroll.content-height,
+        grid-scroll.visible-height, grid-scroll.vertical-scrollbar-policy);
+    out property <LauncherGridMetrics> reorder-metrics: {
+        viewport: {
+            origin: grid-scroll.absolute-position,
+            width: grid-scroll.visible-width, height: grid-scroll.visible-height
+        },
+        source-width: root.reorder-source-width,
+        tile: grid-scroll.tile, gap: root.gap, gutter: FocusTokens.outer-margin,
+        columns: root.grid-columns,
+        content-y: grid-scroll.content-y, content-height: grid-scroll.content-height
+    };
+    property <bool> reorder-armed: true;
+    callback reorder-origin(string, PointerEvent, TileBounds, Point);
+    callback reorder-dragging-changed(bool);
+    callback reorder-can-drop(DropEvent, Point) -> DragAction;
+    callback reorder-dropped(DropEvent, Point) -> DragAction;
+    callback reorder-finished(DragAction);
+    callback reorder-metrics-changed();
+    callback reorder-target-changed(bool);
+    changed reorder-metrics => { root.reorder-metrics-changed(); }
+    function veto-reorder(event: PointerEvent, bounds: TileBounds, point: Point) {
+        if event.kind == PointerEventKind.down {
+            root.reorder-armed = false;
+        } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+            root.reorder-armed = true;
+        }
+        if event.kind != PointerEventKind.move {
+            root.reorder-origin("", event, bounds, point);
+        }
+    }
+    function retain-reorder-focus() {
+        // Preview/virtualization can destroy the focused source delegate.
+        // Native key delivery has no ancestor fallback for an expired focus
+        // item, so retain a real, stable grid focus before publishing preview.
+        // This is internal item focus, not search focus or a host focus request.
+        if root.reorder-dragging {
+            // Existing selected-tile focus resumes when dragging becomes false.
+            // Set this at activation, never after finish: reopen's focus-search
+            // can still clear it without a stale finish stealing search focus.
+            root.grid-navigation = true;
+            if !grid-key.has-focus { grid-key.focus(); }
+        }
+    }
     callback navigate-requested(LauncherNavigation);
     callback activate-selected-requested();
     callback select-requested(string);
@@ -70,6 +132,12 @@ export component Launcher inherits Window {
     // A fresh view/reopen starts at the top without taking keyboard focus.
     public function reset-scroll() {
         grid-scroll.content-y = 0px;
+    }
+
+    // Gesture owner supplies a signed content-y step; native extent owns clamp.
+    public function scroll-reorder(delta: length) {
+        grid-scroll.content-y = clamp(grid-scroll.content-y + delta,
+            -max(0px, grid-scroll.content-height - grid-scroll.visible-height), 0px);
     }
 
     // Nearest-row scrolling includes the shared external outline gutter.
@@ -179,6 +247,13 @@ export component Launcher inherits Window {
                 min-width: 50px;
                 min-height: 50px;
                 focus-on-tab-navigation: false;
+                capture-key-pressed(event) => {
+                    // This gesture is pointer-only. Preserve Escape's ancestor
+                    // route, but do not navigate/activate tiles or move Tab focus
+                    // while the native SDK owns the drag.
+                    if root.reorder-dragging && event.text != Key.Escape { return accept; }
+                    return reject;
+                }
                 key-pressed(event) => {
                     if event.modifiers.control || event.modifiers.alt
                         || event.modifiers.shift || event.modifiers.meta { return reject; }
@@ -195,9 +270,68 @@ export component Launcher inherits Window {
                     // Return/Space belong to each tile or its favorite control.
                     return reject;
                 }
+            // Only the full frame participates in layout. Explicit anchors
+            // prevent implicit centering of the scrollbar-excluding source.
+            grid-frame := Rectangle {
+                x: 0px;
+                y: 0px;
+                width: grid-key.width;
+                height: grid-key.height;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                accessible-role: none;
+            grid-drag := DragArea {
+                x: 0px;
+                y: 0px;
+                width: root.reorder-source-width;
+                height: grid-frame.height;
+                enabled: root.reorder-enabled && root.reorder-armed && !root.blocked;
+                data: root.reorder-data;
+                allow-move: true;
+                changed dragging => {
+                    root.retain-reorder-focus();
+                    root.reorder-dragging-changed(self.dragging);
+                }
+                drag-finished(action) => { root.reorder-finished(action); }
+            grid-drop := DropArea {
+                x: 0px;
+                y: 0px;
+                width: grid-frame.width;
+                height: grid-frame.height;
+                enabled: root.reorder-enabled && !root.blocked;
+                changed has-drag => { root.reorder-target-changed(self.has-drag); }
+                can-drop(event) => {
+                    // Changed handlers are queued; the first native hover can
+                    // replace rows before the dragging-change handler runs.
+                    root.retain-reorder-focus();
+                    return root.reorder-can-drop(event, self.absolute-position);
+                }
+                dropped(event) => {
+                    return root.reorder-dropped(event, self.absolute-position);
+                }
+                // Behind the native list: only uncovered viewport background
+                // reaches this source veto. Native bars/tiles keep first refusal.
+                TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: grid-frame.width;
+                    height: grid-frame.height;
+                    enabled: root.reorder-enabled;
+                    pointer-event(event) => {
+                        root.veto-reorder(event, {
+                            origin: self.absolute-position,
+                            width: self.width, height: self.height
+                        }, {
+                            x: self.absolute-position.x + self.mouse-x,
+                            y: self.absolute-position.y + self.mouse-y
+                        });
+                    }
+                }
             grid-scroll := ListView {
-                width: parent.width;
-                height: parent.height;
+                x: 0px;
+                y: 0px;
+                width: grid-frame.width;
+                height: grid-frame.height;
                 vertical-stretch: 1;
                 horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
                 vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
@@ -211,6 +345,19 @@ export component Launcher inherits Window {
                 for row[row-index] in root.rows: Rectangle {
                     width: grid-scroll.visible-width;
                     height: grid-scroll.tile + root.gap;
+                    // Gaps/gutters veto source presses, not in-flight hover.
+                    TouchArea {
+                        enabled: root.reorder-enabled;
+                        pointer-event(event) => {
+                            root.veto-reorder(event, {
+                                origin: self.absolute-position,
+                                width: self.width, height: self.height
+                            }, {
+                                x: self.absolute-position.x + self.mouse-x,
+                                y: self.absolute-position.y + self.mouse-y
+                            });
+                        }
+                    }
 
                     for tile[column-index] in row.tiles: Rectangle {
                         property <length> size: grid-scroll.tile;
@@ -225,8 +372,20 @@ export component Launcher inherits Window {
                             radius: 10px;
                             filled: false;
                             enabled: !root.blocked;
+                            report-pointer-metadata: root.reorder-enabled;
+                            pointer-metadata(event, bounds, point) => {
+                                if event.kind == PointerEventKind.down {
+                                    root.reorder-armed = event.button == PointerEventButton.left;
+                                } else if event.kind == PointerEventKind.up {
+                                    root.reorder-armed = true;
+                                }
+                                // Descendant Cancel precedes the SDK dragging
+                                // transition; it must not disarm a valid source.
+                                root.reorder-origin(tile.key, event, bounds, point);
+                            }
                             selected: tile.key == root.selected-key;
-                            property <bool> keyboard-selected: root.grid-navigation && self.selected;
+                            property <bool> keyboard-selected: root.grid-navigation
+                                && self.selected && !root.reorder-dragging;
                             // A virtual row can be created already selected;
                             // changed callbacks only track subsequent changes.
                             init => {
@@ -276,6 +435,10 @@ export component Launcher inherits Window {
                                 radius: 4px;
                                 filled: false;
                                 enabled: !root.blocked;
+                                report-pointer-metadata: root.reorder-enabled;
+                                pointer-metadata(event, bounds, point) => {
+                                    root.veto-reorder(event, bounds, point);
+                                }
                                 accessible-role: checkbox;
                                 accessible-checked: tile.favorite;
                                 accessible-text: (tile.favorite ? "Remove from favorites: " :
@@ -297,6 +460,9 @@ export component Launcher inherits Window {
                         }
                     }
                 }
+            }
+            }
+            }
             }
 
                 if root.application-count == 0: Text {

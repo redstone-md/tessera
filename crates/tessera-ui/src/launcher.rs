@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 mod model;
+pub(crate) mod order;
 mod placement;
 mod preferences;
 

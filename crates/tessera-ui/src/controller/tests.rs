@@ -31,6 +31,7 @@ thread_local! {
     static LAUNCHER_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
     static LAUNCHER_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static PREFERENCE_SAVE_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static LAUNCHER_BACKEND_INITIALIZED: Cell<bool> = const { Cell::new(false) };
 }
 
 struct FixtureHost {
@@ -1066,7 +1067,11 @@ impl LauncherFixture {
     }
 
     fn with_snapshot(preferences: PanelPreferences, snapshot: PanelSnapshot) -> Self {
-        i_slint_backend_testing::init_no_event_loop();
+        LAUNCHER_BACKEND_INITIALIZED.with(|initialized| {
+            if !initialized.replace(true) {
+                i_slint_backend_testing::init_no_event_loop();
+            }
+        });
         let panel = Panel::new().unwrap();
         let host = FixtureHost::returning(snapshot.clone());
         let mut subscription_error = None;
@@ -2386,4 +2391,757 @@ fn launcher_native_reopen_and_lease_drop_reentry_cannot_publish_stale_attachment
         slint::PhysicalSize::new(1056, 572)
     );
     assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+}
+
+fn reorder_preferences() -> PanelPreferences {
+    PanelPreferences::new(Theme::Light, false)
+        .with_dock(crate::DockEdge::Left, vec!["app-browser".into()])
+        .with_launcher_favorites(vec![
+            "missing-first".into(),
+            "app-editor".into(),
+            "missing-middle".into(),
+            "app-browser".into(),
+            "app-files".into(),
+            "missing-last".into(),
+        ])
+        .unwrap()
+}
+
+/// Genuine native input; metadata is queried before the final move/release pair.
+fn begin_editor_reorder(fixture: &LauncherFixture) -> slint::LogicalPosition {
+    begin_editor_reorder_with_data(fixture, None)
+}
+
+fn begin_editor_reorder_with_data(
+    fixture: &LauncherFixture,
+    data: Option<slint::DataTransfer>,
+) -> slint::LogicalPosition {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let source = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch Rust Editor",
+    )
+    .next()
+    .unwrap();
+    let target = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch File Manager",
+    )
+    .next()
+    .unwrap();
+    let press = slint::LogicalPosition::new(
+        source.absolute_position().x + 11.0,
+        source.absolute_position().y + 13.0,
+    );
+    let drop = slint::LogicalPosition::new(
+        target.absolute_position().x + target.size().width * 0.4 + 11.0,
+        target.absolute_position().y + 13.0,
+    );
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: press });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position: press,
+            button: PointerEventButton::Left,
+        });
+    if let Some(data) = data {
+        fixture.launcher.set_reorder_data(data);
+    }
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(press.x + 12.0, press.y),
+        });
+    slint::platform::update_timers_and_animations();
+    assert!(fixture.launcher.get_reorder_dragging());
+    assert!(fixture.host.saves.lock().is_empty());
+    drop
+}
+
+fn finish_native_reorder(fixture: &LauncherFixture, position: slint::LogicalPosition) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+}
+
+#[test]
+fn launcher_native_reorder_saves_once_merges_missing_slots_and_preserves_applied_record() {
+    for scale in [1.0, 2.0] {
+        let preferences = reorder_preferences();
+        let fixture = LauncherFixture::with_preferences(preferences.clone());
+        fixture.controller.open_launcher();
+        fixture.launcher.window().dispatch_event(
+            slint::platform::WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            },
+        );
+        fixture.controller.update_launcher_geometry();
+        fixture.panel.set_theme_index(2);
+        fixture.panel.set_compact(true);
+        fixture.panel.set_dock_edge_index(3);
+        fixture
+            .launcher
+            .invoke_select_requested("app-editor".into());
+        let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+        let position = begin_editor_reorder(&fixture);
+        finish_native_reorder(&fixture, position);
+        let applied = fixture.controller.core.applied_preferences();
+        assert_eq!(
+            applied.launcher_favorites(),
+            [
+                "missing-first",
+                "app-browser",
+                "missing-middle",
+                "app-files",
+                "app-editor",
+                "missing-last",
+            ]
+        );
+        assert_eq!(
+            fixture.host.saves.lock().as_slice(),
+            std::slice::from_ref(&applied)
+        );
+        assert_eq!(applied.theme(), preferences.theme());
+        assert_eq!(applied.compact(), preferences.compact());
+        assert_eq!(applied.dock_edge(), preferences.dock_edge());
+        assert_eq!(applied.pinned_apps(), preferences.pinned_apps());
+        assert_eq!(
+            applied.launcher().display_mode(),
+            preferences.launcher().display_mode()
+        );
+        assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+        assert_eq!(fixture.tile(2).key, "app-editor");
+        assert!(fixture.host.launches.lock().is_empty());
+        assert!(fixture.launcher.window().is_visible());
+        assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), focus);
+    }
+}
+
+#[test]
+fn launcher_native_reorder_failed_save_restores_selection_and_bounded_error() {
+    let preferences = reorder_preferences();
+    let fixture = LauncherFixture::with_preferences(preferences.clone());
+    fixture.controller.open_launcher();
+    fixture
+        .launcher
+        .invoke_select_requested("app-editor".into());
+    *fixture.host.save_result.lock() = Err("disk full\n\u{1b}untrusted".into());
+    let position = begin_editor_reorder(&fixture);
+    finish_native_reorder(&fixture, position);
+    assert_eq!(fixture.controller.core.applied_preferences(), preferences);
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(fixture.tile(0).key, "app-editor");
+    assert_eq!(fixture.launcher.get_selected_key(), "app-editor");
+    assert!(
+        fixture
+            .launcher
+            .get_status()
+            .contains("Could not save favorite order")
+    );
+    assert!(!fixture.launcher.get_status().chars().any(char::is_control));
+    assert!(fixture.host.launches.lock().is_empty());
+}
+
+#[test]
+fn launcher_native_reorder_preview_is_transient_and_center_drop_is_a_noop() {
+    use slint::platform::WindowEvent;
+    let preferences = reorder_preferences();
+    let fixture = LauncherFixture::with_preferences(preferences.clone());
+    fixture.controller.open_launcher();
+    let position = begin_editor_reorder(&fixture);
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position });
+    assert_eq!(fixture.tile(2).key, "app-editor");
+    assert_eq!(fixture.controller.core.applied_preferences(), preferences);
+    assert!(fixture.host.saves.lock().is_empty());
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerExited);
+    assert_eq!(fixture.tile(0).key, "app-editor");
+    assert!(fixture.host.saves.lock().is_empty());
+    let source = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch Rust Editor",
+    )
+    .next()
+    .unwrap();
+    let center = slint::LogicalPosition::new(
+        source.absolute_position().x + 23.0,
+        source.absolute_position().y + 13.0,
+    );
+    let _ = begin_editor_reorder(&fixture);
+    finish_native_reorder(&fixture, center);
+    assert!(fixture.host.saves.lock().is_empty());
+    assert_eq!(fixture.controller.core.applied_preferences(), preferences);
+    assert!(fixture.host.launches.lock().is_empty());
+}
+
+#[test]
+fn launcher_native_reorder_immutable_old_text_and_foreign_payloads_fail_closed() {
+    use slint::platform::WindowEvent;
+    let fixture = LauncherFixture::with_preferences(reorder_preferences());
+    fixture.controller.open_launcher();
+    let _ = begin_editor_reorder(&fixture);
+    let old = fixture.launcher.get_reorder_data();
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerExited);
+    let mut foreign = slint::DataTransfer::default();
+    foreign.set_user_data(Rc::new("app-editor".to_owned()));
+    let text = slint::DataTransfer::from(slint::SharedString::from("app-editor"));
+    for invalid in [old, foreign, text] {
+        let position = begin_editor_reorder_with_data(&fixture, Some(invalid));
+        finish_native_reorder(&fixture, position);
+        assert!(fixture.host.saves.lock().is_empty());
+        assert_eq!(fixture.tile(0).key, "app-editor");
+        assert!(fixture.host.launches.lock().is_empty());
+        slint::platform::update_timers_and_animations();
+    }
+    let position = begin_editor_reorder(&fixture);
+    finish_native_reorder(&fixture, position);
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+}
+
+#[test]
+fn launcher_native_reorder_hide_immediate_reopen_new_press_skips_old_teardown() {
+    let fixture = LauncherFixture::with_preferences(reorder_preferences());
+    fixture.controller.open_launcher();
+    let _ = begin_editor_reorder(&fixture);
+    fixture.controller.hide_launcher();
+    fixture.controller.open_launcher();
+    // No event-loop tick before the next press: open must flush old SDK state.
+    let position = begin_editor_reorder(&fixture);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+    slint::platform::update_timers_and_animations();
+    finish_native_reorder(&fixture, position);
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert!(fixture.host.launches.lock().is_empty());
+}
+
+#[test]
+fn launcher_native_reorder_save_reentry_blocks_other_complete_record_writes_and_hide_resurrection()
+{
+    let preferences = reorder_preferences();
+    let fixture = LauncherFixture::with_preferences(preferences.clone());
+    fixture.controller.open_launcher();
+    let controller = fixture.controller.clone();
+    let panel = fixture.panel.as_weak();
+    let launcher = fixture.launcher.as_weak();
+    PREFERENCE_SAVE_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            assert!(controller.launcher_state.try_borrow_mut().is_ok());
+            assert!(controller.leases.try_borrow_mut().is_ok());
+            let panel = panel.upgrade().unwrap();
+            let launcher = launcher.upgrade().unwrap();
+            panel.invoke_pin_toggle_requested("app-editor".into(), true);
+            panel.invoke_save_preferences_requested();
+            launcher.invoke_favorite_toggle_requested("app-browser".into(), false);
+            launcher
+                .invoke_display_mode_requested(crate::generated::LauncherDisplayMode::Fullscreen);
+            controller.hide_launcher();
+        }));
+    });
+    let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    let attached = fixture.host.launcher_attach_calls.load(Ordering::SeqCst);
+    let position = begin_editor_reorder(&fixture);
+    finish_native_reorder(&fixture, position);
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    let applied = fixture.controller.core.applied_preferences();
+    assert_eq!(applied.pinned_apps(), preferences.pinned_apps());
+    assert_eq!(
+        applied.launcher().display_mode(),
+        preferences.launcher().display_mode()
+    );
+    assert_eq!(applied.theme(), preferences.theme());
+    assert_eq!(applied.launcher_favorites()[4], "app-editor");
+    assert!(!fixture.launcher.window().is_visible());
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), focus);
+    assert_eq!(
+        fixture.host.launcher_attach_calls.load(Ordering::SeqCst),
+        attached
+    );
+    fixture.controller.open_launcher();
+    assert_eq!(fixture.tile(2).key, "app-editor");
+}
+
+#[test]
+fn launcher_native_reorder_external_projection_status_catalog_and_refit_cancel_without_saves() {
+    use slint::platform::{Key, WindowEvent};
+    for cancellation in [
+        "query", "all", "busy", "stale", "source", "anchor", "resize", "escape",
+    ] {
+        let fixture = LauncherFixture::with_preferences(reorder_preferences());
+        fixture.controller.open_launcher();
+        let position = begin_editor_reorder(&fixture);
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        match cancellation {
+            "query" => {
+                fixture.launcher.set_search("Rust".into());
+                fixture.controller.apply_launcher_filter();
+            }
+            "all" => fixture
+                .launcher
+                .invoke_view_requested(crate::generated::LauncherView::All),
+            "busy" | "stale" => {
+                fixture.panel.set_refreshing(cancellation == "busy");
+                fixture.panel.set_stale(cancellation == "stale");
+                fixture.controller.render();
+            }
+            "source" | "anchor" => {
+                let removed = if cancellation == "source" {
+                    "app-editor"
+                } else {
+                    "app-files"
+                };
+                let apps = fixture
+                    .controller
+                    .core
+                    .catalog()
+                    .into_iter()
+                    .filter(|app| app.key() != removed)
+                    .collect();
+                apply_result_to_both(
+                    &fixture.controller,
+                    &fixture.panel,
+                    Ok(launcher_snapshot().with_applications(apps)),
+                );
+            }
+            "resize" => {
+                let size = fixture.launcher.window().size();
+                fixture
+                    .launcher
+                    .window()
+                    .set_size(slint::PhysicalSize::new(size.width + 70, size.height));
+            }
+            "escape" => fixture.key(Key::Escape.into()),
+            _ => unreachable!(),
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+        slint::platform::update_timers_and_animations();
+        finish_native_reorder(&fixture, position);
+        assert!(
+            fixture.host.saves.lock().is_empty(),
+            "{cancellation} must cancel order persistence"
+        );
+        assert!(
+            fixture.host.launches.lock().is_empty(),
+            "{cancellation} must never launch"
+        );
+    }
+}
+
+#[test]
+fn launcher_native_reorder_stationary_autoscroll_reaches_partial_tail_after_source_eviction() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let applications = (0..90)
+        .map(|index| {
+            PanelApplication::new(
+                format!("large-{index:04}"),
+                format!("Large App {index}"),
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut favorites: Vec<_> = (0..90).map(|index| format!("large-{index:04}")).collect();
+    favorites.insert(40, "missing-middle".into());
+    let preferences = reorder_preferences()
+        .with_launcher_favorites(favorites.clone())
+        .unwrap();
+    let fixture = LauncherFixture::with_snapshot(
+        preferences.clone(),
+        launcher_snapshot().with_applications(applications),
+    );
+    fixture.controller.open_launcher();
+    let source = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch Large App 0",
+    )
+    .next()
+    .unwrap();
+    let press = slint::LogicalPosition::new(
+        source.absolute_position().x + 11.0,
+        source.absolute_position().y + 13.0,
+    );
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: press });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position: press,
+            button: PointerEventButton::Left,
+        });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(press.x + 12.0, press.y),
+        });
+    slint::platform::update_timers_and_animations();
+    let metrics = fixture.launcher.get_reorder_metrics();
+    let held = slint::LogicalPosition::new(
+        metrics.viewport.origin.x + metrics.gutter + metrics.tile * 0.4 + 11.0,
+        metrics.viewport.origin.y + metrics.viewport.height - 13.0,
+    );
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: held });
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(20));
+    slint::platform::update_timers_and_animations();
+    let outside = slint::LogicalPosition::new(
+        metrics.viewport.origin.x + metrics.viewport.width + 30.0,
+        held.y,
+    );
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: outside });
+    slint::platform::update_timers_and_animations();
+    let left_target = fixture.launcher.get_reorder_metrics().content_y;
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(100));
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        fixture.launcher.get_reorder_metrics().content_y,
+        left_target,
+        "leaving native DropArea must stop its stationary autoscroll"
+    );
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: held });
+    for _ in 0..500 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(10));
+        slint::platform::update_timers_and_animations();
+    }
+    let metrics = fixture.launcher.get_reorder_metrics();
+    assert!(
+        metrics.content_y < 0.0,
+        "stationary pointer must scroll the native ListView"
+    );
+    assert!(
+        !source.is_valid(),
+        "native source delegate must actually be evicted"
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+    assert_eq!(fixture.controller.core.applied_preferences(), preferences);
+    let tail = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch Large App 89",
+    )
+    .next()
+    .unwrap();
+    let position = slint::LogicalPosition::new(
+        tail.absolute_position().x + tail.size().width * 0.4 + 11.0,
+        tail.absolute_position().y + 13.0,
+    );
+    finish_native_reorder(&fixture, position);
+    let applied = fixture.controller.core.applied_preferences();
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(applied.launcher_favorites()[40], "missing-middle");
+    assert_eq!(applied.launcher_favorites().last().unwrap(), "large-0000");
+    assert_eq!(applied.launcher_favorites()[0], "large-0001");
+    assert!(fixture.host.launches.lock().is_empty());
+    let stopped = fixture.launcher.get_reorder_metrics().content_y;
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_secs(1));
+    slint::platform::update_timers_and_animations();
+    assert_eq!(
+        fixture.launcher.get_reorder_metrics().content_y,
+        stopped,
+        "no idle gesture timer"
+    );
+}
+
+#[test]
+fn launcher_native_reorder_below_sdk_threshold_keeps_single_click_activation() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let fixture = LauncherFixture::with_preferences(reorder_preferences());
+    fixture.controller.open_launcher();
+    let source = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch Rust Editor",
+    )
+    .next()
+    .unwrap();
+    let press = slint::LogicalPosition::new(
+        source.absolute_position().x + 11.0,
+        source.absolute_position().y + 13.0,
+    );
+    let near = slint::LogicalPosition::new(press.x + 4.0, press.y - 2.0);
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: press });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position: press,
+            button: PointerEventButton::Left,
+        });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: near });
+    fixture
+        .launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: near,
+            button: PointerEventButton::Left,
+        });
+    assert_eq!(fixture.host.launches.lock().as_slice(), ["app-editor"]);
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(!fixture.launcher.get_reorder_dragging());
+    assert!(!fixture.launcher.window().is_visible());
+}
+
+#[test]
+fn launcher_native_reorder_saved_after_host_reopen_does_not_restore_old_rows_or_focus() {
+    let fixture = LauncherFixture::with_preferences(reorder_preferences());
+    fixture.controller.open_launcher();
+    let controller = fixture.controller.clone();
+    let launcher = fixture.launcher.as_weak();
+    let host = Arc::clone(&fixture.host);
+    let reopened_focus = Rc::new(Cell::new(0));
+    let saved_focus = Rc::clone(&reopened_focus);
+    PREFERENCE_SAVE_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            controller.hide_launcher();
+            controller.open_launcher();
+            let launcher = launcher.upgrade().unwrap();
+            launcher.set_search("browser".into());
+            controller.apply_launcher_filter();
+            saved_focus.set(host.ui_focus_calls.load(Ordering::SeqCst));
+        }));
+    });
+    let position = begin_editor_reorder(&fixture);
+    finish_native_reorder(&fixture, position);
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(
+        fixture.controller.core.launcher_favorites()[4],
+        "app-editor"
+    );
+    assert!(
+        fixture.launcher.window().is_visible(),
+        "explicit host reopen remains current"
+    );
+    assert_eq!(fixture.launcher.get_search(), "browser");
+    assert_eq!(
+        fixture.launcher.get_view(),
+        crate::generated::LauncherView::All
+    );
+    assert_eq!(fixture.launcher.get_application_count(), 1);
+    assert_eq!(fixture.tile(0).key, "app-browser");
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        reopened_focus.get()
+    );
+    assert!(!fixture.launcher.get_reorder_enabled());
+}
+
+#[test]
+fn launcher_native_reorder_conflicting_collection_mode_and_appearance_saves_cancel_preview() {
+    for action in ["favorite", "mode", "pin", "appearance"] {
+        let preferences = reorder_preferences();
+        let fixture = LauncherFixture::with_preferences(preferences.clone());
+        fixture.controller.open_launcher();
+        let position = begin_editor_reorder(&fixture);
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+        match action {
+            "favorite" => fixture
+                .launcher
+                .invoke_favorite_toggle_requested("app-browser".into(), false),
+            "mode" => fixture
+                .launcher
+                .invoke_display_mode_requested(crate::generated::LauncherDisplayMode::Fullscreen),
+            "pin" => fixture
+                .panel
+                .invoke_pin_toggle_requested("app-editor".into(), true),
+            "appearance" => fixture.panel.invoke_save_preferences_requested(),
+            _ => unreachable!(),
+        }
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(1));
+        slint::platform::update_timers_and_animations();
+        finish_native_reorder(&fixture, position);
+        assert_eq!(
+            fixture.host.saves.lock().len(),
+            1,
+            "only the conflicting {action} intent may save"
+        );
+        let expected = if action == "favorite" {
+            vec![
+                "missing-first",
+                "app-editor",
+                "missing-middle",
+                "app-files",
+                "missing-last",
+            ]
+        } else {
+            vec![
+                "missing-first",
+                "app-editor",
+                "missing-middle",
+                "app-browser",
+                "app-files",
+                "missing-last",
+            ]
+        };
+        assert_eq!(fixture.controller.core.launcher_favorites(), expected);
+        assert!(fixture.host.launches.lock().is_empty());
+    }
+}
+
+fn scrollable_favorite_reopen_fixture() -> LauncherFixture {
+    let snapshot = launcher_snapshot();
+    let mut applications = snapshot.applications().unwrap().to_vec();
+    let mut favorites = reorder_preferences().launcher_favorites().to_vec();
+    for index in 0..80 {
+        let key = format!("reopen-tail-{index:04}");
+        applications.push(
+            PanelApplication::new(key.clone(), format!("Reopen Tail {index}"), None).unwrap(),
+        );
+        favorites.push(key);
+    }
+    let preferences = reorder_preferences()
+        .with_launcher_favorites(favorites)
+        .unwrap();
+    LauncherFixture::with_snapshot(preferences, snapshot.with_applications(applications))
+}
+
+fn install_default_favorites_reopen_hook(
+    fixture: &LauncherFixture,
+) -> (Rc<Cell<usize>>, Rc<Cell<f32>>) {
+    let controller = fixture.controller.clone();
+    let launcher = fixture.launcher.as_weak();
+    let host = Arc::clone(&fixture.host);
+    let focus = Rc::new(Cell::new(0));
+    let content_y = Rc::new(Cell::new(0.0));
+    let reopened_focus = Rc::clone(&focus);
+    let reopened_y = Rc::clone(&content_y);
+    PREFERENCE_SAVE_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            controller.hide_launcher();
+            controller.open_launcher();
+            let launcher = launcher.upgrade().unwrap();
+            launcher.invoke_scroll_reorder(-24.0);
+            reopened_y.set(launcher.get_reorder_metrics().content_y);
+            reopened_focus.set(host.ui_focus_calls.load(Ordering::SeqCst));
+        }));
+    });
+    (focus, content_y)
+}
+
+#[test]
+fn launcher_native_reorder_saved_after_default_favorites_reopen_refreshes_current_order() {
+    let fixture = scrollable_favorite_reopen_fixture();
+    fixture.controller.open_launcher();
+    let (reopened_focus, reopened_y) = install_default_favorites_reopen_hook(&fixture);
+    let position = begin_editor_reorder(&fixture);
+    finish_native_reorder(&fixture, position);
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert_eq!(
+        fixture.controller.core.launcher_favorites()[4],
+        "app-editor"
+    );
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(
+        fixture.launcher.get_view(),
+        crate::generated::LauncherView::Favorites
+    );
+    assert_eq!(fixture.launcher.get_search(), "");
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    assert_eq!(fixture.launcher.get_application_count(), 83);
+    assert_eq!(fixture.tile(0).key, "app-browser");
+    assert_eq!(fixture.tile(1).key, "app-files");
+    assert_eq!(fixture.tile(2).key, "app-editor");
+    assert!(
+        fixture.launcher.get_reorder_enabled(),
+        "fresh saved canonical order must remain draggable"
+    );
+    assert!(
+        reopened_y.get() < 0.0,
+        "fixture must exercise a nonzero native scroll offset"
+    );
+    assert_eq!(
+        fixture.launcher.get_reorder_metrics().content_y,
+        reopened_y.get()
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        reopened_focus.get()
+    );
+    assert!(fixture.host.launches.lock().is_empty());
+}
+
+#[test]
+fn launcher_favorite_saved_after_default_favorites_reopen_refreshes_current_membership() {
+    let fixture = scrollable_favorite_reopen_fixture();
+    fixture.controller.open_launcher();
+    let (reopened_focus, reopened_y) = install_default_favorites_reopen_hook(&fixture);
+    fixture.click_launcher("Remove from favorites: Web Browser");
+    assert_eq!(fixture.host.saves.lock().len(), 1);
+    assert!(
+        !fixture
+            .controller
+            .core
+            .launcher_favorites()
+            .iter()
+            .any(|key| key == "app-browser")
+    );
+    assert!(fixture.launcher.window().is_visible());
+    assert_eq!(
+        fixture.launcher.get_view(),
+        crate::generated::LauncherView::Favorites
+    );
+    assert_eq!(fixture.launcher.get_search(), "");
+    assert_eq!(fixture.launcher.get_selected_key(), "");
+    assert_eq!(fixture.launcher.get_application_count(), 82);
+    assert_eq!(fixture.tile(0).key, "app-editor");
+    assert_eq!(fixture.tile(1).key, "app-files");
+    assert_eq!(fixture.tile(2).key, "reopen-tail-0000");
+    assert!(
+        fixture.launcher.get_reorder_enabled(),
+        "current saved membership must remain draggable"
+    );
+    assert!(
+        reopened_y.get() < 0.0,
+        "fixture must exercise a nonzero native scroll offset"
+    );
+    assert_eq!(
+        fixture.launcher.get_reorder_metrics().content_y,
+        reopened_y.get()
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        reopened_focus.get()
+    );
+    assert!(fixture.host.launches.lock().is_empty());
 }

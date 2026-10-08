@@ -26,6 +26,9 @@ export component TileButton inherits Rectangle {
     in property <bool> enabled: true;
     // Semantic selection is independent of real focus and input modality.
     in property <bool> selected: false;
+    // Optional metadata only: the stable parent DragArea owns recognition.
+    in property <bool> report-pointer-metadata: false;
+    callback pointer-metadata(PointerEvent, TileBounds, Point);
     out property <bool> hovered: touch.has-hover;
     out property <bool> pressed: root.enabled && (touch.pressed || root.space-armed);
     out property <bool> focus-visible: root.keyboard-focus && keyboard.has-focus && root.enabled;
@@ -159,6 +162,15 @@ export component TileButton inherits Rectangle {
             return reject; // preserve the parent ScrollView's real scrolling
         }
         pointer-event(event) => {
+            if root.report-pointer-metadata && event.kind != PointerEventKind.move {
+                root.pointer-metadata(event, {
+                    origin: root.absolute-position,
+                    width: root.width, height: root.height
+                }, {
+                    x: root.absolute-position.x + self.mouse-x,
+                    y: root.absolute-position.y + self.mouse-y
+                });
+            }
             if event.kind == PointerEventKind.down || event.kind == PointerEventKind.cancel {
                 root.dismiss-tooltip(false);
             }

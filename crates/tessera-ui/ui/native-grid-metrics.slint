@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+// Audited against Slint 1.18.1 / upstream 372cf0ee5577c3dfec309a45e7b778ba4e81b734:
+// internal/compiler/widgets/fluent/scrollview.slint, ScrollBar.visible and
+// ScrollView vertical bar width (14 logical px). The 2/6px painted thumb is
+// NOT its input hitbox. build.rs explicitly selects Fluent; re-audit on upgrade.
+// ListView supplies the native public extents, including lazy extent updates.
+// ColorScheme changes colors, not this versioned widget geometry.
+export global Slint1181FluentNativeGridMetrics {
+    pure public function source-width(width: length, content-height: length,
+        visible-height: length, policy: ScrollBarPolicy) -> length {
+        let present = policy == ScrollBarPolicy.always-on
+            || (policy == ScrollBarPolicy.as-needed && content-height > visible-height);
+        return max(0px, width - (present ? 14px : 0px));
+    }
+}

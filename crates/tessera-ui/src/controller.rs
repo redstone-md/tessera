@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -123,6 +123,7 @@ pub(crate) struct PanelController {
     icon_cache: Rc<RefCell<crate::icons::IconCache>>,
     leases: Rc<RefCell<SurfaceLeases>>,
     launcher_state: Rc<RefCell<launcher::LauncherState>>,
+    preference_saving: Rc<Cell<bool>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     menus: Menus,
     quick_settings: QuickPopups,
@@ -130,7 +131,26 @@ pub(crate) struct PanelController {
     geometry: Rc<geometry::GeometryUpdates>,
 }
 
+/// Complete-record writes are single-flight even when a host callback re-enters
+/// a different surface's save action. Never hold a state borrow during the write.
+struct PreferenceSave<'a>(&'a PanelController);
+
+impl Drop for PreferenceSave<'_> {
+    fn drop(&mut self) {
+        self.0.preference_saving.set(false);
+        self.0.sync_launcher_reorder();
+    }
+}
+
 impl PanelController {
+    fn begin_preference_save(&self) -> Option<PreferenceSave<'_>> {
+        if self.preference_saving.replace(true) {
+            return None;
+        }
+        self.cancel_launcher_reorder();
+        Some(PreferenceSave(self))
+    }
+
     pub(crate) fn new(panel: &Panel, core: Arc<SurfaceCore>) -> Self {
         let controller = Self {
             panel: panel.as_weak(),
@@ -141,6 +161,7 @@ impl PanelController {
             icon_cache: Rc::default(),
             leases: Rc::default(),
             launcher_state: Rc::default(),
+            preference_saving: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
             quick_settings: Rc::default(),
@@ -171,6 +192,7 @@ impl PanelController {
             icon_cache: Rc::default(),
             leases: Rc::default(),
             launcher_state: Rc::default(),
+            preference_saving: Rc::default(),
             surface_failure: Rc::default(),
             menus: Rc::default(),
             quick_settings: Rc::default(),
@@ -533,10 +555,14 @@ impl PanelController {
         let Some(panel) = self.panel.upgrade() else {
             return;
         };
+        if panel.get_refreshing() || panel.get_stale() {
+            self.cancel_launcher_reorder();
+        }
         launcher.set_refreshing(panel.get_refreshing());
         launcher.set_stale(panel.get_stale());
         launcher.set_status(panel.get_status());
         launcher.set_notice(panel.get_startup_notice());
+        self.sync_launcher_reorder();
     }
 
     /// Mirrors status into the toolbar surface.
@@ -848,6 +874,9 @@ impl PanelController {
     /// appearance values so the live appearance preview is never persisted by
     /// a pin click. On save failure the pin state reverts and stays visible.
     pub(crate) fn toggle_pin(&self, key: &str, pin: bool) {
+        let Some(_save) = self.begin_preference_save() else {
+            return;
+        };
         // `pin` is the *new* state: true means "pin this application".
         let Some(resolved) = self.resolve_app_key(key) else {
             self.report_message("That application is no longer in the current catalog.");
@@ -909,6 +938,9 @@ impl PanelController {
     /// Saves the previewed appearance/edge while preserving the complete saved
     /// pin/favorite record. Successful saves update geometry immediately.
     pub(crate) fn save_preferences(&self) {
+        let Some(_save) = self.begin_preference_save() else {
+            return;
+        };
         let Some(panel) = self.panel.upgrade() else {
             return;
         };
@@ -1034,6 +1066,7 @@ pub(crate) fn apply_result(
     panel: &Panel,
     result: Result<PanelSnapshot, String>,
 ) {
+    controller.cancel_launcher_reorder();
     match result {
         Ok(snapshot) => {
             // Identity text arrives with each successful observation; the

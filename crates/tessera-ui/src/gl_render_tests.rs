@@ -99,6 +99,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                 verify_launcher_controls(ColorScheme::Light, &launcher);
                 verify_menu_press_scale(&menu);
                 verify_menu_application_image(&menu);
+                verify_launcher_reorder_preview(&launcher);
                 launcher.hide().unwrap();
                 tooltip.hide().unwrap();
                 menu.hide().unwrap();
@@ -303,6 +304,135 @@ fn verify_launcher_press_scale(launcher: &Launcher) {
         verify_native_press_scale(launcher.window(), &tile, 0.95, 0.0, source, &launches);
     }
     assert_eq!(launches.get(), 2, "pointer and Space each launch once");
+}
+
+// Actual in-window SDK drag plus a two-tile model preview on the owned GL
+// renderer. This is pixel/dispatch evidence, not OS capture or persistence.
+fn verify_launcher_reorder_preview(launcher: &Launcher) {
+    use slint::language::{DragAction, PointerEventKind};
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let preview_rows = |reversed: bool| {
+        let mut tiles = vec![
+            LaunchTile {
+                key: "native-app".into(),
+                label: "Native app".into(),
+                icon: slint::Image::default(),
+                favorite: true,
+            },
+            LaunchTile {
+                key: "preview-app".into(),
+                label: "Preview app".into(),
+                icon: slint::Image::default(),
+                favorite: true,
+            },
+        ];
+        if reversed {
+            tiles.reverse();
+        }
+        slint::ModelRc::new(slint::VecModel::from(vec![LaunchRow {
+            tiles: slint::ModelRc::new(slint::VecModel::from(tiles)),
+        }]))
+    };
+    launcher.set_application_count(2);
+    launcher.set_rows(preview_rows(false));
+    launcher.set_selected_key("native-app".into());
+    let mut marker = slint::DataTransfer::default();
+    marker.set_user_data(Rc::new(()));
+    launcher.set_reorder_data(marker);
+    launcher.set_reorder_enabled(true);
+    let weak = launcher.as_weak();
+    launcher.on_reorder_origin(move |key, event, _, _| {
+        if event.kind == PointerEventKind::Down && !key.is_empty() {
+            let mut data = slint::DataTransfer::default();
+            data.set_user_data(Rc::new(key.to_string()));
+            weak.upgrade().unwrap().set_reorder_data(data);
+        }
+    });
+    let weak = launcher.as_weak();
+    let previewed = Rc::new(Cell::new(false));
+    let state = previewed.clone();
+    launcher.on_reorder_can_drop(move |event, _| {
+        let valid = event
+            .data
+            .user_data()
+            .and_then(|data| data.downcast::<String>().ok())
+            .is_some_and(|key| key.as_str() == "native-app");
+        if !valid {
+            return DragAction::None;
+        }
+        if !state.replace(true) {
+            weak.upgrade().unwrap().set_rows(preview_rows(true));
+        }
+        DragAction::Move
+    });
+    let drops = Rc::new(Cell::new(0));
+    let count = drops.clone();
+    launcher.on_reorder_dropped(move |_, _| {
+        count.set(count.get() + 1);
+        DragAction::Move
+    });
+    let finished = Rc::new(Cell::new(false));
+    let state = finished.clone();
+    launcher.on_reorder_finished(move |action| state.set(action == DragAction::Move));
+    let launches = Rc::new(Cell::new(0));
+    let count = launches.clone();
+    launcher.on_launch_requested(move |_| count.set(count.get() + 1));
+    let _ = launcher.window().take_snapshot().unwrap();
+    let tile = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        launcher,
+        "Launch Native app",
+    )
+    .next()
+    .unwrap();
+    let source = tile.absolute_position();
+    let target = slint::LogicalPosition::new(source.x + tile.size().width + 19.0, source.y + 13.0);
+    let press = slint::LogicalPosition::new(source.x + 11.0, source.y + 13.0);
+    launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerPressed {
+            position: press,
+            button: PointerEventButton::Left,
+        });
+    launcher.window().dispatch_event(WindowEvent::PointerMoved {
+        position: slint::LogicalPosition::new(press.x + 12.0, press.y),
+    });
+    launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: target });
+    assert!(launcher.get_reorder_dragging());
+    assert!(previewed.get());
+    let frame = launcher.window().take_snapshot().unwrap();
+    let first = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        launcher,
+        "Launch Preview app",
+    )
+    .next()
+    .unwrap();
+    assert_eq!(
+        first.absolute_position(),
+        source,
+        "preview changes order, not native grid layout"
+    );
+    assert_eq!(
+        launcher.get_selected_key(),
+        "native-app",
+        "preview preserves selected identity"
+    );
+    export_frame("launcher-reorder-preview", &frame);
+    // Final native movement/release remain consecutive, with no snapshot/query.
+    launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: target });
+    launcher
+        .window()
+        .dispatch_event(WindowEvent::PointerReleased {
+            position: target,
+            button: PointerEventButton::Left,
+        });
+    assert_eq!(drops.get(), 1);
+    assert!(finished.get());
+    assert_eq!(launches.get(), 0);
+    launcher.set_reorder_enabled(false);
 }
 
 fn verify_menu_press_scale(menu: &ContextMenuSurface) {
