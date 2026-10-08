@@ -20,6 +20,7 @@ export component TileButton inherits Rectangle {
     out property <bool> hovered: touch.has-hover;
     in property <length> radius;
     in property <bool> show-focus-ring: true;
+    property <bool> keyboard-focus;
     /// false renders no idle background (transparent until hover/press).
     in property <bool> filled: true;
     callback clicked;
@@ -60,6 +61,7 @@ export component TileButton inherits Rectangle {
             root.middle-armed = false;
             root.right-armed = false;
             root.dismiss-tooltip(false);
+            root.keyboard-focus = false;
         }
     }
 
@@ -80,14 +82,25 @@ export component TileButton inherits Rectangle {
         // Zero-size: must not react on clicks (only key events); the stock
         // StateLayer pattern from the toolkit's own widgets.
         width: 0px;
+        enabled: root.enabled;
+        focus-gained(reason) => {
+            // Window/popup reactivation preserves the existing modality.
+            if reason == FocusReason.tab-navigation || reason == FocusReason.programmatic {
+                root.keyboard-focus = true;
+            } else if reason == FocusReason.pointer-click {
+                root.keyboard-focus = false;
+            }
+        }
         key-pressed(event) => {
             if root.enabled && (event.text == Key.Space || event.text == Key.Return) {
+                root.keyboard-focus = true;
                 root.activate();
                 return accept;
             }
             if root.enabled && (event.text == Key.Menu
                 || (event.text == Key.F10 && event.modifiers.shift)) {
                 root.dismiss-tooltip(false);
+                root.keyboard-focus = true;
                 root.context-requested({
                     x: root.absolute-position.x + root.width / 2,
                     y: root.absolute-position.y + root.height / 2
@@ -110,6 +123,12 @@ export component TileButton inherits Rectangle {
         pointer-event(event) => {
             if event.kind == PointerEventKind.down || event.kind == PointerEventKind.cancel {
                 root.dismiss-tooltip(false);
+            }
+            if event.kind == PointerEventKind.down {
+                // forward-focus redirects focus requests, not TouchArea
+                // clicks. This is item focus, not a host foreground request.
+                keyboard.focus();
+                root.keyboard-focus = false;
             }
             if event.kind == PointerEventKind.cancel {
                 root.middle-armed = false;
@@ -139,12 +158,12 @@ export component TileButton inherits Rectangle {
         }
     }
 
-    if root.show-focus-ring && keyboard.has-focus && root.enabled: Rectangle {
-        x: -2px;
-        y: -2px;
-        width: parent.width + 4px;
-        height: parent.height + 4px;
-        border-radius: root.radius + 2px;
+    if root.show-focus-ring && root.keyboard-focus && keyboard.has-focus && root.enabled: Rectangle {
+        x: -4px;
+        y: -4px;
+        width: parent.width + 8px;
+        height: parent.height + 8px;
+        border-radius: root.radius + 4px;
         border-width: 2px;
         border-color: SeelenPalette.accent;
         accessible-role: none;

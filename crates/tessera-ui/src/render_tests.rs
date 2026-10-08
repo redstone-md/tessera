@@ -251,6 +251,204 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
 }
 
 #[test]
+fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scales() {
+    let window = software_window();
+    let dock = Dock::new().unwrap();
+    let opens = Rc::new(Cell::new(0));
+    let count = opens.clone();
+    dock.on_open_applications_requested(move || count.set(count.get() + 1));
+    dock.show().unwrap();
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+
+    for theme in [
+        slint::language::ColorScheme::Light,
+        slint::language::ColorScheme::Dark,
+    ] {
+        dock.apply_presentation_theme(PresentationTheme::uniform(theme));
+        for scale in [1.0_f32, 2.0] {
+            window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            let width = (248.0 * scale) as u32;
+            let height = (72.0 * scale) as u32;
+            window.set_size(slint::PhysicalSize::new(width, height));
+            window.window().dispatch_event(WindowEvent::PointerExited);
+            let baseline = draw(&window, width, height);
+            let start =
+                ElementHandle::find_by_accessible_label(&dock, "Open applications and settings")
+                    .next()
+                    .unwrap();
+            let position = start.absolute_position();
+            let size = start.size();
+            let center = slint::LogicalPosition::new(
+                position.x + size.width / 2.0,
+                position.y + size.height / 2.0,
+            );
+            // Sample the straight edge, away from corner antialiasing:
+            // two empty logical pixels, then the two-pixel outline.
+            let sample = |pixels: &[Rgb8Pixel], offset: f32| {
+                let x = ((position.x - offset) * scale) as usize;
+                let y = (center.y * scale) as usize;
+                pixels[y * width as usize + x]
+            };
+            let bar_color = sample(&baseline, 5.5);
+            let click = || {
+                window.window().dispatch_event(WindowEvent::PointerPressed {
+                    position: center,
+                    button: PointerEventButton::Left,
+                });
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerReleased {
+                        position: center,
+                        button: PointerEventButton::Left,
+                    });
+            };
+            let before = opens.get();
+            click();
+            assert_eq!(opens.get(), before + 1);
+            let pointer = draw(&window, width, height);
+            for offset in [0.5, 1.5, 2.5, 3.5, 4.5] {
+                assert_eq!(
+                    sample(&pointer, offset),
+                    bar_color,
+                    "pointer focus must not paint a keyboard outline ({theme:?}, {scale}x)",
+                );
+            }
+
+            window.window().dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Space.into(),
+            });
+            window.window().dispatch_event(WindowEvent::KeyReleased {
+                text: Key::Space.into(),
+            });
+            assert_eq!(opens.get(), before + 2, "keyboard activation is preserved");
+            let keyboard = draw(&window, width, height);
+            for offset in [0.5, 1.5, 4.5] {
+                assert_eq!(
+                    sample(&keyboard, offset),
+                    bar_color,
+                    "outline keeps a two-pixel gap and bounded outer edge",
+                );
+            }
+            assert_ne!(
+                sample(&keyboard, 2.5),
+                bar_color,
+                "keyboard outline starts two logical pixels outside the tile",
+            );
+            assert_eq!(
+                sample(&keyboard, 2.5),
+                sample(&keyboard, 3.5),
+                "the outline is exactly two logical pixels wide",
+            );
+
+            window
+                .window()
+                .dispatch_event(WindowEvent::WindowActiveChanged(false));
+            let inactive = draw(&window, width, height);
+            assert_eq!(sample(&inactive, 2.5), bar_color);
+            window
+                .window()
+                .dispatch_event(WindowEvent::WindowActiveChanged(true));
+            let keyboard_restored = draw(&window, width, height);
+            assert_eq!(sample(&keyboard_restored, 2.5), sample(&keyboard, 2.5));
+
+            // A click on an already-focused tile must switch back to pointer
+            // presentation even though no focus-gained callback runs again.
+            click();
+            assert_eq!(opens.get(), before + 3);
+            let pointer_again = draw(&window, width, height);
+            assert_eq!(sample(&pointer_again, 2.5), bar_color);
+            window
+                .window()
+                .dispatch_event(WindowEvent::WindowActiveChanged(false));
+            window
+                .window()
+                .dispatch_event(WindowEvent::WindowActiveChanged(true));
+            let mut pointer_restored = pointer_again;
+            window.draw_if_needed(|renderer| {
+                renderer.render(&mut pointer_restored, width as usize);
+            });
+            assert_eq!(sample(&pointer_restored, 2.5), bar_color);
+            assert!(
+                !window.draw_if_needed(|_| panic!("unchanged focus must not redraw")),
+                "no idle repaint after focus presentation settles",
+            );
+        }
+    }
+}
+
+#[test]
+fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
+    let window = software_window();
+    let dock = Dock::new().unwrap();
+    dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
+        key: "editor".into(),
+        label: "Editor".into(),
+        icon: slint::Image::default(),
+        pinned: true,
+    }])));
+    let opens = Rc::new(Cell::new(0));
+    let count = opens.clone();
+    dock.on_open_applications_requested(move || count.set(count.get() + 1));
+    let launches = Rc::new(Cell::new(0));
+    let count = launches.clone();
+    dock.on_launch_requested(move |key| {
+        assert_eq!(key, "editor");
+        count.set(count.get() + 1);
+    });
+    dock.show().unwrap();
+    window.set_size(slint::PhysicalSize::new(248, 72));
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    let baseline = draw(&window, 248, 72);
+    let start = ElementHandle::find_by_accessible_label(&dock, "Open applications and settings")
+        .next()
+        .unwrap();
+    let position = start.absolute_position();
+    let outline_index =
+        (position.y + start.size().height / 2.0) as usize * 248 + (position.x - 2.5) as usize;
+    let press = |text: slint::SharedString| {
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    press(Key::Tab.into());
+    let tab_focused = draw(&window, 248, 72);
+    assert_ne!(
+        tab_focused[outline_index], baseline[outline_index],
+        "Tab focus paints the keyboard outline before activation",
+    );
+    press(Key::Return.into());
+    assert_eq!((opens.get(), launches.get()), (1, 0));
+    press(Key::Tab.into());
+    press(Key::Return.into());
+    assert_eq!((opens.get(), launches.get()), (1, 1));
+    dock.set_surface_status(DockStatus {
+        refreshing: true,
+        ..DockStatus::default()
+    });
+    press(Key::Tab.into());
+    press(Key::Return.into());
+    assert_eq!((opens.get(), launches.get()), (2, 1));
+    press(Key::Tab.into());
+    press(Key::Return.into());
+    assert_eq!(
+        (opens.get(), launches.get()),
+        (3, 1),
+        "disabled tiles are skipped, not dead keyboard stops",
+    );
+}
+
+#[test]
 fn toolbar_renders_identity_and_settings_access() {
     let window = software_window();
     let toolbar = Toolbar::new().unwrap();
