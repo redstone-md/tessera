@@ -182,6 +182,7 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
 }
 
 fn verify_launcher_press_scale(launcher: &Launcher) {
+    launcher.invoke_focus_search();
     let launches = Rc::new(Cell::new(0));
     let count = launches.clone();
     launcher.on_launch_requested(move |_| count.set(count.get() + 1));
@@ -191,8 +192,10 @@ fn verify_launcher_press_scale(launcher: &Launcher) {
     )
     .next()
     .unwrap();
-    verify_native_press_scale(launcher.window(), &tile, 0.95, 0.0);
-    assert_eq!(launches.get(), 1, "one pointer gesture launches once");
+    for source in [PressSource::Pointer, PressSource::Space] {
+        verify_native_press_scale(launcher.window(), &tile, 0.95, 0.0, source, &launches);
+    }
+    assert_eq!(launches.get(), 2, "pointer and Space each launch once");
 }
 
 fn verify_menu_press_scale(menu: &ContextMenuSurface) {
@@ -206,12 +209,20 @@ fn verify_menu_press_scale(menu: &ContextMenuSurface) {
     let tile = i_slint_backend_testing::ElementHandle::find_by_accessible_label(menu, "Settings")
         .next()
         .unwrap();
-    verify_native_press_scale(menu.window(), &tile, 0.98, 1.0);
+    for source in [PressSource::Pointer, PressSource::Space] {
+        verify_native_press_scale(menu.window(), &tile, 0.98, 1.0, source, &actions);
+    }
     assert_eq!(
         actions.get(),
-        1,
-        "one pointer gesture requests one menu action"
+        2,
+        "pointer and Space each request one action"
     );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PressSource {
+    Pointer,
+    Space,
 }
 
 fn verify_native_press_scale(
@@ -219,8 +230,11 @@ fn verify_native_press_scale(
     tile: &i_slint_backend_testing::ElementHandle,
     pressed_scale: f32,
     translation_y: f32,
+    source: PressSource,
+    actions: &Cell<usize>,
 ) {
-    use slint::platform::{PointerEventButton, WindowEvent};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    window.dispatch_event(WindowEvent::WindowActiveChanged(true));
     let position = tile.absolute_position();
     let size = tile.size();
     let scale = window.scale_factor();
@@ -237,10 +251,25 @@ fn verify_native_press_scale(
     let body = sample(&hover, position.x - 5.0);
     let edge = sample(&hover, position.x + 0.5);
     assert_ne!(edge, body, "the original tile edge must actually render");
-    window.dispatch_event(WindowEvent::PointerPressed {
-        position: center,
-        button: PointerEventButton::Left,
-    });
+    let before = actions.get();
+    match source {
+        PressSource::Pointer => window.dispatch_event(WindowEvent::PointerPressed {
+            position: center,
+            button: PointerEventButton::Left,
+        }),
+        PressSource::Space => {
+            for _ in 0..2 {
+                window.dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::Space.into(),
+                });
+            }
+        }
+    }
+    assert_eq!(
+        actions.get(),
+        before,
+        "{source:?} press/repeat must not activate before release",
+    );
     let pressed = window.take_snapshot().unwrap();
     assert_eq!(
         tile.size(),
@@ -268,12 +297,27 @@ fn verify_native_press_scale(
         body,
         "press scaling must shrink, not hide, the tile",
     );
-    window.dispatch_event(WindowEvent::PointerReleased {
-        position: center,
-        button: PointerEventButton::Left,
-    });
+    match source {
+        PressSource::Pointer => window.dispatch_event(WindowEvent::PointerReleased {
+            position: center,
+            button: PointerEventButton::Left,
+        }),
+        PressSource::Space => window.dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Space.into(),
+        }),
+    }
+    assert_eq!(
+        actions.get(),
+        before + 1,
+        "one {source:?} release acts once"
+    );
     let restored = window.take_snapshot().unwrap();
-    assert_eq!(sample(&restored, position.x + 0.5), edge);
+    match source {
+        PressSource::Pointer => assert_eq!(sample(&restored, position.x + 0.5), edge),
+        // Space changes focus modality; the launcher's focus skin differs
+        // from hover, but its original edge must be fully visible again.
+        PressSource::Space => assert_ne!(sample(&restored, position.x + 0.5), body),
+    }
     assert_eq!(tile.absolute_position(), position);
     assert_eq!(
         tile.size(),

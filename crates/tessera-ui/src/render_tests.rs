@@ -219,6 +219,10 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
             button: PointerEventButton::Middle,
         });
     assert_eq!(launches.get(), 3, "middle click requests one new instance");
+    window.window().dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Space.into(),
+    });
+    assert_eq!(launches.get(), 3, "holding Space must not launch");
 
     // Disabled while refreshing: neither pointer nor accessibility acts.
     dock.set_surface_status(DockStatus {
@@ -247,6 +251,17 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
         .next()
         .unwrap();
     assert_eq!(button.accessible_enabled(), Some(true));
+
+    dock.set_surface_status(DockStatus::default());
+    assert_eq!(launch.accessible_enabled(), Some(true));
+    window.window().dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Space.into(),
+    });
+    assert_eq!(
+        launches.get(),
+        3,
+        "disable/re-enable cancels the earlier held Space",
+    );
     drop(dock);
 }
 
@@ -323,6 +338,19 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             window.window().dispatch_event(WindowEvent::KeyPressed {
                 text: Key::Space.into(),
             });
+            assert_eq!(
+                opens.get(),
+                before + 1,
+                "Space must arm the actual button, not activate before release",
+            );
+            window.window().dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Space.into(),
+            });
+            assert_eq!(
+                opens.get(),
+                before + 1,
+                "held-Space repeat must not dispatch extra actions",
+            );
             window.window().dispatch_event(WindowEvent::KeyReleased {
                 text: Key::Space.into(),
             });
@@ -345,6 +373,16 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
                 sample(&keyboard, 3.5),
                 "the outline is exactly two logical pixels wide",
             );
+            window.window().dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Space.into(),
+            });
+            assert_eq!(opens.get(), before + 2);
+            let held = draw(&window, width, height);
+            assert_ne!(
+                sample(&held, -2.0),
+                sample(&keyboard, -2.0),
+                "held Space must paint the shared pressed state",
+            );
 
             window
                 .window()
@@ -354,6 +392,14 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             window
                 .window()
                 .dispatch_event(WindowEvent::WindowActiveChanged(true));
+            window.window().dispatch_event(WindowEvent::KeyReleased {
+                text: Key::Space.into(),
+            });
+            assert_eq!(
+                opens.get(),
+                before + 2,
+                "losing window focus cancels a held Space without activation",
+            );
             let keyboard_restored = draw(&window, width, height);
             assert_eq!(sample(&keyboard_restored, 2.5), sample(&keyboard, 2.5));
 

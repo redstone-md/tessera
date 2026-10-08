@@ -89,9 +89,13 @@ fn show(menu: &Rc<ContextMenuController>, kind: DockMenuKind) -> Result<(), Stri
 }
 
 fn press(menu: &ContextMenuController, key: Key) {
+    let text: SharedString = key.into();
     menu.surface
         .window()
-        .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+        .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    menu.surface
+        .window()
+        .dispatch_event(WindowEvent::KeyReleased { text });
 }
 
 #[test]
