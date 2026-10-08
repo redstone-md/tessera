@@ -149,7 +149,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         icon: slint::Image::default(),
         pinned: true,
     }])));
-    dock.window().set_size(slint::LogicalSize::new(168.0, 72.0));
+    dock.window().set_size(slint::LogicalSize::new(216.0, 72.0));
     dock.show().unwrap();
 
     let completed = Rc::new(Cell::new(false));
@@ -278,6 +278,32 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
             assert_eq!(bezel.a, 255, "{name} {theme} opaque bezel: {bezel:?}");
             for channel in [bezel.r, bezel.g, bezel.b] {
                 assert_eq!(channel, foreground, "{name} {theme} bezel tint");
+            }
+            // Generic independent Trash identity artwork, not reference
+            // empty/full SVG parity. The trailing tile is fixed at x=160.
+            let trash_exterior = sample(166.0, 36.0);
+            assert_eq!(
+                (
+                    trash_exterior.r,
+                    trash_exterior.g,
+                    trash_exterior.b,
+                    trash_exterior.a
+                ),
+                (tile_color, tile_color, tile_color, 255),
+                "{name} {theme} transparent Trash exterior over neutral tile"
+            );
+            let trash_interior = sample(180.0, 36.0);
+            assert_eq!(trash_interior.a, 255, "{name} {theme} Trash interior");
+            for channel in [trash_interior.r, trash_interior.g, trash_interior.b] {
+                assert!(
+                    channel.abs_diff(screen_color) <= 1,
+                    "{name} {theme} original .2-alpha Trash interior: {trash_interior:?}"
+                );
+            }
+            let trash_lid = sample(180.0, 28.0);
+            assert_eq!(trash_lid.a, 255, "{name} {theme} opaque Trash lid");
+            for channel in [trash_lid.r, trash_lid.g, trash_lid.b] {
+                assert_eq!(channel, foreground, "{name} {theme} Trash lid tint");
             }
         } else {
             assert_eq!(

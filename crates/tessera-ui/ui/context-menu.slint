@@ -107,6 +107,8 @@ export component ContextMenuSurface inherits Window {
                 @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg"),
             application-image: root.target-icon.width > 0 },
         { label: @tr("Unpin"), action: DockMenuAction.unpin }
+    ] : root.kind == DockMenuKind.recycle ? [
+        { label: @tr("Retry"), action: DockMenuAction.recycle-retry }
     ] : [
         { label: @tr("Switch to window"), action: DockMenuAction.activate,
             icon: root.target-icon.width > 0 ? root.target-icon :

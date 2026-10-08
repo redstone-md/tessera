@@ -16,14 +16,17 @@ pub(super) type Menus = TransientCache<ContextMenuController>;
 impl PanelController {
     pub(super) fn open_dock_menu(&self, kind: DockMenuKind, key: &str, point: (f32, f32)) {
         self.dismiss_tooltip(false);
-        if kind != DockMenuKind::Bar && self.guarded() {
+        if matches!(kind, DockMenuKind::Pinned | DockMenuKind::Window) && self.guarded() {
             return;
         }
         let Some(dock) = self.dock_and_upgrade() else {
             return;
         };
+        if kind == DockMenuKind::Recycle && !dock.window().is_visible() {
+            return;
+        }
         let key = match kind {
-            DockMenuKind::Bar => Some(String::new()),
+            DockMenuKind::Bar | DockMenuKind::Recycle => Some(String::new()),
             DockMenuKind::Pinned => {
                 model_key(&dock.get_pinned_apps(), key, |app| app.key.to_string())
             }

@@ -4,7 +4,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { ApplicationIcon, TileButton, TileBounds } from "tiles.slint";
-import { DockWindowCommand, DockSystemCommand, DockReservedAction, DockMenuKind } from "shell-commands.slint";
+import { DockWindowCommand, DockSystemCommand, DockReservedAction, DockRecycleState, DockRecycleAction, DockMenuKind } from "shell-commands.slint";
 
 export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
@@ -32,6 +32,14 @@ export component Dock inherits Window {
     in property <int> edge;
     in property <bool> show-desktop-busy;
     in property <string> show-desktop-notice;
+    in property <DockRecycleState> recycle-state;
+    in property <bool> recycle-read-busy;
+    in property <bool> recycle-open-busy;
+    in property <bool> recycle-stale;
+    in property <string> recycle-item-count-label;
+    in property <string> recycle-read-notice;
+    in property <string> recycle-watch-notice;
+    in property <string> recycle-open-notice;
     property <bool> vertical: root.edge >= 2;
     callback launch-requested(string);
     callback window-command-requested(string, DockWindowCommand);
@@ -42,6 +50,8 @@ export component Dock inherits Window {
     callback system-command-requested(DockSystemCommand);
     callback reserved-action-requested(DockReservedAction);
     callback utility-event-ready();
+    callback recycle-action-requested(DockRecycleAction);
+    callback recycle-event-ready();
     callback context-menu-requested(DockMenuKind, string, Point);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
@@ -56,10 +66,20 @@ export component Dock inherits Window {
     property <length> tile-radius: 10px * root.factor;
     property <length> icon-pad: 6px * root.factor;
     property <bool> blocked: root.surface-status.refreshing || root.surface-status.stale;
+    // Only confirmed projections carry counts. Notices retain independent
+    // read/watch/open health; the generic glyph does not certify emptiness.
+    property <string> recycle-description: @tr("Recycle Bin") + "\n"
+        + (root.recycle-state == DockRecycleState.unknown
+            ? (root.recycle-read-busy ? @tr("Loading") : @tr("Unknown"))
+            : root.recycle-item-count-label)
+        + (root.recycle-stale ? "\n" + @tr("Stale") : "")
+        + (root.recycle-read-notice == "" ? "" : "\n" + root.recycle-read-notice)
+        + (root.recycle-watch-notice == "" ? "" : "\n" + root.recycle-watch-notice)
+        + (root.recycle-open-notice == "" ? "" : "\n" + root.recycle-open-notice);
 
     // The bar itself: an inner rounded rectangle inside the transparent
-    // window's outer margin. Start and Show desktop stay fixed before the
-    // scrollable application/window tile area.
+    // window's outer margin. Start/Show desktop lead, Trash trails, and only
+    // application/window tiles scroll between these fixed utilities.
     Rectangle {
         x: root.margin;
         y: root.margin;
@@ -129,8 +149,8 @@ export component Dock inherits Window {
         scroll := ScrollView {
             x: root.vertical ? root.pad : root.pad + 2 * (root.item + root.gap);
             y: root.vertical ? root.pad + 2 * (root.item + root.gap) : root.pad;
-            width: max(0px, parent.width - 2 * root.pad - (root.vertical ? 0px : 2 * (root.item + root.gap)));
-            height: max(0px, parent.height - 2 * root.pad - (root.vertical ? 2 * (root.item + root.gap) : 0px));
+            width: max(0px, parent.width - 2 * root.pad - (root.vertical ? 0px : 3 * (root.item + root.gap)));
+            height: max(0px, parent.height - 2 * root.pad - (root.vertical ? 3 * (root.item + root.gap) : 0px));
             // Desktop tiles own button-down; overflow uses wheel/scrollbars,
             // not a competing mouse-pan gesture that delays those events.
             mouse-drag-pan-enabled: false;
@@ -222,6 +242,37 @@ export component Dock inherits Window {
                     visible: !root.surface-status.refreshing;
                     accessible-role: none;
                 }
+            }
+        }
+
+        // Literal trailing utility: declaration/Tab order follows all apps.
+        TileButton {
+            x: root.vertical ? root.pad : max(root.pad, parent.width - root.pad - root.item);
+            y: root.vertical ? max(root.pad, parent.height - root.pad - root.item) : root.pad;
+            width: root.item;
+            height: root.item;
+            radius: root.tile-radius;
+            enabled: !root.recycle-open-busy;
+            allow-return-repeat: false;
+            accessible-text: root.recycle-description;
+            tooltip-text: root.recycle-description;
+            tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+            tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+            clicked => { root.recycle-action-requested(DockRecycleAction.open); }
+            context-requested(position) => {
+                root.context-menu-requested(DockMenuKind.recycle, "", position);
+            }
+            // Independent MIT identity mark, identical for Unknown/Empty/Full.
+            // Exact source full/empty state artwork remains uncleared.
+            Image {
+                x: root.icon-pad;
+                y: root.icon-pad;
+                width: parent.width - 2 * root.icon-pad;
+                height: parent.height - 2 * root.icon-pad;
+                source: @image-url("../assets/icons/phosphor-core-2.1.1/trash-duotone.svg");
+                image-fit: contain;
+                colorize: SeelenPalette.foreground;
+                accessible-role: none;
             }
         }
     }

@@ -14,6 +14,9 @@ pub mod dock_utilities;
 /// Current-user known-folder observations and identity-bound opening.
 pub mod folders;
 
+/// Confirmed Recycle Bin information, fixed opening and scoped change hints.
+pub mod recycle_bin;
+
 /// Default-multimedia audio endpoints and their asynchronous host interface.
 pub mod audio {
     use std::fmt;

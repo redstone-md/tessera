@@ -27,12 +27,14 @@ mod geometry;
 mod launcher;
 mod popups;
 mod quick_settings;
+mod recycle_bin;
 mod tooltip;
 mod user_menu;
 use calendar::CalendarPopups;
 use context_menu::Menus;
 use dock_utilities::DockUtilities;
 use quick_settings::QuickPopups;
+use recycle_bin::RecycleBins;
 use tooltip::Tooltips;
 use user_menu::UserPopups;
 
@@ -137,6 +139,7 @@ pub(crate) struct PanelController {
     user_menu: UserPopups,
     calendar: CalendarPopups,
     dock_utilities: DockUtilities,
+    recycle_bin: RecycleBins,
     tooltips: Tooltips,
     geometry: Rc<geometry::GeometryUpdates>,
 }
@@ -178,6 +181,7 @@ impl PanelController {
             user_menu: Rc::default(),
             calendar: Rc::default(),
             dock_utilities: Rc::default(),
+            recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -212,6 +216,7 @@ impl PanelController {
             user_menu: Rc::default(),
             calendar: Rc::default(),
             dock_utilities: Rc::default(),
+            recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             geometry: Rc::default(),
         };
@@ -339,6 +344,10 @@ impl PanelController {
         dock.on_reserved_action_requested(move |action| weak.request_dock_utility(action));
         let weak = self.clone();
         dock.on_utility_event_ready(move || weak.dock_utility_event_ready());
+        let weak = self.clone();
+        dock.on_recycle_action_requested(move |action| weak.request_recycle_bin(action));
+        let weak = self.clone();
+        dock.on_recycle_event_ready(move || weak.recycle_bin_event_ready());
         let weak = self.clone();
         dock.on_context_menu_requested(move |kind, key, point| {
             weak.open_dock_menu(kind, &key, (point.x, point.y));
@@ -809,10 +818,12 @@ impl PanelController {
                     toolbar.show().map_err(|error| error.to_string())?;
                 }
             }
+            self.recycle_bin_shown();
         } else {
             // Fullscreen: drop both leases before the hides (the windows may
             // lose their HWNDs); recovery stays possible via the launcher's
             // rescue/menu actions once it is reopened.
+            self.recycle_bin_hidden();
             self.detach_lease(SurfaceKind::Dock);
             self.detach_lease(SurfaceKind::Toolbar);
             dock.hide().map_err(|error| error.to_string())?;
@@ -1283,6 +1294,10 @@ pub(crate) fn run(
             let _dock_utility_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.dock_utilities),
                 crate::dock_utilities::DockUtilitiesController::close,
+            );
+            let _recycle_bin_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.recycle_bin),
+                crate::recycle_bin::RecycleBinController::close,
             );
             let _menu_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.menus),

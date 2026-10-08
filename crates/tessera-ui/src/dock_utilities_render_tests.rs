@@ -213,9 +213,9 @@ fn dock_utilities_fixed_slots_and_app_order_on_four_edges_compact_themes_and_dpi
                     .apply_presentation_theme(PresentationTheme::uniform(scheme));
                 for scale in [1.0, 2.0] {
                     let (width, height) = if edge < 2 {
-                        (264.0, 72.0)
+                        (312.0, 72.0)
                     } else {
-                        (72.0, 264.0)
+                        (72.0, 312.0)
                     };
                     fixture.render(
                         (width * factor * scale).ceil() as u32,
@@ -275,7 +275,7 @@ fn dock_utilities_fixed_slots_and_app_order_on_four_edges_compact_themes_and_dpi
 fn dock_utilities_real_pointer_tab_enter_space_ax_tooltip_and_bar_context() {
     let fixture = Fixture::new();
     fixture.apps(1);
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     let desktop = fixture.element(DESKTOP);
     fixture
         .window
@@ -291,7 +291,7 @@ fn dock_utilities_real_pointer_tab_enter_space_ax_tooltip_and_bar_context() {
     fixture
         .dock
         .set_show_desktop_notice("Desktop toggle requested".into());
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     assert_eq!(
         fixture.element(DESKTOP).accessible_label().as_deref(),
         Some(DESKTOP)
@@ -357,7 +357,7 @@ fn dock_utilities_real_pointer_tab_enter_space_ax_tooltip_and_bar_context() {
 fn dock_utilities_busy_cancels_held_space_and_repeats_without_blocking_start_or_recovery() {
     let fixture = Fixture::new();
     fixture.apps(1);
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     fixture.pointer(&fixture.element(START), PointerEventButton::Left);
     fixture.take();
     fixture.key(Key::Tab);
@@ -372,7 +372,7 @@ fn dock_utilities_busy_cancels_held_space_and_repeats_without_blocking_start_or_
         stale: true,
         ..DockStatus::default()
     });
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     let desktop = fixture.element(DESKTOP);
     assert_eq!(desktop.accessible_enabled(), Some(false));
     assert_eq!(fixture.element(START).accessible_enabled(), Some(true));
@@ -395,14 +395,14 @@ fn dock_utilities_busy_cancels_held_space_and_repeats_without_blocking_start_or_
     fixture.pointer(&fixture.element(START), PointerEventButton::Left);
     assert_eq!(fixture.take(), vec![Request::Start]);
     fixture.dock.set_show_desktop_busy(false);
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     assert_eq!(fixture.element(DESKTOP).accessible_enabled(), Some(true));
     fixture.key(Key::Tab);
     fixture.press(Key::Space);
     fixture.dock.set_show_desktop_busy(true);
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     fixture.dock.set_show_desktop_busy(false);
-    fixture.render(168, 72, 1.0);
+    fixture.render(216, 72, 1.0);
     fixture.repeat(Key::Space); // Still held: repeat cannot revive the cancelled arm.
     fixture.release(Key::Space);
     assert!(fixture.take().is_empty());
@@ -417,7 +417,7 @@ fn dock_utilities_busy_cancels_held_space_and_repeats_without_blocking_start_or_
             stale,
             ..DockStatus::default()
         });
-        fixture.render(168, 72, 1.0);
+        fixture.render(216, 72, 1.0);
         fixture.pointer(&fixture.element(DESKTOP), PointerEventButton::Left);
         assert_eq!(
             fixture.take(),
@@ -506,7 +506,6 @@ fn dock_utilities_wheel_keeps_reserved_tiles_fixed_and_reaches_unbounded_apps_wi
 
 #[test]
 fn dock_utilities_exact_duotone_screen_bezel_and_exterior_mask_in_semantic_native_pixels() {
-    let fixture = Fixture::new();
     // The independent official SVG's full-resolution mask, not a redrawn glyph.
     let source = slint::Image::load_from_svg_data(include_bytes!(
         "../assets/icons/phosphor-core-2.1.1/desktop-duotone.svg"
@@ -529,6 +528,27 @@ fn dock_utilities_exact_duotone_screen_bezel_and_exterior_mask_in_semantic_nativ
         0,
         "original exterior is transparent"
     );
+    assert_duotone_mask_matches_native_pixels(&source, DESKTOP);
+}
+
+#[test]
+fn dock_utilities_independent_generic_trash_interior_lid_and_exterior_mask_in_semantic_native_pixels()
+ {
+    // One legal generic identity mark; not reference empty/full artwork.
+    let source = slint::Image::load_from_svg_data(include_bytes!(
+        "../assets/icons/phosphor-core-2.1.1/trash-duotone.svg"
+    ))
+    .unwrap();
+    let mask = source.to_rgba8().unwrap();
+    assert_eq!((mask.width(), mask.height()), (256, 256));
+    assert_eq!(mask.as_slice()[128 * 256 + 128].a, 51, "original interior");
+    assert_eq!(mask.as_slice()[56 * 256 + 128].a, 255, "original lid");
+    assert_eq!(mask.as_slice()[128 * 256 + 8].a, 0, "original exterior");
+    assert_duotone_mask_matches_native_pixels(&source, "Recycle Bin\nUnknown");
+}
+
+fn assert_duotone_mask_matches_native_pixels(source: &slint::Image, label: &str) {
+    let fixture = Fixture::new();
     for edge in 0..4 {
         fixture.dock.set_edge(edge);
         for compact in [false, true] {
@@ -548,16 +568,16 @@ fn dock_utilities_exact_duotone_screen_bezel_and_exterior_mask_in_semantic_nativ
                 };
                 for scale in [1.0, 2.0] {
                     let (width, height) = if edge < 2 {
-                        (120.0, 72.0)
+                        (168.0, 72.0)
                     } else {
-                        (72.0, 120.0)
+                        (72.0, 168.0)
                     };
                     let width = (width * factor * scale).ceil() as u32;
                     let pixels =
                         fixture.render(width, (height * factor * scale).ceil() as u32, scale);
-                    let origin = fixture.element(DESKTOP).absolute_position();
+                    let origin = fixture.element(label).absolute_position();
                     let image = fixture
-                        .element(DESKTOP)
+                        .element(label)
                         .query_descendants()
                         .match_type_name("Image")
                         .find_first()
@@ -576,7 +596,7 @@ fn dock_utilities_exact_duotone_screen_bezel_and_exterior_mask_in_semantic_nativ
                     let bottom = ((image_origin.y + image.size().height) * scale).round() as usize;
                     let raster =
                         slint::private_unstable_api::re_exports::image_to_rgba8_with_target_size(
-                            &source,
+                            source,
                             slint::private_unstable_api::re_exports::IntSize::new(
                                 (right - x) as u32,
                                 (bottom - y) as u32,
@@ -610,15 +630,18 @@ fn dock_utilities_exact_duotone_screen_bezel_and_exterior_mask_in_semantic_nativ
                             exterior_pixels += usize::from(alpha == 0);
                         }
                     }
-                    assert!(screen_pixels > 0, "real screen retains 20% coverage");
+                    assert!(
+                        screen_pixels > 0,
+                        "real secondary path retains 20% coverage"
+                    );
                     assert!(
                         opaque_pixels > 0,
-                        "real bezel/stand retains opaque coverage"
+                        "real primary path retains opaque coverage"
                     );
                     assert!(exterior_pixels > 0, "real exterior stays transparent");
                     assert!(
                         fixture.take().is_empty(),
-                        "glyph inspection never toggles desktop"
+                        "glyph inspection never dispatches a utility"
                     );
                 }
             }

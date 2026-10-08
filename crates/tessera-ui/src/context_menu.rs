@@ -11,7 +11,8 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelExt, SharedString};
 
 use crate::generated::{
-    ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockSystemCommand, DockWindowCommand,
+    ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockRecycleAction, DockSystemCommand,
+    DockWindowCommand,
 };
 use crate::theme::ThemedComponent;
 use crate::transient_window::TransientWindow;
@@ -53,6 +54,10 @@ pub(crate) struct ContextMenuController {
 impl ContextMenuController {
     pub(crate) fn is_open(&self) -> bool {
         self.surface.is_visible()
+    }
+    #[cfg(test)]
+    pub(crate) fn component(&self) -> &ContextMenuSurface {
+        &self.surface
     }
     pub(crate) fn new(
         host: Arc<dyn DesktopHost>,
@@ -103,6 +108,11 @@ impl ContextMenuController {
             .dock
             .upgrade()
             .ok_or("The dock is no longer available.")?;
+        let key = if kind == DockMenuKind::Recycle {
+            SharedString::default()
+        } else {
+            key
+        };
         self.surface.set_kind(kind);
         // Reuse only already-resolved typed dock images; no host extraction.
         let target_icon = match kind {
@@ -116,7 +126,7 @@ impl ContextMenuController {
                 .iter()
                 .find(|window| window.key == key)
                 .map(|window| window.icon),
-            DockMenuKind::Bar => None,
+            DockMenuKind::Bar | DockMenuKind::Recycle => None,
         };
         self.surface
             .set_target_icon(target_icon.unwrap_or_default());
@@ -200,6 +210,9 @@ impl ContextMenuController {
                 dock.invoke_system_command_requested(DockSystemCommand::Restore)
             }
             DockMenuAction::Exit => dock.invoke_exit_requested(),
+            DockMenuAction::RecycleRetry => {
+                dock.invoke_recycle_action_requested(DockRecycleAction::Retry)
+            }
         }
     }
 
@@ -238,5 +251,6 @@ fn allowed(kind: DockMenuKind, action: DockMenuAction) -> bool {
             action,
             DockMenuAction::Activate | DockMenuAction::Minimize | DockMenuAction::Close
         ),
+        DockMenuKind::Recycle => action == DockMenuAction::RecycleRetry,
     }
 }

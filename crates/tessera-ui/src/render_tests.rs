@@ -1629,8 +1629,8 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
     dock.show().unwrap();
 
     // 1x: the window holds margins(2x8) + bar(pad+item+pad=56) => 72 high;
-    // The length covers two reserved tiles and three content tiles.
-    for (scale, width, height) in [(1.0, 264u32, 72u32), (2.0, 528u32, 144u32)] {
+    // The length covers three reserved tiles and three content tiles.
+    for (scale, width, height) in [(1.0, 312u32, 72u32), (2.0, 624u32, 144u32)] {
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -2015,6 +2015,12 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
         assert_eq!(action, crate::generated::DockReservedAction::ShowDesktop);
         count.set(count.get() + 1);
     });
+    let trash_opens = Rc::new(Cell::new(0));
+    let count = trash_opens.clone();
+    dock.on_recycle_action_requested(move |action| {
+        assert_eq!(action, crate::generated::DockRecycleAction::Open);
+        count.set(count.get() + 1);
+    });
     dock.show().unwrap();
     window.set_size(slint::PhysicalSize::new(248, 72));
     window
@@ -2055,6 +2061,9 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
     });
     press(Key::Tab.into());
     press(Key::Return.into());
+    assert_eq!((opens.get(), launches.get(), trash_opens.get()), (1, 1, 1));
+    press(Key::Tab.into());
+    press(Key::Return.into());
     assert_eq!((opens.get(), launches.get()), (2, 1));
     press(Key::Tab.into());
     press(Key::Return.into());
@@ -2062,14 +2071,28 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
     dock.set_show_desktop_busy(true);
     press(Key::Tab.into());
     press(Key::Return.into());
+    assert_eq!(
+        (
+            opens.get(),
+            utilities.get(),
+            launches.get(),
+            trash_opens.get()
+        ),
+        (2, 2, 1, 2),
+        "pending Desktop and disabled application still allow trailing Trash",
+    );
+    press(Key::Tab.into());
+    press(Key::Return.into());
     assert_eq!((opens.get(), utilities.get(), launches.get()), (3, 2, 1));
+    dock.set_recycle_open_busy(true);
     press(Key::Tab.into());
     press(Key::Return.into());
     assert_eq!(
         (opens.get(), utilities.get(), launches.get()),
         (4, 2, 1),
-        "disabled application and pending utility are skipped, not dead stops",
+        "disabled application and both pending utilities are skipped, not dead stops",
     );
+    assert_eq!(trash_opens.get(), 2, "pending Trash cannot activate again");
 }
 
 #[test]
@@ -4087,11 +4110,11 @@ fn dark_palette_renders_the_source_neutral_tile_color() {
         pinned: true,
     }])));
     dock.show().unwrap();
-    window.set_size(slint::PhysicalSize::new(168, 72));
-    let pixels = draw(&window, 168, 72);
-    let inside_tile = pixels[36 * 168 + 132];
+    window.set_size(slint::PhysicalSize::new(216, 72));
+    let pixels = draw(&window, 216, 72);
+    let inside_tile = pixels[36 * 216 + 132];
     assert_eq!([inside_tile.r, inside_tile.g, inside_tile.b], [31, 31, 31]);
-    export_screenshot("dock-dark", &pixels, 168, 72);
+    export_screenshot("dock-dark", &pixels, 216, 72);
 }
 
 #[test]

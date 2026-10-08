@@ -30,6 +30,9 @@ pub(crate) mod motion;
 pub(crate) mod popup_placement;
 pub(crate) mod projection;
 pub(crate) mod quick_settings;
+pub(crate) mod recycle_bin;
+#[cfg(test)]
+mod recycle_bin_render_tests;
 pub(crate) mod user_menu;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
@@ -433,6 +436,17 @@ pub trait DesktopHost: Send + Sync + 'static {
         &self,
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::dock_utilities::DockUtilitiesHost>>,
+        tessera_system::dock_utilities::DockUtilityError,
+    > {
+        Ok(None)
+    }
+
+    /// Genuine Recycle Bin reads, fixed opening and scoped changes, separate
+    /// from application observation and destructive operation authority.
+    fn recycle_bin_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::recycle_bin::RecycleBinHost>>,
         tessera_system::dock_utilities::DockUtilityError,
     > {
         Ok(None)

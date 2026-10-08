@@ -53,9 +53,13 @@ mod native_events;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_folders;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_recycle_bin;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_window_actions;
+pub mod recycle_bin;
 #[cfg(any(windows, test))]
 mod shell_recovery;
 mod shell_runtime;

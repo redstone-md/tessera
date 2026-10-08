@@ -100,6 +100,7 @@ mod desktop {
     use tessera_system::calendar::{CalendarError, CalendarHost};
     use tessera_system::dock_utilities::{DockUtilitiesHost, DockUtilityError};
     use tessera_system::folders::{FolderError, FolderHost};
+    use tessera_system::recycle_bin::RecycleBinHost;
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
         PixelIcon, RunOptions, ShellIdentity, SurfaceKind, SurfaceMode, SystemAction,
@@ -138,6 +139,7 @@ mod desktop {
         folders: LazyLock<Provider<dyn FolderHost>>,
         calendar: LazyLock<Provider<dyn CalendarHost>>,
         dock_utilities: LazyLock<Provider<dyn DockUtilitiesHost>>,
+        recycle_bin: LazyLock<Provider<dyn RecycleBinHost>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -245,6 +247,12 @@ mod desktop {
         ) -> Result<Option<Arc<dyn DockUtilitiesHost>>, DockUtilityError> {
             self.dock_utilities
                 .get(tessera_windows::dock_utilities::native_dock_utilities_host)
+                .map(Some)
+        }
+
+        fn recycle_bin_host(&self) -> Result<Option<Arc<dyn RecycleBinHost>>, DockUtilityError> {
+            self.recycle_bin
+                .get(tessera_windows::recycle_bin::native_recycle_bin_host)
                 .map(Some)
         }
 
@@ -483,6 +491,7 @@ mod desktop {
             folders: LazyLock::new(Provider::default),
             calendar: LazyLock::new(Provider::default),
             dock_utilities: LazyLock::new(Provider::default),
+            recycle_bin: LazyLock::new(Provider::default),
         };
         tessera_ui::run(
             host,
