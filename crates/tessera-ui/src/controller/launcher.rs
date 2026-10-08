@@ -10,8 +10,8 @@ use slint::{ComponentHandle, DataTransfer, ModelRc};
 
 use super::PanelController;
 use crate::generated::{
-    Launcher, LauncherDisplayMode as UiDisplayMode, LauncherGridMetrics, LauncherNavigation,
-    LauncherView, TileBounds,
+    LaunchTile, Launcher, LauncherDisplayMode as UiDisplayMode, LauncherDragVisual,
+    LauncherGridMetrics, LauncherNavigation, LauncherView, TileBounds,
 };
 use crate::launcher::order::{
     Bounds, FavoriteDrag, GridMetrics, Point, apply_reorder, autoscroll_delta,
@@ -160,6 +160,8 @@ struct ReorderToken {
 struct ReorderGesture {
     token: Rc<ReorderToken>,
     drag: FavoriteDrag,
+    // One captured image, independent of virtual rows and the bounded cache.
+    source_visual: LaunchTile,
     saved: Vec<String>,
     resolved: Vec<String>,
     catalog: Vec<String>,
@@ -363,6 +365,8 @@ impl ReorderAccess {
         let owner = self.owner();
         let gesture = owner.gesture.borrow_mut().take();
         owner.timer.stop();
+        self.launcher
+            .set_reorder_visual(LauncherDragVisual::default());
         let native_active = self.launcher.get_reorder_dragging();
         if gesture.is_none()
             && (!cancel_native || !native_active || owner.pending_exit.get().is_some())
@@ -426,6 +430,44 @@ impl ReorderAccess {
         self.sync();
     }
 
+    /// Pure presentation: no collision, grid pointer, autoscroll or save authority.
+    /// SDK state is read synchronously because changed callbacks can be queued.
+    fn present_source(&self, token: &Rc<ReorderToken>, pointer: Point) {
+        if !self.launcher.get_reorder_dragging() || !self.current(token) {
+            return;
+        }
+        let owner = self.owner();
+        let metrics = grid_metrics(self.launcher.get_reorder_metrics());
+        let scale = self.launcher.window().scale_factor();
+        let changed_geometry = owner.gesture.borrow().as_ref().is_some_and(|gesture| {
+            !same_geometry(&gesture.metrics, &metrics) || gesture.scale != scale
+        });
+        if changed_geometry {
+            self.cancel();
+            return;
+        }
+        let visual = {
+            let mut gesture = owner.gesture.borrow_mut();
+            let Some(gesture) = gesture.as_mut() else {
+                return;
+            };
+            let Some(bounds) = gesture.drag.translated_bounds(pointer) else {
+                return;
+            };
+            gesture.active = true;
+            LauncherDragVisual {
+                visible: true,
+                source: gesture.source_visual.clone(),
+                bounds: TileBounds {
+                    origin: slint::LogicalPosition::new(bounds.x, bounds.y),
+                    width: bounds.width,
+                    height: bounds.height,
+                },
+            }
+        };
+        self.launcher.set_reorder_visual(visual);
+    }
+
     fn hover(&self, pointer: Point) -> bool {
         let owner = self.owner();
         let token = owner
@@ -449,6 +491,7 @@ impl ReorderAccess {
             self.cancel();
             return false;
         }
+        self.present_source(&token, pointer);
         let preview = {
             let mut gesture = owner.gesture.borrow_mut();
             let gesture = gesture.as_mut().expect("validated gesture");
@@ -661,6 +704,25 @@ impl PanelController {
                 else {
                     return;
                 };
+                let application = {
+                    let state = self.launcher_state.borrow();
+                    state.inventory.application(key).cloned()
+                };
+                let Some(application) = application else {
+                    return;
+                };
+                // Exactly one source conversion, after all state borrows end.
+                let icon = access
+                    .icons
+                    .borrow_mut()
+                    .optional(application.icon.as_ref())
+                    .unwrap_or_default();
+                let source_visual = LaunchTile {
+                    key: application.key.into(),
+                    label: application.label.into(),
+                    favorite: true,
+                    icon,
+                };
                 let token = Rc::new(ReorderToken {
                     owner: Rc::clone(&owner.marker),
                     session,
@@ -672,6 +734,7 @@ impl PanelController {
                 *owner.gesture.borrow_mut() = Some(ReorderGesture {
                     token: Rc::clone(&token),
                     drag,
+                    source_visual,
                     saved,
                     resolved,
                     catalog,
@@ -703,6 +766,9 @@ impl PanelController {
         let Some(access) = self.reorder_access() else {
             return;
         };
+        if dragging && !access.launcher.get_reorder_dragging() {
+            return;
+        }
         let owner = access.owner();
         if !dragging {
             // dropped/finished own logical completion. Never erase the source
@@ -717,17 +783,19 @@ impl PanelController {
             .map(|gesture| Rc::clone(&gesture.token));
         if token.as_ref().is_none_or(|token| !access.current(token)) {
             access.cancel();
-            return;
         }
-        if let Some(gesture) = owner.gesture.borrow_mut().as_mut() {
-            gesture.active = true;
-        }
+        // Only the SDK's immutable DropEvent payload activates presentation.
+        // A queued changed=true has no payload and must not reveal a foreign
+        // native drag, reset its latest point, or resurrect cleared feedback.
     }
 
     fn reorder_can_drop(&self, event: DropEvent, origin: Point) -> DragAction {
         let Some(access) = self.reorder_access() else {
             return DragAction::None;
         };
+        if !access.launcher.get_reorder_dragging() {
+            return DragAction::None;
+        }
         let Some(token) = event
             .data
             .user_data()
@@ -747,6 +815,26 @@ impl PanelController {
         } else {
             DragAction::None
         }
+    }
+
+    fn reorder_window_hover(&self, event: DropEvent, origin: Point) {
+        let Some(access) = self.reorder_access() else {
+            return;
+        };
+        let Some(token) = event
+            .data
+            .user_data()
+            .and_then(|data| data.downcast::<ReorderToken>().ok())
+        else {
+            return;
+        };
+        access.present_source(
+            &token,
+            Point {
+                x: origin.x + event.position.x,
+                y: origin.y + event.position.y,
+            },
+        );
     }
 
     fn reorder_dropped(&self, event: DropEvent, origin: Point) -> DragAction {
@@ -968,6 +1056,17 @@ impl PanelController {
                     y: origin.y,
                 },
             )
+        });
+        let controller = self.clone();
+        launcher.on_reorder_window_hover(move |event, origin| {
+            let _callback = controller.launcher_callback();
+            controller.reorder_window_hover(
+                event,
+                Point {
+                    x: origin.x,
+                    y: origin.y,
+                },
+            );
         });
         let controller = self.clone();
         launcher.on_reorder_dropped(move |event, origin| {

@@ -180,6 +180,17 @@ impl FavoriteDrag {
         &self.preview
     }
 
+    /// Captured window-logical bounds follow the original press offset, even
+    /// outside the grid or after the source delegate has been evicted.
+    pub(crate) fn translated_bounds(&self, pointer: Point) -> Option<Bounds> {
+        let translated = Bounds {
+            x: self.bounds.x + pointer.x - self.press.x,
+            y: self.bounds.y + pointer.y - self.press.y,
+            ..self.bounds
+        };
+        translated.valid().then_some(translated)
+    }
+
     /// Immediate edge sorting uses the translated SOURCE center, retaining the
     /// original press offset even when rows disappear or the content scrolls.
     /// False means the preview did not change, not that the gesture was ended.
@@ -187,14 +198,9 @@ impl FavoriteDrag {
         if !metrics.valid() || !metrics.eligible_pointer(pointer) {
             return false;
         }
-        let translated = Bounds {
-            x: self.bounds.x + pointer.x - self.press.x,
-            y: self.bounds.y + pointer.y - self.press.y,
-            ..self.bounds
-        };
-        if !translated.valid() {
+        let Some(translated) = self.translated_bounds(pointer) else {
             return false;
-        }
+        };
         let Some(target) = collision_target(metrics, pointer, translated, self.preview.len())
         else {
             return false;
@@ -425,6 +431,39 @@ mod tests {
             anchor_key: anchor.into(),
             placement,
         }
+    }
+
+    #[test]
+    fn translated_bounds_retain_hotspot_outside_grid_without_changing_order() {
+        let values = keys(&["A", "B", "C"]);
+        let moving = drag(&values, 2, Some(Point { x: 255.0, y: 23.0 }));
+        assert_eq!(
+            moving.translated_bounds(Point { x: -20.0, y: -30.0 }),
+            Some(Bounds {
+                x: -25.0,
+                y: -43.0,
+                width: 100.0,
+                height: 100.0,
+            })
+        );
+        for pointer in [
+            Point {
+                x: f32::NAN,
+                y: 0.0,
+            },
+            Point {
+                x: 0.0,
+                y: f32::INFINITY,
+            },
+            Point {
+                x: f32::NEG_INFINITY,
+                y: 0.0,
+            },
+        ] {
+            assert!(moving.translated_bounds(pointer).is_none());
+        }
+        assert_eq!(moving.preview_keys(), values);
+        assert_eq!(moving.final_intent(), None);
     }
 
     #[test]

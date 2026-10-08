@@ -37,6 +37,11 @@ impl LauncherInventory {
         self.applications.len()
     }
 
+    /// Exact opaque identity lookup; it never requests native rows or images.
+    pub(crate) fn application(&self, key: &str) -> Option<&AppProjection> {
+        self.applications.iter().find(|app| app.key == key)
+    }
+
     /// Reorders the exact current identities without materializing native rows or images.
     pub(crate) fn reordered(&self, keys: &[String]) -> Option<Self> {
         if keys.len() != self.len() {
@@ -160,6 +165,21 @@ mod tests {
             }));
             Image::default()
         })
+    }
+
+    #[test]
+    fn application_lookup_is_exact_metadata_only_and_preserves_retained_pixels() {
+        let inventory = Rc::new(LauncherInventory::new(applications(1024)));
+        let converted = Rc::new(RefCell::new(Vec::new()));
+        let _rows = recording_rows(inventory.clone(), vec![], 7, converted.clone());
+        let app = inventory.application("opaque:1023").unwrap();
+        assert_eq!(app.label, "Label 1023");
+        assert_eq!(app.icon.as_ref().unwrap().rgba(), &[255, 3, 0, 255]);
+        assert!(std::ptr::eq(app, &inventory.applications[1023]));
+        for key in ["OPAQUE:1023", "opaque:1023 ", "Label 1023", "foreign", ""] {
+            assert!(inventory.application(key).is_none());
+        }
+        assert!(converted.borrow().is_empty());
     }
 
     #[test]

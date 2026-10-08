@@ -24,14 +24,16 @@ export component TileButton inherits Rectangle {
     in property <string> accessible-text;
     in property <string> tooltip-text;
     in property <bool> enabled: true;
+    // Passive presentation keeps enabled appearance without input or AX actions.
+    in property <bool> interactive: true;
     // Semantic selection is independent of real focus and input modality.
     in property <bool> selected: false;
     // Optional metadata only: the stable parent DragArea owns recognition.
     in property <bool> report-pointer-metadata: false;
     callback pointer-metadata(PointerEvent, TileBounds, Point);
-    out property <bool> hovered: touch.has-hover;
-    out property <bool> pressed: root.enabled && (touch.pressed || root.space-armed);
-    out property <bool> focus-visible: root.keyboard-focus && keyboard.has-focus && root.enabled;
+    out property <bool> hovered: root.interactive && touch.has-hover;
+    out property <bool> pressed: root.interactive && root.enabled && (touch.pressed || root.space-armed);
+    out property <bool> focus-visible: root.interactive && root.keyboard-focus && keyboard.has-focus && root.enabled;
     in property <length> radius;
     in property <bool> show-focus-ring: true;
     property <bool> keyboard-focus;
@@ -39,7 +41,7 @@ export component TileButton inherits Rectangle {
     /// false renders no idle background (transparent until hover/press).
     in property <bool> filled: true;
     public function focus-for-keyboard() {
-        if root.enabled {
+        if root.interactive && root.enabled {
             keyboard.focus();
             root.keyboard-focus = true;
         }
@@ -51,10 +53,12 @@ export component TileButton inherits Rectangle {
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point); // delay and source tile origin
     function dismiss-tooltip(delayed: bool) {
-        root.tooltip-dismissed(delayed, root.absolute-position);
+        if root.interactive {
+            root.tooltip-dismissed(delayed, root.absolute-position);
+        }
     }
     function update-tooltip() {
-        if root.enabled && root.hovered && root.tooltip-text != "" {
+        if root.interactive && root.enabled && root.hovered && root.tooltip-text != "" {
             root.tooltip-requested(root.tooltip-text, {
                 origin: root.absolute-position,
                 width: root.width,
@@ -65,8 +69,10 @@ export component TileButton inherits Rectangle {
         }
     }
     function activate() {
-        root.dismiss-tooltip(false);
-        root.clicked();
+        if root.interactive && root.enabled {
+            root.dismiss-tooltip(false);
+            root.clicked();
+        }
     }
     changed hovered => {
         if root.hovered {
@@ -87,26 +93,39 @@ export component TileButton inherits Rectangle {
             root.keyboard-focus = false;
         }
     }
+    changed interactive => {
+        if !root.interactive {
+            root.middle-armed = false;
+            root.right-armed = false;
+            root.space-armed = false;
+            root.keyboard-focus = false;
+            if root.tooltip-text != "" {
+                root.tooltip-dismissed(false, root.absolute-position);
+            }
+        }
+    }
 
     border-radius: root.radius;
     background: !root.enabled ? (root.filled ? SeelenPalette.tile : transparent) :
         root.pressed ? SeelenPalette.pressed :
-        touch.has-hover ? SeelenPalette.hover :
+        root.hovered ? SeelenPalette.hover :
         root.filled ? SeelenPalette.tile : transparent;
     opacity: root.enabled ? 1 : 0.5;
 
     accessible-role: button;
-    accessible-enabled: root.enabled;
+    accessible-enabled: root.enabled && root.interactive;
     accessible-label: root.accessible-text;
-    accessible-action-default => { if root.enabled { root.activate(); } }
+    accessible-action-default => { if root.interactive && root.enabled { root.activate(); } }
 
 
     keyboard := FocusScope {
         // Zero-size: must not react on clicks (only key events); the stock
         // StateLayer pattern from the toolkit's own widgets.
         width: 0px;
-        enabled: root.enabled;
+        enabled: root.enabled && root.interactive;
+        focus-on-tab-navigation: root.interactive;
         focus-gained(reason) => {
+            if !root.interactive { return; }
             // Window/popup reactivation preserves the existing modality.
             if reason == FocusReason.tab-navigation || reason == FocusReason.programmatic {
                 root.keyboard-focus = true;
@@ -117,19 +136,19 @@ export component TileButton inherits Rectangle {
         }
         focus-lost(reason) => { root.space-armed = false; }
         key-pressed(event) => {
-            if root.enabled && event.text == Key.Space {
+            if root.interactive && root.enabled && event.text == Key.Space {
                 root.keyboard-focus = true;
                 // Repeats cannot revive a cancelled gesture.
                 if !event.repeat { root.space-armed = true; }
                 root.dismiss-tooltip(false);
                 return accept;
             }
-            if root.enabled && event.text == Key.Return {
+            if root.interactive && root.enabled && event.text == Key.Return {
                 root.keyboard-focus = true;
                 root.activate();
                 return accept;
             }
-            if root.enabled && (event.text == Key.Menu
+            if root.interactive && root.enabled && (event.text == Key.Menu
                 || (event.text == Key.F10 && event.modifiers.shift)) {
                 root.dismiss-tooltip(false);
                 root.keyboard-focus = true;
@@ -142,7 +161,7 @@ export component TileButton inherits Rectangle {
             return reject;
         }
         key-released(event) => {
-            if event.text == Key.Space {
+            if root.interactive && event.text == Key.Space {
                 let activate = root.enabled && root.space-armed;
                 root.space-armed = false;
                 if activate { root.activate(); }
@@ -154,7 +173,7 @@ export component TileButton inherits Rectangle {
     forward-focus: keyboard;
 
     touch := TouchArea {
-        enabled: root.enabled;
+        enabled: root.enabled && root.interactive;
         clicked => { root.activate(); }
         forward-focus: keyboard;
         scroll-event(event) => {
@@ -162,7 +181,8 @@ export component TileButton inherits Rectangle {
             return reject; // preserve the parent ScrollView's real scrolling
         }
         pointer-event(event) => {
-            if root.report-pointer-metadata && event.kind != PointerEventKind.move {
+            if !root.interactive { return; }
+            if root.interactive && root.report-pointer-metadata && event.kind != PointerEventKind.move {
                 root.pointer-metadata(event, {
                     origin: root.absolute-position,
                     width: root.width, height: root.height
@@ -174,7 +194,7 @@ export component TileButton inherits Rectangle {
             if event.kind == PointerEventKind.down || event.kind == PointerEventKind.cancel {
                 root.dismiss-tooltip(false);
             }
-            if event.kind == PointerEventKind.down {
+            if root.interactive && event.kind == PointerEventKind.down {
                 // forward-focus redirects focus requests, not TouchArea
                 // clicks. This is item focus, not a host foreground request.
                 keyboard.focus();
@@ -229,6 +249,10 @@ export component ApplicationIcon inherits Rectangle {
     in property <image> source;
     accessible-role: none;
     Image {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
         source: root.source;
         image-fit: ImageFit.contain;
         accessible-role: none;

@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+import { ApplicationIcon, TileButton, TileBounds } from "tiles.slint";
+
+export struct LaunchTile {
+    key: string,
+    label: string,
+    icon: image,
+    favorite: bool,
+}
+
+// One appearance for native delegates and passive whole-tile drag feedback.
+export component LauncherTile inherits TileButton {
+    in property <LaunchTile> tile;
+    in property <bool> keyboard-selected: false;
+    callback favorite-pointer-metadata(PointerEvent, TileBounds, Point);
+    callback favorite-toggle-requested();
+    radius: 10px;
+    filled: false;
+    transform-scale: self.pressed ? 0.95 : 1;
+    background: !self.enabled ? transparent :
+        (self.selected || self.focus-visible) ? SeelenPalette.accent.with-alpha(0.1) :
+        self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+    accessible-text: "Launch " + root.tile.label;
+    // Virtual rows can be created already selected, before any changed signal.
+    init => {
+        if root.keyboard-selected { root.focus-for-keyboard(); }
+    }
+    changed keyboard-selected => {
+        if root.keyboard-selected { root.focus-for-keyboard(); }
+    }
+
+    // Clip icon/name content, not the external focus ring. Keep the fixed
+    // reference label track even when the residual icon row becomes tiny.
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+        accessible-role: none;
+        icon-row := Rectangle {
+            x: 8px;
+            y: 8px;
+            width: max(0px, parent.width - 16px);
+            height: max(0px, parent.height - 16px - 8px - 35.2px);
+            accessible-role: none;
+            ApplicationIcon {
+                property <length> side: min(icon-row.height, icon-row.width);
+                x: (icon-row.width - self.side) / 2;
+                y: (icon-row.height - self.side) / 2;
+                width: self.side;
+                height: self.side;
+                source: root.tile.icon;
+            }
+        }
+        Text {
+            x: 8px;
+            y: icon-row.y + icon-row.height + 8px;
+            width: max(0px, parent.width - 16px);
+            height: 35.2px;
+            text: root.tile.label;
+            color: SeelenPalette.foreground;
+            font-size: 12.8px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+
+    TileButton {
+        width: 16px;
+        height: 16px;
+        x: parent.width - self.width;
+        y: 0px;
+        radius: 4px;
+        filled: false;
+        enabled: root.enabled;
+        interactive: root.interactive;
+        visible: root.interactive;
+        report-pointer-metadata: root.report-pointer-metadata;
+        pointer-metadata(event, bounds, point) => {
+            root.favorite-pointer-metadata(event, bounds, point);
+        }
+        accessible-role: checkbox;
+        accessible-checked: root.tile.favorite;
+        accessible-text: (root.tile.favorite ? "Remove from favorites: " :
+            "Add to favorites: ") + root.tile.label;
+        clicked => { root.favorite-toggle-requested(); }
+    }
+    // Keep the favorite glyph painted in passive feedback without retaining
+    // an accessible or interactive corner control there.
+    Rectangle {
+        width: 8px;
+        height: 8px;
+        x: root.width - 12px;
+        y: 4px;
+        border-radius: 4px;
+        background: root.tile.favorite ? SeelenPalette.accent : SeelenPalette.muted;
+        opacity: root.enabled ? 1 : 0.5;
+        accessible-role: none;
+    }
+}

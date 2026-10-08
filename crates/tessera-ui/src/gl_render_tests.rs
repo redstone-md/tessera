@@ -3,7 +3,7 @@
 
 //! Production-renderer pixels on an owned virtual display, in an isolated test process.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use slint::ComponentHandle;
@@ -13,7 +13,7 @@ use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
     ContextMenuSurface, DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher,
-    LauncherDisplayMode, QuickSettings, TooltipSurface,
+    LauncherDisplayMode, LauncherDragVisual, QuickSettings, TileBounds, TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -99,13 +99,17 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                 verify_launcher_controls(ColorScheme::Light, &launcher);
                 verify_menu_press_scale(&menu);
                 verify_menu_application_image(&menu);
-                verify_launcher_reorder_preview(&launcher);
-                launcher.hide().unwrap();
-                tooltip.hide().unwrap();
-                menu.hide().unwrap();
-                quick.hide().unwrap();
-                result.set(true);
-                slint::quit_event_loop().unwrap();
+                verify_launcher_reorder_preview(
+                    launcher,
+                    Box::new(move |launcher| {
+                        launcher.hide().unwrap();
+                        tooltip.hide().unwrap();
+                        menu.hide().unwrap();
+                        quick.hide().unwrap();
+                        result.set(true);
+                        slint::quit_event_loop().unwrap();
+                    }),
+                );
             });
         });
     })
@@ -306,133 +310,725 @@ fn verify_launcher_press_scale(launcher: &Launcher) {
     assert_eq!(launches.get(), 2, "pointer and Space each launch once");
 }
 
-// Actual in-window SDK drag plus a two-tile model preview on the owned GL
-// renderer. This is pixel/dispatch evidence, not OS capture or persistence.
-fn verify_launcher_reorder_preview(launcher: &Launcher) {
+// Owned Mesa/OpenGL pixels and real SDK dispatch, not Windows compositor,
+// OLE capture, persistence, or a production snapshot-based feedback path.
+struct GlDragSource {
+    tile: LaunchTile,
+    bounds: TileBounds,
+    press: slint::LogicalPosition,
+}
+
+fn publish_gl_drag_visual(
+    launcher: &Launcher,
+    source: &RefCell<Option<Rc<GlDragSource>>>,
+    event: &slint::language::DropEvent,
+    origin: slint::LogicalPosition,
+) -> bool {
+    let Some(payload) = event
+        .data
+        .user_data()
+        .and_then(|data| data.downcast::<GlDragSource>().ok())
+    else {
+        return false;
+    };
+    if !launcher.get_reorder_dragging()
+        || !source
+            .borrow()
+            .as_ref()
+            .is_some_and(|source| Rc::ptr_eq(source, &payload))
+    {
+        return false;
+    }
+    launcher.set_reorder_visual(LauncherDragVisual {
+        visible: true,
+        source: payload.tile.clone(),
+        bounds: TileBounds {
+            origin: slint::LogicalPosition::new(
+                payload.bounds.origin.x + origin.x + event.position.x - payload.press.x,
+                payload.bounds.origin.y + origin.y + event.position.y - payload.press.y,
+            ),
+            width: payload.bounds.width,
+            height: payload.bounds.height,
+        },
+    });
+    true
+}
+
+fn assert_gl_launcher_tile_geometry(tile: &i_slint_backend_testing::ElementHandle) {
+    let origin = tile.absolute_position();
+    let size = tile.size();
+    let icon = tile
+        .query_descendants()
+        .match_type_name("ApplicationIcon")
+        .find_first()
+        .unwrap();
+    let label = tile
+        .query_descendants()
+        .match_type_name("Text")
+        .find_first()
+        .unwrap();
+    let side = (size.height - 59.2)
+        .max(0.0)
+        .min((size.width - 16.0).max(0.0));
+    assert!((icon.size().width - side).abs() < 0.001);
+    assert!(
+        (icon.size().height - side).abs() < 0.001,
+        "genuine and fallback have one square frame"
+    );
+    assert!((icon.absolute_position().x - origin.x - (size.width - side) / 2.0).abs() < 0.001);
+    assert!((icon.absolute_position().y - origin.y - 8.0).abs() < 0.001);
+    assert!(
+        (label.size().height - 35.2).abs() < 0.001,
+        "label track is fixed at both window widths"
+    );
+    assert!((label.absolute_position().y - origin.y - size.height + 43.2).abs() < 0.001);
+}
+
+fn gl_region(
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    origin: slint::LogicalPosition,
+    size: slint::LogicalSize,
+    scale: f32,
+) -> Vec<slint::Rgba8Pixel> {
+    let mut pixels = Vec::new();
+    for y in (origin.y * scale).ceil() as usize..((origin.y + size.height) * scale).floor() as usize
+    {
+        for x in
+            (origin.x * scale).ceil() as usize..((origin.x + size.width) * scale).floor() as usize
+        {
+            pixels.push(frame.as_slice()[y * frame.width() as usize + x]);
+        }
+    }
+    pixels
+}
+
+fn assert_gl_whole_tile_pixels(
+    original: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    floating: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    source: TileBounds,
+    ghost: TileBounds,
+    scale: f32,
+    genuine: bool,
+) {
+    // Integer logical translation retains subpixel phase at genuine 1x/2x.
+    // Compare the whole icon/name skin, not just an image-size getter.
+    let content = slint::LogicalSize::new(source.width - 16.0, source.height - 16.0);
+    let original_content = gl_region(
+        original,
+        slint::LogicalPosition::new(source.origin.x + 8.0, source.origin.y + 8.0),
+        content,
+        scale,
+    );
+    let ghost_content = gl_region(
+        floating,
+        slint::LogicalPosition::new(ghost.origin.x + 8.0, ghost.origin.y + 8.0),
+        content,
+        scale,
+    );
+    assert_eq!(ghost_content.len(), original_content.len());
+    // Same-position comparison allows only 2/255 antialias/compositing rounding
+    // (<0.8% per channel), never spatial matching or missing icon/name content.
+    let (index, difference) = ghost_content
+        .iter()
+        .zip(&original_content)
+        .enumerate()
+        .map(|(index, (actual, expected))| {
+            let difference = [
+                actual.r.abs_diff(expected.r),
+                actual.g.abs_diff(expected.g),
+                actual.b.abs_diff(expected.b),
+                actual.a.abs_diff(expected.a),
+            ]
+            .into_iter()
+            .max()
+            .unwrap();
+            (index, difference)
+        })
+        .max_by_key(|(_, difference)| *difference)
+        .unwrap();
+    eprintln!(
+        "native GL full content: genuine={genuine} scale={scale} source={source:?} ghost={ghost:?} max_channel_delta={difference}"
+    );
+    assert!(
+        difference <= 2,
+        "shared ordinary/ghost icon AND two-line label pixel {index}: {:?} != {:?}",
+        ghost_content[index],
+        original_content[index],
+    );
+    // Selected skin's external 4px outline supplies a whole-tile pixel bbox.
+    // A one-physical-pixel edge tolerance accounts only for raster coverage.
+    let mut changed = Vec::new();
+    for y in ((ghost.origin.y - 5.0) * scale).floor() as usize
+        ..((ghost.origin.y + ghost.height + 5.0) * scale).ceil() as usize
+    {
+        for x in ((ghost.origin.x - 5.0) * scale).floor() as usize
+            ..((ghost.origin.x + ghost.width + 5.0) * scale).ceil() as usize
+        {
+            let index = y * floating.width() as usize + x;
+            if floating.as_slice()[index] != original.as_slice()[index] {
+                changed.push((x, y));
+            }
+        }
+    }
+    for (actual, expected) in [
+        (
+            changed.iter().map(|pixel| pixel.0).min().unwrap() as f32,
+            (ghost.origin.x - 4.0) * scale,
+        ),
+        (
+            changed.iter().map(|pixel| pixel.1).min().unwrap() as f32,
+            (ghost.origin.y - 4.0) * scale,
+        ),
+        (
+            changed.iter().map(|pixel| pixel.0).max().unwrap() as f32 + 1.0,
+            (ghost.origin.x + ghost.width + 4.0) * scale,
+        ),
+        (
+            changed.iter().map(|pixel| pixel.1).max().unwrap() as f32 + 1.0,
+            (ghost.origin.y + ghost.height + 4.0) * scale,
+        ),
+    ] {
+        assert!(
+            (actual - expected).abs() <= 1.0,
+            "physical WHOLE ghost bbox, including original selected outline"
+        );
+    }
+    let side = (ghost.height - 59.2).max(0.0);
+    let icon_origin = slint::LogicalPosition::new(
+        ghost.origin.x + (ghost.width - side) / 2.0,
+        ghost.origin.y + 8.0,
+    );
+    let icon_pixels = gl_region(
+        floating,
+        icon_origin,
+        slint::LogicalSize::new(side, side),
+        scale,
+    );
+    assert!(
+        icon_pixels.iter().any(|pixel| {
+            if genuine {
+                (pixel.r, pixel.g, pixel.b, pixel.a) == (255, 0, 255, 255)
+            } else {
+                pixel.r < 200 && pixel.g < 200 && pixel.b < 200 && pixel.a == 255
+            }
+        }),
+        "actual genuine/fallback icon pixels, including the narrow residual row"
+    );
+    if genuine {
+        let colored = floating
+            .as_slice()
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| (pixel.r, pixel.g, pixel.b, pixel.a) == (255, 0, 255, 255))
+            .map(|(index, _)| {
+                (
+                    index % floating.width() as usize,
+                    index / floating.width() as usize,
+                )
+            })
+            .collect::<Vec<_>>();
+        let left = colored.iter().map(|pixel| pixel.0).min().unwrap() as f32;
+        let right = colored.iter().map(|pixel| pixel.0).max().unwrap() as f32 + 1.0;
+        let top = colored.iter().map(|pixel| pixel.1).min().unwrap() as f32;
+        let bottom = colored.iter().map(|pixel| pixel.1).max().unwrap() as f32 + 1.0;
+        for (actual, expected) in [
+            (left, icon_origin.x * scale),
+            (right, (icon_origin.x + side) * scale),
+            (top, icon_origin.y * scale),
+            (bottom, (icon_origin.y + side) * scale),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 1.0,
+                "physical icon bbox {actual} vs {expected} at {scale}x"
+            );
+        }
+    }
+    for offset in [0.0, 17.6] {
+        let label = gl_region(
+            floating,
+            slint::LogicalPosition::new(
+                ghost.origin.x + 8.0,
+                ghost.origin.y + ghost.height - 43.2 + offset,
+            ),
+            slint::LogicalSize::new(ghost.width - 16.0, 17.6),
+            scale,
+        );
+        assert!(
+            label
+                .iter()
+                .filter(|pixel| pixel.r < 180 && pixel.g < 180 && pixel.b < 180)
+                .count()
+                > 4,
+            "both lines of the original label must actually paint"
+        );
+    }
+}
+
+fn verify_launcher_reorder_preview(launcher: Launcher, completed: Box<dyn FnOnce(Launcher)>) {
+    launcher
+        .window()
+        .set_size(slint::LogicalSize::new(560.0, 420.0));
+    await_launcher_gl_width(
+        launcher,
+        560.0,
+        std::time::Instant::now(),
+        Box::new(move |launcher| {
+            verify_launcher_reorder_at_width(&launcher, 560.0);
+            launcher
+                .window()
+                .set_size(slint::LogicalSize::new(840.0, 420.0));
+            await_launcher_gl_width(
+                launcher,
+                840.0,
+                std::time::Instant::now(),
+                Box::new(move |launcher| {
+                    verify_launcher_reorder_at_width(&launcher, 840.0);
+                    completed(launcher);
+                }),
+            );
+        }),
+    );
+}
+
+// X11 resize acknowledgement is asynchronous. Yield only for native/cache
+// size agreement; never poll snapshots or create another renderer/window.
+fn await_launcher_gl_width(
+    launcher: Launcher,
+    width: f32,
+    started: std::time::Instant,
+    ready: Box<dyn FnOnce(Launcher)>,
+) {
+    let window = launcher.window();
+    let (native_size, native_scale) = window
+        .with_winit_window(|native| (native.inner_size(), native.scale_factor()))
+        .expect("the owned production winit window exists");
+    let scale = window.scale_factor();
+    assert_eq!(
+        native_scale as f32, scale,
+        "native display and renderer scale must agree, not just a Slint override"
+    );
+    let expected = slint::PhysicalSize::new((width * scale) as u32, (420.0 * scale) as u32);
+    if native_size.width == expected.width
+        && native_size.height == expected.height
+        && window.size() == expected
+    {
+        eprintln!(
+            "owned GL native/cache settled: logical={width}x420 physical={expected:?} native_scale={native_scale} renderer_scale={scale}"
+        );
+        ready(launcher);
+        return;
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "native GL resize not acknowledged: native={native_size:?}, cached={:?}, expected={expected:?}",
+        window.size()
+    );
+    slint::Timer::single_shot(std::time::Duration::from_millis(10), move || {
+        await_launcher_gl_width(launcher, width, started, ready);
+    });
+}
+
+fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
     use slint::language::{DragAction, PointerEventKind};
     use slint::platform::{PointerEventButton, WindowEvent};
-    let preview_rows = |reversed: bool| {
-        let mut tiles = vec![
-            LaunchTile {
-                key: "native-app".into(),
-                label: "Native app".into(),
-                icon: slint::Image::default(),
-                favorite: true,
-            },
-            LaunchTile {
-                key: "preview-app".into(),
-                label: "Preview app".into(),
-                icon: slint::Image::default(),
-                favorite: true,
-            },
-        ];
-        if reversed {
-            tiles.reverse();
-        }
-        slint::ModelRc::new(slint::VecModel::from(vec![LaunchRow {
-            tiles: slint::ModelRc::new(slint::VecModel::from(tiles)),
-        }]))
-    };
-    launcher.set_application_count(2);
-    launcher.set_rows(preview_rows(false));
-    launcher.set_selected_key("native-app".into());
-    let mut marker = slint::DataTransfer::default();
-    marker.set_user_data(Rc::new(()));
-    launcher.set_reorder_data(marker);
-    launcher.set_reorder_enabled(true);
-    let weak = launcher.as_weak();
-    launcher.on_reorder_origin(move |key, event, _, _| {
-        if event.kind == PointerEventKind::Down && !key.is_empty() {
-            let mut data = slint::DataTransfer::default();
-            data.set_user_data(Rc::new(key.to_string()));
-            weak.upgrade().unwrap().set_reorder_data(data);
-        }
-    });
-    let weak = launcher.as_weak();
-    let previewed = Rc::new(Cell::new(false));
-    let state = previewed.clone();
-    launcher.on_reorder_can_drop(move |event, _| {
-        let valid = event
-            .data
-            .user_data()
-            .and_then(|data| data.downcast::<String>().ok())
-            .is_some_and(|key| key.as_str() == "native-app");
-        if !valid {
-            return DragAction::None;
-        }
-        if !state.replace(true) {
-            weak.upgrade().unwrap().set_rows(preview_rows(true));
-        }
-        DragAction::Move
-    });
-    let drops = Rc::new(Cell::new(0));
-    let count = drops.clone();
-    launcher.on_reorder_dropped(move |_, _| {
-        count.set(count.get() + 1);
-        DragAction::Move
-    });
-    let finished = Rc::new(Cell::new(false));
-    let state = finished.clone();
-    launcher.on_reorder_finished(move |action| state.set(action == DragAction::Move));
-    let launches = Rc::new(Cell::new(0));
-    let count = launches.clone();
-    launcher.on_launch_requested(move |_| count.set(count.get() + 1));
-    let _ = launcher.window().take_snapshot().unwrap();
-    let tile = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-        launcher,
-        "Launch Native app",
-    )
-    .next()
-    .unwrap();
-    let source = tile.absolute_position();
-    let target = slint::LogicalPosition::new(source.x + tile.size().width + 19.0, source.y + 13.0);
-    let press = slint::LogicalPosition::new(source.x + 11.0, source.y + 13.0);
-    launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerPressed {
-            position: press,
-            button: PointerEventButton::Left,
-        });
-    launcher.window().dispatch_event(WindowEvent::PointerMoved {
-        position: slint::LogicalPosition::new(press.x + 12.0, press.y),
-    });
-    launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerMoved { position: target });
-    assert!(launcher.get_reorder_dragging());
-    assert!(previewed.get());
-    let frame = launcher.window().take_snapshot().unwrap();
-    let first = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-        launcher,
-        "Launch Preview app",
-    )
-    .next()
-    .unwrap();
-    assert_eq!(
-        first.absolute_position(),
-        source,
-        "preview changes order, not native grid layout"
+    let scale = launcher.window().scale_factor();
+    assert!(
+        scale == 1.0 || scale == 2.0,
+        "owned GL run must have genuine 1x or 2x scale, got {scale}"
     );
-    assert_eq!(
-        launcher.get_selected_key(),
-        "native-app",
-        "preview preserves selected identity"
-    );
-    export_frame("launcher-reorder-preview", &frame);
-    // Final native movement/release remain consecutive, with no snapshot/query.
-    launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerMoved { position: target });
-    launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerReleased {
-            position: target,
-            button: PointerEventButton::Left,
+    if let Ok(expected) = std::env::var("SLINT_SCALE_FACTOR") {
+        assert_eq!(
+            scale,
+            expected.parse::<f32>().unwrap(),
+            "requested scale must be the real window scale"
+        );
+    }
+    for genuine in [true, false] {
+        let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(16, 16);
+        for pixel in pixels.make_mut_bytes().chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[255, 0, 255, 255]);
+        }
+        let tile = LaunchTile {
+            key: "native-app".into(),
+            label: "Native\napplication".into(),
+            icon: if genuine {
+                slint::Image::from_rgba8(pixels)
+            } else {
+                slint::Image::default()
+            },
+            favorite: true,
+        };
+        let preview = LaunchTile {
+            key: "preview-app".into(),
+            label: "Preview app".into(),
+            icon: slint::Image::default(),
+            favorite: true,
+        };
+        let retained = tile.clone();
+        let rows = move |reversed: bool| {
+            let tiles = if reversed {
+                vec![preview.clone(), tile.clone()]
+            } else {
+                vec![tile.clone(), preview.clone()]
+            };
+            slint::ModelRc::new(slint::VecModel::from(vec![LaunchRow {
+                tiles: slint::ModelRc::new(slint::VecModel::from(tiles)),
+            }]))
+        };
+        launcher.set_application_count(2);
+        launcher.set_rows(rows(false));
+        launcher.set_selected_key("native-app".into());
+        launcher.invoke_focus_search();
+        launcher.window().dispatch_event(WindowEvent::PointerExited);
+        let original = launcher.window().take_snapshot().unwrap();
+        assert_eq!(original.width(), (width * scale) as u32);
+        assert_eq!(original.height(), (420.0 * scale) as u32);
+        let source_weak =
+            ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
+                .next()
+                .unwrap();
+        assert_gl_launcher_tile_geometry(&source_weak);
+        let bounds = TileBounds {
+            origin: source_weak.absolute_position(),
+            width: source_weak.size().width,
+            height: source_weak.size().height,
+        };
+        let extent = launcher.get_reorder_metrics().content_height;
+        let source = Rc::new(RefCell::new(None::<Rc<GlDragSource>>));
+        let mut marker = slint::DataTransfer::default();
+        marker.set_user_data(Rc::new(()));
+        launcher.set_reorder_data(marker);
+        launcher.set_reorder_enabled(true);
+        let weak = launcher.as_weak();
+        let state = source.clone();
+        launcher.on_reorder_origin(move |key, event, bounds, press| {
+            let launcher = weak.upgrade().unwrap();
+            if event.kind == PointerEventKind::Down {
+                state.borrow_mut().take();
+                launcher.set_reorder_visual(LauncherDragVisual::default());
+                if event.button == PointerEventButton::Left && key == retained.key {
+                    let token = Rc::new(GlDragSource {
+                        tile: retained.clone(),
+                        bounds,
+                        press,
+                    });
+                    *state.borrow_mut() = Some(token.clone());
+                    let mut data = slint::DataTransfer::default();
+                    data.set_user_data(token);
+                    launcher.set_reorder_data(data);
+                }
+            } else if event.kind == PointerEventKind::Up && !launcher.get_reorder_dragging() {
+                state.borrow_mut().take();
+            }
         });
-    assert_eq!(drops.get(), 1);
-    assert!(finished.get());
-    assert_eq!(launches.get(), 0);
-    launcher.set_reorder_enabled(false);
+        let weak = launcher.as_weak();
+        let state = source.clone();
+        let previewed = Rc::new(Cell::new(false));
+        let did_preview = previewed.clone();
+        launcher.on_reorder_can_drop(move |event, origin| {
+            let launcher = weak.upgrade().unwrap();
+            if !publish_gl_drag_visual(&launcher, &state, &event, origin) {
+                return DragAction::None;
+            }
+            if !did_preview.replace(true) {
+                launcher.set_rows(rows(true));
+            }
+            DragAction::Move
+        });
+        let weak = launcher.as_weak();
+        let state = source.clone();
+        let outside = Rc::new(Cell::new(0));
+        let count = outside.clone();
+        launcher.on_reorder_window_hover(move |event, origin| {
+            if publish_gl_drag_visual(&weak.upgrade().unwrap(), &state, &event, origin) {
+                count.set(count.get() + 1);
+            }
+        });
+        let drops = Rc::new(Cell::new(0));
+        let count = drops.clone();
+        let weak = launcher.as_weak();
+        let state = source.clone();
+        launcher.on_reorder_dropped(move |event, origin| {
+            if !publish_gl_drag_visual(&weak.upgrade().unwrap(), &state, &event, origin) {
+                return DragAction::None;
+            }
+            count.set(count.get() + 1);
+            DragAction::Move
+        });
+        let finished = Rc::new(RefCell::new(Vec::new()));
+        let log = finished.clone();
+        let weak = launcher.as_weak();
+        let state = source.clone();
+        launcher.on_reorder_finished(move |action| {
+            state.borrow_mut().take();
+            weak.upgrade()
+                .unwrap()
+                .set_reorder_visual(LauncherDragVisual::default());
+            log.borrow_mut().push(action);
+        });
+        let launches = Rc::new(Cell::new(0));
+        let count = launches.clone();
+        launcher.on_launch_requested(move |_| count.set(count.get() + 1));
+        let favorites = Rc::new(Cell::new(0));
+        let count = favorites.clone();
+        launcher.on_favorite_toggle_requested(move |_, _| count.set(count.get() + 1));
+        let press = slint::LogicalPosition::new(bounds.origin.x + 11.0, bounds.origin.y + 13.0);
+        let target = slint::LogicalPosition::new(press.x + 280.0, press.y + 120.0);
+        launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: press });
+        launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: press,
+                button: PointerEventButton::Left,
+            });
+        assert!(
+            !launcher.get_reorder_visual().visible,
+            "Down only arms source data"
+        );
+        launcher.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(press.x + 12.0, press.y),
+        });
+        launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: target });
+        assert!(launcher.get_reorder_dragging());
+        assert!(previewed.get());
+        let floating = launcher.window().take_snapshot().unwrap();
+        assert!(
+            !source_weak.is_valid(),
+            "native source delegate is really evicted by preview"
+        );
+        let visual = launcher.get_reorder_visual();
+        assert_eq!(visual.source.key, "native-app");
+        assert_eq!(visual.source.label, "Native\napplication");
+        assert_eq!(
+            visual.bounds.origin,
+            slint::LogicalPosition::new(target.x - 11.0, target.y - 13.0)
+        );
+        let ghost = ElementHandle::find_by_element_id(launcher, "Launcher::drag-visual")
+            .next()
+            .unwrap();
+        assert_eq!(ghost.absolute_position(), visual.bounds.origin);
+        assert_eq!(
+            ghost.size(),
+            slint::LogicalSize::new(bounds.width, bounds.height)
+        );
+        for (actual, expected) in [
+            (
+                ghost.absolute_position().x * scale,
+                target.x * scale - 11.0 * scale,
+            ),
+            (
+                ghost.absolute_position().y * scale,
+                target.y * scale - 13.0 * scale,
+            ),
+            (ghost.size().width * scale, bounds.width * scale),
+            (ghost.size().height * scale, bounds.height * scale),
+        ] {
+            assert!(
+                (actual - expected).abs() < 0.001,
+                "physical whole-ghost bbox/noncenter hotspot"
+            );
+        }
+        assert_gl_launcher_tile_geometry(&ghost);
+        export_frame(
+            &format!("launcher-reorder-source-{width}-{genuine}-{scale}x"),
+            &original,
+        );
+        export_frame(
+            &format!("launcher-reorder-floating-{width}-{genuine}-{scale}x"),
+            &floating,
+        );
+        assert_gl_whole_tile_pixels(
+            &original,
+            &floating,
+            bounds.clone(),
+            visual.bounds.clone(),
+            scale,
+            genuine,
+        );
+        let slot_origin =
+            slint::LogicalPosition::new(bounds.origin.x + bounds.width + 8.0, bounds.origin.y);
+        let placeholder = ElementHandle::find_by_element_type_name(launcher, "Rectangle")
+            .find(|element| {
+                element.absolute_position() == slot_origin
+                    && element.size() == slint::LogicalSize::new(bounds.width, bounds.height)
+            })
+            .expect(
+                "the explicit source slot stays visible when its LauncherTile subtree is hidden",
+            );
+        assert_eq!(
+            placeholder.size(),
+            slint::LogicalSize::new(bounds.width, bounds.height)
+        );
+        assert_eq!(
+            placeholder.absolute_position(),
+            slint::LogicalPosition::new(bounds.origin.x + bounds.width + 8.0, bounds.origin.y)
+        );
+        assert_eq!(placeholder.accessible_role(), Some(AccessibleRole::None));
+        placeholder.invoke_accessible_default_action();
+        assert!(
+            !ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
+                .any(|element| element.accessible_role() == Some(AccessibleRole::Button)),
+            "neither hidden native source nor passive ghost exposes a visible launch Button"
+        );
+        assert!(
+            !ElementHandle::find_by_accessible_label(
+                launcher,
+                "Remove from favorites: Native\napplication"
+            )
+            .any(|element| element.accessible_role() == Some(AccessibleRole::Checkbox)),
+            "hidden source and passive ghost expose no visible favorite Checkbox"
+        );
+        assert_eq!(launcher.get_reorder_metrics().content_height, extent);
+        let hidden = gl_region(
+            &floating,
+            placeholder.absolute_position(),
+            placeholder.size(),
+            scale,
+        );
+        assert!(
+            hidden
+                .iter()
+                .all(|pixel| (pixel.r, pixel.g, pixel.b, pixel.a) == (242, 242, 242, 255)),
+            "source slot is background only, not a duplicate icon/name/corner"
+        );
+        assert_eq!(ghost.accessible_role(), Some(AccessibleRole::None));
+        for child in ghost
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .chain(std::iter::once(ghost))
+        {
+            assert_ne!(child.accessible_role(), Some(AccessibleRole::Button));
+            assert_ne!(child.accessible_role(), Some(AccessibleRole::Checkbox));
+            child.invoke_accessible_default_action();
+        }
+        export_frame(
+            &format!("launcher-reorder-preview-{width}-{genuine}-{scale}x"),
+            &floating,
+        );
+        // Final move/release stay adjacent: no snapshot/getter/query.
+        launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: target });
+        launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: target,
+                button: PointerEventButton::Left,
+            });
+        assert_eq!(drops.get(), 1);
+        assert_eq!(*finished.borrow(), vec![DragAction::Move]);
+        assert!(!launcher.get_reorder_visual().visible);
+        let restored_source =
+            ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
+                .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .expect("drop restores the original visible native source Button");
+        assert_eq!(restored_source.accessible_enabled(), Some(true));
+        assert_eq!(restored_source.absolute_position(), slot_origin);
+        assert_eq!(restored_source.size(), placeholder.size());
+        let trail_origin =
+            slint::LogicalPosition::new(visual.bounds.origin.x - 4.0, visual.bounds.origin.y - 4.0);
+        let trail_size = slint::LogicalSize::new(bounds.width + 8.0, bounds.height + 8.0);
+        let restored = launcher.window().take_snapshot().unwrap();
+        assert_eq!(
+            gl_region(&restored, trail_origin, trail_size, scale),
+            gl_region(&original, trail_origin, trail_size, scale),
+            "drop leaves no whole-tile trail",
+        );
+        let source_tile =
+            ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
+                .next()
+                .unwrap();
+        let press = slint::LogicalPosition::new(
+            source_tile.absolute_position().x + 11.0,
+            source_tile.absolute_position().y + 13.0,
+        );
+        let grid_top = launcher.get_reorder_metrics().viewport.origin.y;
+        let outside_pointer = slint::LogicalPosition::new(320.0, grid_top - 10.0);
+        launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: press,
+                button: PointerEventButton::Left,
+            });
+        launcher.window().dispatch_event(WindowEvent::PointerMoved {
+            position: slint::LogicalPosition::new(press.x + 12.0, press.y),
+        });
+        launcher.window().dispatch_event(WindowEvent::PointerMoved {
+            position: outside_pointer,
+        });
+        let outside_frame = launcher.window().take_snapshot().unwrap();
+        let outside_visual = launcher.get_reorder_visual();
+        assert_eq!(
+            outside_visual.bounds.origin,
+            slint::LogicalPosition::new(outside_pointer.x - 11.0, outside_pointer.y - 13.0)
+        );
+        assert!(outside.get() > 0, "rejecting root receives header hover");
+        let side = (outside_visual.bounds.height - 59.2).max(0.0);
+        let above_origin = slint::LogicalPosition::new(
+            outside_visual.bounds.origin.x + (outside_visual.bounds.width - side) / 2.0,
+            outside_visual.bounds.origin.y + 8.0,
+        );
+        let above_size = slint::LogicalSize::new(side, side.min(grid_top - above_origin.y));
+        let unclipped_icon = gl_region(&outside_frame, above_origin, above_size, scale);
+        let clean_header = gl_region(&restored, above_origin, above_size, scale);
+        assert!(
+            unclipped_icon
+                .iter()
+                .zip(&clean_header)
+                .any(|(pixel, clean)| {
+                    pixel != clean
+                        && if genuine {
+                            (pixel.r, pixel.g, pixel.b) == (255, 0, 255)
+                        } else {
+                            pixel.r < 200 && pixel.g < 200 && pixel.b < 200
+                        }
+                }),
+            "actual icon pixels ABOVE the ListView boundary, not just a below-grid fragment or existing header text"
+        );
+        export_frame(
+            &format!("launcher-reorder-outside-{width}-{genuine}-{scale}x"),
+            &outside_frame,
+        );
+        launcher.window().dispatch_event(WindowEvent::PointerExited);
+        assert!(!launcher.get_reorder_visual().visible);
+        assert_eq!(
+            source_tile.accessible_role(),
+            Some(AccessibleRole::Button),
+            "cancel restores ordinary source AX on GL"
+        );
+        assert_eq!(source_tile.accessible_enabled(), Some(true));
+        assert!(
+            ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
+                .any(|element| element.accessible_role() == Some(AccessibleRole::Button)),
+            "cancel restores a publicly visible native source Button"
+        );
+        assert_eq!(*finished.borrow(), vec![DragAction::Move, DragAction::None]);
+        assert_eq!(drops.get(), 1, "outside observer never accepts a save/drop");
+        let canceled = launcher.window().take_snapshot().unwrap();
+        assert_eq!(
+            gl_region(&canceled, trail_origin, trail_size, scale),
+            gl_region(&original, trail_origin, trail_size, scale),
+            "cancel leaves no previous ghost trail",
+        );
+        let outside_trail = slint::LogicalPosition::new(
+            outside_visual.bounds.origin.x - 4.0,
+            outside_visual.bounds.origin.y - 4.0,
+        );
+        assert_eq!(
+            gl_region(&canceled, outside_trail, trail_size, scale),
+            gl_region(&restored, outside_trail, trail_size, scale),
+            "cancel removes the current out-of-grid ghost as well as older positions",
+        );
+        assert_eq!(launches.get(), 0);
+        assert_eq!(favorites.get(), 0);
+        launcher.set_reorder_enabled(false);
+    }
 }
 
 fn verify_menu_press_scale(menu: &ContextMenuSurface) {

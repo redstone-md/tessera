@@ -4,14 +4,16 @@
 import { Button, LineEdit, ListView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
-import { ApplicationIcon, TileButton, FocusTokens, TileBounds } from "tiles.slint";
+import { TileButton, FocusTokens, TileBounds } from "tiles.slint";
+import { LauncherTile, LaunchTile } from "launcher-tile.slint";
 import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
-export struct LaunchTile {
-    key: string,
-    label: string,
-    icon: image,
-    favorite: bool,
+export { LaunchTile } from "launcher-tile.slint";
+
+export struct LauncherDragVisual {
+    visible: bool,
+    source: LaunchTile,
+    bounds: TileBounds,
 }
 
 export struct LaunchRow {
@@ -64,6 +66,7 @@ export component Launcher inherits Window {
     out property <int> grid-columns: 7;
     in property <bool> reorder-enabled: false;
     in property <data-transfer> reorder-data;
+    in property <LauncherDragVisual> reorder-visual;
     out property <bool> reorder-dragging: grid-drag.dragging;
     // Source geometry must not depend on the metrics' own window transform.
     property <length> reorder-source-width: Slint1181FluentNativeGridMetrics.source-width(
@@ -83,6 +86,7 @@ export component Launcher inherits Window {
     callback reorder-origin(string, PointerEvent, TileBounds, Point);
     callback reorder-dragging-changed(bool);
     callback reorder-can-drop(DropEvent, Point) -> DragAction;
+    callback reorder-window-hover(DropEvent, Point);
     callback reorder-dropped(DropEvent, Point) -> DragAction;
     callback reorder-finished(DragAction);
     callback reorder-metrics-changed();
@@ -164,6 +168,24 @@ export component Launcher inherits Window {
     changed search => {
         root.grid-navigation = false;
         root.search-changed();
+    }
+
+    // Rejecting observer: feedback may follow outside the grid, but only the
+    // existing grid target can authorize a drop or drive domain autoscroll.
+    DropArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        enabled: root.reorder-enabled && root.reorder-dragging;
+        can-drop(event) => {
+            if root.reorder-enabled && root.reorder-dragging {
+                root.retain-reorder-focus();
+                root.reorder-window-hover(event, self.absolute-position);
+            }
+            return DragAction.none;
+        }
+        dropped(event) => { return DragAction.none; }
     }
 
     body := PopoverBody {
@@ -366,12 +388,18 @@ export component Launcher inherits Window {
                         width: self.size;
                         height: self.size;
 
-                        TileButton {
+                        LauncherTile {
                             width: parent.width;
                             height: parent.height;
-                            radius: 10px;
-                            filled: false;
+                            tile: tile;
+                            // Keep the native slot and its geometry alive.
+                            opacity: root.reorder-visual.visible
+                                && root.reorder-visual.source.key == tile.key ? 0 : root.blocked ? 0.5 : 1;
                             enabled: !root.blocked;
+                            interactive: !(root.reorder-visual.visible
+                                && root.reorder-visual.source.key == tile.key);
+                            visible: !(root.reorder-visual.visible
+                                && root.reorder-visual.source.key == tile.key);
                             report-pointer-metadata: root.reorder-enabled;
                             pointer-metadata(event, bounds, point) => {
                                 if event.kind == PointerEventKind.down {
@@ -384,78 +412,15 @@ export component Launcher inherits Window {
                                 root.reorder-origin(tile.key, event, bounds, point);
                             }
                             selected: tile.key == root.selected-key;
-                            property <bool> keyboard-selected: root.grid-navigation
+                            keyboard-selected: root.grid-navigation
                                 && self.selected && !root.reorder-dragging;
-                            // A virtual row can be created already selected;
-                            // changed callbacks only track subsequent changes.
-                            init => {
-                                if self.keyboard-selected { self.focus-for-keyboard(); }
-                            }
-                            changed keyboard-selected => {
-                                if self.keyboard-selected { self.focus-for-keyboard(); }
-                            }
                             focus-acquired => { root.select-requested(tile.key); }
-                            transform-scale: self.pressed ? 0.95 : 1;
-                            background: !self.enabled ? transparent :
-                                (self.selected || self.focus-visible) ? SeelenPalette.accent.with-alpha(0.1) :
-                                self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
-                            accessible-text: "Launch " + tile.label;
                             clicked => { root.launch-requested(tile.key); }
-
-                            // Clip icon/name content, not the external focus ring.
-                            Rectangle {
-                                width: parent.width;
-                                height: parent.height;
-                                clip: true;
-                                VerticalLayout {
-                                    padding: root.pad;
-                                    spacing: root.gap;
-                                    ApplicationIcon { source: tile.icon; }
-                                    Text {
-                                        text: tile.label;
-                                        color: SeelenPalette.foreground;
-                                        font-size: 12.8px;
-                                        font-weight: 600;
-                                        horizontal-alignment: center;
-                                        wrap: word-wrap;
-                                        height: 35.2px;
-                                        overflow: elide;
-                                        accessible-role: none;
-                                    }
-                                }
+                            favorite-pointer-metadata(event, bounds, point) => {
+                                root.veto-reorder(event, bounds, point);
                             }
-
-                            // A genuine favorite action using the shared native
-                            // tile's focus, Space release and accessible activation.
-                            TileButton {
-                                width: 16px;
-                                height: 16px;
-                                x: parent.width - self.width;
-                                y: 0px;
-                                radius: 4px;
-                                filled: false;
-                                enabled: !root.blocked;
-                                report-pointer-metadata: root.reorder-enabled;
-                                pointer-metadata(event, bounds, point) => {
-                                    root.veto-reorder(event, bounds, point);
-                                }
-                                accessible-role: checkbox;
-                                accessible-checked: tile.favorite;
-                                accessible-text: (tile.favorite ? "Remove from favorites: " :
-                                    "Add to favorites: ") + tile.label;
-                                clicked => {
-                                    root.favorite-toggle-requested(tile.key, !tile.favorite);
-                                }
-
-                                Rectangle {
-                                    width: 8px;
-                                    height: 8px;
-                                    x: (parent.width - 8px) / 2;
-                                    y: (parent.height - 8px) / 2;
-                                    border-radius: 4px;
-                                    background: tile.favorite ? SeelenPalette.accent : SeelenPalette.muted;
-                                    accessible-role: none;
-                                }
+                            favorite-toggle-requested => {
+                                root.favorite-toggle-requested(tile.key, !tile.favorite);
                             }
                         }
                     }
@@ -551,5 +516,18 @@ export component Launcher inherits Window {
             }
         }
         }
+    }
+
+    // One stable whole-tile visual, outside the native ListView clip.
+    if root.reorder-visual.visible: drag-visual := LauncherTile {
+        x: root.reorder-visual.bounds.origin.x;
+        y: root.reorder-visual.bounds.origin.y;
+        width: root.reorder-visual.bounds.width;
+        height: root.reorder-visual.bounds.height;
+        tile: root.reorder-visual.source;
+        selected: root.reorder-visual.source.key == root.selected-key;
+        interactive: false;
+        enabled: true;
+        accessible-role: none;
     }
 }
