@@ -14,6 +14,7 @@ export struct LauncherDragVisual {
     visible: bool,
     source: LaunchTile,
     bounds: TileBounds,
+    source-scale: float,
 }
 
 export struct LaunchRow {
@@ -68,6 +69,8 @@ export component Launcher inherits Window {
     in property <data-transfer> reorder-data;
     in property <LauncherDragVisual> reorder-visual;
     out property <bool> reorder-dragging: grid-drag.dragging;
+    // Transient appearance metadata; gesture capture, not this property, owns it.
+    in-out property <float> source-appearance-scale: 1;
     // Source geometry must not depend on the metrics' own window transform.
     property <length> reorder-source-width: Slint1181FluentNativeGridMetrics.source-width(
         grid-scroll.visible-width, grid-scroll.content-height,
@@ -409,6 +412,9 @@ export component Launcher inherits Window {
                                 }
                                 // Descendant Cancel precedes the SDK dragging
                                 // transition; it must not disarm a valid source.
+                                if event.kind == PointerEventKind.down {
+                                    root.source-appearance-scale = self.appearance-scale;
+                                }
                                 root.reorder-origin(tile.key, event, bounds, point);
                             }
                             selected: tile.key == root.selected-key;
@@ -527,6 +533,7 @@ export component Launcher inherits Window {
         tile: root.reorder-visual.source;
         selected: root.reorder-visual.source.key == root.selected-key;
         interactive: false;
+        feedback-scale: root.reorder-visual.source-scale;
         enabled: true;
         accessible-role: none;
     }

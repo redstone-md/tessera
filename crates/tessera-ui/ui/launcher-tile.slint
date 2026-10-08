@@ -15,11 +15,13 @@ export struct LaunchTile {
 export component LauncherTile inherits TileButton {
     in property <LaunchTile> tile;
     in property <bool> keyboard-selected: false;
+    in property <float> feedback-scale: 1;
+    out property <float> appearance-scale: self.pressed ? 0.95 : 1;
     callback favorite-pointer-metadata(PointerEvent, TileBounds, Point);
     callback favorite-toggle-requested();
     radius: 10px;
     filled: false;
-    transform-scale: self.pressed ? 0.95 : 1;
+    transform-scale: root.interactive ? root.appearance-scale : root.feedback-scale;
     background: !self.enabled ? transparent :
         (self.selected || self.focus-visible) ? SeelenPalette.accent.with-alpha(0.1) :
         self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;

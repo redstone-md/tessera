@@ -2504,6 +2504,7 @@ fn finish_native_reorder(fixture: &LauncherFixture, position: slint::LogicalPosi
 fn assert_reorder_visual_cleared(fixture: &LauncherFixture) {
     let visual = fixture.launcher.get_reorder_visual();
     assert!(!visual.visible);
+    assert_eq!(visual.source_scale, 0.0);
     assert!(visual.source.key.is_empty());
     assert!(visual.source.label.is_empty());
     let size = visual.source.icon.size();
@@ -2561,6 +2562,10 @@ fn launcher_native_reorder_retains_one_source_image_and_moves_without_rebuilding
             position: press,
             button: PointerEventButton::Left,
         });
+    let captured_scale = fixture.launcher.get_source_appearance_scale();
+    assert!(captured_scale.is_finite() && captured_scale > 0.0 && captured_scale < 1.0);
+    // Source appearance is transient metadata, not a per-hover paint getter.
+    fixture.launcher.set_source_appearance_scale(0.625);
     assert_reorder_visual_cleared(&fixture);
     assert_eq!(fixture.launcher.get_rows(), rows);
     let activation = slint::LogicalPosition::new(press.x + 12.0, press.y);
@@ -2572,6 +2577,7 @@ fn launcher_native_reorder_retains_one_source_image_and_moves_without_rebuilding
         });
     assert!(fixture.launcher.get_reorder_dragging());
     assert_reorder_visual_cleared(&fixture);
+    fixture.launcher.set_source_appearance_scale(f32::NAN);
     // Actual dragging alone cannot reveal a source: this next native move
     // supplies the SDK's immutable payload to the first can-drop callback.
     let active = slint::LogicalPosition::new(press.x + 13.0, press.y + 1.0);
@@ -2587,6 +2593,7 @@ fn launcher_native_reorder_retains_one_source_image_and_moves_without_rebuilding
     assert_eq!(visual.source.key, "app-editor");
     assert_eq!(visual.source.label, "Rust Editor");
     assert!(visual.source.favorite);
+    assert_eq!(visual.source_scale, captured_scale);
     assert_reorder_visual_position(visual.bounds.origin, origin, press, active);
     let retained = visual.source.icon.to_rgba8_premultiplied().unwrap();
     assert_eq!(retained.as_bytes(), &[1; 8 * 8 * 4]);
@@ -2606,6 +2613,7 @@ fn launcher_native_reorder_retains_one_source_image_and_moves_without_rebuilding
         .dispatch_event(WindowEvent::PointerMoved { position: moved });
     let moved_visual = fixture.launcher.get_reorder_visual();
     assert_eq!(moved_visual.source.icon, visual.source.icon);
+    assert_eq!(moved_visual.source_scale, captured_scale);
     assert_eq!(
         moved_visual
             .source
@@ -2628,15 +2636,10 @@ fn launcher_native_reorder_retains_one_source_image_and_moves_without_rebuilding
     assert!(outside_visual.visible);
     assert_eq!(outside_visual.source.icon, visual.source.icon);
     assert_eq!(outside_visual.source.label, "Rust Editor");
+    assert_eq!(outside_visual.source_scale, captured_scale);
     assert_reorder_visual_position(outside_visual.bounds.origin, origin, press, outside);
     assert_eq!(fixture.launcher.get_rows(), rows);
-    fixture
-        .launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerReleased {
-            position: outside,
-            button: PointerEventButton::Left,
-        });
+    finish_native_reorder(&fixture, outside);
     assert_reorder_visual_cleared(&fixture);
     assert!(fixture.host.saves.lock().is_empty());
     assert!(fixture.host.launches.lock().is_empty());
@@ -2656,6 +2659,126 @@ fn launcher_native_reorder_retains_one_source_image_and_moves_without_rebuilding
 }
 
 #[test]
+fn launcher_native_reorder_source_appearance_is_validated_before_source_image_conversion() {
+    use slint::language::{PointerEvent, PointerEventKind};
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let fixture = LauncherFixture::with_preferences(reorder_preferences());
+    fixture.controller.open_launcher();
+    let source = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+        &fixture.launcher,
+        "Launch Rust Editor",
+    )
+    .next()
+    .unwrap();
+    let bounds = crate::generated::TileBounds {
+        origin: source.absolute_position(),
+        width: source.size().width,
+        height: source.size().height,
+    };
+    let press = slint::LogicalPosition::new(bounds.origin.x + 11.0, bounds.origin.y + 13.0);
+    let marker = fixture.launcher.get_reorder_data().user_data().unwrap();
+    let mut down = PointerEvent::default();
+    down.kind = PointerEventKind::Down;
+    down.button = PointerEventButton::Left;
+    for source_scale in [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        0.0,
+        -0.0,
+        -0.625,
+        0.625,
+        1.25,
+    ] {
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: press });
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerPressed {
+                position: press,
+                button: PointerEventButton::Left,
+            });
+        // Real Down establishes the SDK recognizer. Re-enter only the existing
+        // typed metadata seam: native delegates otherwise overwrite this getter
+        // with their valid pressed appearance before the controller can read it.
+        *fixture.controller.icon_cache.borrow_mut() = crate::icons::IconCache::default();
+        let empty_cache = format!("{:?}", fixture.controller.icon_cache.borrow());
+        fixture.launcher.set_source_appearance_scale(source_scale);
+        fixture.launcher.invoke_reorder_origin(
+            "app-editor".into(),
+            down.clone(),
+            bounds.clone(),
+            press,
+        );
+        let payload = fixture.launcher.get_reorder_data().user_data().unwrap();
+        let valid = source_scale.is_finite() && source_scale > 0.0;
+        assert_eq!(
+            Rc::ptr_eq(&payload, &marker),
+            !valid,
+            "invalid appearance must leave only the unauthorizing owner marker",
+        );
+        let captured_cache = format!("{:?}", fixture.controller.icon_cache.borrow());
+        if valid {
+            assert_ne!(captured_cache, empty_cache);
+        } else {
+            assert_eq!(
+                captured_cache, empty_cache,
+                "invalid appearance must not convert the canonical source image",
+            );
+        }
+        assert!(
+            fixture.launcher.get_reorder_enabled(),
+            "rejected metadata must restore eligibility for a fresh native press",
+        );
+        assert_reorder_visual_cleared(&fixture);
+        fixture.launcher.set_source_appearance_scale(f32::NAN);
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved {
+                position: slint::LogicalPosition::new(press.x + 12.0, press.y),
+            });
+        if valid {
+            assert!(fixture.launcher.get_reorder_dragging());
+        }
+        assert_reorder_visual_cleared(&fixture);
+        let moved = slint::LogicalPosition::new(press.x + 13.0, press.y + 1.0);
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: moved });
+        if valid {
+            let visual = fixture.launcher.get_reorder_visual();
+            assert!(visual.visible);
+            assert_eq!(visual.source_scale, source_scale);
+            assert_eq!(visual.source.key, "app-editor");
+            assert_eq!(visual.source.label, "Rust Editor");
+            assert_eq!(visual.bounds.width, bounds.width);
+            assert_eq!(visual.bounds.height, bounds.height);
+            assert_reorder_visual_position(visual.bounds.origin, bounds.origin, press, moved);
+        } else {
+            assert_reorder_visual_cleared(&fixture);
+            let rejected = fixture.launcher.get_reorder_data().user_data().unwrap();
+            assert!(Rc::ptr_eq(&rejected, &marker));
+            assert_eq!(
+                format!("{:?}", fixture.controller.icon_cache.borrow()),
+                empty_cache,
+            );
+        }
+        finish_native_reorder(&fixture, slint::LogicalPosition::new(40.0, 12.0));
+        assert_reorder_visual_cleared(&fixture);
+        assert!(fixture.host.saves.lock().is_empty());
+        assert!(fixture.host.launches.lock().is_empty());
+        slint::platform::update_timers_and_animations();
+        assert!(!fixture.launcher.get_reorder_dragging());
+        assert!(fixture.launcher.get_reorder_enabled());
+    }
+}
+
+#[test]
 fn launcher_native_reorder_passive_visual_identity_cannot_authorize_outside_drop() {
     use slint::platform::WindowEvent;
     let preferences = reorder_preferences();
@@ -2663,8 +2786,10 @@ fn launcher_native_reorder_passive_visual_identity_cannot_authorize_outside_drop
     fixture.controller.open_launcher();
     let position = begin_editor_reorder(&fixture);
     let mut visual = fixture.launcher.get_reorder_visual();
+    let captured_scale = visual.source_scale;
     visual.source.key = "app-browser".into();
     visual.source.label = "Untrusted presentation".into();
+    visual.source_scale = 0.625;
     fixture.launcher.set_reorder_visual(visual);
     fixture
         .launcher
@@ -2673,6 +2798,10 @@ fn launcher_native_reorder_passive_visual_identity_cannot_authorize_outside_drop
     assert_eq!(
         fixture.launcher.get_reorder_visual().source.key,
         "app-editor"
+    );
+    assert_eq!(
+        fixture.launcher.get_reorder_visual().source_scale,
+        captured_scale
     );
     let preview = fixture.launcher.get_rows();
     let content_y = fixture.launcher.get_reorder_metrics().content_y;
@@ -2830,6 +2959,7 @@ fn launcher_native_reorder_immutable_old_text_and_foreign_payloads_fail_closed()
     for invalid in [marker, old, foreign, text, slint::DataTransfer::default()] {
         let position = begin_editor_reorder_with_data(&fixture, Some(invalid));
         assert_reorder_visual_cleared(&fixture);
+        fixture.launcher.set_source_appearance_scale(0.625);
         fixture
             .launcher
             .window()
@@ -2854,6 +2984,8 @@ fn launcher_native_reorder_hide_immediate_reopen_new_press_skips_old_teardown() 
     let fixture = LauncherFixture::with_preferences(reorder_preferences());
     fixture.controller.open_launcher();
     let _ = begin_editor_reorder(&fixture);
+    let old_visual = fixture.launcher.get_reorder_visual();
+    fixture.launcher.set_source_appearance_scale(0.625);
     fixture.controller.hide_launcher();
     assert_reorder_visual_cleared(&fixture);
     fixture.controller.open_launcher();
@@ -2864,6 +2996,12 @@ fn launcher_native_reorder_hide_immediate_reopen_new_press_skips_old_teardown() 
     let new_visual = fixture.launcher.get_reorder_visual();
     assert_eq!(new_visual.source.key, "app-browser");
     assert_eq!(new_visual.source.label, "Web Browser");
+    assert_eq!(
+        new_visual.source_scale,
+        fixture.launcher.get_source_appearance_scale(),
+    );
+    assert_eq!(new_visual.source_scale, old_visual.source_scale);
+    assert_ne!(new_visual.source_scale, 0.625);
     assert_eq!(
         new_visual
             .source
@@ -2879,6 +3017,7 @@ fn launcher_native_reorder_hide_immediate_reopen_new_press_skips_old_teardown() 
     assert!(after_old_teardown.visible);
     assert_eq!(after_old_teardown.source.icon, new_visual.source.icon);
     assert_eq!(after_old_teardown.source.key, new_visual.source.key);
+    assert_eq!(after_old_teardown.source_scale, new_visual.source_scale);
     finish_native_reorder(&fixture, position);
     assert_reorder_visual_cleared(&fixture);
     assert_eq!(fixture.host.saves.lock().len(), 1);
@@ -3075,6 +3214,9 @@ fn exercise_reorder_after_source_eviction(escape: bool) {
             position: press,
             button: PointerEventButton::Left,
         });
+    let captured_scale = fixture.launcher.get_source_appearance_scale();
+    assert!(captured_scale.is_finite() && captured_scale > 0.0 && captured_scale < 1.0);
+    fixture.launcher.set_source_appearance_scale(f32::INFINITY);
     fixture
         .launcher
         .window()
@@ -3094,6 +3236,7 @@ fn exercise_reorder_after_source_eviction(escape: bool) {
     assert!(captured.visible);
     assert_eq!(captured.source.key, "large-0000");
     assert_eq!(captured.source.label, "Large App 0");
+    assert_eq!(captured.source_scale, captured_scale);
     assert_eq!(
         captured
             .source
@@ -3152,6 +3295,7 @@ fn exercise_reorder_after_source_eviction(escape: bool) {
     assert!(evicted_visual.visible);
     assert_eq!(evicted_visual.source.icon, captured.source.icon);
     assert_eq!(evicted_visual.source.label, captured.source.label);
+    assert_eq!(evicted_visual.source_scale, captured_scale);
     *fixture.controller.icon_cache.borrow_mut() = crate::icons::IconCache::default();
     let outside = slint::LogicalPosition::new(40.0, 12.0);
     fixture
@@ -3162,6 +3306,7 @@ fn exercise_reorder_after_source_eviction(escape: bool) {
     assert!(outside_visual.visible);
     assert_eq!(outside_visual.source.icon, captured.source.icon);
     assert_eq!(outside_visual.source.label, captured.source.label);
+    assert_eq!(outside_visual.source_scale, captured_scale);
     assert_eq!(outside_visual.bounds.origin.x, outside.x - 11.0);
     assert_eq!(outside_visual.bounds.origin.y, outside.y - 13.0);
     assert!(fixture.host.saves.lock().is_empty());

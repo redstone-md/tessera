@@ -162,6 +162,7 @@ struct ReorderGesture {
     drag: FavoriteDrag,
     // One captured image, independent of virtual rows and the bounded cache.
     source_visual: LaunchTile,
+    source_scale: f32,
     saved: Vec<String>,
     resolved: Vec<String>,
     catalog: Vec<String>,
@@ -458,6 +459,7 @@ impl ReorderAccess {
             LauncherDragVisual {
                 visible: true,
                 source: gesture.source_visual.clone(),
+                source_scale: gesture.source_scale,
                 bounds: TileBounds {
                     origin: slint::LogicalPosition::new(bounds.x, bounds.y),
                     width: bounds.width,
@@ -711,6 +713,11 @@ impl PanelController {
                 let Some(application) = application else {
                     return;
                 };
+                let source_scale = access.launcher.get_source_appearance_scale();
+                if !source_scale.is_finite() || source_scale <= 0.0 {
+                    access.sync();
+                    return;
+                }
                 // Exactly one source conversion, after all state borrows end.
                 let icon = access
                     .icons
@@ -735,6 +742,7 @@ impl PanelController {
                     token: Rc::clone(&token),
                     drag,
                     source_visual,
+                    source_scale,
                     saved,
                     resolved,
                     catalog,

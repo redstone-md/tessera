@@ -404,6 +404,7 @@ mod native_reorder {
         token: RefCell<Option<Rc<Token>>>,
         active: Cell<bool>,
         source: RefCell<Option<LaunchTile>>,
+        source_scale: Cell<Option<f32>>,
         source_conversions: Cell<usize>,
         window_hovers: Cell<usize>,
         drops: RefCell<Vec<(String, slint::LogicalPosition)>>,
@@ -437,9 +438,13 @@ mod native_reorder {
             let Some(source) = self.source.borrow().clone() else {
                 return false;
             };
+            let Some(source_scale) = self.source_scale.get() else {
+                return false;
+            };
             launcher.set_reorder_visual(LauncherDragVisual {
                 visible: true,
                 source,
+                source_scale,
                 bounds: TileBounds {
                     origin: slint::LogicalPosition::new(
                         payload.bounds.origin.x + origin.x + event.position.x - payload.press.x,
@@ -454,6 +459,7 @@ mod native_reorder {
 
         fn clear_visual(&self, launcher: &Launcher) {
             self.source.borrow_mut().take();
+            self.source_scale.set(None);
             launcher.set_reorder_visual(LauncherDragVisual::default());
         }
 
@@ -505,6 +511,18 @@ mod native_reorder {
             count: usize,
             source_icon: bool,
         ) -> Self {
+            Self::with_appearance(window, scale, count, source_icon, None)
+        }
+
+        // The public metadata setter exercises scalar transport without changing
+        // the shared production skin or introducing a test-only recognizer.
+        fn with_appearance(
+            window: &MinimalSoftwareWindow,
+            scale: f32,
+            count: usize,
+            source_icon: bool,
+            appearance: Option<f32>,
+        ) -> Self {
             let native = NativeLauncherInventory::with_source_icon(count, source_icon);
             let routing = Rc::new(Routing::default());
             // Nonempty typed marker exists BEFORE the ancestor's Down filter.
@@ -522,7 +540,15 @@ mod native_reorder {
                 .on_reorder_origin(move |key, event, bounds, press| {
                     state.trace.borrow_mut().push(format!("{:?}", event.kind));
                     if event.kind == PointerEventKind::Down {
-                        let token = (event.button == PointerEventButton::Left && !key.is_empty())
+                        let launcher = weak.upgrade().unwrap();
+                        if let Some(appearance) = appearance {
+                            launcher.set_source_appearance_scale(appearance);
+                        }
+                        let source_scale = launcher.get_source_appearance_scale();
+                        let token = (event.button == PointerEventButton::Left
+                            && !key.is_empty()
+                            && source_scale.is_finite()
+                            && source_scale > 0.0)
                             .then(|| {
                                 Rc::new(Token {
                                     key: key.to_string(),
@@ -531,9 +557,9 @@ mod native_reorder {
                                 })
                             });
                         *state.token.borrow_mut() = token.clone();
-                        let launcher = weak.upgrade().unwrap();
                         state.clear_visual(&launcher);
                         if let Some(token) = token {
+                            state.source_scale.set(Some(source_scale));
                             let application = inventory.application(&token.key).unwrap().clone();
                             let icon = cache
                                 .borrow_mut()
@@ -626,6 +652,7 @@ mod native_reorder {
             assert!(visual.visible);
             assert_eq!(visual.source.key, inventory_key(index));
             assert_eq!(visual.source.label, format!("Inventory {index}"));
+            assert_eq!(Some(visual.source_scale), self.routing.source_scale.get());
             let token = self.routing.token.borrow().clone().unwrap();
             assert!((visual.bounds.origin.x - (pointer.x - 11.0)).abs() < 0.001);
             assert!((visual.bounds.origin.y - (pointer.y - 13.0)).abs() < 0.001);
@@ -660,10 +687,16 @@ mod native_reorder {
 
         fn start(&self, window: &MinimalSoftwareWindow, press: slint::LogicalPosition) {
             press_at(window, press, PointerEventButton::Left);
+            assert!(self.routing.source_scale.get().is_some());
+            assert!(!self.native.launcher.get_reorder_visual().visible);
             move_to(window, slint::LogicalPosition::new(press.x + 12.0, press.y));
             slint::platform::update_timers_and_animations();
             assert!(self.native.launcher.get_reorder_dragging());
             assert!(self.routing.active.get());
+            assert!(
+                !self.native.launcher.get_reorder_visual().visible,
+                "SDK activation consumes the first move; it cannot publish appearance"
+            );
         }
     }
 
@@ -1070,6 +1103,7 @@ mod native_reorder {
             let visual = LauncherDragVisual {
                 visible: true,
                 source: captured,
+                source_scale: 0.8,
                 bounds: TileBounds {
                     origin: slint::LogicalPosition::new(260.0, 240.0),
                     width: source.size().width,
@@ -1133,6 +1167,79 @@ mod native_reorder {
     }
 
     #[test]
+    fn native_reorder_captures_positive_appearance_once_without_granting_scalar_authority() {
+        let window = software_window();
+        for scale in [1.0, 2.0] {
+            for appearance in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.2] {
+                let fixture = Fixture::with_appearance(&window, scale, 70, true, Some(appearance));
+                let press = fixture.source(0).1;
+                press_at(&window, press, PointerEventButton::Left);
+                assert!(fixture.routing.token.borrow().is_none());
+                assert!(fixture.routing.source.borrow().is_none());
+                assert!(fixture.routing.source_scale.get().is_none());
+                assert_eq!(fixture.routing.source_conversions.get(), 0);
+                let pointer = slint::LogicalPosition::new(press.x + 24.0, press.y);
+                move_to(&window, pointer);
+                move_to(&window, pointer);
+                assert!(!fixture.native.launcher.get_reorder_visual().visible);
+                move_to(&window, pointer);
+                release_at(&window, pointer, PointerEventButton::Left);
+                assert!(fixture.routing.drops.borrow().is_empty());
+            }
+            let fixture = Fixture::with_appearance(&window, scale, 70, true, Some(0.8));
+            let (slot, press) = fixture.source(0);
+            let slot_origin = slot.absolute_position();
+            let slot_size = slot.size();
+            let extent = fixture.native.launcher.get_reorder_metrics().content_height;
+            fixture.start(&window, press);
+            assert_eq!(fixture.routing.source_scale.get(), Some(0.8));
+            fixture.native.launcher.set_source_appearance_scale(1.3);
+            for pointer in [
+                slint::LogicalPosition::new(260.0, 180.0),
+                slint::LogicalPosition::new(260.0, 40.0),
+                slint::LogicalPosition::new(260.0, 280.0),
+                slint::LogicalPosition::new(5.0, 150.0),
+            ] {
+                move_to(&window, pointer);
+                fixture.assert_visual(0, pointer);
+                assert_eq!(
+                    fixture.native.launcher.get_reorder_visual().source_scale,
+                    0.8
+                );
+                assert_eq!(slot.absolute_position(), slot_origin);
+                assert_eq!(slot.size(), slot_size);
+                assert_eq!(
+                    fixture.native.launcher.get_reorder_metrics().content_height,
+                    extent
+                );
+                assert_eq!(fixture.routing.source_conversions.get(), 1);
+                for data in [
+                    slint::DataTransfer::default(),
+                    slint::DataTransfer::from(slint::SharedString::from(inventory_key(0))),
+                ] {
+                    let before = fixture.native.launcher.get_reorder_visual();
+                    let mut event = DropEvent::default();
+                    event.data = data;
+                    event.position = slint::LogicalPosition::new(400.0, 200.0);
+                    fixture
+                        .native
+                        .launcher
+                        .invoke_reorder_window_hover(event, slint::LogicalPosition::new(0.0, 0.0));
+                    let after = fixture.native.launcher.get_reorder_visual();
+                    assert_eq!(after.bounds, before.bounds);
+                    assert_eq!(after.source_scale, before.source_scale);
+                }
+            }
+            let pointer = slint::LogicalPosition::new(5.0, 150.0);
+            move_to(&window, pointer);
+            release_at(&window, pointer, PointerEventButton::Left);
+            assert!(!fixture.native.launcher.get_reorder_visual().visible);
+            assert!(fixture.routing.source_scale.get().is_none());
+            assert!(fixture.routing.drops.borrow().is_empty());
+        }
+    }
+
+    #[test]
     fn native_reorder_parent_finish_survives_actual_source_weak_eviction_and_tail_drop() {
         let window = software_window();
         for scale in [1.0, 2.0] {
@@ -1141,6 +1248,9 @@ mod native_reorder {
                 let (source_weak, press) = fixture.source(0);
                 let visible = launch_elements(&fixture.native.launcher).len();
                 fixture.start(&window, press);
+                let captured_scale = fixture.routing.source_scale.get().unwrap();
+                assert!(captured_scale > 0.0 && captured_scale < 1.0);
+                fixture.native.launcher.set_source_appearance_scale(0.61);
                 // Existing public scroll seam; controller tests own timed autoscroll.
                 fixture.native.launcher.invoke_scroll_reorder(-100_000.0);
                 let _ = fixture.frame(&window);
@@ -1159,6 +1269,11 @@ mod native_reorder {
                 move_to(&window, pointer);
                 let pixels = fixture.frame(&window);
                 fixture.assert_visual(0, pointer);
+                assert_eq!(
+                    fixture.native.launcher.get_reorder_visual().source_scale,
+                    captured_scale,
+                    "eviction/cache replacement and transient UI metadata cannot replace captured appearance"
+                );
                 assert_eq!(fixture.routing.source_conversions.get(), 1);
                 if source_icon {
                     let visual = fixture.native.launcher.get_reorder_visual();
@@ -1189,6 +1304,7 @@ mod native_reorder {
                 assert!(!source_weak.is_valid());
                 assert!(!fixture.native.launcher.get_reorder_visual().visible);
                 assert!(fixture.routing.source.borrow().is_none());
+                assert!(fixture.routing.source_scale.get().is_none());
             }
         }
     }
@@ -1202,13 +1318,20 @@ mod native_reorder {
             let target = fixture.source(1).1;
             fixture.start(&window, press);
             let old = fixture.routing.token.borrow().clone().unwrap();
+            let old_scale = fixture.routing.source_scale.get().unwrap();
+            fixture.native.launcher.set_source_appearance_scale(0.67);
             move_to(&window, target);
+            assert_eq!(
+                fixture.native.launcher.get_reorder_visual().source_scale,
+                old_scale
+            );
             // Outside SDK dispatch and all fixture borrows.
             window.window().dispatch_event(WindowEvent::PointerExited);
             slint::platform::update_timers_and_animations();
             assert!(!fixture.native.launcher.get_reorder_dragging());
             assert!(!fixture.native.launcher.get_reorder_visual().visible);
             assert!(fixture.routing.source.borrow().is_none());
+            assert!(fixture.routing.source_scale.get().is_none());
             assert_eq!(
                 inventory_tile(&fixture.native.launcher, 0).accessible_role(),
                 Some(AccessibleRole::Button)
@@ -1219,6 +1342,16 @@ mod native_reorder {
                 .show(&window, (560.0 * scale) as u32, (300.0 * scale) as u32);
             // No old release, draw, or idle delay before the new press.
             fixture.start(&window, target);
+            let fresh_scale = fixture.routing.source_scale.get().unwrap();
+            assert_eq!(
+                fresh_scale,
+                fixture.native.launcher.get_source_appearance_scale()
+            );
+            assert_ne!(
+                fresh_scale, 0.67,
+                "new native Down replaces old transient metadata"
+            );
+            fixture.native.launcher.set_source_appearance_scale(0.73);
             assert!(fixture.native.launcher.get_reorder_dragging());
             assert!(
                 !fixture.native.launcher.get_reorder_visual().visible,
@@ -1229,6 +1362,10 @@ mod native_reorder {
             let fresh_pointer = slint::LogicalPosition::new(target.x + 24.0, target.y);
             move_to(&window, fresh_pointer);
             fixture.assert_visual(1, fresh_pointer);
+            assert_eq!(
+                fixture.native.launcher.get_reorder_visual().source_scale,
+                fresh_scale
+            );
             let pixels = fixture.frame(&window);
             let visual = fixture.native.launcher.get_reorder_visual();
             let side = (visual.bounds.height - 59.2).max(0.0);
@@ -1258,6 +1395,11 @@ mod native_reorder {
             assert_eq!(
                 fixture.native.launcher.get_reorder_visual().bounds,
                 before.bounds
+            );
+            assert_eq!(
+                fixture.native.launcher.get_reorder_visual().source_scale,
+                before.source_scale,
+                "stale typed payload cannot change the fresh appearance"
             );
             assert!(!Rc::ptr_eq(
                 &old,

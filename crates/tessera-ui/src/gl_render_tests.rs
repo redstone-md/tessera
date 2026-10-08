@@ -321,6 +321,7 @@ struct GlDragSource {
 fn publish_gl_drag_visual(
     launcher: &Launcher,
     source: &RefCell<Option<Rc<GlDragSource>>>,
+    source_scale: &Cell<Option<f32>>,
     event: &slint::language::DropEvent,
     origin: slint::LogicalPosition,
 ) -> bool {
@@ -339,9 +340,13 @@ fn publish_gl_drag_visual(
     {
         return false;
     }
+    let Some(source_scale) = source_scale.get() else {
+        return false;
+    };
     launcher.set_reorder_visual(LauncherDragVisual {
         visible: true,
         source: payload.tile.clone(),
+        source_scale,
         bounds: TileBounds {
             origin: slint::LogicalPosition::new(
                 payload.bounds.origin.x + origin.x + event.position.x - payload.press.x,
@@ -354,7 +359,28 @@ fn publish_gl_drag_visual(
     true
 }
 
-fn assert_gl_launcher_tile_geometry(tile: &i_slint_backend_testing::ElementHandle) {
+// Metadata additions/subtractions round at the native f32 input precision,
+// not at a renderer pixel or an arbitrary logical-geometry tolerance.
+fn assert_gl_input_position(
+    actual: slint::LogicalPosition,
+    expected: slint::LogicalPosition,
+    inputs: &[slint::LogicalPosition],
+) {
+    let precision = f32::EPSILON
+        * inputs
+            .iter()
+            .flat_map(|position| [position.x.abs(), position.y.abs()])
+            .fold(1.0, f32::max);
+    assert!(
+        (actual.x - expected.x).abs() <= precision && (actual.y - expected.y).abs() <= precision,
+        "native f32 position {actual:?} != {expected:?}, input precision {precision}"
+    );
+}
+
+fn assert_gl_launcher_tile_geometry(
+    tile: &i_slint_backend_testing::ElementHandle,
+    appearance: f32,
+) {
     let origin = tile.absolute_position();
     let size = tile.size();
     let icon = tile
@@ -375,13 +401,26 @@ fn assert_gl_launcher_tile_geometry(tile: &i_slint_backend_testing::ElementHandl
         (icon.size().height - side).abs() < 0.001,
         "genuine and fallback have one square frame"
     );
-    assert!((icon.absolute_position().x - origin.x - (size.width - side) / 2.0).abs() < 0.001);
-    assert!((icon.absolute_position().y - origin.y - 8.0).abs() < 0.001);
+    assert_gl_input_position(
+        icon.absolute_position(),
+        slint::LogicalPosition::new(
+            origin.x + (size.width - side) / 2.0 * appearance,
+            origin.y + 8.0 * appearance,
+        ),
+        &[origin, slint::LogicalPosition::new(size.width, size.height)],
+    );
     assert!(
         (label.size().height - 35.2).abs() < 0.001,
         "label track is fixed at both window widths"
     );
-    assert!((label.absolute_position().y - origin.y - size.height + 43.2).abs() < 0.001);
+    assert_gl_input_position(
+        label.absolute_position(),
+        slint::LogicalPosition::new(
+            origin.x + 8.0 * appearance,
+            origin.y + (size.height - 43.2) * appearance,
+        ),
+        &[origin, slint::LogicalPosition::new(size.width, size.height)],
+    );
 }
 
 fn gl_region(
@@ -402,29 +441,51 @@ fn gl_region(
     pixels
 }
 
+// The pinned compiler scales paint uniformly around the raw tile's center.
+// Public logical bounds, hotspot and layout remain deliberately unscaled.
+fn gl_scaled_tile_region(
+    tile: &TileBounds,
+    appearance: f32,
+    origin: slint::LogicalPosition,
+    size: slint::LogicalSize,
+) -> (slint::LogicalPosition, slint::LogicalSize) {
+    (
+        slint::LogicalPosition::new(
+            tile.origin.x + tile.width / 2.0 + (origin.x - tile.width / 2.0) * appearance,
+            tile.origin.y + tile.height / 2.0 + (origin.y - tile.height / 2.0) * appearance,
+        ),
+        slint::LogicalSize::new(size.width * appearance, size.height * appearance),
+    )
+}
+
 fn assert_gl_whole_tile_pixels(
-    original: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    pressed: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    baseline: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
     floating: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
     source: TileBounds,
-    ghost: TileBounds,
+    visual: LauncherDragVisual,
     scale: f32,
     genuine: bool,
 ) {
+    let appearance = visual.source_scale;
+    let ghost = visual.bounds;
     // Integer logical translation retains subpixel phase at genuine 1x/2x.
     // Compare the whole icon/name skin, not just an image-size getter.
     let content = slint::LogicalSize::new(source.width - 16.0, source.height - 16.0);
-    let original_content = gl_region(
-        original,
-        slint::LogicalPosition::new(source.origin.x + 8.0, source.origin.y + 8.0),
+    let (source_content_origin, scaled_content) = gl_scaled_tile_region(
+        &source,
+        appearance,
+        slint::LogicalPosition::new(8.0, 8.0),
         content,
-        scale,
     );
-    let ghost_content = gl_region(
-        floating,
-        slint::LogicalPosition::new(ghost.origin.x + 8.0, ghost.origin.y + 8.0),
+    let (ghost_content_origin, _) = gl_scaled_tile_region(
+        &ghost,
+        appearance,
+        slint::LogicalPosition::new(8.0, 8.0),
         content,
-        scale,
     );
+    let original_content = gl_region(pressed, source_content_origin, scaled_content, scale);
+    let ghost_content = gl_region(floating, ghost_content_origin, scaled_content, scale);
     assert_eq!(ghost_content.len(), original_content.len());
     // Same-position comparison allows only 2/255 antialias/compositing rounding
     // (<0.8% per channel), never spatial matching or missing icon/name content.
@@ -447,7 +508,7 @@ fn assert_gl_whole_tile_pixels(
         .max_by_key(|(_, difference)| *difference)
         .unwrap();
     eprintln!(
-        "native GL full content: genuine={genuine} scale={scale} source={source:?} ghost={ghost:?} max_channel_delta={difference}"
+        "native GL full pressed content: genuine={genuine} scale={scale} appearance={appearance} source={source:?} ghost={ghost:?} max_channel_delta={difference}"
     );
     assert!(
         difference <= 2,
@@ -457,6 +518,47 @@ fn assert_gl_whole_tile_pixels(
     );
     // Selected skin's external 4px outline supplies a whole-tile pixel bbox.
     // A one-physical-pixel edge tolerance accounts only for raster coverage.
+    let (outline_origin, outline_size) = gl_scaled_tile_region(
+        &ghost,
+        appearance,
+        slint::LogicalPosition::new(-4.0, -4.0),
+        slint::LogicalSize::new(ghost.width + 8.0, ghost.height + 8.0),
+    );
+    let (source_outline_origin, _) = gl_scaled_tile_region(
+        &source,
+        appearance,
+        slint::LogicalPosition::new(-4.0, -4.0),
+        slint::LogicalSize::new(source.width + 8.0, source.height + 8.0),
+    );
+    let source_skin = gl_region(pressed, source_outline_origin, outline_size, scale);
+    let ghost_skin = gl_region(floating, outline_origin, outline_size, scale);
+    assert_eq!(source_skin.len(), ghost_skin.len());
+    for (index, (expected, actual)) in source_skin.iter().zip(&ghost_skin).enumerate() {
+        assert!(
+            expected.r.abs_diff(actual.r) <= 2
+                && expected.g.abs_diff(actual.g) <= 2
+                && expected.b.abs_diff(actual.b) <= 2
+                && expected.a.abs_diff(actual.a) <= 2,
+            "same-position whole pressed skin/selected outline pixel {index}: {expected:?} != {actual:?}"
+        );
+    }
+    assert_gl_scaled_tile_pixels(baseline, floating, &ghost, scale, appearance, genuine);
+}
+
+fn assert_gl_scaled_tile_pixels(
+    baseline: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    floating: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    ghost: &TileBounds,
+    scale: f32,
+    appearance: f32,
+    genuine: bool,
+) {
+    let (outline_origin, outline_size) = gl_scaled_tile_region(
+        ghost,
+        appearance,
+        slint::LogicalPosition::new(-4.0, -4.0),
+        slint::LogicalSize::new(ghost.width + 8.0, ghost.height + 8.0),
+    );
     let mut changed = Vec::new();
     for y in ((ghost.origin.y - 5.0) * scale).floor() as usize
         ..((ghost.origin.y + ghost.height + 5.0) * scale).ceil() as usize
@@ -465,7 +567,7 @@ fn assert_gl_whole_tile_pixels(
             ..((ghost.origin.x + ghost.width + 5.0) * scale).ceil() as usize
         {
             let index = y * floating.width() as usize + x;
-            if floating.as_slice()[index] != original.as_slice()[index] {
+            if floating.as_slice()[index] != baseline.as_slice()[index] {
                 changed.push((x, y));
             }
         }
@@ -473,19 +575,19 @@ fn assert_gl_whole_tile_pixels(
     for (actual, expected) in [
         (
             changed.iter().map(|pixel| pixel.0).min().unwrap() as f32,
-            (ghost.origin.x - 4.0) * scale,
+            outline_origin.x * scale,
         ),
         (
             changed.iter().map(|pixel| pixel.1).min().unwrap() as f32,
-            (ghost.origin.y - 4.0) * scale,
+            outline_origin.y * scale,
         ),
         (
             changed.iter().map(|pixel| pixel.0).max().unwrap() as f32 + 1.0,
-            (ghost.origin.x + ghost.width + 4.0) * scale,
+            (outline_origin.x + outline_size.width) * scale,
         ),
         (
             changed.iter().map(|pixel| pixel.1).max().unwrap() as f32 + 1.0,
-            (ghost.origin.y + ghost.height + 4.0) * scale,
+            (outline_origin.y + outline_size.height) * scale,
         ),
     ] {
         assert!(
@@ -493,17 +595,16 @@ fn assert_gl_whole_tile_pixels(
             "physical WHOLE ghost bbox, including original selected outline"
         );
     }
-    let side = (ghost.height - 59.2).max(0.0);
-    let icon_origin = slint::LogicalPosition::new(
-        ghost.origin.x + (ghost.width - side) / 2.0,
-        ghost.origin.y + 8.0,
+    let raw_side = (ghost.height - 59.2)
+        .max(0.0)
+        .min((ghost.width - 16.0).max(0.0));
+    let (icon_origin, icon_size) = gl_scaled_tile_region(
+        ghost,
+        appearance,
+        slint::LogicalPosition::new((ghost.width - raw_side) / 2.0, 8.0),
+        slint::LogicalSize::new(raw_side, raw_side),
     );
-    let icon_pixels = gl_region(
-        floating,
-        icon_origin,
-        slint::LogicalSize::new(side, side),
-        scale,
-    );
+    let icon_pixels = gl_region(floating, icon_origin, icon_size, scale);
     assert!(
         icon_pixels.iter().any(|pixel| {
             if genuine {
@@ -533,9 +634,9 @@ fn assert_gl_whole_tile_pixels(
         let bottom = colored.iter().map(|pixel| pixel.1).max().unwrap() as f32 + 1.0;
         for (actual, expected) in [
             (left, icon_origin.x * scale),
-            (right, (icon_origin.x + side) * scale),
+            (right, (icon_origin.x + icon_size.width) * scale),
             (top, icon_origin.y * scale),
-            (bottom, (icon_origin.y + side) * scale),
+            (bottom, (icon_origin.y + icon_size.height) * scale),
         ] {
             assert!(
                 (actual - expected).abs() <= 1.0,
@@ -544,15 +645,13 @@ fn assert_gl_whole_tile_pixels(
         }
     }
     for offset in [0.0, 17.6] {
-        let label = gl_region(
-            floating,
-            slint::LogicalPosition::new(
-                ghost.origin.x + 8.0,
-                ghost.origin.y + ghost.height - 43.2 + offset,
-            ),
+        let (label_origin, label_size) = gl_scaled_tile_region(
+            ghost,
+            appearance,
+            slint::LogicalPosition::new(8.0, ghost.height - 43.2 + offset),
             slint::LogicalSize::new(ghost.width - 16.0, 17.6),
-            scale,
         );
+        let label = gl_region(floating, label_origin, label_size, scale);
         assert!(
             label
                 .iter()
@@ -629,7 +728,7 @@ fn await_launcher_gl_width(
 }
 
 fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
-    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
     use slint::language::{DragAction, PointerEventKind};
     use slint::platform::{PointerEventButton, WindowEvent};
     let scale = launcher.window().scale_factor();
@@ -688,26 +787,62 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
             ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
                 .next()
                 .unwrap();
-        assert_gl_launcher_tile_geometry(&source_weak);
+        assert_gl_launcher_tile_geometry(&source_weak, 1.0);
         let bounds = TileBounds {
             origin: source_weak.absolute_position(),
             width: source_weak.size().width,
             height: source_weak.size().height,
         };
+        // The accessible tile is inside a centered Transform. Retain its
+        // untransformed enclosing slot, not that paint-mapped tile position.
+        let source_slot = ElementQuery::from_root(launcher)
+            .match_type_name("Rectangle")
+            .find_all()
+            .into_iter()
+            .find(|element| {
+                element.absolute_position() == bounds.origin
+                    && element.size() == slint::LogicalSize::new(bounds.width, bounds.height)
+                    && element.accessible_role() == Some(AccessibleRole::None)
+                    && element
+                        .query_descendants()
+                        .find_all()
+                        .into_iter()
+                        .any(|child| {
+                            child.accessible_role() == Some(AccessibleRole::Button)
+                                && child
+                                    .accessible_label()
+                                    .is_some_and(|label| label == "Launch Native\napplication")
+                        })
+            })
+            .expect("retain the untransformed source slot enclosing the accessible native tile");
         let extent = launcher.get_reorder_metrics().content_height;
         let source = Rc::new(RefCell::new(None::<Rc<GlDragSource>>));
+        let source_scale = Rc::new(Cell::new(None::<f32>));
+        let appearance_override = Rc::new(Cell::new(None::<f32>));
         let mut marker = slint::DataTransfer::default();
         marker.set_user_data(Rc::new(()));
         launcher.set_reorder_data(marker);
         launcher.set_reorder_enabled(true);
         let weak = launcher.as_weak();
         let state = source.clone();
+        let captured_scale = source_scale.clone();
+        let override_scale = appearance_override.clone();
         launcher.on_reorder_origin(move |key, event, bounds, press| {
             let launcher = weak.upgrade().unwrap();
             if event.kind == PointerEventKind::Down {
                 state.borrow_mut().take();
+                captured_scale.set(None);
                 launcher.set_reorder_visual(LauncherDragVisual::default());
-                if event.button == PointerEventButton::Left && key == retained.key {
+                if let Some(appearance) = override_scale.get() {
+                    launcher.set_source_appearance_scale(appearance);
+                }
+                let appearance = launcher.get_source_appearance_scale();
+                if event.button == PointerEventButton::Left
+                    && key == retained.key
+                    && appearance.is_finite()
+                    && appearance > 0.0
+                {
+                    captured_scale.set(Some(appearance));
                     let token = Rc::new(GlDragSource {
                         tile: retained.clone(),
                         bounds,
@@ -720,15 +855,17 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
                 }
             } else if event.kind == PointerEventKind::Up && !launcher.get_reorder_dragging() {
                 state.borrow_mut().take();
+                captured_scale.set(None);
             }
         });
         let weak = launcher.as_weak();
         let state = source.clone();
+        let captured_scale = source_scale.clone();
         let previewed = Rc::new(Cell::new(false));
         let did_preview = previewed.clone();
         launcher.on_reorder_can_drop(move |event, origin| {
             let launcher = weak.upgrade().unwrap();
-            if !publish_gl_drag_visual(&launcher, &state, &event, origin) {
+            if !publish_gl_drag_visual(&launcher, &state, &captured_scale, &event, origin) {
                 return DragAction::None;
             }
             if !did_preview.replace(true) {
@@ -738,10 +875,17 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         });
         let weak = launcher.as_weak();
         let state = source.clone();
+        let captured_scale = source_scale.clone();
         let outside = Rc::new(Cell::new(0));
         let count = outside.clone();
         launcher.on_reorder_window_hover(move |event, origin| {
-            if publish_gl_drag_visual(&weak.upgrade().unwrap(), &state, &event, origin) {
+            if publish_gl_drag_visual(
+                &weak.upgrade().unwrap(),
+                &state,
+                &captured_scale,
+                &event,
+                origin,
+            ) {
                 count.set(count.get() + 1);
             }
         });
@@ -749,8 +893,15 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         let count = drops.clone();
         let weak = launcher.as_weak();
         let state = source.clone();
+        let captured_scale = source_scale.clone();
         launcher.on_reorder_dropped(move |event, origin| {
-            if !publish_gl_drag_visual(&weak.upgrade().unwrap(), &state, &event, origin) {
+            if !publish_gl_drag_visual(
+                &weak.upgrade().unwrap(),
+                &state,
+                &captured_scale,
+                &event,
+                origin,
+            ) {
                 return DragAction::None;
             }
             count.set(count.get() + 1);
@@ -760,8 +911,10 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         let log = finished.clone();
         let weak = launcher.as_weak();
         let state = source.clone();
+        let captured_scale = source_scale.clone();
         launcher.on_reorder_finished(move |action| {
             state.borrow_mut().take();
+            captured_scale.set(None);
             weak.upgrade()
                 .unwrap()
                 .set_reorder_visual(LauncherDragVisual::default());
@@ -788,9 +941,55 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
             !launcher.get_reorder_visual().visible,
             "Down only arms source data"
         );
+        let appearance = source_scale.get().unwrap();
+        assert_eq!(appearance, launcher.get_source_appearance_scale());
+        assert!(appearance > 0.0 && appearance < 1.0);
+        let pressed = launcher.window().take_snapshot().unwrap();
+        assert!(source_slot.is_valid());
+        assert_eq!(source_slot.absolute_position(), bounds.origin);
+        assert_eq!(
+            source_slot.size(),
+            slint::LogicalSize::new(bounds.width, bounds.height),
+            "pressed paint cannot shrink the logical source slot"
+        );
+        let captured_bounds = source.borrow().as_ref().unwrap().bounds.clone();
+        let captured_press = source.borrow().as_ref().unwrap().press;
+        assert_eq!(captured_bounds.origin, source_weak.absolute_position());
+        assert_eq!(captured_bounds.width, bounds.width);
+        assert_eq!(captured_bounds.height, bounds.height);
+        assert_gl_input_position(
+            slint::LogicalPosition::new(
+                captured_press.x - captured_bounds.origin.x,
+                captured_press.y - captured_bounds.origin.y,
+            ),
+            slint::LogicalPosition::new(press.x - bounds.origin.x, press.y - bounds.origin.y),
+            &[captured_press, captured_bounds.origin, press, bounds.origin],
+        );
+        assert_eq!(launcher.get_reorder_metrics().content_height, extent);
+        assert_ne!(
+            gl_region(
+                &pressed,
+                bounds.origin,
+                slint::LogicalSize::new(bounds.width, bounds.height),
+                scale,
+            ),
+            gl_region(
+                &original,
+                bounds.origin,
+                slint::LogicalSize::new(bounds.width, bounds.height),
+                scale,
+            ),
+            "ordinary source really paints its pressed appearance before SDK activation"
+        );
+        launcher.set_source_appearance_scale(1.2);
         launcher.window().dispatch_event(WindowEvent::PointerMoved {
             position: slint::LogicalPosition::new(press.x + 12.0, press.y),
         });
+        assert!(launcher.get_reorder_dragging());
+        assert!(
+            !launcher.get_reorder_visual().visible,
+            "SDK activation seeds drag authority but has not delivered typed feedback"
+        );
         launcher
             .window()
             .dispatch_event(WindowEvent::PointerMoved { position: target });
@@ -804,49 +1003,70 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         let visual = launcher.get_reorder_visual();
         assert_eq!(visual.source.key, "native-app");
         assert_eq!(visual.source.label, "Native\napplication");
-        assert_eq!(
+        assert_eq!(visual.source_scale, appearance);
+        assert_eq!(visual.bounds.width, bounds.width);
+        assert_eq!(visual.bounds.height, bounds.height);
+        assert_gl_input_position(
             visual.bounds.origin,
-            slint::LogicalPosition::new(target.x - 11.0, target.y - 13.0)
+            slint::LogicalPosition::new(target.x - 11.0, target.y - 13.0),
+            &[target, captured_press, captured_bounds.origin],
         );
         let ghost = ElementHandle::find_by_element_id(launcher, "Launcher::drag-visual")
             .next()
             .unwrap();
-        assert_eq!(ghost.absolute_position(), visual.bounds.origin);
+        let (paint_origin, _) = gl_scaled_tile_region(
+            &visual.bounds,
+            appearance,
+            slint::LogicalPosition::new(0.0, 0.0),
+            slint::LogicalSize::new(bounds.width, bounds.height),
+        );
+        assert_gl_input_position(
+            ghost.absolute_position(),
+            paint_origin,
+            &[visual.bounds.origin, target],
+        );
         assert_eq!(
             ghost.size(),
             slint::LogicalSize::new(bounds.width, bounds.height)
         );
         for (actual, expected) in [
-            (
-                ghost.absolute_position().x * scale,
-                target.x * scale - 11.0 * scale,
-            ),
-            (
-                ghost.absolute_position().y * scale,
-                target.y * scale - 13.0 * scale,
-            ),
+            (ghost.absolute_position().x * scale, paint_origin.x * scale),
+            (ghost.absolute_position().y * scale, paint_origin.y * scale),
             (ghost.size().width * scale, bounds.width * scale),
             (ghost.size().height * scale, bounds.height * scale),
         ] {
             assert!(
-                (actual - expected).abs() < 0.001,
-                "physical whole-ghost bbox/noncenter hotspot"
+                (actual - expected).abs()
+                    <= f32::EPSILON
+                        * target
+                            .x
+                            .abs()
+                            .max(target.y.abs())
+                            .max(bounds.width)
+                            .max(bounds.height)
+                        * scale,
+                "physical center-scaled paint origin with raw whole-ghost size/noncenter hotspot"
             );
         }
-        assert_gl_launcher_tile_geometry(&ghost);
+        assert_gl_launcher_tile_geometry(&ghost, appearance);
         export_frame(
             &format!("launcher-reorder-source-{width}-{genuine}-{scale}x"),
             &original,
+        );
+        export_frame(
+            &format!("launcher-reorder-pressed-{width}-{genuine}-{scale}x"),
+            &pressed,
         );
         export_frame(
             &format!("launcher-reorder-floating-{width}-{genuine}-{scale}x"),
             &floating,
         );
         assert_gl_whole_tile_pixels(
+            &pressed,
             &original,
             &floating,
             bounds.clone(),
-            visual.bounds.clone(),
+            visual.clone(),
             scale,
             genuine,
         );
@@ -924,6 +1144,7 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         assert_eq!(drops.get(), 1);
         assert_eq!(*finished.borrow(), vec![DragAction::Move]);
         assert!(!launcher.get_reorder_visual().visible);
+        assert!(source_scale.get().is_none());
         let restored_source =
             ElementHandle::find_by_accessible_label(launcher, "Launch Native\napplication")
                 .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
@@ -950,31 +1171,61 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         );
         let grid_top = launcher.get_reorder_metrics().viewport.origin.y;
         let outside_pointer = slint::LogicalPosition::new(320.0, grid_top - 10.0);
+        // Alternate positive metadata uses the same public Down callback route;
+        // its transport and centered paint must not collapse to the default skin.
+        appearance_override.set(Some(0.8));
         launcher
             .window()
             .dispatch_event(WindowEvent::PointerPressed {
                 position: press,
                 button: PointerEventButton::Left,
             });
+        assert_eq!(source_scale.get(), Some(0.8));
+        launcher.set_source_appearance_scale(1.3);
         launcher.window().dispatch_event(WindowEvent::PointerMoved {
             position: slint::LogicalPosition::new(press.x + 12.0, press.y),
         });
+        assert!(!launcher.get_reorder_visual().visible);
         launcher.window().dispatch_event(WindowEvent::PointerMoved {
             position: outside_pointer,
         });
         let outside_frame = launcher.window().take_snapshot().unwrap();
         let outside_visual = launcher.get_reorder_visual();
-        assert_eq!(
+        assert_eq!(outside_visual.source_scale, 0.8);
+        assert_eq!(outside_visual.bounds.width, bounds.width);
+        assert_eq!(outside_visual.bounds.height, bounds.height);
+        assert_eq!(launcher.get_reorder_metrics().content_height, extent);
+        assert_gl_scaled_tile_pixels(
+            &restored,
+            &outside_frame,
+            &outside_visual.bounds,
+            scale,
+            outside_visual.source_scale,
+            genuine,
+        );
+        assert_gl_input_position(
             outside_visual.bounds.origin,
-            slint::LogicalPosition::new(outside_pointer.x - 11.0, outside_pointer.y - 13.0)
+            slint::LogicalPosition::new(outside_pointer.x - 11.0, outside_pointer.y - 13.0),
+            &[
+                outside_pointer,
+                source.borrow().as_ref().unwrap().press,
+                source.borrow().as_ref().unwrap().bounds.origin,
+            ],
         );
         assert!(outside.get() > 0, "rejecting root receives header hover");
-        let side = (outside_visual.bounds.height - 59.2).max(0.0);
-        let above_origin = slint::LogicalPosition::new(
-            outside_visual.bounds.origin.x + (outside_visual.bounds.width - side) / 2.0,
-            outside_visual.bounds.origin.y + 8.0,
+        let side = (outside_visual.bounds.height - 59.2)
+            .max(0.0)
+            .min((outside_visual.bounds.width - 16.0).max(0.0));
+        let (above_origin, icon_size) = gl_scaled_tile_region(
+            &outside_visual.bounds,
+            outside_visual.source_scale,
+            slint::LogicalPosition::new((outside_visual.bounds.width - side) / 2.0, 8.0),
+            slint::LogicalSize::new(side, side),
         );
-        let above_size = slint::LogicalSize::new(side, side.min(grid_top - above_origin.y));
+        let above_size = slint::LogicalSize::new(
+            icon_size.width,
+            icon_size.height.min(grid_top - above_origin.y),
+        );
         let unclipped_icon = gl_region(&outside_frame, above_origin, above_size, scale);
         let clean_header = gl_region(&restored, above_origin, above_size, scale);
         assert!(
@@ -997,6 +1248,7 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
         );
         launcher.window().dispatch_event(WindowEvent::PointerExited);
         assert!(!launcher.get_reorder_visual().visible);
+        assert!(source_scale.get().is_none());
         assert_eq!(
             source_tile.accessible_role(),
             Some(AccessibleRole::Button),
