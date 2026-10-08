@@ -83,6 +83,16 @@ fn draw(window: &MinimalSoftwareWindow, width: u32, height: u32) -> Vec<Rgb8Pixe
     pixels
 }
 
+fn assert_rgb_overlay(actual: [u8; 3], source: [u8; 3], background: [u8; 3], alpha: f32) {
+    for ((actual, source), base) in actual.into_iter().zip(source).zip(background) {
+        let expected = (f32::from(source) * alpha + f32::from(base) * (1.0 - alpha)).round() as u8;
+        assert!(
+            actual.abs_diff(expected) <= 2,
+            "reference overlay alpha {alpha}: expected {expected}, actual {actual}",
+        );
+    }
+}
+
 fn app(key: &str, label: &str) -> LaunchTile {
     LaunchTile {
         key: key.into(),
@@ -254,6 +264,11 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
 
     dock.set_surface_status(DockStatus::default());
     assert_eq!(launch.accessible_enabled(), Some(true));
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Space.into(),
+        });
     window.window().dispatch_event(WindowEvent::KeyReleased {
         text: Key::Space.into(),
     });
@@ -343,9 +358,11 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
                 before + 1,
                 "Space must arm the actual button, not activate before release",
             );
-            window.window().dispatch_event(WindowEvent::KeyPressed {
-                text: Key::Space.into(),
-            });
+            window
+                .window()
+                .dispatch_event(WindowEvent::KeyPressRepeated {
+                    text: Key::Space.into(),
+                });
             assert_eq!(
                 opens.get(),
                 before + 1,
@@ -392,6 +409,11 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             window
                 .window()
                 .dispatch_event(WindowEvent::WindowActiveChanged(true));
+            window
+                .window()
+                .dispatch_event(WindowEvent::KeyPressRepeated {
+                    text: Key::Space.into(),
+                });
             window.window().dispatch_event(WindowEvent::KeyReleased {
                 text: Key::Space.into(),
             });
@@ -496,13 +518,20 @@ fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
 
 #[test]
 fn toolbar_renders_identity_and_settings_access() {
+    use slint::language::ColorScheme;
     let window = software_window();
     let toolbar = Toolbar::new().unwrap();
     toolbar.set_user_name("alice".into());
     toolbar.set_focused_app("Editor — window".into());
     toolbar.set_clock("12:34".into());
     toolbar.set_language("en-US".into());
+    toolbar
+        .global::<crate::generated::SeelenPalette>()
+        .set_accent(slint::Color::from_rgb_u8(37, 171, 86).into());
     toolbar.show().unwrap();
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
     let opened = Rc::new(Cell::new(0));
     let counter = opened.clone();
     toolbar.on_open_panel_requested(move || counter.set(counter.get() + 1));
@@ -510,13 +539,20 @@ fn toolbar_renders_identity_and_settings_access() {
     let records = Rc::clone(&hints);
     toolbar
         .on_tooltip_requested(move |content, bounds| records.borrow_mut().push((content, bounds)));
-    for (scale, width, height) in [(1.0, 640u32, 32u32), (2.0, 1280u32, 64u32)] {
+    for (scheme, scale, width, height) in [
+        (ColorScheme::Light, 1.0, 640u32, 32u32),
+        (ColorScheme::Light, 2.0, 1280, 64),
+        (ColorScheme::Dark, 1.0, 640, 32),
+        (ColorScheme::Dark, 2.0, 1280, 64),
+    ] {
+        toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
                 scale_factor: scale,
             });
         window.set_size(slint::PhysicalSize::new(width, height));
+        window.window().dispatch_event(WindowEvent::PointerExited);
         window.request_redraw();
         let pixels = draw(&window, width, height);
         let settings =
@@ -525,6 +561,9 @@ fn toolbar_renders_identity_and_settings_access() {
                 .unwrap();
         assert_eq!(settings.accessible_role(), Some(AccessibleRole::Button));
         let origin = settings.absolute_position();
+        let size = settings.size();
+        assert_eq!(origin.y, 8.0);
+        assert_eq!((size.width, size.height), (16.0, 16.0));
         let (x, y) = ((origin.x * scale) as usize, (origin.y * scale) as usize);
         let inset = (3.0 * scale) as usize;
         let end = (13.0 * scale) as usize;
@@ -536,15 +575,31 @@ fn toolbar_renders_identity_and_settings_access() {
             }),
             "the settings vector renders inside its 16px tile at each DPI"
         );
-        for point in [
-            slint::LogicalPosition::new(0.0, 0.0),
-            slint::LogicalPosition::new(origin.x + 8.0, origin.y + 8.0),
-        ] {
-            window
-                .window()
-                .dispatch_event(WindowEvent::PointerMoved { position: point });
-            slint::platform::update_timers_and_animations();
-        }
+        let center = slint::LogicalPosition::new(origin.x + 8.0, origin.y + 8.0);
+        // Straight edge outside the independent SVG's stroke bounds.
+        let index =
+            (center.y * scale) as usize * width as usize + ((origin.x + 0.5) * scale) as usize;
+        let base = pixels[index];
+        assert_eq!(base, pixels[0], "idle Settings has no filled background");
+        let accent = toolbar
+            .global::<crate::generated::SeelenPalette>()
+            .get_accent()
+            .color()
+            .to_argb_u8();
+        let overlay = |frame: &[Rgb8Pixel], alpha| {
+            let pixel = frame[index];
+            assert_rgb_overlay(
+                [pixel.r, pixel.g, pixel.b],
+                [accent.red, accent.green, accent.blue],
+                [base.r, base.g, base.b],
+                alpha,
+            );
+        };
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: center });
+        let hovered = draw(&window, width, height);
+        overlay(&hovered, 0.2);
         let requested = hints.borrow();
         let (content, bounds) = requested
             .last()
@@ -553,18 +608,73 @@ fn toolbar_renders_identity_and_settings_access() {
         assert_eq!(bounds.origin, origin);
         assert_eq!((bounds.width, bounds.height), (16.0, 16.0));
         drop(requested);
+        let before = opened.get();
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+        assert_eq!(opened.get(), before);
+        let pressed = draw(&window, width, height);
+        overlay(&pressed, 0.3);
+        assert_eq!(
+            settings.absolute_position(),
+            origin,
+            "toolbar div has no button translation"
+        );
+        assert_eq!(
+            settings.size(),
+            size,
+            "toolbar icon geometry stays unchanged"
+        );
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: center,
+                button: PointerEventButton::Left,
+            });
+        assert_eq!(opened.get(), before + 1);
+        overlay(&draw(&window, width, height), 0.2);
+        window.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Space.into(),
+        });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressRepeated {
+                text: Key::Space.into(),
+            });
+        assert_eq!(
+            opened.get(),
+            before + 1,
+            "held/repeated Space does not open Settings"
+        );
+        overlay(&draw(&window, width, height), 0.3);
+        assert_eq!(settings.absolute_position(), origin);
+        assert_eq!(settings.size(), size);
+        window.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Space.into(),
+        });
+        assert_eq!(opened.get(), before + 2);
+        overlay(&draw(&window, width, height), 0.2);
+        window.window().dispatch_event(WindowEvent::PointerExited);
+        let idle = draw(&window, width, height);
+        assert_eq!(
+            idle[index], base,
+            "release and leave restore transparent idle"
+        );
+        settings.invoke_accessible_default_action();
+        assert_eq!(opened.get(), before + 3);
+        assert!(!window.draw_if_needed(|_| panic!("settled toolbar must not redraw")));
         export_screenshot(
-            &format!("toolbar-{scale}x"),
+            &format!("toolbar-{scheme:?}-{scale}x"),
             &pixels,
             width as usize,
             height as usize,
         );
-        settings.invoke_accessible_default_action();
     }
     assert_eq!(
         opened.get(),
-        2,
-        "settings opens the real panel at both scales"
+        12,
+        "three real activation paths in all themes/scales"
     );
     drop(toolbar);
 }
@@ -715,18 +825,12 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
                     .to_argb_u8();
                 let assert_tint = |pixels: &[Rgb8Pixel], alpha: f32| {
                     let pixel = pixels[fill_index];
-                    for ((actual, source), base) in [pixel.r, pixel.g, pixel.b]
-                        .into_iter()
-                        .zip([accent.red, accent.green, accent.blue])
-                        .zip([body_color.r, body_color.g, body_color.b])
-                    {
-                        let expected = (f32::from(source) * alpha + f32::from(base) * (1.0 - alpha))
-                            .round() as u8;
-                        assert!(
-                            actual.abs_diff(expected) <= 2,
-                            "tile state must composite accent alpha {alpha} over the body: {pixel:?}",
-                        );
-                    }
+                    assert_rgb_overlay(
+                        [pixel.r, pixel.g, pixel.b],
+                        [accent.red, accent.green, accent.blue],
+                        [body_color.r, body_color.g, body_color.b],
+                        alpha,
+                    );
                 };
                 window
                     .window()
@@ -1196,15 +1300,7 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
             };
             let overlay = |frame: &[Rgb8Pixel], alpha: f32| {
                 let actual = sample(frame, origin.x + 4.0, center.y);
-                for channel in 0..3 {
-                    let expected = (f32::from(accent[channel]) * alpha
-                        + f32::from(background[channel]) * (1.0 - alpha))
-                        .round() as u8;
-                    assert!(
-                        actual[channel].abs_diff(expected) <= 2,
-                        "transparent menu skin must use accent alpha {alpha}, not neutral gray",
-                    );
-                }
+                assert_rgb_overlay(actual, accent, background, alpha);
             };
             window
                 .window()

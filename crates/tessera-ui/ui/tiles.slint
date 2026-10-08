@@ -112,7 +112,8 @@ export component TileButton inherits Rectangle {
         key-pressed(event) => {
             if root.enabled && event.text == Key.Space {
                 root.keyboard-focus = true;
-                root.space-armed = true;
+                // Repeats cannot revive a cancelled gesture.
+                if !event.repeat { root.space-armed = true; }
                 root.dismiss-tooltip(false);
                 return accept;
             }

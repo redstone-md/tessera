@@ -100,6 +100,11 @@ export component Toolbar inherits Window {
                 height: root.item;
                 radius: root.tile-radius;
                 filled: false;
+                // Reference Settings is a toolbar-item div, not a common
+                // button: accent overlays apply, but no active transform.
+                background: !self.enabled ? transparent :
+                    self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
+                    self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
                 accessible-text: "Open settings and recovery";
                 tooltip-text: @tr("Settings and recovery");
                 tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }

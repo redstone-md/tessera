@@ -258,11 +258,12 @@ fn verify_native_press_scale(
             button: PointerEventButton::Left,
         }),
         PressSource::Space => {
-            for _ in 0..2 {
-                window.dispatch_event(WindowEvent::KeyPressed {
-                    text: Key::Space.into(),
-                });
-            }
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Space.into(),
+            });
+            window.dispatch_event(WindowEvent::KeyPressRepeated {
+                text: Key::Space.into(),
+            });
         }
     }
     assert_eq!(
