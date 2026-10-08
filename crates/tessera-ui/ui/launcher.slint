@@ -112,6 +112,9 @@ export component Launcher inherits Window {
                         radius: 10px;
                         filled: false;
                         enabled: !root.blocked;
+                        background: !self.enabled ? transparent :
+                            self.focus-visible ? SeelenPalette.accent.with-alpha(0.1) :
+                            self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
                         accessible-text: "Launch " + tile.label;
                         clicked => { root.launch-requested(tile.key); }
 

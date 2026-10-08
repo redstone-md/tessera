@@ -19,5 +19,5 @@ export global SeelenPalette {
     out property <color> foreground: self.dark ? #e4e4e4 : #121212;
     out property <color> secondary: self.dark ? #bababa : #3d3d3d;
     out property <color> muted: self.dark ? #898989 : #6f6f6f;
-    out property <brush> accent: Palette.accent-background;
+    in-out property <brush> accent: Palette.accent-background;
 }

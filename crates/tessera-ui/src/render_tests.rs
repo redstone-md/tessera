@@ -597,11 +597,19 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
     window
         .window()
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
-    for theme in [
-        slint::language::ColorScheme::Light,
-        slint::language::ColorScheme::Dark,
+    let custom_accent = slint::Color::from_rgb_u8(42, 160, 95);
+    for (theme, accent_override) in [
+        (slint::language::ColorScheme::Light, None),
+        (slint::language::ColorScheme::Dark, None),
+        (slint::language::ColorScheme::Light, Some(custom_accent)),
+        (slint::language::ColorScheme::Dark, Some(custom_accent)),
     ] {
         launcher.apply_presentation_theme(PresentationTheme::uniform(theme));
+        if let Some(accent) = accent_override {
+            launcher
+                .global::<crate::generated::SeelenPalette>()
+                .set_accent(accent.into());
+        }
         for scale in [1.0_f32, 2.0] {
             window
                 .window()
@@ -652,11 +660,43 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
                     );
                 }
                 let center = slint::LogicalPosition::new(position.x + size.width / 2.0, y);
+                let fill_index =
+                    (y * scale) as usize * width as usize + ((position.x + 4.0) * scale) as usize;
+                let accent = launcher
+                    .global::<crate::generated::SeelenPalette>()
+                    .get_accent()
+                    .color()
+                    .to_argb_u8();
+                let assert_tint = |pixels: &[Rgb8Pixel], alpha: f32| {
+                    let pixel = pixels[fill_index];
+                    for ((actual, source), base) in [pixel.r, pixel.g, pixel.b]
+                        .into_iter()
+                        .zip([accent.red, accent.green, accent.blue])
+                        .zip([body_color.r, body_color.g, body_color.b])
+                    {
+                        let expected = (f32::from(source) * alpha + f32::from(base) * (1.0 - alpha))
+                            .round() as u8;
+                        assert!(
+                            actual.abs_diff(expected) <= 2,
+                            "tile state must composite accent alpha {alpha} over the body: {pixel:?}",
+                        );
+                    }
+                };
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: center });
+                let hovered = draw(&window, width, height);
+                assert_tint(&hovered, 0.2);
                 let before = launches.get();
                 window.window().dispatch_event(WindowEvent::PointerPressed {
                     position: center,
                     button: PointerEventButton::Left,
                 });
+                let mut pressed = hovered;
+                window.draw_if_needed(|renderer| {
+                    renderer.render(&mut pressed, width as usize);
+                });
+                assert_tint(&pressed, 0.2);
                 window
                     .window()
                     .dispatch_event(WindowEvent::PointerReleased {
@@ -671,14 +711,23 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
                 });
                 assert_eq!(launches.get(), before + 2);
                 let focused = draw(&window, width, height);
+                assert_tint(&focused, 0.1);
                 assert_ne!(
                     focused[index], baseline[index],
                     "the {i} edge tile's external keyboard outline must not be clipped ({theme:?}, {scale}x)",
                 );
                 assert_eq!(tile.absolute_position(), position);
                 assert_eq!(tile.size(), size, "focus does not resize or move the grid");
+                launcher.set_stale(true);
+                let disabled = draw(&window, width, height);
+                assert_eq!(
+                    disabled[fill_index], body_color,
+                    "disabled tiles have no state overlay"
+                );
+                launcher.set_stale(false);
             }
             launcher.invoke_focus_search();
+            window.window().dispatch_event(WindowEvent::PointerExited);
         }
     }
 }
