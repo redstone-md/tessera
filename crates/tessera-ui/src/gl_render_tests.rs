@@ -37,7 +37,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
             key: "native-app".into(),
             label: "Native app".into(),
             icon: slint::Image::default(),
-            pinned: false,
+            favorite: false,
         },
     ])));
     launcher

@@ -108,13 +108,33 @@ pub(crate) fn project_apps(
             needle.is_empty() || application.title().to_lowercase().contains(&needle)
         })
         .take(MAX_APPS)
-        .map(|application| AppProjection {
-            key: application.key().to_string(),
-            label: sanitize::caption(application.title()),
-            pinned: pins.iter().any(|pin| pin == application.key()),
-            icon: application.icon().cloned(),
-        })
+        .map(|application| project_app(application, pins))
         .collect()
+}
+
+/// Resolves exact favorite identities against the full trusted catalog, in
+/// preference order. Unavailable identities produce no synthetic launch rows;
+/// the display cap applies only after resolution. Favorites have no query.
+pub(crate) fn project_favorite_apps(
+    applications: &[PanelApplication],
+    favorites: &[String],
+    pins: &[String],
+) -> Vec<AppProjection> {
+    favorites
+        .iter()
+        .filter_map(|favorite| applications.iter().find(|app| app.key() == favorite))
+        .take(MAX_APPS)
+        .map(|application| project_app(application, pins))
+        .collect()
+}
+
+fn project_app(application: &PanelApplication, pins: &[String]) -> AppProjection {
+    AppProjection {
+        key: application.key().to_string(),
+        label: sanitize::caption(application.title()),
+        pinned: pins.iter().any(|pin| pin == application.key()),
+        icon: application.icon().cloned(),
+    }
 }
 
 /// Cleaned title, never empty, with a minimized marker for clarity.
@@ -155,6 +175,43 @@ mod tests {
         assert_eq!(rows.len(), MAX_APPS);
         assert!(rows[0].pinned);
         assert!(!rows[1].pinned);
+    }
+
+    #[test]
+    fn favorites_resolve_full_catalog_in_saved_order_and_report_only_dock_pins() {
+        let mut catalog: Vec<_> = (0..80)
+            .map(|index| app(&format!("k{index}"), &format!("App {index}")))
+            .collect();
+        let favorites = vec!["missing".into(), "k79".into(), "k2".into()];
+        let rows = project_favorite_apps(&catalog, &favorites, &["k2".into()]);
+        assert_eq!(
+            rows.iter().map(|row| row.key.as_str()).collect::<Vec<_>>(),
+            ["k79", "k2"]
+        );
+        assert!(!rows[0].pinned);
+        assert!(rows[1].pinned);
+        assert_eq!(project_apps(&catalog, &[], "")[0].key, "k0");
+        catalog.push(app("missing", "Reinstalled"));
+        let restored = project_favorite_apps(&catalog, &favorites, &[]);
+        assert_eq!(restored[0].key, "missing");
+        assert_eq!(restored[1].key, "k79");
+        assert!(project_favorite_apps(&[], &favorites, &[]).is_empty());
+        assert_eq!(favorites, ["missing", "k79", "k2"]);
+    }
+
+    #[test]
+    fn favorite_cap_follows_resolution_without_losing_preference_tail() {
+        let catalog: Vec<_> = (0..80)
+            .map(|index| app(&format!("k{index}"), &format!("App {index}")))
+            .collect();
+        let mut favorites: Vec<_> = (0..70).map(|index| format!("missing-{index}")).collect();
+        favorites.extend((0..80).rev().map(|index| format!("k{index}")));
+        let rows = project_favorite_apps(&catalog, &favorites, &[]);
+        assert_eq!(rows.len(), MAX_APPS);
+        assert_eq!(rows[0].key, "k79");
+        assert_eq!(rows[MAX_APPS - 1].key, "k16");
+        assert_eq!(favorites.len(), 150);
+        assert_eq!(favorites.last().unwrap(), "k0");
     }
 
     #[test]

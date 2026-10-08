@@ -869,9 +869,10 @@ impl PanelController {
         } else {
             pins.retain(|existing| existing != &resolved);
         }
-        let appearance = self.core.applied_appearance();
-        let preferences = PanelPreferences::new(appearance.theme, appearance.compact)
-            .with_dock(self.core.applied_dock_edge(), pins.clone());
+        let preferences = self
+            .core
+            .applied_preferences()
+            .with_dock(self.core.applied_dock_edge(), pins);
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {
                 self.core.record_applied(&preferences);
@@ -907,20 +908,16 @@ impl PanelController {
         });
     }
 
-    /// Saves the currently previewed preferences through the host. Dock edge
-    /// and pins are preview/live state; this records them on success and
-    /// re-applies the dock geometry immediately (edge change is visible).
+    /// Saves the previewed appearance/edge while preserving the complete saved
+    /// pin/favorite record. Successful saves update geometry immediately.
     pub(crate) fn save_preferences(&self) {
         let Some(panel) = self.panel.upgrade() else {
             return;
         };
-        let preferences = PanelPreferences::new(
+        let preferences = self.core.applied_preferences().with_appearance(
             crate::theme_from_index(panel.get_theme_index()),
             panel.get_compact(),
-        )
-        .with_dock(
             crate::dock_edge_from_index(panel.get_dock_edge_index()),
-            self.core.pins(),
         );
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {

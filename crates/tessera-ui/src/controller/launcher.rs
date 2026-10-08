@@ -5,21 +5,32 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use super::{PanelController, dock_icon};
 use crate::SurfaceKind;
-use crate::generated::{LaunchTile, Launcher, LauncherNavigation};
+use crate::generated::{LaunchTile, Launcher, LauncherNavigation, LauncherView};
 use crate::launcher::{LauncherSelection, Navigation};
 
 #[derive(Default)]
 pub(super) struct LauncherState {
+    view: LauncherView,
     selection: LauncherSelection,
     query: String,
 }
 
 impl LauncherState {
-    fn project(&mut self, keys: &[String], query: &str) -> Option<usize> {
-        let active_query = !query.trim().is_empty();
+    fn effective_view(&self, query: &str) -> LauncherView {
+        // Raw whitespace opens All, but does not implicitly select an app.
+        if query.is_empty() {
+            self.view
+        } else {
+            LauncherView::All
+        }
+    }
+
+    fn project(&mut self, keys: &[String], query: &str, view: LauncherView) -> Option<usize> {
+        let active_query = view == LauncherView::All && !query.trim().is_empty();
         // Slint can deliver an earlier changed callback after a projection.
-        // Only a genuinely different query may discard the selected identity.
-        if self.query != query {
+        // Only a genuinely different query/view discards selected identity.
+        if self.view != view || self.query != query {
+            self.view = view;
             self.query = query.to_owned();
             self.selection.search_changed(keys, active_query)
         } else {
@@ -27,9 +38,14 @@ impl LauncherState {
         }
     }
 
-    fn reopen(&mut self) {
+    fn switch(&mut self, view: LauncherView) {
+        self.view = view;
         self.selection.reset();
         self.query.clear();
+    }
+
+    fn reopen(&mut self) {
+        self.switch(LauncherView::Favorites);
     }
 }
 
@@ -38,7 +54,11 @@ impl PanelController {
         let weak = self.clone();
         launcher.on_launch_requested(move |key| weak.launch_launcher(&key));
         let weak = self.clone();
-        launcher.on_pin_toggle_requested(move |key, pinned| weak.toggle_pin(&key, pinned));
+        launcher.on_favorite_toggle_requested(move |key, favorite| {
+            weak.toggle_launcher_favorite(&key, favorite);
+        });
+        let weak = self.clone();
+        launcher.on_view_requested(move |view| weak.switch_launcher_view(view));
         let weak = self.clone();
         launcher.on_search_changed(move || weak.apply_launcher_filter());
         let weak = self.clone();
@@ -66,37 +86,125 @@ impl PanelController {
         });
     }
 
-    /// Applies the launcher's own search box to the retained catalog.
+    /// Applies the launcher's own search to All, resolving Favorites separately.
     /// Filtering never re-observes the desktop and never renumbers keys.
     pub(crate) fn apply_launcher_filter(&self) {
         self.show_launcher_tiles();
     }
 
-    /// Renders the launcher grid tiles for the launcher's own search over the
-    /// retained catalog (bounded by the projection module's `MAX_APPS`).
+    /// Resolves the active view against the full retained catalog, then applies
+    /// the bounded grid projection without mutating saved favorite identities.
     pub(super) fn show_launcher_tiles(&self) {
         let Some(launcher) = self.launcher_and_upgrade() else {
             return;
         };
         let search = launcher.get_search().to_string();
         let catalog = self.core.catalog();
-        let apps = crate::projection::project_apps(&catalog, &self.core.pins(), &search);
+        let favorites = self.core.launcher_favorites();
+        let pins = self.core.pins();
+        let view = self.launcher_state.borrow().effective_view(&search);
+        let view_changed = self.launcher_state.borrow().view != view;
+        let apps = match view {
+            LauncherView::Favorites => {
+                crate::projection::project_favorite_apps(&catalog, &favorites, &pins)
+            }
+            LauncherView::All => crate::projection::project_apps(&catalog, &pins, &search),
+        };
         let tiles: Vec<LaunchTile> = apps
             .iter()
             .map(|app| LaunchTile {
                 key: app.key.as_str().into(),
                 label: app.label.as_str().into(),
                 icon: dock_icon(self, app.icon.as_ref()),
-                pinned: app.pinned,
+                favorite: favorites.iter().any(|key| key == &app.key),
             })
             .collect();
         let keys = tiles
             .iter()
             .map(|tile| tile.key.to_string())
             .collect::<Vec<_>>();
-        let index = self.launcher_state.borrow_mut().project(&keys, &search);
+        let index = self
+            .launcher_state
+            .borrow_mut()
+            .project(&keys, &search, view);
+        launcher.set_view(view);
+        launcher.set_saved_favorites_present(!favorites.is_empty());
         launcher.set_tiles(ModelRc::new(VecModel::from(tiles)));
+        if view_changed {
+            launcher.invoke_reset_scroll();
+        }
         self.project_launcher_selection(&launcher, index);
+    }
+
+    fn switch_launcher_view(&self, view: LauncherView) {
+        let Some(launcher) = self.interactive_launcher() else {
+            return;
+        };
+        if self.launcher_state.borrow().view == view {
+            return;
+        }
+        self.launcher_state.borrow_mut().switch(view);
+        launcher.set_search("".into());
+        self.show_launcher_tiles();
+        launcher.invoke_reset_scroll();
+        launcher.invoke_focus_search();
+    }
+
+    /// Favorites are immediate saves of the complete applied record, never
+    /// dock pins or an appearance preview. Stored IDs are not launch authority.
+    fn toggle_launcher_favorite(&self, key: &str, favorite: bool) {
+        let Some(launcher) = self.interactive_launcher() else {
+            return;
+        };
+        let Some(key) = super::model_key(&launcher.get_tiles(), key, |tile| tile.key.to_string())
+            .filter(|key| self.core.catalog().iter().any(|app| app.key() == key))
+        else {
+            self.report_message("That application is no longer in the current launcher results.");
+            return;
+        };
+        let mut favorites = self.core.launcher_favorites();
+        if favorites.iter().any(|existing| existing == &key) == favorite {
+            return;
+        }
+        if favorite {
+            favorites.push(key);
+        } else {
+            favorites.retain(|existing| existing != &key);
+        }
+        let preferences = match self
+            .core
+            .applied_preferences()
+            .with_launcher_favorites(favorites)
+        {
+            Ok(preferences) => preferences,
+            Err(error) => {
+                self.report_message(&format!(
+                    "Could not save favorites: {}",
+                    crate::sanitize::bounded_text(&error, 200)
+                ));
+                return;
+            }
+        };
+        match self.core.host().save_preferences(&preferences) {
+            Ok(()) => {
+                self.core.record_applied(&preferences);
+                self.report_message(if favorite {
+                    "Added to favorites"
+                } else {
+                    "Removed from favorites"
+                });
+                self.show_launcher_tiles();
+                if launcher.get_selected_key().is_empty()
+                    && self.launcher_state.borrow().view == LauncherView::Favorites
+                {
+                    launcher.invoke_focus_search();
+                }
+            }
+            Err(error) => self.report_message(&format!(
+                "Could not save favorites: {}",
+                crate::sanitize::bounded_text(&error, 200)
+            )),
+        }
     }
 
     /// Shows (creates not; already constructed) the frameless launcher
@@ -112,6 +220,7 @@ impl PanelController {
             self.launcher_state.borrow_mut().reopen();
             launcher.set_search("".into());
             self.show_launcher_tiles();
+            launcher.invoke_reset_scroll();
             self.leases.borrow_mut().detach(SurfaceKind::Launcher);
             let rect = self.core.dock_context().map(|context| {
                 crate::dock::launcher_rect(context, launcher.window().scale_factor())
@@ -134,7 +243,7 @@ impl PanelController {
             if self.attach_lease(SurfaceKind::Launcher, launcher.window(), rect) {
                 self.request_ui_focus(launcher.window());
                 launcher.invoke_focus_search();
-                launcher.invoke_ensure_visible(0);
+                launcher.invoke_reset_scroll();
             }
         }
     }

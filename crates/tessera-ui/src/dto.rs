@@ -4,7 +4,7 @@
 //! Portable dock and launcher data types.
 //!
 //! [`PanelPreferences`] is defined in the crate root (with the public API);
-//! this module implements its bounded pin/dock behavior.
+//! this module implements dock pins and independent ordered launcher favorites.
 //!
 //! These DTOs cross the UI boundary only: the host adapter maps native
 //! application facts (identities, icons, work areas) into them on the
@@ -14,8 +14,8 @@
 
 /// Maximum number of pinned applications the UI will store or render.
 pub const MAX_PINS: usize = 32;
-/// Upper bound for one opaque identity (pin or application key): 1024 UTF-16
-/// code units, matching the native catalog's own identifier bound.
+/// Upper bound for one opaque identity (pin, favorite, or application key):
+/// 1024 UTF-16 code units, matching the native catalog's identifier bound.
 const KEY_BOUND_UTF16: usize = 1024;
 /// Upper bound for one raw application title in UTF-16 code units.
 const TITLE_BOUND_UTF16: usize = 512;
@@ -322,6 +322,30 @@ impl PanelPreferences {
         self
     }
 
+    /// Sets ordered launcher favorites, preserving exact first occurrences.
+    ///
+    /// Invalid identities reject the whole collection; no favorite count cap
+    /// or silent tail truncation is applied. The host validates storage size.
+    pub fn with_launcher_favorites(mut self, favorites: Vec<String>) -> Result<Self, String> {
+        let mut ordered = Vec::with_capacity(favorites.len());
+        let mut seen = std::collections::HashSet::new();
+        for favorite in favorites {
+            if !valid_key(&favorite) {
+                return Err("Launcher favorite identities must be nonempty, control-free, and at most 1024 UTF-16 units".into());
+            }
+            if seen.insert(favorite.clone()) {
+                ordered.push(favorite);
+            }
+        }
+        self.launcher_favorites = ordered;
+        Ok(self)
+    }
+
+    /// Persisted exact application identities in launcher favorite order.
+    pub fn launcher_favorites(&self) -> &[String] {
+        &self.launcher_favorites
+    }
+
     /// Screen edge the dock hugs when this preference is applied.
     pub fn dock_edge(&self) -> DockEdge {
         self.dock_edge
@@ -330,5 +354,51 @@ impl PanelPreferences {
     /// Persisted application keys in pin order (bounded; see [`MAX_PINS`]).
     pub fn pinned_apps(&self) -> &[String] {
         &self.pins
+    }
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+    use crate::Theme;
+
+    #[test]
+    fn favorites_preserve_order_case_and_tail_independently_of_dock_and_appearance() {
+        let favorites: Vec<_> = (0..80).map(|index| format!("favorite-{index}")).collect();
+        let mut repeated = favorites.clone();
+        repeated.extend(["favorite-0".into(), "Favorite-0".into()]);
+        let preferences = PanelPreferences::new(Theme::Dark, true)
+            .with_launcher_favorites(repeated)
+            .unwrap()
+            .with_dock(DockEdge::Left, vec!["dock-only".into()])
+            .with_appearance(Theme::Light, false, DockEdge::Right);
+        assert_eq!(&preferences.launcher_favorites()[..80], favorites);
+        assert_eq!(preferences.launcher_favorites()[80], "Favorite-0");
+        assert_eq!(preferences.pinned_apps(), ["dock-only"]);
+        assert_eq!(preferences.theme(), Theme::Light);
+        assert!(!preferences.compact());
+        assert_eq!(preferences.dock_edge(), DockEdge::Right);
+        assert!(PanelPreferences::default().launcher_favorites().is_empty());
+    }
+
+    #[test]
+    fn favorites_validate_entire_collection_with_utf16_key_rules() {
+        let valid = "\u{1f600}".repeat(512);
+        assert_eq!(
+            PanelPreferences::default()
+                .with_launcher_favorites(vec![valid.clone()])
+                .unwrap()
+                .launcher_favorites(),
+            [valid]
+        );
+        for invalid in [String::new(), "control\n".into(), "\u{1f600}".repeat(513)] {
+            let mut favorites: Vec<_> = (0..80).map(|index| format!("valid-{index}")).collect();
+            favorites.push(invalid);
+            assert!(
+                PanelPreferences::default()
+                    .with_launcher_favorites(favorites)
+                    .is_err()
+            );
+        }
     }
 }

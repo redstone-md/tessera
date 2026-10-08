@@ -41,6 +41,27 @@ pub(crate) struct Preferences {
     dock_edge: DockEdge,
     #[serde(default)]
     pinned_apps: Vec<String>,
+    launcher_favorites: Vec<String>,
+}
+
+/// Only the discriminator is read here; the selected typed record below
+/// rejects unknown and duplicate fields without passing through JSON Value.
+#[derive(Deserialize)]
+struct SchemaVersion {
+    schema_version: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPreferences {
+    #[serde(rename = "schema_version")]
+    _schema_version: u32,
+    theme: Theme,
+    compact: bool,
+    #[serde(default)]
+    dock_edge: DockEdge,
+    #[serde(default)]
+    pinned_apps: Vec<String>,
 }
 
 impl Default for Preferences {
@@ -52,11 +73,12 @@ impl Default for Preferences {
 impl Preferences {
     pub(crate) fn new(theme: Theme, compact: bool) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             theme,
             compact,
             dock_edge: DockEdge::default(),
             pinned_apps: Vec::new(),
+            launcher_favorites: Vec::new(),
         }
     }
 
@@ -82,8 +104,41 @@ impl Preferences {
         &self.pinned_apps
     }
 
+    pub(crate) fn with_launcher_favorites(mut self, favorites: Vec<String>) -> Self {
+        self.launcher_favorites = favorites;
+        self
+    }
+
+    pub(crate) fn launcher_favorites(&self) -> &[String] {
+        &self.launcher_favorites
+    }
+
+    /// Migrates legacy data in memory only. No caller writes until explicit save.
+    fn decode(contents: &[u8]) -> io::Result<Self> {
+        let schema: SchemaVersion = serde_json::from_slice(contents)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let preferences = match schema.schema_version {
+            1 => {
+                let legacy: LegacyPreferences = serde_json::from_slice(contents)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                Self::new(legacy.theme, legacy.compact)
+                    .with_dock(legacy.dock_edge, legacy.pinned_apps)
+            }
+            2 => serde_json::from_slice(contents)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Unsupported settings schema version",
+                ));
+            }
+        };
+        preferences.validate()?;
+        Ok(preferences)
+    }
+
     fn validate(&self) -> io::Result<()> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Unsupported settings schema version",
@@ -91,20 +146,35 @@ impl Preferences {
         }
         let mut seen = std::collections::HashSet::new();
         if self.pinned_apps.len() > MAX_PINS
-            || self.pinned_apps.iter().any(|id| {
-                id.is_empty()
-                    || id.encode_utf16().count() > MAX_APPLICATION_ID_UNITS
-                    || id.chars().any(char::is_control)
-                    || !seen.insert(id.to_lowercase())
-            })
+            || self
+                .pinned_apps
+                .iter()
+                .any(|id| !valid_application_id(id) || !seen.insert(id.to_lowercase()))
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Pinned application identities are invalid or exceed the limit",
             ));
         }
+        let mut seen = std::collections::HashSet::new();
+        if self
+            .launcher_favorites
+            .iter()
+            .any(|id| !valid_application_id(id) || !seen.insert(id.as_str()))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Launcher favorite identities are invalid or duplicated",
+            ));
+        }
         Ok(())
     }
+}
+
+fn valid_application_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.encode_utf16().count() <= MAX_APPLICATION_ID_UNITS
+        && !id.chars().any(char::is_control)
 }
 
 pub(crate) struct SettingsStore {
@@ -143,10 +213,7 @@ impl SettingsStore {
                 "Settings file exceeds 16 KiB",
             ));
         }
-        let preferences: Preferences = serde_json::from_slice(&contents)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        preferences.validate()?;
-        Ok(preferences)
+        Preferences::decode(&contents)
     }
 
     /// Explicit saves replace one small file atomically; no startup or shell settings are stored.
@@ -202,6 +269,14 @@ mod tests {
         for invalid in [
             "not json",
             r#"{"schema_version":2,"theme":"system","compact":false}"#,
+            r#"{"schema_version":0,"theme":"system","compact":false}"#,
+            r#"{"schema_version":3,"theme":"system","compact":false}"#,
+            r#"{"schema_version":1,"theme":"dark","compact":false,"launcher_favorites":[]}"#,
+            r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":[],"extra":0}"#,
+            r#"{"schema_version":1,"schema_version":1,"theme":"dark","compact":false}"#,
+            r#"{"schema_version":1,"theme":"dark","theme":"light","compact":false}"#,
+            r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":[],"launcher_favorites":[]}"#,
+            r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":["same","same"]}"#,
             r#"{"schema_version":1,"theme":"neon","compact":false}"#,
             r#"{"schema_version":1,"theme":"dark","compact":false,"autostart":true}"#,
         ] {
@@ -214,24 +289,40 @@ mod tests {
     }
 
     #[test]
-    fn legacy_preferences_load_defaults_and_dock_pins_round_trip() {
+    fn legacy_migration_is_read_only_until_complete_v2_explicit_save() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
-        fs::write(
-            &path,
-            r#"{"schema_version":1,"theme":"dark","compact":true}"#,
-        )
-        .unwrap();
-        let legacy = store.load().unwrap();
-        assert_eq!(legacy.dock_edge(), DockEdge::Bottom);
-        assert!(legacy.pinned_apps().is_empty());
-        let dock = legacy.with_dock(
-            DockEdge::Left,
-            vec!["shell:AppsFolder\\Application".to_owned()],
-        );
-        store.save(&dock).unwrap();
-        assert_eq!(store.load().unwrap(), dock);
+        for (original, edge, pins) in [
+            (
+                r#"{"schema_version":1,"theme":"dark","compact":true}"#,
+                DockEdge::Bottom,
+                Vec::<String>::new(),
+            ),
+            (
+                r#"{"schema_version":1,"theme":"dark","compact":true,"dock_edge":"left","pinned_apps":["dock-only"]}"#,
+                DockEdge::Left,
+                vec!["dock-only".to_owned()],
+            ),
+        ] {
+            fs::write(&path, original).unwrap();
+            let migrated = store.load().unwrap();
+            assert_eq!(migrated.dock_edge(), edge);
+            assert_eq!(
+                migrated,
+                Preferences::new(Theme::Dark, true).with_dock(edge, pins)
+            );
+            assert!(migrated.launcher_favorites().is_empty());
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+            let complete =
+                migrated.with_launcher_favorites(vec!["favorite-b".into(), "Favorite-A".into()]);
+            store.save(&complete).unwrap();
+            let persisted = fs::read_to_string(&path).unwrap();
+            assert!(persisted.contains("\"schema_version\": 2"));
+            assert!(persisted.contains("\"launcher_favorites\""));
+            assert_eq!(store.load().unwrap(), complete);
+        }
     }
 
     #[test]
@@ -256,6 +347,98 @@ mod tests {
             );
             assert_eq!(fs::read(&path).unwrap(), original);
         }
+    }
+
+    #[test]
+    fn favorites_round_trip_exact_case_order_and_more_than_dock_capacity() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SettingsStore::new(directory.path().join("settings.json"));
+        let mut favorites = vec!["exact".into(), "EXACT".into(), "\u{1f600}".repeat(512)];
+        favorites.extend((0..100).map(|index| format!("favorite-{index}")));
+        let preferences = Preferences::new(Theme::Light, true)
+            .with_dock(DockEdge::Right, vec!["dock-only".into()])
+            .with_launcher_favorites(favorites.clone());
+        store.save(&preferences).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded, preferences);
+        assert_eq!(loaded.launcher_favorites(), favorites);
+        assert_eq!(loaded.pinned_apps(), ["dock-only"]);
+    }
+
+    #[test]
+    fn invalid_favorites_reject_complete_load_and_save_without_replacing_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let original = r#"{"schema_version":1,"theme":"dark","compact":true}"#;
+        fs::write(&path, original).unwrap();
+        for favorites in [
+            vec![String::new()],
+            vec!["control\u{0007}".into()],
+            vec!["\u{1f600}".repeat(513)],
+            vec!["duplicate".into(), "duplicate".into()],
+        ] {
+            let preferences = Preferences::default().with_launcher_favorites(favorites);
+            assert_eq!(
+                store.save(&preferences).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+            let invalid = serde_json::to_vec(&preferences).unwrap();
+            fs::write(&path, &invalid).unwrap();
+            assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(fs::read(&path).unwrap(), invalid);
+            fs::write(&path, original).unwrap();
+        }
+    }
+
+    #[test]
+    fn whole_record_budget_accepts_exact_limit_and_rejects_tail_without_loss() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let mut favorites: Vec<_> = (0..16)
+            .map(|index| format!("{index:02}{}", "a".repeat(958)))
+            .collect();
+        favorites.push("tail".into());
+        let mut preferences = Preferences::default().with_launcher_favorites(favorites);
+        let size = serde_json::to_vec_pretty(&preferences).unwrap().len() + 1;
+        let padding = MAX_SETTINGS_BYTES as usize - size;
+        preferences
+            .launcher_favorites
+            .last_mut()
+            .unwrap()
+            .push_str(&"z".repeat(padding));
+        preferences.validate().unwrap();
+        store.save(&preferences).unwrap();
+        let original = fs::read(&path).unwrap();
+        assert_eq!(original.len(), MAX_SETTINGS_BYTES as usize);
+        assert_eq!(store.load().unwrap(), preferences);
+        preferences.launcher_favorites.last_mut().unwrap().push('z');
+        assert_eq!(
+            store.save(&preferences).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        let pins: Vec<_> = (0..9)
+            .map(|index| format!("pin-{index}{}", "p".repeat(995)))
+            .collect();
+        let favorites: Vec<_> = (0..9)
+            .map(|index| format!("favorite-{index}{}", "f".repeat(989)))
+            .collect();
+        let combined = Preferences::default()
+            .with_dock(DockEdge::Bottom, pins)
+            .with_launcher_favorites(favorites);
+        combined.validate().unwrap();
+        assert!(store.save(&combined).is_err());
+        assert_eq!(fs::read(&path).unwrap(), original);
+
+        let mut too_large = original;
+        too_large.push(b' ');
+        fs::write(&path, &too_large).unwrap();
+        assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&path).unwrap(), too_large);
     }
 
     #[test]

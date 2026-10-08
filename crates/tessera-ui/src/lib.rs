@@ -165,19 +165,20 @@ pub(crate) fn start_clock_timer(
     timer
 }
 
-/// Panel appearance preferences, persisted by the host on explicit save.
+/// Complete panel preferences, persisted by the host on explicit user actions.
 ///
-/// `dock_edge` and `pins` ride along in the same persisted record: the dock
-/// edge follows the appearance Save button, while pin changes are persisted
-/// immediately using the last saved appearance values (see the controller).
-/// Pins are bounded (`MAX_PINS`) and length-limited by `with_dock`, so this
-/// small cloneable value stays cheap to move across the trait boundary.
+/// Dock pins and ordered launcher favorites are independent collections.
+/// Immediate pin/favorite changes carry the last saved appearance, never a
+/// live preview. Dock pins are bounded by [`MAX_PINS`]; favorite builders
+/// validate identities without truncating the collection. The host enforces
+/// the aggregate storage budget on save.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PanelPreferences {
     theme: Theme,
     compact: bool,
     dock_edge: DockEdge,
     pins: Vec<String>,
+    launcher_favorites: Vec<String>,
 }
 
 impl PanelPreferences {
@@ -188,7 +189,16 @@ impl PanelPreferences {
             compact,
             dock_edge: DockEdge::default(),
             pins: Vec::new(),
+            launcher_favorites: Vec::new(),
         }
+    }
+
+    /// Changes appearance and dock placement without changing either collection.
+    pub fn with_appearance(mut self, theme: Theme, compact: bool, edge: DockEdge) -> Self {
+        self.theme = theme;
+        self.compact = compact;
+        self.dock_edge = edge;
+        self
     }
 
     /// Selected color scheme.
@@ -326,7 +336,7 @@ impl PanelSnapshot {
 /// activation this preserves foreground eligibility) and only for an explicit
 /// user action. `system_action` likewise runs on the UI thread for a click.
 /// `save_preferences` is called only when the user presses Save or toggles a
-/// pin (see [`DesktopHost::save_preferences`]).
+/// dock pin or launcher favorite (see [`DesktopHost::save_preferences`]).
 pub trait DesktopHost: Send + Sync + 'static {
     /// Captures one observation pass, including the capped application
     /// catalog and dock viewport when the source provides them.
@@ -345,8 +355,8 @@ pub trait DesktopHost: Send + Sync + 'static {
     fn launch(&self, key: &str) -> Result<(), String>;
     /// Performs one explicit desktop action on the host's own authority.
     fn system_action(&self, action: SystemAction) -> Result<(), String>;
-    /// Persists preferences; invoked on explicit Save and on pin changes
-    /// (which carry the last saved appearance values, never the live preview).
+    /// Persists the complete record on explicit Save or pin/favorite changes.
+    /// Immediate collection changes carry last-saved appearance, never preview.
     fn save_preferences(&self, preferences: &PanelPreferences) -> Result<(), String>;
 
     /// Subscribes to desktop-change notifications (coalesced by the UI into
@@ -446,8 +456,9 @@ pub trait DesktopHost: Send + Sync + 'static {
 /// returned (single-flight). Desktop-change notifications that arrive while a
 /// worker runs are coalesced into exactly one queued follow-up refresh;
 /// concurrent manual refresh requests are dropped, not queued.
-/// `preferences` seeds the initial live preview; nothing is saved without an
-/// explicit Save. `startup_notice`, when present, is shown as a plain notice
+/// `preferences` seeds the initial live preview and complete applied record;
+/// nothing is saved without explicit Save or a pin/favorite action.
+/// `startup_notice`, when present, is shown as a plain notice
 /// at the top of the launcher panel. One desktop-change subscription is
 /// created; a subscription failure just leaves manual refresh as the update
 /// path.

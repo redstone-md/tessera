@@ -26,7 +26,7 @@ use slint::{ComponentHandle, Model, ModelRc, Rgb8Pixel, VecModel};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockApp, DockMenuAction, DockMenuKind, DockStatus, DockWindow,
-    LaunchTile, Launcher, LauncherNavigation, Toolbar, TooltipSurface,
+    LaunchTile, Launcher, LauncherNavigation, LauncherView, Toolbar, TooltipSurface,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientComponent;
@@ -98,7 +98,7 @@ fn app(key: &str, label: &str) -> LaunchTile {
         key: key.into(),
         label: label.into(),
         icon: slint::Image::default(),
-        pinned: false,
+        favorite: false,
     }
 }
 
@@ -726,6 +726,264 @@ fn launcher_renders_grid_search_and_escape_hides() {
 }
 
 #[test]
+fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus() {
+    use std::cell::RefCell;
+
+    let window = software_window();
+    let launcher = Launcher::new().unwrap();
+    assert_eq!(launcher.get_view(), LauncherView::Favorites);
+    let views = Rc::new(RefCell::new(Vec::new()));
+    let log = views.clone();
+    launcher.on_view_requested(move |view| log.borrow_mut().push(view));
+    let launches = Rc::new(RefCell::new(Vec::new()));
+    let log = launches.clone();
+    launcher.on_launch_requested(move |key| log.borrow_mut().push(key));
+    let selected_activations = Rc::new(Cell::new(0));
+    let count = selected_activations.clone();
+    launcher.on_activate_selected_requested(move || count.set(count.get() + 1));
+    launcher.show().unwrap();
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    let key = |text: slint::SharedString| {
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    };
+    let click = |element: &ElementHandle| {
+        let position = element.absolute_position();
+        let size = element.size();
+        let center = slint::LogicalPosition::new(
+            position.x + size.width / 2.0,
+            position.y + size.height / 2.0,
+        );
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+        window
+            .window()
+            .dispatch_event(WindowEvent::PointerReleased {
+                position: center,
+                button: PointerEventButton::Left,
+            });
+    };
+    for scale in [1.0_f32, 2.0] {
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (560.0 * scale) as u32;
+        let height = (300.0 * scale) as u32;
+        window.set_size(slint::PhysicalSize::new(width, height));
+        launcher.set_view(LauncherView::Favorites);
+        launcher.set_search("".into());
+        launcher.set_selected_key("".into());
+        let mut editor = app("editor", "Editor");
+        editor.favorite = true;
+        launcher.set_tiles(ModelRc::new(VecModel::from(vec![editor.clone()])));
+        launcher.set_saved_favorites_present(true);
+        launcher.invoke_reset_scroll();
+        launcher.invoke_focus_search();
+        let _ = draw(&window, width, height);
+        views.borrow_mut().clear();
+        launches.borrow_mut().clear();
+        let all = ElementHandle::find_by_accessible_label(&launcher, "All Apps")
+            .next()
+            .unwrap();
+        assert_eq!(all.accessible_role(), Some(AccessibleRole::Button));
+        click(&all);
+        assert_eq!(views.borrow().as_slice(), &[LauncherView::All]);
+        // The pinned stock Button's pointer handler does not take focus.
+        // Native Tab moves from the still-focused search field to the header.
+        key(Key::Tab.into());
+        key(Key::Return.into());
+        key(Key::Space.into());
+        assert_eq!(views.borrow().as_slice(), &[LauncherView::All; 3]);
+        assert_eq!(
+            launcher.get_view(),
+            LauncherView::Favorites,
+            "requests do not optimistically change view"
+        );
+        assert!(
+            launches.borrow().is_empty(),
+            "header Return/Space never launches"
+        );
+
+        // The parent accepts the requested view and supplies its real data.
+        launcher.set_view(LauncherView::All);
+        launcher.set_tiles(ModelRc::new(VecModel::from(
+            (0..23)
+                .map(|i| app(&format!("app-{i}"), &format!("App {i}")))
+                .collect::<Vec<_>>(),
+        )));
+        launcher.invoke_reset_scroll();
+        launcher.invoke_focus_search();
+        let _ = draw(&window, width, height);
+        assert_eq!(
+            views.borrow().len(),
+            3,
+            "programmatic view/model changes are silent"
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&launcher, "Launch Editor")
+                .next()
+                .is_none()
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&launcher, "All Apps")
+                .next()
+                .is_none()
+        );
+        let first = ElementHandle::find_by_accessible_label(&launcher, "Launch App 0")
+            .next()
+            .unwrap();
+        let initial_position = first.absolute_position();
+        click(&first);
+        launcher.invoke_ensure_visible(22);
+        let _ = draw(&window, width, height);
+        assert!(
+            first.absolute_position().y < initial_position.y,
+            "ensure-visible scrolls the real grid"
+        );
+        launcher.invoke_reset_scroll();
+        let _ = draw(&window, width, height);
+        assert_eq!(
+            first.absolute_position(),
+            initial_position,
+            "reset-scroll returns the native viewport to its top"
+        );
+        key(Key::Space.into());
+        assert_eq!(
+            launches.borrow().as_slice(),
+            &[
+                slint::SharedString::from("app-0"),
+                slint::SharedString::from("app-0")
+            ],
+            "reset-scroll does not steal the tile's actual keyboard focus",
+        );
+
+        let back = ElementHandle::find_by_accessible_label(&launcher, "Back to favorites")
+            .next()
+            .unwrap();
+        click(&back);
+        assert_eq!(views.borrow().last(), Some(&LauncherView::Favorites));
+        assert_eq!(
+            launcher.get_view(),
+            LauncherView::All,
+            "Back is also host-accepted"
+        );
+        launcher.set_view(LauncherView::Favorites);
+        launcher.set_tiles(ModelRc::new(VecModel::from(vec![editor])));
+        launcher.set_selected_key("".into());
+        launcher.set_search("".into());
+        launcher.invoke_reset_scroll();
+        launcher.invoke_focus_search();
+        let _ = draw(&window, width, height);
+        key("q".into());
+        assert_eq!(
+            launcher.get_search(),
+            "q",
+            "accepted transition restores native search focus"
+        );
+        assert_eq!(
+            views.borrow().len(),
+            4,
+            "projection/reset/focus/search emit no navigation request"
+        );
+        assert_eq!(selected_activations.get(), 0);
+        assert_eq!(launches.borrow().len(), 2);
+    }
+}
+
+#[test]
+fn launcher_empty_unavailable_and_no_match_states_are_distinct_and_keep_recovery() {
+    let window = software_window();
+    let launcher = Launcher::new().unwrap();
+    launcher.show().unwrap();
+    let messages = [
+        "Welcome to Tessera.\nYour favorite applications appear here. Open All Apps to add favorites.",
+        "Saved favorites are unavailable. Refresh to check installed applications.",
+        "No matching applications.",
+        "Working; results appear after the current refresh.",
+    ];
+    for scale in [1.0_f32, 2.0] {
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (560.0 * scale) as u32;
+        let height = (420.0 * scale) as u32;
+        window.set_size(slint::PhysicalSize::new(width, height));
+        let mut previous_pixels = None;
+        for (index, view, saved, refreshing) in [
+            (0, LauncherView::Favorites, false, false),
+            (1, LauncherView::Favorites, true, false),
+            (2, LauncherView::All, true, false),
+            (3, LauncherView::All, true, true),
+        ] {
+            launcher.set_view(view);
+            launcher.set_saved_favorites_present(saved);
+            launcher.set_refreshing(refreshing);
+            launcher.set_search(if view == LauncherView::All {
+                "missing".into()
+            } else {
+                "".into()
+            });
+            let pixels = draw(&window, width, height);
+            let message = ElementHandle::find_by_accessible_label(&launcher, messages[index])
+                .next()
+                .unwrap();
+            assert_eq!(message.accessible_role(), Some(AccessibleRole::Text));
+            for (other, text) in messages.iter().enumerate() {
+                if other != index {
+                    assert!(
+                        ElementHandle::find_by_accessible_label(&launcher, text)
+                            .next()
+                            .is_none()
+                    );
+                }
+            }
+            if let Some(previous) = previous_pixels {
+                assert_ne!(
+                    pixels, previous,
+                    "different empty states must genuinely render different text"
+                );
+            }
+            previous_pixels = Some(pixels);
+            for label in ["Open settings and recovery", "Exit Tessera"] {
+                let rescue = ElementHandle::find_by_accessible_label(&launcher, label)
+                    .next()
+                    .unwrap();
+                assert_eq!(rescue.accessible_enabled(), Some(true));
+                assert!(
+                    message.absolute_position().y + message.size().height
+                        < rescue.absolute_position().y
+                );
+            }
+            let refresh = ElementHandle::find_by_accessible_label(&launcher, "Refresh the desktop")
+                .next()
+                .unwrap();
+            assert_eq!(refresh.accessible_enabled(), Some(!refreshing));
+            let navigation_label = if view == LauncherView::Favorites {
+                "All Apps"
+            } else {
+                "Back to favorites"
+            };
+            let navigation = ElementHandle::find_by_accessible_label(&launcher, navigation_label)
+                .next()
+                .unwrap();
+            assert_eq!(navigation.accessible_enabled(), Some(!refreshing));
+        }
+    }
+}
+
+#[test]
 fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
     use std::cell::RefCell;
 
@@ -895,7 +1153,8 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
     assert_eq!(launcher.get_selected_key(), "app-0");
     key(Key::DownArrow.into());
     assert_eq!(launcher.get_selected_key(), "app-7");
-    key(Key::Tab.into());
+    key(Key::Tab.into()); // All Apps is a real header navigation control.
+    key(Key::Tab.into()); // Actual focus on App 0.
     assert_eq!(
         launcher.get_selected_key(),
         "app-0",
@@ -916,7 +1175,7 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
         moved[ring_index], baseline[ring_index],
         "grid navigation removes the former tile's real-focus outline"
     );
-    key(Key::Tab.into()); // App 1's pin has its own focus scope.
+    key(Key::Tab.into()); // App 1's favorite has its own focus scope.
     key(Key::Tab.into()); // Actual focus on App 2.
     assert_eq!(launcher.get_selected_key(), "app-2");
     let reconciled = draw(&window, 560, 300);
@@ -1342,16 +1601,21 @@ fn dock_compact_and_stale_states_change_rendering_and_keep_rescue() {
 }
 
 #[test]
-fn launcher_pin_toggle_routes_the_key() {
+fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
     launcher.set_tiles(ModelRc::new(VecModel::from(vec![app(
         "app-editor",
         "Rust Editor",
     )])));
-    let pins = Rc::new(Cell::new(0));
-    let counter = pins.clone();
-    launcher.on_pin_toggle_requested(move |_, _| counter.set(counter.get() + 1));
+    let favorites = Rc::new(Cell::new(0));
+    let counter = favorites.clone();
+    let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let log = requests.clone();
+    launcher.on_favorite_toggle_requested(move |key, desired| {
+        counter.set(counter.get() + 1);
+        log.borrow_mut().push((key, desired));
+    });
     let launches = Rc::new(Cell::new(0));
     let counter = launches.clone();
     launcher.on_launch_requested(move |_| counter.set(counter.get() + 1));
@@ -1363,12 +1627,24 @@ fn launcher_pin_toggle_routes_the_key() {
     window.set_size(slint::PhysicalSize::new(560, 420));
     let _ = draw(&window, 560, 420);
 
-    let pin = ElementHandle::find_by_accessible_label(&launcher, "Pin Rust Editor")
-        .next()
-        .unwrap();
-    pin.invoke_accessible_default_action();
-    assert_eq!(pins.get(), 1, "accessible pin action toggles");
-    let position = pin.absolute_position();
+    let favorite =
+        ElementHandle::find_by_accessible_label(&launcher, "Add to favorites: Rust Editor")
+            .next()
+            .unwrap();
+    assert_eq!(favorite.accessible_role(), Some(AccessibleRole::Checkbox));
+    assert_eq!(favorite.accessible_checked(), Some(false));
+    favorite.invoke_accessible_default_action();
+    assert_eq!(
+        favorites.get(),
+        1,
+        "accessible favorite action requests addition"
+    );
+    assert_eq!(
+        favorite.accessible_checked(),
+        Some(false),
+        "no optimistic membership"
+    );
+    let position = favorite.absolute_position();
     let center = slint::LogicalPosition::new(position.x + 8.0, position.y + 8.0);
     window.window().dispatch_event(WindowEvent::PointerPressed {
         position: center,
@@ -1380,28 +1656,79 @@ fn launcher_pin_toggle_routes_the_key() {
             position: center,
             button: PointerEventButton::Left,
         });
-    assert_eq!(pins.get(), 2, "mouse pin action is not a tile launch");
+    assert_eq!(
+        favorites.get(),
+        2,
+        "mouse favorite action is not a tile launch"
+    );
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::Space.into(),
     });
-    assert_eq!(pins.get(), 3, "focused pin accepts keyboard activation");
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Space.into(),
+        });
+    assert_eq!(
+        favorites.get(),
+        2,
+        "Space arms without activating or repeating"
+    );
     window.window().dispatch_event(WindowEvent::KeyReleased {
         text: Key::Space.into(),
     });
+    assert_eq!(
+        favorites.get(),
+        3,
+        "focused favorite Space activates once on release"
+    );
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::Return.into(),
     });
     window.window().dispatch_event(WindowEvent::KeyReleased {
         text: Key::Return.into(),
     });
-    assert_eq!(pins.get(), 4, "focused pin Return remains pin-only");
-    assert_eq!(launches.get(), 0, "pin input never bubbles into launch");
+    assert_eq!(
+        favorites.get(),
+        4,
+        "focused favorite Return remains favorite-only"
+    );
+    assert_eq!(
+        launches.get(),
+        0,
+        "favorite input never bubbles into launch"
+    );
+    assert_eq!(
+        requests.borrow().as_slice(),
+        &vec![(slint::SharedString::from("app-editor"), true); 4],
+        "callbacks request absolute desired membership for the exact key",
+    );
+    let mut saved = app("app-editor", "Rust Editor");
+    saved.favorite = true;
+    launcher.set_tiles(ModelRc::new(VecModel::from(vec![saved])));
+    let _ = draw(&window, 560, 420);
+    assert_eq!(favorites.get(), 4, "programmatic projection is silent");
+    let favorite =
+        ElementHandle::find_by_accessible_label(&launcher, "Remove from favorites: Rust Editor")
+            .next()
+            .unwrap();
+    assert_eq!(favorite.accessible_checked(), Some(true));
+    favorite.invoke_accessible_default_action();
+    assert_eq!(favorites.get(), 5);
+    assert_eq!(
+        requests.borrow().last(),
+        Some(&(slint::SharedString::from("app-editor"), false))
+    );
     launcher.set_stale(true);
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::Return.into(),
     });
-    pin.invoke_accessible_default_action();
-    assert_eq!(pins.get(), 4, "stale pin controls reject all actions");
+    favorite.invoke_accessible_default_action();
+    assert_eq!(
+        favorites.get(),
+        5,
+        "stale favorite controls reject all actions"
+    );
 
     let actions = Rc::new(std::cell::RefCell::new(Vec::new()));
     let log = actions.clone();
@@ -1439,7 +1766,7 @@ fn launcher_pin_toggle_routes_the_key() {
             assert_eq!(
                 actions.borrow().as_slice(),
                 &expected[..=index],
-                "Tab must skip blocked application and pin scopes",
+                "Tab must skip blocked header, application and favorite scopes",
             );
         }
         key(Key::Tab.into());
@@ -1452,12 +1779,16 @@ fn launcher_pin_toggle_routes_the_key() {
         key(Key::Escape.into());
     }
     assert_eq!(hides.get(), 2, "Escape still bubbles from the search field");
-    assert_eq!(pins.get(), 4, "blocked traversal never toggles a pin");
+    assert_eq!(
+        favorites.get(),
+        5,
+        "blocked traversal never changes a favorite"
+    );
     assert_eq!(launches.get(), 0, "blocked traversal never launches an app");
     assert_eq!(
         selected_activations.get(),
         0,
-        "pin and footer Return never request selected-app activation"
+        "favorite and footer Return never request selected-app activation"
     );
     drop(launcher);
 }

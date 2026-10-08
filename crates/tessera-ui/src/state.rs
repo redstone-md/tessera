@@ -5,8 +5,8 @@
 //! strip).
 //!
 //! One [`SurfaceCore`] owns the retained observation, the retained catalog,
-//! the pin list, and the coalescing desktop-notification bus. The surface
-//! controller registers its routes on the core at construction.
+//! the complete applied preferences, and the coalescing notification bus.
+//! The surface controller registers its routes on the core at construction.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -29,13 +29,9 @@ pub(crate) struct SurfaceCore {
     host: Arc<Host>,
     snapshot: Mutex<Option<PanelSnapshot>>,
     catalog: Mutex<Vec<PanelApplication>>,
-    /// Live pins: the last successfully saved list, or the seeded list.
-    pins: Mutex<Vec<String>>,
-    /// Appearance values of the last save (or seed); pin saves reuse them so
-    /// a live appearance preview is never persisted by a pin click.
-    applied_appearance: Mutex<Appearance>,
-    /// Dock edge of the last save (or seed); pin saves reuse it.
-    applied_dock_edge: Mutex<crate::DockEdge>,
+    /// Complete last successfully saved record (or seed). Immediate collection
+    /// saves clone it, so they cannot accidentally persist appearance previews.
+    applied_preferences: Mutex<PanelPreferences>,
     dirty: Mutex<bool>,
     /// UI-thread routes installed by the surface controller.
     routes: Mutex<Option<Routes>>,
@@ -55,22 +51,6 @@ pub(crate) struct Routes {
     pub(crate) start_refresh: Arc<dyn Fn() + Send + Sync>,
 }
 
-/// Theme + compact pair as last persisted (theme and compact stay `Copy`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Appearance {
-    pub(crate) theme: crate::Theme,
-    pub(crate) compact: bool,
-}
-
-impl Appearance {
-    pub(crate) fn of(preferences: &PanelPreferences) -> Self {
-        Self {
-            theme: preferences.theme(),
-            compact: preferences.compact(),
-        }
-    }
-}
-
 impl SurfaceCore {
     /// Creates the shared core and opens the host subscription.
     ///
@@ -87,9 +67,7 @@ impl SurfaceCore {
             host: Arc::clone(&host),
             snapshot: Mutex::new(None),
             catalog: Mutex::new(Vec::new()),
-            pins: Mutex::new(preferences.pinned_apps().to_vec()),
-            applied_appearance: Mutex::new(Appearance::of(preferences)),
-            applied_dock_edge: Mutex::new(preferences.dock_edge()),
+            applied_preferences: Mutex::new(preferences.clone()),
             dirty: Mutex::new(false),
             routes: Mutex::new(None),
             apply_route: Mutex::new(None),
@@ -223,25 +201,31 @@ impl SurfaceCore {
     }
 
     pub(crate) fn pins(&self) -> Vec<String> {
-        self.pins.lock().clone()
+        self.applied_preferences.lock().pinned_apps().to_vec()
+    }
+
+    pub(crate) fn launcher_favorites(&self) -> Vec<String> {
+        self.applied_preferences
+            .lock()
+            .launcher_favorites()
+            .to_vec()
+    }
+
+    pub(crate) fn applied_preferences(&self) -> PanelPreferences {
+        self.applied_preferences.lock().clone()
     }
 
     pub(crate) fn catalog(&self) -> Vec<PanelApplication> {
         self.catalog.lock().clone()
     }
 
-    pub(crate) fn applied_appearance(&self) -> Appearance {
-        *self.applied_appearance.lock()
-    }
-
     pub(crate) fn applied_dock_edge(&self) -> crate::DockEdge {
-        *self.applied_dock_edge.lock()
+        self.applied_preferences.lock().dock_edge()
     }
 
+    /// Commits the whole record only after the caller's host save succeeds.
     pub(crate) fn record_applied(&self, preferences: &PanelPreferences) {
-        *self.applied_appearance.lock() = Appearance::of(preferences);
-        *self.applied_dock_edge.lock() = preferences.dock_edge();
-        *self.pins.lock() = preferences.pinned_apps().to_vec();
+        *self.applied_preferences.lock() = preferences.clone();
     }
 
     pub(crate) fn pin_capacity_full(&self, pins: &[String]) -> bool {
@@ -330,6 +314,8 @@ mod tests {
     fn preferences() -> PanelPreferences {
         PanelPreferences::new(Theme::Dark, true)
             .with_dock(crate::DockEdge::Left, vec!["known-key".into()])
+            .with_launcher_favorites(vec!["favorite-only".into(), "known-key".into()])
+            .unwrap()
     }
 
     #[test]
@@ -338,35 +324,69 @@ mod tests {
         let (core, _guard) = SurfaceCore::new(CoalesceHost::counting(), &preferences(), &mut error);
         assert!(error.is_none());
         assert_eq!(core.pins(), vec!["known-key".to_string()]);
-        assert_eq!(core.applied_appearance().theme, Theme::Dark);
+        assert_eq!(core.applied_preferences(), preferences());
+        assert_eq!(core.launcher_favorites(), ["favorite-only", "known-key"]);
+        assert_eq!(core.applied_preferences().theme(), Theme::Dark);
         assert_eq!(core.applied_dock_edge(), crate::DockEdge::Left);
 
-        // A later explicit save with different appearance updates the applied
-        // state pin saves reuse.
+        // A successful explicit save replaces the complete record.
         core.record_applied(
             &PanelPreferences::new(Theme::Light, false)
-                .with_dock(crate::DockEdge::Right, Vec::new()),
+                .with_dock(crate::DockEdge::Right, Vec::new())
+                .with_launcher_favorites(vec!["new-favorite".into()])
+                .unwrap(),
         );
-        assert_eq!(core.applied_appearance().theme, Theme::Light);
+        assert_eq!(core.applied_preferences().theme(), Theme::Light);
         assert!(core.pins().is_empty());
+        assert_eq!(core.launcher_favorites(), ["new-favorite"]);
+        assert_eq!(
+            core.applied_preferences(),
+            PanelPreferences::new(Theme::Light, false)
+                .with_dock(crate::DockEdge::Right, Vec::new())
+                .with_launcher_favorites(vec!["new-favorite".into()])
+                .unwrap()
+        );
     }
 
     #[test]
-    fn pin_save_uses_last_saved_appearance_not_preview() {
-        // Seeded Dark/compact; the user then previews Light in the UI but
-        // does not press Save. A pin click must persist Dark.
+    fn immediate_collection_save_clones_full_record_without_persisting_preview() {
+        // A live appearance preview does not change the complete applied seed.
         let mut error = None;
         let (core, _guard) = SurfaceCore::new(CoalesceHost::counting(), &preferences(), &mut error);
-        core.record_applied(
-            &PanelPreferences::new(Theme::Light, false)
-                .with_dock(crate::DockEdge::Bottom, Vec::new()),
+        let persisted = core
+            .applied_preferences()
+            .with_dock(core.applied_dock_edge(), vec!["new-pin".into()]);
+        assert_eq!(persisted.theme(), Theme::Dark);
+        assert!(persisted.compact());
+        assert_eq!(persisted.dock_edge(), crate::DockEdge::Left);
+        assert_eq!(
+            persisted.launcher_favorites(),
+            preferences().launcher_favorites()
         );
-        let appearance = core.applied_appearance();
-        let persisted = PanelPreferences::new(appearance.theme, appearance.compact)
-            .with_dock(core.applied_dock_edge(), core.pins());
-        assert_eq!(persisted.theme(), Theme::Light);
-        assert!(!persisted.compact());
-        assert_eq!(persisted.dock_edge(), crate::DockEdge::Bottom);
+        assert_eq!(core.applied_preferences(), preferences());
+    }
+
+    #[test]
+    fn catalog_retains_full_inventory_until_explicit_empty_snapshot() {
+        let mut error = None;
+        let (core, _guard) = SurfaceCore::new(CoalesceHost::counting(), &preferences(), &mut error);
+        let catalog: Vec<_> = (0..80)
+            .map(|index| {
+                PanelApplication::new(format!("k{index}"), format!("App {index}"), None).unwrap()
+            })
+            .collect();
+        core.store_snapshot(
+            PanelSnapshot::new(1, Vec::new(), 0).with_applications(catalog.clone()),
+        );
+        assert_eq!(core.catalog(), catalog);
+        core.store_snapshot(PanelSnapshot::new(1, Vec::new(), 0));
+        assert_eq!(core.catalog(), catalog);
+        core.store_snapshot(PanelSnapshot::new(1, Vec::new(), 0).with_applications(Vec::new()));
+        assert!(core.catalog().is_empty());
+        assert_eq!(
+            core.launcher_favorites(),
+            preferences().launcher_favorites()
+        );
     }
 
     #[test]

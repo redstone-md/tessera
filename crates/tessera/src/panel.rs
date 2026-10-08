@@ -3,6 +3,39 @@
 
 use std::error::Error;
 
+/// A failed startup read disables ordinary saves for this session, protecting
+/// damaged or newer records from immediate pin/favorite changes. Missing files
+/// still load writable defaults. Recovery is deliberately manual.
+#[cfg(any(windows, test))]
+fn load_preferences(
+    store: std::io::Result<crate::settings::SettingsStore>,
+) -> (
+    Option<crate::settings::SettingsStore>,
+    crate::settings::Preferences,
+    Option<String>,
+) {
+    use crate::settings::Preferences;
+
+    match store {
+        Ok(store) => match store.load() {
+            Ok(preferences) => (Some(store), preferences, None),
+            Err(_) => (
+                None,
+                Preferences::default(),
+                Some(
+                    "Preferences could not be loaded; saving is disabled. Back up and rename %LOCALAPPDATA%\\Tessera\\settings.json, then restart. Saved data is unchanged; appearance preview still works."
+                        .into(),
+                ),
+            ),
+        },
+        Err(_) => (
+            None,
+            Preferences::default(),
+            Some("User settings location is unavailable; saving is disabled. Appearance preview still works.".into()),
+        ),
+    }
+}
+
 #[cfg(windows)]
 mod desktop {
     use std::collections::HashMap;
@@ -330,7 +363,7 @@ mod desktop {
 
         fn save_preferences(&self, preferences: &PanelPreferences) -> Result<(), String> {
             let store = self.settings.as_ref().ok_or_else(|| {
-                "User settings location is unavailable; preview still works".to_owned()
+                "Preference saving is unavailable for this session; preview still works. Check the startup notice and restart after recovery.".to_owned()
             })?;
             let theme = match preferences.theme() {
                 tessera_ui::Theme::System => Theme::System,
@@ -346,7 +379,8 @@ mod desktop {
             store
                 .save(
                     &Preferences::new(theme, preferences.compact())
-                        .with_dock(edge, preferences.pinned_apps().to_vec()),
+                        .with_dock(edge, preferences.pinned_apps().to_vec())
+                        .with_launcher_favorites(preferences.launcher_favorites().to_vec()),
                 )
                 .map_err(|error| error.to_string())
         }
@@ -364,27 +398,8 @@ mod desktop {
                 .with_winit_window_attributes_hook(|attributes| attributes.with_active(false))
                 .select()?;
         }
-        let (settings, preferences, notice) = match SettingsStore::for_current_user() {
-            Ok(store) => {
-                let (preferences, notice) = match store.load() {
-                    Ok(preferences) => (preferences, None),
-                    Err(error) => (
-                        Preferences::default(),
-                        Some(format!(
-                            "Preferences could not be loaded: {error}. Defaults are active; Save replaces the file."
-                        )),
-                    ),
-                };
-                (Some(store), preferences, notice)
-            }
-            Err(error) => (
-                None,
-                Preferences::default(),
-                Some(format!(
-                    "Preferences cannot be saved: {error}. Appearance preview is available."
-                )),
-            ),
-        };
+        let (settings, preferences, notice) =
+            super::load_preferences(SettingsStore::for_current_user());
         let theme = match preferences.theme() {
             Theme::System => tessera_ui::Theme::System,
             Theme::Light => tessera_ui::Theme::Light,
@@ -416,7 +431,8 @@ mod desktop {
         tessera_ui::run(
             host,
             PanelPreferences::new(theme, preferences.compact())
-                .with_dock(edge, preferences.pinned_apps().to_vec()),
+                .with_dock(edge, preferences.pinned_apps().to_vec())
+                .with_launcher_favorites(preferences.launcher_favorites().to_vec())?,
             notice,
             RunOptions {
                 surface: if presentation == Presentation::Utility {
@@ -462,4 +478,43 @@ pub(crate) fn run_desktop(_heartbeat: Option<&str>) -> Result<(), Box<dyn Error>
 #[cfg(not(windows))]
 pub(crate) fn run_desktop_diagnostic(_heartbeat: &str) -> Result<(), Box<dyn Error>> {
     run()
+}
+
+#[cfg(test)]
+mod preference_tests {
+    use super::*;
+    use crate::settings::{Preferences, SettingsStore};
+
+    #[test]
+    fn invalid_or_future_startup_records_disable_all_normal_preference_saves() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        for original in [
+            "damaged",
+            r#"{"schema_version":9,"theme":"dark","compact":true}"#,
+            r#"{"schema_version":2,"theme":"dark","compact":true}"#,
+        ] {
+            std::fs::write(&path, original).unwrap();
+            let (store, preferences, notice) =
+                load_preferences(Ok(SettingsStore::new(path.clone())));
+            assert!(store.is_none());
+            assert_eq!(preferences, Preferences::default());
+            let notice = notice.unwrap();
+            assert!(notice.len() <= 200);
+            assert!(notice.contains("Back up and rename"));
+            assert!(notice.contains("restart"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn missing_startup_record_remains_writable_without_implicit_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let (store, preferences, notice) = load_preferences(Ok(SettingsStore::new(path.clone())));
+        assert!(store.is_some());
+        assert_eq!(preferences, Preferences::default());
+        assert!(notice.is_none());
+        assert!(!path.exists());
+    }
 }

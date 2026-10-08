@@ -10,10 +10,11 @@ export struct LaunchTile {
     key: string,
     label: string,
     icon: image,
-    pinned: bool,
+    favorite: bool,
 }
 
 export enum LauncherNavigation { up, down, left, right }
+export enum LauncherView { favorites, all }
 
 // Frameless OPAQUE centered launcher (source apps-menu has no translucency):
 // a search header, a 7-column icon grid of
@@ -29,6 +30,8 @@ export component Launcher inherits Window {
     min-height: 1px;
 
     in property <[LaunchTile]> tiles;
+    in property <LauncherView> view: LauncherView.favorites;
+    in property <bool> saved-favorites-present;
     in property <string> status;
     in property <string> notice;
     in property <bool> refreshing;
@@ -43,7 +46,8 @@ export component Launcher inherits Window {
     callback select-requested(string);
     callback search-changed();
     callback launch-requested(string);
-    callback pin-toggle-requested(string, bool);
+    callback favorite-toggle-requested(string, bool);
+    callback view-requested(LauncherView);
     callback open-settings-requested();
     callback refresh-requested();
     callback hide-requested();
@@ -52,6 +56,11 @@ export component Launcher inherits Window {
     focus-search => {
         root.grid-navigation = false;
         search-field.focus();
+    }
+
+    // A fresh view/reopen starts at the top without taking keyboard focus.
+    public function reset-scroll() {
+        grid-scroll.content-y = 0px;
     }
 
     // Nearest-row scrolling includes the shared external outline gutter.
@@ -84,7 +93,7 @@ export component Launcher inherits Window {
         surface-radius: 16px;
 
         // Search receives focus on each show; Escape bubbles from all of
-        // this scope's children, including the search field and pin controls.
+        // this scope's children, including the search field and favorite controls.
         escape-scope := FocusScope {
             width: body.content-width;
             height: body.content-height;
@@ -101,8 +110,11 @@ export component Launcher inherits Window {
             padding: root.pad;
             spacing: root.pad;
 
-            // Header: search field.
+            // Genuine data-view navigation; the host accepts and resets a view.
+            HorizontalLayout {
+                spacing: root.pad;
             search-field := LineEdit {
+                horizontal-stretch: 1;
                 accessible-label: "Search applications";
                 placeholder-text: "Search applications";
                 text <=> root.search;
@@ -131,6 +143,18 @@ export component Launcher inherits Window {
                     return reject;
                 }
             }
+                Button {
+                    text: root.view == LauncherView.favorites ? "All Apps" : "Back";
+                    accessible-label: root.view == LauncherView.favorites ? "All Apps" : "Back to favorites";
+                    enabled: !root.blocked;
+                    clicked => {
+                        if !root.blocked {
+                            root.view-requested(root.view == LauncherView.favorites ?
+                                LauncherView.all : LauncherView.favorites);
+                        }
+                    }
+                }
+            }
 
             // Grid: 7 columns of square tiles; overflow scrolls.
             HorizontalLayout {
@@ -157,7 +181,7 @@ export component Launcher inherits Window {
                         }
                         return accept;
                     }
-                    // Return/Space belong to each tile or its pin control.
+                    // Return/Space belong to each tile or its favorite control.
                     return reject;
                 }
             grid-scroll := ScrollView {
@@ -225,37 +249,22 @@ export component Launcher inherits Window {
                             }
                         }
 
-                        // Visible pin control (Seelen apps-menu uses
-                        // drag/context-menu pinning; a bounded corner toggle
-                        // keeps pinning reachable without that system).
-                        Rectangle {
+                        // A genuine favorite action using the shared native
+                        // tile's focus, Space release and accessible activation.
+                        TileButton {
                             width: 16px;
                             height: 16px;
                             x: parent.width - self.width;
                             y: 0px;
-                            border-radius: 4px;
-                            opacity: root.blocked ? 0.5 : 1;
-                            forward-focus: pin-key;
-
-                            pin-touch := TouchArea {
-                                enabled: !root.blocked;
-                                clicked => {
-                                    pin-key.focus();
-                                    root.pin-toggle-requested(tile.key, !tile.pinned);
-                                }
-                                forward-focus: pin-key;
-                            }
-                            pin-key := FocusScope {
-                                width: 0px;
-                                enabled: !root.blocked;
-                                key-pressed(event) => {
-                                    if root.blocked == false
-                                        && (event.text == Key.Space || event.text == Key.Return) {
-                                        root.pin-toggle-requested(tile.key, !tile.pinned);
-                                        return accept;
-                                    }
-                                    return reject;
-                                }
+                            radius: 4px;
+                            filled: false;
+                            enabled: !root.blocked;
+                            accessible-role: checkbox;
+                            accessible-checked: tile.favorite;
+                            accessible-text: (tile.favorite ? "Remove from favorites: " :
+                                "Add to favorites: ") + tile.label;
+                            clicked => {
+                                root.favorite-toggle-requested(tile.key, !tile.favorite);
                             }
 
                             Rectangle {
@@ -264,16 +273,8 @@ export component Launcher inherits Window {
                                 x: (parent.width - 8px) / 2;
                                 y: (parent.height - 8px) / 2;
                                 border-radius: 4px;
-                                background: tile.pinned ? SeelenPalette.accent : SeelenPalette.muted;
+                                background: tile.favorite ? SeelenPalette.accent : SeelenPalette.muted;
                                 accessible-role: none;
-                            }
-
-                            accessible-role: checkbox;
-                            accessible-checked: tile.pinned;
-                            accessible-enabled: pin-touch.enabled;
-                            accessible-label: (tile.pinned ? "Unpin " : "Pin ") + tile.label;
-                            accessible-action-default => {
-                                if !root.blocked { root.pin-toggle-requested(tile.key, !tile.pinned); }
                             }
                         }
                     }
@@ -283,7 +284,10 @@ export component Launcher inherits Window {
                     x: 0;
                     y: (grid-scroll.visible-height - self.preferred-height) / 2;
                     width: grid-scroll.visible-width;
-                    text: root.blocked ? "Working; results appear after the current refresh." : "No matching applications.";
+                    text: root.blocked ? "Working; results appear after the current refresh." :
+                        root.view == LauncherView.all ? "No matching applications." :
+                        root.saved-favorites-present ? "Saved favorites are unavailable. Refresh to check installed applications." :
+                        "Welcome to Tessera.\nYour favorite applications appear here. Open All Apps to add favorites.";
                     color: SeelenPalette.secondary;
                     font-italic: true;
                     horizontal-alignment: center;
