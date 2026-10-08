@@ -1005,7 +1005,7 @@ fn dark_palette_renders_the_source_neutral_tile_color() {
 #[test]
 fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     let window = software_window();
-    let menu = ContextMenuSurface::new().unwrap();
+    let menu = ContextMenuSurface::new_with_metrics().unwrap();
     menu.set_kind(DockMenuKind::Bar);
     let selected = Rc::new(Cell::new(None));
     let recorded = Rc::clone(&selected);
@@ -1235,6 +1235,79 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     });
     assert_eq!(selected.get(), Some(DockMenuAction::Exit));
     drop(menu);
+}
+
+#[test]
+fn context_menu_fits_native_label_metrics_and_returns_to_minimum_width() {
+    let window = software_window();
+    let menu = ContextMenuSurface::new_with_metrics().unwrap();
+    for scheme in [
+        slint::language::ColorScheme::Light,
+        slint::language::ColorScheme::Dark,
+    ] {
+        menu.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        for scale in [1.0, 2.0] {
+            window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            for (kind, label) in [
+                (DockMenuKind::Bar, "Restore Explorer"),
+                (DockMenuKind::Pinned, "Unpin"),
+                (DockMenuKind::Window, "Switch to window"),
+            ] {
+                menu.set_kind(kind);
+                let tokens = menu.global::<crate::generated::PopoverTokens>();
+                let minimum = 200.0 + 2.0 * tokens.get_shadow_margin();
+                tokens.set_font_size(12.8);
+                assert!((menu.get_menu_width() - minimum).abs() < 0.001);
+                // A real large theme font forces long labels beyond the
+                // minimum; no guessed character-width/font-size estimator.
+                tokens.set_font_size(48.0);
+                let preferred = menu.get_menu_width();
+                assert!(preferred >= minimum);
+                if kind != DockMenuKind::Pinned {
+                    assert!(
+                        preferred > minimum,
+                        "{kind:?} {scheme:?} {scale}x: fit-content must grow, preferred {preferred}, minimum {minimum}",
+                    );
+                }
+                let width = (preferred * scale).ceil() as u32;
+                let height = (menu.get_menu_height() * scale).ceil() as u32;
+                window.set_size(slint::PhysicalSize::new(width, height));
+                menu.show().unwrap();
+                let pixels = draw(&window, width, height);
+                let item = ElementHandle::find_by_accessible_label(&menu, label)
+                    .next()
+                    .unwrap();
+                assert_eq!(item.accessible_role(), Some(AccessibleRole::Button));
+                assert!(
+                    item.size().width >= 184.0,
+                    "{kind:?} {scheme:?} {scale}x: preferred {preferred}, physical {width}x{height}, item {:?}, logical height {}",
+                    item.size(),
+                    menu.get_menu_height(),
+                );
+                let point = item.absolute_position();
+                assert!(
+                    point.x + item.size().width <= preferred - tokens.get_shadow_margin() - 8.0
+                );
+                assert!(
+                    !window.draw_if_needed(|renderer| {
+                        let mut unchanged = pixels.clone();
+                        renderer.render(&mut unchanged, width as usize);
+                    }),
+                    "native width measurement must not add an idle rendering loop",
+                );
+                tokens.set_font_size(12.8);
+                assert!(
+                    (menu.get_menu_width() - minimum).abs() < 0.001,
+                    "preferred width must shrink back to the reference minimum",
+                );
+                menu.hide().unwrap();
+            }
+        }
+    }
 }
 
 #[test]

@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, Model, ModelExt, SharedString};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockSystemCommand, DockWindowCommand,
@@ -20,6 +20,24 @@ use crate::{DesktopHost, DockContext, SurfaceKind};
 use crate::popup_placement as placement;
 #[cfg(test)]
 mod tests;
+
+impl ContextMenuSurface {
+    pub(crate) fn new_with_metrics() -> Result<Self, slint::PlatformError> {
+        let surface = Self::new()?;
+        surface.on_metric_labels(|entries| {
+            entries.model_tracker().track_row_count_changes();
+            let mut labels = String::new();
+            for row in 0..entries.row_count() {
+                if let Some(entry) = entries.row_data_tracked(row) {
+                    labels.push_str(entry.label.as_str());
+                    labels.push('\n');
+                }
+            }
+            labels.into()
+        });
+        Ok(surface)
+    }
+}
 
 pub(crate) struct ContextMenuController {
     surface: TransientWindow<ContextMenuSurface>,
@@ -38,7 +56,11 @@ impl ContextMenuController {
         dock: &Dock,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let menu = Rc::new(Self {
-            surface: TransientWindow::new(host, ContextMenuSurface::new()?, SurfaceKind::Popup),
+            surface: TransientWindow::new(
+                host,
+                ContextMenuSurface::new_with_metrics()?,
+                SurfaceKind::Popup,
+            ),
             dock: dock.as_weak(),
             key: RefCell::default(),
             focus_seen: Cell::new(false),

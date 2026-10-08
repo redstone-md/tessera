@@ -50,7 +50,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         tooltip.get_tooltip_height(),
     ));
     tooltip.show().unwrap();
-    let menu = ContextMenuSurface::new().unwrap();
+    let menu = ContextMenuSurface::new_with_metrics().unwrap();
     menu.set_kind(DockMenuKind::Bar);
     menu.set_selected_index(-1);
     menu.window().set_size(slint::LogicalSize::new(

@@ -9,6 +9,16 @@ import { DockMenuKind, DockMenuAction } from "shell-commands.slint";
 
 struct MenuEntry { label: string, action: DockMenuAction }
 
+component MenuLabel inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    font-weight: 600;
+    accessible-role: none;
+    // Only the button owns a label; metric instances must not match it.
+    accessible-label: "";
+}
+
 // A separate native Window: winit's built-in popups are clipped inside the
 // parent bar, and its platform menu blocks the UI event loop.
 export component ContextMenuSurface inherits Window {
@@ -20,7 +30,8 @@ export component ContextMenuSurface inherits Window {
     min-height: 1px;
     in property <DockMenuKind> kind;
     in-out property <int> selected-index;
-    out property <length> menu-width: 200px + 2 * PopoverTokens.shadow-margin;
+    out property <length> menu-width: max(200px, label-metrics.preferred-width + 32px)
+        + 2 * PopoverTokens.shadow-margin;
     out property <length> menu-height: 2 * PopoverTokens.shadow-margin + 16px + root.rows-height;
     preferred-width: root.menu-width;
     preferred-height: root.menu-height;
@@ -32,6 +43,14 @@ export component ContextMenuSurface inherits Window {
     property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
     callback action-requested(DockMenuAction);
     callback dismiss-requested();
+    pure callback metric-labels([MenuEntry]) -> string;
+    // One direct text probe avoids the SDK's deferred repeater layout updates.
+    label-metrics := MenuLabel {
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: root.metric-labels(root.entries);
+    }
     property <[MenuEntry]> entries: root.kind == DockMenuKind.bar ? [
         { label: @tr("Settings"), action: DockMenuAction.settings },
         { label: @tr("File Explorer"), action: DockMenuAction.file-manager },
@@ -125,18 +144,13 @@ export component ContextMenuSurface inherits Window {
                             if self.pressed { root.keyboard-navigation = false; }
                         }
                         clicked => { root.action-requested(entry.action); }
-                        Text {
+                        MenuLabel {
                             x: 8px;
                             width: parent.width - 16px;
                             text: entry.label;
-                            color: SeelenPalette.foreground;
-                            font-size: PopoverTokens.font-size;
-                            font-weight: 600;
-                            font-family: PopoverTokens.font-family;
                             line-height-factor: body.text-line-height-factor;
                             vertical-alignment: center;
                             overflow: elide;
-                            accessible-role: none;
                         }
                     }
                 }
