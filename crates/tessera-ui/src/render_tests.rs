@@ -1012,6 +1012,9 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     menu.on_action_requested(move |action| recorded.set(Some(action)));
     menu.show().unwrap();
     menu.invoke_focus_menu();
+    window
+        .window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
 
     for (name, scheme, scale, background) in [
         (
@@ -1064,6 +1067,8 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
             ),
         ] {
             menu.set_kind(kind);
+            menu.set_selected_index(0);
+            menu.invoke_focus_menu();
             let tokens = menu.global::<crate::generated::PopoverTokens>();
             let margin = tokens.get_shadow_margin();
             let row_height = tokens.get_font_size() * tokens.get_line_height() + 16.0;
@@ -1125,9 +1130,103 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
                 }),
                 "the open menu does not continuously render unchanged pixels"
             );
+            let first = ElementHandle::find_by_accessible_label(&menu, labels[0])
+                .next()
+                .unwrap();
+            let origin = first.absolute_position();
+            let center = slint::LogicalPosition::new(
+                origin.x + first.size().width / 2.0,
+                origin.y + row_height / 2.0,
+            );
+            let accent = menu
+                .global::<crate::generated::SeelenPalette>()
+                .get_accent()
+                .color()
+                .to_argb_u8();
+            let accent = [accent.red, accent.green, accent.blue];
+            let sample = |frame: &[Rgb8Pixel], x: f32, y: f32| {
+                let pixel = frame[(y * scale) as usize * width as usize + (x * scale) as usize];
+                [pixel.r, pixel.g, pixel.b]
+            };
+            let overlay = |frame: &[Rgb8Pixel], alpha: f32| {
+                let actual = sample(frame, origin.x + 4.0, center.y);
+                for channel in 0..3 {
+                    let expected = (f32::from(accent[channel]) * alpha
+                        + f32::from(background[channel]) * (1.0 - alpha))
+                        .round() as u8;
+                    assert!(
+                        actual[channel].abs_diff(expected) <= 2,
+                        "transparent menu skin must use accent alpha {alpha}, not neutral gray",
+                    );
+                }
+            };
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerMoved { position: center });
+            let hovered = draw(&window, width, height);
+            overlay(&hovered, 0.2);
+            assert_eq!(
+                sample(&hovered, origin.x - 3.0, center.y),
+                background,
+                "pointer hover has no keyboard outline",
+            );
+            window.window().dispatch_event(WindowEvent::PointerPressed {
+                position: center,
+                button: PointerEventButton::Left,
+            });
+            let pressed = draw(&window, width, height);
+            overlay(&pressed, 0.3);
+            window
+                .window()
+                .dispatch_event(WindowEvent::PointerReleased {
+                    position: center,
+                    button: PointerEventButton::Left,
+                });
+            let restored = draw(&window, width, height);
+            overlay(&restored, 0.2);
+            window.window().dispatch_event(WindowEvent::PointerExited);
+            // Home covers mouse -> keyboard on the already-focused first
+            // item; End covers a real focus move to the opposite edge row.
+            for (key, index) in [(Key::Home, 0), (Key::End, labels.len() - 1)] {
+                window
+                    .window()
+                    .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+                let focused = draw(&window, width, height);
+                let item = ElementHandle::find_by_accessible_label(&menu, labels[index])
+                    .next()
+                    .unwrap();
+                let point = item.absolute_position();
+                let middle_y = point.y + row_height / 2.0;
+                assert_eq!(
+                    sample(&focused, point.x - 3.0, middle_y),
+                    accent,
+                    "keyboard selection must focus the real row and expose its external outline",
+                );
+                assert_eq!(
+                    sample(&focused, point.x - 1.0, middle_y),
+                    background,
+                    "the keyboard outline preserves its 2px gap",
+                );
+                let middle_x = point.x + item.size().width / 2.0;
+                for y in [point.y - 3.0, point.y + row_height + 3.0] {
+                    assert_eq!(
+                        sample(&focused, middle_x, y),
+                        accent,
+                        "first/last row outlines remain inside the vertical viewport gutter",
+                    );
+                }
+                assert!(
+                    !window.draw_if_needed(|renderer| {
+                        let mut unchanged = focused.clone();
+                        renderer.render(&mut unchanged, width as usize);
+                    }),
+                    "a settled keyboard outline adds no idle redraw",
+                );
+            }
         }
     }
     menu.set_kind(DockMenuKind::Bar);
+    menu.invoke_focus_menu();
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::End.into(),
     });

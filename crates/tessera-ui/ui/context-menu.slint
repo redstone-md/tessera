@@ -3,7 +3,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { TileButton } from "tiles.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { DockMenuKind, DockMenuAction } from "shell-commands.slint";
 
@@ -28,6 +28,8 @@ export component ContextMenuSurface inherits Window {
     property <length> row-gap: 8px;
     property <length> rows-height: root.entries.length * root.row-height
         + max(0, root.entries.length - 1) * root.row-gap;
+    property <bool> keyboard-navigation;
+    property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
     callback action-requested(DockMenuAction);
     callback dismiss-requested();
     property <[MenuEntry]> entries: root.kind == DockMenuKind.bar ? [
@@ -45,7 +47,10 @@ export component ContextMenuSurface inherits Window {
         { label: @tr("Close"), action: DockMenuAction.close }
     ];
 
-    public function focus-menu() { keyboard.focus(); }
+    public function focus-menu() {
+        root.keyboard-navigation = false;
+        keyboard.focus();
+    }
     public function set-presentation-opacity(value: float) {
         body.set-presentation-opacity(value);
     }
@@ -60,10 +65,12 @@ export component ContextMenuSurface inherits Window {
                 root.selected-index = event.text == Key.DownArrow
                     ? (root.selected-index >= root.entries.length - 1 ? 0 : root.selected-index + 1)
                     : (root.selected-index <= 0 ? root.entries.length - 1 : root.selected-index - 1);
+                root.keyboard-navigation = true;
                 return accept;
             }
             if event.text == Key.Home || event.text == Key.End {
                 root.selected-index = event.text == Key.Home ? 0 : root.entries.length - 1;
+                root.keyboard-navigation = true;
                 return accept;
             }
             if event.text == Key.Return || event.text == Key.Space {
@@ -78,29 +85,40 @@ export component ContextMenuSurface inherits Window {
 
         body := PopoverBody {
             ScrollView {
-                x: 8px;
-                y: 8px;
-                width: max(0px, body.content-width - 16px);
-                height: max(0px, body.content-height - 16px);
+                x: root.viewport-inset;
+                y: root.viewport-inset;
+                width: max(0px, body.content-width - 2 * root.viewport-inset);
+                height: max(0px, body.content-height - 2 * root.viewport-inset);
                 content-width: self.visible-width;
-                content-height: root.rows-height;
+                content-height: root.rows-height + 2 * FocusTokens.outer-margin;
                 content-y: -max(0px, min(root.selected-index * (root.row-height + root.row-gap),
                     self.content-height - self.visible-height));
                 horizontal-scrollbar-policy: always-off;
                 vertical-scrollbar-policy: as-needed;
                 for entry[index] in root.entries: Rectangle {
-                    y: index * (root.row-height + root.row-gap);
-                    width: parent.width;
+                    x: FocusTokens.outer-margin;
+                    y: FocusTokens.outer-margin + index * (root.row-height + root.row-gap);
+                    width: max(0px, parent.width - 2 * FocusTokens.outer-margin);
                     height: root.row-height;
-                    border-radius: 6px;
-                    background: index == root.selected-index ? SeelenPalette.hover : transparent;
                     TileButton {
                         radius: 6px;
                         filled: false;
-                        show-focus-ring: false;
+                        property <bool> keyboard-selected: root.keyboard-navigation
+                            && root.selected-index == index;
+                        changed keyboard-selected => {
+                            if self.keyboard-selected { self.focus-for-keyboard(); }
+                        }
+                        background: self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
+                            self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
                         accessible-text: entry.label;
                         changed hovered => {
-                            if self.hovered { root.selected-index = index; }
+                            if self.hovered {
+                                root.keyboard-navigation = false;
+                                root.selected-index = index;
+                            }
+                        }
+                        changed pressed => {
+                            if self.pressed { root.keyboard-navigation = false; }
                         }
                         clicked => { root.action-requested(entry.action); }
                         Text {

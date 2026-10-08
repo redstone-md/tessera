@@ -32,6 +32,12 @@ export component TileButton inherits Rectangle {
     property <bool> keyboard-focus;
     /// false renders no idle background (transparent until hover/press).
     in property <bool> filled: true;
+    public function focus-for-keyboard() {
+        if root.enabled {
+            keyboard.focus();
+            root.keyboard-focus = true;
+        }
+    }
     callback clicked;
     callback middle-clicked;
     callback context-requested(Point);
