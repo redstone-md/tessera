@@ -1,4 +1,11 @@
-Boxicons font-derived window-close graphical image
+Boxicons font-derived window-close and log-out graphical images
+
+ASSET INVENTORY
+window-close.svg: graphical output from SVG font glyph U+EC84 (bx-window-close).
+log-out.svg: graphical output from SVG font glyph U+EB4F (bx-log-out).
+The shared upstream identity, class-specific font grant, actual notices and
+full OFL treatment below apply to both outputs. Window-close derivation
+facts remain unchanged; log-out-specific provenance is appended below.
 
 UPSTREAM IDENTITY AND IMMUTABLE SOURCE
 Project: Boxicons
@@ -152,3 +159,47 @@ portion is relicensed under MIT, GPL or an unspecified CC variant. Retain
 this NOTICE.txt and OFL.txt together with the image. Nothing here grants
 permission to sell Font Software by itself, ignore actual RFNs if present
 in other fonts, or imply upstream author endorsement.
+
+LOG-OUT INDEPENDENT GRAPHICAL DERIVATION
+Actual outline source: the same pinned fonts/boxicons.svg identified above,
+glyph U+EB4F, glyph-name="bx-log-out", data-tags="bx-log-out".
+Source:
+https://raw.githubusercontent.com/atisawd/boxicons/9ffa9136e8681886bb7bd2145cd4098717ce1c11/fonts/boxicons.svg
+Source SHA-256: 3fe502d8c8f6a0bb86fc258e16aa6ec95a684ee50d693bd4fe305b467fd270bb
+
+The output log-out.svg was independently produced ONLY from this font
+outline before fetching the standalone comparison graphic. Retained
+external fontTools 4.66.1 parsed the outline into a RecordingPen through
+a TransformPen with the same affine matrix documented above:
+(0.0234375, 0, 0, -0.0234375, 0, 22.5).
+Every absolute endpoint and control point was independently rounded to
+three decimal places; consecutive duplicate and redundant closing line
+segments were removed. The two closed contours are serialized as one
+ordinary nonzero-fill path with currentColor fill in a 24 by 24 viewBox.
+Maximum per-coordinate rounding change: 0.00003125 image units.
+Delivered output size: 437 bytes.
+Output SHA-256: a210bd35aaff84eae1818bd6778a0eb163abe7a9e4978ebedc16bd63255d578b
+No font binary, runtime parser, new dependency or AGPL artwork was used.
+
+Only after producing that font-derived output, the pinned standalone
+svg/regular/bx-log-out.svg was fetched independently as a geometry
+reference. All 26 canonical absolute commands and all endpoint/control
+point values match exactly after normalization and redundant closure
+removal. The font-derived output remained unchanged by this comparison.
+Reference:
+https://raw.githubusercontent.com/atisawd/boxicons/9ffa9136e8681886bb7bd2145cd4098717ce1c11/svg/regular/bx-log-out.svg
+Reference SHA-256: 346e924a9fb26441d84253721c808d59523029805fbccb9517574d906317c325
+This establishes exact normalized geometry, not raw fractional font
+mathematical identity, byte-identical SVG or native-rendered pixel parity.
+No standalone SVG or React-generated path was used as an outline source
+or as replacement coordinates. The standalone SVG's unspecified CC 4.0
+grant remains uncleared; comparison does not independently clear it.
+
+The shared OFL FONT SOFTWARE VERSUS GRAPHICAL OUTPUT section applies to
+log-out.svg as well as window-close.svg. Preserve this complete NOTICE
+and the unchanged full OFL.txt with both images. The explicit OFL 1.1
+font-file grant, not the root MIT license or aggregate package expression,
+is the source permission used for this graphical-output route. Any
+source-derived portion construed as Font Software remains under OFL 1.1;
+no MIT relicense, invented copyright owner or Reserved Font Name is
+asserted. All actual upstream notices and font metadata above are retained.
