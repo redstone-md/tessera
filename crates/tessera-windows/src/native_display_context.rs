@@ -73,6 +73,14 @@ impl Default for NativeDisplayContextHost {
 
 impl DisplayContextHost for NativeDisplayContextHost {
     fn read(&self, completion: DisplayContextCompletion) -> Result<(), DisplayContextError> {
+        self.read_selected(DisplaySelection::Primary, completion)
+    }
+
+    fn read_selected(
+        &self,
+        selection: DisplaySelection,
+        completion: DisplayContextCompletion,
+    ) -> Result<(), DisplayContextError> {
         let flight = self.gate.try_enter().ok_or(DisplayContextError::Busy)?;
         let factory = self.factory.clone();
         // A failed spawn drops this job, releasing the flight and consumer with
@@ -81,7 +89,7 @@ impl DisplayContextHost for NativeDisplayContextHost {
             (self.spawn)(Box::new(move || {
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     let mut driver = factory()?;
-                    let result = read_layout(driver.as_mut());
+                    let result = read_layout(driver.as_mut(), selection);
                     let cleanup = driver.finish();
                     match result {
                         Ok(layout) => cleanup.map(|()| layout),
@@ -100,12 +108,12 @@ impl DisplayContextHost for NativeDisplayContextHost {
     }
 }
 
-fn read_layout(driver: &mut dyn Driver) -> ReadResult {
+fn read_layout(driver: &mut dyn Driver, selection: DisplaySelection) -> ReadResult {
     let mut admitted = driver.monitors()?;
     // Stable sorting preserves enumeration order for duplicate/empty opaque IDs.
     admitted.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
     let monitors: Vec<_> = admitted.iter().map(|entry| entry.monitor).collect();
-    let Some((desktop, selected, selection)) = geometry(&monitors)? else {
+    let Some((desktop, selected, selection)) = geometry_selected(&monitors, selection)? else {
         return Ok(None);
     };
     let scale = admitted
@@ -156,6 +164,34 @@ fn geometry(
         DisplaySelection::FirstFallback
     };
     Ok(Some((desktop, selected, selection)))
+}
+
+fn geometry_selected(
+    monitors: &[Monitor],
+    requested: DisplaySelection,
+) -> Result<Option<(Rect, Monitor, DisplaySelection)>, DisplayContextError> {
+    // Validate identities and the whole admitted desktop even if the point
+    // falls outside it. Primary/fallback retain the original chooser exactly.
+    let Some(layout) = geometry(monitors)? else {
+        return Ok(None);
+    };
+    let DisplaySelection::AtPoint { x, y } = requested else {
+        return Ok(Some(layout));
+    };
+    let contains = |monitor: &&Monitor| {
+        x >= monitor.bounds.x()
+            && x < monitor.bounds.right()
+            && y >= monitor.bounds.y()
+            && y < monitor.bounds.bottom()
+    };
+    // The input is already stably sorted by actual opaque target ID. Prefer
+    // its first containing primary, then its first containing survivor.
+    let selected = monitors
+        .iter()
+        .filter(contains)
+        .find(|monitor| monitor.primary)
+        .or_else(|| monitors.iter().find(contains));
+    Ok(selected.map(|monitor| (layout.0, *monitor, requested)))
 }
 
 fn probe_center(bounds: Rect) -> Result<(i32, i32), DisplayContextError> {

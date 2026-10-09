@@ -8,9 +8,11 @@ use super::{
     artwork::MAX_ENCODED_BYTES,
     sdk::{Apartment, decode_reference},
 };
+use crate::image_decode::{ImageDecodeLimits, decode_bytes};
 use tessera_system::media::{MediaArtwork, MediaError};
 use windows::Storage::Streams::{
-    DataWriter, InMemoryRandomAccessStream, RandomAccessStreamReference,
+    DataWriter, IRandomAccessStreamReference, InMemoryRandomAccessStream,
+    RandomAccessStreamReference,
 };
 
 struct FixtureStream(InMemoryRandomAccessStream);
@@ -20,20 +22,34 @@ impl Drop for FixtureStream {
     }
 }
 
+struct FixtureWriter(DataWriter);
+impl Drop for FixtureWriter {
+    fn drop(&mut self) {
+        let _ = self.0.Close();
+    }
+}
+
 fn decode_fixture(bytes: &[u8], advertised_size: Option<u64>) -> Result<MediaArtwork, MediaError> {
+    with_fixture_reference(bytes, advertised_size, decode_reference)
+}
+
+fn with_fixture_reference<T>(
+    bytes: &[u8],
+    advertised_size: Option<u64>,
+    decode: impl FnOnce(&IRandomAccessStreamReference) -> Result<T, MediaError>,
+) -> Result<T, MediaError> {
     let _apartment = Apartment::new()?;
     let memory = FixtureStream(InMemoryRandomAccessStream::new().unwrap());
-    let writer = DataWriter::new().unwrap();
-    writer.WriteBytes(bytes).unwrap();
-    let buffer = writer.DetachBuffer().unwrap();
+    let writer = FixtureWriter(DataWriter::new().unwrap());
+    writer.0.WriteBytes(bytes).unwrap();
+    let buffer = writer.0.DetachBuffer().unwrap();
     memory.0.WriteAsync(&buffer).unwrap().join().unwrap();
     if let Some(size) = advertised_size {
         memory.0.SetSize(size).unwrap();
     }
     memory.0.Seek(0).unwrap();
     let reference = RandomAccessStreamReference::CreateFromStream(&memory.0).unwrap();
-    // This is exactly the production Thumbnail/OpenReadAsync decode path.
-    decode_reference(&reference.into())
+    decode(&reference.into())
 }
 
 #[test]
@@ -69,6 +85,89 @@ fn sdk_decode_rejects_malformed_empty_and_oversized_encoded_streams() {
     assert!(empty.message.contains("empty"));
     let oversized = decode_fixture(&[], Some(MAX_ENCODED_BYTES + 1)).unwrap_err();
     assert!(oversized.message.contains("8 MiB"));
+}
+
+#[test]
+fn sdk_shared_bytes_and_reference_use_the_same_profile512_premultiplied_decode() {
+    let png = solid_png(1024, 2, [255, 0, 0, 128]);
+    let from_reference = with_fixture_reference(&png, None, |reference| {
+        crate::image_decode::decode_reference(reference, ImageDecodeLimits::profile_photo())
+            .map_err(super::artwork::error)
+    })
+    .unwrap();
+    let _apartment = Apartment::new().unwrap();
+    let from_bytes = decode_bytes(&png, ImageDecodeLimits::profile_photo()).unwrap();
+    assert_eq!(from_bytes, from_reference);
+    assert_eq!((from_bytes.width(), from_bytes.height()), (512, 1));
+    assert_eq!(from_bytes.rgba().len(), 512 * 4);
+    assert!(
+        from_bytes
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [128, 0, 0, 128])
+    );
+    let media = decode_bytes(&png, ImageDecodeLimits::media_thumbnail()).unwrap();
+    assert_eq!((media.width(), media.height()), (128, 1));
+    assert_eq!(media.rgba().len(), 128 * 4);
+    assert!(
+        media
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [128, 0, 0, 128])
+    );
+}
+
+#[test]
+fn sdk_shared_bytes_reject_empty_oversized_and_malformed_without_native_error_text() {
+    let _apartment = Apartment::new().unwrap();
+    for limits in [
+        ImageDecodeLimits::media_thumbnail(),
+        ImageDecodeLimits::profile_photo(),
+    ] {
+        let empty = decode_bytes(&[], limits).unwrap_err();
+        assert!(empty.message().contains("empty"));
+        assert_eq!(empty.hresult(), None);
+        let oversized = decode_bytes(&vec![0; MAX_ENCODED_BYTES as usize + 1], limits).unwrap_err();
+        assert!(oversized.message().contains("8 MiB"));
+        assert_eq!(oversized.hresult(), None);
+        let malformed = decode_bytes(b"not an encoded image", limits).unwrap_err();
+        assert!(malformed.hresult().is_some());
+        assert_eq!(malformed.message(), "Windows image decoding failed");
+    }
+}
+
+#[test]
+fn sdk_both_policies_admit_dimensions_before_requesting_huge_pixel_data() {
+    let _apartment = Apartment::new().unwrap();
+    for (width, height) in [(16_385_u32, 1_u32), (8192, 8192)] {
+        let mut header = Vec::new();
+        header.extend_from_slice(&width.to_be_bytes());
+        header.extend_from_slice(&height.to_be_bytes());
+        header.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut png, b"IHDR", &header);
+        // A valid zlib stream containing one RGBA pixel, not huge raster data.
+        chunk(
+            &mut png,
+            b"IDAT",
+            &[
+                0x78, 0x01, 0x01, 0x05, 0x00, 0xFA, 0xFF, 0, 255, 0, 0, 128, 0x04, 0x81, 0x01, 0x80,
+            ],
+        );
+        chunk(&mut png, b"IEND", &[]);
+        for limits in [
+            ImageDecodeLimits::media_thumbnail(),
+            ImageDecodeLimits::profile_photo(),
+        ] {
+            let error = decode_bytes(&png, limits).unwrap_err();
+            assert_eq!(error.hresult(), None);
+            assert!(error.message().contains("source dimensions"));
+        }
+    }
 }
 
 // Minimal fixture writer, deliberately not a production image codec. One

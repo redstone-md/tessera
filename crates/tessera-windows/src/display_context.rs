@@ -44,6 +44,14 @@ impl<R: DisplayContextHost> DisplayContextHost for CompositeDisplayContextHost<R
         self.read.read(completion)
     }
 
+    fn read_selected(
+        &self,
+        selection: tessera_system::display_context::DisplaySelection,
+        completion: tessera_system::display_context::DisplayContextCompletion,
+    ) -> Result<(), DisplayContextError> {
+        self.read.read_selected(selection, completion)
+    }
+
     fn watch(
         &self,
         on_event: tessera_system::display_context::DisplayContextWatchCallback,
@@ -64,5 +72,75 @@ mod tests {
             super::native_display_context_host(),
             Err(tessera_system::display_context::DisplayContextError::Unsupported)
         ));
+    }
+}
+
+#[cfg(test)]
+mod selected_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tessera_core::Rect;
+    use tessera_system::display_context::{
+        DisplayContextCompletion, DisplayContextWatchCallback, DisplayContextWatchGuard,
+        DisplayContextWatchReady, DisplayLayout, DisplaySelection,
+    };
+
+    struct PointReader {
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl DisplayContextHost for PointReader {
+        fn read(&self, _: DisplayContextCompletion) -> Result<(), DisplayContextError> {
+            panic!("selected facade read must not use the legacy read");
+        }
+
+        fn read_selected(
+            &self,
+            selection: DisplaySelection,
+            completion: DisplayContextCompletion,
+        ) -> Result<(), DisplayContextError> {
+            assert_eq!(selection, DisplaySelection::AtPoint { x: -1, y: -1 });
+            self.reads.fetch_add(1, Ordering::AcqRel);
+            let bounds = Rect::new(-100, -100, 100, 100).unwrap();
+            completion(DisplayLayout::new(bounds, bounds, 1.375, selection).map(Some));
+            Ok(())
+        }
+    }
+
+    fn unsupported_watch(
+        _: DisplayContextWatchCallback,
+        _: DisplayContextWatchReady,
+    ) -> Result<Box<dyn DisplayContextWatchGuard>, DisplayContextError> {
+        Err(DisplayContextError::Unsupported)
+    }
+
+    #[test]
+    fn composite_forwards_point_selection_without_using_legacy_or_watch() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let host = CompositeDisplayContextHost {
+            read: PointReader {
+                reads: reads.clone(),
+            },
+            watch: unsupported_watch,
+        };
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let count = callbacks.clone();
+        let requested = DisplaySelection::AtPoint { x: -1, y: -1 };
+        host.read_selected(
+            requested,
+            Box::new(move |result| {
+                let layout = result.unwrap().unwrap();
+                assert_eq!(layout.selection(), requested);
+                assert_eq!(
+                    layout.selected_bounds(),
+                    Rect::new(-100, -100, 100, 100).unwrap()
+                );
+                assert_eq!(layout.presentation_scale(), 1.375);
+                count.fetch_add(1, Ordering::AcqRel);
+            }),
+        )
+        .unwrap();
+        assert_eq!(reads.load(Ordering::Acquire), 1);
+        assert_eq!(callbacks.load(Ordering::Acquire), 1);
     }
 }

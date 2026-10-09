@@ -9,6 +9,9 @@ readme.workspace = true
 description = "Portable system capability contracts for the Tessera desktop environment"
 publish = false
 
+[features]
+test-support = []
+
 [dependencies]
 chrono.workspace = true
 tessera-core.workspace = true

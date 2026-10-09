@@ -9,6 +9,8 @@ pub mod bluetooth;
 pub mod input_language;
 pub mod media;
 pub mod network;
+pub mod profile;
+pub mod shortcuts;
 pub mod visibility;
 
 /// Gregorian calendar projection and asynchronous real-date/locale capability.

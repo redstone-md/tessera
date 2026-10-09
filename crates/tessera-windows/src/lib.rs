@@ -31,6 +31,8 @@ mod events;
 pub mod folders;
 #[cfg(any(windows, test))]
 mod helpers;
+#[cfg(any(windows, test))]
+mod image_decode;
 pub mod input_language;
 pub mod media;
 #[cfg(windows)]
@@ -81,12 +83,18 @@ mod native_power;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_power_updates;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_profile;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin_mutation;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_shortcuts;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_visibility;
@@ -96,11 +104,13 @@ mod native_window_actions;
 pub mod network;
 pub mod power;
 pub mod power_updates;
+pub mod profile;
 pub mod recycle_bin;
 pub mod recycle_bin_mutation;
 #[cfg(any(windows, test))]
 mod shell_recovery;
 mod shell_runtime;
+pub mod shortcuts;
 #[cfg(any(windows, test))]
 mod single_flight;
 mod snapshot;

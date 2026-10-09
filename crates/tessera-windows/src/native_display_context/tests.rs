@@ -444,14 +444,21 @@ fn host(config: Config, events: Events, inline: bool) -> NativeDisplayContextHos
     }
 }
 fn run(config: Config) -> (ReadResult, Vec<&'static str>) {
+    run_selected(config, DisplaySelection::Primary)
+}
+
+fn run_selected(config: Config, selection: DisplaySelection) -> (ReadResult, Vec<&'static str>) {
     let events = Events::default();
     let host = host(config, events.clone(), true);
     let (tx, rx) = mpsc::channel();
     let callback_events = events.clone();
-    host.read(Box::new(move |result| {
-        record(&callback_events, "callback");
-        tx.send(result).unwrap();
-    }))
+    host.read_selected(
+        selection,
+        Box::new(move |result| {
+            record(&callback_events, "callback");
+            tx.send(result).unwrap();
+        }),
+    )
     .unwrap();
     let result = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let names = events.lock().iter().map(|(name, _)| *name).collect();
@@ -1446,4 +1453,323 @@ fn cleanup_errors_never_become_empty_and_first_checked_failure_is_retained() {
     assert_eq!(count(&events, "create"), 0);
     assert_eq!(count(&events, "restore"), 2);
     assert_eq!(count(&events, "callback"), 1);
+}
+
+#[test]
+fn point_geometry_uses_signed_half_open_edges_and_never_fills_desktop_gaps() {
+    let negative = monitor(1, -200, -100, 100, 100, false);
+    let primary = monitor(2, 0, 0, 100, 100, true);
+    for (x, y, expected) in [
+        (-200, -100, Some(1)),
+        (-101, -1, Some(1)),
+        (0, 0, Some(2)),
+        (99, 99, Some(2)),
+        (-201, -1, None),
+        (-101, -101, None),
+        (-100, -1, None),
+        (-101, 0, None),
+        (-50, 0, None),
+        (100, 0, None),
+        (0, 100, None),
+        (i32::MIN, i32::MIN, None),
+        (i32::MAX, i32::MAX, None),
+    ] {
+        let selection = DisplaySelection::AtPoint { x, y };
+        let result = geometry_selected(&[negative, primary], selection).unwrap();
+        assert_eq!(result.map(|(_, monitor, _)| monitor.identity), expected);
+        if let Some((desktop, _, actual)) = result {
+            assert_eq!(actual, selection);
+            assert_eq!(desktop, Rect::new(-200, -100, 300, 200).unwrap());
+        }
+    }
+    let selection = DisplaySelection::AtPoint { x: 0, y: 0 };
+    assert!(geometry_selected(&[], selection).unwrap().is_none());
+    let left = monitor(3, -100, 0, 100, 100, true);
+    let right = monitor(4, 0, 0, 100, 100, false);
+    assert_eq!(
+        geometry_selected(&[left, right], selection)
+            .unwrap()
+            .unwrap()
+            .1
+            .identity,
+        4
+    );
+}
+
+#[test]
+fn point_geometry_validates_admitted_identity_even_for_offscreen_requests() {
+    let requested = DisplaySelection::AtPoint { x: 999, y: 999 };
+    let first = monitor(1, 0, 0, 100, 100, true);
+    let duplicate = monitor(1, -100, 0, 100, 100, false);
+    for monitors in [
+        vec![first, duplicate],
+        vec![monitor(0, 0, 0, 100, 100, false)],
+    ] {
+        assert!(matches!(
+            geometry_selected(&monitors, requested),
+            Err(DisplayContextError::InvalidData)
+        ));
+    }
+}
+
+#[test]
+fn point_overlap_prefers_containing_primary_then_stable_survivor_with_raw_id_ties() {
+    let first = monitor(1, -100, -100, 200, 200, false);
+    let second = monitor(2, -50, -50, 100, 100, false);
+    let requested = DisplaySelection::AtPoint { x: -1, y: -1 };
+    for (first_primary, second_primary) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let mut first = first;
+        let mut second = second;
+        first.primary = first_primary;
+        second.primary = second_primary;
+        for monitors in [vec![first, second], vec![second, first]] {
+            let layout = run_selected(
+                Config {
+                    monitors,
+                    targets: Some(vec![target(key(1), "z"), target(key(2), "a")]),
+                    ..Config::default()
+                },
+                requested,
+            )
+            .0
+            .unwrap()
+            .unwrap();
+            let expected = if first_primary && !second_primary {
+                first.bounds
+            } else {
+                second.bounds
+            };
+            assert_eq!(layout.selected_bounds(), expected);
+            assert_eq!(layout.selection(), requested);
+            assert_eq!(layout.presentation_scale(), 132.0 / 96.0 * 1.125);
+        }
+    }
+    for id in ["", "duplicate opaque ID"] {
+        for monitors in [vec![first, second], vec![second, first]] {
+            let expected = monitors[0].bounds;
+            let layout = run_selected(
+                Config {
+                    monitors,
+                    targets: Some(vec![target(key(1), id), target(key(2), id)]),
+                    ..Config::default()
+                },
+                requested,
+            )
+            .0
+            .unwrap()
+            .unwrap();
+            assert_eq!(layout.selected_bounds(), expected);
+            assert_eq!(layout.selection(), requested);
+        }
+    }
+}
+
+#[test]
+fn point_excluded_or_disconnected_target_never_redirects_to_surviving_primary() {
+    let primary = monitor(1, 0, 0, 100, 100, true);
+    let pointed = monitor(2, -100, 0, 100, 100, false);
+    let requested = DisplaySelection::AtPoint { x: -1, y: 1 };
+    let mut bad_key = key(2);
+    bad_key.high += 1;
+    let mut missing_id = target(key(2), "pointed");
+    missing_id.id = Err(native_error());
+    for targets in [
+        vec![target(key(1), "primary")],
+        vec![target(key(1), "primary"), target(bad_key, "pointed")],
+        vec![target(key(1), "primary"), missing_id],
+    ] {
+        let (result, events) = run_selected(
+            Config {
+                monitors: vec![primary, pointed],
+                targets: Some(targets),
+                ..Config::default()
+            },
+            requested,
+        );
+        assert_eq!(result, Ok(None));
+        assert_eq!(count(&events, "callback"), 1);
+        assert_eq!(count(&events, "create"), 1);
+        assert_eq!(&events[events.len() - 2..], &["driver-drop", "callback"]);
+    }
+    for fault in [
+        Fault::Dpi,
+        Fault::Text,
+        Fault::Association,
+        Fault::Awareness,
+        Fault::Create,
+    ] {
+        let (result, events) = run_selected(
+            Config {
+                monitors: vec![primary, pointed],
+                faulty_monitor: Some(2),
+                fault,
+                ..Config::default()
+            },
+            requested,
+        );
+        assert_eq!(result, Ok(None));
+        assert_eq!(count(&events, "callback"), 1);
+        assert_eq!(count(&events, "restore"), 1);
+        assert_eq!(&events[events.len() - 2..], &["driver-drop", "callback"]);
+    }
+    assert_eq!(
+        run_selected(
+            Config {
+                monitors: vec![primary],
+                ..Config::default()
+            },
+            requested
+        )
+        .0,
+        Ok(None)
+    );
+    assert_eq!(
+        run_selected(
+            Config {
+                dpi: 0,
+                ..Config::default()
+            },
+            requested
+        )
+        .0,
+        Ok(None)
+    );
+}
+
+#[test]
+fn point_worker_shares_busy_gate_and_retires_before_reentrant_primary_read() {
+    let events = Events::default();
+    let mut host = host(Config::default(), events.clone(), false);
+    let factory = host.factory.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let first = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    host.factory = Arc::new(move || {
+        if first.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            entered_tx.send(thread::current().id()).unwrap();
+            release_rx
+                .lock()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
+        }
+        factory()
+    });
+    let requested = DisplaySelection::AtPoint { x: -1, y: -1 };
+    let clone = host.clone();
+    let callback_events = events.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    host.read_selected(
+        requested,
+        Box::new(move |result| {
+            assert_eq!(result.unwrap().unwrap().selection(), requested);
+            assert_eq!(callback_events.lock().last().unwrap().0, "driver-drop");
+            record(&callback_events, "point-callback");
+            clone
+                .read(Box::new(move |result| {
+                    done_tx.send(result).unwrap();
+                }))
+                .unwrap();
+        }),
+    )
+    .unwrap();
+    let owner = entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_ne!(owner, thread::current().id());
+    let (rejected_tx, rejected_rx) = mpsc::channel();
+    assert_eq!(
+        host.read_selected(
+            requested,
+            Box::new(move |_| {
+                rejected_tx.send(()).unwrap();
+            })
+        ),
+        Err(DisplayContextError::Busy)
+    );
+    assert!(rejected_rx.try_recv().is_err());
+    drop(host);
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .selection(),
+        DisplaySelection::Primary
+    );
+    assert!(done_rx.try_recv().is_err());
+    let records = events.lock();
+    let callback = records
+        .iter()
+        .position(|(name, _)| *name == "point-callback")
+        .unwrap();
+    assert!(
+        records[..=callback]
+            .iter()
+            .all(|(_, thread)| *thread == owner)
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|(name, _)| *name == "factory")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn point_spawn_rejection_accepts_zero_and_cleanup_failure_completes_once_with_error() {
+    let requested = DisplaySelection::AtPoint { x: -1, y: -1 };
+    for panic in [false, true] {
+        let events = Events::default();
+        let mut host = host(Config::default(), events.clone(), true);
+        host.spawn = Arc::new(move |_job| {
+            if panic {
+                panic!("recorded selected spawn panic");
+            }
+            Err(std::io::Error::other("recorded selected spawn failure"))
+        });
+        let (tx, rx) = mpsc::channel();
+        assert_eq!(
+            host.read_selected(
+                requested,
+                Box::new(move |_| {
+                    tx.send(()).unwrap();
+                })
+            ),
+            Err(DisplayContextError::Unavailable)
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(events.lock().is_empty());
+        assert!(host.gate.try_enter().is_some());
+    }
+    for (fault, expected) in [
+        (Fault::Enter, native_error()),
+        (Fault::Collect, native_error()),
+        (Fault::Panic, DisplayContextError::Unavailable),
+    ] {
+        let (result, events) = run_selected(
+            Config {
+                fault,
+                ..Config::default()
+            },
+            requested,
+        );
+        assert_eq!(result, Err(expected));
+        assert_eq!(count(&events, "callback"), 1);
+    }
+    for fault in [Fault::CloseOnce, Fault::Restore] {
+        let (result, events) = run_selected(
+            Config {
+                fault,
+                ..Config::default()
+            },
+            requested,
+        );
+        assert_eq!(result, Err(native_error()));
+        assert_eq!(count(&events, "callback"), 1);
+        assert_eq!(&events[events.len() - 2..], &["driver-drop", "callback"]);
+    }
 }

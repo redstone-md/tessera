@@ -10,6 +10,11 @@ use tessera_core::Rect;
 pub enum DisplaySelection {
     Primary,
     FirstFallback,
+    /// Physical desktop coordinates; no nearest-monitor or primary fallback.
+    AtPoint {
+        x: i32,
+        y: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,6 +38,14 @@ impl DisplayLayout {
             || selected_bounds.y() < desktop_bounds.y()
             || selected_bounds.right() > desktop_bounds.right()
             || selected_bounds.bottom() > desktop_bounds.bottom()
+        {
+            return Err(DisplayContextError::InvalidData);
+        }
+        if let DisplaySelection::AtPoint { x, y } = selection
+            && (x < selected_bounds.x()
+                || x >= selected_bounds.right()
+                || y < selected_bounds.y()
+                || y >= selected_bounds.bottom())
         {
             return Err(DisplayContextError::InvalidData);
         }
@@ -82,7 +95,7 @@ impl fmt::Display for DisplayContextError {
 }
 impl std::error::Error for DisplayContextError {}
 
-/// `None` is a successful observation containing no monitors.
+/// `None` is a successful observation with no monitor matching the requested selection.
 pub type DisplayContextCompletion =
     Box<dyn FnOnce(Result<Option<DisplayLayout>, DisplayContextError>) + Send + 'static>;
 
@@ -106,6 +119,20 @@ pub trait DisplayContextWatchGuard: Send {}
 /// flight before calling consumers, allowing a completion to submit another read.
 pub trait DisplayContextHost: Send + Sync + 'static {
     fn read(&self, completion: DisplayContextCompletion) -> Result<(), DisplayContextError>;
+
+    /// Legacy hosts may return their actual primary/fallback selection; callers
+    /// requiring a point must check the returned selection. Point rejection
+    /// accepts zero callbacks and never silently redirects to the primary.
+    fn read_selected(
+        &self,
+        selection: DisplaySelection,
+        completion: DisplayContextCompletion,
+    ) -> Result<(), DisplayContextError> {
+        match selection {
+            DisplaySelection::Primary | DisplaySelection::FirstFallback => self.read(completion),
+            DisplaySelection::AtPoint { .. } => Err(DisplayContextError::Unsupported),
+        }
+    }
 
     /// `Ok` accepts startup and exactly one ready callback (possibly inline);
     /// immediate `Err` accepts no callbacks. Early guard drop reports Stopped.
@@ -200,5 +227,91 @@ mod tests {
         let event = DisplayContextWatchEvent::Unavailable(DisplayContextError::Stopped);
         let copied = event;
         assert_eq!(copied, event);
+    }
+
+    #[test]
+    fn point_layout_proves_half_open_containment_without_changing_legacy_layouts() {
+        let bounds = Rect::new(-100, -50, 100, 50).unwrap();
+        for (x, y) in [(-100, -50), (-1, -1)] {
+            let selection = DisplaySelection::AtPoint { x, y };
+            let layout = DisplayLayout::new(bounds, bounds, 1.375, selection).unwrap();
+            assert_eq!(layout.selection(), selection);
+            assert_eq!(layout.presentation_scale(), 1.375);
+        }
+        for (x, y) in [(-101, -1), (-1, -51), (0, -1), (-1, 0)] {
+            assert_eq!(
+                DisplayLayout::new(bounds, bounds, 1.0, DisplaySelection::AtPoint { x, y }),
+                Err(DisplayContextError::InvalidData)
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_selected_read_delegates_without_relabeling_and_point_rejects_zero_callbacks() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Legacy {
+            reject: bool,
+            reads: AtomicUsize,
+        }
+        impl DisplayContextHost for Legacy {
+            fn read(
+                &self,
+                completion: DisplayContextCompletion,
+            ) -> Result<(), DisplayContextError> {
+                self.reads.fetch_add(1, Ordering::AcqRel);
+                if self.reject {
+                    return Err(DisplayContextError::Busy);
+                }
+                let bounds = Rect::new(-10, -10, 10, 10).unwrap();
+                completion(
+                    DisplayLayout::new(bounds, bounds, 1.0, DisplaySelection::FirstFallback)
+                        .map(Some),
+                );
+                Ok(())
+            }
+        }
+        for reject in [false, true] {
+            let host = Legacy {
+                reject,
+                reads: AtomicUsize::new(0),
+            };
+            let callbacks = Arc::new(AtomicUsize::new(0));
+            for selection in [DisplaySelection::Primary, DisplaySelection::FirstFallback] {
+                let count = callbacks.clone();
+                let result = host.read_selected(
+                    selection,
+                    Box::new(move |result| {
+                        assert_eq!(
+                            result.unwrap().unwrap().selection(),
+                            DisplaySelection::FirstFallback
+                        );
+                        count.fetch_add(1, Ordering::AcqRel);
+                    }),
+                );
+                assert_eq!(
+                    result,
+                    if reject {
+                        Err(DisplayContextError::Busy)
+                    } else {
+                        Ok(())
+                    }
+                );
+            }
+            let count = callbacks.clone();
+            assert_eq!(
+                host.read_selected(
+                    DisplaySelection::AtPoint { x: -1, y: -1 },
+                    Box::new(move |_| {
+                        count.fetch_add(1, Ordering::AcqRel);
+                    })
+                ),
+                Err(DisplayContextError::Unsupported)
+            );
+            assert_eq!(host.reads.load(Ordering::Acquire), 2);
+            assert_eq!(
+                callbacks.load(Ordering::Acquire),
+                if reject { 0 } else { 2 }
+            );
+        }
     }
 }

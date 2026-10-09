@@ -5,7 +5,7 @@
 #![allow(unsafe_code)]
 
 use super::{
-    artwork::{DecodePlan, copied_size, read_count},
+    artwork,
     owner::{Calls, Event, nullable_result},
 };
 use std::{marker::PhantomData, ptr::null_mut, rc::Rc, sync::Arc};
@@ -15,20 +15,13 @@ use tessera_system::media::{
 };
 use windows::{
     Foundation::TypedEventHandler,
-    Graphics::Imaging::{
-        BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat, BitmapTransform, ColorManagementMode,
-        ExifOrientationMode,
-    },
     Media::Control::{
         CurrentSessionChangedEventArgs, GlobalSystemMediaTransportControlsSession as Session,
         GlobalSystemMediaTransportControlsSessionManager as Manager,
         GlobalSystemMediaTransportControlsSessionMediaProperties as Properties,
         MediaPropertiesChangedEventArgs, PlaybackInfoChangedEventArgs, SessionsChangedEventArgs,
     },
-    Storage::Streams::{
-        Buffer, IRandomAccessStreamReference, IRandomAccessStreamWithContentType,
-        InMemoryRandomAccessStream, InputStreamOptions,
-    },
+    Storage::Streams::IRandomAccessStreamReference,
     Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
     core::{IUnknown, Interface},
 };
@@ -354,82 +347,16 @@ fn thumbnail(properties: &Properties) -> Result<Option<MediaArtwork>, MediaError
     decode_reference(&reference).map(Some)
 }
 
-/// Shared production decode seam; tests supply only an in-memory reference.
+/// Media policy only; session authority remains in the existing owner caller.
 pub(super) fn decode_reference(
     reference: &IRandomAccessStreamReference,
 ) -> Result<MediaArtwork, MediaError> {
-    let source = SourceStream(
-        reference
-            .OpenReadAsync()
-            .and_then(|operation| operation.join())
-            .map_err(|e| error(MediaErrorKind::Other, "Open media thumbnail", e))?,
-    );
-    let decode = || -> Result<MediaArtwork, MediaError> {
-        let size = source.0.Size().map_err(art_error)?;
-        let count = read_count(size)?;
-        source.0.Seek(0).map_err(art_error)?;
-        let buffer = Buffer::Create(count).map_err(art_error)?;
-        let buffer = source
-            .0
-            .ReadAsync(&buffer, count, InputStreamOptions::None)
-            .and_then(|operation| operation.join())
-            .map_err(art_error)?;
-        copied_size(
-            size,
-            buffer.Length().map_err(art_error)?,
-            source.0.Size().map_err(art_error)?,
-        )?;
-        let copy = MemoryStream(InMemoryRandomAccessStream::new().map_err(art_error)?);
-        let written = copy
-            .0
-            .WriteAsync(&buffer)
-            .and_then(|operation| operation.join())
-            .map_err(art_error)?;
-        copied_size(size, written, copy.0.Size().map_err(art_error)?)?;
-        copy.0.Seek(0).map_err(art_error)?;
-        let decoder = BitmapDecoder::CreateAsync(&copy.0)
-            .and_then(|operation| operation.join())
-            .map_err(art_error)?;
-        let plan = DecodePlan::new(
-            decoder.PixelWidth().map_err(art_error)?,
-            decoder.PixelHeight().map_err(art_error)?,
-        )?;
-        let transform = BitmapTransform::new().map_err(art_error)?;
-        transform.SetScaledWidth(plan.width).map_err(art_error)?;
-        transform.SetScaledHeight(plan.height).map_err(art_error)?;
-        let pixels = decoder
-            .GetPixelDataTransformedAsync(
-                BitmapPixelFormat::Rgba8,
-                BitmapAlphaMode::Premultiplied,
-                &transform,
-                ExifOrientationMode::IgnoreExifOrientation,
-                ColorManagementMode::ColorManageToSRgb,
-            )
-            .and_then(|operation| operation.join())
-            .map_err(art_error)?;
-        let rgba = pixels.DetachPixelData().map_err(art_error)?;
-        plan.accept(&rgba)
-    };
-    decode()
-}
-
-// RAII covers every early-return/unwind after an opened stream. Close and
-// interface release occur on owner, before manager/apartment retirement.
-struct SourceStream(IRandomAccessStreamWithContentType);
-impl Drop for SourceStream {
-    fn drop(&mut self) {
-        let _ = self.0.Close();
-    }
-}
-struct MemoryStream(InMemoryRandomAccessStream);
-impl Drop for MemoryStream {
-    fn drop(&mut self) {
-        let _ = self.0.Close();
-    }
-}
-
-fn art_error(error: windows::core::Error) -> MediaError {
-    self::error(MediaErrorKind::Other, "Decode media thumbnail", error)
+    crate::image_decode::decode_reference(
+        reference,
+        crate::image_decode::ImageDecodeLimits::media_thumbnail(),
+    )
+    .map_err(artwork::error)
+    .and_then(artwork::image)
 }
 
 fn error(kind: MediaErrorKind, operation: &str, error: windows::core::Error) -> MediaError {
