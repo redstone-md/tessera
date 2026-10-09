@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   native-runtime:
-    name: Windows native GUI startup and owned cleanup (Debug)
+    name: Windows native source tests and owned GUI cleanup (Debug)
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -24,6 +24,11 @@ jobs:
         run: |
           rustup toolchain install 1.92.0 --profile minimal
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed.' }
+      - name: Test the full workspace on native Windows
+        shell: pwsh
+        run: |
+          cargo +1.92.0 test --workspace --target x86_64-pc-windows-msvc --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows workspace tests failed.' }
       - name: Build the production GUI and supervisor (Debug, static CRT)
         shell: pwsh
         run: |
