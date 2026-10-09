@@ -5,6 +5,7 @@
 //! These are test-only presentation fixtures, not WLAN/Windows privacy evidence.
 
 use crate::generated::{NetworkMenu, NetworkRow, SeelenPalette};
+use crate::native_typography_oracle::SourceTypographyText;
 use crate::theme::{PresentationTheme, ThemedComponent};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
@@ -63,19 +64,32 @@ enum Request {
 }
 struct Fixture {
     window: Rc<MinimalSoftwareWindow>,
+    source_window: Rc<MinimalSoftwareWindow>,
     popup: NetworkMenu,
     requests: Rc<RefCell<Vec<Request>>>,
 }
 impl Fixture {
     fn new(configure: impl FnOnce(&NetworkMenu)) -> Self {
-        struct TestPlatform(Rc<MinimalSoftwareWindow>);
+        struct TestPlatform {
+            popup: RefCell<Option<Rc<MinimalSoftwareWindow>>>,
+            source: Rc<MinimalSoftwareWindow>,
+        }
         impl Platform for TestPlatform {
             fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-                Ok(self.0.clone())
+                Ok(self
+                    .popup
+                    .borrow_mut()
+                    .take()
+                    .unwrap_or_else(|| self.source.clone()))
             }
         }
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
+        let source_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(TestPlatform {
+            popup: RefCell::new(Some(window.clone())),
+            source: source_window.clone(),
+        }))
+        .unwrap();
         let popup = NetworkMenu::new().unwrap();
         popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
@@ -102,6 +116,7 @@ impl Fixture {
             .dispatch_event(WindowEvent::WindowActiveChanged(true));
         let fixture = Self {
             window,
+            source_window,
             popup,
             requests,
         };
@@ -209,10 +224,23 @@ fn has_ink(
 ) -> bool {
     let p = node.absolute_position();
     let s = node.size();
-    let left = (p.x * scale).ceil().max(0.0) as usize;
-    let top = (p.y * scale).ceil().max(0.0) as usize;
-    let right = ((p.x + s.width) * scale).floor().max(0.0) as usize;
-    let bottom = ((p.y + s.height) * scale).floor().max(0.0) as usize;
+    rect_has_ink(pixels, width, height, scale, p, s, color)
+}
+
+// Isolated native text regions prevent details/SSID ink from satisfying caption/band checks.
+fn rect_has_ink(
+    pixels: &[Rgb8Pixel],
+    width: usize,
+    height: usize,
+    scale: f32,
+    origin: LogicalPosition,
+    size: slint::LogicalSize,
+    color: [u8; 3],
+) -> bool {
+    let left = (origin.x * scale).ceil().max(0.0) as usize;
+    let top = (origin.y * scale).ceil().max(0.0) as usize;
+    let right = ((origin.x + size.width) * scale).floor().max(0.0) as usize;
+    let bottom = ((origin.y + size.height) * scale).floor().max(0.0) as usize;
     (top..bottom.min(height)).any(|y| {
         (left..right.min(width)).any(|x| {
             let pixel = pixels[y * width + x];
@@ -222,8 +250,16 @@ fn has_ink(
 }
 
 #[test]
-fn network_popup_four_real_sections_have_source_spacing_and_pixels_at_light_dark_scale_one_two() {
+fn network_popup_four_real_sections_have_source_ink_and_native_geometry_at_light_dark_scale_one_two()
+ {
     let f = Fixture::new(ready);
+    let source = SourceTypographyText::new().unwrap();
+    source.set_source_weight(600);
+    source.set_source_tracking(0.0);
+    source.set_text_height(30.72);
+    source.set_vertically_centered(true);
+    source.set_native_line_height(true);
+    source.show().unwrap();
     for scheme in [
         slint::language::ColorScheme::Light,
         slint::language::ColorScheme::Dark,
@@ -237,6 +273,29 @@ fn network_popup_four_real_sections_have_source_spacing_and_pixels_at_light_dark
             let height = size.height as usize;
             let background = rgb(f.popup.global::<SeelenPalette>().get_surface());
             let foreground = rgb(f.popup.global::<SeelenPalette>().get_foreground());
+            let secondary = rgb(f.popup.global::<SeelenPalette>().get_secondary());
+            let tile = rgb(f.popup.global::<SeelenPalette>().get_tile());
+            let (surface, muted) = match scheme {
+                slint::language::ColorScheme::Dark => ([24, 24, 24], [137, 137, 137]),
+                _ => ([242, 242, 242], [111, 111, 111]),
+            };
+            assert_eq!(background, surface);
+            let ink = match scheme {
+                slint::language::ColorScheme::Dark => 228,
+                _ => 18,
+            };
+            assert_eq!(foreground, [ink; 3]);
+            source.set_source_background(slint::Color::from_rgb_u8(
+                surface[0], surface[1], surface[2],
+            ));
+            source.set_source_foreground(slint::Color::from_rgb_u8(ink, ink, ink));
+            f.source_window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            f.source_window.set_size(size);
+            assert_ne!(secondary, foreground);
             assert_eq!(
                 sample(
                     &pixels,
@@ -258,12 +317,82 @@ fn network_popup_four_real_sections_have_source_spacing_and_pixels_at_light_dark
                 .iter()
                 .map(|label| f.element(label))
                 .collect::<Vec<_>>();
-            for row in &rows {
+            let mut dividers =
+                ElementHandle::find_by_element_id(&f.popup, "NetworkSection::divider")
+                    .collect::<Vec<_>>();
+            dividers.sort_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y));
+            assert_eq!(dividers.len(), 4);
+            for (row, divider) in rows.iter().zip(&dividers) {
                 assert_eq!(row.accessible_role(), Some(AccessibleRole::Text));
                 assert!((row.size().height - ROW_HEIGHT).abs() < 0.02);
                 assert!(
                     has_ink(&pixels, width, height, scale, row, foreground),
                     "actual SSID glyph pixels, scheme={scheme:?} scale={scale}"
+                );
+                let p = row.absolute_position();
+                let s = row.size();
+                let divider_origin = divider.absolute_position();
+                assert!((divider_origin.x - p.x).abs() < 0.02);
+                assert!((divider_origin.y - (p.y - SECTION_HEADER)).abs() < 0.02);
+                assert!((divider.size().height - 1.0).abs() < 0.02);
+                assert!((divider.size().width - s.width).abs() < 0.02);
+                let boundary_x = ((p.x + s.width / 2.0) * scale).floor() as usize;
+                assert!(
+                    ((divider_origin.y * scale).floor() as usize
+                        ..((divider_origin.y + 1.0) * scale).ceil() as usize)
+                        .any(|y| {
+                            let pixel = pixels[y * width + boundary_x];
+                            [pixel.r, pixel.g, pixel.b] != surface
+                        }),
+                    "section-top divider boundary paints even at fractional scale-one origin"
+                );
+                if scale == 2.0 {
+                    assert!(
+                        has_ink(&pixels, width, height, scale, divider, muted),
+                        "two physical pixels expose the literal muted divider ink"
+                    );
+                }
+                // Native left padding beside the SSID is empty surface, not a
+                // centered divider crossing the first text line.
+                let gutter_x = ((p.x + 1.0) * scale).floor() as usize;
+                for y in ((p.y + 6.4) * scale).ceil() as usize
+                    ..((p.y + 6.4 + 17.92) * scale).floor() as usize
+                {
+                    let pixel = pixels[y * width + gutter_x];
+                    assert_eq!(
+                        [pixel.r, pixel.g, pixel.b],
+                        background,
+                        "SSID gutter must not be struck by a centered section divider"
+                    );
+                }
+                assert!(
+                    rect_has_ink(
+                        &pixels,
+                        width,
+                        height,
+                        scale,
+                        LogicalPosition::new(p.x + 6.4, p.y - SECTION_HEADER + 6.4),
+                        slint::LogicalSize::new(s.width - 12.8, 17.92),
+                        secondary
+                    ),
+                    "isolated uppercase section caption uses secondary ink"
+                );
+                assert!(
+                    rect_has_ink(
+                        &pixels,
+                        width,
+                        height,
+                        scale,
+                        LogicalPosition::new(p.x + s.width - 22.4, p.y + 6.4),
+                        slint::LogicalSize::new(12.8, 17.92),
+                        secondary
+                    ),
+                    "isolated band suffix uses secondary ink, not row details"
+                );
+                assert_eq!(
+                    sample(&pixels, width, scale, p.x + s.width - 8.0, p.y + 15.36),
+                    tile,
+                    "band keeps the light tile surface"
                 );
             }
             for pair in rows.windows(2) {
@@ -281,6 +410,56 @@ fn network_popup_four_real_sections_have_source_spacing_and_pixels_at_light_dark
                 2,
                 "only Refresh and Settings have button semantics"
             );
+            let actions =
+                ["Refresh", "More Network Settings"].map(|label| (label, f.element(label)));
+            assert!(
+                (actions[1].1.absolute_position().y
+                    - actions[0].1.absolute_position().y
+                    - SECTION_HEADER
+                    - 6.4)
+                    .abs()
+                    < 0.02
+            );
+            for (label, action) in actions {
+                assert!((action.size().height - SECTION_HEADER).abs() < 0.02);
+                assert!((action.size().width - rows[0].size().width).abs() < 0.02);
+                assert!(has_ink(&pixels, width, height, scale, &action, foreground));
+                // Radio uses a different x/y phase and explicit 17.92px line height.
+                // Fully covered ink spans there are not a portable weight oracle.
+                // Independent Text paints the entire footer line at its actual phase.
+                let origin = action.absolute_position();
+                let x = origin.x + 6.4;
+                let y = origin.y;
+                let text_width = action.size().width - 12.8;
+                source.set_text_x(x);
+                source.set_text_y(y);
+                source.set_text_width(text_width);
+                source.set_caption(label.into());
+                f.source_window.request_redraw();
+                let mut reference = vec![Rgb8Pixel::default(); width * height];
+                assert!(f.source_window.draw_if_needed(|renderer| {
+                    renderer.render(&mut reference, width);
+                }));
+                let mut glyph_pixels = 0;
+                for py in (y * scale).floor() as usize..((y + 30.72) * scale).ceil() as usize {
+                    for px in
+                        (x * scale).floor() as usize..((x + text_width) * scale).ceil() as usize
+                    {
+                        let offset = py * width + px;
+                        let expected = reference[offset];
+                        glyph_pixels +=
+                            usize::from([expected.r, expected.g, expected.b] != surface);
+                        assert_eq!(
+                            pixels[offset], expected,
+                            "footer native 12.8px/600 whole-line raster: {label}, {scheme:?}, scale={scale}, physical=({px},{py}), logical-origin=({x},{y}), text-width={text_width}"
+                        );
+                    }
+                }
+                assert!(
+                    glyph_pixels > 0,
+                    "independent footer oracle must paint glyphs"
+                );
+            }
             assert!(
                 f.requests().is_empty(),
                 "theme/scale/render do not cause effects"
@@ -369,42 +548,50 @@ fn network_popup_unavailable_off_absent_empty_partial_watch_states_paint_and_kee
         popup.set_refresh_key(REFRESH.into());
         popup.set_settings_key(SETTINGS.into());
     });
-    for (radio, summary, notice, watch) in [
+    for (radio, summary, notice, watch, connected_count) in [
         (
             "No Wi-Fi adapter found",
             "Windows confirmed no adapters.",
             "",
             "Notifications unsupported; use Refresh.",
+            0,
         ),
         (
             "Fixture adapter: Wi-Fi Off",
             "Enable Wi-Fi in Windows Settings, then Refresh.",
             "",
             "",
+            0,
         ),
         (
             "Fixture adapter: Wi-Fi Unknown",
             "",
             "Windows denied Wi-Fi access. Check location permissions, then Refresh.",
             "",
+            0,
         ),
         (
             "Fixture adapter: Wi-Fi On",
             "No Wi-Fi networks in the Windows cache.",
             "",
             "Notifications active; no active scanning.",
+            0,
         ),
         (
             "Fixture adapter: Wi-Fi On · Other: Unavailable",
             "Partial cache read. Another adapter is unavailable.",
             "",
             "Notifications unavailable; use Refresh.",
+            1,
         ),
     ] {
         f.popup.set_radio_text(radio.into());
         f.popup.set_summary(summary.into());
         f.popup.set_notice(notice.into());
         f.popup.set_watch_status(watch.into());
+        f.popup.set_connected(model(
+            (0..connected_count).map(|i| row("connected", i)).collect(),
+        ));
         for scheme in [
             slint::language::ColorScheme::Light,
             slint::language::ColorScheme::Dark,
@@ -432,6 +619,43 @@ fn network_popup_unavailable_off_absent_empty_partial_watch_states_paint_and_kee
                     &f.element(feedback),
                     foreground
                 ));
+                let cache = f.element(
+                    "Read-only Windows cache; Refresh does not scan. Connection, radio and hotspot controls are not supported here.",
+                );
+                let cache_origin = cache.absolute_position();
+                let surface = rgb(f.popup.global::<SeelenPalette>().get_surface());
+                // All four empty sections, or the three trailing empty sections
+                // after one connected row, share this origin. Zero height alone
+                // must not leave their dividers/captions painting over the cache.
+                let gap_top = cache_origin.y - 6.4;
+                let gap_bottom = cache_origin.y;
+                let left = (cache_origin.x * scale).ceil() as usize;
+                let right = ((cache_origin.x + cache.size().width) * scale).floor() as usize;
+                for y in (gap_top * scale).floor() as usize..(gap_bottom * scale).floor() as usize {
+                    assert!(
+                        (left..right).all(|x| {
+                            let pixel = pixels[y * size.width as usize + x];
+                            [pixel.r, pixel.g, pixel.b] == surface
+                        }),
+                        "empty section origin/gap stays unpainted: {radio}, {scheme:?}, {scale}"
+                    );
+                }
+                if connected_count == 1 {
+                    let connected = f.element(&row_description("connected", 0));
+                    assert_eq!(connected.accessible_role(), Some(AccessibleRole::Text));
+                    assert!(
+                        (cache_origin.y - connected.absolute_position().y - ROW_HEIGHT - 6.4).abs()
+                            < 0.02
+                    );
+                    assert!(has_ink(
+                        &pixels,
+                        size.width as usize,
+                        size.height as usize,
+                        scale,
+                        &connected,
+                        foreground
+                    ));
+                }
                 assert_eq!(f.buttons().len(), 2);
                 f.popup.invoke_focus_content();
                 f.key(Key::Tab);

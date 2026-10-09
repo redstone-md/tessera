@@ -12,9 +12,11 @@ use slint::winit_030::{SlintEvent, WinitWindowAccessor, winit};
 use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
-    CalendarDayCell, CalendarMenu, CalendarWeekRow, ContextMenuSurface, Dock, DockApp,
-    DockMenuAction, DockMenuKind, DockWindow, LaunchRow, LaunchTile, Launcher, LauncherDisplayMode,
-    LauncherDragVisual, Panel, QuickSettings, TileBounds, Toolbar, TooltipSurface, UserFolderKind,
+    BluetoothDeviceRow, BluetoothMenu, BluetoothRadioRow, BluetoothRadioStatus,
+    BluetoothTransportKind, CalendarDayCell, CalendarMenu, CalendarWeekRow, ContextMenuSurface,
+    Dock, DockApp, DockMenuAction, DockMenuKind, DockWindow, InputLanguageMenu, InputProfileRow,
+    LaunchRow, LaunchTile, Launcher, LauncherDisplayMode, LauncherDragVisual, NetworkMenu,
+    NetworkRow, Panel, QuickSettings, TileBounds, Toolbar, TooltipSurface, UserFolderKind,
     UserFolderRow, UserMenu,
 };
 use crate::generated::{FocusTokens, PowerMenuAction, PowerMenuSurface};
@@ -837,6 +839,76 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         user.get_popup_content_height(),
     ));
     user.show().unwrap();
+    // Closed selector presentation fixtures; no OS enumeration, activation,
+    // WLAN scan/connect, Bluetooth discovery or mutation provider is bound.
+    let keyboard = InputLanguageMenu::new().unwrap();
+    keyboard.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
+    keyboard.set_observed(true);
+    keyboard.set_unknown_active(false);
+    keyboard.set_settings_key("gl-keyboard-settings".into());
+    keyboard.set_rows(slint::ModelRc::new(slint::VecModel::from(
+        (0..3)
+            .map(|index| InputProfileRow {
+                key: format!("gl-input-profile-{index}").into(),
+                language_name: "Fixture language".into(),
+                layout_name: format!("Fixture layout {index}").into(),
+                active: index == 0,
+            })
+            .collect::<Vec<_>>(),
+    )));
+    keyboard.window().set_size(slint::LogicalSize::new(
+        keyboard.get_popup_content_width(),
+        keyboard.get_popup_content_height(),
+    ));
+    keyboard.show().unwrap();
+
+    let network = NetworkMenu::new().unwrap();
+    network.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
+    network.set_radio_text("Fixture adapter: Wi-Fi On".into());
+    network.set_summary("Controlled cached observations, not live Internet connectivity.".into());
+    network.set_refresh_key("gl-network-refresh".into());
+    network.set_settings_key("gl-network-settings".into());
+    network.set_connected(slint::ModelRc::new(slint::VecModel::from(vec![
+        NetworkRow {
+            label: "Fixture cached network".into(),
+            details: "Fixture adapter · 81% signal · Connection unknown".into(),
+            description: "Controlled read-only cache entry".into(),
+            bands: "5G".into(),
+        },
+    ])));
+    network.window().set_size(slint::LogicalSize::new(
+        network.get_popup_content_width(),
+        network.get_popup_content_height(),
+    ));
+    network.show().unwrap();
+
+    let bluetooth = BluetoothMenu::new().unwrap();
+    bluetooth.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
+    bluetooth.set_has_snapshot(true);
+    bluetooth.set_refresh_enabled(true);
+    bluetooth.set_radios(slint::ModelRc::new(slint::VecModel::from(vec![
+        BluetoothRadioRow {
+            name: "Fixture Bluetooth radio".into(),
+            state: BluetoothRadioStatus::On,
+        },
+    ])));
+    bluetooth.set_connected(slint::ModelRc::new(slint::VecModel::from(vec![
+        BluetoothDeviceRow {
+            name: "Fixture paired device".into(),
+            transport: BluetoothTransportKind::Classic,
+        },
+    ])));
+    bluetooth.set_unknown(slint::ModelRc::new(slint::VecModel::from(vec![
+        BluetoothDeviceRow {
+            name: "Fixture uncertain device".into(),
+            transport: BluetoothTransportKind::LowEnergy,
+        },
+    ])));
+    bluetooth.window().set_size(slint::LogicalSize::new(
+        bluetooth.get_popup_content_width(),
+        bluetooth.get_popup_content_height(),
+    ));
+    bluetooth.show().unwrap();
     let calendar =
         native_gl_calendar_fixture(PresentationTheme::seelen_reference(ColorScheme::Dark));
     calendar.show().unwrap();
@@ -900,6 +972,9 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         verify_frame("user-menu", &user);
         verify_user_fallback_frames(&user);
         verify_frame("calendar", &calendar);
+        verify_frame("keyboard-selector", &keyboard);
+        verify_frame("network-selector", &network);
+        verify_frame("bluetooth-selector", &bluetooth);
         verify_frame("dock", &dock);
         verify_dock_reference_paint(&dock);
         // Stock control colors have their own 150ms transitions. Let the
@@ -927,6 +1002,9 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                         quick.hide().unwrap();
                         user.hide().unwrap();
                         calendar.hide().unwrap();
+                        keyboard.hide().unwrap();
+                        network.hide().unwrap();
+                        bluetooth.hide().unwrap();
                         dock.hide().unwrap();
                         power.hide().unwrap();
                         result.set(true);

@@ -1,0 +1,48 @@
+Keyboard (regular) — Font Awesome Free 5.15.4 by @fontawesome
+https://fontawesome.com
+SVG artwork: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+https://creativecommons.org/licenses/by/4.0/legalcode.en
+
+Original SVG and its embedded Font Awesome credit are retained unmodified.
+Original immutable upstream LICENSE.txt is retained in full. Its icon SVG/JS
+licensing is CC BY 4.0; OFL applies to fonts and MIT only to non-font/non-icon
+files. Neither font licensing nor react-icons package metadata is used to
+relicense this original SVG. No numeric copyright year or individual icon
+creator is asserted beyond the supplied original Font Awesome/@fontawesome
+credit. No endorsement or trademark/patent grant is asserted.
+
+Original source commit: afecf2af5d897b763e5e8e28d46aad2f710ccad6
+This is the actual React Icons generator pin; it is not the 5.15.4 tag commit.
+Original SVG (1846 bytes), source path svgs/regular/keyboard.svg:
+https://raw.githubusercontent.com/FortAwesome/Font-Awesome/afecf2af5d897b763e5e8e28d46aad2f710ccad6/svgs/regular/keyboard.svg
+Git blob SHA-1: 585810573ab843742ff82882b8aeed9eabd9e283
+SHA-256: 9b60d7921b9a5ecbf39ca0a3835228a54fe985ae4c2427d4a11444b183e856f8
+Original full upstream grant (1548 bytes):
+https://raw.githubusercontent.com/FortAwesome/Font-Awesome/afecf2af5d897b763e5e8e28d46aad2f710ccad6/LICENSE.txt
+Git blob SHA-1: f31bef92b64e9d493204176354b2d7f83d8d7eae
+SHA-256: e779748dfe75e84f974df3c7bc07f842011a100159158b0f1f49b2f2a5a515cb
+Git blob IDs include Git's blob header, not plain-file SHA-1.
+
+Reference provenance, not another runtime dependency:
+React Icons 5.7.0, immutable generator commit
+87470d588c5624bf3e291f17527c3ecd1419c8ae, maps fa/regular keyboard.svg to
+FaRegKeyboard and pins the original Font Awesome 5.x revision above.
+https://raw.githubusercontent.com/react-icons/react-icons/87470d588c5624bf3e291f17527c3ecd1419c8ae/packages/react-icons/src/icons/index.ts
+https://unpkg.com/react-icons@5.7.0/fa/index.mjs
+The full independently published FaRegKeyboard export was read and its
+complete single path and viewBox 0 0 576 512 compared exactly to this original.
+Fa6 is a distinct family/pin. Original XML and React serialization are not
+claimed byte-identical. Seelen serialization/assets/code are not included.
+
+Integration changes are display-only: native aspect-preserving containment in
+a 20px grid slot with a 16px-high viewport, plus inherited foreground tint.
+The SVG file, paths, embedded credit and original license are unchanged.
+Source CSS informs this sizing; no generated reference SVG/computed browser
+width was available, so browser pixel width is not certified. Native raster,
+fonts, scale and Windows composition require separate verification. Original
+ink y64..448 occupies 384/512 of the viewport; viewport height is not ink height.
+
+The existing recursive third-party package collector retains this NOTICE,
+original upstream LICENSE.txt and source attribution/license URLs. Licensed
+artwork is not restricted by the application's source-code license.

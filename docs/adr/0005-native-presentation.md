@@ -34,7 +34,7 @@ Notifications received before UI routes are installed remain dirty and coalesce 
 
 The generated Slint module is isolated from handwritten Rust. Win32 integration remains in the platform module; any compiler-generated toolkit unsafe code is not permission to add handwritten FFI to presentation. Selecting Slint does not choose or freeze a plugin runtime, third-party UI protocol, or shell-activation mechanism.
 
-The default desktop presentation follows the standard Seelen UI theme rather than inventing another text-command taskbar. Native leases are UI-thread-affine: the controller retains each host-returned lease in an `Rc<RefCell<_>>` registry and an explicit run-scope guard releases them before component/HWND destruction. Worker completion sends only a weak-component signal, never a native lease. The platform validates live, current-process HWNDs before styling or registering an appbar; diagnostics bypass these mutations. The primary toolbar reserves 32 logical pixels when an Explorer appbar host is available; the dock is content-sized and floating. Scoped WinEvent notifications replace idle desktop polling. A retained UI-thread heartbeat supervises the GUI; a separate minute timer reads only the clock. Fullscreen hiding keeps the event loop alive. Missing icons use an independent generic glyph with the real accessible application label, never guessed executable paths.
+The default development presentation follows the user-selected Material 3 appearance target while retaining Seelen's functional contract. Native leases are UI-thread-affine: the controller retains each host-returned lease in an `Rc<RefCell<_>>` registry and an explicit run-scope guard releases them before component/HWND destruction. Worker completion sends only a weak-component signal, never a native lease. The platform validates live, current-process HWNDs before styling or registering an appbar; diagnostics bypass these mutations. The primary toolbar reserves 40 logical pixels when an Explorer appbar host is available; the dock is content-sized and floating. Scoped WinEvent notifications replace idle desktop polling. A retained UI-thread heartbeat supervises the GUI; a separate minute timer reads only the clock. Fullscreen hiding keeps the event loop alive. Missing icons use an independent generic glyph with the real accessible application label, never guessed executable paths.
 
 Before constructing any desktop component, Windows sets nonactivating native creation attributes through the toolkit hook. This prevents the first bar show from stealing foreground before its native lease attaches. Only user-opened launcher/settings windows request foreground through the owned-HWND platform adapter; Windows denial is nonfatal and reported. No synthetic input or focus-policy bypass is used. Slint retains Windows HWNDs across hide/show, so the bar's intrinsic `NOACTIVATE` role remains until HWND destruction even when its appbar lease is released during fullscreen hiding; other captured styles and work-area reservations are released normally.
 
@@ -84,7 +84,7 @@ Dock context menus use one lazily created, separately owned Slint `Window`, shar
 
 Window menus activate without toggling, request asynchronous minimize, and post ordinary close requests; they do not terminate applications or claim that a queued request completed. Pin/recovery commands reuse existing persistence and host boundaries. Native identity and application eligibility are revalidated at each platform effect. Popup leases drop before hide, parent callbacks and component teardown. Synchronous Slint appearance callbacks during `show()` coalesce geometry requests so leases are not borrowed recursively and the final UI geometry is applied before readiness.
 
-`inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the DPI-scaled 32px token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
+`inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the shared DPI-scaled toolbar token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
 
 The immutable [alpha.10 CI run](https://github.com/redstone-md/tessera/actions/runs/37675695227) passed on Windows stable and Rust 1.92.0, including actual execution of the controlled toolbar green/offset-red/restored-green CLI fixture, and published only after native packaging/runtime preflight passed. This verifies the diagnostic feedback loop, not the cause or correction of the user's VM toolbar offset.
 
@@ -160,7 +160,7 @@ its older RGB gradients paint only in the explicit neutral skin. Calendar
 selected dates also pair primary/onPrimary instead of stock accent foreground.
 No new framework, provider, dependency, borrowed font or wallpaper is added.
 
-Focused geometry/inspection checks passed (8/6); all 821 software UI cases
+**First tracer (`dd52da5`) local proof:** focused geometry/inspection checks passed (8/6); all 821 software UI cases
 passed with two explicitly ignored native GL scenarios. Both actual Mesa
 scenarios passed independently at 1×/2×: retained neutral matrix 9.24s/15.32s,
 Material toolbar/dock/Settings/Calendar 0.92s/1.78s. All 168 complete P6
@@ -174,12 +174,43 @@ This is not HCT generation, wallpaper adaptation, blur, exact footage motion
 or completed native AppBar/PMv2/VM-offset certification. The neutral section
 below records the earlier source checkpoint, not the final appearance target.
 
+**Merged Material/selector local proof:** the isolated candidate combines
+`dd52da5` with the independently repaired selector checkpoint `8dbd385`.
+All 1,448 workspace tests/19 suites passed (823 UI; two separately gated GL
+cases ignored). Strict Rust 1.92 Linux/MSVC workspace/all-target Clippy,
+warnings-denied Linux rustdoc and format/diff passed. Both owned Mesa scenarios
+passed independently at 1×/2×: Material 1.07s/1.80s, neutral/source
+9.89s/16.64s. All 180 complete P6 exports (90/scale, 338,365,734 bytes)
+have matching frame families; all 32 Material frames retain their literal
+double dimensions. Source selectors explicitly request neutral fixture paint
+before first show; Calendar reuses the existing genuine fixture.
+All 35 notice assertions, full original three-family grants/attribution and
+exact CC BY keyboard/grant hashes passed. The 11 separately parked media
+files remain byte-identical. This merged candidate still requires its own
+native Windows execution; earlier native receipts do not certify Material,
+new release assets, ordinary effects or the reported VM offset.
+
+
 ### Alpha.21 source visual layer (development)
 
-The visual layer is measured against the same pinned Seelen reference, not a
-new theme or framework. It starts from the verified alpha.20 checkpoint in an
-isolated worktree; the separately parked media-display changes are excluded.
-This is development source, not a published alpha.21 or completed 1:1 contract.
+The completed source layers below were measured against the pinned Seelen
+reference. They start from verified alpha.20 in isolated worktrees; separately
+parked media-display changes are excluded. This is development source, not a
+published alpha.21 or completed functional contract.
+
+**User-selected appearance target:** the subsequent explicit reference is
+[Hyprland Material 3 Design / unix.s](https://www.youtube.com/watch?v=fcK0vem1RtI),
+with [end4-pC / illogical-impulse](https://github.com/pctrade/end4-pC) as its
+source-config reference. Seelen remains the functional contract, not the final
+neutral skin. The actual YouTube thumbnail and source-credited 25-second
+[repost footage](https://www.bilibili.com/video/BV1Qb8Y64ErD) were inspected:
+tinted rounded surfaces, floating dock/bar groups, desktop cards and multiple
+color/layout presets. Low-resolution footage does not certify fonts or timings.
+Current end4-pC source was independently pinned at `09f0bc4`; it is not the
+August video revision. The first implemented layer is semantic tinted roles plus
+native bar/dock paint/layout, retaining genuine actions. Dynamic wallpaper
+colors, desktop widgets, exact fonts/motion and Windows blur remain outstanding;
+no Qt/Quickshell/Wayland backend or unreviewed artwork is imported.
 
 - **Toolbar:** 24px wrappers at y=4, 16px glyphs, 4px inner padding/gaps,
   source accent hover/press states, a bounded real user/focused-title group and
@@ -215,6 +246,21 @@ This is development source, not a published alpha.21 or completed 1:1 contract.
   vectors replace Unicode navigation at the source's centered 12.8px/1em size.
   Fixed 28.8×22.4 input slots, navigator-only .98/+1px press, month/year/Today,
   cancellation and native accessibility remain authoritative.
+- **Selector continuation (before the Material 3 restyle):** Keyboard uses
+  source 12.8px/17.92px semibold lines, 51.84px rows, 8px gaps, 24.32px
+  centered secondary footer and observed-active alpha .10. The 300px body
+  absorbs its native focus gutter into source padding; native window rounding
+  only contributes residual flexible-viewport space. Original CC BY keyboard
+  artwork uses native 20×16 containment, not a certified browser viewport.
+  Network's section/band text is secondary and its two real action captions
+  semibold; empty sections hide their whole paint subtree, not only their
+  zero-height rectangle. The remaining divider is explicitly anchored at its
+  section top, never at the default center across an SSID. Bluetooth headings
+  retain secondary/uppercase/.5px
+  tracking and original accessible captions; names use weight 500. Existing
+  typed authority, readonly states, cancellation, RTL and native scrolling
+  remain intact. Network/Bluetooth geometry and absent mutation features are
+  still truthful source differences, not completed full popup parity.
 
 **First shell layer local checkpoint (`dd467ef`):** 1,444 workspace tests/19 suites passed
 (819 UI, one separately gated GL case ignored in the workspace run).
@@ -250,10 +296,71 @@ checks alone are not claimed as independent original-path mask equality.
 All 35 notice assertions and the existing recursive package collector retain
 the full original Ant UED MIT grant and exact adjacent provenance.
 
+**Actual native popup checkpoint (`b876985`):**
+[CI 37987319326](https://github.com/redstone-md/tessera/actions/runs/37987319326)
+passed Linux stable (1,446/19 suites, one ignored) and Windows 1.92/stable
+(each 1,535/19 suites, zero failed/ignored), including strict Clippy/rustdoc.
+Exact-source metadata and complete archived job logs were independently
+verified/recounted; diagnostic packaging was skipped.
+[Native Debug 37987319370](https://github.com/redstone-md/tessera/actions/runs/37987319370)
+passed at that same source in 11m48s: 1,535/19 suites, static-CRT production
+GUI/supervisor, two real UI-thread pulses and owned cleanup. This excludes
+ordinary providers/preferences/hooks and certifies neither newer selector WIP,
+native effects, the user's VM toolbar pixels nor any new release assets.
+
+**Selector continuation local proof:** all 23 focused Keyboard/Network/Bluetooth
+cases passed. The 1,448-test/19-suite workspace gate preceded the final Network
+paint corrections; the complete 823-UI-test gate covered empty-section hiding,
+and all six Network cases were rerun after explicit divider-top positioning.
+One independent test-only native Text module now supplies exact whole-glyph
+comparisons for Bluetooth and the Keyboard footer, rather than assuming a
+single reconstructible alpha mask. Literal colors, complete bitmap restoration,
+input/AX/RTL and source-vector guards remain intact. Final strict Rust 1.92
+all-target UI checks passed on Linux and MSVC. Actual Mesa GL1× (10.26s)/2×
+(16.49s) passed with all 148 complete P6 frames (74/scale, 316,600,556 bytes),
+including the inspected corrected Network image. Original shader/input/glyph
+guards were not weakened. An earlier Power resize frame and a cancelled
+whole-workspace build-lock stall remain harness risks, not production-fix claims.
+All 35 notice assertions and original CC BY grant/attribution/hash collection
+passed. These receipts do not certify the separate Material 3 WIP or Windows.
+
+**Actual selector checkpoint (`384e005`) native RED:** authenticated
+[CI 37997372827](https://github.com/redstone-md/tessera/actions/runs/37997372827)
+passed Linux (1,448/19 suites, one ignored), but both Windows 1.92/stable
+aborted at the Network footer glyph-span assertion (968 passed/9 suites, one
+failed). [Native Debug 37997372907](https://github.com/redstone-md/tessera/actions/runs/37997372907)
+failed the same case; GUI build/pulses were skipped, never a runtime pass.
+The old oracle compared exact-solid-ink widths at unequal radio/footer
+coordinates and line layouts. Its narrow test-only replacement reuses the
+independent native Text module at the actual footer position/size with
+literal 12.8px/600 typography, default SDK line height and vertical centering.
+Keyboard/Bluetooth layout defaults and all production fonts remain unchanged.
+Neither the old failed checkpoint nor the separate Material layer is certified
+by Linux. The replacement subsequently passed all 23 focused selector cases,
+the complete 823-UI-test suite (one ignored GL case), strict Rust 1.92
+Linux/MSVC all-target UI checks and format/diff.
+
+**Actual repaired selector checkpoint (`8dbd385`):**
+[CI 37999840948](https://github.com/redstone-md/tessera/actions/runs/37999840948)
+passed Linux stable (1,448/19 suites, one ignored) and Windows 1.92/stable
+(each 1,537/19 suites, zero failed/ignored), including strict Clippy/rustdoc.
+Exact-source metadata and complete archived root-job logs were independently
+authenticated/recounted.
+[Native Debug 37999840918](https://github.com/redstone-md/tessera/actions/runs/37999840918)
+passed at that same source: 1,537/19 suites, static-CRT production GUI,
+two actual UI-thread pulses and owned cleanup. The failed `384e005` receipt
+stays unchanged. This source-only repair certifies neither the merged Material
+candidate, ordinary providers/effects, the VM toolbar pixels nor new releases.
+
 Seven additional original Tabler vectors retain the existing immutable
 [MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/tabler-icons-6d128ed/NOTICE.txt).
 Three original Ant Design navigation SVGs retain their independently pinned
 [MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/ant-design-icons-74e514e/NOTICE.txt).
+Original Font Awesome 5.x regular keyboard artwork retains its embedded credit,
+full original grant and [immutable CC BY 4.0 attribution/receipts](../../crates/tessera-ui/assets/icons/font-awesome-free-afecf2a/NOTICE.txt).
+The complete published React Icons 5.7.0 FaRegKeyboard path/viewBox was
+independently compared to the unmodified original. MIT package metadata and
+font OFL terms are not used to relicense this SVG.
 No Seelen code/assets, new provider, preference schema or rendering framework
 is imported. Font/native-control skins, exact rights-blocked artwork,
 frameless Settings chrome, complete source modules and Windows backdrop/

@@ -4,7 +4,7 @@
 //! Generated-component input, semantic accessibility, and real software pixels.
 //! No native host, discovery, mutation, or source-string assertions are involved.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
@@ -16,6 +16,7 @@ use crate::generated::{
     BluetoothDeviceRow, BluetoothMenu, BluetoothRadioRow, BluetoothRadioStatus,
     BluetoothTransportKind,
 };
+use crate::native_typography_oracle::SourceTypographyText;
 use crate::sanitize::bounded_text;
 use crate::theme::{PresentationTheme, ThemedComponent};
 
@@ -27,20 +28,35 @@ enum Request {
 
 struct Fixture {
     window: Rc<MinimalSoftwareWindow>,
+    source_window: Rc<MinimalSoftwareWindow>,
     popup: BluetoothMenu,
     requests: Rc<RefCell<Vec<Request>>>,
 }
 
 impl Fixture {
     fn new(configure: impl FnOnce(&BluetoothMenu)) -> Self {
-        struct TestPlatform(Rc<MinimalSoftwareWindow>);
+        struct TestPlatform {
+            popup: Rc<MinimalSoftwareWindow>,
+            source: Rc<MinimalSoftwareWindow>,
+            popup_created: Cell<bool>,
+        }
         impl Platform for TestPlatform {
             fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-                Ok(self.0.clone())
+                Ok(if self.popup_created.replace(true) {
+                    self.source.clone()
+                } else {
+                    self.popup.clone()
+                })
             }
         }
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
+        let source_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(TestPlatform {
+            popup: window.clone(),
+            source: source_window.clone(),
+            popup_created: Cell::new(false),
+        }))
+        .unwrap();
         let popup = BluetoothMenu::new().unwrap();
         popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
@@ -58,6 +74,7 @@ impl Fixture {
             .dispatch_event(WindowEvent::WindowActiveChanged(true));
         let fixture = Self {
             window,
+            source_window,
             popup,
             requests,
         };
@@ -166,6 +183,125 @@ fn observed(root: &BluetoothMenu) {
         "Sensor",
         BluetoothTransportKind::LowEnergy,
     )]));
+}
+
+#[test]
+fn bluetooth_source_heading_and_name_native_glyphs_match_both_themes_and_three_scales() {
+    let long_name = bounded_text(&format!("Clavier אוזניות {}", "界".repeat(180)), 128);
+    let fixture = Fixture::new(|root| {
+        observed(root);
+        root.set_paired(model(vec![
+            row("Keyboard", BluetoothTransportKind::Classic),
+            row(&long_name, BluetoothTransportKind::LowEnergy),
+        ]));
+    });
+    let source = SourceTypographyText::new().unwrap();
+    source.show().unwrap();
+    for scheme in [
+        slint::language::ColorScheme::Light,
+        slint::language::ColorScheme::Dark,
+    ] {
+        fixture
+            .popup
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
+        // Independent pinned source neutrals; never read the tested palette.
+        let (background, foreground, secondary) = match scheme {
+            slint::language::ColorScheme::Dark => (0x181818, 0xe4e4e4, 0xbababa),
+            _ => (0xf2f2f2, 0x121212, 0x3d3d3d),
+        };
+        source.set_source_background(slint::Color::from_rgb_u8(
+            (background >> 16) as u8,
+            (background >> 8) as u8,
+            background as u8,
+        ));
+        for scale in [1.0_f32, 1.5, 2.0] {
+            let actual = fixture.render_fit(scale);
+            let window_size = fixture.window.window().size();
+            let width = window_size.width as usize;
+            let height = window_size.height as usize;
+            fixture
+                .source_window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            fixture.source_window.set_size(window_size);
+            for (label, caption, heading) in [
+                ("Connected", "CONNECTED", true),
+                ("Paired", "PAIRED", true),
+                ("Connection unknown", "CONNECTION UNKNOWN", true),
+                ("Headset", "Headset", false),
+                ("Keyboard", "Keyboard", false),
+                ("Sensor", "Sensor", false),
+                (long_name.as_str(), long_name.as_str(), false),
+            ] {
+                // The semantic caption remains the untranslated-case @tr result,
+                // separate from the visible uppercase heading. Device AX names
+                // remain complete even when their visible text is elided.
+                let node = fixture.element(label);
+                assert_eq!(node.accessible_role(), Some(AccessibleRole::Text));
+                if heading {
+                    assert!(fixture.elements(caption).is_empty());
+                }
+                let origin = node.absolute_position();
+                let size = node.size();
+                assert!(origin.x >= 0.0 && origin.y >= 0.0);
+                assert!(size.width > 8.0 && size.height >= 17.92 - 0.02);
+                assert!((origin.x + size.width) * scale <= window_size.width as f32 + 1.0);
+                assert!((origin.y + size.height) * scale <= window_size.height as f32 + 1.0);
+                let inset = if heading { 0.0 } else { 4.0 };
+                let x = origin.x + inset;
+                let y = origin.y + inset;
+                let text_width = size.width - 2.0 * inset;
+                source.set_text_x(x);
+                source.set_text_y(y);
+                source.set_text_width(text_width);
+                source.set_source_weight(if heading { 600 } else { 500 });
+                source.set_source_tracking(if heading { 0.5 } else { 0.0 });
+                source.set_caption(caption.into());
+                let ink = if heading { secondary } else { foreground };
+                source.set_source_foreground(slint::Color::from_rgb_u8(
+                    (ink >> 16) as u8,
+                    (ink >> 8) as u8,
+                    ink as u8,
+                ));
+                fixture.source_window.request_redraw();
+                let mut reference = vec![Rgb8Pixel::default(); width * height];
+                assert!(fixture.source_window.draw_if_needed(|renderer| {
+                    renderer.render(&mut reference, width);
+                }));
+                let mut glyph_pixels = 0;
+                for py in (y * scale).ceil() as usize..((y + 17.92) * scale).floor() as usize {
+                    for px in
+                        (x * scale).ceil() as usize..((x + text_width) * scale).floor() as usize
+                    {
+                        let offset = py * width + px;
+                        let expected = reference[offset];
+                        glyph_pixels += usize::from(
+                            [expected.r, expected.g, expected.b]
+                                != [
+                                    (background >> 16) as u8,
+                                    (background >> 8) as u8,
+                                    background as u8,
+                                ],
+                        );
+                        assert_eq!(
+                            actual[offset], expected,
+                            "independent source glyph {label:?}, heading={heading}, \
+                             scheme={scheme:?}, scale={scale}, pixel=({px},{py})"
+                        );
+                    }
+                }
+                assert!(glyph_pixels > 8, "{label:?} needs visible native glyphs");
+            }
+            assert_eq!(
+                fixture.buttons().len(),
+                1,
+                "only genuine Refresh is a button"
+            );
+            assert!(fixture.take_requests().is_empty());
+        }
+    }
 }
 
 #[test]

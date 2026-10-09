@@ -230,10 +230,17 @@ The [tester guide](docs/alpha-testing.md) targets published alpha.20 with eight 
 
 **Alpha.21 visual development:** source-backed toolbar/dock geometry and paint,
 native Settings shell, and launcher search/footer/empty states are in main.
-That shell checkpoint passed the actual Linux/Windows CI and native Debug
-GUI two-pulse/owned-cleanup gate. User avatar/Accounts/folder paint and original
-MIT Calendar vectors form the next locally verified popup layer. Existing native
-input, providers and explicit Save remain unchanged. See the
+Both shell and User/Calendar checkpoints passed actual Linux/Windows CI and
+native Debug GUI two-pulse/owned-cleanup gates. Keyboard/Network/Bluetooth's
+repaired selector checkpoint `8dbd385` also passed exact-source Windows
+1.92/stable (1,537 tests each) and Debug GUI; the earlier `384e005` remains failed.
+The user's [Material 3 / end4-pC video reference](https://www.youtube.com/watch?v=fcK0vem1RtI)
+sets the appearance direction; Seelen remains the functional contract.
+The isolated merged Material/selector candidate passed 1,448 tests/19 suites,
+strict Linux/MSVC checks, rustdoc, 35 notices and both actual GL scenarios at
+1×/2× (180 complete frames). Its own native Windows execution remains required;
+older native receipts do not certify the new tinted layer.
+Providers, persisted preferences and explicit Save remain unchanged. See the
 [exact source/gate boundaries and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
 this is not a published release, complete 1:1 parity or a fix claim for the VM toolbar offset.
 
@@ -255,7 +262,7 @@ Each layer builds on a working previous layer.
 
 ## Architectural references
 
-- [Seelen UI](https://seelen.io/apps/seelen-ui/customizable-shell): the visual reference for the default dock, toolbar, and application menu, as well as the broader customizable-shell direction. Source measurements are pinned in the [presentation decision](docs/adr/0005-native-presentation.md). Its [upstream README](https://github.com/eythaann/Seelen-UI) documents a required WebView runtime; Tessera independently implements the native presentation without copying its AGPL source or artwork.
+- [Seelen UI](https://seelen.io/apps/seelen-ui/customizable-shell): the functional reference and original geometry baseline for the customizable shell. The user's [Material 3 / end4-pC video](https://www.youtube.com/watch?v=fcK0vem1RtI) sets the current appearance target; both boundaries are recorded in the [presentation decision](docs/adr/0005-native-presentation.md). Seelen's [upstream README](https://github.com/eythaann/Seelen-UI) documents a required WebView runtime; Tessera independently implements native presentation without copying its AGPL source or artwork.
 - [komorebi](https://github.com/LGUG2Z/komorebi): window management on top of DWM, separated commands and panels, and reversible changes.
 - [GlazeWM](https://github.com/glzr-io/glazewm): layouts, window rules, and independent panel integration.
 - [Cairo Desktop](https://github.com/cairoshell/cairoshell): an established alternate Explorer-shell product; independent recovery and conventional desktop behavior inform the product constraints.
