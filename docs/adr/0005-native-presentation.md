@@ -133,10 +133,24 @@ Automated recording/SDK-shape tests never certify actual Power, TSF, player tran
 
 ### Alpha.21 source visual layer (development)
 
-The visual layer is measured against the same pinned Seelen reference, not a
-new theme or framework. It starts from the verified alpha.20 checkpoint in an
-isolated worktree; the separately parked media-display changes are excluded.
-This is development source, not a published alpha.21 or completed 1:1 contract.
+The completed source layers below were measured against the pinned Seelen
+reference. They start from verified alpha.20 in isolated worktrees; separately
+parked media-display changes are excluded. This is development source, not a
+published alpha.21 or completed functional contract.
+
+**User-selected appearance target:** the subsequent explicit reference is
+[Hyprland Material 3 Design / unix.s](https://www.youtube.com/watch?v=fcK0vem1RtI),
+with [end4-pC / illogical-impulse](https://github.com/pctrade/end4-pC) as its
+source-config reference. Seelen remains the functional contract, not the final
+neutral skin. The actual YouTube thumbnail and source-credited 25-second
+[repost footage](https://www.bilibili.com/video/BV1Qb8Y64ErD) were inspected:
+tinted rounded surfaces, floating dock/bar groups, desktop cards and multiple
+color/layout presets. Low-resolution footage does not certify fonts or timings.
+Current end4-pC source was independently pinned at `09f0bc4`; it is not the
+August video revision. The next coherent layer is semantic tinted roles plus
+native bar/dock paint/layout, retaining genuine actions. Dynamic wallpaper
+colors, desktop widgets, exact fonts/motion and Windows blur remain outstanding;
+no Qt/Quickshell/Wayland backend or unreviewed artwork is imported.
 
 - **Toolbar:** 24px wrappers at y=4, 16px glyphs, 4px inner padding/gaps,
   source accent hover/press states, a bounded real user/focused-title group and
@@ -172,6 +186,21 @@ This is development source, not a published alpha.21 or completed 1:1 contract.
   vectors replace Unicode navigation at the source's centered 12.8px/1em size.
   Fixed 28.8×22.4 input slots, navigator-only .98/+1px press, month/year/Today,
   cancellation and native accessibility remain authoritative.
+- **Selector continuation (before the Material 3 restyle):** Keyboard uses
+  source 12.8px/17.92px semibold lines, 51.84px rows, 8px gaps, 24.32px
+  centered secondary footer and observed-active alpha .10. The 300px body
+  absorbs its native focus gutter into source padding; native window rounding
+  only contributes residual flexible-viewport space. Original CC BY keyboard
+  artwork uses native 20×16 containment, not a certified browser viewport.
+  Network's section/band text is secondary and its two real action captions
+  semibold; empty sections hide their whole paint subtree, not only their
+  zero-height rectangle. The remaining divider is explicitly anchored at its
+  section top, never at the default center across an SSID. Bluetooth headings
+  retain secondary/uppercase/.5px
+  tracking and original accessible captions; names use weight 500. Existing
+  typed authority, readonly states, cancellation, RTL and native scrolling
+  remain intact. Network/Bluetooth geometry and absent mutation features are
+  still truthful source differences, not completed full popup parity.
 
 **First shell layer local checkpoint (`dd467ef`):** 1,444 workspace tests/19 suites passed
 (819 UI, one separately gated GL case ignored in the workspace run).
@@ -207,10 +236,43 @@ checks alone are not claimed as independent original-path mask equality.
 All 35 notice assertions and the existing recursive package collector retain
 the full original Ant UED MIT grant and exact adjacent provenance.
 
+**Actual native popup checkpoint (`b876985`):**
+[CI 37987319326](https://github.com/redstone-md/tessera/actions/runs/37987319326)
+passed Linux stable (1,446/19 suites, one ignored) and Windows 1.92/stable
+(each 1,535/19 suites, zero failed/ignored), including strict Clippy/rustdoc.
+Exact-source metadata and complete archived job logs were independently
+verified/recounted; diagnostic packaging was skipped.
+[Native Debug 37987319370](https://github.com/redstone-md/tessera/actions/runs/37987319370)
+passed at that same source in 11m48s: 1,535/19 suites, static-CRT production
+GUI/supervisor, two real UI-thread pulses and owned cleanup. This excludes
+ordinary providers/preferences/hooks and certifies neither newer selector WIP,
+native effects, the user's VM toolbar pixels nor any new release assets.
+
+**Selector continuation local proof:** all 23 focused Keyboard/Network/Bluetooth
+cases passed. The 1,448-test/19-suite workspace gate preceded the final Network
+paint corrections; the complete 823-UI-test gate covered empty-section hiding,
+and all six Network cases were rerun after explicit divider-top positioning.
+One independent test-only native Text module now supplies exact whole-glyph
+comparisons for Bluetooth and the Keyboard footer, rather than assuming a
+single reconstructible alpha mask. Literal colors, complete bitmap restoration,
+input/AX/RTL and source-vector guards remain intact. Final strict Rust 1.92
+all-target UI checks passed on Linux and MSVC. Actual Mesa GL1× (10.26s)/2×
+(16.49s) passed with all 148 complete P6 frames (74/scale, 316,600,556 bytes),
+including the inspected corrected Network image. Original shader/input/glyph
+guards were not weakened. An earlier Power resize frame and a cancelled
+whole-workspace build-lock stall remain harness risks, not production-fix claims.
+All 35 notice assertions and original CC BY grant/attribution/hash collection
+passed. These receipts do not certify the separate Material 3 WIP or Windows.
+
 Seven additional original Tabler vectors retain the existing immutable
 [MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/tabler-icons-6d128ed/NOTICE.txt).
 Three original Ant Design navigation SVGs retain their independently pinned
 [MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/ant-design-icons-74e514e/NOTICE.txt).
+Original Font Awesome 5.x regular keyboard artwork retains its embedded credit,
+full original grant and [immutable CC BY 4.0 attribution/receipts](../../crates/tessera-ui/assets/icons/font-awesome-free-afecf2a/NOTICE.txt).
+The complete published React Icons 5.7.0 FaRegKeyboard path/viewBox was
+independently compared to the unmodified original. MIT package metadata and
+font OFL terms are not used to relicense this SVG.
 No Seelen code/assets, new provider, preference schema or rendering framework
 is imported. Font/native-control skins, exact rights-blocked artwork,
 frameless Settings chrome, complete source modules and Windows backdrop/

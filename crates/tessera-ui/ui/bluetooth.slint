@@ -24,14 +24,17 @@ component DeviceSection inherits VerticalLayout {
     in property <[BluetoothDeviceRow]> rows;
     in property <length> text-height;
     in property <float> text-line-height-factor;
+    // Native 4px row rhythm is retained; it is not a source-geometry match.
     spacing: 4px;
     BluetoothText {
         height: root.text-height;
-        text: root.heading;
+        text: root.heading.to-uppercase();
+        color: SeelenPalette.secondary;
         font-weight: 600;
+        letter-spacing: 0.5px;
         line-height-factor: root.text-line-height-factor;
         accessible-role: text;
-        accessible-label: self.text;
+        accessible-label: root.heading;
     }
     for row in root.rows: Rectangle {
         height: 2 * root.text-height + 12px;
@@ -45,6 +48,7 @@ component DeviceSection inherits VerticalLayout {
             width: max(0px, parent.width - 8px);
             height: root.text-height;
             text: row.name != "" ? row.name : @tr("Unnamed device");
+            font-weight: 500;
             line-height-factor: root.text-line-height-factor;
             overflow: elide;
         }
@@ -85,6 +89,8 @@ export component BluetoothMenu inherits Window {
     callback hide-requested();
     callback bluetooth-event-ready();
     callback preferred-size-changed();
+    // Typography follows the source, not geometry: retain native 350px/max600,
+    // 400px measurement/body caps and the single outer scroll for a later tracer.
     out property <length> popup-content-width: 350px + 2 * PopoverTokens.shadow-margin;
     out property <length> popup-content-height: min(600px,
         root.natural-content-height + 2 * root.viewport-inset) + 2 * PopoverTokens.shadow-margin;

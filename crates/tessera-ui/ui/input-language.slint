@@ -47,19 +47,20 @@ component InputProfileButton inherits TileButton {
         width: root.width;
         height: root.height;
         border-radius: root.radius;
-        background: SeelenPalette.accent.with-alpha(0.15);
+        background: SeelenPalette.accent.with-alpha(0.10);
         accessible-role: none;
     }
-    // Unicode keyboard glyph uses the native font, never reference artwork.
-    InputLanguageText {
+    // Original CC BY FaRegKeyboard, with native containment in the source
+    // 20px slot; generated browser viewport width is not certified.
+    Image {
         x: 12px;
         y: (root.height - self.height) / 2;
         width: 20px;
-        height: 20px;
-        text: "⌨";
-        font-size: 20px;
-        vertical-alignment: center;
-        horizontal-alignment: center;
+        height: 16px;
+        source: @image-url("../assets/icons/font-awesome-free-afecf2a/keyboard.svg");
+        colorize: SeelenPalette.foreground;
+        image-fit: contain;
+        accessible-role: none;
     }
     InputLanguageText {
         x: 40px; // Published spacing-s + 20px icon slot + spacing-xs.
@@ -67,7 +68,6 @@ component InputProfileButton inherits TileButton {
         width: max(0px, root.width - self.x - 12px);
         height: root.language-height;
         text: root.language-label;
-        font-size: PopoverTokens.font-size / 0.8;
         font-weight: 600;
         line-height-factor: root.text-line-height-factor;
         overflow: elide;
@@ -118,31 +118,45 @@ export component InputLanguageMenu inherits Window {
     changed popup-content-height => { root.preferred-size-changed(); }
 
     property <length> description-height: max(1px, PopoverTokens.font-size * PopoverTokens.line-height);
-    property <length> language-height: root.description-height / 0.8;
+    property <length> language-height: root.description-height;
     property <length> row-height: 16px + root.language-height + root.description-height;
-    property <length> header-height: 16px + root.language-height;
-    property <length> footer-height: 16px + root.description-height + 2 * FocusTokens.outer-margin;
+    property <length> row-gap: 8px;
+    property <length> row-stride: root.row-height + root.row-gap;
+    property <length> rows-extent: root.rows.length > 0
+        ? root.rows.length * root.row-stride - root.row-gap : 0px;
+    // Absorb the native focus gutter into source spacing, rather than adding
+    // it to every source gap. Larger custom focus reserves remain unclipped.
+    property <length> inset-remainder: max(0px, 8px - FocusTokens.outer-margin);
+    property <length> footer-button-height: root.description-height + PopoverTokens.font-size * 0.5;
+    property <length> header-height: 8px + root.description-height + root.inset-remainder;
+    property <length> footer-height: root.inset-remainder + root.footer-button-height
+        + max(8px, FocusTokens.outer-margin);
+    property <length> feedback-top: root.rows-extent + (root.rows.length > 0 ? root.row-gap : 0px);
+    property <length> retry-height: 16px + root.description-height;
+    pure function retry-top(feedback-height: length) -> length {
+        return root.feedback != "" ? root.feedback-top + feedback-height + root.row-gap
+            : root.rows-extent + (root.rows.length > 0 ? root.row-gap : 0px);
+    }
+    pure function list-extent(feedback-height: length) -> length {
+        return 2 * FocusTokens.outer-margin + (root.retry-enabled
+            ? root.retry-top(feedback-height) + root.retry-height
+            : root.feedback != "" ? root.feedback-top + feedback-height : root.rows-extent);
+    }
     property <string> feedback: root.action-pending ? @tr("Applying keyboard request…")
         : root.notice != "" ? root.notice
         : root.loading ? @tr("Loading keyboard profiles…")
         : root.observed && root.rows.length == 0 ? @tr("No keyboard profiles are enabled.")
         : root.observed && root.unknown-active ? @tr("Active keyboard profile unavailable.") : "";
-    property <length> natural-list-height: 2 * FocusTokens.outer-margin
-        + root.rows.length * root.row-height
-        + (root.feedback != "" ? 16px + feedback-metrics.preferred-height : 0px)
-        + (root.retry-enabled ? 16px + root.description-height : 0px);
-    property <length> unreserved-list-height: 2 * FocusTokens.outer-margin
-        + root.rows.length * root.row-height
-        + (root.feedback != "" ? 16px + unreserved-feedback-metrics.preferred-height : 0px)
-        + (root.retry-enabled ? 16px + root.description-height : 0px);
-    property <length> measure-width: max(1px, min(root.width > 0px ? root.width
-        : root.popup-content-width, root.popup-content-width)
-        - 2 * PopoverTokens.shadow-margin - 2 * FocusTokens.outer-margin - 24px);
+    property <length> natural-list-height: root.list-extent(feedback-metrics.preferred-height);
+    property <length> unreserved-list-height: root.list-extent(unreserved-feedback-metrics.preferred-height);
+    property <length> viewport-width: max(0px, body.content-width - 2 * root.inset-remainder);
+    property <length> measure-width: max(1px,
+        root.viewport-width - 2 * FocusTokens.outer-margin - 24px);
     property <length> actual-footer-height: min(root.footer-height, body.content-height);
     property <length> actual-header-height: min(root.header-height,
         max(0px, body.content-height - root.actual-footer-height));
     property <length> list-width: Slint1181FluentNativeGridMetrics.source-width(
-        body.content-width, root.unreserved-list-height, scroll.visible-height, ScrollBarPolicy.as-needed);
+        root.viewport-width, root.unreserved-list-height, scroll.visible-height, ScrollBarPolicy.as-needed);
 
     unreserved-feedback-metrics := InputLanguageText {
         width: root.measure-width;
@@ -153,7 +167,7 @@ export component InputLanguageMenu inherits Window {
         line-height-factor: body.text-line-height-factor;
     }
     feedback-metrics := InputLanguageText {
-        width: max(1px, root.measure-width - (body.content-width - root.list-width));
+        width: max(1px, root.measure-width - (root.viewport-width - root.list-width));
         height: 0px;
         opacity: 0;
         text: root.feedback;
@@ -196,19 +210,20 @@ export component InputLanguageMenu inherits Window {
             width: min(root.width, root.popup-content-width);
             height: root.height;
             InputLanguageText {
-                x: 12px;
+                x: 8px;
                 y: 8px;
-                width: max(0px, body.content-width - 24px);
-                height: max(0px, root.actual-header-height - 16px);
+                width: max(0px, body.content-width - 16px);
+                height: max(0px, min(root.description-height, root.actual-header-height - 8px));
                 text: @tr("Keyboard layout");
-                font-size: PopoverTokens.font-size / 0.8;
                 font-weight: 600;
+                line-height-factor: body.text-line-height-factor;
                 overflow: elide;
                 accessible-role: text;
             }
             scroll := NativeScrollView {
+                x: root.inset-remainder;
                 y: root.actual-header-height;
-                width: body.content-width;
+                width: root.viewport-width;
                 height: max(0px, body.content-height - root.actual-header-height - root.actual-footer-height);
                 horizontal-scrollbar-policy: always-off;
                 vertical-scrollbar-policy: as-needed;
@@ -216,7 +231,7 @@ export component InputLanguageMenu inherits Window {
                 content-height: root.natural-list-height;
                 for row[index] in root.rows: InputProfileButton {
                     x: FocusTokens.outer-margin;
-                    y: FocusTokens.outer-margin + index * root.row-height;
+                    y: FocusTokens.outer-margin + index * root.row-stride;
                     width: max(0px, scroll.content-width - 2 * FocusTokens.outer-margin);
                     height: root.row-height;
                     profile-row: row;
@@ -229,7 +244,7 @@ export component InputLanguageMenu inherits Window {
                 }
                 if root.feedback != "": InputLanguageText {
                     x: FocusTokens.outer-margin + 12px;
-                    y: FocusTokens.outer-margin + root.rows.length * root.row-height + 8px;
+                    y: FocusTokens.outer-margin + root.feedback-top;
                     width: max(0px, scroll.content-width - 2 * self.x);
                     height: feedback-metrics.preferred-height;
                     text: root.feedback;
@@ -240,10 +255,9 @@ export component InputLanguageMenu inherits Window {
                 }
                 if root.retry-enabled: retry := TileButton {
                     x: FocusTokens.outer-margin;
-                    y: FocusTokens.outer-margin + root.rows.length * root.row-height
-                        + (root.feedback != "" ? 16px + feedback-metrics.preferred-height : 0px);
+                    y: FocusTokens.outer-margin + root.retry-top(feedback-metrics.preferred-height);
                     width: max(0px, scroll.content-width - 2 * FocusTokens.outer-margin);
-                    height: 16px + root.description-height;
+                    height: root.retry-height;
                     radius: 6px;
                     filled: false;
                     allow-return-repeat: false;
@@ -258,18 +272,23 @@ export component InputLanguageMenu inherits Window {
                         height: root.description-height;
                         text: @tr("Retry");
                         font-weight: 600;
+                        line-height-factor: body.text-line-height-factor;
                         overflow: elide;
                     }
                 }
             }
-            // This genuine Settings action never scrolls away with installed profiles.
+            // Native accessibility accommodation: Settings stays outside the
+            // scroll viewport; the source scrolls the complete popup.
             footer := TileButton {
                 in property <string> capability: root.settings-key;
                 activation-key: root.settings-key;
-                x: FocusTokens.outer-margin;
-                y: max(0px, body.content-height - root.actual-footer-height) + FocusTokens.outer-margin;
-                width: max(0px, body.content-width - 2 * FocusTokens.outer-margin);
-                height: max(0px, root.actual-footer-height - 2 * FocusTokens.outer-margin);
+                x: 8px;
+                y: max(0px, body.content-height - root.actual-footer-height)
+                    + min(root.inset-remainder, root.actual-footer-height);
+                width: max(0px, body.content-width - 16px);
+                height: max(0px, min(root.footer-button-height,
+                    root.actual-footer-height - root.inset-remainder
+                    - max(8px, FocusTokens.outer-margin)));
                 radius: 6px;
                 filled: false;
                 allow-return-repeat: false;
@@ -277,12 +296,15 @@ export component InputLanguageMenu inherits Window {
                 accessible-text: @tr("More keyboard settings");
                 clicked => { root.open-settings(self.capability); }
                 InputLanguageText {
-                    x: 12px;
-                    y: 8px;
-                    width: max(0px, parent.width - 24px);
-                    height: max(0px, parent.height - 16px);
+                    x: PopoverTokens.font-size * 0.5;
+                    y: PopoverTokens.font-size * 0.25;
+                    width: max(0px, parent.width - PopoverTokens.font-size);
+                    height: max(0px, parent.height - PopoverTokens.font-size * 0.5);
                     text: @tr("More keyboard settings");
                     font-weight: 600;
+                    color: SeelenPalette.secondary;
+                    horizontal-alignment: center;
+                    line-height-factor: body.text-line-height-factor;
                     overflow: elide;
                 }
             }

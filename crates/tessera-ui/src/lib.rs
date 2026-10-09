@@ -38,6 +38,8 @@ pub(crate) mod input_language;
 mod input_language_render_tests;
 pub(crate) mod launcher;
 pub(crate) mod motion;
+#[cfg(test)]
+mod native_typography_oracle;
 pub(crate) mod network_menu;
 #[cfg(test)]
 mod network_menu_render_tests;

@@ -230,10 +230,13 @@ The [tester guide](docs/alpha-testing.md) targets published alpha.20 with eight 
 
 **Alpha.21 visual development:** source-backed toolbar/dock geometry and paint,
 native Settings shell, and launcher search/footer/empty states are in main.
-That shell checkpoint passed the actual Linux/Windows CI and native Debug
-GUI two-pulse/owned-cleanup gate. User avatar/Accounts/folder paint and original
-MIT Calendar vectors form the next locally verified popup layer. Existing native
-input, providers and explicit Save remain unchanged. See the
+Both shell and User/Calendar checkpoints passed actual Linux/Windows CI and
+native Debug GUI two-pulse/owned-cleanup gates. A separate Keyboard/Network/
+Bluetooth visual continuation retains genuine native input/actions. The user's
+new [Material 3 / end4-pC video reference](https://www.youtube.com/watch?v=fcK0vem1RtI)
+sets the next appearance direction; Seelen remains the functional contract.
+The new tinted bar/dock layer is separate WIP, not certified by older receipts.
+Providers, persisted preferences and explicit Save remain unchanged. See the
 [exact source/gate boundaries and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
 this is not a published release, complete 1:1 parity or a fix claim for the VM toolbar offset.
 

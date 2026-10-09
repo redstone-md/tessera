@@ -52,6 +52,7 @@ component NetworkReadRow inherits Rectangle {
                     height: parent.height;
                     text: root.net-row.bands;
                     font-weight: 600;
+                    color: SeelenPalette.secondary;
                     vertical-alignment: center;
                     overflow: elide;
                 }
@@ -74,8 +75,11 @@ component NetworkSection inherits Rectangle {
     out property <length> natural-height: root.rows.length > 0
         ? NetworkMetrics.text-height + 2 * NetworkMetrics.xs + min(300px, root.rows.length * NetworkMetrics.row-height) : 0px;
     height: root.natural-height;
+    visible: root.rows.length > 0;
     accessible-role: none;
-    Rectangle {
+    divider := Rectangle {
+        x: 0px;
+        y: 0px;
         width: root.width;
         height: 1px;
         background: SeelenPalette.muted;
@@ -88,6 +92,7 @@ component NetworkSection inherits Rectangle {
         height: NetworkMetrics.text-height;
         text: root.caption;
         font-weight: 600;
+        color: SeelenPalette.secondary;
         letter-spacing: 0.5px;
         overflow: elide;
         line-height-factor: root.text-line-height-factor;
@@ -121,6 +126,8 @@ component NetworkAction inherits TileButton {
         width: max(0px, root.width - 2 * NetworkMetrics.xs);
         height: root.height;
         text: root.label;
+        // Source footer weight; Refresh shares it as a native cache-recovery action, not Scan.
+        font-weight: 600;
         vertical-alignment: center;
         overflow: elide;
     }
@@ -177,6 +184,7 @@ export component NetworkMenu inherits Window {
     settings-metrics := NetworkText {
         width: 0px; height: 0px; opacity: 0;
         text: @tr("More Network Settings");
+        font-weight: 600;
     }
     feedback-metrics := NetworkText {
         // Conservatively reserve Fluent's audited scrollbar input gutter for
