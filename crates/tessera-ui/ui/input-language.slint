@@ -1,0 +1,291 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView as NativeScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
+
+export struct InputProfileRow {
+    key: string,
+    language-name: string,
+    layout-name: string,
+    active: bool,
+}
+
+component InputLanguageText inherits Text {
+    font-family: PopoverTokens.font-family;
+    font-size: PopoverTokens.font-size;
+    color: SeelenPalette.foreground;
+    accessible-role: none;
+}
+
+component InputProfileButton inherits TileButton {
+    in property <InputProfileRow> profile-row;
+    activation-key: root.profile-row.key;
+    in property <length> language-height;
+    in property <length> description-height;
+    in property <float> text-line-height-factor;
+    // Missing native metadata is explicitly unavailable, never a guessed locale.
+    property <string> language-label: root.profile-row.language-name != ""
+        ? root.profile-row.language-name : @tr("Language name unavailable");
+    property <string> profile-label: root.profile-row.layout-name != ""
+        ? root.profile-row.layout-name : @tr("Keyboard profile name unavailable");
+    radius: 6px; // Published radius-s, as used by the existing native list tiles.
+    filled: false;
+    allow-return-repeat: false;
+    selected: false; // Focus ring is not an observation of the active profile.
+    opacity: 1;
+    accessible-text: root.language-label + " - " + root.profile-label;
+    accessible-description: root.profile-row.active ? @tr("Active keyboard profile") : "";
+    accessible-item-selectable: true;
+    accessible-item-selected: root.profile-row.active;
+    background: root.pressed ? SeelenPalette.pressed
+        : root.hovered && root.enabled ? SeelenPalette.hover : transparent;
+    if root.profile-row.active: Rectangle {
+        width: root.width;
+        height: root.height;
+        border-radius: root.radius;
+        background: SeelenPalette.accent.with-alpha(0.15);
+        accessible-role: none;
+    }
+    // Unicode keyboard glyph uses the native font, never reference artwork.
+    InputLanguageText {
+        x: 12px;
+        y: (root.height - self.height) / 2;
+        width: 20px;
+        height: 20px;
+        text: "⌨";
+        font-size: 20px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+    InputLanguageText {
+        x: 40px; // Published spacing-s + 20px icon slot + spacing-xs.
+        y: 8px;
+        width: max(0px, root.width - self.x - 12px);
+        height: root.language-height;
+        text: root.language-label;
+        font-size: PopoverTokens.font-size / 0.8;
+        font-weight: 600;
+        line-height-factor: root.text-line-height-factor;
+        overflow: elide;
+    }
+    InputLanguageText {
+        x: 40px;
+        y: 8px + root.language-height;
+        width: max(0px, root.width - self.x - 12px);
+        height: root.description-height;
+        text: root.profile-label;
+        font-weight: 600;
+        color: SeelenPalette.secondary;
+        line-height-factor: root.text-line-height-factor;
+        overflow: elide;
+    }
+}
+
+// Presentation has no native identities, handles, indexes or desktop effects.
+export component InputLanguageMenu inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera keyboard selector";
+    min-width: 1px;
+    min-height: 1px;
+    in property <[InputProfileRow]> rows;
+    in property <string> settings-key;
+    in property <bool> loading;
+    in property <bool> action-pending;
+    in property <bool> observed;
+    in property <bool> unknown-active;
+    in property <string> notice;
+    in property <bool> retry-enabled;
+    callback select-profile(string);
+    callback open-settings(string);
+    callback retry-requested();
+    callback hide-requested();
+    callback input-event-ready();
+    callback preferred-size-changed();
+
+    out property <length> popup-content-width: 300px + 2 * PopoverTokens.shadow-margin;
+    out property <length> popup-content-height: min(700px,
+        root.header-height + root.natural-list-height + root.footer-height)
+        + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.popup-content-width;
+    preferred-height: root.popup-content-height;
+    changed popup-content-width => { root.preferred-size-changed(); }
+    changed popup-content-height => { root.preferred-size-changed(); }
+
+    property <length> description-height: max(1px, PopoverTokens.font-size * PopoverTokens.line-height);
+    property <length> language-height: root.description-height / 0.8;
+    property <length> row-height: 16px + root.language-height + root.description-height;
+    property <length> header-height: 16px + root.language-height;
+    property <length> footer-height: 16px + root.description-height + 2 * FocusTokens.outer-margin;
+    property <string> feedback: root.action-pending ? @tr("Applying keyboard request…")
+        : root.notice != "" ? root.notice
+        : root.loading ? @tr("Loading keyboard profiles…")
+        : root.observed && root.rows.length == 0 ? @tr("No keyboard profiles are enabled.")
+        : root.observed && root.unknown-active ? @tr("Active keyboard profile unavailable.") : "";
+    property <length> natural-list-height: 2 * FocusTokens.outer-margin
+        + root.rows.length * root.row-height
+        + (root.feedback != "" ? 16px + feedback-metrics.preferred-height : 0px)
+        + (root.retry-enabled ? 16px + root.description-height : 0px);
+    property <length> unreserved-list-height: 2 * FocusTokens.outer-margin
+        + root.rows.length * root.row-height
+        + (root.feedback != "" ? 16px + unreserved-feedback-metrics.preferred-height : 0px)
+        + (root.retry-enabled ? 16px + root.description-height : 0px);
+    property <length> measure-width: max(1px, min(root.width > 0px ? root.width
+        : root.popup-content-width, root.popup-content-width)
+        - 2 * PopoverTokens.shadow-margin - 2 * FocusTokens.outer-margin - 24px);
+    property <length> actual-footer-height: min(root.footer-height, body.content-height);
+    property <length> actual-header-height: min(root.header-height,
+        max(0px, body.content-height - root.actual-footer-height));
+    property <length> list-width: Slint1181FluentNativeGridMetrics.source-width(
+        body.content-width, root.unreserved-list-height, scroll.visible-height, ScrollBarPolicy.as-needed);
+
+    unreserved-feedback-metrics := InputLanguageText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.feedback;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    feedback-metrics := InputLanguageText {
+        width: max(1px, root.measure-width - (body.content-width - root.list-width));
+        height: 0px;
+        opacity: 0;
+        text: root.feedback;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    function reveal-focused(top: length, item-height: length) {
+        let visible-top = -scroll.content-y;
+        let desired-top = max(0px, top - FocusTokens.outer-margin);
+        let desired-bottom = top + item-height + FocusTokens.outer-margin;
+        if desired-top < visible-top {
+            scroll.content-y = -desired-top;
+        } else if desired-bottom > visible-top + scroll.visible-height {
+            scroll.content-y = -max(0px, min(desired-bottom - scroll.visible-height,
+                scroll.content-height - scroll.visible-height));
+        }
+    }
+    public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
+    // Hide cancels input immediately; projection keys guard rebinds without
+    // disrupting ordinary keyboard navigation within the open selector.
+    public function cancel-input() {
+        footer.cancel-input();
+        escape-scope.focus();
+    }
+    public function focus-content() {
+        scroll.content-y = 0px;
+        escape-scope.focus();
+    }
+    forward-focus: escape-scope;
+    escape-scope := FocusScope {
+        width: root.width;
+        height: root.height;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.hide-requested(); return accept; }
+            return reject;
+        }
+        body := PopoverBody {
+            x: max(0px, (root.width - self.width) / 2);
+            width: min(root.width, root.popup-content-width);
+            height: root.height;
+            InputLanguageText {
+                x: 12px;
+                y: 8px;
+                width: max(0px, body.content-width - 24px);
+                height: max(0px, root.actual-header-height - 16px);
+                text: @tr("Keyboard layout");
+                font-size: PopoverTokens.font-size / 0.8;
+                font-weight: 600;
+                overflow: elide;
+                accessible-role: text;
+            }
+            scroll := NativeScrollView {
+                y: root.actual-header-height;
+                width: body.content-width;
+                height: max(0px, body.content-height - root.actual-header-height - root.actual-footer-height);
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                content-width: root.list-width;
+                content-height: root.natural-list-height;
+                for row[index] in root.rows: InputProfileButton {
+                    x: FocusTokens.outer-margin;
+                    y: FocusTokens.outer-margin + index * root.row-height;
+                    width: max(0px, scroll.content-width - 2 * FocusTokens.outer-margin);
+                    height: root.row-height;
+                    profile-row: row;
+                    language-height: root.language-height;
+                    description-height: root.description-height;
+                    text-line-height-factor: body.text-line-height-factor;
+                    enabled: !root.loading && !root.action-pending && row.key != "";
+                    clicked => { root.select-profile(row.key); }
+                    focus-acquired => { root.reveal-focused(self.y, self.height); }
+                }
+                if root.feedback != "": InputLanguageText {
+                    x: FocusTokens.outer-margin + 12px;
+                    y: FocusTokens.outer-margin + root.rows.length * root.row-height + 8px;
+                    width: max(0px, scroll.content-width - 2 * self.x);
+                    height: feedback-metrics.preferred-height;
+                    text: root.feedback;
+                    color: SeelenPalette.secondary;
+                    wrap: word-wrap;
+                    line-height-factor: body.text-line-height-factor;
+                    accessible-role: text;
+                }
+                if root.retry-enabled: retry := TileButton {
+                    x: FocusTokens.outer-margin;
+                    y: FocusTokens.outer-margin + root.rows.length * root.row-height
+                        + (root.feedback != "" ? 16px + feedback-metrics.preferred-height : 0px);
+                    width: max(0px, scroll.content-width - 2 * FocusTokens.outer-margin);
+                    height: 16px + root.description-height;
+                    radius: 6px;
+                    filled: false;
+                    allow-return-repeat: false;
+                    enabled: !root.loading && !root.action-pending;
+                    accessible-text: @tr("Retry keyboard profiles");
+                    clicked => { root.retry-requested(); }
+                    focus-acquired => { root.reveal-focused(self.y, self.height); }
+                    InputLanguageText {
+                        x: 12px;
+                        y: 8px;
+                        width: max(0px, parent.width - 24px);
+                        height: root.description-height;
+                        text: @tr("Retry");
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+                }
+            }
+            // This genuine Settings action never scrolls away with installed profiles.
+            footer := TileButton {
+                in property <string> capability: root.settings-key;
+                activation-key: root.settings-key;
+                x: FocusTokens.outer-margin;
+                y: max(0px, body.content-height - root.actual-footer-height) + FocusTokens.outer-margin;
+                width: max(0px, body.content-width - 2 * FocusTokens.outer-margin);
+                height: max(0px, root.actual-footer-height - 2 * FocusTokens.outer-margin);
+                radius: 6px;
+                filled: false;
+                allow-return-repeat: false;
+                enabled: !root.action-pending && self.capability != "";
+                accessible-text: @tr("More keyboard settings");
+                clicked => { root.open-settings(self.capability); }
+                InputLanguageText {
+                    x: 12px;
+                    y: 8px;
+                    width: max(0px, parent.width - 24px);
+                    height: max(0px, parent.height - 16px);
+                    text: @tr("More keyboard settings");
+                    font-weight: 600;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}

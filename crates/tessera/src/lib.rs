@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(windows, test))]
+mod diagnostic;
 mod panel;
 #[cfg(any(windows, test))]
 mod provider;

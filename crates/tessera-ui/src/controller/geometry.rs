@@ -9,7 +9,7 @@ use crate::DockContext;
 #[derive(Default)]
 pub(super) struct GeometryUpdates {
     running: Cell<bool>,
-    pending: Cell<Option<DockContext>>,
+    pending: Cell<Option<Option<DockContext>>>,
 }
 
 struct GeometryScope<'a>(&'a GeometryUpdates);
@@ -24,10 +24,7 @@ impl PanelController {
     /// Showing a Slint window flushes pending property-change callbacks.
     /// A nested request records the latest context instead of borrowing native
     /// leases again. The outer pass applies it before reporting readiness.
-    pub(super) fn apply_geometry(&self, context: Option<DockContext>) -> Result<bool, String> {
-        let Some(mut context) = context else {
-            return Ok(false);
-        };
+    pub(super) fn apply_geometry(&self, mut context: Option<DockContext>) -> Result<bool, String> {
         if self.geometry.running.replace(true) {
             self.geometry.pending.set(Some(context));
             return Ok(false);
@@ -35,7 +32,13 @@ impl PanelController {
         let _scope = GeometryScope(&self.geometry);
         loop {
             self.geometry.pending.set(None);
-            let placed = self.place_geometry(context)?;
+            let placed = match context {
+                Some(context) => self.place_geometry(context)?,
+                None => {
+                    self.retire_visibility_geometry()?;
+                    false
+                }
+            };
             match self.geometry.pending.take() {
                 Some(next) => context = next,
                 None => return Ok(placed),

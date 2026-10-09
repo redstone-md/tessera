@@ -5,20 +5,39 @@
 
 use std::fmt;
 
-/// Only genuinely implemented native requests are exposed.
+/// Explicit update-installation intent, captured before admitting a request.
+///
+/// Omitting the explicit flag is not a guarantee that Windows installs nothing.
+/// Requesting installation is not proof that updates exist or later complete.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PowerUpdatePolicy {
+    OmitExplicitInstallation,
+    RequestInstallation,
+}
+
+/// Closed native requests; callers cannot supply force, reason or target flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PowerAction {
     LockSession,
+    LogOut,
+    PowerOff { updates: PowerUpdatePolicy },
+    Reboot { updates: PowerUpdatePolicy },
+    Suspend,
+    Hibernate,
 }
 
-/// Native initiation receipt, not proof that the session is locked.
+/// Native initiation receipt, not proof of eventual OS state or update completion.
 ///
-/// `LockWorkStation` returns asynchronously. This marker makes no claim about
-/// the eventual OS state, session notifications, or the lifetime of the UI.
+/// Lock, logoff and shutdown can be asynchronous. Suspend/hibernate may block
+/// until resume. This marker makes no claim about observed session/power state,
+/// installed updates, or the lifetime of the UI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PowerRequestAccepted;
 
 /// Safe fixed diagnostics; native codes are preserved without provider text.
+///
+/// Any completion error can follow native initiation (for example, checked
+/// cleanup failed). It does not prove the request was uninitiated: never replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PowerError {
     Unsupported,
@@ -36,11 +55,13 @@ impl fmt::Display for PowerError {
             }
             Self::Busy => formatter.write_str("A power request is already in progress"),
             Self::Unavailable => formatter.write_str("The power request is unavailable"),
-            Self::AccessDenied => formatter.write_str("The power request was denied"),
+            Self::AccessDenied => {
+                formatter.write_str("The power request or its cleanup was denied")
+            }
             Self::Native { code } => {
                 write!(
                     formatter,
-                    "The power request failed (native code 0x{code:08x})"
+                    "The power request or its cleanup failed (native code 0x{code:08x})"
                 )
             }
         }
@@ -55,15 +76,20 @@ pub type PowerCompletion =
 /// Prompt admission of one explicit request, with no accepted queue or replay.
 ///
 /// `Ok` accepts exactly one completion, possibly inline/reentrant; immediate
-/// `Err` accepts zero callbacks. Native resources and drivers are retired (or
-/// cleanup attempted), and admission is released, before calling the consumer.
-/// The completion may submit another request. A successful completion reports
-/// only native initiation, never an observed locked state.
+/// `Err` accepts zero callbacks. Native owners retire before admission releases
+/// and the consumer runs. The completion may submit another request. Success
+/// reports only initiation, never observed OS state or completed installation.
 ///
 /// Accepted work outlives host/UI drops. There is no GUI-thread join, deadline,
-/// native cancellation, or completion-across-process-exit guarantee. Native
-/// cleanup can fail or stall. Panic containment requires unwinding and cannot
-/// recover from aborts, double panics during cleanup, or process termination.
+/// native cancellation, queue, retry, or completion-across-process-exit promise.
+/// Suspend/hibernate and native cleanup can stall. The Windows privileged child
+/// must actually terminate before consumer delivery, including if reversion
+/// fails. An unexpected failure to prove child retirement quarantines its
+/// background owner: admission remains busy and no completion is delivered.
+///
+/// Panic containment requires unwinding; aborts, TLS/DLL teardown failures,
+/// double panics, global panic hooks and process termination are not recoverable
+/// guarantees. A failed token close may leak its handle until process exit.
 pub trait PowerHost: Send + Sync + 'static {
     fn perform(&self, action: PowerAction, completion: PowerCompletion) -> Result<(), PowerError>;
 }
@@ -80,6 +106,7 @@ mod tests {
         fn send_sync<T: Send + Sync>() {}
         fn error<T: std::error::Error>() {}
         copy_eq::<PowerAction>();
+        copy_eq::<PowerUpdatePolicy>();
         copy_eq::<PowerRequestAccepted>();
         copy_eq::<PowerError>();
         send::<PowerCompletion>();
@@ -87,6 +114,27 @@ mod tests {
         error::<PowerError>();
         assert_eq!(PowerAction::LockSession, PowerAction::LockSession);
         assert_eq!(std::mem::size_of::<PowerRequestAccepted>(), 0);
+        let actions = [
+            PowerAction::LockSession,
+            PowerAction::LogOut,
+            PowerAction::PowerOff {
+                updates: PowerUpdatePolicy::OmitExplicitInstallation,
+            },
+            PowerAction::Reboot {
+                updates: PowerUpdatePolicy::RequestInstallation,
+            },
+            PowerAction::Suspend,
+            PowerAction::Hibernate,
+        ];
+        assert_eq!(actions.len(), 6);
+        assert_ne!(
+            PowerAction::PowerOff {
+                updates: PowerUpdatePolicy::OmitExplicitInstallation,
+            },
+            PowerAction::PowerOff {
+                updates: PowerUpdatePolicy::RequestInstallation,
+            },
+        );
         assert_eq!(format!("{PowerRequestAccepted:?}"), "PowerRequestAccepted");
     }
 
@@ -99,14 +147,17 @@ mod tests {
             ),
             (PowerError::Busy, "A power request is already in progress"),
             (PowerError::Unavailable, "The power request is unavailable"),
-            (PowerError::AccessDenied, "The power request was denied"),
+            (
+                PowerError::AccessDenied,
+                "The power request or its cleanup was denied",
+            ),
             (
                 PowerError::Native { code: 0 },
-                "The power request failed (native code 0x00000000)",
+                "The power request or its cleanup failed (native code 0x00000000)",
             ),
             (
                 PowerError::Native { code: u32::MAX },
-                "The power request failed (native code 0xffffffff)",
+                "The power request or its cleanup failed (native code 0xffffffff)",
             ),
         ];
         for (error, expected) in cases {

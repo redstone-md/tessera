@@ -16,6 +16,8 @@ pub(super) type PowerPopups = TransientCache<PowerMenuController>;
 /// Close root admission before the actor's scope drops callback-capable leases.
 pub(super) struct PowerAdmissionScope {
     closed: Rc<Cell<bool>>,
+    launcher: Option<slint::Weak<crate::generated::Launcher>>,
+    _watch: TransientScope<super::power_display::PowerDisplayWatch>,
     _actor: TransientScope<PowerMenuController>,
 }
 
@@ -23,6 +25,11 @@ impl PowerAdmissionScope {
     pub(super) fn new(controller: &PanelController) -> Self {
         Self {
             closed: Rc::clone(&controller.power_admission_closed),
+            launcher: controller.launcher.clone(),
+            _watch: TransientScope::new(
+                Rc::clone(&controller.power_display),
+                super::power_display::PowerDisplayWatch::close,
+            ),
             _actor: TransientScope::new(
                 Rc::clone(&controller.power_menu),
                 PowerMenuController::close,
@@ -34,6 +41,9 @@ impl PowerAdmissionScope {
 impl Drop for PowerAdmissionScope {
     fn drop(&mut self) {
         self.closed.set(true);
+        if let Some(launcher) = self.launcher.as_ref().and_then(slint::Weak::upgrade) {
+            launcher.invoke_cancel_input();
+        }
     }
 }
 
@@ -45,6 +55,19 @@ impl PanelController {
             if let Some(power) = power {
                 if controller.power_admission_closed.get() {
                     power.close();
+                    return;
+                }
+                let operation = controller.popup_operation.borrow().clone();
+                if power.is_visible() {
+                    controller.start_power_display_watch(&power, false);
+                }
+                let cached = controller.power_menu.borrow().clone();
+                if controller.power_admission_closed.get()
+                    || !Rc::ptr_eq(&operation, &controller.popup_operation.borrow())
+                    || cached
+                        .as_ref()
+                        .is_none_or(|cached| !Rc::ptr_eq(cached, &power))
+                {
                     return;
                 }
                 controller.popup_presentation_finished(
@@ -60,7 +83,9 @@ impl PanelController {
                 return;
             }
             if accepted {
-                controller.report_message("Lock request accepted; session state is not observed.");
+                controller.report_message(
+                    "Power request accepted; OS state and update completion are not observed.",
+                );
             } else {
                 controller.report_message(&format!(
                     "Power: {}",
@@ -68,6 +93,8 @@ impl PanelController {
                 ));
             }
         });
+        let controller = self.clone();
+        panel.on_power_display_event_ready(move || controller.power_display_event_ready());
     }
 
     pub(super) fn open_power_menu(&self) {
@@ -149,9 +176,17 @@ impl PanelController {
         if !current() {
             return;
         }
+        // Reuse the retained genuine account observation, not another desktop read.
+        power.set_user_name(&launcher.get_user_name());
+        if !current() {
+            return;
+        }
         // Scheduled read is not visible: coordinate only after real show.
-        if let Err(error) = power.show(theme) {
-            self.report_message(&format!("Power menu: {error}"));
+        match power.show(theme) {
+            Ok(true) if current() => self.start_power_display_watch(&power, true),
+            Ok(_) => {}
+            Err(error) if current() => self.report_message(&format!("Power menu: {error}")),
+            Err(_) => {}
         }
     }
 

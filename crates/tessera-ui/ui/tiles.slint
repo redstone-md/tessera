@@ -28,18 +28,53 @@ export component TileButton inherits Rectangle {
     in property <bool> interactive: true;
     // Non-idempotent actions may require a fresh Return press for each effect.
     in property <bool> allow-return-repeat: true;
+    // Opaque actor-issued authority, never a caption. Existing tiles need no key.
+    in property <string> activation-key: "";
     // Semantic selection is independent of real focus and input modality.
     in property <bool> selected: false;
     // Optional metadata only: the stable parent DragArea owns recognition.
     in property <bool> report-pointer-metadata: false;
     callback pointer-metadata(PointerEvent, TileBounds, Point);
     out property <bool> hovered: root.interactive && touch.has-hover;
-    out property <bool> pressed: root.interactive && root.enabled && (touch.pressed || root.space-armed);
+    out property <bool> pressed: root.interactive && root.enabled
+        && ((touch.pressed && root.left-armed && root.left-key == root.activation-key)
+            || (root.space-armed && root.space-key == root.activation-key));
+    // Actual native focus, independent of keyboard-only outline modality.
+    out property <bool> has-focus: root.interactive && keyboard.has-focus;
     out property <bool> focus-visible: root.interactive && root.keyboard-focus && keyboard.has-focus && root.enabled;
+    // Stock command surfaces may activate without changing the current focus.
+    in property <bool> focus-on-pointer: true;
     in property <length> radius;
     in property <bool> show-focus-ring: true;
     property <bool> keyboard-focus;
     property <bool> space-armed;
+    property <string> space-key;
+    property <bool> return-armed;
+    property <string> return-key;
+    property <bool> left-armed;
+    property <string> left-key;
+    property <bool> right-armed;
+    property <string> right-key;
+    property <bool> middle-armed;
+    property <string> middle-key;
+    // Call synchronously before hiding or rebinding a persistent source.
+    // Reactive changed handlers may coalesce a transient false -> true.
+    public function cancel-input() {
+        root.space-armed = false;
+        root.return-armed = false;
+        root.left-armed = false;
+        root.right-armed = false;
+        root.middle-armed = false;
+        root.space-key = "";
+        root.return-key = "";
+        root.left-key = "";
+        root.right-key = "";
+        root.middle-key = "";
+    }
+    function pointer-inside() -> bool {
+        return touch.mouse-x >= 0px && touch.mouse-y >= 0px
+            && touch.mouse-x < root.width && touch.mouse-y < root.height;
+    }
     /// false renders no idle background (transparent until hover/press).
     in property <bool> filled: true;
     public function focus-for-keyboard() {
@@ -72,8 +107,11 @@ export component TileButton inherits Rectangle {
     }
     function activate() {
         if root.interactive && root.enabled {
+            let key = root.activation-key;
             root.dismiss-tooltip(false);
-            root.clicked();
+            if root.interactive && root.enabled && root.activation-key == key {
+                root.clicked();
+            }
         }
     }
     changed hovered => {
@@ -84,22 +122,16 @@ export component TileButton inherits Rectangle {
         }
     }
     changed tooltip-text => { if root.hovered { root.update-tooltip(); } }
-    property <bool> right-armed;
-    property <bool> middle-armed;
     changed enabled => {
         if !root.enabled {
-            root.middle-armed = false;
-            root.right-armed = false;
-            root.space-armed = false;
+            root.cancel-input();
             root.dismiss-tooltip(false);
             root.keyboard-focus = false;
         }
     }
     changed interactive => {
         if !root.interactive {
-            root.middle-armed = false;
-            root.right-armed = false;
-            root.space-armed = false;
+            root.cancel-input();
             root.keyboard-focus = false;
             if root.tooltip-text != "" {
                 root.tooltip-dismissed(false, root.absolute-position);
@@ -136,18 +168,28 @@ export component TileButton inherits Rectangle {
             }
             root.focus-acquired();
         }
-        focus-lost(reason) => { root.space-armed = false; }
+        focus-lost(reason) => { root.cancel-input(); }
         key-pressed(event) => {
             if root.interactive && root.enabled && event.text == Key.Space {
                 root.keyboard-focus = true;
                 // Repeats cannot revive a cancelled gesture.
-                if !event.repeat { root.space-armed = true; }
+                if !event.repeat {
+                    root.space-key = root.activation-key;
+                    root.space-armed = true;
+                }
                 root.dismiss-tooltip(false);
                 return accept;
             }
             if root.interactive && root.enabled && event.text == Key.Return {
                 root.keyboard-focus = true;
-                if !event.repeat || root.allow-return-repeat { root.activate(); }
+                if !event.repeat {
+                    root.return-key = root.activation-key;
+                    root.return-armed = true;
+                }
+                if root.return-armed && root.return-key == root.activation-key
+                    && (!event.repeat || root.allow-return-repeat) {
+                    root.activate();
+                }
                 return accept;
             }
             if root.interactive && root.enabled && (event.text == Key.Menu
@@ -163,9 +205,16 @@ export component TileButton inherits Rectangle {
             return reject;
         }
         key-released(event) => {
+            if event.text == Key.Return {
+                root.return-armed = false;
+                root.return-key = "";
+                return accept;
+            }
             if root.interactive && event.text == Key.Space {
-                let activate = root.enabled && root.space-armed;
+                let activate = root.enabled && root.space-armed
+                    && root.space-key == root.activation-key;
                 root.space-armed = false;
+                root.space-key = "";
                 if activate { root.activate(); }
                 return accept;
             }
@@ -176,14 +225,40 @@ export component TileButton inherits Rectangle {
 
     touch := TouchArea {
         enabled: root.enabled && root.interactive;
-        clicked => { root.activate(); }
+        clicked => {
+            // Native clicked precedes pointer-event(up); do not synthesize a click.
+            let activate = root.left-armed && root.left-key == root.activation-key
+                && root.pointer-inside();
+            root.left-armed = false;
+            root.left-key = "";
+            if activate { root.activate(); }
+        }
         forward-focus: keyboard;
         scroll-event(event) => {
             root.dismiss-tooltip(false);
             return reject; // preserve the parent ScrollView's real scrolling
         }
         pointer-event(event) => {
+            if event.kind == PointerEventKind.cancel { root.cancel-input(); }
             if !root.interactive { return; }
+            if event.kind == PointerEventKind.down {
+                // Capture before external metadata/focus callbacks can rebind.
+                if event.button == PointerEventButton.left {
+                    root.left-key = root.activation-key;
+                    root.left-armed = root.enabled;
+                } else if event.button == PointerEventButton.middle {
+                    root.middle-key = root.activation-key;
+                    root.middle-armed = root.enabled;
+                } else if event.button == PointerEventButton.right {
+                    root.right-key = root.activation-key;
+                    root.right-armed = root.enabled;
+                }
+            } else if event.kind == PointerEventKind.up
+                && event.button == PointerEventButton.left && !root.pointer-inside() {
+                // An outside native release has no clicked callback.
+                root.left-armed = false;
+                root.left-key = "";
+            }
             if root.interactive && root.report-pointer-metadata && event.kind != PointerEventKind.move {
                 root.pointer-metadata(event, {
                     origin: root.absolute-position,
@@ -196,36 +271,29 @@ export component TileButton inherits Rectangle {
             if event.kind == PointerEventKind.down || event.kind == PointerEventKind.cancel {
                 root.dismiss-tooltip(false);
             }
-            if root.interactive && event.kind == PointerEventKind.down {
+            if root.interactive && root.focus-on-pointer && event.kind == PointerEventKind.down {
                 // forward-focus redirects focus requests, not TouchArea
                 // clicks. This is item focus, not a host foreground request.
                 keyboard.focus();
                 root.keyboard-focus = false;
             }
-            if event.kind == PointerEventKind.cancel {
+            if event.kind == PointerEventKind.up && event.button == PointerEventButton.middle {
+                let activate = root.interactive && root.middle-armed && root.enabled
+                    && root.middle-key == root.activation-key && root.pointer-inside();
                 root.middle-armed = false;
+                root.middle-key = "";
+                if activate { root.middle-clicked(); }
+            } else if event.kind == PointerEventKind.up && event.button == PointerEventButton.right {
+                // has-hover stays true during a grabbed release, even outside.
+                let activate = root.interactive && root.right-armed && root.enabled
+                    && root.right-key == root.activation-key && root.pointer-inside();
+                let position = {
+                    x: root.absolute-position.x + self.mouse-x,
+                    y: root.absolute-position.y + self.mouse-y
+                };
                 root.right-armed = false;
-            } else if event.button == PointerEventButton.middle {
-                if event.kind == PointerEventKind.down {
-                    root.middle-armed = root.enabled;
-                } else if event.kind == PointerEventKind.up {
-                    if root.middle-armed && root.enabled && self.has-hover {
-                        root.middle-clicked();
-                    }
-                    root.middle-armed = false;
-                }
-            } else if event.button == PointerEventButton.right {
-                if event.kind == PointerEventKind.down {
-                    root.right-armed = root.enabled;
-                } else if event.kind == PointerEventKind.up {
-                    if root.right-armed && root.enabled && self.has-hover {
-                        root.context-requested({
-                            x: root.absolute-position.x + self.mouse-x,
-                            y: root.absolute-position.y + self.mouse-y
-                        });
-                    }
-                    root.right-armed = false;
-                }
+                root.right-key = "";
+                if activate { root.context-requested(position); }
             }
         }
     }

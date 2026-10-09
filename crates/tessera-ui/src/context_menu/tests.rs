@@ -707,7 +707,7 @@ fn recycle_empty_revalidates_stale_scope_key_busy_and_hidden_intents() {
 }
 
 #[test]
-fn recycle_live_refresh_only_sets_current_open_recycle_projection() {
+fn recycle_live_refresh_updates_retained_presentation_without_granting_closed_authority() {
     let (host, dock, menu) = setup();
     let actions = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&actions);
@@ -739,19 +739,74 @@ fn recycle_live_refresh_only_sets_current_open_recycle_projection() {
     }
     dock.set_recycle_empty_enabled(true);
     menu.refresh_recycle_actions();
+    let active_generation = menu.scope_generation.get();
+    dock.hide().unwrap();
+    menu.refresh_recycle_actions();
+    assert!(
+        !menu.component().get_recycle_empty_enabled(),
+        "hidden Dock has no live admission"
+    );
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert!(actions.borrow().is_empty());
+    assert!(menu.is_open());
+    assert_eq!(menu.scope_generation.get(), active_generation);
+    assert_eq!(*host.events.lock(), before);
+    dock.show().unwrap();
+    menu.refresh_recycle_actions();
+    assert!(menu.component().get_recycle_empty_enabled());
     press(&menu, Key::Home);
     assert_eq!(menu.component().get_selected_index(), 0);
     press(&menu, Key::Return);
     assert_eq!(&*actions.borrow(), &[DockRecycleAction::Empty]);
     assert!(!menu.is_open());
     let before = host.events.lock().clone();
+    let retired_generation = menu.scope_generation.get();
+    assert!(retired_generation.is_some());
     dock.set_recycle_empty_enabled(true);
     menu.refresh_recycle_actions();
     assert!(
-        !menu.component().get_recycle_empty_enabled(),
-        "own hide revoked authority; hidden refresh must not restore it"
+        menu.component().get_recycle_empty_enabled(),
+        "retained readback mirrors the live admitted Dock, not popup authority"
     );
-    assert_eq!(*host.events.lock(), before);
+    assert!(!menu.is_open());
+    assert!(!menu.component().window().is_visible());
+    assert_eq!(menu.scope_generation.get(), retired_generation);
+    assert_eq!(
+        *host.events.lock(),
+        before,
+        "readback cannot attach or focus"
+    );
+    menu.component().set_selected_index(0);
+    press(&menu, Key::Return);
+    press(&menu, Key::Space);
+    click_row(&menu, "Empty Recycle Bin");
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert_eq!(&*actions.borrow(), &[DockRecycleAction::Empty]);
+    assert!(!menu.is_open());
+    assert!(!menu.component().window().is_visible());
+    assert_eq!(menu.scope_generation.get(), retired_generation);
+    assert_eq!(
+        *host.events.lock(),
+        before,
+        "closed intents cannot revive a native scope"
+    );
+    assert_no_effects(&host);
+    menu.scope_generation.set(None);
+    menu.refresh_recycle_actions();
+    assert!(!menu.component().get_recycle_empty_enabled());
+    menu.component()
+        .invoke_action_requested(DockMenuAction::RecycleEmpty);
+    assert_eq!(menu.scope_generation.get(), None);
+    assert!(!menu.is_open());
+    assert!(!menu.component().window().is_visible());
+    assert_eq!(&*actions.borrow(), &[DockRecycleAction::Empty]);
+    assert_eq!(
+        *host.events.lock(),
+        before,
+        "exhausted readback cannot resume authority"
+    );
     show(&menu, DockMenuKind::Bar).unwrap();
     let before = host.events.lock().clone();
     dock.set_recycle_empty_enabled(true);
@@ -959,6 +1014,12 @@ fn recycle_empty_exhausted_scope_generation_rejects_without_reuse_or_panic() {
     assert_eq!(menu.scope_generation.get(), None);
     assert!(!menu.is_open());
     assert!(actions.borrow().is_empty());
+    let retired_events = host.events.lock().clone();
+    menu.refresh_recycle_actions();
+    assert!(!menu.component().get_recycle_empty_enabled());
+    assert_eq!(menu.scope_generation.get(), None);
+    assert!(!menu.component().window().is_visible());
+    assert_eq!(*host.events.lock(), retired_events);
     show(&menu, DockMenuKind::Recycle).unwrap();
     let before = host.events.lock().clone();
     menu.component()

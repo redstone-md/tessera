@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ComboBox, Palette } from "std-widgets.slint";
+
+// Draft only: the containing panel owns its existing explicit Save transaction.
+export component GeneralPreferences inherits VerticalLayout {
+    in-out property <int> start-of-week-index: 0;
+    in property <bool> compact: false;
+
+    spacing: root.compact ? 4px : 8px;
+    vertical-stretch: 0;
+
+    Text {
+        text: "General";
+        color: Palette.foreground;
+        font-weight: 600;
+    }
+    HorizontalLayout {
+        spacing: root.compact ? 6px : 12px;
+        Text {
+            text: "Start of week";
+            color: Palette.foreground;
+            vertical-alignment: center;
+            // The native selector already owns this accessible label.
+            accessible-role: none;
+        }
+        ComboBox {
+            accessible-label: "Start of week";
+            model: ["Monday", "Sunday", "Saturday"];
+            current-index <=> root.start-of-week-index;
+            horizontal-stretch: 1;
+        }
+    }
+}

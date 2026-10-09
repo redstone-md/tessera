@@ -30,7 +30,7 @@ fn main() -> ExitCode {
         [only] if only == "--verify-runtime" => match verify_runtime() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("Tessera runtime verification failed: {error}");
+                eprintln!("{error}");
                 ExitCode::FAILURE
             }
         },

@@ -1,0 +1,31 @@
+Tabler Icons — outline zzz
+
+Upstream: https://github.com/tabler/tabler-icons
+Immutable revision: 6d128ed935d4546607b1e4d5d08c8b27bdbe7758
+Unmodified original: icons/outline/zzz.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/zzz.svg
+Local artwork: zzz.svg
+Bytes: 381
+Git blob: e2e9e4e673b08bad55771a52c9ccfc357fd3d179
+SHA-256: 69a5ce315af4a3e0c582003d189c7ac242871a0a5acbe5a5501f03b3e0badc10
+The Git blob was matched against the immutable upstream Git tree member.
+Original category/tags/version/unicode comment, 24x24 viewBox, fill none, currentColor stroke, stroke width 2, round caps/joins and both original path strings are preserved byte-for-byte. This is outline zzz, not filled zzz.
+
+Complete original MIT grant retained in adjacent LICENSE:
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/LICENSE
+Copyright (c) 2020-2026 Paweł Kuna
+Bytes: 1073
+Git blob: 3e82379dab3fe93d9ee22251949604ed63ddea39
+SHA-256: b740a1d46122672da62833e97f7e7c8a13fa85cbc7445b584b297cc00dde93db
+Retain this copyright and the full permission notice in all copies or substantial portions of the artwork. No separate upstream NOTICE or NOTICE.txt member exists in the pinned root or artwork ancestor directories (icons, outline). The outline directory's license.svg and license-off.svg are unrelated icon artwork, not grants.
+
+React export mapping evidence (study only, no copied reference implementation/art):
+https://raw.githubusercontent.com/react-icons/react-icons/9f32da3e3bd131c60951c0052c952df935c45f82/packages/react-icons/src/icons/index.ts
+Manifest SHA-256: f7e5a28f2305aa10653b4519fdf2b7d8a8b12d66e6d817bc67194158d64d5adb
+The tb manifest pins this Tabler family revision and maps icons/outline/*.svg to Tb plus the icon name: zzz maps to TbZzz. Its separate icons/filled/*.svg mapping appends Filled and would be TbZzzFilled, which is not selected.
+https://raw.githubusercontent.com/react-icons/react-icons/9f32da3e3bd131c60951c0052c952df935c45f82/packages/react-icons/package.json
+Package manifest version: 5.7.0
+Package manifest SHA-256: c58f1047fa9a76d899f9a6dd96aa0a03476a6b28de334015173161b17d80f9d8
+The studied reference at 53274fa9f45ad1b0ebd798e2d464858a213d9022 declares react-icons ^5.6.0 and selects TbZzz. That range/export alone does not establish its installed package revision; the pinned family manifest above establishes this independent artwork selection. The older v5.6.0 source tag uses a different family pin and is not asserted to be this pin.
+
+This independently licensed upstream SVG is not reference-exported React/SSR serialization. Original SVG bytes, metadata and stroke geometry are retained, not transformed into React's generated shape or attributes. Permissive artwork provenance is separate from serialized-byte/native-pixel equivalence; visual equivalence requires separate verification. No author endorsement or trademark rights are claimed.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Read-only desktop observation for Windows.
+//! Native Windows desktop capabilities, including read-only observation.
 //!
 //! `observe()` enumerates physical monitors and visible top-level desktop
 //! windows without moving, resizing, focusing, or otherwise mutating any
@@ -21,6 +21,7 @@
 mod activation;
 mod apps;
 mod audio;
+pub mod bluetooth;
 pub mod calendar;
 mod diagnostics;
 pub mod display_context;
@@ -30,6 +31,8 @@ mod events;
 pub mod folders;
 #[cfg(any(windows, test))]
 mod helpers;
+pub mod input_language;
+pub mod media;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native;
@@ -44,10 +47,16 @@ mod native_apps;
 mod native_audio;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
+mod native_bluetooth;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
 mod native_calendar;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_display_context;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_display_watch;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_dock_utilities;
@@ -59,17 +68,34 @@ mod native_events;
 mod native_folders;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
+mod native_input_language;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_media;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_network;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
 mod native_power;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_power_updates;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin_mutation;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
+mod native_visibility;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_window_actions;
+pub mod network;
 pub mod power;
+pub mod power_updates;
 pub mod recycle_bin;
 pub mod recycle_bin_mutation;
 #[cfg(any(windows, test))]
@@ -79,6 +105,7 @@ mod shell_runtime;
 mod single_flight;
 mod snapshot;
 mod ui_preferences;
+pub mod visibility;
 mod window_actions;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};

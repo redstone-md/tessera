@@ -56,10 +56,17 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         tessera_ui::LauncherDisplayMode::Windowed => LauncherDisplayMode::Windowed,
         tessera_ui::LauncherDisplayMode::Fullscreen => LauncherDisplayMode::Fullscreen,
     };
+    let start = match preferences.general().start_of_week() {
+        tessera_ui::StartOfWeek::Monday => crate::settings::StartOfWeek::Monday,
+        tessera_ui::StartOfWeek::Sunday => crate::settings::StartOfWeek::Sunday,
+        tessera_ui::StartOfWeek::Saturday => crate::settings::StartOfWeek::Saturday,
+    };
     Preferences::new(theme, preferences.compact())
         .with_dock(edge, preferences.pinned_apps().to_vec())
         .with_launcher_favorites(preferences.launcher().favorites().to_vec())
         .with_launcher_display_mode(mode)
+        .with_general(crate::settings::GeneralPreferences::default().with_start_of_week(start))
+        .with_media_enabled(preferences.media_enabled())
 }
 
 #[cfg(windows)]
@@ -83,9 +90,16 @@ fn to_ui_preferences(
         LauncherDisplayMode::Windowed => tessera_ui::LauncherDisplayMode::Windowed,
         LauncherDisplayMode::Fullscreen => tessera_ui::LauncherDisplayMode::Fullscreen,
     };
+    let start = match preferences.general().start_of_week() {
+        crate::settings::StartOfWeek::Monday => tessera_ui::StartOfWeek::Monday,
+        crate::settings::StartOfWeek::Sunday => tessera_ui::StartOfWeek::Sunday,
+        crate::settings::StartOfWeek::Saturday => tessera_ui::StartOfWeek::Saturday,
+    };
     tessera_ui::PanelPreferences::new(theme, preferences.compact())
         .with_dock(edge, preferences.pinned_apps().to_vec())
         .with_launcher_display_mode(mode)
+        .with_general(tessera_ui::GeneralPreferences::default().with_start_of_week(start))
+        .with_media_enabled(preferences.media_enabled())
         .with_launcher_favorites(preferences.launcher_favorites().to_vec())
 }
 
@@ -97,13 +111,19 @@ mod desktop {
 
     use parking_lot::Mutex;
     use tessera_system::audio::{AudioError, AudioHost};
+    use tessera_system::bluetooth::{BluetoothError, BluetoothHost};
     use tessera_system::calendar::{CalendarError, CalendarHost};
     use tessera_system::display_context::{DisplayContextError, DisplayContextHost};
     use tessera_system::dock_utilities::{DockUtilitiesHost, DockUtilityError};
     use tessera_system::folders::{FolderError, FolderHost};
+    use tessera_system::input_language::{InputLanguageError, InputLanguageHost};
+    use tessera_system::media::{MediaError, MediaHost};
+    use tessera_system::network::{NetworkError, NetworkHost};
     use tessera_system::power::{PowerError, PowerHost};
+    use tessera_system::power_updates::{PowerUpdatesError, PowerUpdatesHost};
     use tessera_system::recycle_bin::RecycleBinHost;
     use tessera_system::recycle_bin_mutation::RecycleBinMutationHost;
+    use tessera_system::visibility::{PointerHost, PointerWatchError};
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
         PixelIcon, RunOptions, ShellIdentity, SurfaceKind, SurfaceMode, SystemAction,
@@ -146,6 +166,12 @@ mod desktop {
         recycle_bin_mutation: LazyLock<Provider<dyn RecycleBinMutationHost>>,
         display_context: LazyLock<Provider<dyn DisplayContextHost>>,
         power: LazyLock<Provider<dyn PowerHost>>,
+        power_updates: LazyLock<Provider<dyn PowerUpdatesHost>>,
+        network: LazyLock<Provider<dyn NetworkHost>>,
+        bluetooth: LazyLock<Provider<dyn BluetoothHost>>,
+        input_language: LazyLock<Provider<dyn InputLanguageHost>>,
+        media: LazyLock<Provider<dyn MediaHost>>,
+        pointer: LazyLock<Provider<dyn PointerHost>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -261,6 +287,52 @@ mod desktop {
                 .map(Some)
         }
 
+        fn power_updates_host(
+            &self,
+        ) -> Result<Option<Arc<dyn PowerUpdatesHost>>, PowerUpdatesError> {
+            self.power_updates
+                .get(|| Ok(tessera_windows::power_updates::native_power_updates_host()))
+                .map(Some)
+        }
+
+        fn network_host(&self) -> Result<Option<Arc<dyn NetworkHost>>, NetworkError> {
+            self.network
+                .get(tessera_windows::network::native_network_host)
+                .map(Some)
+        }
+
+        fn bluetooth_host(&self) -> Result<Option<Arc<dyn BluetoothHost>>, BluetoothError> {
+            self.bluetooth
+                .get(|| Ok(tessera_windows::bluetooth::native_bluetooth_host()))
+                .map(Some)
+        }
+
+        fn input_language_host(
+            &self,
+        ) -> Result<Option<Arc<dyn InputLanguageHost>>, InputLanguageError> {
+            self.input_language
+                .get(tessera_windows::input_language::native_input_language_host)
+                .map(Some)
+        }
+
+        fn media_host(&self) -> Result<Option<Arc<dyn MediaHost>>, MediaError> {
+            self.media
+                .get(|| {
+                    tessera_windows::media::MediaService::new()
+                        .map(|host| -> Arc<dyn MediaHost> { Arc::new(host) })
+                })
+                .map(Some)
+        }
+
+        fn pointer_host(&self) -> Result<Option<Arc<dyn PointerHost>>, PointerWatchError> {
+            if self.presentation != Presentation::Desktop {
+                return Ok(None);
+            }
+            self.pointer
+                .get(tessera_windows::visibility::native_pointer_host)
+                .map(Some)
+        }
+
         fn dock_utilities_host(
             &self,
         ) -> Result<Option<Arc<dyn DockUtilitiesHost>>, DockUtilityError> {
@@ -326,19 +398,39 @@ mod desktop {
                 .find(|monitor| monitor.primary())
                 .or_else(|| snapshot.monitors().first())
             {
-                let foreground = tessera_windows::foreground_window_id();
-                let fullscreen = snapshot.windows().iter().any(|window| {
-                    Some(window.id()) == foreground
-                        && window.monitor_id() == Some(primary.id())
-                        && window.covers_monitor()
-                        && !window.maximized()
-                        && ActivationTarget::from_window(window).is_some()
-                });
+                let foreground = snapshot.foreground_window_id();
+                let fullscreen = snapshot
+                    .visibility_windows()
+                    .unwrap_or(snapshot.windows())
+                    .iter()
+                    .any(|window| {
+                        Some(window.id()) == foreground
+                            && window.monitor_id() == Some(primary.id())
+                            && window.covers_monitor()
+                            && !window.maximized()
+                            && ActivationTarget::from_window(window).is_some()
+                    });
                 let area = primary.bounds();
                 if let Some(context) =
                     DockContext::new(area.x(), area.y(), area.width(), area.height(), fullscreen)
                 {
                     view = view.with_dock_context(context);
+                    if let (Some(windows), Some(foreground_interactable)) = (
+                        snapshot.visibility_windows(),
+                        snapshot.foreground_interactable(),
+                    ) {
+                        view = view.with_visibility_windows(
+                            windows
+                                .iter()
+                                .map(|window| tessera_system::visibility::VisibilityWindow {
+                                    bounds: window.bounds(),
+                                    belongs_to_monitor: window.monitor_id() == Some(primary.id()),
+                                    minimized: window.minimized(),
+                                })
+                                .collect(),
+                            foreground_interactable,
+                        );
+                    }
                 }
             }
             Ok(view)
@@ -489,25 +581,30 @@ mod desktop {
         presentation: Presentation,
         heartbeat: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if presentation != Presentation::Utility {
-            // Shell surfaces start passive, including their first native
-            // show. Interactive windows request foreground explicitly only
-            // after their validated role is attached; never activate a hint.
-            slint::BackendSelector::new()
-                .with_winit_window_attributes_hook(|attributes| attributes.with_active(false))
-                .select()?;
+        let diagnostic = presentation == Presentation::Diagnostic;
+        // The production UI runner owns backend selection and its passive
+        // first-show hook; selecting here would recreate Winit's event loop.
+        let heartbeat = crate::diagnostic::startup_phase(
+            diagnostic,
+            crate::diagnostic::StartupPhase::HeartbeatEventConnect,
+            || {
+                heartbeat
+                    .map(tessera_windows::ShellHeartbeat::connect)
+                    .transpose()
+                    .map_err(Into::into)
+            },
+        )?
+        .map(|event| {
+            // The independent supervisor handles a failed/absent heartbeat by restoring Explorer.
+            Arc::new(move || {
+                let _ = event.pulse();
+            }) as Arc<dyn Fn() + Send + Sync>
+        });
+        if diagnostic {
+            return crate::diagnostic::run(heartbeat);
         }
         let (settings, preferences, notice) =
             super::load_preferences(SettingsStore::for_current_user());
-        let heartbeat = heartbeat
-            .map(tessera_windows::ShellHeartbeat::connect)
-            .transpose()?
-            .map(|event| {
-                // The independent supervisor handles a failed/absent heartbeat by restoring Explorer.
-                Arc::new(move || {
-                    let _ = event.pulse();
-                }) as Arc<dyn Fn() + Send + Sync>
-            });
         let host = AppHost {
             targets: Mutex::new(HashMap::new()),
             catalog: Mutex::new(None),
@@ -522,6 +619,12 @@ mod desktop {
             recycle_bin_mutation: LazyLock::new(Provider::default),
             display_context: LazyLock::new(Provider::default),
             power: LazyLock::new(Provider::default),
+            power_updates: LazyLock::new(Provider::default),
+            network: LazyLock::new(Provider::default),
+            bluetooth: LazyLock::new(Provider::default),
+            input_language: LazyLock::new(Provider::default),
+            media: LazyLock::new(Provider::default),
+            pointer: LazyLock::new(Provider::default),
         };
         tessera_ui::run(
             host,
@@ -589,6 +692,10 @@ mod preference_tests {
             r#"{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"normal","favorites":[]}}"#,
             r#"{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"fullscreen","favorites":[],"unknown":true}}"#,
             r#"{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":["fullscreen",["A"]]}"#,
+            r#"{"schema_version":4,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"windowed","favorites":[]},"dock":{"media_enabled":false}}"#,
+            r#"{"schema_version":4,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"windowed","favorites":[]},"general":{"start_of_week":"friday"},"dock":{"media_enabled":false}}"#,
+            r#"{"schema_version":4,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"windowed","favorites":[]},"general":{"start_of_week":"monday"}}"#,
+            r#"{"schema_version":4,"theme":"dark","compact":true,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"windowed","favorites":[]},"general":{"start_of_week":"monday"},"dock":{"media_enabled":"false"}}"#,
         ] {
             std::fs::write(&path, original).unwrap();
             let (store, preferences, notice) =
@@ -617,7 +724,9 @@ mod preference_tests {
     #[cfg(windows)]
     #[test]
     fn complete_preferences_map_both_directions_without_losing_launcher_mode_or_tail() {
-        use crate::settings::{DockEdge, LauncherDisplayMode, Theme};
+        use crate::settings::{
+            DockEdge, GeneralPreferences, LauncherDisplayMode, StartOfWeek, Theme,
+        };
 
         let mut favorites: Vec<_> = (0..80).map(|index| format!("favorite-{index}")).collect();
         favorites.extend(["missing-app".into(), "exact".into(), "EXACT".into()]);
@@ -643,19 +752,36 @@ mod preference_tests {
                     ),
                 ] {
                     for compact in [false, true] {
-                        let stored = Preferences::new(theme, compact)
-                            .with_dock(edge, vec!["dock-only".into()])
-                            .with_launcher_favorites(favorites.clone())
-                            .with_launcher_display_mode(mode);
-                        let ui = to_ui_preferences(&stored).unwrap();
-                        assert_eq!(ui.theme(), ui_theme);
-                        assert_eq!(ui.compact(), compact);
-                        assert_eq!(ui.dock_edge(), ui_edge);
-                        assert_eq!(ui.launcher().display_mode(), ui_mode);
-                        assert_eq!(ui.launcher().favorites(), favorites);
-                        assert_eq!(ui.pinned_apps(), ["dock-only"]);
-                        assert_eq!(from_ui_preferences(&ui), stored);
-                        assert_eq!(to_ui_preferences(&from_ui_preferences(&ui)).unwrap(), ui);
+                        for (start, ui_start) in [
+                            (StartOfWeek::Monday, tessera_ui::StartOfWeek::Monday),
+                            (StartOfWeek::Sunday, tessera_ui::StartOfWeek::Sunday),
+                            (StartOfWeek::Saturday, tessera_ui::StartOfWeek::Saturday),
+                        ] {
+                            for media_enabled in [false, true] {
+                                let stored = Preferences::new(theme, compact)
+                                    .with_dock(edge, vec!["dock-only".into()])
+                                    .with_launcher_favorites(favorites.clone())
+                                    .with_launcher_display_mode(mode)
+                                    .with_general(
+                                        GeneralPreferences::default().with_start_of_week(start),
+                                    )
+                                    .with_media_enabled(media_enabled);
+                                let ui = to_ui_preferences(&stored).unwrap();
+                                assert_eq!(ui.theme(), ui_theme);
+                                assert_eq!(ui.compact(), compact);
+                                assert_eq!(ui.dock_edge(), ui_edge);
+                                assert_eq!(ui.launcher().display_mode(), ui_mode);
+                                assert_eq!(ui.launcher().favorites(), favorites);
+                                assert_eq!(ui.pinned_apps(), ["dock-only"]);
+                                assert_eq!(ui.general().start_of_week(), ui_start);
+                                assert_eq!(ui.media_enabled(), media_enabled);
+                                assert_eq!(from_ui_preferences(&ui), stored);
+                                assert_eq!(
+                                    to_ui_preferences(&from_ui_preferences(&ui)).unwrap(),
+                                    ui
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -672,7 +798,12 @@ mod preference_tests {
             .with_dock(tessera_ui::DockEdge::Left, vec!["dock-only".into()])
             .with_launcher_favorites(favorites.clone())
             .unwrap()
-            .with_launcher_display_mode(tessera_ui::LauncherDisplayMode::Fullscreen);
+            .with_launcher_display_mode(tessera_ui::LauncherDisplayMode::Fullscreen)
+            .with_general(
+                tessera_ui::GeneralPreferences::default()
+                    .with_start_of_week(tessera_ui::StartOfWeek::Saturday),
+            )
+            .with_media_enabled(true);
         for edited in [
             applied.clone().with_appearance(
                 tessera_ui::Theme::Light,

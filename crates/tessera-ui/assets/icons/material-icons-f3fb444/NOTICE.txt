@@ -1,0 +1,37 @@
+Google Material Icons — classic normal filled restart_alt
+
+Upstream: https://github.com/google/material-design-icons
+Immutable revision: f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d
+Unmodified original: src/device/restart_alt/materialicons/24px.svg
+https://raw.githubusercontent.com/google/material-design-icons/f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d/src/device/restart_alt/materialicons/24px.svg
+Local artwork: restart_alt.svg
+Bytes: 437
+Git blob: b764af7f5a906d6c176895343a2fbf7c32d7fa24
+SHA-256: 4e4163974c5b4182d4e20bbe6b3c55f5e7a88754175ecb6b8931c18443e5a84d
+The Git blob was matched against the immutable upstream Git tree member.
+Original 24x24 viewBox, transparent background path and two filled artwork paths are retained without SVG optimization, rewriting, title insertion or serialization.
+
+Full original Apache License Version 2.0 is retained in adjacent LICENSE:
+https://raw.githubusercontent.com/google/material-design-icons/f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d/LICENSE
+Bytes: 11357
+Git blob: 7a4a3ea2424c09fbe48d455aed1eaa94d9124835
+SHA-256: 58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd
+No separate upstream NOTICE or NOTICE.txt member exists in the pinned root or artwork ancestor directories (src, device, restart_alt, materialicons). No copyright header occurs in this original SVG; the full license's Appendix placeholder is preserved, not replaced with an invented copyright year.
+
+Pinned README scope evidence:
+https://raw.githubusercontent.com/google/material-design-icons/f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d/README.md
+Bytes: 7856
+Git blob (computed): 724f231e9d7ace1b480fc28f16e256bb1ab12520
+SHA-256: e1ab9d093fa612bd83a1043717ac150d636354c444792893dba2119f22a212c3
+README identifies src as classic Material Icons, distinguishes Filled from Outlined/Rounded/Sharp/Two tone and Material Symbols, and explicitly makes these icons and documentation available for incorporation into products under Apache License Version 2.0. This is the normal filled Material Icons family, not Material Symbols or MdOutlineRestartAlt. Attribution to Google describes origin only.
+
+React export mapping evidence (study only, no copied reference implementation/art):
+https://raw.githubusercontent.com/react-icons/react-icons/9f32da3e3bd131c60951c0052c952df935c45f82/packages/react-icons/src/icons/index.ts
+Manifest SHA-256: f7e5a28f2305aa10653b4519fdf2b7d8a8b12d66e6d817bc67194158d64d5adb
+The md manifest pins this Material family revision and selects src/*/*/materialicons/24px.svg before any missing-normal twotone fallback; its formatter maps restart_alt to MdRestartAlt. Outlined uses a separate MdOutline prefix. The manifest enables SVGO.
+https://raw.githubusercontent.com/react-icons/react-icons/9f32da3e3bd131c60951c0052c952df935c45f82/packages/react-icons/package.json
+Package manifest version: 5.7.0
+Package manifest SHA-256: c58f1047fa9a76d899f9a6dd96aa0a03476a6b28de334015173161b17d80f9d8
+The studied reference at 53274fa9f45ad1b0ebd798e2d464858a213d9022 declares react-icons ^5.6.0 and selects MdRestartAlt. That range/export alone does not establish its installed package revision; the pinned family manifest above establishes this independent artwork selection. The older v5.6.0 source tag uses a different family pin and is not asserted to be this pin.
+
+This independently licensed upstream SVG is not reference-exported React/SSR serialization. Source-byte provenance and permitted redistribution do not establish serialized-byte or native-rendered pixel equivalence; those require separate visual verification. Preserve the full license and applicable upstream notices on redistribution; mark any future modifications. No author endorsement or trademark rights are claimed. Apache section 6 does not grant general trademark rights.

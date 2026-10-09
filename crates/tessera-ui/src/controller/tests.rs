@@ -14,6 +14,10 @@ use tessera_system::recycle_bin_mutation::{
     RecycleBinEmptyCompletion, RecycleBinEmptyOutcome, RecycleBinMutationHost,
 };
 
+#[path = "../launcher/app_menu/controller_tests.rs"]
+mod launcher_app_menu_tests;
+mod module_integration_tests;
+mod power_display_tests;
 mod power_tests;
 
 #[cfg(debug_assertions)]
@@ -47,6 +51,8 @@ thread_local! {
     static RECYCLE_MENU_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static POWER_DISPLAY_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static POWER_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static POWER_UPDATES_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static MEDIA_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static POWER_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
     static POWER_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static TOOLTIP_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
@@ -87,7 +93,22 @@ struct FixtureHost {
     display_provider_calls: AtomicUsize,
     power_provider: Mutex<Option<Arc<dyn tessera_system::power::PowerHost>>>,
     power_provider_calls: AtomicUsize,
+    power_updates_provider: Mutex<Option<Arc<dyn tessera_system::power_updates::PowerUpdatesHost>>>,
+    power_updates_factory_calls: AtomicUsize,
+    network_provider: Mutex<Option<Arc<dyn tessera_system::network::NetworkHost>>>,
+    network_provider_calls: AtomicUsize,
+    bluetooth_provider: Mutex<Option<Arc<dyn tessera_system::bluetooth::BluetoothHost>>>,
+    bluetooth_provider_calls: AtomicUsize,
+    input_language_provider:
+        Mutex<Option<Arc<dyn tessera_system::input_language::InputLanguageHost>>>,
+    input_language_provider_calls: AtomicUsize,
+    media_provider: Mutex<Option<Arc<dyn tessera_system::media::MediaHost>>>,
+    media_provider_calls: AtomicUsize,
+    pointer_provider: Mutex<Option<Arc<dyn tessera_system::visibility::PointerHost>>>,
+    pointer_provider_calls: AtomicUsize,
     power_lease_drops: Arc<AtomicUsize>,
+    shell_identity: Mutex<crate::ShellIdentity>,
+    identity_calls: AtomicUsize,
 }
 
 impl FixtureHost {
@@ -127,7 +148,21 @@ impl FixtureHost {
             display_provider_calls: AtomicUsize::new(0),
             power_provider: Mutex::default(),
             power_provider_calls: AtomicUsize::new(0),
+            power_updates_provider: Mutex::default(),
+            power_updates_factory_calls: AtomicUsize::new(0),
+            network_provider: Mutex::default(),
+            network_provider_calls: AtomicUsize::new(0),
+            bluetooth_provider: Mutex::default(),
+            bluetooth_provider_calls: AtomicUsize::new(0),
+            input_language_provider: Mutex::default(),
+            input_language_provider_calls: AtomicUsize::new(0),
+            media_provider: Mutex::default(),
+            media_provider_calls: AtomicUsize::new(0),
+            pointer_provider: Mutex::default(),
+            pointer_provider_calls: AtomicUsize::new(0),
             power_lease_drops: Arc::default(),
+            shell_identity: Mutex::default(),
+            identity_calls: AtomicUsize::new(0),
         })
     }
 
@@ -227,6 +262,79 @@ impl DesktopHost for FixtureHost {
             hook();
         }
         Ok(self.power_provider.lock().clone())
+    }
+
+    fn power_updates_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::power_updates::PowerUpdatesHost>>,
+        tessera_system::power_updates::PowerUpdatesError,
+    > {
+        self.power_updates_factory_calls
+            .fetch_add(1, Ordering::SeqCst);
+        let hook = POWER_UPDATES_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.power_updates_provider.lock().clone())
+    }
+
+    fn network_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::network::NetworkHost>>,
+        tessera_system::network::NetworkError,
+    > {
+        self.network_provider_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.network_provider.lock().clone())
+    }
+
+    fn bluetooth_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::bluetooth::BluetoothHost>>,
+        tessera_system::bluetooth::BluetoothError,
+    > {
+        self.bluetooth_provider_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.bluetooth_provider.lock().clone())
+    }
+
+    fn input_language_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::input_language::InputLanguageHost>>,
+        tessera_system::input_language::InputLanguageError,
+    > {
+        self.input_language_provider_calls
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(self.input_language_provider.lock().clone())
+    }
+
+    fn media_host(
+        &self,
+    ) -> Result<Option<Arc<dyn tessera_system::media::MediaHost>>, tessera_system::media::MediaError>
+    {
+        self.media_provider_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = MEDIA_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.media_provider.lock().clone())
+    }
+
+    fn pointer_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::visibility::PointerHost>>,
+        tessera_system::visibility::PointerWatchError,
+    > {
+        self.pointer_provider_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.pointer_provider.lock().clone())
+    }
+
+    fn shell_identity(&self) -> Result<crate::ShellIdentity, String> {
+        self.identity_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.shell_identity.lock().clone())
     }
 
     fn activate(&self, key: &str) -> Result<(), String> {
@@ -1250,6 +1358,11 @@ impl Drop for FixtureWindowScope {
 struct LauncherFixture {
     // Drop transient and bar attachments before the owned component windows.
     _power_scope: power_menu::PowerAdmissionScope,
+    _toolbar_popup_scope: native_toolbar::ToolbarPopupScope,
+    _launcher_app_scope: crate::transient_window::TransientScope<crate::launcher::LauncherAppMenu>,
+    _media_scope: crate::transient_window::TransientScope<crate::dock_media::DockMediaController>,
+    _visibility_scope:
+        crate::transient_window::TransientScope<crate::visibility::VisibilityController>,
     _recycle_scope:
         crate::transient_window::TransientScope<crate::recycle_bin::RecycleBinController>,
     _menu_scope:
@@ -1295,6 +1408,7 @@ impl LauncherFixture {
             }
         });
         let panel = Panel::new().unwrap();
+        panel.set_start_of_week_index(preferences.general().start_of_week().index());
         let host = FixtureHost::returning(snapshot.clone());
         let mut subscription_error = None;
         let (core, _guard) = SurfaceCore::new(host.clone(), &preferences, &mut subscription_error);
@@ -1342,6 +1456,19 @@ impl LauncherFixture {
         };
         let fixture = Self {
             _recycle_scope: recycle_scope,
+            _toolbar_popup_scope: native_toolbar::ToolbarPopupScope::new(&controller),
+            _launcher_app_scope: crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.launcher_app_menu),
+                crate::launcher::LauncherAppMenu::hide,
+            ),
+            _media_scope: crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.dock_media),
+                crate::dock_media::DockMediaController::close,
+            ),
+            _visibility_scope: crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.visibility),
+                crate::visibility::VisibilityController::close,
+            ),
             _menu_scope: menu_scope,
             _tooltip_scope: tooltip_scope,
             _dock_utility_scope: dock_utility_scope,

@@ -10,6 +10,7 @@ description = "Native alpha desktop presentation for Tessera"
 publish = false
 
 [dependencies]
+tessera-core.workspace = true
 tessera-system.workspace = true
 slint.workspace = true
 parking_lot.workspace = true

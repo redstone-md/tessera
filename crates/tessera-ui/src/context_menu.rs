@@ -105,6 +105,45 @@ impl ContextMenuController {
         anchor: slint::PhysicalPosition,
         context: DockContext,
     ) -> Result<(), String> {
+        self.show_scope(kind, key, anchor, context, false)
+    }
+
+    /// Context for the displayed optional module, not a playback command.
+    pub(crate) fn show_media(
+        self: &Rc<Self>,
+        dock: &Dock,
+        logical_anchor: slint::LogicalPosition,
+        context: DockContext,
+    ) -> Result<(), String> {
+        let owned = self
+            .dock
+            .upgrade()
+            .is_some_and(|owned| std::ptr::eq(owned.window(), dock.window()));
+        if !owned || !dock.window().is_visible() || !dock.get_media_view().enabled {
+            return Err("The media module is no longer available.".into());
+        }
+        let anchor = placement::physical_anchor(
+            dock.window().position(),
+            dock.window().scale_factor(),
+            (logical_anchor.x, logical_anchor.y),
+        )?;
+        self.show_scope(
+            DockMenuKind::Bar,
+            SharedString::default(),
+            anchor,
+            context,
+            true,
+        )
+    }
+
+    fn show_scope(
+        self: &Rc<Self>,
+        kind: DockMenuKind,
+        key: SharedString,
+        anchor: slint::PhysicalPosition,
+        context: DockContext,
+        media_scope: bool,
+    ) -> Result<(), String> {
         let retired_generation = self
             .scope_generation
             .get()
@@ -119,12 +158,19 @@ impl ContextMenuController {
             .dock
             .upgrade()
             .ok_or("The dock is no longer available.")?;
+        if media_scope && (!dock.window().is_visible() || !dock.get_media_view().enabled) {
+            return Err("The media module is no longer available.".into());
+        }
         let key = if kind == DockMenuKind::Recycle {
             SharedString::default()
         } else {
             key
         };
         self.surface.set_kind(kind);
+        self.surface.set_launcher_favorite_scope(false);
+        self.surface.set_media_scope(media_scope);
+        self.surface
+            .set_media_enabled(kind == DockMenuKind::Bar && dock.get_media_view().enabled);
         // Reuse only already-resolved typed dock images; no host extraction.
         let target_icon = match kind {
             DockMenuKind::Pinned => dock
@@ -157,7 +203,15 @@ impl ContextMenuController {
             ),
             dock.window().scale_factor(),
         )?;
+        let generation = self.scope_generation.get();
         if !self.surface.present(rect.position, rect.size)? {
+            return Ok(());
+        }
+        if self.scope_generation.get() != generation {
+            return Ok(());
+        }
+        if media_scope && (!dock.window().is_visible() || !dock.get_media_view().enabled) {
+            self.hide();
             return Ok(());
         }
         self.refresh_recycle_actions();
@@ -196,13 +250,14 @@ impl ContextMenuController {
         self.surface.hide();
     }
 
-    /// Refresh only the current recycle popup; this never presents or focuses it.
+    /// Refresh retained recycle presentation without granting or presenting a scope.
     pub(crate) fn refresh_recycle_actions(&self) {
-        if self.is_open() && self.surface.get_kind() == DockMenuKind::Recycle {
+        if self.surface.get_kind() == DockMenuKind::Recycle {
             self.surface.set_recycle_empty_enabled(
-                self.dock
-                    .upgrade()
-                    .is_some_and(|dock| dock.get_recycle_empty_enabled()),
+                self.scope_generation.get().is_some()
+                    && self.dock.upgrade().is_some_and(|dock| {
+                        dock.window().is_visible() && dock.get_recycle_empty_enabled()
+                    }),
             );
         }
     }
@@ -211,7 +266,17 @@ impl ContextMenuController {
     }
 
     fn execute(&self, action: DockMenuAction) {
-        if !self.surface.is_visible() || !allowed(self.surface.get_kind(), action) {
+        if matches!(
+            action,
+            DockMenuAction::MediaBarAdd | DockMenuAction::MediaRemove
+        ) {
+            self.execute_media(action);
+            return;
+        }
+        if !self.surface.is_visible()
+            || self.surface.get_media_scope()
+            || !allowed(self.surface.get_kind(), action)
+        {
             return;
         }
         let key = self.key.borrow().clone();
@@ -267,6 +332,54 @@ impl ContextMenuController {
             DockMenuAction::RecycleRetry => {
                 dock.invoke_recycle_action_requested(DockRecycleAction::Retry)
             }
+            DockMenuAction::MediaBarAdd | DockMenuAction::MediaRemove => {}
+            // These belong exclusively to the launcher's favorite scope.
+            DockMenuAction::FavoriteAdd | DockMenuAction::FavoriteRemove => {}
+        }
+    }
+
+    fn execute_media(&self, action: DockMenuAction) {
+        if !self.surface.is_visible()
+            || !self.surface.window().is_visible()
+            || self.surface.get_kind() != DockMenuKind::Bar
+            || self.surface.get_launcher_favorite_scope()
+        {
+            return;
+        }
+        let Some(generation) = self.scope_generation.get() else {
+            return;
+        };
+        let media_scope = self.surface.get_media_scope();
+        let enabled = self.surface.get_media_enabled();
+        let desired = action == DockMenuAction::MediaBarAdd;
+        if desired == enabled
+            || (media_scope && desired)
+            || !self.dock.upgrade().is_some_and(|dock| {
+                dock.window().is_visible() && dock.get_media_view().enabled == enabled
+            })
+        {
+            return;
+        }
+        // No strong Dock survives lease Drop: a reentrant owner drop or scope
+        // replacement must cancel this intent before the root transaction.
+        self.hide();
+        let same_scope = generation
+            .checked_add(1)
+            .is_some_and(|retired| self.scope_generation.get() == Some(retired))
+            && !self.is_open()
+            && !self.surface.window().is_visible()
+            && self.surface.get_kind() == DockMenuKind::Bar
+            && self.surface.get_media_scope() == media_scope
+            && self.surface.get_media_enabled() == enabled;
+        if !same_scope {
+            return;
+        }
+        if let Some(dock) = self
+            .dock
+            .upgrade()
+            .filter(|dock| dock.window().is_visible() && dock.get_media_view().enabled == enabled)
+        {
+            dock.invoke_media_enabled_requested(desired);
         }
     }
 

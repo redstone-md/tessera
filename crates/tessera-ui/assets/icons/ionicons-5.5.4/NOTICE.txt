@@ -40,10 +40,34 @@ Git blob: 6b57967bbe9542d7c2ed53e616c90f823297d4e6
 SHA-256: 58c0fad45808e4cbb27614a8a649c5c87d8397ad9bac73c7c266fdb928468ea1
 These are original independently licensed upstream SVGs, not reference-exported serialization.
 
+Unmodified logout control artwork source:
+src/svg/log-out-outline.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/log-out-outline.svg
+Bytes: 596
+Git blob: d33e590544c637d00e0e7b99bddf5b520da45e70
+SHA-256: 6ef889144d24a964cab2d33242850e7d86c643125bebee0533accaf08f1ecc2e
+The Git blob was matched against the immutable upstream Git tree member.
+Original title ionicons-v5-o, 512x512 viewBox, unfilled path/polyline/line, black stroke width 32px and rounded caps/joins remain unchanged. This is canonical src/svg artwork, not the optimized dist/svg asset or reference-exported React/SSR serialization.
+
+React export mapping evidence (study only):
+https://raw.githubusercontent.com/react-icons/react-icons/9f32da3e3bd131c60951c0052c952df935c45f82/packages/react-icons/src/icons/index.ts
+Manifest SHA-256: f7e5a28f2305aa10653b4519fdf2b7d8a8b12d66e6d817bc67194158d64d5adb
+The io5 family reads ionicons-5/dist/svg/*.svg, prefixes Io and enables SVGO; log-out-outline maps to IoLogOutOutline.
+https://raw.githubusercontent.com/react-icons/react-icons/9f32da3e3bd131c60951c0052c952df935c45f82/packages/react-icons/package.json
+Package manifest version: 5.7.0
+Package manifest SHA-256: c58f1047fa9a76d899f9a6dd96aa0a03476a6b28de334015173161b17d80f9d8
+Its ionicons-5 development dependency is npm:ionicons@5, not an immutable release pin. The independently selected official v5.5.4 canonical source revision is pinned above. The studied reference at 53274fa9f45ad1b0ebd798e2d464858a213d9022 declares react-icons ^5.6.0 and selects IoLogOutOutline; that range/export does not establish its installed package revision.
+Permissive artwork provenance, original source geometry and React export naming do not establish identical generated/optimized serialization or native-rendered pixels. Visual equivalence requires separate verification.
+
 Full original MIT grant is retained in the adjacent LICENSE:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/LICENSE
 Copyright (c) 2015-present Ionic (http://ionic.io/)
 Retain that copyright and complete permission notice with copies or substantial portions of the artwork.
+The already retained complete LICENSE is reused unchanged; it was not downloaded again.
+Bytes: 1099
+Git blob: 6be4c3e10d8acc5e5268d72c381cdd5685805312
+SHA-256: c89dabc60b2e4e1a04b33bd7010b5a56bb4725ffe8c00d793a5ae009fbbfebd8
+The cached grant's Git blob matches the pinned upstream root LICENSE member.
 
 The pinned upstream readme.md identifies the project license as MIT:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/readme.md

@@ -1052,16 +1052,120 @@ function New-DeploymentRestoreResult {
     return [pscustomobject]@{ Action = $Action }
 }
 
-# Mandatory supervisor runtime verification: launches the INSTALLED
-# supervisor's own '--verify-runtime' probe (self-verification that the
-# unsigned supervisor can start at all, e.g. under Smart App Control),
-# waits for exit 0 within a bounded time, then terminates only the process
-# it started if still running. It writes no registry data, never touches
-# Winlogon or Explorer, and starts no other program. Tests inject a safe
-# probe through the module-internal Hooks seam; production never sets it.
+$script:SupervisorRuntimeCaptureReadMax = 32768
+$script:SupervisorRuntimeRecordPattern = '^tessera-runtime stage=(event|spawn|wait1|wait2|processExit|cleanup) error=(windows|spawn|heartbeat|path|other) pulses=[012] exit_code=(none|0x[0-9A-Fa-f]{8}) native_code=(none|0x[0-9A-Fa-f]{8}) cleanup_native_code=(none|0x[0-9A-Fa-f]{8}) stderr_bytes=(?<bytes>[0-9]{1,5}) stderr_truncated=(true|false) stderr_status=(complete|incomplete|readError|panic) stderr_hint=(empty|panic|other) stderr_native_code=(none|0x[0-9A-Fa-f]{8})$'
+
+# Both readers inspect only the bounded, locally owned supervisor capture.
+function Read-SupervisorRuntimeCapture {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not [IO.File]::Exists($Path)) { return '' }
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        $bytes = New-Object byte[] $script:SupervisorRuntimeCaptureReadMax
+        $count = $stream.Read($bytes, 0, $bytes.Length)
+        return [Text.Encoding]::UTF8.GetString($bytes, 0, $count)
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
+function Get-SupervisorRuntimeDiagnosticEnvironment {
+    # Only the in-process test seam substitutes these values; never mutate the
+    # runner's environment or consult desktop/user-data providers.
+    if ($script:DeploymentContext.Hooks.ContainsKey('SupervisorRuntimeDiagnosticEnvironment')) {
+        return & $script:DeploymentContext.Hooks['SupervisorRuntimeDiagnosticEnvironment']
+    }
+    $values = @{}
+    foreach ($name in @('GITHUB_ACTIONS', 'USERPROFILE', 'HOME', 'RUNNER_TEMP', 'TEMP', 'TMP')) {
+        $values[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    return $values
+}
+
+# Internal CI opt-in: retain ONLY the existing Rust Debug-escaped GUI tail
+# following a valid diagnostic record and its cause. Escaping is not redaction;
+# remove known runner home/temp roots before emitting this inert-host detail.
+function Read-SupervisorRuntimeGuiDetail {
+    param([Parameter(Mandatory)][string]$Path, [switch]$DiagnosticDetails)
+    if (-not $DiagnosticDetails) { return }
+    try {
+        $environment = Get-SupervisorRuntimeDiagnosticEnvironment
+        if ($environment['GITHUB_ACTIONS'] -cne 'true') { return }
+        $hasRecord = $false
+        $hasCause = $false
+        foreach ($line in ((Read-SupervisorRuntimeCapture -Path $Path) -split "`r?`n")) {
+            if ($line -cmatch $script:SupervisorRuntimeRecordPattern -and [int]$Matches['bytes'] -le 16384) {
+                $hasRecord = $true
+                $hasCause = $false
+                continue
+            }
+            if ($hasRecord -and -not $hasCause -and $line.StartsWith('runtime cause: ', [StringComparison]::Ordinal)) {
+                $hasCause = $true
+                continue
+            }
+            # Rust string Debug escapes quotes, slashes and control characters.
+            # Do not unescape, print cause/unknown lines, or read stdout.
+            if ($hasRecord -and $hasCause -and $line -cmatch '^GUI stderr tail: "(?:Tessera supervised GUI could not start: |Tessera supervised startup was refused: )(?:[^"\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|\\(?:["\\nrt0]|u\{[0-9a-fA-F]{1,6}\}))*"$') {
+                $roots = @('USERPROFILE', 'HOME', 'RUNNER_TEMP', 'TEMP', 'TMP') |
+                    ForEach-Object { [string]$environment[$_] } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Sort-Object Length -Descending
+                foreach ($root in $roots) {
+                    $root = $root.TrimEnd([char[]]@('\', '/'))
+                    if ($root.Length -lt 3) { continue }
+                    foreach ($variant in @($root, $root.Replace('\', '/'), $root.Replace('/', '\'))) {
+                        $escaped = $variant.Replace('\', '\\').Replace('"', '\"')
+                        $line = [regex]::Replace($line, [regex]::Escape($escaped), '<runner-path>', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+                    }
+                }
+                $detail = 'tessera-runtime-gui-detail source=DiagnosticHeartbeat ' + $line
+                if ([Text.Encoding]::UTF8.GetByteCount($detail) -gt 4096) {
+                    $suffix = ' [truncated]'
+                    $length = [Math]::Min($detail.Length, 4096 - $suffix.Length)
+                    while ([Text.Encoding]::UTF8.GetByteCount($detail.Substring(0, $length)) -gt 4096 - $suffix.Length) { $length-- }
+                    if ($length -gt 0 -and [char]::IsHighSurrogate($detail[$length - 1])) { $length-- }
+                    $detail = $detail.Substring(0, $length) + $suffix
+                }
+                return $detail
+            }
+            $hasRecord = $false
+            $hasCause = $false
+        }
+    } catch {
+        # Detail capture is best-effort; retain the primary numeric failure.
+    }
+}
+
+# Accept only the supervisor's fixed public error schema, never raw panic
+# text, OS messages, user paths, or arbitrary redirected stdout.
+function Read-SupervisorRuntimeRecords {
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $text = Read-SupervisorRuntimeCapture -Path $Path
+        $accepted = 0
+        foreach ($line in ($text -split "`r?`n")) {
+            if ($line -cmatch $script:SupervisorRuntimeRecordPattern -and [int]$Matches['bytes'] -le 16384) {
+                $line
+                $accepted++
+                if ($accepted -ge 8) { break }
+            }
+        }
+    } catch {
+        'tessera-runtime-probe stage=capture-read result=failed'
+    }
+}
+
+# The production supervisor retains its two real UI-thread heartbeat barrier.
+# Redirect only this owned probe, outside both package and source payloads.
+# Print bounded, privacy-safe records to the durable CI job log on failure;
+# no failed executable/archive uploads or shell activation are involved.
 function Invoke-SupervisorRuntimeVerification {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$SupervisorPath)
+    param(
+        [Parameter(Mandatory)][string]$SupervisorPath,
+        [switch]$DiagnosticDetails
+    )
 
     if ($script:DeploymentContext.Hooks.ContainsKey('SupervisorRuntimeProbe')) {
         & $script:DeploymentContext.Hooks['SupervisorRuntimeProbe'] -SupervisorPath $SupervisorPath
@@ -1072,28 +1176,105 @@ function Invoke-SupervisorRuntimeVerification {
         throw "The installed shell supervisor is missing: $SupervisorPath"
     }
 
-    # Bounded wait: 30 s supervisor startup + 30 s UI heartbeat, plus slack.
-    $waitMilliseconds = 90000
     $probe = $null
+    $captureDirectory = Join-Path ([IO.Path]::GetTempPath()) ('tessera-runtime-' + [Guid]::NewGuid().ToString('N'))
+    $stderrPath = Join-Path $captureDirectory 'stderr.txt'
+    $stdoutPath = Join-Path $captureDirectory 'stdout.txt'
+    $stage = 'capture-create'
     try {
-        $probe = Start-Process -FilePath $SupervisorPath -ArgumentList '--verify-runtime' -PassThru -Wait:$false
-        if (-not $probe.WaitForExit($waitMilliseconds)) {
-            if (-not $probe.HasExited) {
-                $null = $probe.Kill()
-                $probe.WaitForExit(5000) | Out-Null
+        $null = [IO.Directory]::CreateDirectory($captureDirectory)
+        $stage = 'supervisor-start'
+        $startParameters = @{
+            FilePath = $SupervisorPath
+            ArgumentList = '--verify-runtime'
+            PassThru = $true
+            Wait = $false
+            RedirectStandardError = $stderrPath
+            RedirectStandardOutput = $stdoutPath
+        }
+        if ($script:DeploymentContext.Hooks.ContainsKey('SupervisorRuntimeStart')) {
+            $probe = & $script:DeploymentContext.Hooks['SupervisorRuntimeStart'] $startParameters
+        } else {
+            $probe = Start-Process @startParameters
+        }
+        $stage = 'supervisor-wait'
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $completed = $false
+        # Polling bounds output growth as well as runtime. No unbounded
+        # WaitForExit() overload (which also waits for redirected readers).
+        for ($attempt = 0; $attempt -lt 360 -and $clock.ElapsedMilliseconds -lt 90000; $attempt++) {
+            $remaining = 90000 - $clock.ElapsedMilliseconds
+            $completed = $probe.WaitForExit([int][Math]::Max(0, [Math]::Min(250, $remaining)))
+            foreach ($path in @($stderrPath, $stdoutPath)) {
+                if ([IO.File]::Exists($path) -and (Get-Item -LiteralPath $path).Length -gt 65536) {
+                    $stage = 'capture-budget'
+                    throw 'The supervisor runtime diagnostic stream exceeded its 64 KiB budget.'
+                }
             }
-            throw ("The supervisor runtime verification did not finish within 90 seconds; " +
-                "the shell activation is refused.")
+            if ($completed) { break }
         }
+        if (-not $completed) {
+            $stage = 'supervisor-timeout'
+            throw 'The supervisor runtime verification did not finish within 90 seconds.'
+        }
+        $stage = 'supervisor-exit'
         if ($probe.ExitCode -ne 0) {
-            throw ("The supervisor runtime verification failed with exit code $($probe.ExitCode); " +
-                "the shell activation is refused. The supervisor may be blocked by security policy.")
+            throw "The supervisor runtime verification failed with exit code $($probe.ExitCode)."
         }
+    } catch {
+        # Do not print arbitrary exception messages: Start-Process errors can
+        # contain user paths. Preserve numeric OS errors without guessing policy.
+        $nativeCode = 'none'
+        $exception = $_.Exception
+        while ($null -ne $exception) {
+            if ($exception -is [ComponentModel.Win32Exception]) {
+                $nativeCode = [string]$exception.NativeErrorCode
+                break
+            }
+            $exception = $exception.InnerException
+        }
+        $exitCode = 'unavailable'
+        if ($null -ne $probe -and $probe.HasExited) { $exitCode = [string]$probe.ExitCode }
+        $record = "tessera-runtime-probe stage=$stage exit_code=$exitCode native_code=$nativeCode deadline_ms=90000"
+        Write-Host $record
+        $records = @(Read-SupervisorRuntimeRecords -Path $stderrPath)
+        $detail = Read-SupervisorRuntimeGuiDetail -Path $stderrPath -DiagnosticDetails:$DiagnosticDetails
+        # Start-Process's redirected-file callbacks can trail process exit.
+        # Give only the bounded numeric/opt-in GUI fields 150 ms drain grace, never
+        # call parameterless WaitForExit() or join a reader.
+        for ($drain = 0; $drain -lt 3 -and ($records.Count -eq 0 -or ($DiagnosticDetails -and $null -eq $detail)); $drain++) {
+            Start-Sleep -Milliseconds 50
+            $records = @(Read-SupervisorRuntimeRecords -Path $stderrPath)
+            $detail = Read-SupervisorRuntimeGuiDetail -Path $stderrPath -DiagnosticDetails:$DiagnosticDetails
+        }
+        foreach ($line in $records) { Write-Host $line }
+        if ($null -ne $detail) { Write-Host $detail }
+        throw ("The shell activation is refused. $record" +
+            $(if ($records.Count -gt 0) { "`n" + ($records -join "`n") } else { "`nNo recognized runtime stderr record was captured." }) +
+            $(if ($null -ne $detail) { "`n" + $detail } else { '' }))
     } finally {
-        if ($null -ne $probe -and -not $probe.HasExited) {
-            try { $null = $probe.Kill() } catch { }
+        if ($null -ne $probe) {
+            try {
+                if (-not $probe.HasExited) {
+                    $null = $probe.Kill()
+                    if (-not $probe.WaitForExit(5000)) {
+                        Write-Host 'tessera-runtime-probe stage=supervisor-cleanup result=timeout'
+                    }
+                }
+            } catch {
+                Write-Host 'tessera-runtime-probe stage=supervisor-cleanup result=failed'
+            } finally { $probe.Dispose() }
         }
-        if ($null -ne $probe) { $probe.Dispose() }
+        # Delete only the two exact files and our empty, uniquely owned directory.
+        # Never recursively delete a user-supplied path.
+        foreach ($path in @($stderrPath, $stdoutPath)) {
+            try { if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) } } catch {
+                Write-Host 'tessera-runtime-probe stage=capture-cleanup result=failed'
+            }
+        }
+        try {
+            if ([IO.Directory]::Exists($captureDirectory)) { [IO.Directory]::Delete($captureDirectory, $false) }
+        } catch { Write-Host 'tessera-runtime-probe stage=capture-cleanup result=failed' }
     }
     Write-Verbose 'The supervisor runtime verification probe completed successfully.'
 }

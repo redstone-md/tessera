@@ -1,0 +1,271 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+//! OS-current media session facts and nonblocking transport requests.
+//!
+//! Session keys are transient command authority, never application identities.
+//! A successful empty snapshot is distinct from an unavailable observation.
+
+use std::fmt;
+use std::num::NonZeroU64;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_SESSION_KEY: AtomicU64 = AtomicU64::new(1);
+
+/// Opaque identity for one live native session incarnation. Never persist it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct MediaSessionKey(NonZeroU64);
+
+impl MediaSessionKey {
+    /// Allocates a globally unique key for a host or recording adapter only.
+    /// Native hosts retain it for the same live session and rotate on reconnect,
+    /// including when the replacement reports the same source application ID.
+    pub fn issue() -> Result<Self, MediaError> {
+        Self::issue_from(&NEXT_SESSION_KEY)
+    }
+
+    fn issue_from(counter: &AtomicU64) -> Result<Self, MediaError> {
+        let mut value = counter.load(Ordering::Relaxed);
+        let value = loop {
+            let next = value.checked_add(1).filter(|_| value != 0).ok_or_else(|| {
+                MediaError::new(MediaErrorKind::Other, "Media session keys exhausted")
+            })?;
+            match counter.compare_exchange_weak(value, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(previous) => break previous,
+                Err(observed) => value = observed,
+            }
+        };
+        NonZeroU64::new(value)
+            .map(Self)
+            .ok_or_else(|| MediaError::new(MediaErrorKind::Other, "Invalid media session key"))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaPlayback {
+    Closed,
+    Opened,
+    Changing,
+    Stopped,
+    Playing,
+    Paused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaAction {
+    Previous,
+    Toggle,
+    Next,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaCapabilities {
+    pub previous: bool,
+    pub toggle: bool,
+    pub next: bool,
+}
+
+impl MediaCapabilities {
+    pub fn allows(self, action: MediaAction) -> bool {
+        match action {
+            MediaAction::Previous => self.previous,
+            MediaAction::Toggle => self.toggle,
+            MediaAction::Next => self.next,
+        }
+    }
+}
+
+/// Owned, tightly packed premultiplied RGBA8, at most 128 pixels per axis.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaArtwork {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+impl MediaArtwork {
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, MediaError> {
+        if width == 0 || height == 0 || width > 128 || height > 128 {
+            return Err(invalid_artwork(
+                "Media artwork dimensions must be between 1 and 128",
+            ));
+        }
+        let expected = usize::try_from(width)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(height)
+                    .ok()
+                    .and_then(|height| width.checked_mul(height))
+            })
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| invalid_artwork("Media artwork dimensions overflow"))?;
+        if rgba.len() != expected {
+            return Err(invalid_artwork(
+                "Media artwork must contain exactly width × height × 4 bytes",
+            ));
+        }
+        if rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[..3].iter().any(|channel| *channel > pixel[3]))
+        {
+            return Err(invalid_artwork("Media artwork must use premultiplied RGBA"));
+        }
+        Ok(Self {
+            width,
+            height,
+            rgba,
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+}
+
+fn invalid_artwork(message: &str) -> MediaError {
+    MediaError::new(MediaErrorKind::Other, message)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaSession {
+    pub key: MediaSessionKey,
+    /// Presentation metadata only; never pass this value to launch or transport.
+    pub source_app_id: String,
+    pub title: String,
+    pub author: String,
+    pub playback: MediaPlayback,
+    pub capabilities: MediaCapabilities,
+    pub artwork: Option<MediaArtwork>,
+    /// Independent thumbnail failure; usable metadata/controls remain available.
+    pub artwork_notice: Option<MediaError>,
+}
+
+impl MediaSession {
+    /// Bounds Unicode scalar counts at ingress without splitting UTF-8.
+    /// Overlong source IDs are cleared, not shortened into another app identity.
+    pub fn bounded(mut self) -> Self {
+        if self.source_app_id.chars().nth(256).is_some() {
+            self.source_app_id.clear();
+        }
+        truncate_chars(&mut self.title, 512);
+        truncate_chars(&mut self.author, 512);
+        self
+    }
+}
+
+fn truncate_chars(value: &mut String, maximum: usize) {
+    if let Some((end, _)) = value.char_indices().nth(maximum) {
+        value.truncate(end);
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MediaSnapshot {
+    /// `None` means the OS positively reported no current session.
+    pub current: Option<MediaSession>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaCommand {
+    pub expected_session: MediaSessionKey,
+    pub action: MediaAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaErrorKind {
+    Unsupported,
+    Unavailable,
+    SessionChanged,
+    CommandUnavailable,
+    Rejected,
+    WatchUnavailable,
+    Other,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaError {
+    pub kind: MediaErrorKind,
+    pub message: String,
+    pub hresult: Option<i32>,
+}
+
+impl MediaError {
+    pub fn new(kind: MediaErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            hresult: None,
+        }
+    }
+
+    pub fn with_hresult(kind: MediaErrorKind, message: impl Into<String>, code: i32) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            hresult: Some(code),
+        }
+    }
+}
+
+impl fmt::Display for MediaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MediaError {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaEvent {
+    Changed,
+    WatchReady,
+    WatchUnavailable(MediaError),
+}
+
+pub type MediaReadCompletion = Box<dyn FnOnce(Result<MediaSnapshot, MediaError>) + Send + 'static>;
+pub type MediaCommandCompletion = Box<dyn FnOnce(Result<(), MediaError>) + Send + 'static>;
+
+/// Prompt, nonblocking seam for native media and recording adapters.
+///
+/// `Ok` from read/execute transfers exactly one completion; immediate `Err`
+/// transfers none. Callbacks may run inline or on a worker. Transport intents
+/// must never be retried automatically, including after initialization failure.
+pub trait MediaHost: Send + Sync + 'static {
+    fn read(&self, completion: MediaReadCompletion) -> Result<(), MediaError>;
+
+    /// Acknowledges OS acceptance, not a confirmed new playback/title snapshot.
+    /// Revalidate actual current identity and capabilities immediately before
+    /// dispatch, then explicitly reread after completion to observe any change.
+    fn execute(
+        &self,
+        command: MediaCommand,
+        completion: MediaCommandCompletion,
+    ) -> Result<(), MediaError>;
+
+    /// `Changed` invalidates observations. Readiness follows native registration;
+    /// a returned guard only accepts asynchronous setup, not live readiness.
+    /// `None` means watching is unsupported. Immediate `Err` emits no events.
+    /// Guard drop suppresses new delivery and queues cleanup without joining;
+    /// a callback already admitted may finish, so consumers generation-gate.
+    fn subscribe(
+        &self,
+        _changed: Arc<dyn Fn(MediaEvent) + Send + Sync>,
+    ) -> Result<Option<Box<dyn Send>>, MediaError> {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+#[path = "media/tests.rs"]
+mod tests;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Button, LineEdit, ListView, Palette, StyleMetrics } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { TileButton, FocusTokens, TileBounds } from "tiles.slint";
@@ -9,6 +9,40 @@ import { LauncherTile, LaunchTile } from "launcher-tile.slint";
 import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
 export { LaunchTile } from "launcher-tile.slint";
+
+// Labels reuse the shared input owner, so window retirement can revoke both
+// application and command gestures without touching private stock widgets.
+component LauncherCommandButton inherits TileButton {
+    in property <string> text;
+    in property <string> input-scope;
+    activation-key: root.input-scope + root.accessible-text;
+    min-width: metrics.min-width;
+    min-height: metrics.min-height;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    radius: 4px;
+    allow-return-repeat: false;
+    focus-on-pointer: false;
+    // Delegate native size/font metrics to the installed widget, not a frozen
+    // pixel estimate. The probe is never visible, focusable or actionable.
+    metrics := Button {
+        text: root.text;
+        enabled: false;
+        visible: false;
+        accessible-role: none;
+        accessible-label: "";
+    }
+    label := Text {
+        x: 12px;
+        width: max(0px, root.width - 24px);
+        height: root.height;
+        text: root.text;
+        color: root.enabled ? Palette.control-foreground : SeelenPalette.muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
 
 export struct LauncherDragVisual {
     visible: bool,
@@ -65,6 +99,10 @@ export component Launcher inherits Window {
     in-out property <string> search;
     in property <string> selected-key: "";
     out property <int> grid-columns: 7;
+    property <int> input-generation: 0;
+    property <bool> input-exhausted: false;
+    property <string> input-scope: "launcher/" + root.input-generation + ":";
+    out property <bool> input-available: !root.input-exhausted;
     in property <bool> reorder-enabled: false;
     in property <data-transfer> reorder-data;
     in property <LauncherDragVisual> reorder-visual;
@@ -124,6 +162,7 @@ export component Launcher inherits Window {
     callback search-changed();
     callback launch-requested(string);
     callback favorite-toggle-requested(string, bool);
+    callback app-menu-requested(string, Point);
     callback view-requested(LauncherView);
     callback display-mode-requested(LauncherDisplayMode);
     callback open-settings-requested();
@@ -136,6 +175,24 @@ export component Launcher inherits Window {
     focus-search => {
         root.grid-navigation = false;
         search-field.focus();
+    }
+
+    // Root calls this before hide/reopen or any query/projection replacement.
+    // Scoped keys revoke virtual delegates synchronously when input is checked;
+    // named commands also release their held visual/input state immediately.
+    public function cancel-input() {
+        if root.input-generation < 2147483647 {
+            root.input-generation += 1;
+        } else {
+            root.input-exhausted = true;
+        }
+        view-command.cancel-input();
+        user-command.cancel-input();
+        settings-command.cancel-input();
+        power-command.cancel-input();
+        refresh-command.cancel-input();
+        exit-command.cancel-input();
+        mode-command.cancel-input();
     }
 
     // A fresh view/reopen starts at the top without taking keyboard focus.
@@ -165,7 +222,7 @@ export component Launcher inherits Window {
     }
     property <length> gap: 8px;
     property <length> pad: 8px;
-    property <bool> blocked: root.refreshing || root.stale;
+    property <bool> blocked: root.refreshing || root.stale || root.input-exhausted;
     // Only arrows originating in the grid move real tile focus. Search
     // preselection stays semantic so native text editing retains focus.
     property <bool> grid-navigation: false;
@@ -249,10 +306,12 @@ export component Launcher inherits Window {
                     return reject;
                 }
             }
-                Button {
+                view-command := LauncherCommandButton {
+                    input-scope: root.input-scope;
                     text: root.view == LauncherView.favorites ? "All Apps" : "Back";
-                    accessible-label: root.view == LauncherView.favorites ? "All Apps" : "Back to favorites";
+                    accessible-text: root.view == LauncherView.favorites ? "All Apps" : "Back to favorites";
                     enabled: !root.blocked;
+                    allow-return-repeat: true;
                     clicked => {
                         if !root.blocked {
                             root.view-requested(root.view == LauncherView.favorites ?
@@ -397,6 +456,7 @@ export component Launcher inherits Window {
                             width: parent.width;
                             height: parent.height;
                             tile: tile;
+                            input-scope: root.input-scope;
                             // Keep the native slot and its geometry alive.
                             opacity: root.reorder-visual.visible
                                 && root.reorder-visual.source.key == tile.key ? 0 : root.blocked ? 0.5 : 1;
@@ -405,8 +465,17 @@ export component Launcher inherits Window {
                                 && root.reorder-visual.source.key == tile.key);
                             visible: !(root.reorder-visual.visible
                                 && root.reorder-visual.source.key == tile.key);
-                            report-pointer-metadata: root.reorder-enabled;
+                            // Context presses retain genuine focus without changing
+                            // the host's semantic selection or arming a reorder.
+                            property <bool> context-pointer-focus;
+                            report-pointer-metadata: true;
                             pointer-metadata(event, bounds, point) => {
+                                if event.kind == PointerEventKind.down {
+                                    self.context-pointer-focus = event.button == PointerEventButton.right;
+                                } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                                    self.context-pointer-focus = false;
+                                }
+                                if !root.reorder-enabled { return; }
                                 if event.kind == PointerEventKind.down {
                                     root.reorder-armed = event.button == PointerEventButton.left;
                                 } else if event.kind == PointerEventKind.up {
@@ -422,10 +491,22 @@ export component Launcher inherits Window {
                             selected: tile.key == root.selected-key;
                             keyboard-selected: root.grid-navigation
                                 && self.selected && !root.reorder-dragging;
-                            focus-acquired => { root.select-requested(tile.key); }
+                            focus-acquired => {
+                                if !self.context-pointer-focus { root.select-requested(tile.key); }
+                            }
                             clicked => { root.launch-requested(tile.key); }
+                            context-requested(anchor) => {
+                                // Pointer capture may retain hover until release;
+                                // authority still requires the real source bounds.
+                                let origin = self.absolute-position;
+                                if !root.blocked && !root.reorder-dragging && self.interactive
+                                    && anchor.x >= origin.x && anchor.x < origin.x + self.width
+                                    && anchor.y >= origin.y && anchor.y < origin.y + self.height {
+                                    root.app-menu-requested(tile.key, anchor);
+                                }
+                            }
                             favorite-pointer-metadata(event, bounds, point) => {
-                                root.veto-reorder(event, bounds, point);
+                                if root.reorder-enabled { root.veto-reorder(event, bounds, point); }
                             }
                             favorite-toggle-requested => {
                                 root.favorite-toggle-requested(tile.key, !tile.favorite);
@@ -475,9 +556,11 @@ export component Launcher inherits Window {
                 spacing: root.pad;
                 alignment: end;
 
-                Button {
+                user-command := LauncherCommandButton {
+                    input-scope: root.input-scope;
+                    enabled: root.input-available;
                     text: root.user-name == "" ? "User" : root.user-name;
-                    accessible-label: "Open user menu";
+                    accessible-text: "Open user menu";
                     clicked => {
                         root.open-user-menu-requested({
                             origin: self.absolute-position,
@@ -487,18 +570,21 @@ export component Launcher inherits Window {
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                Button {
+                settings-command := LauncherCommandButton {
+                    input-scope: root.input-scope;
+                    enabled: root.input-available;
                     text: "Settings";
-                    accessible-label: "Open settings and recovery";
+                    accessible-text: "Open settings and recovery";
                     clicked => { root.open-settings-requested(); }
                 }
-                TileButton {
+                power-command := TileButton {
+                    activation-key: root.input-scope + "power";
                     width: 32px;
                     height: 32px;
                     radius: 6px;
                     filled: false;
                     // Session actions do not borrow application refresh state.
-                    enabled: !root.reorder-dragging;
+                    enabled: root.input-available && !root.reorder-dragging;
                     allow-return-repeat: false;
                     accessible-text: @tr("Open power menu");
                     tooltip-text: @tr("Power menu");
@@ -514,23 +600,28 @@ export component Launcher inherits Window {
                         accessible-role: none;
                     }
                 }
-                Button {
+                refresh-command := LauncherCommandButton {
+                    input-scope: root.input-scope;
                     text: "Refresh";
-                    enabled: !root.refreshing;
-                    accessible-label: "Refresh the desktop";
+                    enabled: root.input-available && !root.refreshing;
+                    accessible-text: "Refresh the desktop";
                     clicked => { root.refresh-requested(); }
                 }
-                Button {
+                exit-command := LauncherCommandButton {
+                    input-scope: root.input-scope;
+                    enabled: root.input-available;
                     text: "Exit";
-                    accessible-label: "Exit Tessera";
+                    accessible-text: "Exit Tessera";
                     clicked => { root.exit-requested(); }
                 }
-                TileButton {
+                mode-command := TileButton {
+                    activation-key: root.input-scope + "display-mode";
                     width: 32px;
                     height: 32px;
                     radius: 6px;
                     filled: false;
                     enabled: !root.blocked;
+                    allow-return-repeat: false;
                     accessible-text: root.display-mode == LauncherDisplayMode.Windowed
                         ? @tr("Expand applications menu") : @tr("Contract applications menu");
                     accessible-description: root.display-mode == LauncherDisplayMode.Windowed

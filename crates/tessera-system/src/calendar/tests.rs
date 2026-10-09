@@ -309,3 +309,41 @@ fn metadata_validation_is_utf16_bounded_rejects_controls_and_preserves_unicode_r
     value.weekdays_abbreviated[6] = "x\ty".into();
     assert!(construct(&value).is_err());
 }
+
+#[test]
+fn week_start_setter_changes_only_alignment_preserving_browse_selection_and_view() {
+    for view in [CalendarView::Month, CalendarView::Year] {
+        let mut state = CalendarState::new(snapshot(date(2024, 2, 29), WeekStart::Monday));
+        assert!(state.select_day(date(2024, 2, 28)));
+        assert!(state.navigate(CalendarDirection::Next));
+        if view == CalendarView::Year {
+            state.toggle_view();
+        }
+        let displayed = state.displayed();
+        let selected = state.selected();
+        let original = state.snapshot.clone();
+        for (index, start) in STARTS.into_iter().enumerate() {
+            state.set_week_start(start);
+            let mut expected = original.clone();
+            expected.week_start = start;
+            assert_eq!(
+                state.snapshot, expected,
+                "all other native metadata is retained"
+            );
+            assert_eq!(state.displayed(), displayed);
+            assert_eq!(state.selected(), selected);
+            assert_eq!(state.view(), view);
+            assert_eq!(
+                state.projection().weekdays,
+                std::array::from_fn(|offset| format!("W{}", (index + offset) % 7 + 1)),
+            );
+            let projected = state.projection();
+            state.set_week_start(start);
+            assert_eq!(
+                state.projection(),
+                projected,
+                "same alignment is idempotent"
+            );
+        }
+    }
+}

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Desktop-spanning Power presentation and one genuine, directly dispatched Lock.
-//! Read, presentation and accepted command lifetimes are deliberately independent.
+//! Desktop-spanning Power presentation with six directly dispatched native intents.
+//! Domain flights survive hidden presentation retirement; no command is replayed.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -12,7 +12,10 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use slint::{ComponentHandle, PhysicalPosition, PhysicalSize};
 use tessera_system::display_context::{DisplayContextError, DisplayContextHost, DisplayLayout};
-use tessera_system::power::{PowerAction, PowerError, PowerHost, PowerRequestAccepted};
+use tessera_system::power::{
+    PowerAction, PowerError, PowerHost, PowerRequestAccepted, PowerUpdatePolicy,
+};
+use tessera_system::power_updates::{PowerUpdateHint, PowerUpdatesError, PowerUpdatesHost};
 
 use crate::generated::{
     FocusTokens, Palette, PopoverMotion, PowerMenuAction, PowerMenuSurface, SeelenPalette,
@@ -20,6 +23,15 @@ use crate::generated::{
 use crate::transient_window::{TransientComponent, TransientWindow};
 use crate::{DesktopHost, SurfaceKind, Theme};
 
+mod mailbox;
+mod presentation;
+mod updates;
+use mailbox::{Mailbox, complete_lock, complete_read, complete_updates};
+
+#[cfg(test)]
+pub(crate) mod source_measure_tests;
+#[cfg(test)]
+mod surface_tests;
 #[cfg(test)]
 mod tests;
 
@@ -37,6 +49,7 @@ impl TransientComponent for PowerMenuSurface {
 struct Token {
     generation: u64,
     sequence: u64,
+    epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +69,7 @@ struct State {
     generation: u64,
     sequence: u64,
     closed: bool,
+    epoch: u64,
     desired: bool,
     opening: bool,
     authorized: Option<u64>,
@@ -63,6 +77,16 @@ struct State {
     layout: Option<DisplayLayout>,
     display: Option<Arc<dyn DisplayContextHost>>,
     power: Option<Arc<dyn PowerHost>>,
+    updates: Option<Arc<dyn PowerUpdatesHost>>,
+    updates_dirty: bool,
+    updates_read: Option<Flight>,
+    updates_hint: Option<PowerUpdateHint>,
+    updates_status: String,
+    install_updates: bool,
+    initialized: bool,
+    initial_updates_generation: Option<u64>,
+    user_name: String,
+    hidden_deadline: Option<presentation::HiddenDeadline>,
     read_dirty: bool,
     read: Option<Flight>,
     lock: Option<Flight>,
@@ -85,6 +109,7 @@ impl State {
         Ok(Token {
             generation: self.generation,
             sequence: self.sequence,
+            epoch: self.epoch,
         })
     }
 
@@ -95,78 +120,6 @@ impl State {
 
 type ReadResult = Result<Option<DisplayLayout>, DisplayContextError>;
 type LockResult = Result<PowerRequestAccepted, PowerError>;
-
-struct Slot<T> {
-    expected: Option<Token>,
-    terminal: Option<(Token, T)>,
-}
-
-impl<T> Default for Slot<T> {
-    fn default() -> Self {
-        Self {
-            expected: None,
-            terminal: None,
-        }
-    }
-}
-
-// Two one-terminal slots, not an unbounded channel. Inline delivery still only
-// queues Send data; factories and providers never receive a strong UI/root.
-#[derive(Default)]
-struct Mailbox {
-    read: Slot<ReadResult>,
-    lock: Slot<LockResult>,
-    wake_queued: bool,
-}
-
-fn wake(mailbox: &Arc<Mutex<Mailbox>>, root: &slint::Weak<PowerMenuSurface>) {
-    if root
-        .upgrade_in_event_loop(|root| root.invoke_power_event_ready())
-        .is_err()
-    {
-        mailbox.lock().wake_queued = false;
-    }
-}
-
-fn complete_read(
-    mailbox: &Arc<Mutex<Mailbox>>,
-    root: &slint::Weak<PowerMenuSurface>,
-    token: Token,
-    result: ReadResult,
-) {
-    {
-        let mut mailbox = mailbox.lock();
-        if mailbox.read.expected != Some(token) || mailbox.read.terminal.is_some() {
-            return;
-        }
-        mailbox.read.terminal = Some((token, result));
-        if mailbox.wake_queued {
-            return;
-        }
-        mailbox.wake_queued = true;
-    }
-    wake(mailbox, root);
-}
-
-fn complete_lock(
-    mailbox: &Arc<Mutex<Mailbox>>,
-    root: &slint::Weak<PowerMenuSurface>,
-    token: Token,
-    result: LockResult,
-) {
-    {
-        let mut mailbox = mailbox.lock();
-        if mailbox.lock.expected != Some(token) || mailbox.lock.terminal.is_some() {
-            return;
-        }
-        mailbox.lock.terminal = Some((token, result));
-        if mailbox.wake_queued {
-            return;
-        }
-        mailbox.wake_queued = true;
-    }
-    wake(mailbox, root);
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Frame {
@@ -272,7 +225,7 @@ impl Drop for NativeEffect<'_> {
 }
 
 pub(crate) struct PowerMenuController {
-    surface: TransientWindow<PowerMenuSurface>,
+    surface: RefCell<Option<Rc<TransientWindow<PowerMenuSurface>>>>,
     host: Arc<dyn DesktopHost>,
     state: RefCell<State>,
     mailbox: Arc<Mutex<Mailbox>>,
@@ -283,6 +236,7 @@ pub(crate) struct PowerMenuController {
     fit_timer: slint::Timer,
     work_timer: slint::Timer,
     focus_watch: slint::Timer,
+    retirement_timer: slint::Timer,
     focus_seen: Cell<bool>,
     processing: Cell<bool>,
     native_effect: Cell<bool>,
@@ -297,11 +251,19 @@ impl PowerMenuController {
     ) -> Result<Rc<Self>, String> {
         let component =
             PowerMenuSurface::new().map_err(|_| "Could not create the Power menu surface.")?;
-        let surface = TransientWindow::new(host.clone(), component, SurfaceKind::Popup);
+        let surface = Rc::new(TransientWindow::new(
+            host.clone(),
+            component,
+            SurfaceKind::Popup,
+        ));
         let controller = Rc::new_cyclic(|weak| Self {
-            surface,
+            surface: RefCell::new(Some(surface.clone())),
             host,
-            state: RefCell::default(),
+            state: RefCell::new(State {
+                epoch: 1,
+                install_updates: true,
+                ..State::default()
+            }),
             mailbox: Arc::new(Mutex::default()),
             weak: weak.clone(),
             on_opened,
@@ -310,60 +272,56 @@ impl PowerMenuController {
             fit_timer: slint::Timer::default(),
             work_timer: slint::Timer::default(),
             focus_watch: slint::Timer::default(),
+            retirement_timer: slint::Timer::default(),
             focus_seen: Cell::new(false),
             processing: Cell::new(false),
             native_effect: Cell::new(false),
             motion_suppressed: Cell::new(false),
         });
-        let weak = controller.weak.clone();
-        controller.surface.on_power_event_ready(move || {
-            if let Some(controller) = weak.upgrade() {
-                controller.process_events();
-            }
-        });
-        let weak = controller.weak.clone();
-        controller.surface.on_viewport_changed(move || {
-            if let Some(controller) = weak.upgrade() {
-                controller.schedule_fit();
-            }
-        });
-        let weak = controller.weak.clone();
-        controller.surface.on_action_requested(move |action| {
-            if let Some(controller) = weak.upgrade() {
-                controller.activate(action);
-            }
-        });
-        let weak = controller.weak.clone();
-        controller.surface.on_hide_requested(move || {
-            if let Some(controller) = weak.upgrade() {
-                controller.hide();
-            }
-        });
-        let weak = controller.weak.clone();
-        controller.surface.window().on_close_requested(move || {
-            if let Some(controller) = weak.upgrade() {
-                controller.hide();
-            }
-            slint::CloseRequestResponse::KeepWindowShown
-        });
+        controller.attach_callbacks(&surface, 1);
+        controller.mailbox.lock().install(1, surface.as_weak())?;
         controller.project(0);
         Ok(controller)
     }
 
     #[cfg(test)]
-    pub(crate) fn component(&self) -> &PowerMenuSurface {
-        &self.surface
+    pub(crate) fn component(&self) -> PowerMenuSurface {
+        self.component_if_present()
+            .expect("current Power presentation")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn component_if_present(&self) -> Option<PowerMenuSurface> {
+        self.surface_snapshot()
+            .map(|(_, surface)| surface.clone_strong())
     }
 
     pub(crate) fn is_visible(&self) -> bool {
-        !self.state.borrow().closed
-            && self.surface.is_visible()
-            && self.surface.window().is_visible()
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return false;
+        };
+        self.epoch_is(epoch)
+            && surface.is_visible()
+            && surface.window().is_visible()
+            && self.epoch_is(epoch)
+    }
+
+    /// Cache-only seam for the root's presentation-independent display relay.
+    /// Never discovers a provider, reads native state or creates a surface.
+    pub(crate) fn display_provider(&self) -> Option<Arc<dyn DisplayContextHost>> {
+        let state = self.state.borrow();
+        if state.closed {
+            None
+        } else {
+            state.display.clone()
+        }
     }
 
     /// True means a fresh context request was scheduled, not that a popup is
     /// already visible. The root validates genuine Launcher trigger authority.
     pub(crate) fn show(&self, theme: Theme) -> Result<bool, String> {
+        // Cancel before constructors, provider factories or generated effects.
+        self.retirement_timer.stop();
         let generation = {
             let mut state = self.state.borrow_mut();
             if state.closed {
@@ -381,15 +339,38 @@ impl PowerMenuController {
             state.desired = true;
             state.opening = true;
             state.authorized = None;
+            state.layout = None;
+            state.hidden_deadline = None;
+            state.updates_dirty = true;
+            if !state.initialized {
+                state.initial_updates_generation = None;
+            }
             state.read_dirty = true;
             generation
         };
+        match self.ensure_surface(generation) {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(error) => {
+                if self.current(generation) {
+                    self.hide();
+                }
+                return Err(error);
+            }
+        }
+        self.process_events();
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return Ok(false);
+        };
+        if !self.current(generation) || !self.epoch_is(epoch) {
+            return Ok(false);
+        }
         self.motion_suppressed.set(false);
         // Explicit replacement intent cancels an older native operation at its
         // own lifetime seam, so its position/show/configure continuation cannot
         // mutate the replacement. Settled visible refits stay attached.
         if self.native_effect.get() {
-            self.surface.hide();
+            surface.hide();
             if !self.current(generation) {
                 return Ok(false);
             }
@@ -403,6 +384,9 @@ impl PowerMenuController {
             return Ok(false);
         }
         self.pump_read();
+        if self.current(generation) {
+            self.pump_updates();
+        }
         Ok(self.current(generation))
     }
 
@@ -410,6 +394,8 @@ impl PowerMenuController {
         self.fit_timer.stop();
         self.work_timer.stop();
         self.focus_watch.stop();
+        self.retirement_timer.stop();
+        let presentation = self.surface_snapshot();
         self.focus_seen.set(false);
         let generation = {
             let mut state = self.state.borrow_mut();
@@ -426,15 +412,27 @@ impl PowerMenuController {
             state.authorized = None;
             state.layout = None;
             state.read_dirty = false;
+            state.updates_dirty = false;
+            state.hidden_deadline =
+                presentation
+                    .as_ref()
+                    .map(|(epoch, _)| presentation::HiddenDeadline {
+                        epoch: *epoch,
+                        generation,
+                    });
             generation
         };
         self.frame.set(None);
         self.project(generation);
         // Property and lease destructors may have installed a replacement.
         // Never let the older hide tear that replacement down.
-        if self.retired(generation) {
-            self.surface.hide();
+        if let Some((epoch, surface)) = presentation
+            && self.retired(generation)
+            && self.epoch_is(epoch)
+        {
+            surface.hide();
         }
+        self.arm_completed_hide();
     }
 
     /// Called by the root's TransientScope before its HWND teardown. Submitted
@@ -443,43 +441,57 @@ impl PowerMenuController {
         self.fit_timer.stop();
         self.work_timer.stop();
         self.focus_watch.stop();
-        let (display, power, unissued_read, unissued_lock) = {
+        self.retirement_timer.stop();
+        let (display, power, updates, surface) = {
             let mut state = self.state.borrow_mut();
             if state.closed {
                 return;
             }
+            // Revoke every callback/presentation authority before native/UI or
+            // provider Drop can reenter. Accepted native work is not cancelled.
             state.closed = true;
-            // Exhaustion is terminal: no identity can be reused after close.
-            if let Some(next) = state.generation.checked_add(1) {
-                state.generation = next;
-            }
+            state.generation = state.generation.checked_add(1).unwrap_or(state.generation);
+            state.epoch = state.epoch.checked_add(1).unwrap_or(state.epoch);
             state.desired = false;
             state.opening = false;
             state.authorized = None;
             state.layout = None;
             state.read_dirty = false;
-            let read = state.read.filter(|flight| flight.phase == Phase::Reserved);
-            let lock = state.lock.filter(|flight| flight.phase == Phase::Reserved);
-            if read.is_some() {
+            state.updates_dirty = false;
+            state.hidden_deadline = None;
+            if state
+                .read
+                .is_some_and(|flight| flight.phase == Phase::Reserved)
+            {
                 state.read = None;
             }
-            if lock.is_some() {
+            if state
+                .lock
+                .is_some_and(|flight| flight.phase == Phase::Reserved)
+            {
                 state.lock = None;
             }
-            (state.display.take(), state.power.take(), read, lock)
+            if state
+                .updates_read
+                .is_some_and(|flight| flight.phase == Phase::Reserved)
+            {
+                state.updates_read = None;
+            }
+            (
+                state.display.take(),
+                state.power.take(),
+                state.updates.take(),
+                self.surface.borrow_mut().take(),
+            )
         };
-        if let Some(flight) = unissued_read {
-            self.clear_read_slot(flight.token);
-        }
-        if let Some(flight) = unissued_lock {
-            self.clear_lock_slot(flight.token);
-        }
+        self.mailbox.lock().close();
         self.frame.set(None);
         self.focus_seen.set(false);
-        self.surface.hide();
-        // Provider and native lease destructors are allowed to reenter. No
-        // RefCell borrow, strong root capture, or native join crosses them.
-        drop((display, power));
+        if let Some(surface) = surface {
+            surface.hide();
+            drop(surface);
+        }
+        drop((display, power, updates));
     }
 
     pub(crate) fn set_theme(&self, theme: Theme) {
@@ -499,11 +511,18 @@ impl PowerMenuController {
 
     pub(crate) fn disable_motion(&self) {
         self.motion_suppressed.set(true);
-        self.surface.disable_motion();
+        if let Some((epoch, surface)) = self.surface_snapshot()
+            && self.epoch_is(epoch)
+        {
+            surface.disable_motion();
+        }
     }
 
     pub(crate) fn update_motion(&self) {
         let generation = self.state.borrow().generation;
+        if self.surface_snapshot().is_none() {
+            return;
+        }
         let enabled = self.host.ui_animations_enabled();
         if self.generation_is(generation) && !enabled {
             self.disable_motion();
@@ -529,18 +548,14 @@ impl PowerMenuController {
             return;
         }
         let _processing = Processing(&self.processing);
-        let (read, lock) = {
+        let (read, lock, updates) = {
             let mut mailbox = self.mailbox.lock();
             mailbox.wake_queued = false;
-            let read = mailbox.read.terminal.take();
-            let lock = mailbox.lock.terminal.take();
-            if read.is_some() {
-                mailbox.read.expected = None;
-            }
-            if lock.is_some() {
-                mailbox.lock.expected = None;
-            }
-            (read, lock)
+            (
+                mailbox.read.take(),
+                mailbox.lock.take(),
+                mailbox.updates.take(),
+            )
         };
         if let Some((token, result)) = lock {
             let live = {
@@ -559,17 +574,20 @@ impl PowerMenuController {
                     (self.on_result)(
                         result
                             .map(|_| ())
-                            .map_err(|error| format!("Lock request failed: {error}")),
+                            .map_err(|error| format!("Power request failed: {error}")),
                     );
                 }
             }
+        }
+        if let Some((token, result)) = updates {
+            self.observe_updates(token, result);
         }
         if let Some((token, result)) = read {
             let current = {
                 let mut state = self.state.borrow_mut();
                 if state.read.is_some_and(|flight| flight.token == token) {
                     state.read = None;
-                    state.current(token.generation)
+                    state.current(token.generation) && state.epoch == token.epoch
                 } else {
                     false
                 }
@@ -588,16 +606,11 @@ impl PowerMenuController {
                 }
             }
         }
-        let dirty = self.state.borrow().read_dirty;
-        if dirty {
-            self.refresh_display();
-        }
-        // A synchronous provider can have delivered while this drain was
-        // running. Schedule finite work, never poll a quiet capability.
-        let pending = {
-            let mailbox = self.mailbox.lock();
-            mailbox.read.terminal.is_some() || mailbox.lock.terminal.is_some()
-        };
+        self.pump_read();
+        self.pump_updates();
+        // Only finite terminal draining while a current presentation exists.
+        // Presentationless terminals/root receipts may wait for explicit reopen.
+        let pending = self.mailbox.lock().pending();
         if pending {
             self.schedule_work();
         }
@@ -618,9 +631,12 @@ impl PowerMenuController {
     }
 
     fn project(&self, generation: u64) {
-        let (busy, enabled) = {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return;
+        };
+        let (busy, enabled, pending, choice, user_name, status) = {
             let state = self.state.borrow();
-            if state.closed || state.generation != generation {
+            if state.closed || state.generation != generation || state.epoch != epoch {
                 return;
             }
             (
@@ -628,46 +644,68 @@ impl PowerMenuController {
                 state.current(generation)
                     && state.authorized == Some(generation)
                     && state.lock.is_none(),
+                state.updates_hint == Some(PowerUpdateHint::Pending),
+                state.install_updates,
+                state.user_name.clone(),
+                state.updates_status.clone(),
             )
         };
-        self.surface.set_lock_busy(busy);
-        if !self.generation_is(generation) {
-            return;
+        macro_rules! apply {
+            ($effect:expr) => {
+                if !self.scope_is(generation, epoch) {
+                    return;
+                }
+                $effect;
+                if !self.scope_is(generation, epoch) {
+                    return;
+                }
+            };
         }
-        self.surface.set_action_enabled(enabled);
+        apply!(surface.set_lock_busy(busy));
+        apply!(surface.set_action_enabled(enabled));
+        apply!(surface.set_updates_known_pending(pending));
+        apply!(surface.set_install_updates(choice));
+        apply!(surface.set_user_name(user_name.into()));
+        apply!(surface.set_updates_status(status.into()));
     }
 
     fn apply_theme(&self, generation: u64) {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return;
+        };
         let theme = self.state.borrow().theme;
         let scheme = match theme {
             Theme::System => slint::language::ColorScheme::Unknown,
             Theme::Light => slint::language::ColorScheme::Light,
             Theme::Dark => slint::language::ColorScheme::Dark,
         };
-        if !self.generation_is(generation) || self.state.borrow().theme != theme {
+        if !self.scope_is(generation, epoch) || self.state.borrow().theme != theme {
             return;
         }
-        self.surface.global::<Palette>().set_color_scheme(scheme);
-        if !self.generation_is(generation) || self.state.borrow().theme != theme {
+        surface.global::<Palette>().set_color_scheme(scheme);
+        if !self.scope_is(generation, epoch) || self.state.borrow().theme != theme {
             return;
         }
-        self.surface
-            .global::<SeelenPalette>()
-            .set_color_scheme(scheme);
+        surface.global::<SeelenPalette>().set_color_scheme(scheme);
     }
 
     fn pump_read(&self) {
         let reservation = {
             let mut state = self.state.borrow_mut();
-            if state.closed || !state.desired || !state.read_dirty || state.read.is_some() {
+            if state.closed
+                || !state.desired
+                || !state.read_dirty
+                || state.read.is_some()
+                || self.surface.borrow().is_none()
+            {
                 return;
             }
             let token = match state.token() {
                 Ok(token) => token,
                 Err(error) => {
-                    let generation = state.generation;
                     drop(state);
-                    self.fail_scope(generation, error);
+                    self.report(Err(error));
+                    self.close();
                     return;
                 }
             };
@@ -719,9 +757,8 @@ impl PowerMenuController {
             }
         }
         let mailbox = self.mailbox.clone();
-        let root = self.surface.as_weak();
         let result = provider.read(Box::new(move |result| {
-            complete_read(&mailbox, &root, token, result)
+            complete_read(&mailbox, token, result)
         }));
         if let Err(error) = result {
             self.finish_read(token, Err(error));
@@ -730,27 +767,21 @@ impl PowerMenuController {
 
     fn read_current(&self, token: Token) -> bool {
         let state = self.state.borrow();
-        state.current(token.generation) && state.read.is_some_and(|flight| flight.token == token)
+        state.current(token.generation)
+            && state.epoch == token.epoch
+            && state.read.is_some_and(|flight| flight.token == token)
     }
 
     fn finish_read(&self, token: Token, result: ReadResult) {
-        complete_read(&self.mailbox, &self.surface.as_weak(), token, result);
+        complete_read(&self.mailbox, token, result);
     }
 
     fn clear_read_slot(&self, token: Token) {
-        let mut mailbox = self.mailbox.lock();
-        if mailbox.read.expected == Some(token) {
-            mailbox.read.expected = None;
-            mailbox.read.terminal = None;
-        }
+        self.mailbox.lock().read.clear(token);
     }
 
     fn clear_lock_slot(&self, token: Token) {
-        let mut mailbox = self.mailbox.lock();
-        if mailbox.lock.expected == Some(token) {
-            mailbox.lock.expected = None;
-            mailbox.lock.terminal = None;
-        }
+        self.mailbox.lock().lock.clear(token);
     }
 
     fn cancel_read(&self, token: Token) {
@@ -767,26 +798,38 @@ impl PowerMenuController {
     }
 
     fn activate(&self, action: PowerMenuAction) {
-        if action != PowerMenuAction::LockSession || !self.is_visible() {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return;
+        };
+        if !self.is_visible() {
             return;
         }
-        let generation = self.state.borrow().generation;
-        let enabled = self.surface.get_action_enabled();
-        if !self.generation_is(generation) {
-            return;
-        }
-        let busy = self.surface.get_lock_busy();
-        if !self.generation_is(generation) || !enabled || busy || !self.is_visible() {
-            return;
-        }
-        let token = {
+        // Snapshot the closed typed intent at genuine input reservation, before
+        // any generated getter, hide, lease Drop or provider callback can reenter.
+        let (token, native_action) = {
             let mut state = self.state.borrow_mut();
+            let generation = state.generation;
             if !state.current(generation)
+                || state.epoch != epoch
                 || state.authorized != Some(generation)
                 || state.lock.is_some()
             {
                 return;
             }
+            let updates =
+                if state.updates_hint == Some(PowerUpdateHint::Pending) && state.install_updates {
+                    PowerUpdatePolicy::RequestInstallation
+                } else {
+                    PowerUpdatePolicy::OmitExplicitInstallation
+                };
+            let native_action = match action {
+                PowerMenuAction::LockSession => PowerAction::LockSession,
+                PowerMenuAction::LogOut => PowerAction::LogOut,
+                PowerMenuAction::PowerOff => PowerAction::PowerOff { updates },
+                PowerMenuAction::Reboot => PowerAction::Reboot { updates },
+                PowerMenuAction::Suspend => PowerAction::Suspend,
+                PowerMenuAction::Hibernate => PowerAction::Hibernate,
+            };
             let token = match state.token() {
                 Ok(token) => token,
                 Err(error) => {
@@ -800,18 +843,32 @@ impl PowerMenuController {
                 token,
                 phase: Phase::Reserved,
             });
-            token
+            (token, native_action)
         };
+        let enabled = surface.get_action_enabled();
+        let busy = surface.get_lock_busy();
+        if !self.scope_is(token.generation, epoch) || !enabled || busy || !self.is_visible() {
+            // These flags were not projected busy yet. Do not turn a genuinely
+            // disabled widget back on merely because injected input was rejected.
+            {
+                let mut state = self.state.borrow_mut();
+                if state
+                    .lock
+                    .is_some_and(|flight| flight.token == token && flight.phase == Phase::Reserved)
+                {
+                    state.lock = None;
+                }
+            }
+            self.clear_lock_slot(token);
+            return;
+        }
         let Some(retirement) = token.generation.checked_add(1) else {
             self.cancel_lock(token);
             self.close();
             return;
         };
-        // Native role detaches, then Slint hides, before even acquiring the
-        // Power factory. A lease-Drop/factory replacement invalidates old intent.
+        // Exact own hide and epoch, never broad SurfaceNone, authorize entry.
         self.hide();
-        // Compare the EXPECTED own retirement, not whichever hidden generation
-        // happens to exist after a reentrant replacement opens and closes.
         if !self.lock_retired(token, retirement) {
             self.cancel_lock(token);
             return;
@@ -840,7 +897,7 @@ impl PowerMenuController {
                 let current = self.lock_retired(token, retirement);
                 self.cancel_lock(token);
                 if current && self.retired(retirement) {
-                    self.report(Err(format!("Lock request failed: {error}")));
+                    self.report(Err(format!("Power request failed: {error}")));
                 }
                 return;
             }
@@ -858,30 +915,37 @@ impl PowerMenuController {
             flight.phase = Phase::Submitted;
         }
         let mailbox = self.mailbox.clone();
-        let root = self.surface.as_weak();
         let result = provider.perform(
-            PowerAction::LockSession,
+            native_action,
             Box::new(move |result| {
-                complete_lock(&mailbox, &root, token, result);
+                complete_lock(&mailbox, token, result);
             }),
         );
-        // From native entry onward the accepted flight outlives every visible
-        // generation. No hide, read, replacement or close can replay/cancel it.
+        // Accepted work outlives every presentation. No replay, queue or join.
         if let Err(error) = result {
-            complete_lock(&self.mailbox, &self.surface.as_weak(), token, Err(error));
+            complete_lock(&self.mailbox, token, Err(error));
         }
     }
 
     fn lock_retired(&self, token: Token, retirement: u64) -> bool {
-        let state = self.state.borrow();
-        !state.closed
-            && state.generation == retirement
-            && !state.desired
-            && state
-                .lock
-                .is_some_and(|flight| flight.token == token && flight.phase == Phase::Reserved)
-            && !self.surface.is_visible()
-            && !self.surface.window().is_visible()
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return false;
+        };
+        let reserved = {
+            let state = self.state.borrow();
+            !state.closed
+                && state.generation == retirement
+                && state.epoch == token.epoch
+                && epoch == token.epoch
+                && !state.desired
+                && state
+                    .lock
+                    .is_some_and(|flight| flight.token == token && flight.phase == Phase::Reserved)
+        };
+        reserved
+            && !surface.is_visible()
+            && !surface.window().is_visible()
+            && self.scope_is(retirement, epoch)
     }
 
     fn cancel_lock(&self, token: Token) {
@@ -906,10 +970,14 @@ impl PowerMenuController {
         fit: LogicalFit,
         native_scale: f32,
     ) -> bool {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return false;
+        };
         let current = || {
             self.current(generation)
+                && self.epoch_is(epoch)
                 && self.state.borrow().layout == Some(layout)
-                && self.surface.window().scale_factor() == native_scale
+                && surface.window().scale_factor() == native_scale
         };
         macro_rules! apply {
             ($effect:expr) => {
@@ -922,44 +990,56 @@ impl PowerMenuController {
                 }
             };
         }
-        apply!(self.surface.set_metric_scale(fit.metric));
+        apply!(surface.set_metric_scale(fit.metric));
         apply!(
-            self.surface
+            surface
                 .global::<FocusTokens>()
                 .set_outline_width(2.0 * fit.metric)
         );
         apply!(
-            self.surface
+            surface
                 .global::<FocusTokens>()
                 .set_outline_offset(2.0 * fit.metric)
         );
-        apply!(self.surface.set_selected_x(fit.x));
-        apply!(self.surface.set_selected_y(fit.y));
-        apply!(self.surface.set_selected_width(fit.width));
-        apply!(self.surface.set_selected_height(fit.height));
+        apply!(surface.set_selected_x(fit.x));
+        apply!(surface.set_selected_y(fit.y));
+        apply!(surface.set_selected_width(fit.width));
+        apply!(surface.set_selected_height(fit.height));
         true
     }
 
     fn fit_current_scale(&self, generation: u64, layout: DisplayLayout) -> Result<bool, String> {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return Ok(false);
+        };
         // A reentrant SDK scale change invalidates the entire old conversion,
         // even if visibility did not change. One bounded retry settles it.
         for _ in 0..2 {
-            if !self.current(generation) || self.state.borrow().layout != Some(layout) {
+            if !self.current(generation)
+                || !self.epoch_is(epoch)
+                || self.state.borrow().layout != Some(layout)
+            {
                 return Ok(false);
             }
-            let native_scale = self.surface.window().scale_factor();
+            let native_scale = surface.window().scale_factor();
             let fit = LogicalFit::new(layout, native_scale)?;
             if self.apply_fit(generation, layout, fit, native_scale) {
                 return Ok(true);
             }
         }
-        if !self.current(generation) || self.state.borrow().layout != Some(layout) {
+        if !self.current(generation)
+            || !self.epoch_is(epoch)
+            || self.state.borrow().layout != Some(layout)
+        {
             return Ok(false);
         }
         Err("The Power surface scale did not settle during fitting.".into())
     }
 
     fn present_layout(&self, generation: u64, layout: DisplayLayout) {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return;
+        };
         let frame = match Frame::from_layout(layout) {
             Ok(frame) => frame,
             Err(error) => {
@@ -967,16 +1047,24 @@ impl PowerMenuController {
                 return;
             }
         };
-        if !self.current(generation) {
+        if !self.current(generation) || !self.epoch_is(epoch) {
             return;
         }
-        let opening = {
+        let (opening, metadata_ready) = {
             let mut state = self.state.borrow_mut();
-            let opening = state.opening;
             state.layout = Some(layout);
             state.authorized = None;
-            opening
+            let ready = state.initialized || state.initial_updates_generation == Some(generation);
+            // Source initialization ends at the metadata barrier, not native
+            // window attachment success. Later trigger refresh is non-awaited.
+            if ready {
+                state.initialized = true;
+            }
+            (state.opening, ready)
         };
+        if !metadata_ready {
+            return;
+        }
         if !opening && !self.is_visible() {
             self.fail_scope(
                 generation,
@@ -985,7 +1073,7 @@ impl PowerMenuController {
             return;
         }
         self.project(generation);
-        if !self.current(generation) {
+        if !self.current(generation) || !self.epoch_is(epoch) {
             return;
         }
         match self.fit_current_scale(generation, layout) {
@@ -998,25 +1086,26 @@ impl PowerMenuController {
         }
         let newly_presented = !self.is_visible();
         let reposition = self.needs_reposition(frame);
-        if !self.current(generation) {
+        if !self.current(generation) || !self.epoch_is(epoch) {
             return;
         }
         let native_effect = NativeEffect::enter(&self.native_effect);
         let presented = if newly_presented {
-            self.surface.present(frame.position, frame.size)
+            surface.present(frame.position, frame.size)
         } else if reposition {
-            Ok(self.surface.reposition(frame.position, frame.size))
+            Ok(surface.reposition(frame.position, frame.size))
         } else {
             Ok(true)
         };
         drop(native_effect);
+        self.arm_completed_hide();
         // A root motion-off signal may arrive after the native presenter's
         // initial permission read. Never restore that stale permission.
-        if self.current(generation) && self.motion_suppressed.get() {
-            self.surface.disable_motion();
+        if self.current(generation) && self.epoch_is(epoch) && self.motion_suppressed.get() {
+            surface.disable_motion();
         }
         match presented {
-            Ok(true) if self.current(generation) && self.is_visible() => {
+            Ok(true) if self.current(generation) && self.epoch_is(epoch) && self.is_visible() => {
                 self.frame.set(Some(frame))
             }
             Ok(_) => {
@@ -1043,7 +1132,7 @@ impl PowerMenuController {
                 return;
             }
         }
-        if !self.current(generation) || !self.is_visible() {
+        if !self.current(generation) || !self.epoch_is(epoch) || !self.is_visible() {
             return;
         }
         {
@@ -1052,20 +1141,20 @@ impl PowerMenuController {
             state.opening = false;
         }
         self.project(generation);
-        if !self.current(generation) || !self.is_visible() {
+        if !self.current(generation) || !self.epoch_is(epoch) || !self.is_visible() {
             return;
         }
         if newly_presented {
             (self.on_opened)();
-            if !self.current(generation) || !self.is_visible() {
+            if !self.current(generation) || !self.epoch_is(epoch) || !self.is_visible() {
                 return;
             }
-            self.surface.invoke_focus_content();
-            if !self.current(generation) || !self.is_visible() {
+            surface.invoke_focus_content();
+            if !self.current(generation) || !self.epoch_is(epoch) || !self.is_visible() {
                 return;
             }
-            let focus = self.surface.request_focus();
-            if !self.current(generation) || !self.is_visible() {
+            let focus = surface.request_focus();
+            if !self.current(generation) || !self.epoch_is(epoch) || !self.is_visible() {
                 return;
             }
             if focus.is_err() {
@@ -1074,18 +1163,24 @@ impl PowerMenuController {
                 ));
             }
         }
-        if self.current(generation) && self.is_visible() {
+        if self.current(generation) && self.epoch_is(epoch) && self.is_visible() {
             self.watch_focus(generation);
         }
     }
 
     fn needs_reposition(&self, frame: Frame) -> bool {
+        let Some((_, surface)) = self.surface_snapshot() else {
+            return false;
+        };
         self.frame.get() != Some(frame)
-            || self.surface.window().size() != frame.size
-            || self.surface.window().position() != frame.position
+            || surface.window().size() != frame.size
+            || surface.window().position() != frame.position
     }
 
     fn refit(&self, generation: u64) -> Result<bool, String> {
+        let Some((epoch, surface)) = self.surface_snapshot() else {
+            return Ok(false);
+        };
         if !self.current(generation) || !self.is_visible() {
             return Ok(false);
         }
@@ -1099,14 +1194,15 @@ impl PowerMenuController {
         // DPI/backend resize can drift physical geometry while the requested
         // layout stays equal. Compare SDK truth, not only our last request.
         let reposition = self.needs_reposition(frame);
-        if !self.current(generation) {
+        if !self.current(generation) || !self.epoch_is(epoch) {
             return Ok(false);
         }
         if reposition {
             let native_effect = NativeEffect::enter(&self.native_effect);
-            let repositioned = self.surface.reposition(frame.position, frame.size);
+            let repositioned = surface.reposition(frame.position, frame.size);
             drop(native_effect);
-            if !repositioned || !self.current(generation) {
+            self.arm_completed_hide();
+            if !repositioned || !self.current(generation) || !self.epoch_is(epoch) {
                 return Ok(false);
             }
             self.frame.set(Some(frame));
@@ -1114,7 +1210,7 @@ impl PowerMenuController {
                 return Ok(false);
             }
         }
-        Ok(self.current(generation) && self.is_visible())
+        Ok(self.current(generation) && self.epoch_is(epoch) && self.is_visible())
     }
 
     fn refit_or_report(&self, generation: u64) {
@@ -1144,17 +1240,23 @@ impl PowerMenuController {
             return;
         }
         let generation = self.state.borrow().generation;
+        let Some((epoch, _)) = self.surface_snapshot() else {
+            return;
+        };
         let weak = self.weak.clone();
         self.fit_timer
             .start(slint::TimerMode::SingleShot, Duration::ZERO, move || {
-                if let Some(controller) = weak.upgrade() {
+                if let Some(controller) = weak
+                    .upgrade()
+                    .filter(|controller| controller.scope_is(generation, epoch))
+                {
                     controller.refit_or_report(generation);
                 }
             });
     }
 
     fn schedule_work(&self) {
-        if self.state.borrow().closed || self.work_timer.running() {
+        if self.surface_snapshot().is_none() || self.work_timer.running() {
             return;
         }
         let weak = self.weak.clone();
@@ -1167,6 +1269,9 @@ impl PowerMenuController {
     }
 
     fn watch_focus(&self, generation: u64) {
+        let Some((epoch, _)) = self.surface_snapshot() else {
+            return;
+        };
         if !self.current(generation) || !self.is_visible() {
             return;
         }
@@ -1182,7 +1287,10 @@ impl PowerMenuController {
             Duration::from_millis(100),
             move || {
                 if let Some(controller) = weak.upgrade() {
-                    if !controller.current(generation) || !controller.is_visible() {
+                    if !controller.current(generation)
+                        || !controller.epoch_is(epoch)
+                        || !controller.is_visible()
+                    {
                         controller.focus_watch.stop();
                         return;
                     }
@@ -1199,9 +1307,11 @@ impl PowerMenuController {
     #[cfg(any(windows, test))]
     fn is_focused(&self) -> Option<bool> {
         use slint::winit_030::WinitWindowAccessor;
-        self.surface
+        let (epoch, surface) = self.surface_snapshot()?;
+        let focus = surface
             .window()
-            .with_winit_window(|window| window.has_focus())
+            .with_winit_window(|window| window.has_focus());
+        if self.epoch_is(epoch) { focus } else { None }
     }
 
     #[cfg(not(any(windows, test)))]

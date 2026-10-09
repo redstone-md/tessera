@@ -221,7 +221,7 @@ fn explicit_gregorian_all_labels_are_monday_first_and_locale_retains_nul() {
         .map(CalendarField::Month)
         .chain((0..7).map(CalendarField::Weekday))
         .chain((0..7).map(CalendarField::AbbreviatedWeekday));
-    for (pair, field) in queries.calls[2..54].chunks_exact(2).zip(fields) {
+    for (pair, field) in queries.calls[2..54].as_chunks::<2>().0.iter().zip(fields) {
         assert_eq!(
             pair[0],
             Call::Label {
@@ -705,7 +705,7 @@ fn valid_empty_calendar_names_inherit_each_native_label_family_same_locale() {
     );
     let locale = Reply::text("ja-JP").units;
     assert_eq!(queries.calls.len(), 107);
-    for (calls, field) in queries.calls[2..106].chunks_exact(4).zip(fields) {
+    for (calls, field) in queries.calls[2..106].as_chunks::<4>().0.iter().zip(fields) {
         assert_eq!(
             calls[0],
             Call::Label {

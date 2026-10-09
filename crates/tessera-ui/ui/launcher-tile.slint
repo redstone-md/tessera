@@ -14,6 +14,10 @@ export struct LaunchTile {
 // One appearance for native delegates and passive whole-tile drag feedback.
 export component LauncherTile inherits TileButton {
     in property <LaunchTile> tile;
+    // The window issues a fresh UI interaction scope; application authority
+    // remains the original opaque key forwarded by the parent.
+    in property <string> input-scope: "";
+    activation-key: root.input-scope + root.tile.key;
     in property <bool> keyboard-selected: false;
     in property <float> feedback-scale: 1;
     out property <float> appearance-scale: self.pressed ? 0.95 : 1;
@@ -73,6 +77,7 @@ export component LauncherTile inherits TileButton {
     }
 
     TileButton {
+        activation-key: root.input-scope + root.tile.key;
         width: 16px;
         height: 16px;
         x: parent.width - self.width;

@@ -5,7 +5,8 @@
 //!
 //! The panel is an ordinary, closable utility window. It shows windows and
 //! counts supplied by a [`DesktopHost`]. Observation is read-only; activation
-//! and preference saves are explicit host commands. No hooks or polling.
+//! and preference saves are explicit host commands. Independent native capability
+//! notifications do not add desktop-observation polling.
 //!
 //! [`PanelSnapshot`] is a portable UI view of one observation. [`run`] opens
 //! the panel and blocks on the UI thread until the window closes. Observation
@@ -14,19 +15,31 @@
 
 #![deny(unsafe_code)]
 
+pub(crate) mod bluetooth;
+#[cfg(test)]
+mod bluetooth_render_tests;
 pub(crate) mod calendar;
 #[cfg(test)]
 mod calendar_render_tests;
 pub(crate) mod context_menu;
 pub(crate) mod controller;
 pub(crate) mod dock;
+pub(crate) mod dock_media;
+#[cfg(test)]
+mod dock_media_render_tests;
 pub(crate) mod dock_utilities;
 #[cfg(test)]
 mod dock_utilities_render_tests;
 pub(crate) mod dto;
 pub(crate) mod icons;
+pub(crate) mod input_language;
+#[cfg(test)]
+mod input_language_render_tests;
 pub(crate) mod launcher;
 pub(crate) mod motion;
+pub(crate) mod network_menu;
+#[cfg(test)]
+mod network_menu_render_tests;
 pub(crate) mod popup_placement;
 pub(crate) mod power_menu;
 #[cfg(test)]
@@ -37,6 +50,7 @@ pub(crate) mod recycle_bin;
 #[cfg(test)]
 mod recycle_bin_render_tests;
 pub(crate) mod user_menu;
+pub(crate) mod visibility;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
 #[cfg(all(test, target_os = "linux"))]
@@ -48,6 +62,8 @@ mod render_tests;
 pub(crate) mod sanitize;
 pub(crate) mod state;
 pub(crate) mod theme;
+#[cfg(test)]
+mod tile_input_tests;
 pub(crate) mod tooltip;
 pub(crate) mod transient_window;
 #[cfg(test)]
@@ -60,6 +76,7 @@ mod generated {
 }
 use generated::Panel;
 
+pub use calendar::preferences::{GeneralPreferences, StartOfWeek};
 pub use dto::{
     DockContext, DockEdge, MAX_PINS, PanelApplication, PixelIcon, RunOptions, ShellIdentity,
     SurfaceKind, SurfaceMode, SystemAction, WindowAction,
@@ -195,6 +212,8 @@ pub struct PanelPreferences {
     dock_edge: DockEdge,
     pins: Vec<String>,
     launcher: LauncherPreferences,
+    general: GeneralPreferences,
+    media_enabled: bool,
 }
 
 impl PanelPreferences {
@@ -206,6 +225,8 @@ impl PanelPreferences {
             dock_edge: DockEdge::default(),
             pins: Vec::new(),
             launcher: LauncherPreferences::default(),
+            general: GeneralPreferences::default(),
+            media_enabled: false,
         }
     }
 
@@ -225,6 +246,26 @@ impl PanelPreferences {
     /// Changes applications-menu presentation without changing any other saved choice.
     pub fn with_launcher_display_mode(mut self, mode: LauncherDisplayMode) -> Self {
         self.launcher = self.launcher.with_display_mode(mode);
+        self
+    }
+
+    /// Applied calendar policy, independent of the settings draft.
+    pub fn general(&self) -> GeneralPreferences {
+        self.general
+    }
+
+    pub fn with_general(mut self, general: GeneralPreferences) -> Self {
+        self.general = general;
+        self
+    }
+
+    /// Optional Dock media starts disabled and is adopted only after a save.
+    pub fn media_enabled(&self) -> bool {
+        self.media_enabled
+    }
+
+    pub fn with_media_enabled(mut self, enabled: bool) -> Self {
+        self.media_enabled = enabled;
         self
     }
 
@@ -302,6 +343,7 @@ pub struct PanelSnapshot {
     warning_count: usize,
     applications: Option<Vec<PanelApplication>>,
     dock_context: Option<DockContext>,
+    visibility: Option<(Vec<tessera_system::visibility::VisibilityWindow>, bool)>,
 }
 
 impl PanelSnapshot {
@@ -313,6 +355,7 @@ impl PanelSnapshot {
             warning_count,
             applications: None,
             dock_context: None,
+            visibility: None,
         }
     }
 
@@ -327,6 +370,25 @@ impl PanelSnapshot {
     pub fn with_dock_context(mut self, dock_context: DockContext) -> Self {
         self.dock_context = Some(dock_context);
         self
+    }
+
+    /// Complete native eligibility/geometry facts, kept separate from UI row caps.
+    /// Missing evidence is unknown, never an empty/no-overlap observation.
+    pub fn with_visibility_windows(
+        mut self,
+        windows: Vec<tessera_system::visibility::VisibilityWindow>,
+        foreground_interactable: bool,
+    ) -> Self {
+        self.visibility = Some((windows, foreground_interactable));
+        self
+    }
+
+    pub fn visibility_facts(
+        &self,
+    ) -> Option<(&[tessera_system::visibility::VisibilityWindow], bool)> {
+        self.visibility
+            .as_ref()
+            .map(|(windows, foreground)| (windows.as_slice(), *foreground))
     }
 
     /// Number of monitors observed.
@@ -484,6 +546,67 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::power::PowerHost>>,
         tessera_system::power::PowerError,
+    > {
+        Ok(None)
+    }
+
+    /// Read-only known pending-update hints, independent of power mutation.
+    /// Query work and registry resources belong to the capability's worker.
+    fn power_updates_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::power_updates::PowerUpdatesHost>>,
+        tessera_system::power_updates::PowerUpdatesError,
+    > {
+        Ok(None)
+    }
+
+    /// Independent read-only network capability, acquired on popup intent.
+    fn network_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::network::NetworkHost>>,
+        tessera_system::network::NetworkError,
+    > {
+        Ok(None)
+    }
+
+    /// Independent read-only Bluetooth capability, acquired on popup intent.
+    fn bluetooth_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::bluetooth::BluetoothHost>>,
+        tessera_system::bluetooth::BluetoothError,
+    > {
+        Ok(None)
+    }
+
+    /// Enabled language profiles and explicitly selected native activation.
+    fn input_language_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::input_language::InputLanguageHost>>,
+        tessera_system::input_language::InputLanguageError,
+    > {
+        Ok(None)
+    }
+
+    /// Current native media sessions and explicit transport requests.
+    fn media_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::media::MediaHost>>,
+        tessera_system::media::MediaError,
+    > {
+        Ok(None)
+    }
+
+    /// Passive physical pointer hints; only the production desktop host opts in.
+    fn pointer_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::visibility::PointerHost>>,
+        tessera_system::visibility::PointerWatchError,
     > {
         Ok(None)
     }

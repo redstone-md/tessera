@@ -1,0 +1,236 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+import { TileButton, TileBounds } from "tiles.slint";
+
+export enum MediaAction { previous, toggle, next }
+
+export struct DockMediaView {
+    enabled: bool,
+    current-present: bool,
+    // Cancellation-only enable/admission generation + incarnation; never an app ID.
+    session-identity: string,
+    busy: bool,
+    stale: bool,
+    status: string,
+    read-notice: string,
+    watch-notice: string,
+    action-notice: string,
+    artwork-notice: string,
+    title: string,
+    author: string,
+    playback: string,
+    playing: bool,
+    previous-enabled: bool,
+    toggle-enabled: bool,
+    next-enabled: bool,
+    artwork: image,
+    has-artwork: bool,
+    dark-foreground: bool,
+    app-icon: image,
+    has-app-icon: bool,
+}
+
+// One source-sized module; orientation changes coordinates, never input logic.
+// Native TileButton owns keyboard/pointer/focus/AX; the opaque key binds held
+// gestures to one observed session and one controller admission sequence.
+export component DockMediaTile inherits Rectangle {
+    in property <DockMediaView> view;
+    in property <bool> compact;
+    in property <int> edge;
+    callback command-requested(MediaAction);
+    callback retry-requested();
+    callback context-requested(Point);
+    callback tooltip-requested(string, TileBounds);
+    callback tooltip-dismissed(bool, Point);
+
+    property <bool> vertical: root.edge >= 2;
+    property <float> factor: root.compact ? 0.8 : 1;
+    property <bool> real-art: root.view.current-present && root.view.has-artwork;
+    property <bool> retry-needed: !root.view.current-present || root.view.stale
+        || root.view.read-notice != "" || root.view.watch-notice != "";
+    property <color> ink: root.real-art
+        ? (root.view.dark-foreground ? #121212 : #ffffff) : SeelenPalette.foreground;
+    property <string> description: root.view.status
+        + (root.view.current-present ? "\n" + root.view.title
+            + (root.view.author == "" ? "" : "\n" + root.view.author)
+            + (root.view.playback == "" ? "" : "\n" + root.view.playback) : "")
+        + (root.view.stale ? "\n" + @tr("Stale") : "")
+        + (root.view.read-notice == "" ? "" : "\n" + root.view.read-notice)
+        + (root.view.watch-notice == "" ? "" : "\n" + root.view.watch-notice)
+        + (root.view.action-notice == "" ? "" : "\n" + root.view.action-notice)
+        + (root.view.artwork-notice == "" ? "" : "\n" + root.view.artwork-notice);
+
+    width: (root.vertical ? 40px : 136px) * root.factor;
+    height: (root.vertical ? 136px : 40px) * root.factor;
+    visible: root.view.enabled;
+    background: SeelenPalette.tile;
+    border-radius: 10px * root.factor;
+    accessible-role: groupbox;
+    accessible-label: "Media module";
+
+    // No placeholder album, path loading or decorative application fallback.
+    if root.real-art: Rectangle {
+        width: root.width;
+        height: root.height;
+        border-radius: root.border-radius;
+        clip: true;
+        accessible-role: none;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.view.artwork;
+            image-fit: cover;
+            accessible-role: none;
+        }
+        Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: root.view.dark-foreground ? #ffffff99 : #00000099;
+            accessible-role: none;
+        }
+    }
+
+    // The unobstructed thumbnail/status area exposes details and the existing
+    // module context surface even when no transport capability is available.
+    // Retry means a new read, never a replay of a failed transport intent.
+    information := TileButton {
+        x: 0px;
+        y: 0px;
+        // Never cover transport buttons: disabled transport input must not
+        // fall through into a retry of the read.
+        width: root.view.current-present ? 40px * root.factor : root.width;
+        height: root.view.current-present ? 40px * root.factor : root.height;
+        radius: root.border-radius;
+        filled: false;
+        allow-return-repeat: false;
+        activation-key: root.view.session-identity;
+        enabled: !root.retry-needed || !root.view.busy;
+        accessible-text: root.retry-needed ? "Retry media" : "Media information";
+        tooltip-text: root.description;
+        clicked => {
+            if root.retry-needed {
+                root.retry-requested();
+            } else {
+                root.tooltip-requested(root.description, {
+                    origin: root.absolute-position, width: root.width, height: root.height
+                });
+            }
+        }
+        context-requested(position) => { root.context-requested(position); }
+        tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+        tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+
+        if root.real-art: Image {
+            x: 4px * root.factor;
+            y: 4px * root.factor;
+            width: 32px * root.factor;
+            height: 32px * root.factor;
+            source: root.view.artwork;
+            image-fit: cover;
+            accessible-role: none;
+        }
+        if root.view.current-present && root.view.has-app-icon: Image {
+            x: 24px * root.factor;
+            y: 24px * root.factor;
+            width: 12px * root.factor;
+            height: 12px * root.factor;
+            source: root.view.app-icon;
+            image-fit: contain;
+            accessible-role: none;
+        }
+        if root.retry-needed: Text {
+            x: (root.vertical ? 4px : root.view.current-present ? 4px : 94px) * root.factor;
+            y: (root.vertical && !root.view.current-present ? 124px : 27px) * root.factor;
+            width: 32px * root.factor;
+            height: 10px * root.factor;
+            text: @tr("Retry");
+            color: root.ink;
+            font-size: 8px * root.factor;
+            horizontal-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    // Vertical docks retain full metadata in the tooltip, not tiny rotated text.
+    if root.view.current-present && !root.vertical: Rectangle {
+        x: 40px * root.factor;
+        y: 1px * root.factor;
+        width: 92px * root.factor;
+        height: 22px * root.factor;
+        accessible-role: none;
+        Text {
+            width: parent.width;
+            height: 12px * root.factor;
+            text: root.view.title;
+            color: root.ink;
+            font-size: 10px * root.factor;
+            font-weight: 600;
+            overflow: elide;
+            accessible-role: text;
+            accessible-label: root.view.title;
+        }
+        Text {
+            y: 12px * root.factor;
+            width: parent.width;
+            height: 10px * root.factor;
+            text: root.view.author;
+            color: root.ink;
+            font-size: 8px * root.factor;
+            overflow: elide;
+            accessible-role: text;
+            accessible-label: root.view.author;
+        }
+    }
+    if !root.view.current-present: Text {
+        x: 4px * root.factor;
+        y: (root.vertical ? 40px : 3px) * root.factor;
+        width: (root.vertical ? 32px : 128px) * root.factor;
+        height: (root.vertical ? 76px : 22px) * root.factor;
+        text: root.view.status;
+        color: SeelenPalette.foreground;
+        font-size: 10px * root.factor;
+        wrap: word-wrap;
+        overflow: elide;
+        accessible-role: text;
+        accessible-label: root.view.status;
+    }
+
+    if root.view.current-present: Rectangle {
+        width: root.width;
+        height: root.height;
+        accessible-role: none;
+        for action[index] in [MediaAction.previous, MediaAction.toggle, MediaAction.next]: TileButton {
+            x: (root.vertical ? 4px : 42px + index * 30px) * root.factor;
+            y: (root.vertical ? 44px + index * 28px : 24px) * root.factor;
+            width: (root.vertical ? 32px : 28px) * root.factor;
+            height: (root.vertical ? 24px : 14px) * root.factor;
+            activation-key: root.view.session-identity;
+            radius: 4px * root.factor;
+            filled: false;
+            allow-return-repeat: false;
+            enabled: root.view.enabled && root.view.current-present && !root.view.busy && !root.view.stale
+                && (action == MediaAction.previous ? root.view.previous-enabled
+                    : action == MediaAction.toggle ? root.view.toggle-enabled : root.view.next-enabled);
+            accessible-text: action == MediaAction.previous ? "Previous track"
+                : action == MediaAction.toggle ? (root.view.playing ? "Pause" : "Play") : "Next track";
+            tooltip-text: self.accessible-text + "\n" + root.description;
+            clicked => { root.command-requested(action); }
+            context-requested(position) => { root.context-requested(position); }
+            tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+            tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+            Text {
+                width: parent.width;
+                height: parent.height;
+                text: action == MediaAction.previous ? @tr("Prev")
+                    : action == MediaAction.toggle ? (root.view.playing ? @tr("Pause") : @tr("Play")) : @tr("Next");
+                color: root.ink;
+                font-size: 8px * root.factor;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+        }
+    }
+}

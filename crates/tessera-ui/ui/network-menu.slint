@@ -1,0 +1,331 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView as NativeScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
+
+// Presentation only: no row key or mutation callback exists.
+export struct NetworkRow { label: string, details: string, description: string, bands: string }
+global NetworkMetrics {
+    out property <length> xs: 6.4px;
+    out property <length> two-xs: 3.2px;
+    out property <length> text-height: PopoverTokens.font-size * PopoverTokens.line-height;
+    out property <length> row-height: 2 * self.xs + 3 * self.text-height;
+}
+component NetworkText inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    accessible-role: none;
+}
+component NetworkReadRow inherits Rectangle {
+    in property <NetworkRow> net-row;
+    in property <float> text-line-height-factor;
+    height: NetworkMetrics.row-height;
+    border-radius: 6px;
+    accessible-role: text;
+    accessible-label: root.net-row.description;
+    VerticalLayout {
+        padding: NetworkMetrics.xs;
+        spacing: 0px;
+        HorizontalLayout {
+            spacing: NetworkMetrics.xs;
+            NetworkText {
+                text: root.net-row.label;
+                font-weight: 500;
+                overflow: elide;
+                min-width: 0px;
+                horizontal-stretch: 1;
+                line-height-factor: root.text-line-height-factor;
+            }
+            if root.net-row.bands != "": Rectangle {
+                width: band-text.preferred-width + 2 * NetworkMetrics.two-xs;
+                height: NetworkMetrics.text-height;
+                border-radius: 3.2px;
+                background: SeelenPalette.tile;
+                band-text := NetworkText {
+                    x: NetworkMetrics.two-xs;
+                    width: max(0px, parent.width - 2 * NetworkMetrics.two-xs);
+                    height: parent.height;
+                    text: root.net-row.bands;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+        NetworkText {
+            text: root.net-row.details;
+            color: SeelenPalette.secondary;
+            wrap: word-wrap;
+            overflow: elide;
+            height: 2 * NetworkMetrics.text-height;
+            line-height-factor: root.text-line-height-factor;
+        }
+    }
+}
+component NetworkSection inherits Rectangle {
+    in property <string> caption;
+    in property <[NetworkRow]> rows;
+    in property <float> text-line-height-factor;
+    out property <length> natural-height: root.rows.length > 0
+        ? NetworkMetrics.text-height + 2 * NetworkMetrics.xs + min(300px, root.rows.length * NetworkMetrics.row-height) : 0px;
+    height: root.natural-height;
+    accessible-role: none;
+    Rectangle {
+        width: root.width;
+        height: 1px;
+        background: SeelenPalette.muted;
+        accessible-role: none;
+    }
+    NetworkText {
+        x: NetworkMetrics.xs;
+        y: NetworkMetrics.xs;
+        width: max(0px, root.width - 2 * NetworkMetrics.xs);
+        height: NetworkMetrics.text-height;
+        text: root.caption;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        overflow: elide;
+        line-height-factor: root.text-line-height-factor;
+    }
+    list := NativeScrollView {
+        y: NetworkMetrics.text-height + 2 * NetworkMetrics.xs;
+        width: root.width;
+        height: min(300px, root.rows.length * NetworkMetrics.row-height);
+        horizontal-scrollbar-policy: always-off;
+        vertical-scrollbar-policy: as-needed;
+        content-height: root.rows.length * NetworkMetrics.row-height;
+        content-width: Slint1181FluentNativeGridMetrics.source-width(self.visible-width,
+            self.content-height, self.visible-height, ScrollBarPolicy.as-needed);
+        for row[index] in root.rows: NetworkReadRow {
+            y: index * NetworkMetrics.row-height;
+            width: list.content-width;
+            net-row: row;
+            text-line-height-factor: root.text-line-height-factor;
+        }
+    }
+}
+component NetworkAction inherits TileButton {
+    in property <string> label;
+    radius: 6px;
+    filled: false;
+    allow-return-repeat: false;
+    accessible-text: root.label;
+    NetworkText {
+        x: NetworkMetrics.xs;
+        y: 0px;
+        width: max(0px, root.width - 2 * NetworkMetrics.xs);
+        height: root.height;
+        text: root.label;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component NetworkMenu inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera network";
+    min-width: 1px;
+    min-height: 1px;
+    in property <[NetworkRow]> connected;
+    in property <[NetworkRow]> saved;
+    in property <[NetworkRow]> available;
+    in property <[NetworkRow]> hidden;
+    in property <string> radio-text;
+    in property <string> summary;
+    in property <string> notice;
+    in property <string> watch-status;
+    in property <bool> loading;
+    in property <bool> settings-loading;
+    in property <string> refresh-key;
+    in property <string> settings-key;
+    callback refresh-requested(string);
+    callback settings-requested(string);
+    callback hide-requested();
+    callback preferred-size-changed();
+    callback network-event-ready();
+    // Local intrinsic layout choice, not a claimed fixed source width.
+    out property <length> popup-content-width: max(280px, min(480px,
+        settings-metrics.preferred-width + 4 * NetworkMetrics.xs + 2 * FocusTokens.outer-margin))
+        + 2 * PopoverTokens.shadow-margin;
+    out property <length> popup-content-height: min(740px, root.natural-height + 2 * root.inset)
+        + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.popup-content-width;
+    preferred-height: root.popup-content-height;
+    changed popup-content-width => { root.preferred-size-changed(); }
+    changed popup-content-height => { root.preferred-size-changed(); }
+    property <length> inset: NetworkMetrics.two-xs;
+    property <length> action-height: 2 * NetworkMetrics.xs + NetworkMetrics.text-height;
+    property <string> feedback: root.notice != "" ? root.notice + (root.summary != "" ? "\n" + root.summary : "")
+        : root.loading ? @tr("Reading Windows Wi-Fi cache…") + (root.summary != "" ? "\n" + root.summary : "") : root.summary;
+    property <string> cache-text: @tr("Read-only Windows cache; Refresh does not scan. Connection, radio and hotspot controls are not supported here.");
+    property <length> measure-width: max(0px, min(root.width > 0px ? root.width : root.popup-content-width,
+        root.popup-content-width) - 2 * PopoverTokens.shadow-margin - 2 * root.inset - 2 * FocusTokens.outer-margin);
+    property <length> natural-height: 2 * FocusTokens.outer-margin + NetworkMetrics.text-height
+        + (root.feedback != "" ? NetworkMetrics.xs + feedback-metrics.preferred-height : 0px)
+        + (root.watch-status != "" ? NetworkMetrics.xs + watch-metrics.preferred-height : 0px)
+        + connected-section.natural-height + saved-section.natural-height
+        + available-section.natural-height + hidden-section.natural-height
+        + NetworkMetrics.xs + cache-metrics.preferred-height
+        + 2 * NetworkMetrics.xs + 2 * root.action-height;
+    settings-metrics := NetworkText {
+        width: 0px; height: 0px; opacity: 0;
+        text: @tr("More Network Settings");
+    }
+    feedback-metrics := NetworkText {
+        // Conservatively reserve Fluent's audited scrollbar input gutter for
+        // wrapped feedback, including a work-area-constrained tiny viewport.
+        width: max(0px, root.measure-width - 14px); height: 0px; opacity: 0;
+        text: root.feedback; wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    watch-metrics := NetworkText {
+        width: max(0px, root.measure-width - 14px); height: 0px; opacity: 0;
+        text: root.watch-status; wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    cache-metrics := NetworkText {
+        width: max(0px, root.measure-width - 14px); height: 0px; opacity: 0;
+        text: root.cache-text; wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    function reveal-focused(top: length) {
+        let visible-top = -scroll.content-y;
+        let desired-top = top - FocusTokens.outer-margin;
+        let desired-bottom = top + root.action-height + FocusTokens.outer-margin;
+        if desired-top < visible-top {
+            scroll.content-y = -max(0px, desired-top);
+        } else if desired-bottom > visible-top + scroll.visible-height {
+            scroll.content-y = -max(0px, min(desired-bottom - scroll.visible-height,
+                scroll.content-height - scroll.visible-height));
+        }
+    }
+    public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
+    public function focus-content() { scroll.content-y = 0px; escape-scope.focus(); }
+    forward-focus: escape-scope;
+    escape-scope := FocusScope {
+        focus-on-tab-navigation: false;
+        width: root.width;
+        height: root.height;
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.hide-requested(); return accept; }
+            return reject;
+        }
+        body := PopoverBody {
+            width: min(root.width, root.popup-content-width);
+            x: max(0px, (root.width - self.width) / 2);
+            height: root.height;
+            scroll := NativeScrollView {
+                x: root.inset;
+                y: root.inset;
+                width: max(0px, body.content-width - 2 * root.inset);
+                height: max(0px, body.content-height - 2 * root.inset);
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                content-width: Slint1181FluentNativeGridMetrics.source-width(self.visible-width,
+                    root.natural-height, self.visible-height, ScrollBarPolicy.as-needed);
+                content-height: root.natural-height;
+                content := Rectangle {
+                    x: FocusTokens.outer-margin;
+                    width: max(0px, scroll.content-width - 2 * FocusTokens.outer-margin);
+                    height: root.natural-height;
+                    accessible-role: none;
+                    radio := NetworkText {
+                        y: FocusTokens.outer-margin;
+                        width: parent.width;
+                        height: NetworkMetrics.text-height;
+                        text: root.radio-text != "" ? root.radio-text : @tr("Wi-Fi status not yet read");
+                        font-weight: 600;
+                        overflow: elide;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                        line-height-factor: body.text-line-height-factor;
+                    }
+                    feedback := NetworkText {
+                        y: radio.y + radio.height + (root.feedback != "" ? NetworkMetrics.xs : 0px);
+                        width: parent.width;
+                        height: root.feedback != "" ? feedback-metrics.preferred-height : 0px;
+                        text: root.feedback;
+                        wrap: word-wrap;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                        line-height-factor: body.text-line-height-factor;
+                    }
+                    watch := NetworkText {
+                        y: feedback.y + feedback.height + (root.watch-status != "" ? NetworkMetrics.xs : 0px);
+                        width: parent.width;
+                        height: root.watch-status != "" ? watch-metrics.preferred-height : 0px;
+                        text: root.watch-status;
+                        wrap: word-wrap;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                        line-height-factor: body.text-line-height-factor;
+                    }
+                    connected-section := NetworkSection {
+                        y: watch.y + watch.height;
+                        width: parent.width;
+                        caption: @tr("CONNECTED TO");
+                        rows: root.connected;
+                        text-line-height-factor: body.text-line-height-factor;
+                    }
+                    saved-section := NetworkSection {
+                        y: connected-section.y + connected-section.height;
+                        width: parent.width;
+                        caption: @tr("SAVED NETWORKS");
+                        rows: root.saved;
+                        text-line-height-factor: body.text-line-height-factor;
+                    }
+                    available-section := NetworkSection {
+                        y: saved-section.y + saved-section.height;
+                        width: parent.width;
+                        caption: @tr("AVAILABLE NETWORKS");
+                        rows: root.available;
+                        text-line-height-factor: body.text-line-height-factor;
+                    }
+                    hidden-section := NetworkSection {
+                        y: available-section.y + available-section.height;
+                        width: parent.width;
+                        caption: @tr("HIDDEN NETWORKS");
+                        rows: root.hidden;
+                        text-line-height-factor: body.text-line-height-factor;
+                    }
+                    cache := NetworkText {
+                        y: hidden-section.y + hidden-section.height + NetworkMetrics.xs;
+                        width: parent.width;
+                        height: cache-metrics.preferred-height;
+                        text: root.cache-text;
+                        color: SeelenPalette.secondary;
+                        wrap: word-wrap;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                        line-height-factor: body.text-line-height-factor;
+                    }
+                    refresh := NetworkAction {
+                        y: cache.y + cache.height + NetworkMetrics.xs;
+                        width: parent.width;
+                        height: root.action-height;
+                        label: @tr("Refresh");
+                        enabled: root.refresh-key != "" && !root.loading;
+                        clicked => { root.refresh-requested(root.refresh-key); }
+                        focus-acquired => { root.reveal-focused(self.y); }
+                    }
+                    settings := NetworkAction {
+                        y: refresh.y + refresh.height + NetworkMetrics.xs;
+                        width: parent.width;
+                        height: root.action-height;
+                        label: @tr("More Network Settings");
+                        enabled: root.settings-key != "" && !root.settings-loading;
+                        clicked => { root.settings-requested(root.settings-key); }
+                        focus-acquired => { root.reveal-focused(self.y); }
+                    }
+                }
+            }
+        }
+    }
+}

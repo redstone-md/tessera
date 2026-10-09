@@ -21,9 +21,9 @@ use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed,
-    MONITORINFOF_PRIMARY, WS_EX_TOOLWINDOW,
+    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetClassNameW, GetForegroundWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, WS_EX_TOOLWINDOW,
 };
 use windows_sys::core::BOOL;
 
@@ -45,25 +45,70 @@ pub(crate) fn observe() -> Result<DesktopSnapshot, ObservationError> {
     // exclusively accessed by our callbacks until each call returns.
     let ok = unsafe { EnumDisplayMonitors(null_mut(), null(), Some(monitor_callback), context) };
     observer.check_enumeration(ok, "EnumDisplayMonitors")?;
+    // SAFETY: read-only handle query. A null foreground stays unknown; its
+    // eligibility is resolved against this pass, never against capped UI data.
+    let foreground = unsafe { GetForegroundWindow() };
+    let foreground = (!foreground.is_null()).then(|| WindowId::new(foreground as usize as u64));
     // SAFETY: the same synchronous context lifetime applies here.
     let ok = unsafe { EnumWindows(Some(window_callback), context) };
     observer.check_enumeration(ok, "EnumWindows")?;
-    Ok(DesktopSnapshot::new(
-        observer.monitors,
-        observer.windows,
-        observer.warnings,
-    ))
+    Ok(
+        DesktopSnapshot::new(observer.monitors, observer.windows, observer.warnings)
+            .with_visibility_facts(foreground),
+    )
 }
 
-/// Monitor-only collection reuses the exact observer callback without window,
-/// foreground, or application-catalog enumeration. Caller owns its DPI scope.
-pub(crate) fn collect_monitors() -> Result<Vec<ObservedMonitor>, ObservationError> {
-    let mut observer = Observer::default();
-    let context = &mut observer as *mut Observer as LPARAM;
-    // SAFETY: synchronous callback, exclusively borrowing this live observer.
-    let ok = unsafe { EnumDisplayMonitors(null_mut(), null(), Some(monitor_callback), context) };
-    observer.check_enumeration(ok, "EnumDisplayMonitors")?;
-    Ok(observer.monitors)
+/// Raw monitor enumeration only; admission and bounds are separate fallible
+/// queries. This does not relax the ordinary desktop observer's contract.
+pub(crate) fn collect_monitor_handles() -> Result<Vec<HMONITOR>, ObservationError> {
+    struct Handles {
+        values: Vec<HMONITOR>,
+        panicked: bool,
+    }
+    unsafe extern "system" fn collect(
+        handle: HMONITOR,
+        _dc: HDC,
+        _bounds: *mut RECT,
+        context: LPARAM,
+    ) -> BOOL {
+        // SAFETY: synchronous enumeration exclusively borrows this live context.
+        let handles = unsafe { &mut *(context as *mut Handles) };
+        if catch_unwind(AssertUnwindSafe(|| handles.values.push(handle))).is_err() {
+            handles.panicked = true;
+            return 0;
+        }
+        1
+    }
+    let mut handles = Handles {
+        values: Vec::new(),
+        panicked: false,
+    };
+    // SAFETY: callback/context remain live until this synchronous call returns.
+    let ok = unsafe {
+        EnumDisplayMonitors(
+            null_mut(),
+            null(),
+            Some(collect),
+            &mut handles as *mut Handles as LPARAM,
+        )
+    };
+    if handles.panicked {
+        return Err(ObservationError::CallbackPanicked);
+    }
+    if ok == 0 {
+        return Err(windows_error("EnumDisplayMonitors"));
+    }
+    Ok(handles.values)
+}
+
+pub(crate) fn monitor_info(handle: HMONITOR) -> Result<MONITORINFOEXW, ObservationError> {
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: full EX allocation; cbSize permits user32 to write the device name.
+    if unsafe { GetMonitorInfoW(handle, (&mut info as *mut MONITORINFOEXW).cast()) } == 0 {
+        return Err(windows_error("GetMonitorInfoW"));
+    }
+    Ok(info)
 }
 
 /// Raw DPI-context tokens are not Send/Sync. The guard never leaves the
@@ -130,13 +175,7 @@ impl Observer {
     }
 
     fn push_monitor(&mut self, handle: HMONITOR) -> Result<(), ObservationError> {
-        let mut info = MONITORINFOEXW::default();
-        info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
-        // SAFETY: derive the pointer from the full EX allocation, not just its
-        // prefix field: cbSize permits user32 to write the device name too.
-        if unsafe { GetMonitorInfoW(handle, (&mut info as *mut MONITORINFOEXW).cast()) } == 0 {
-            return Err(windows_error("GetMonitorInfoW"));
-        }
+        let info = monitor_info(handle)?;
         let monitor = &info.monitorInfo;
         let bounds = rect_from_edges(
             monitor.rcMonitor.left,

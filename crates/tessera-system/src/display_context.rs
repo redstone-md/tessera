@@ -3,6 +3,7 @@
 
 //! Validated presentation geometry, not a certification of native monitor provenance.
 use std::fmt;
+use std::sync::Arc;
 use tessera_core::Rect;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +63,7 @@ pub enum DisplayContextError {
     Unsupported,
     Busy,
     Unavailable,
+    Stopped,
     InvalidData,
     Native { code: u32 },
 }
@@ -72,6 +74,7 @@ impl fmt::Display for DisplayContextError {
             Self::Unsupported => "display context is unsupported",
             Self::Busy => "display context read is busy",
             Self::Unavailable => "display context is unavailable",
+            Self::Stopped => "display context watch stopped",
             Self::InvalidData => "display context contains invalid data",
             Self::Native { .. } => "native display context read failed",
         })
@@ -83,11 +86,39 @@ impl std::error::Error for DisplayContextError {}
 pub type DisplayContextCompletion =
     Box<dyn FnOnce(Result<Option<DisplayLayout>, DisplayContextError>) + Send + 'static>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisplayContextWatchEvent {
+    Changed,
+    Unavailable(DisplayContextError),
+}
+
+pub type DisplayContextWatchCallback =
+    Arc<dyn Fn(DisplayContextWatchEvent) + Send + Sync + 'static>;
+pub type DisplayContextWatchReady =
+    Box<dyn FnOnce(Result<(), DisplayContextError>) + Send + 'static>;
+
+/// Drop closes callback admission and requests detached retirement, never a
+/// GUI-thread join. A callback admitted before Drop may finish.
+pub trait DisplayContextWatchGuard: Send {}
+
 /// Submission is prompt: `Ok` accepts exactly one completion (possibly inline),
 /// `Err` accepts zero. Implementations must retire resources and release their
 /// flight before calling consumers, allowing a completion to submit another read.
 pub trait DisplayContextHost: Send + Sync + 'static {
     fn read(&self, completion: DisplayContextCompletion) -> Result<(), DisplayContextError>;
+
+    /// `Ok` accepts startup and exactly one ready callback (possibly inline);
+    /// immediate `Err` accepts no callbacks. Early guard drop reports Stopped.
+    /// Ready returns before any Changed; startup hints coalesce into one
+    /// mandatory post-ready Changed. Watch failure does not disable reads.
+    /// Native startup/retirement can stall; cancellation is not a native timeout.
+    fn watch(
+        &self,
+        _on_event: DisplayContextWatchCallback,
+        _on_ready: DisplayContextWatchReady,
+    ) -> Result<Box<dyn DisplayContextWatchGuard>, DisplayContextError> {
+        Err(DisplayContextError::Unsupported)
+    }
 }
 
 #[cfg(test)]
@@ -130,5 +161,44 @@ mod tests {
             DisplayContextError::Native { code: 123 }.to_string(),
             "native display context read failed"
         );
+    }
+
+    #[test]
+    fn display_watch_default_rejects_without_callbacks_and_preserves_read() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct ReadOnly;
+        impl DisplayContextHost for ReadOnly {
+            fn read(&self, complete: DisplayContextCompletion) -> Result<(), DisplayContextError> {
+                complete(Ok(None));
+                Ok(())
+            }
+        }
+        let events = Arc::new(AtomicUsize::new(0));
+        let ready = Arc::new(AtomicUsize::new(0));
+        let event_count = events.clone();
+        let ready_count = ready.clone();
+        assert!(matches!(
+            ReadOnly.watch(
+                Arc::new(move |_| {
+                    event_count.fetch_add(1, Ordering::AcqRel);
+                }),
+                Box::new(move |_| {
+                    ready_count.fetch_add(1, Ordering::AcqRel);
+                }),
+            ),
+            Err(DisplayContextError::Unsupported)
+        ));
+        assert_eq!(events.load(Ordering::Acquire), 0);
+        assert_eq!(ready.load(Ordering::Acquire), 0);
+        ReadOnly
+            .read(Box::new(|result| assert_eq!(result, Ok(None))))
+            .unwrap();
+        assert_eq!(
+            DisplayContextError::Stopped.to_string(),
+            "display context watch stopped"
+        );
+        let event = DisplayContextWatchEvent::Unavailable(DisplayContextError::Stopped);
+        let copied = event;
+        assert_eq!(copied, event);
     }
 }

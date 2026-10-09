@@ -853,3 +853,248 @@ fn invalid_source_geometry_rejects_before_provider_and_accepted_callback_owns_no
     assert!(weak.upgrade().is_none());
     source.hide().unwrap();
 }
+
+fn native_snapshot(day: u32, start: WeekStart) -> CalendarSnapshot {
+    let source = snapshot(day);
+    CalendarSnapshot::new(
+        source.today(),
+        source.locale_name().into(),
+        source.months().clone(),
+        source.weekdays_full().clone(),
+        source.weekdays_abbreviated().clone(),
+        start,
+    )
+    .unwrap()
+}
+
+#[test]
+fn saved_week_start_reprojects_and_refits_without_native_work_or_stale_input_authority() {
+    let f = Fixture::new();
+    f.loaded();
+    for _ in 0..5 {
+        f.navigate(true);
+    }
+    let (selected_key, selected) = f
+        .popup
+        .state
+        .borrow()
+        .keys
+        .days
+        .iter()
+        .find(|(_, date)| date.month() == 6 && date.day() == 15)
+        .unwrap()
+        .clone();
+    f.popup.component().invoke_day_selected(selected_key);
+    assert_eq!(f.popup.component().get_weeks().row_count(), 5);
+    let displayed = f.displayed();
+    let old_action = f.popup.component().get_action_key();
+    let old_day = f.popup.state.borrow().keys.days[0].0.clone();
+    let old_height = f.popup.component().get_popup_content_height();
+    let events = f.host.events.lock().clone();
+    let session = f.popup.state.borrow().session;
+    let placement = f.popup.placement.get().unwrap().anchor;
+    let motion = f.popup.component().global::<PopoverMotion>();
+    let motion_before = (motion.get_enabled(), motion.get_presented());
+    f.popup.set_start_of_week(StartOfWeek::Sunday);
+    assert_eq!(f.displayed(), displayed);
+    assert_eq!(f.selected(), selected);
+    assert_eq!(f.popup.component().get_view_mode(), CalendarMode::Month);
+    assert_eq!(
+        f.popup.component().get_weekdays().row_data(0).unwrap(),
+        "W7"
+    );
+    assert_eq!(f.popup.component().get_weeks().row_count(), 6);
+    assert!(f.popup.component().get_popup_content_height() > old_height);
+    assert_eq!(
+        *f.popup.rect.borrow(),
+        Some(f.popup.preferred_rect().unwrap()),
+        "visible geometry is refit to the new row count",
+    );
+    assert_ne!(f.popup.component().get_action_key(), old_action);
+    f.popup
+        .component()
+        .invoke_today_requested(old_action.clone());
+    f.popup
+        .component()
+        .invoke_navigate_requested(true, old_action);
+    f.popup.component().invoke_day_selected(old_day);
+    assert_eq!(f.displayed(), displayed);
+    assert_eq!(f.selected(), selected);
+    assert_eq!(f.calendar.reads(), 1);
+    assert_eq!(f.host.provider_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        *f.host.events.lock(),
+        events,
+        "no attach/detach/focus replay"
+    );
+    assert_eq!(f.popup.state.borrow().session, session);
+    assert_eq!(f.popup.placement.get().unwrap().anchor, placement);
+    assert_eq!(
+        (motion.get_enabled(), motion.get_presented()),
+        motion_before
+    );
+    assert!(f.popup.is_open());
+
+    let key = f.popup.component().get_action_key();
+    let sequence = f.popup.state.borrow().key_sequence;
+    f.popup.set_start_of_week(StartOfWeek::Sunday);
+    assert_eq!(f.popup.component().get_action_key(), key);
+    assert_eq!(
+        f.popup.state.borrow().key_sequence,
+        sequence,
+        "same policy is a no-op"
+    );
+}
+
+#[test]
+fn saved_week_start_preserves_year_view_and_retires_old_month_keys() {
+    let f = Fixture::new();
+    f.loaded();
+    f.navigate(true);
+    f.popup
+        .component()
+        .invoke_toggle_view_requested(f.popup.component().get_action_key());
+    f.navigate(true);
+    let displayed = f.displayed();
+    let selected = f.selected();
+    let old_month = f.popup.state.borrow().keys.months[0].0.clone();
+    let events = f.host.events.lock().clone();
+    f.popup.set_start_of_week(StartOfWeek::Saturday);
+    f.popup.component().invoke_month_selected(old_month);
+    assert_eq!(f.popup.component().get_view_mode(), CalendarMode::Year);
+    assert_eq!(f.displayed(), displayed);
+    assert_eq!(f.selected(), selected);
+    assert_eq!(
+        f.popup.component().get_weekdays().row_data(0).unwrap(),
+        "W6"
+    );
+    assert_eq!(*f.host.events.lock(), events);
+    assert_eq!(f.calendar.reads(), 1);
+}
+
+#[test]
+fn native_sunday_snapshot_is_adapted_before_each_refresh_and_latest_inflight_policy_wins() {
+    let f = Fixture::new();
+    f.show().unwrap();
+    f.calendar
+        .finish(Ok(native_snapshot(31, WeekStart::Sunday)));
+    f.drain();
+    assert_eq!(
+        f.popup.component().get_weekdays().row_data(0).unwrap(),
+        "W1"
+    );
+    f.navigate(true);
+    let displayed = f.displayed();
+    let selected = f.selected();
+    advance(60_000);
+    assert_eq!(f.calendar.reads(), 2);
+    f.calendar
+        .finish(Ok(native_snapshot(30, WeekStart::Sunday)));
+    f.drain();
+    assert_eq!(
+        f.displayed(),
+        displayed,
+        "native Sunday cannot reset Monday browsing"
+    );
+    assert_eq!(f.selected(), selected);
+    advance(60_000);
+    assert_eq!(f.calendar.reads(), 3);
+    f.popup.set_start_of_week(StartOfWeek::Sunday);
+    f.popup.set_start_of_week(StartOfWeek::Saturday);
+    f.calendar
+        .finish(Ok(native_snapshot(29, WeekStart::Sunday)));
+    f.popup.set_start_of_week(StartOfWeek::Monday);
+    f.popup.set_start_of_week(StartOfWeek::Saturday);
+    f.drain();
+    assert_eq!(f.displayed(), displayed);
+    assert_eq!(f.selected(), selected);
+    assert_eq!(
+        f.popup.component().get_weekdays().row_data(0).unwrap(),
+        "W6"
+    );
+    assert_eq!(f.popup.state.borrow().start_of_week, StartOfWeek::Saturday);
+    assert_eq!(f.host.provider_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        f.calendar.reads(),
+        3,
+        "policy changes must not request metadata"
+    );
+}
+
+#[test]
+fn hidden_week_start_policy_does_not_show_or_read_and_stale_session_cannot_replace_it() {
+    let f = Fixture::new();
+    f.popup.set_start_of_week(StartOfWeek::Sunday);
+    assert!(!f.popup.is_open());
+    assert_eq!(f.calendar.reads(), 0);
+    assert_eq!(f.host.provider_calls.load(Ordering::Relaxed), 0);
+    assert!(f.host.events.lock().is_empty());
+    f.loaded();
+    f.navigate(true);
+    let displayed = f.displayed();
+    let selected = f.selected();
+    advance(60_000);
+    assert_eq!(f.calendar.reads(), 2);
+    f.popup.hide();
+    let events = f.host.events.lock().clone();
+    f.popup.set_start_of_week(StartOfWeek::Saturday);
+    assert!(!f.popup.is_open());
+    assert_eq!(f.popup.component().get_weeks().row_count(), 0);
+    assert_eq!(*f.host.events.lock(), events);
+    assert_eq!(f.calendar.reads(), 2);
+    assert_eq!(f.displayed(), displayed);
+    assert_eq!(f.selected(), selected);
+    assert!(f.popup.state.borrow().keys.days.is_empty());
+    f.show().unwrap();
+    assert_eq!(
+        f.calendar.reads(),
+        2,
+        "old accepted read still owns the single flight"
+    );
+    f.calendar.finish(Ok(native_snapshot(1, WeekStart::Sunday)));
+    f.drain();
+    assert_eq!(
+        f.displayed(),
+        displayed,
+        "stale session cannot update retained metadata"
+    );
+    assert_eq!(f.selected(), selected);
+    assert_eq!(f.calendar.reads(), 3);
+    assert!(f.popup.component().get_loading());
+    f.calendar
+        .finish(Ok(native_snapshot(30, WeekStart::Sunday)));
+    f.drain();
+    assert_eq!(f.displayed(), displayed);
+    assert_eq!(f.selected(), selected);
+    assert_eq!(
+        f.popup.component().get_weekdays().row_data(0).unwrap(),
+        "W6"
+    );
+    assert_eq!(f.popup.state.borrow().start_of_week, StartOfWeek::Saturday);
+}
+
+#[test]
+fn week_start_changed_under_projection_retires_authority_and_defers_latest_policy() {
+    let f = Fixture::new();
+    f.loaded();
+    let old_day = f.popup.state.borrow().keys.days[0].0.clone();
+    let selected = f.selected();
+    f.popup.projecting.set(true);
+    f.popup.set_start_of_week(StartOfWeek::Sunday);
+    f.popup.set_start_of_week(StartOfWeek::Saturday);
+    assert!(f.popup.policy_projection_pending.get());
+    assert!(f.popup.state.borrow().keys.action.is_empty());
+    assert!(f.popup.state.borrow().keys.days.is_empty());
+    f.popup.component().invoke_day_selected(old_day.clone());
+    assert_eq!(f.selected(), selected);
+    f.popup.projecting.set(false);
+    f.popup.project_and_fit();
+    assert!(!f.popup.policy_projection_pending.get());
+    assert_eq!(
+        f.popup.component().get_weekdays().row_data(0).unwrap(),
+        "W6"
+    );
+    f.popup.component().invoke_day_selected(old_day);
+    assert_eq!(f.selected(), selected);
+    assert_eq!(f.calendar.reads(), 1);
+}

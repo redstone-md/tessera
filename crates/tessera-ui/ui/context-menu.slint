@@ -65,6 +65,12 @@ export component ContextMenuSurface inherits Window {
     in property <DockMenuKind> kind;
     in property <image> target-icon;
     in property <bool> recycle-empty-enabled: false;
+    // Launcher favorites are independent from dock pins; no dock kind is added.
+    in property <bool> launcher-favorite-scope: false;
+    in property <bool> launcher-favorite: false;
+    // Optional module membership is applied preference state, not playback.
+    in property <bool> media-scope: false;
+    in property <bool> media-enabled: false;
     in-out property <int> selected-index;
     out property <length> menu-width: max(200px,
         plain-label-metrics.preferred-width + 32px,
@@ -95,13 +101,20 @@ export component ContextMenuSurface inherits Window {
         opacity: 0;
         text: root.metric-labels(root.entries, true);
     }
-    property <[MenuEntry]> entries: root.kind == DockMenuKind.bar ? [
+    property <[MenuEntry]> entries: root.launcher-favorite-scope ? [
+        { label: root.launcher-favorite ? @tr("Unpin") : @tr("Pin"),
+            action: root.launcher-favorite ? DockMenuAction.favorite-remove : DockMenuAction.favorite-add }
+    ] : root.media-scope ? [
+        { label: @tr("Remove media module"), action: DockMenuAction.media-remove }
+    ] : root.kind == DockMenuKind.bar ? [
         { label: @tr("Settings"), action: DockMenuAction.settings,
             icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg") },
         { label: @tr("File Explorer"), action: DockMenuAction.file-manager },
         { label: @tr("Task Manager"), action: DockMenuAction.task-manager },
         { label: @tr("Restore Explorer"), action: DockMenuAction.restore },
-        { label: @tr("Exit Tessera"), action: DockMenuAction.exit }
+        { label: @tr("Exit Tessera"), action: DockMenuAction.exit },
+        { label: root.media-enabled ? @tr("Remove media module") : @tr("Add media module"),
+            action: root.media-enabled ? DockMenuAction.media-remove : DockMenuAction.media-bar-add }
     ] : root.kind == DockMenuKind.pinned ? [
         { label: @tr("Open"), action: DockMenuAction.launch,
             icon: root.target-icon.width > 0 ? root.target-icon :
@@ -124,7 +137,14 @@ export component ContextMenuSurface inherits Window {
     pure function entry-enabled(index: int) -> bool {
         return index >= 0 && index < root.entries.length
             && (root.entries[index].action != DockMenuAction.recycle-empty
-                || root.recycle-empty-enabled);
+                || root.recycle-empty-enabled)
+            && (root.entries[index].action != DockMenuAction.media-bar-add || !root.media-enabled)
+            && (root.entries[index].action != DockMenuAction.media-remove || root.media-enabled);
+    }
+    pure function non-repeating-action(action: DockMenuAction) -> bool {
+        return action == DockMenuAction.recycle-empty
+            || action == DockMenuAction.favorite-add || action == DockMenuAction.favorite-remove
+            || action == DockMenuAction.media-bar-add || action == DockMenuAction.media-remove;
     }
     pure function adjacent-index(index: int, direction: int) -> int {
         return direction > 0
@@ -133,7 +153,7 @@ export component ContextMenuSurface inherits Window {
     }
     pure function next-enabled-index(index: int, direction: int) -> int {
         let candidate = root.adjacent-index(index, direction);
-        // Only Empty can be disabled; every scope retains an enabled row.
+        // Normal scopes retain enabled rows; a retired media scope stays inert.
         return root.entry-enabled(candidate) ? candidate
             : root.adjacent-index(candidate, direction);
     }
@@ -168,7 +188,7 @@ export component ContextMenuSurface inherits Window {
             if (event.text == Key.Return || event.text == Key.Space)
                 && (!root.entry-enabled(root.selected-index)
                     || (event.repeat
-                        && root.entries[root.selected-index].action == DockMenuAction.recycle-empty)) {
+                        && root.non-repeating-action(root.entries[root.selected-index].action))) {
                 return accept;
             }
             if event.text == Key.Tab { return accept; }
@@ -178,7 +198,7 @@ export component ContextMenuSurface inherits Window {
             if event.text == Key.Return || event.text == Key.Space {
                 if root.entry-enabled(root.selected-index)
                     && !(event.repeat
-                        && root.entries[root.selected-index].action == DockMenuAction.recycle-empty) {
+                        && root.non-repeating-action(root.entries[root.selected-index].action)) {
                     root.action-requested(root.entries[root.selected-index].action);
                 }
                 return accept;
@@ -211,7 +231,7 @@ export component ContextMenuSurface inherits Window {
                         radius: 6px;
                         filled: false;
                         enabled: root.entry-enabled(index);
-                        allow-return-repeat: entry.action != DockMenuAction.recycle-empty;
+                        allow-return-repeat: !root.non-repeating-action(entry.action);
                         property <bool> has-icon: entry.icon.width > 0;
                         property <bool> keyboard-selected: root.keyboard-navigation
                             && root.selected-index == index;

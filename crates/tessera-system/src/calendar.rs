@@ -264,6 +264,11 @@ impl CalendarState {
         self.selected
     }
 
+    /// Change grid alignment without changing browsing, selection, or view mode.
+    pub fn set_week_start(&mut self, start: WeekStart) {
+        self.snapshot.week_start = start;
+    }
+
     pub fn projection(&self) -> CalendarProjection {
         let year = self.displayed.0.format("%Y");
         let title = match self.view {

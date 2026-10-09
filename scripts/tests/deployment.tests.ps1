@@ -8,6 +8,9 @@
 # or the real LOCALAPPDATA. No processes are launched.
 #
 # Run from the repository root:  powershell -File scripts\tests\deployment.tests.ps1
+# Portable process-capture cases only: pwsh -File scripts/tests/deployment.tests.ps1 -RuntimeOnly
+
+param([switch]$RuntimeOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -820,9 +823,220 @@ function Test-InstallerProbeDoesNotHoldRecoveryLock {
     }
 }
 
+function Test-RuntimeProbeCaptureAndOwnedCleanup {
+    # Exercise the production wait/capture/cleanup boundary, replacing only
+    # process creation. No executable, Windows GUI, or registry is accessed.
+    $previous = Get-ModuleContext
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('tessera-probe-test-' + [Guid]::NewGuid().ToString('N'))
+    $null = [IO.Directory]::CreateDirectory($root)
+    $supervisor = Join-Path $root 'tessera-shell.exe'
+    [IO.File]::WriteAllText($supervisor, 'never executed')
+    $record = 'tessera-runtime stage=processExit error=heartbeat pulses=0 exit_code=0x00000001 native_code=none cleanup_native_code=none stderr_bytes=123 stderr_truncated=false stderr_status=complete stderr_hint=panic stderr_native_code=none'
+    try {
+        foreach ($scenario in @('failure', 'timeout', 'success', 'budget', 'start-error')) {
+            $state = @{
+                Parameters = $null; Kills = 0; Disposals = 0; Waits = @()
+                Complete = ($scenario -ne 'timeout')
+                ExitCode = $(if ($scenario -eq 'failure') { 1 } else { 0 })
+                Scenario = $scenario; Record = $record
+            }
+            $runner = {
+                param($Parameters)
+                $state.Parameters = $Parameters
+                if ($state.Scenario -eq 'start-error') {
+                    throw [ComponentModel.Win32Exception]::new(5, 'private path C:\Users\private\file')
+                }
+                $text = "PRIVATE USER TITLE AND C:\Users\private\file`n$($state.Record)`n"
+                if ($state.Scenario -eq 'budget') { $text += ('x' * 65537) }
+                [IO.File]::WriteAllText($Parameters.RedirectStandardError, $text)
+                [IO.File]::WriteAllText($Parameters.RedirectStandardOutput, 'PRIVATE STDOUT')
+                $process = [pscustomobject]@{
+                    State = $state; HasExited = $state.Complete; ExitCode = $state.ExitCode
+                }
+                $process | Add-Member ScriptMethod WaitForExit {
+                    param($Milliseconds)
+                    $this.State.Waits += $Milliseconds
+                    return $this.HasExited
+                }
+                $process | Add-Member ScriptMethod Kill {
+                    $this.State.Kills++
+                    $this.HasExited = $true
+                }
+                $process | Add-Member ScriptMethod Dispose { $this.State.Disposals++ }
+                return $process
+            }.GetNewClosure()
+            Set-ModuleContext @{ Hooks = @{ SupervisorRuntimeStart = $runner } }
+            $errorText = $null
+            try { Invoke-SupervisorRuntimeVerification -SupervisorPath $supervisor } catch {
+                $errorText = $_.Exception.Message
+            }
+            Assert-DeploymentEqual $state.Parameters.ArgumentList '--verify-runtime' 'The genuine production runtime barrier flag is unchanged.'
+            Assert-DeploymentTrue ($state.Parameters.PassThru -and -not $state.Parameters.Wait) 'The owned process uses the finite .NET wait, not Start-Process -Wait.'
+            $captureRoot = Split-Path -Parent $state.Parameters.RedirectStandardError
+            Assert-DeploymentFalse ($captureRoot.StartsWith($root, [StringComparison]::Ordinal)) 'Diagnostic files are outside the fixture package payload.'
+            Assert-DeploymentFalse ([IO.Directory]::Exists($captureRoot)) 'The uniquely owned capture directory is deleted on every path.'
+            Assert-DeploymentFalse ($errorText -match 'PRIVATE|private|PRIVATE STDOUT') 'Unknown stderr/stdout and exception paths never reach the failure record.'
+            if ($scenario -eq 'start-error') {
+                Assert-DeploymentTrue ($errorText -match 'stage=supervisor-start.*native_code=5') 'An actual start OS error is recorded without guessing security policy.'
+                continue
+            }
+            Assert-DeploymentEqual $state.Disposals 1 'Only the returned owned process handle is disposed.'
+            if ($scenario -eq 'success') {
+                Assert-DeploymentEqual $errorText $null 'Exit zero still passes the complete production supervisor barrier.'
+                Assert-DeploymentEqual $state.Kills 0 'A completed successful supervisor is not killed.'
+            } elseif ($scenario -eq 'timeout') {
+                Assert-DeploymentTrue ($errorText -match 'stage=supervisor-timeout.*deadline_ms=90000') 'The outer deadline remains 90 seconds.'
+                Assert-DeploymentEqual $state.Kills 1 'Timeout kills only the returned owned supervisor.'
+                Assert-DeploymentEqual $state.Waits[-1] 5000 'Owned cleanup retains its five-second finite wait.'
+                Assert-DeploymentTrue (@($state.Waits | Where-Object { $_ -gt 5000 }).Count -eq 0) 'No unbounded process wait is used.'
+            } else {
+                $stage = $(if ($scenario -eq 'budget') { 'capture-budget' } else { 'supervisor-exit' })
+                Assert-DeploymentTrue ($errorText -match "stage=$stage") 'Failure records identify the actual boundary.'
+                Assert-DeploymentTrue ($errorText.Contains($record)) 'The actual finite native stage/exit/panic record survives the throw.'
+                Assert-DeploymentFalse ($errorText -match 'blocked by security policy') 'Nonzero exit is not misdiagnosed as policy denial.'
+            }
+        }
+
+        $recordPath = Join-Path $root 'records.txt'
+        [IO.File]::WriteAllText($recordPath, (($record + "`n") * 20) + ('sensitive' * 10000))
+        $records = @(& $module { param($Path) Read-SupervisorRuntimeRecords -Path $Path } $recordPath)
+        Assert-DeploymentEqual $records.Count 8 'Failure logging accepts at most eight known bounded records.'
+        [IO.File]::WriteAllText($recordPath, ($record -replace 'stderr_bytes=123', 'stderr_bytes=99999'))
+        $records = @(& $module { param($Path) Read-SupervisorRuntimeRecords -Path $Path } $recordPath)
+        Assert-DeploymentEqual $records.Count 0 'Out-of-contract stream lengths are rejected rather than printed.'
+    } finally {
+        Set-ModuleContext $previous
+        # All files under this exact test-owned root were created above.
+        foreach ($name in @('tessera-shell.exe', 'records.txt')) {
+            $path = Join-Path $root $name
+            if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+        }
+        [IO.Directory]::Delete($root, $false)
+    }
+}
+
+function Test-RuntimeProbeCiGuiDetails {
+    # All roots/environment values and process handles below are synthetic.
+    # The 106-byte fixture models the observed length, NOT its unknown contents.
+    $previous = Get-ModuleContext
+    $root = Join-Path ([IO.Path]::GetTempPath()) ('tessera-detail-test-' + [Guid]::NewGuid().ToString('N'))
+    $null = [IO.Directory]::CreateDirectory($root)
+    $supervisor = Join-Path $root 'tessera-shell.exe'
+    $capture = Join-Path $root 'records.txt'
+    [IO.File]::WriteAllText($supervisor, 'never executed')
+    $record = 'tessera-runtime stage=processExit error=heartbeat pulses=0 exit_code=0x00000001 native_code=none cleanup_native_code=none stderr_bytes=106 stderr_truncated=false stderr_status=complete stderr_hint=other stderr_native_code=none'
+    $message = 'Tessera supervised GUI could not start: fixture unknown native backend/platform cause'.PadRight(105, '?')
+    $tail = 'GUI stderr tail: "' + $message + '\n"'
+    $expected = 'tessera-runtime-gui-detail source=DiagnosticHeartbeat ' + $tail
+    $environment = @{
+        GITHUB_ACTIONS = 'true'; USERPROFILE = 'C:\Users\fixture-private'
+        HOME = '/home/fixture-private'; RUNNER_TEMP = 'D:\runner\fixture-temp'
+        TEMP = 'D:\runner\fixture-temp\child'; TMP = '/tmp/fixture-private'
+    }
+    try {
+        Assert-DeploymentEqual ([Text.Encoding]::UTF8.GetByteCount($message + "`n")) 106 'The explicitly synthetic unknown-cause fixture has the observed byte length.'
+        foreach ($case in @(
+            @{ Name = 'default-off'; Details = $false; Ci = 'true'; ExitCode = 1; Expected = $false },
+            @{ Name = 'ci-opt-in'; Details = $true; Ci = 'true'; ExitCode = 1; Expected = $true },
+            @{ Name = 'non-ci'; Details = $true; Ci = $null; ExitCode = 1; Expected = $false },
+            @{ Name = 'ci-not-exact'; Details = $true; Ci = 'True'; ExitCode = 1; Expected = $false },
+            @{ Name = 'successful-ci'; Details = $true; Ci = 'true'; ExitCode = 0; Expected = $false }
+        )) {
+            $state = @{
+                Parameters = $null; Logs = @(); Disposals = 0; EnvironmentReads = 0
+                ExitCode = $case.ExitCode; Environment = $environment.Clone()
+                Stderr = "UNKNOWN STDERR PRIVATE`n$record`nruntime cause: PRIVATE CAUSE`n$tail`nUNKNOWN AFTER PRIVATE"
+            }
+            $state.Environment.GITHUB_ACTIONS = $case.Ci
+            $environmentReader = { $state.EnvironmentReads++; return $state.Environment }.GetNewClosure()
+            $runner = {
+                param($Parameters)
+                $state.Parameters = $Parameters
+                [IO.File]::WriteAllText($Parameters.RedirectStandardError, $state.Stderr)
+                [IO.File]::WriteAllText($Parameters.RedirectStandardOutput, 'GUI stderr tail: "Tessera supervised GUI could not start: PRIVATE STDOUT\n"')
+                $process = [pscustomobject]@{ State = $state; HasExited = $true; ExitCode = $state.ExitCode }
+                $process | Add-Member ScriptMethod WaitForExit { param($Milliseconds) return $true }
+                $process | Add-Member ScriptMethod Kill { throw 'A completed owned handle must not be killed.' }
+                $process | Add-Member ScriptMethod Dispose { $this.State.Disposals++ }
+                return $process
+            }.GetNewClosure()
+            Set-ModuleContext @{ Hooks = @{
+                SupervisorRuntimeStart = $runner
+                SupervisorRuntimeDiagnosticEnvironment = $environmentReader
+            } }
+            $errorText = ''
+            try {
+                Invoke-SupervisorRuntimeVerification -SupervisorPath $supervisor -DiagnosticDetails:$case.Details 6>&1 |
+                    ForEach-Object { $state.Logs += $_.ToString() }
+            } catch { $errorText = $_.Exception.Message }
+            $logs = $state.Logs -join "`n"
+            Assert-DeploymentEqual $state.Parameters.ArgumentList '--verify-runtime' 'Opt-in details never change the actual DiagnosticHeartbeat production invocation.'
+            Assert-DeploymentEqual $state.Disposals 1 'The returned owned process handle is disposed with details on or off.'
+            Assert-DeploymentFalse ([IO.Directory]::Exists((Split-Path -Parent $state.Parameters.RedirectStandardError))) 'Detail mode still deletes its owned capture directory.'
+            Assert-DeploymentFalse (($logs + $errorText) -match 'PRIVATE|UNKNOWN STDERR|UNKNOWN AFTER') 'Neither unknown stderr, cause nor stdout is emitted even with CI details.'
+            Assert-DeploymentEqual ($errorText.Contains($expected)) $case.Expected "Only explicit CI failure exposes the complete escaped backend message: $($case.Name)."
+            Assert-DeploymentEqual ($logs.Contains($expected)) $case.Expected "The allowed detail survives into the durable failure host log: $($case.Name)."
+            if ($case.ExitCode -ne 0) {
+                Assert-DeploymentEqual $state.Logs[1] $record 'The first Rust numeric record remains byte-for-byte unchanged before any detail.'
+            }
+            if (-not $case.Details -or $case.ExitCode -eq 0) {
+                Assert-DeploymentEqual $state.EnvironmentReads 0 'Default and successful probes do not even inspect CI detail environment values.'
+            }
+        }
+
+        $environmentReader = { return $environment }.GetNewClosure()
+        Set-ModuleContext @{ Hooks = @{ SupervisorRuntimeDiagnosticEnvironment = $environmentReader } }
+        $privateTail = 'GUI stderr tail: "Tessera supervised GUI could not start: diagnostic phase=backendSelection: loader C:\\Users\\fixture-private\\native.dll D:/runner/fixture-temp/child/native.dll /home/fixture-private/native.dll /tmp/fixture-private/native.dll\n"'
+        [IO.File]::WriteAllText($capture, "$record`nruntime cause: PRIVATE CAUSE`n$privateTail`n")
+        $detail = & $module { param($Path) Read-SupervisorRuntimeGuiDetail -Path $Path -DiagnosticDetails } $capture
+        Assert-DeploymentTrue ($detail -match 'diagnostic phase=backendSelection: loader') 'The actual typed phase and original backend error text are preserved.'
+        Assert-DeploymentFalse ($detail -match 'fixture-private|fixture-temp|C:\\\\Users|/home/|D:/runner|/tmp/') 'Known home/temp roots are redacted, including Rust-escaped and slash-normalized Windows paths.'
+        Assert-DeploymentEqual ([regex]::Matches($detail, '<runner-path>').Count) 4 'Each known private root is replaced, rather than confusing escaping with redaction.'
+        foreach ($phase in @('heartbeatEventConnect', 'diagnosticFixture', 'productionUiConstructionAndEventLoop')) {
+            [IO.File]::WriteAllText($capture, "$record`nruntime cause: heartbeat`n" + ($privateTail -replace 'backendSelection', $phase) + "`n")
+            $detail = & $module { param($Path) Read-SupervisorRuntimeGuiDetail -Path $Path -DiagnosticDetails } $capture
+            Assert-DeploymentTrue ($detail.Contains("diagnostic phase=${phase}: loader")) 'Detail parsing does not guess or discard the startup adapter phase.'
+        }
+        $refusedTail = 'GUI stderr tail: "Tessera supervised startup was refused: fixture \"quoted\" error \u{1b} control stays escaped\n"'
+        [IO.File]::WriteAllText($capture, "$record`nruntime cause: heartbeat`n$refusedTail`n")
+        $detail = & $module { param($Path) Read-SupervisorRuntimeGuiDetail -Path $Path -DiagnosticDetails } $capture
+        Assert-DeploymentEqual $detail ('tessera-runtime-gui-detail source=DiagnosticHeartbeat ' + $refusedTail) 'The other fixed startup producer and Rust quote/control escapes are retained without decoding.'
+
+        foreach ($text in @(
+            "$record`nruntime cause: heartbeat`nGUI stderr tail: `"UNKNOWN GUI USER DATA`"",
+            "$record`nruntime cause: heartbeat`nGUI stderr tail: `"Tessera supervised GUI could not start: actual`nnewline`"",
+            "$record`nruntime cause: heartbeat`nGUI stderr tail: `"Tessera supervised GUI could not start: $([char]27)[31mraw-control`"",
+            "$record`nruntime cause: heartbeat`nGUI stderr tail: `"Tessera supervised GUI could not start: $([char]0x2028)raw-separator`"",
+            "$tail`n$record`nruntime cause: heartbeat",
+            "$record`n$tail",
+            "$record`nruntime cause: heartbeat`nunknown intervening data`n$tail",
+            (($record -replace 'stderr_bytes=106', 'stderr_bytes=99999') + "`nruntime cause: heartbeat`n$tail"),
+            (('x' * 32768) + "`n$record`nruntime cause: heartbeat`n$tail"),
+            "$record`nruntime cause: heartbeat`nGUI stderr tail: `"Tessera supervised GUI could not start: incomplete"
+        )) {
+            [IO.File]::WriteAllText($capture, $text)
+            $details = @(& $module { param($Path) Read-SupervisorRuntimeGuiDetail -Path $Path -DiagnosticDetails } $capture)
+            Assert-DeploymentEqual $details.Count 0 'Only a complete escaped fixed-producer field immediately after the bounded numeric/cause context is accepted.'
+        }
+        $longTail = 'GUI stderr tail: "Tessera supervised GUI could not start: ' + ([string][char]0x0416 * 8000) + '\n"'
+        [IO.File]::WriteAllText($capture, "$record`nruntime cause: heartbeat`n$longTail`n")
+        $detail = & $module { param($Path) Read-SupervisorRuntimeGuiDetail -Path $Path -DiagnosticDetails } $capture
+        Assert-DeploymentTrue ([Text.Encoding]::UTF8.GetByteCount($detail) -le 4096) 'The entire emitted detail record, not just its payload, is bounded to 4096 UTF-8 bytes.'
+        Assert-DeploymentTrue ($detail.EndsWith(' [truncated]', [StringComparison]::Ordinal)) 'An oversized owned startup error is explicitly bounded, never silently printed whole.'
+        Assert-DeploymentTrue ($detail.StartsWith('tessera-runtime-gui-detail source=DiagnosticHeartbeat ', [StringComparison]::Ordinal)) 'The diagnostic source field is fixed and cannot come from arbitrary captured text.'
+    } finally {
+        Set-ModuleContext $previous
+        foreach ($name in @('tessera-shell.exe', 'records.txt')) {
+            $path = Join-Path $root $name
+            if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+        }
+        [IO.Directory]::Delete($root, $false)
+    }
+}
+
 # --------------------------------------------------------------------- main
 
-foreach ($test in @(
+$tests = @(
     'Test-PackageValidation',
     'Test-ActivationAndRestoreWithoutShellValue',
     'Test-ActivationAndRestoreWithStringAndExpandString',
@@ -837,11 +1051,17 @@ foreach ($test in @(
     'Test-DeploymentLockContention',
     'Test-MalformedBuildInfoIsRefused',
     'Test-PreflightGateAndProbeHook',
+    'Test-RuntimeProbeCaptureAndOwnedCleanup',
+    'Test-RuntimeProbeCiGuiDetails',
     'Test-SmartAppControlStateMapping',
     'Test-EntrypointWhatIfChangesNothing',
     'Test-WhatIfChangesNothing',
     'Test-InstallerProbeDoesNotHoldRecoveryLock'
-)) {
+)
+# This opt-in entrypoint selects the same runtime cases included in the full
+# Windows suite. It does not instantiate registry fixtures or launch processes.
+$selectedTests = if ($RuntimeOnly) { @('Test-RuntimeProbeCaptureAndOwnedCleanup', 'Test-RuntimeProbeCiGuiDetails') } else { $tests }
+foreach ($test in $selectedTests) {
     & $test
 }
 

@@ -1,15 +1,95 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { ScrollView as NativeScrollView } from "std-widgets.slint";
+import { ScrollView as NativeScrollView, CheckBox as NativeCheckBox } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { TileButton, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens, PopoverMotion } from "popover.slint";
 
-export enum PowerMenuAction { LockSession }
+export enum PowerMenuAction { LockSession, LogOut, PowerOff, Reboot, Suspend, Hibernate }
 
-// This window covers the physical desktop aggregate. Its controller supplies
-// the selected full monitor in this window's CURRENT logical coordinate space.
+// One genuine TileButton owns all input; icons, badges and labels only paint.
+component PowerActionTile inherits TileButton {
+    in property <float> metric-scale: 1;
+    in property <length> base-y;
+    in property <length> text-height;
+    in property <length> font-size;
+    in property <float> text-line-height-factor: 1;
+    in property <image> icon-source;
+    in property <bool> update-pending: false;
+    property <length> label-height: root.text-height * (root.update-pending ? 2 : 1);
+    y: root.base-y + (root.enabled && root.hovered && !root.pressed ? -4px * root.metric-scale : 0px);
+    width: 100px * root.metric-scale;
+    height: 100px * root.metric-scale;
+    radius: 10px * root.metric-scale;
+    filled: false;
+    allow-return-repeat: false;
+    transform-scale: !root.enabled ? 1 : root.pressed ? 0.95 : root.hovered ? 1.05 : 1;
+    drop-shadow-color: root.enabled && root.hovered && !root.pressed ? #00000033 : transparent;
+    drop-shadow-offset-x: 0px;
+    drop-shadow-offset-y: root.enabled && root.hovered && !root.pressed ? 8px * root.metric-scale : 0px;
+    drop-shadow-blur: root.enabled && root.hovered && !root.pressed ? 16px * root.metric-scale : 0px;
+    background: !root.enabled ? transparent : root.pressed ? SeelenPalette.accent.with-alpha(0.3)
+        : root.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+    animate y, transform-scale {
+        enabled: PopoverMotion.enabled;
+        duration: 120ms;
+        easing: cubic-bezier(0.2, 0, 0, 1);
+    }
+    animate background {
+        enabled: PopoverMotion.enabled;
+        duration: 150ms;
+        easing: cubic-bezier(0.2, 0, 0, 1);
+    }
+    icon := Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height - 4px * root.metric-scale - root.label-height) / 2;
+        width: 25px * root.metric-scale;
+        height: 25px * root.metric-scale;
+        source: root.icon-source;
+        image-fit: contain;
+        colorize: SeelenPalette.foreground;
+        accessible-role: none;
+    }
+    if root.update-pending: update-badge := Rectangle {
+        x: icon.x + icon.width - 7px * root.metric-scale;
+        y: icon.y + icon.height - 7px * root.metric-scale;
+        width: 10px * root.metric-scale;
+        height: 10px * root.metric-scale;
+        border-radius: self.width / 2;
+        background: SeelenPalette.accent;
+        drop-shadow-color: SeelenPalette.tile;
+        drop-shadow-blur: 0px;
+        // The source's 2px body-colored ring is outside the 10px badge.
+        Rectangle {
+            x: -2px * root.metric-scale;
+            y: -2px * root.metric-scale;
+            width: parent.width + 4px * root.metric-scale;
+            height: parent.height + 4px * root.metric-scale;
+            border-radius: self.width / 2;
+            border-width: 2px * root.metric-scale;
+            border-color: SeelenPalette.tile;
+            accessible-role: none;
+        }
+        accessible-role: none;
+    }
+    label := Text {
+        x: 0px;
+        y: (parent.height + 25px * root.metric-scale + 4px * root.metric-scale - root.label-height) / 2;
+        width: parent.width;
+        height: root.label-height;
+        text: root.accessible-text;
+        font-size: root.font-size;
+        font-family: PopoverTokens.font-family;
+        font-weight: 500;
+        line-height-factor: root.text-line-height-factor;
+        color: SeelenPalette.foreground;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+}
+
 export component PowerMenuSurface inherits Window {
     no-frame: true;
     always-on-top: true;
@@ -23,31 +103,46 @@ export component PowerMenuSurface inherits Window {
     in property <length> selected-y;
     in property <length> selected-width;
     in property <length> selected-height;
-    // Display presentation scale already includes native text scale.
     in property <float> metric-scale: 1;
+    // The pinned Power popup is NOT .slu-std-popover (0.8rem). It inherits
+    // reset :root 100% / normal browser initial 16px, independently of other menus.
+    in property <length> source-font-size: 16px;
     in property <bool> action-enabled: true;
+    // Compatibility name: a single accepted flight disables ALL six controls.
     in property <bool> lock-busy: false;
+    in property <string> user-name: "";
+    in property <bool> updates-known-pending: false;
+    in-out property <bool> install-updates: true;
+    in property <string> updates-status: "";
+    // Canonical moon remains license-blocked; never substitute an approximation.
+    in property <image> suspend-icon;
+    callback updates-choice-changed(bool);
     callback action-requested(PowerMenuAction);
     callback hide-requested();
-    // UI-thread wakeup only; neither callback carries native action authority.
     callback power-event-ready();
     callback viewport-changed();
     changed width => { root.viewport-changed(); }
     changed height => { root.viewport-changed(); }
 
-    property <length> font-size: PopoverTokens.font-size * root.metric-scale;
+    property <length> font-size: root.source-font-size * root.metric-scale;
     property <length> text-height: root.font-size * PopoverTokens.line-height;
     property <float> text-line-height-factor: font-probe.preferred-height > 0px
         ? root.text-height / font-probe.preferred-height : 1;
     property <length> action-size: 100px * root.metric-scale;
+    property <length> gap: 24px * root.metric-scale;
+    property <length> content-padding: 24px * root.metric-scale;
     property <length> focus-margin: FocusTokens.outer-margin;
-    property <length> content-padding: min(24px * root.metric-scale,
-        max(root.focus-margin, selected-viewport.width / 6),
-        max(root.focus-margin, selected-viewport.height / 6));
-    property <length> natural-height: 2 * root.content-padding + root.text-height
-        + 24px * root.metric-scale + root.action-size;
-    // Keep source shadow space on ordinary monitors; tiny viewports prioritize
-    // a scrollable real control instead of consuming their extent with shadow.
+    property <length> grid-width: 348px * root.metric-scale;
+    property <string> updates-prompt: @tr("There's pending system updates. Install now?");
+    property <length> updates-height: max(18px * root.metric-scale, updates-probe.preferred-height);
+    property <length> optional-row-height: root.updates-known-pending ? root.updates-height
+        : root.updates-status != "" ? status-probe.preferred-height : 0px;
+    property <length> separator-y: root.content-padding + 48px * root.metric-scale + root.gap
+        + (root.optional-row-height > 0px ? root.optional-row-height + root.gap : 0px);
+    property <length> grid-y: root.separator-y + 1px * root.metric-scale + root.gap;
+    property <length> natural-height: root.grid-y + 2 * root.action-size + root.gap + root.content-padding;
+    property <bool> controls-enabled: root.action-enabled && !root.lock-busy;
+    property <bool> will-install: root.updates-known-pending && root.install-updates;
     property <length> shadow-space: min(32px * root.metric-scale,
         max(0px, (selected-viewport.width - 124px * root.metric-scale) / 2),
         max(0px, (selected-viewport.height - 124px * root.metric-scale) / 2));
@@ -61,43 +156,67 @@ export component PowerMenuSurface inherits Window {
         font-family: PopoverTokens.font-family;
         accessible-role: none;
     }
-    public function set-presentation-opacity(value: float) {
-        body.set-presentation-opacity(value);
+    // SDK1.18 Text vertical layout measures word-wrap against its fixed width.
+    // Keep conditional rows out of that dependency so no fixed two-line guess
+    // inflates the source flex row or clips a translated/factual message.
+    updates-probe := Text {
+        width: root.grid-width - 56px * root.metric-scale;
+        height: 0px;
+        opacity: 0;
+        text: root.updates-prompt;
+        font-size: root.font-size;
+        font-family: PopoverTokens.font-family;
+        line-height-factor: root.text-line-height-factor;
+        wrap: word-wrap;
+        accessible-role: none;
     }
+    status-probe := Text {
+        width: root.grid-width;
+        height: 0px;
+        opacity: 0;
+        text: root.updates-status;
+        font-size: root.font-size;
+        font-family: PopoverTokens.font-family;
+        line-height-factor: root.text-line-height-factor;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+    public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
     public function focus-content() {
         scroll.content-x = 0px;
         scroll.content-y = 0px;
         escape-scope.focus();
     }
-    function reveal-lock() {
-        let left = lock.x - root.focus-margin;
-        let right = lock.x + lock.width + root.focus-margin;
-        let top = lock.y - root.focus-margin;
-        let bottom = lock.y + lock.height + root.focus-margin;
-        if left < -scroll.content-x {
-            scroll.content-x = -max(0px, left);
+    // Shared scroll reveal preserves real layout coordinates under paint-only motion.
+    function reveal-control(left: length, top: length, width: length, height: length) {
+        let right = left + width + root.focus-margin;
+        let bottom = top + height + root.focus-margin;
+        let start-x = left - root.focus-margin;
+        let start-y = top - root.focus-margin;
+        // An oversized control cannot fit both edges. Keep its leading native
+        // focus anchor visible instead of clipping the stock widget's FocusScope.
+        if width + 2 * root.focus-margin > scroll.visible-width {
+            scroll.content-x = -max(0px, min(start-x, scroll.content-width - scroll.visible-width));
+        } else if start-x < -scroll.content-x {
+            scroll.content-x = -max(0px, start-x);
         } else if right > -scroll.content-x + scroll.visible-width {
-            scroll.content-x = -max(0px, min(right - scroll.visible-width,
-                scroll.content-width - scroll.visible-width));
+            scroll.content-x = -max(0px, min(right - scroll.visible-width, scroll.content-width - scroll.visible-width));
         }
-        if top < -scroll.content-y {
-            scroll.content-y = -max(0px, top);
+        if height + 2 * root.focus-margin > scroll.visible-height {
+            scroll.content-y = -max(0px, min(start-y, scroll.content-height - scroll.visible-height));
+        } else if start-y < -scroll.content-y {
+            scroll.content-y = -max(0px, start-y);
         } else if bottom > -scroll.content-y + scroll.visible-height {
-            scroll.content-y = -max(0px, min(bottom - scroll.visible-height,
-                scroll.content-height - scroll.visible-height));
+            scroll.content-y = -max(0px, min(bottom - scroll.visible-height, scroll.content-height - scroll.visible-height));
         }
     }
     forward-focus: escape-scope;
-
     escape-scope := FocusScope {
         width: root.width;
         height: root.height;
         focus-on-tab-navigation: false;
         key-pressed(event) => {
-            if event.text == Key.Escape {
-                root.hide-requested();
-                return accept;
-            }
+            if event.text == Key.Escape { root.hide-requested(); return accept; }
             return reject;
         }
         scrim := Rectangle {
@@ -105,9 +224,7 @@ export component PowerMenuSurface inherits Window {
             height: parent.height;
             background: #12121266;
             accessible-role: none;
-            TouchArea {
-                clicked => { root.hide-requested(); }
-            }
+            TouchArea { clicked => { root.hide-requested(); } }
         }
         selected-viewport := Rectangle {
             x: root.selected-x;
@@ -122,95 +239,222 @@ export component PowerMenuSurface inherits Window {
                 height: min(parent.height, root.natural-height + 2 * root.shadow-space);
                 shadow-margin: root.shadow-space;
                 surface-radius: 16px * root.metric-scale;
-                // Power's bg-light role differs from the standard popup role.
                 surface-background: SeelenPalette.tile;
                 surface-shadow-color: #0000003d;
                 surface-shadow-offset-x: 8px * root.metric-scale;
                 surface-shadow-offset-y: 8px * root.metric-scale;
                 surface-shadow-blur: 24px * root.metric-scale;
-                // Consume body input before the desktop scrim, without creating
-                // a second action, focus target, account or confirmation route.
                 TouchArea { clicked => { } }
                 scroll := NativeScrollView {
                     width: body.content-width;
                     height: body.content-height;
                     horizontal-scrollbar-policy: as-needed;
                     vertical-scrollbar-policy: as-needed;
-                    content-width: max(self.visible-width,
-                        root.action-size + 2 * root.content-padding);
+                    content-width: max(self.visible-width, root.grid-width + 2 * root.content-padding);
                     content-height: root.natural-height;
-                    Text {
+                    header := Rectangle {
                         x: root.content-padding;
                         y: root.content-padding;
-                        width: max(0px, parent.width - 2 * root.content-padding);
-                        height: root.text-height;
-                        text: root.lock-busy ? @tr("Lock request pending") : @tr("Power menu");
+                        width: root.grid-width;
+                        height: 48px * root.metric-scale;
+                        accessible-role: none;
+                        // Reserve the unavailable profile image's source extent without fake art.
+                        greeting := Text {
+                            x: 64px * root.metric-scale;
+                            y: (parent.height - root.text-height) / 2;
+                            width: parent.width - self.x;
+                            height: root.text-height;
+                            text: root.user-name == "" ? @tr("User identity unavailable") : @tr("Goodbye {}", root.user-name);
+                            font-size: root.font-size;
+                            font-family: PopoverTokens.font-family;
+                            line-height-factor: root.text-line-height-factor;
+                            font-weight: 600;
+                            color: SeelenPalette.foreground;
+                            overflow: elide;
+                            accessible-role: text;
+                            accessible-label: self.text;
+                        }
+                    }
+                    if root.updates-known-pending: updates-row := Rectangle {
+                        x: root.content-padding;
+                        y: root.content-padding + 48px * root.metric-scale + root.gap;
+                        width: root.grid-width;
+                        height: root.updates-height;
+                        accessible-role: none;
+                        // Native control supplies pointer/Space/Tab/AX semantics. Its paint is
+                        // replaced, not its input; these siblings contain no input handlers.
+                        // Layout owns the public stock widget's extent. An explicit
+                        // widget width/height conflicts with its inherited minimums.
+                        HorizontalLayout {
+                            width: parent.width;
+                            height: parent.height;
+                            padding: 0px;
+                            spacing: 0px;
+                            updates-choice := NativeCheckBox {
+                                min-width: 0px;
+                                min-height: 0px;
+                                preferred-height: updates-row.height;
+                                max-height: updates-row.height;
+                                horizontal-stretch: 1;
+                                vertical-stretch: 1;
+                                font-size: root.font-size;
+                                text: root.updates-prompt;
+                                enabled: root.controls-enabled;
+                                checked <=> root.install-updates;
+                                opacity: 0;
+                                toggled => { root.updates-choice-changed(self.checked); }
+                                changed has-focus => {
+                                    if self.has-focus {
+                                        root.reveal-control(updates-row.x, updates-row.y, updates-row.width, updates-row.height);
+                                    }
+                                }
+                            }
+                        }
+                        updates-label := Text {
+                            width: parent.width - 56px * root.metric-scale;
+                            height: parent.height;
+                            text: updates-choice.text;
+                            font-size: root.font-size;
+                            font-family: PopoverTokens.font-family;
+                            line-height-factor: root.text-line-height-factor;
+                            color: SeelenPalette.secondary;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                        switch-track := Rectangle {
+                            x: parent.width - self.width;
+                            y: (parent.height - self.height) / 2;
+                            width: 36px * root.metric-scale;
+                            height: 18px * root.metric-scale;
+                            border-radius: self.height / 2;
+                            background: root.install-updates ? SeelenPalette.accent : SeelenPalette.muted;
+                            opacity: root.controls-enabled ? 1 : 0.5;
+                            accessible-role: none;
+                            animate background { enabled: PopoverMotion.enabled; duration: 300ms; }
+                            switch-thumb := Rectangle {
+                                x: (root.install-updates ? 20px : 2px) * root.metric-scale;
+                                y: 2px * root.metric-scale;
+                                width: 14px * root.metric-scale;
+                                height: 14px * root.metric-scale;
+                                border-radius: self.height / 2;
+                                background: SeelenPalette.tile;
+                                accessible-role: none;
+                                animate x { enabled: PopoverMotion.enabled; duration: 300ms; }
+                            }
+                        }
+                        if updates-choice.has-focus: Rectangle {
+                            x: -root.focus-margin;
+                            y: -root.focus-margin;
+                            width: parent.width + 2 * root.focus-margin;
+                            height: parent.height + 2 * root.focus-margin;
+                            border-width: FocusTokens.outline-width;
+                            border-color: SeelenPalette.accent;
+                            border-radius: 4px * root.metric-scale;
+                            accessible-role: none;
+                        }
+                    }
+                    if !root.updates-known-pending && root.updates-status != "": updates-message := Text {
+                        x: root.content-padding;
+                        y: root.content-padding + 48px * root.metric-scale + root.gap;
+                        width: root.grid-width;
+                        height: root.optional-row-height;
+                        text: root.updates-status;
                         font-size: root.font-size;
                         font-family: PopoverTokens.font-family;
                         line-height-factor: root.text-line-height-factor;
-                        font-weight: 600;
-                        color: SeelenPalette.foreground;
-                        overflow: elide;
+                        color: SeelenPalette.secondary;
+                        wrap: word-wrap;
                         accessible-role: text;
                         accessible-label: self.text;
                     }
-                    lock := TileButton {
+                    separator := Rectangle {
                         x: root.content-padding;
-                        y: root.content-padding + root.text-height + 24px * root.metric-scale
-                            + (self.enabled && self.hovered && !self.pressed ? -4px * root.metric-scale : 0px);
-                        width: root.action-size;
-                        height: root.action-size;
-                        radius: 10px * root.metric-scale;
-                        // Paint-only scale preserves the source's stable 100px layout.
-                        transform-scale: !self.enabled ? 1 : self.pressed ? 0.95 : self.hovered ? 1.05 : 1;
-                        drop-shadow-color: self.enabled && self.hovered && !self.pressed ? #00000033 : transparent;
-                        drop-shadow-offset-x: 0px;
-                        drop-shadow-offset-y: self.enabled && self.hovered && !self.pressed ? 8px * root.metric-scale : 0px;
-                        drop-shadow-blur: self.enabled && self.hovered && !self.pressed ? 16px * root.metric-scale : 0px;
-                        animate y, transform-scale {
-                            enabled: PopoverMotion.enabled;
-                            duration: 120ms;
-                            easing: cubic-bezier(0.2, 0, 0, 1);
-                        }
-                        animate background {
-                            enabled: PopoverMotion.enabled;
-                            duration: 150ms;
-                            easing: cubic-bezier(0.2, 0, 0, 1);
-                        }
-                        filled: false;
-                        enabled: root.action-enabled && !root.lock-busy;
-                        allow-return-repeat: false;
+                        y: root.separator-y;
+                        width: root.grid-width;
+                        height: 1px * root.metric-scale;
+                        background: SeelenPalette.muted;
+                        accessible-role: none;
+                    }
+                    lock := PowerActionTile {
+                        x: root.content-padding;
+                        base-y: root.grid-y;
+                        metric-scale: root.metric-scale;
+                        font-size: root.font-size;
+                        text-height: root.text-height;
+                        text-line-height-factor: root.text-line-height-factor;
+                        enabled: root.controls-enabled;
                         accessible-text: @tr("Lock session");
-                        background: !self.enabled ? transparent
-                            : self.pressed ? SeelenPalette.accent.with-alpha(0.3)
-                            : self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+                        icon-source: @image-url("../assets/icons/ionicons-5.5.4/lock-closed.svg");
                         clicked => { root.action-requested(PowerMenuAction.LockSession); }
-                        focus-acquired => { root.reveal-lock(); }
-                        lock-icon := Image {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height - 4px * root.metric-scale - root.text-height) / 2;
-                            width: 25px * root.metric-scale;
-                            height: 25px * root.metric-scale;
-                            source: @image-url("../assets/icons/ionicons-5.5.4/lock-closed.svg");
-                            image-fit: contain;
-                            colorize: SeelenPalette.foreground;
-                            accessible-role: none;
-                        }
-                        lock-label := Text {
-                            x: 4px * root.metric-scale;
-                            y: (parent.height + 25px * root.metric-scale + 4px * root.metric-scale - root.text-height) / 2;
-                            width: max(0px, parent.width - 8px * root.metric-scale);
-                            height: root.text-height;
-                            text: @tr("Lock session");
-                            font-size: root.font-size;
-                            font-family: PopoverTokens.font-family;
-                            font-weight: 500;
-                            line-height-factor: root.text-line-height-factor;
-                            color: SeelenPalette.foreground;
-                            horizontal-alignment: center;
-                            overflow: elide;
-                            accessible-role: none;
-                        }
+                        focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
+                    }
+                    log-out := PowerActionTile {
+                        x: root.content-padding + root.action-size + root.gap;
+                        base-y: root.grid-y;
+                        metric-scale: root.metric-scale;
+                        font-size: root.font-size;
+                        text-height: root.text-height;
+                        text-line-height-factor: root.text-line-height-factor;
+                        enabled: root.controls-enabled;
+                        accessible-text: @tr("Log out");
+                        icon-source: @image-url("../assets/icons/ionicons-5.5.4/log-out-outline.svg");
+                        clicked => { root.action-requested(PowerMenuAction.LogOut); }
+                        focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
+                    }
+                    power-off := PowerActionTile {
+                        x: root.content-padding + 2 * (root.action-size + root.gap);
+                        base-y: root.grid-y;
+                        metric-scale: root.metric-scale;
+                        font-size: root.font-size;
+                        text-height: root.text-height;
+                        text-line-height-factor: root.text-line-height-factor;
+                        enabled: root.controls-enabled;
+                        accessible-text: root.will-install ? @tr("Update and shut down") : @tr("Power off");
+                        update-pending: root.will-install;
+                        icon-source: @image-url("../assets/icons/ionicons-5.5.4/power.svg");
+                        clicked => { root.action-requested(PowerMenuAction.PowerOff); }
+                        focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
+                    }
+                    reboot := PowerActionTile {
+                        x: root.content-padding;
+                        base-y: root.grid-y + root.action-size + root.gap;
+                        metric-scale: root.metric-scale;
+                        font-size: root.font-size;
+                        text-height: root.text-height;
+                        text-line-height-factor: root.text-line-height-factor;
+                        enabled: root.controls-enabled;
+                        accessible-text: root.will-install ? @tr("Update and restart") : @tr("Reboot");
+                        update-pending: root.will-install;
+                        icon-source: @image-url("../assets/icons/material-icons-f3fb444/restart_alt.svg");
+                        clicked => { root.action-requested(PowerMenuAction.Reboot); }
+                        focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
+                    }
+                    suspend := PowerActionTile {
+                        x: root.content-padding + root.action-size + root.gap;
+                        base-y: root.grid-y + root.action-size + root.gap;
+                        metric-scale: root.metric-scale;
+                        font-size: root.font-size;
+                        text-height: root.text-height;
+                        text-line-height-factor: root.text-line-height-factor;
+                        enabled: root.controls-enabled;
+                        accessible-text: @tr("Suspend");
+                        icon-source: root.suspend-icon;
+                        clicked => { root.action-requested(PowerMenuAction.Suspend); }
+                        focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
+                    }
+                    hibernate := PowerActionTile {
+                        x: root.content-padding + 2 * (root.action-size + root.gap);
+                        base-y: root.grid-y + root.action-size + root.gap;
+                        metric-scale: root.metric-scale;
+                        font-size: root.font-size;
+                        text-height: root.text-height;
+                        text-line-height-factor: root.text-line-height-factor;
+                        enabled: root.controls-enabled;
+                        accessible-text: @tr("Hibernate");
+                        icon-source: @image-url("../assets/icons/tabler-icons-6d128ed/zzz.svg");
+                        clicked => { root.action-requested(PowerMenuAction.Hibernate); }
+                        focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
                     }
                 }
             }

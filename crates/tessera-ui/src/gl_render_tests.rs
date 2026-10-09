@@ -158,6 +158,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     power
         .window()
         .set_size(slint::LogicalSize::new(1600.0, 900.0));
+    power.set_user_name("Native fixture user".into());
     power.show().unwrap();
 
     let completed = Rc::new(Cell::new(false));
@@ -267,6 +268,14 @@ fn verify_power_frames(power: &PowerMenuSurface) {
         assert_eq!(matches.len(), 1, "one genuine Power {id}");
         matches.into_iter().next().unwrap()
     };
+    let tile_child = |tile: &str, child: &str| {
+        let matches = element(tile)
+            .query_descendants()
+            .match_id(format!("PowerActionTile::{child}"))
+            .find_all();
+        assert_eq!(matches.len(), 1, "one genuine {tile} {child}");
+        matches.into_iter().next().unwrap()
+    };
     let window = power.window();
     let scale = window.scale_factor();
     let metric = power.get_metric_scale();
@@ -323,7 +332,7 @@ fn verify_power_frames(power: &PowerMenuSurface) {
         let origin = body.absolute_position();
         let size = body.size();
         near(size.width, 460.0 * metric);
-        near(size.height, 253.92 * metric);
+        near(size.height, 433.0 * metric);
         near((origin.x + size.width / 2.0) * scale, 1120.0);
         near((origin.y + size.height / 2.0) * scale, 530.0);
         let left = origin.x + 32.0 * metric;
@@ -390,12 +399,12 @@ fn verify_power_frames(power: &PowerMenuSurface) {
         let lock_size = lock.size();
         near(lock_size.width, 100.0 * metric);
         near(lock_size.height, 100.0 * metric);
-        let icon = element("lock-icon");
+        let icon = tile_child("lock", "icon");
         let icon_origin = icon.absolute_position();
         near(icon.size().width, 25.0 * metric);
         near(icon.size().height, 25.0 * metric);
         near(
-            element("lock-label").absolute_position().y - icon_origin.y - icon.size().height,
+            tile_child("lock", "label").absolute_position().y - icon_origin.y - icon.size().height,
             4.0 * metric,
         );
         let idle_ink = ink_count(&idle, icon_origin, 25.0 * metric, foreground);
@@ -495,6 +504,209 @@ fn verify_power_frames(power: &PowerMenuSurface) {
             "native Tab/focus never activates Lock"
         );
         export_frame(&format!("gl-power-{theme}-focused-{scale}x"), &focused);
+
+        // Six additional genuine GL frames per palette; the original four
+        // Lock-state frames above remain independent and keep their names.
+        power.invoke_focus_content();
+        let grid = snapshot();
+        let ids = [
+            "lock",
+            "log-out",
+            "power-off",
+            "reboot",
+            "suspend",
+            "hibernate",
+        ];
+        for (index, id) in ids.into_iter().enumerate() {
+            let tile = element(id);
+            assert_eq!(tile.accessible_enabled(), Some(true));
+            let position = tile.absolute_position();
+            near(
+                position.x - lock_origin.x,
+                (index % 3) as f32 * 124.0 * metric,
+            );
+            near(
+                position.y - lock_origin.y,
+                (index / 3) as f32 * 124.0 * metric,
+            );
+            near(tile.size().width, 100.0 * metric);
+            near(tile.size().height, 100.0 * metric);
+            let tile_icon = tile_child(id, "icon");
+            near(tile_icon.size().width, 25.0 * metric);
+            near(tile_icon.size().height, 25.0 * metric);
+            let ink = ink_count(
+                &grid,
+                tile_icon.absolute_position(),
+                25.0 * metric,
+                foreground,
+            );
+            if id == "suspend" {
+                let suspend_image_size = power.get_suspend_icon().size();
+                assert_eq!(
+                    (suspend_image_size.width, suspend_image_size.height),
+                    (0, 0)
+                );
+                assert_eq!(
+                    ink, 0,
+                    "license-blocked moon slot is EMPTY, not pixel parity"
+                );
+            } else {
+                assert!(ink > 0, "genuine {id} artwork must paint");
+            }
+        }
+        export_frame(&format!("gl-power-{theme}-full-six-grid-{scale}x"), &grid);
+
+        power.set_user_name("Native bounded account".into());
+        let header = snapshot();
+        assert_eq!(
+            element("greeting").accessible_label().as_deref(),
+            Some("Goodbye Native bounded account")
+        );
+        export_frame(
+            &format!("gl-power-{theme}-source-header-username-{scale}x"),
+            &header,
+        );
+        power.set_user_name("Native fixture user".into());
+
+        power.set_updates_known_pending(true);
+        power.set_install_updates(true);
+        power.invoke_focus_content();
+        let pending_checked = snapshot();
+        let expected_row = crate::power_menu_render_tests::source_pending_row_height(power, metric);
+        near(element("updates-row").size().height, expected_row);
+        near(
+            element("body").size().height,
+            (433.0 * metric + 24.0 * metric + expected_row)
+                .min(element("selected-viewport").size().height),
+        );
+        near(element("updates-choice").size().width, 348.0 * metric);
+        near(element("updates-choice").size().height, expected_row);
+        let pending_origin = element("body").absolute_position();
+        for (index, id) in ids.into_iter().enumerate() {
+            let position = element(id).absolute_position();
+            near(
+                position.x,
+                pending_origin.x + (56.0 + (index % 3) as f32 * 124.0) * metric,
+            );
+            near(
+                position.y,
+                pending_origin.y + (177.0 + (index / 3) as f32 * 124.0) * metric + expected_row,
+            );
+        }
+        assert_eq!(
+            element("power-off").accessible_label().as_deref(),
+            Some("Update and shut down")
+        );
+        assert_eq!(
+            element("reboot").accessible_label().as_deref(),
+            Some("Update and restart")
+        );
+        for id in ["power-off", "reboot"] {
+            let badge = tile_child(id, "update-badge");
+            near(badge.size().width, 10.0 * metric);
+            near(badge.size().height, 10.0 * metric);
+            let badge_origin = badge.absolute_position();
+            let pixel = sample(
+                &pending_checked,
+                badge_origin.x + 5.0 * metric,
+                badge_origin.y + 5.0 * metric,
+            );
+            assert_eq!(pixel.a, 255);
+            assert_ne!(
+                (pixel.r, pixel.g, pixel.b),
+                (background, background, background)
+            );
+        }
+        export_frame(
+            &format!("gl-power-{theme}-pending-checked-{scale}x"),
+            &pending_checked,
+        );
+        // Tab enters the actual public std-widgets CheckBox before the grid.
+        // Space changes local choice only; no actor or native host is connected.
+        for key in [Key::Tab, Key::Space] {
+            window.dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+            window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+        }
+        assert!(!power.get_install_updates());
+        let pending_unchecked = snapshot();
+        assert_eq!(
+            element("power-off").accessible_label().as_deref(),
+            Some("Power off")
+        );
+        assert_eq!(
+            element("reboot").accessible_label().as_deref(),
+            Some("Reboot")
+        );
+        export_frame(
+            &format!("gl-power-{theme}-pending-unchecked-{scale}x"),
+            &pending_unchecked,
+        );
+
+        power.set_updates_known_pending(false);
+        power.set_updates_status("Update status unavailable".into());
+        power.invoke_focus_content();
+        let warning = snapshot();
+        let message = element("updates-message");
+        assert_eq!(
+            message.accessible_label().as_deref(),
+            Some("Update status unavailable")
+        );
+        let expected_message = crate::power_menu_render_tests::source_text_height(
+            power,
+            "Update status unavailable",
+            348.0,
+            metric,
+        );
+        near(message.size().height, expected_message);
+        near(
+            element("body").size().height,
+            (433.0 * metric + expected_message + 24.0 * metric)
+                .min(element("selected-viewport").size().height),
+        );
+        assert_eq!(element("suspend").accessible_enabled(), Some(true));
+        export_frame(
+            &format!("gl-power-{theme}-unknown-warning-{scale}x"),
+            &warning,
+        );
+
+        power.set_updates_status("".into());
+        power.invoke_focus_content();
+        snapshot();
+        for _ in 0..6 {
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: Key::Tab.into(),
+            });
+            window.dispatch_event(WindowEvent::KeyReleased {
+                text: Key::Tab.into(),
+            });
+        }
+        let last_focus = snapshot();
+        let hibernate = element("hibernate");
+        let last_origin = hibernate.absolute_position();
+        let ring = sample(
+            &last_focus,
+            last_origin.x - 3.0 * metric,
+            last_origin.y + 50.0 * metric,
+        );
+        assert_ne!(
+            (ring.r, ring.g, ring.b),
+            (background, background, background)
+        );
+        assert_eq!(
+            ring.a, 255,
+            "last real action owns the external focus outline"
+        );
+        export_frame(
+            &format!("gl-power-{theme}-last-tab-focus-{scale}x"),
+            &last_focus,
+        );
+        assert_eq!(
+            actions.get(),
+            before + 1,
+            "status, checkbox and focus have zero OS effects"
+        );
+        power.set_install_updates(true);
+        power.invoke_focus_content();
     }
     assert_eq!(actions.get(), 2, "paint fixture cannot invoke an OS action");
 }
@@ -1197,7 +1409,7 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
     }
     for genuine in [true, false] {
         let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(16, 16);
-        for pixel in pixels.make_mut_bytes().chunks_exact_mut(4) {
+        for pixel in pixels.make_mut_bytes().as_chunks_mut::<4>().0.iter_mut() {
             pixel.copy_from_slice(&[255, 0, 255, 255]);
         }
         let tile = LaunchTile {
@@ -1758,7 +1970,7 @@ fn verify_menu_press_scale(menu: &ContextMenuSurface) {
 
 fn verify_menu_application_image(menu: &ContextMenuSurface) {
     let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
-    for pixel in pixels.make_mut_bytes().chunks_exact_mut(4) {
+    for pixel in pixels.make_mut_bytes().as_chunks_mut::<4>().0.iter_mut() {
         pixel.copy_from_slice(&[255, 0, 255, 255]);
     }
     menu.set_kind(DockMenuKind::Pinned);

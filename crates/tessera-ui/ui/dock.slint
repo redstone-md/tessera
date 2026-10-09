@@ -5,6 +5,7 @@ import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { ApplicationIcon, TileButton, TileBounds } from "tiles.slint";
 import { DockWindowCommand, DockSystemCommand, DockReservedAction, DockRecycleState, DockRecycleAction, DockMenuKind } from "shell-commands.slint";
+import { DockMediaTile, DockMediaView, MediaAction } from "dock-media.slint";
 
 export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
@@ -43,6 +44,7 @@ export component Dock inherits Window {
     in-out property <bool> recycle-empty-busy: false;
     in-out property <bool> recycle-empty-enabled: false;
     in-out property <string> recycle-empty-notice: "";
+    in-out property <DockMediaView> media-view;
     property <bool> vertical: root.edge >= 2;
     callback launch-requested(string);
     callback window-command-requested(string, DockWindowCommand);
@@ -56,6 +58,11 @@ export component Dock inherits Window {
     callback recycle-action-requested(DockRecycleAction);
     callback recycle-event-ready();
     callback recycle-projection-changed();
+    callback media-action-requested(MediaAction);
+    callback media-retry-requested();
+    callback media-event-ready();
+    callback media-context-requested(Point);
+    callback media-enabled-requested(bool);
     changed recycle-empty-enabled => { root.recycle-projection-changed(); }
     callback context-menu-requested(DockMenuKind, string, Point);
     callback tooltip-requested(string, TileBounds);
@@ -82,6 +89,7 @@ export component Dock inherits Window {
         + (root.recycle-watch-notice == "" ? "" : "\n" + root.recycle-watch-notice)
         + (root.recycle-open-notice == "" ? "" : "\n" + root.recycle-open-notice)
         + (root.recycle-empty-notice == "" ? "" : "\n" + root.recycle-empty-notice);
+    property <length> media-length: root.media-view.enabled ? 136px * root.factor + root.gap : 0px;
 
     // The bar itself: an inner rounded rectangle inside the transparent
     // window's outer margin. Start/Show desktop lead, Trash trails, and only
@@ -163,14 +171,27 @@ export component Dock inherits Window {
             horizontal-scrollbar-policy: root.vertical ? ScrollBarPolicy.always-off : ScrollBarPolicy.as-needed;
             vertical-scrollbar-policy: root.vertical ? ScrollBarPolicy.as-needed : ScrollBarPolicy.always-off;
             property <length> content-length: max(0px,
-                (root.pinned-apps.length + root.running-windows.length) * (root.item + root.gap) - root.gap);
+                (root.pinned-apps.length + root.running-windows.length) * (root.item + root.gap) - root.gap + root.media-length);
             content-width: root.vertical ? self.visible-width : max(self.visible-width, self.content-length);
             content-height: root.vertical ? max(self.visible-height, self.content-length) : self.visible-height;
 
+
+            if root.media-view.enabled: DockMediaTile {
+                x: 0px;
+                y: 0px;
+                view: root.media-view;
+                compact: root.compact;
+                edge: root.edge;
+                command-requested(action) => { root.media-action-requested(action); }
+                retry-requested => { root.media-retry-requested(); }
+                context-requested(point) => { root.media-context-requested(point); }
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+            }
             // Tiles: pinned applications first, then running windows.
             for tile[i] in root.pinned-apps: Rectangle {
                 property <length> step: root.item + root.gap;
-                property <length> offset: i * step;
+                property <length> offset: root.media-length + i * step;
                 x: root.vertical ? 0px : self.offset;
                 y: root.vertical ? self.offset : 0px;
                 width: root.item;
@@ -204,7 +225,7 @@ export component Dock inherits Window {
             }
             for tile[i] in root.running-windows: Rectangle {
                 property <length> step: root.item + root.gap;
-                property <length> offset: (root.pinned-apps.length + i) * step;
+                property <length> offset: root.media-length + (root.pinned-apps.length + i) * step;
                 property <bool> focused: tile.key == root.focused-key;
                 x: root.vertical ? 0px : self.offset;
                 y: root.vertical ? self.offset : 0px;

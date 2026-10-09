@@ -49,6 +49,7 @@ impl PanelController {
             },
         };
         calendar.apply_theme(toolbar.presentation_theme());
+        calendar.set_start_of_week(self.core.applied_preferences().general().start_of_week());
         let result = calendar.show(toolbar.window(), bounds, context);
         self.popup_presentation_finished(PopupKind::Calendar, calendar.is_open(), result);
     }

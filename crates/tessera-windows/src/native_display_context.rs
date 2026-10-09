@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Raw enumeration currently lacks source PhysicalTarget admission and stable-id
-//! fallback ordering. Reads are non-atomic and have no dedicated live display/text
-//! change subscription. The explicit FirstFallback must not imply those guarantees.
+//! Request-local physical-monitor admission and stable opaque ordering. Bounds,
+//! CCD, WinRT targets and scale are sequential snapshots, not an atomic topology.
+//! A dedicated live display/text-change subscription is intentionally separate.
 use crate::single_flight::FlightGate;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -26,17 +26,7 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 /// Driver creation occurs on the request owner, never on the submitting thread.
 /// Native driver and every resource it owns remain non-Send and worker-local.
 trait Driver {
-    fn monitors(&mut self) -> Result<Vec<Monitor>, DisplayContextError>;
-    fn create_probe(
-        &mut self,
-        selected: Monitor,
-        x: i32,
-        y: i32,
-    ) -> Result<(), DisplayContextError>;
-    fn probe_matches(&mut self, selected: Monitor) -> Result<bool, DisplayContextError>;
-    fn dpi(&mut self) -> Result<u32, DisplayContextError>;
-    fn text_scale(&mut self) -> Result<f64, DisplayContextError>;
-    fn close_probe(&mut self) -> Result<(), DisplayContextError>;
+    fn monitors(&mut self) -> Result<Vec<AdmittedMonitor>, DisplayContextError>;
     fn finish(&mut self) -> Result<(), DisplayContextError>;
 }
 
@@ -46,6 +36,13 @@ struct Monitor {
     identity: usize,
     bounds: Rect,
     primary: bool,
+}
+
+struct AdmittedMonitor {
+    monitor: Monitor,
+    // Opaque WinRT identity stays private; empty and duplicate strings are valid.
+    stable_id: String,
+    scale: f64,
 }
 
 type DriverFactory = dyn Fn() -> Result<Box<dyn Driver>, DisplayContextError> + Send + Sync;
@@ -104,33 +101,19 @@ impl DisplayContextHost for NativeDisplayContextHost {
 }
 
 fn read_layout(driver: &mut dyn Driver) -> ReadResult {
-    let monitors = driver.monitors()?;
+    let mut admitted = driver.monitors()?;
+    // Stable sorting preserves enumeration order for duplicate/empty opaque IDs.
+    admitted.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+    let monitors: Vec<_> = admitted.iter().map(|entry| entry.monitor).collect();
     let Some((desktop, selected, selection)) = geometry(&monitors)? else {
         return Ok(None);
     };
-    let (x, y) = probe_center(selected.bounds)?;
-    driver.create_probe(selected, x, y)?;
-    if !driver.probe_matches(selected)? {
-        return Err(DisplayContextError::InvalidData);
-    }
-    let dpi = driver.dpi()?;
-    if dpi == 0 {
-        return Err(DisplayContextError::InvalidData);
-    }
-    let text = driver.text_scale()?;
-    if !text.is_finite() || text <= 0.0 {
-        return Err(DisplayContextError::InvalidData);
-    }
-    let layout = DisplayLayout::new(
-        desktop,
-        selected.bounds,
-        (f64::from(dpi) / 96.0) * text,
-        selection,
-    )?;
-    // Explicit checked destruction is required before claiming successful data.
-    // Failure/unwind still has the driver's best-effort cleanup fallback.
-    driver.close_probe()?;
-    Ok(Some(layout))
+    let scale = admitted
+        .iter()
+        .find(|entry| entry.monitor.identity == selected.identity)
+        .ok_or(DisplayContextError::InvalidData)?
+        .scale;
+    DisplayLayout::new(desktop, selected.bounds, scale, selection).map(Some)
 }
 
 fn geometry(
@@ -151,16 +134,15 @@ fn geometry(
             return Err(DisplayContextError::InvalidData);
         }
         if monitor.primary {
+            if primary_count == 0 {
+                selected = *monitor;
+            }
             primary_count += 1;
-            selected = *monitor;
         }
         left = left.min(monitor.bounds.x());
         top = top.min(monitor.bounds.y());
         right = right.max(monitor.bounds.right());
         bottom = bottom.max(monitor.bounds.bottom());
-    }
-    if primary_count > 1 {
-        return Err(DisplayContextError::InvalidData);
     }
     let width = u32::try_from(i64::from(right) - i64::from(left))
         .map_err(|_| DisplayContextError::InvalidData)?;
@@ -168,7 +150,7 @@ fn geometry(
         .map_err(|_| DisplayContextError::InvalidData)?;
     let desktop =
         Rect::new(left, top, width, height).map_err(|_| DisplayContextError::InvalidData)?;
-    let selection = if primary_count == 1 {
+    let selection = if primary_count != 0 {
         DisplaySelection::Primary
     } else {
         DisplaySelection::FirstFallback

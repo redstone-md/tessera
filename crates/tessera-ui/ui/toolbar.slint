@@ -24,6 +24,9 @@ export component Toolbar inherits Window {
     in property <DockStatus> surface-status;
     callback quick-settings-requested(TileBounds);
     callback calendar-requested(TileBounds);
+    callback network-requested(TileBounds);
+    callback bluetooth-requested(TileBounds);
+    callback keyboard-requested(TileBounds);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
 
@@ -110,13 +113,62 @@ export component Toolbar inherits Window {
             height: root.item;
             spacing: root.pad;
             alignment: end;
-            if root.language != "": Text {
-                text: root.language;
-                color: SeelenPalette.secondary;
-                font-size: 12.8px;
-                font-weight: 500;
-                vertical-alignment: center;
-                accessible-role: text;
+            TileButton {
+                width: network-label.preferred-width;
+                height: root.item;
+                radius: root.tile-radius;
+                filled: false;
+                accessible-text: @tr("Open network");
+                tooltip-text: @tr("Network");
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+                clicked => { root.network-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
+                network-label := Text {
+                    text: @tr("Network");
+                    color: SeelenPalette.secondary;
+                    font-size: 12.8px;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+            TileButton {
+                width: bluetooth-label.preferred-width;
+                height: root.item;
+                radius: root.tile-radius;
+                filled: false;
+                accessible-text: @tr("Open Bluetooth");
+                tooltip-text: @tr("Bluetooth");
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+                clicked => { root.bluetooth-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
+                bluetooth-label := Text {
+                    text: @tr("Bluetooth");
+                    color: SeelenPalette.secondary;
+                    font-size: 12.8px;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+            TileButton {
+                width: max(root.item, language-label.preferred-width);
+                height: root.item;
+                radius: root.tile-radius;
+                filled: false;
+                accessible-text: @tr("Open keyboard selector");
+                tooltip-text: @tr("Keyboard language");
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+                clicked => { root.keyboard-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
+                language-label := Text {
+                    text: root.language == "" ? @tr("Keyboard") : root.language;
+                    color: SeelenPalette.secondary;
+                    font-size: 12.8px;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
             }
             TileButton {
                 width: root.item;

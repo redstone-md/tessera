@@ -4187,7 +4187,7 @@ dependencies = [
 
 [[package]]
 name = "tessera"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.15"
 dependencies = [
  "parking_lot",
  "raw-window-handle",
@@ -4205,11 +4205,11 @@ dependencies = [
 
 [[package]]
 name = "tessera-core"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.15"
 
 [[package]]
 name = "tessera-system"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.15"
 dependencies = [
  "chrono",
  "tessera-core",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-ui"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.15"
 dependencies = [
  "i-slint-backend-testing",
  "parking_lot",
@@ -4229,12 +4229,13 @@ dependencies = [
 
 [[package]]
 name = "tessera-windows"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.15"
 dependencies = [
  "parking_lot",
  "tessera-core",
  "tessera-system",
  "windows",
+ "windows-collections",
  "windows-core",
  "windows-sys 0.61.2",
 ]

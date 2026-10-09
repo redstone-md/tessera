@@ -8,6 +8,12 @@ use std::path::PathBuf;
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 
+mod dock;
+mod general;
+
+pub(crate) use dock::DockPreferences;
+pub(crate) use general::{GeneralPreferences, StartOfWeek};
+
 const MAX_SETTINGS_BYTES: u64 = 16 * 1024;
 const MAX_PINS: usize = 32;
 const MAX_APPLICATION_ID_UNITS: usize = 1024;
@@ -84,6 +90,8 @@ pub(crate) struct Preferences {
     pinned_apps: Vec<String>,
     #[serde(deserialize_with = "deserialize_launcher_preferences")]
     launcher: LauncherPreferences,
+    pub(crate) general: GeneralPreferences,
+    pub(crate) dock: DockPreferences,
 }
 
 /// Only the discriminator is read here; the selected typed record below
@@ -120,6 +128,20 @@ struct LegacyPreferencesV2 {
     launcher_favorites: Vec<String>,
 }
 
+/// The exact pre-group record; additions belong only to the current schema.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPreferencesV3 {
+    #[serde(rename = "schema_version")]
+    _schema_version: u32,
+    theme: Theme,
+    compact: bool,
+    dock_edge: DockEdge,
+    pinned_apps: Vec<String>,
+    #[serde(deserialize_with = "deserialize_launcher_preferences")]
+    launcher: LauncherPreferences,
+}
+
 impl Default for Preferences {
     fn default() -> Self {
         Self::new(Theme::System, false)
@@ -129,12 +151,14 @@ impl Default for Preferences {
 impl Preferences {
     pub(crate) fn new(theme: Theme, compact: bool) -> Self {
         Self {
-            schema_version: 3,
+            schema_version: 4,
             theme,
             compact,
             dock_edge: DockEdge::default(),
             pinned_apps: Vec::new(),
             launcher: LauncherPreferences::default(),
+            general: GeneralPreferences::default(),
+            dock: DockPreferences::default(),
         }
     }
 
@@ -144,6 +168,24 @@ impl Preferences {
 
     pub(crate) fn compact(&self) -> bool {
         self.compact
+    }
+
+    pub(crate) fn general(&self) -> GeneralPreferences {
+        self.general
+    }
+
+    pub(crate) fn with_general(mut self, general: GeneralPreferences) -> Self {
+        self.general = general;
+        self
+    }
+
+    pub(crate) fn media_enabled(&self) -> bool {
+        self.dock.media_enabled()
+    }
+
+    pub(crate) fn with_media_enabled(mut self, enabled: bool) -> Self {
+        self.dock = self.dock.with_media_enabled(enabled);
+        self
     }
 
     pub(crate) fn with_dock(mut self, edge: DockEdge, pins: Vec<String>) -> Self {
@@ -179,6 +221,7 @@ impl Preferences {
     }
 
     /// Migrates legacy data in memory only. No caller writes until explicit save.
+    /// Pre-V4 calendars intentionally adopt source-default Monday rather than locale order.
     fn decode(contents: &[u8]) -> io::Result<Self> {
         let schema: SchemaVersion = serde_json::from_slice(contents)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -196,7 +239,15 @@ impl Preferences {
                     .with_dock(legacy.dock_edge, legacy.pinned_apps)
                     .with_launcher_favorites(legacy.launcher_favorites)
             }
-            3 => serde_json::from_slice(contents)
+            3 => {
+                let legacy: LegacyPreferencesV3 = serde_json::from_slice(contents)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                Self::new(legacy.theme, legacy.compact)
+                    .with_dock(legacy.dock_edge, legacy.pinned_apps)
+                    .with_launcher_favorites(legacy.launcher.favorites)
+                    .with_launcher_display_mode(legacy.launcher.display_mode)
+            }
+            4 => serde_json::from_slice(contents)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
             _ => {
                 return Err(io::Error::new(
@@ -210,7 +261,7 @@ impl Preferences {
     }
 
     fn validate(&self) -> io::Result<()> {
-        if self.schema_version != 3 {
+        if self.schema_version != 4 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Unsupported settings schema version",
@@ -317,12 +368,21 @@ impl SettingsStore {
 mod tests {
     use super::*;
 
+    fn assert_source_groups(preferences: &Preferences) {
+        assert_eq!(preferences.schema_version, 4);
+        assert_eq!(preferences.general().start_of_week(), StartOfWeek::Monday);
+        assert!(!preferences.media_enabled());
+        assert_eq!(preferences.general, GeneralPreferences::default());
+        assert_eq!(preferences.dock, DockPreferences::default());
+    }
+
     #[test]
     fn defaults_do_not_create_files_and_explicit_saves_replace_previous_preferences() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("Tessera/settings.json");
         let store = SettingsStore::new(path.clone());
         assert_eq!(store.load().unwrap(), Preferences::default());
+        assert_source_groups(&store.load().unwrap());
         assert!(!path.exists());
         let dark = Preferences::new(Theme::Dark, true);
         store.save(&dark).unwrap();
@@ -345,6 +405,7 @@ mod tests {
             r#"{"schema_version":0,"theme":"system","compact":false}"#,
             r#"{"schema_version":3,"theme":"system","compact":false}"#,
             r#"{"schema_version":4,"theme":"system","compact":false}"#,
+            r#"{"schema_version":5,"theme":"system","compact":false}"#,
             r#"{"schema_version":1,"theme":"dark","compact":false,"launcher_favorites":[]}"#,
             r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":[],"extra":0}"#,
             r#"{"schema_version":1,"schema_version":1,"theme":"dark","compact":false}"#,
@@ -352,6 +413,8 @@ mod tests {
             r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":[],"launcher_favorites":[]}"#,
             r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":["same","same"]}"#,
             r#"{"schema_version":1,"theme":"neon","compact":false}"#,
+            r#"{"schema_version":3,"theme":"dark","compact":false,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"windowed","favorites":[]},"general":{"start_of_week":"monday"}}"#,
+            r#"{"schema_version":3,"theme":"dark","compact":false,"dock_edge":"bottom","pinned_apps":[],"launcher":{"display_mode":"windowed","favorites":[]},"dock":{"media_enabled":false}}"#,
             r#"{"schema_version":1,"theme":"dark","compact":false,"autostart":true}"#,
             r#"{"schema_version":1,"theme":"dark","compact":false,"launcher":{"display_mode":"fullscreen","favorites":[]}}"#,
             r#"{"schema_version":2,"theme":"dark","compact":false,"launcher_favorites":[],"launcher":{"display_mode":"fullscreen","favorites":[]}}"#,
@@ -362,12 +425,17 @@ mod tests {
             assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
             assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
         }
+        for invalid in [vec![0xff, 0xfe], vec![0]] {
+            fs::write(&path, &invalid).unwrap();
+            assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(fs::read(&path).unwrap(), invalid);
+        }
         fs::write(&path, vec![b' '; MAX_SETTINGS_BYTES as usize + 1]).unwrap();
         assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
-    fn legacy_v1_migration_is_read_only_until_complete_v3_explicit_save() {
+    fn legacy_v1_migration_is_read_only_until_complete_v4_explicit_save() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -385,6 +453,7 @@ mod tests {
         ] {
             fs::write(&path, original).unwrap();
             let migrated = store.load().unwrap();
+            assert_source_groups(&migrated);
             assert_eq!(migrated.dock_edge(), edge);
             assert_eq!(
                 migrated,
@@ -402,17 +471,19 @@ mod tests {
                 .with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
             store.save(&complete).unwrap();
             let persisted = fs::read_to_string(&path).unwrap();
-            assert!(persisted.contains("\"schema_version\": 3"));
+            assert!(persisted.contains("\"schema_version\": 4"));
             assert!(persisted.contains("\"launcher\""));
             assert!(persisted.contains("\"display_mode\": \"fullscreen\""));
             assert!(persisted.contains("\"favorites\""));
+            assert!(persisted.contains("\"general\""));
+            assert!(persisted.contains("\"dock\""));
             assert!(!persisted.contains("\"launcher_favorites\""));
             assert_eq!(store.load().unwrap(), complete);
         }
     }
 
     #[test]
-    fn legacy_v2_migration_retains_exact_favorites_and_only_explicit_save_writes_v3() {
+    fn legacy_v2_migration_retains_exact_favorites_and_only_explicit_save_writes_v4() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -424,6 +495,7 @@ mod tests {
         );
         fs::write(&path, &original).unwrap();
         let migrated = store.load().unwrap();
+        assert_source_groups(&migrated);
         assert_eq!(migrated.launcher_favorites(), favorites);
         assert_eq!(
             migrated.launcher_display_mode(),
@@ -438,12 +510,13 @@ mod tests {
         let complete = migrated.with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
         store.save(&complete).unwrap();
         let persisted = fs::read_to_string(&path).unwrap();
-        assert!(persisted.contains("\"schema_version\": 3"));
+        assert!(persisted.contains("\"schema_version\": 4"));
         assert!(!persisted.contains("\"launcher_favorites\""));
         assert_eq!(store.load().unwrap(), complete);
 
         let minimal_v2 = br#"{"schema_version":2,"theme":"light","compact":false,"launcher_favorites":["missing"]}"#;
         let minimal = Preferences::decode(minimal_v2).unwrap();
+        assert_source_groups(&minimal);
         assert_eq!(minimal.dock_edge(), DockEdge::Bottom);
         assert!(minimal.pinned_apps().is_empty());
         assert_eq!(minimal.launcher_favorites(), ["missing"]);
@@ -454,56 +527,192 @@ mod tests {
     }
 
     #[test]
-    fn v3_requires_complete_strict_launcher_group_and_rejects_duplicate_fields() {
+    fn legacy_v3_migration_preserves_complete_old_record_without_load_writes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
-        let record = |launcher: &str| {
+        let pins = vec!["dock-z".to_owned(), "Dock-A".into()];
+        let mut favorites = vec!["missing-app".to_owned(), "exact".into(), "EXACT".into()];
+        favorites.extend((0..80).map(|index| format!("favorite-{index}")));
+        for (mode, name) in [
+            (LauncherDisplayMode::Windowed, "windowed"),
+            (LauncherDisplayMode::Fullscreen, "fullscreen"),
+        ] {
+            let original = format!(
+                r#"{{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"right","pinned_apps":{},"launcher":{{"display_mode":"{name}","favorites":{}}}}}"#,
+                serde_json::to_string(&pins).unwrap(),
+                serde_json::to_string(&favorites).unwrap()
+            );
+            fs::write(&path, &original).unwrap();
+            let migrated = store.load().unwrap();
+            assert_source_groups(&migrated);
+            assert_eq!(
+                migrated,
+                Preferences::new(Theme::Dark, true)
+                    .with_dock(DockEdge::Right, pins.clone())
+                    .with_launcher_favorites(favorites.clone())
+                    .with_launcher_display_mode(mode)
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+
+            let complete = migrated
+                .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Sunday))
+                .with_media_enabled(true);
+            store.save(&complete).unwrap();
+            let persisted = fs::read_to_string(&path).unwrap();
+            assert!(persisted.contains("\"schema_version\": 4"));
+            assert!(persisted.contains("\"start_of_week\": \"sunday\""));
+            assert!(persisted.contains("\"media_enabled\": true"));
+            assert_eq!(store.load().unwrap(), complete);
+            assert_eq!(complete.pinned_apps(), pins);
+            assert_eq!(complete.launcher_favorites(), favorites);
+            assert_eq!(complete.launcher_display_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn complete_v4_records_round_trip_every_general_and_dock_choice() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        for (start_of_week, name) in [
+            (StartOfWeek::Monday, "monday"),
+            (StartOfWeek::Sunday, "sunday"),
+            (StartOfWeek::Saturday, "saturday"),
+        ] {
+            for enabled in [false, true] {
+                let preferences = Preferences::new(Theme::Light, true)
+                    .with_dock(DockEdge::Left, vec!["dock-z".into(), "Dock-A".into()])
+                    .with_launcher_favorites(vec!["missing".into(), "exact".into(), "EXACT".into()])
+                    .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
+                    .with_general(GeneralPreferences::default().with_start_of_week(start_of_week))
+                    .with_media_enabled(enabled);
+                assert_eq!(
+                    serde_json::to_value(&preferences).unwrap(),
+                    serde_json::json!({
+                        "schema_version": 4,
+                        "theme": "light",
+                        "compact": true,
+                        "dock_edge": "left",
+                        "pinned_apps": ["dock-z", "Dock-A"],
+                        "launcher": {
+                            "display_mode": "fullscreen",
+                            "favorites": ["missing", "exact", "EXACT"],
+                        },
+                        "general": { "start_of_week": name },
+                        "dock": { "media_enabled": enabled },
+                    })
+                );
+                store.save(&preferences).unwrap();
+                assert_eq!(store.load().unwrap(), preferences);
+                assert_eq!(preferences.general().start_of_week(), start_of_week);
+                assert_eq!(preferences.media_enabled(), enabled);
+            }
+        }
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn every_preferences_builder_preserves_unrelated_record_groups() {
+        let original = Preferences::new(Theme::Dark, true)
+            .with_dock(DockEdge::Right, vec!["dock-only".into()])
+            .with_launcher_favorites(vec!["missing".into(), "EXACT".into(), "exact".into()])
+            .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
+            .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Saturday))
+            .with_media_enabled(true);
+        let dock = original
+            .clone()
+            .with_dock(DockEdge::Top, vec!["replacement".into()]);
+        assert_eq!(dock.dock_edge(), DockEdge::Top);
+        assert_eq!(dock.pinned_apps(), ["replacement"]);
+        assert_eq!(
+            dock.with_dock(original.dock_edge(), original.pinned_apps().to_vec()),
+            original
+        );
+        let favorites = original
+            .clone()
+            .with_launcher_favorites(vec!["new-favorite".into()]);
+        assert_eq!(favorites.launcher_favorites(), ["new-favorite"]);
+        assert_eq!(
+            favorites.with_launcher_favorites(original.launcher_favorites().to_vec()),
+            original
+        );
+        let mode = original
+            .clone()
+            .with_launcher_display_mode(LauncherDisplayMode::Windowed);
+        assert_eq!(mode.launcher_display_mode(), LauncherDisplayMode::Windowed);
+        assert_eq!(
+            mode.with_launcher_display_mode(original.launcher_display_mode()),
+            original
+        );
+        let general = original
+            .clone()
+            .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Sunday));
+        assert_eq!(general.general().start_of_week(), StartOfWeek::Sunday);
+        assert_eq!(general.with_general(original.general()), original);
+        let media = original.clone().with_media_enabled(false);
+        assert!(!media.media_enabled());
+        assert_eq!(media.with_media_enabled(original.media_enabled()), original);
+    }
+
+    #[test]
+    fn v4_requires_strict_general_and_dock_groups_without_rewriting_invalid_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let general = r#"{"start_of_week":"monday"}"#;
+        let dock = r#"{"media_enabled":false}"#;
+        let record = |general: &str, dock: &str| {
             format!(
-                r#"{{"schema_version":3,"theme":"dark","compact":true,"dock_edge":"top","pinned_apps":["dock-only"],"launcher":{launcher}}}"#
+                r#"{{"schema_version":4,"theme":"dark","compact":true,"dock_edge":"left","pinned_apps":["dock-only"],"launcher":{{"display_mode":"fullscreen","favorites":["missing"]}},"general":{general},"dock":{dock}}}"#
             )
         };
-        for launcher in [
+        let valid = record(general, dock);
+        for invalid_general in [
             "null",
             "[]",
-            r#"["fullscreen",["A"]]"#,
-            r#"["windowed",[]]"#,
-            r#""fullscreen""#,
+            r#"["monday"]"#,
+            r#""monday""#,
             "{}",
-            r#"{"display_mode":"windowed"}"#,
-            r#"{"favorites":[]}"#,
-            r#"{"display_mode":null,"favorites":[]}"#,
-            r#"{"display_mode":true,"favorites":[]}"#,
-            r#"{"display_mode":"normal","favorites":[]}"#,
-            r#"{"display_mode":"Fullscreen","favorites":[]}"#,
-            r#"{"display_mode":"windowed","favorites":null}"#,
-            r#"{"display_mode":"windowed","favorites":[],"extra":true}"#,
-            r#"{"display_mode":"windowed","display_mode":"fullscreen","favorites":[]}"#,
-            r#"{"display_mode":"windowed","favorites":[],"favorites":[]}"#,
-            r#"{"display_mode":"fullscreen","favorites":["same","same"]}"#,
+            r#"{"start_of_week":null}"#,
+            r#"{"start_of_week":true}"#,
+            r#"{"start_of_week":"system"}"#,
+            r#"{"start_of_week":"Monday"}"#,
+            r#"{"start_of_week":"monday","unknown":true}"#,
+            r#"{"start_of_week":"monday","start_of_week":"sunday"}"#,
         ] {
-            let invalid = record(launcher);
+            let invalid = record(invalid_general, dock);
             fs::write(&path, &invalid).unwrap();
             assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
             assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
         }
-        let valid = record(r#"{"display_mode":"windowed","favorites":[]}"#);
+        for invalid_dock in [
+            "null",
+            "[]",
+            "[false]",
+            r#""false""#,
+            "{}",
+            r#"{"media_enabled":null}"#,
+            r#"{"media_enabled":"false"}"#,
+            r#"{"media_enabled":1}"#,
+            r#"{"media_enabled":false,"unknown":true}"#,
+            r#"{"media_enabled":false,"media_enabled":true}"#,
+        ] {
+            let invalid = record(general, invalid_dock);
+            fs::write(&path, &invalid).unwrap();
+            assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
         for invalid in [
-            valid.replace(r#""dock_edge":"top","#, ""),
-            valid.replace(r#""pinned_apps":["dock-only"],"#, ""),
+            valid.replace(r#","general":{"start_of_week":"monday"}"#, ""),
+            valid.replace(r#","dock":{"media_enabled":false}"#, ""),
             valid.replace(
-                r#","launcher":{"display_mode":"windowed","favorites":[]}"#,
-                "",
+                r#""general":"#,
+                r#""general":{"start_of_week":"monday"},"general":"#,
             ),
-            valid.replace(
-                r#""schema_version":3"#,
-                r#""schema_version":3,"schema_version":3"#,
-            ),
-            valid.replace(r#""launcher":"#, r#""launcher_favorites":[],"launcher":"#),
-            valid.replace(
-                r#""launcher":"#,
-                r#""launcher":{"display_mode":"windowed","favorites":[]},"launcher":"#,
-            ),
+            valid.replace(r#""dock":"#, r#""dock":{"media_enabled":false},"dock":"#),
+            valid.replace(r#""schema_version":4"#, r#""schema_version":5"#),
         ] {
             fs::write(&path, &invalid).unwrap();
             assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
@@ -511,8 +720,81 @@ mod tests {
         }
         assert_eq!(
             Preferences::decode(valid.as_bytes()).unwrap(),
-            Preferences::new(Theme::Dark, true).with_dock(DockEdge::Top, vec!["dock-only".into()])
+            Preferences::new(Theme::Dark, true)
+                .with_dock(DockEdge::Left, vec!["dock-only".into()])
+                .with_launcher_favorites(vec!["missing".into()])
+                .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
         );
+    }
+
+    #[test]
+    fn v3_and_v4_require_complete_strict_launcher_groups_and_reject_duplicate_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        for version in [3, 4] {
+            let groups = if version == 4 {
+                r#","general":{"start_of_week":"monday"},"dock":{"media_enabled":false}"#
+            } else {
+                ""
+            };
+            let record = |launcher: &str| {
+                format!(
+                    r#"{{"schema_version":{version},"theme":"dark","compact":true,"dock_edge":"top","pinned_apps":["dock-only"],"launcher":{launcher}{groups}}}"#
+                )
+            };
+            for launcher in [
+                "null",
+                "[]",
+                r#"["fullscreen",["A"]]"#,
+                r#"["windowed",[]]"#,
+                r#""fullscreen""#,
+                "{}",
+                r#"{"display_mode":"windowed"}"#,
+                r#"{"favorites":[]}"#,
+                r#"{"display_mode":null,"favorites":[]}"#,
+                r#"{"display_mode":true,"favorites":[]}"#,
+                r#"{"display_mode":"normal","favorites":[]}"#,
+                r#"{"display_mode":"Fullscreen","favorites":[]}"#,
+                r#"{"display_mode":"windowed","favorites":null}"#,
+                r#"{"display_mode":"windowed","favorites":[],"extra":true}"#,
+                r#"{"display_mode":"windowed","display_mode":"fullscreen","favorites":[]}"#,
+                r#"{"display_mode":"windowed","favorites":[],"favorites":[]}"#,
+                r#"{"display_mode":"fullscreen","favorites":["same","same"]}"#,
+            ] {
+                let invalid = record(launcher);
+                fs::write(&path, &invalid).unwrap();
+                assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+                assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+            }
+            let valid = record(r#"{"display_mode":"windowed","favorites":[]}"#);
+            for invalid in [
+                valid.replace(r#""dock_edge":"top","#, ""),
+                valid.replace(r#""pinned_apps":["dock-only"],"#, ""),
+                valid.replace(
+                    r#","launcher":{"display_mode":"windowed","favorites":[]}"#,
+                    "",
+                ),
+                valid.replace(
+                    &format!(r#""schema_version":{version}"#),
+                    &format!(r#""schema_version":{version},"schema_version":{version}"#),
+                ),
+                valid.replace(r#""launcher":"#, r#""launcher_favorites":[],"launcher":"#),
+                valid.replace(
+                    r#""launcher":"#,
+                    r#""launcher":{"display_mode":"windowed","favorites":[]},"launcher":"#,
+                ),
+            ] {
+                fs::write(&path, &invalid).unwrap();
+                assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+                assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+            }
+            assert_eq!(
+                Preferences::decode(valid.as_bytes()).unwrap(),
+                Preferences::new(Theme::Dark, true)
+                    .with_dock(DockEdge::Top, vec!["dock-only".into()])
+            );
+        }
     }
 
     #[test]
@@ -545,6 +827,10 @@ mod tests {
                 (
                     3,
                     r#","launcher":{"display_mode":"fullscreen","favorites":[]}"#,
+                ),
+                (
+                    4,
+                    r#","launcher":{"display_mode":"fullscreen","favorites":[]},"general":{"start_of_week":"monday"},"dock":{"media_enabled":false}"#,
                 ),
             ] {
                 let invalid = format!(
@@ -633,7 +919,10 @@ mod tests {
             .map(|index| format!("{index:02}{}", "a".repeat(958)))
             .collect();
         favorites.push("tail".into());
-        let mut preferences = Preferences::default().with_launcher_favorites(favorites);
+        let mut preferences = Preferences::default()
+            .with_launcher_favorites(favorites)
+            .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Saturday))
+            .with_media_enabled(true);
         let size = serde_json::to_vec_pretty(&preferences).unwrap().len() + 1;
         let padding = MAX_SETTINGS_BYTES as usize - size;
         preferences
@@ -654,6 +943,14 @@ mod tests {
                         .clone()
                         .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
                 )
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(
+            store
+                .save(&preferences.clone().with_media_enabled(false))
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidData
@@ -684,6 +981,35 @@ mod tests {
         fs::write(&path, &too_large).unwrap();
         assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::read(&path).unwrap(), too_large);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_atomic_replace_failure_preserves_previous_file_and_cleans_temporary() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let previous = Preferences::new(Theme::Dark, true)
+            .with_dock(DockEdge::Left, vec!["dock-only".into()])
+            .with_launcher_favorites(vec!["favorite".into()])
+            .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
+            .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Saturday))
+            .with_media_enabled(true);
+        store.save(&previous).unwrap();
+        let original = fs::read(&path).unwrap();
+        // Denying delete sharing forces the actual persist/replace step to fail.
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert!(store.save(&Preferences::new(Theme::Light, false)).is_err());
+        drop(locked);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(store.load().unwrap(), previous);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

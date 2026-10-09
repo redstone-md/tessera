@@ -5,6 +5,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bluetooth;
+pub mod input_language;
+pub mod media;
+pub mod network;
+pub mod visibility;
+
 /// Gregorian calendar projection and asynchronous real-date/locale capability.
 pub mod calendar;
 
@@ -19,6 +25,9 @@ pub mod folders;
 
 /// Explicit typed session/power requests, separate from display observation.
 pub mod power;
+
+/// Read-only pending-update key hints, separate from power request authority.
+pub mod power_updates;
 
 /// Confirmed Recycle Bin information, fixed opening and scoped change hints.
 pub mod recycle_bin;

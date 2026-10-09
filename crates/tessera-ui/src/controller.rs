@@ -25,15 +25,19 @@ mod context_menu;
 mod dock_utilities;
 mod geometry;
 mod launcher;
+mod native_toolbar;
 mod popups;
+mod power_display;
 mod power_menu;
 mod quick_settings;
 mod recycle_bin;
 mod tooltip;
 mod user_menu;
+mod visibility;
 use calendar::CalendarPopups;
 use context_menu::Menus;
 use dock_utilities::DockUtilities;
+use native_toolbar::{BluetoothPopups, InputLanguagePopups, NetworkPopups};
 use power_menu::PowerPopups;
 use quick_settings::QuickPopups;
 use recycle_bin::RecycleBins;
@@ -146,6 +150,14 @@ pub(crate) struct PanelController {
     dock_utilities: DockUtilities,
     recycle_bin: RecycleBins,
     tooltips: Tooltips,
+    network_menu: NetworkPopups,
+    bluetooth: BluetoothPopups,
+    input_language: InputLanguagePopups,
+    launcher_app_menu: crate::transient_window::TransientCache<crate::launcher::LauncherAppMenu>,
+    dock_media: crate::transient_window::TransientCache<crate::dock_media::DockMediaController>,
+    visibility: crate::transient_window::TransientCache<crate::visibility::VisibilityController>,
+    visibility_geometry: Rc<RefCell<visibility::RootGeometry>>,
+    power_display: crate::transient_window::TransientCache<power_display::PowerDisplayWatch>,
     geometry: Rc<geometry::GeometryUpdates>,
 }
 
@@ -162,11 +174,22 @@ impl Drop for PreferenceSave<'_> {
 
 impl PanelController {
     fn begin_preference_save(&self) -> Option<PreferenceSave<'_>> {
-        if self.preference_saving.replace(true) {
+        if self.power_admission_closed.get() || self.preference_saving.replace(true) {
             return None;
         }
+        let save = PreferenceSave(self);
+        self.cancel_launcher_input();
         self.cancel_launcher_reorder();
-        Some(PreferenceSave(self))
+        self.hide_launcher_app_menu();
+        let menu = self.menus.borrow().clone();
+        if let Some(menu) = menu {
+            menu.hide();
+        }
+        if self.power_admission_closed.get() {
+            None
+        } else {
+            Some(save)
+        }
     }
 
     pub(crate) fn new(panel: &Panel, core: Arc<SurfaceCore>) -> Self {
@@ -191,6 +214,14 @@ impl PanelController {
             dock_utilities: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
+            network_menu: Rc::default(),
+            bluetooth: Rc::default(),
+            input_language: Rc::default(),
+            launcher_app_menu: Rc::default(),
+            dock_media: Rc::default(),
+            visibility: Rc::default(),
+            visibility_geometry: Rc::default(),
+            power_display: Rc::default(),
             geometry: Rc::default(),
         };
         controller.wire_panel(panel);
@@ -229,6 +260,14 @@ impl PanelController {
             dock_utilities: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
+            network_menu: Rc::default(),
+            bluetooth: Rc::default(),
+            input_language: Rc::default(),
+            launcher_app_menu: Rc::default(),
+            dock_media: Rc::default(),
+            visibility: Rc::default(),
+            visibility_geometry: Rc::default(),
+            power_display: Rc::default(),
             geometry: Rc::default(),
         };
         controller.wire_panel(panel);
@@ -237,6 +276,8 @@ impl PanelController {
         controller.wire_launcher(launcher);
         controller.wire_completion(panel);
         controller.wire_motion(panel);
+        controller.initialize_media(dock);
+        controller.wire_visibility(panel);
         controller
     }
 
@@ -293,6 +334,11 @@ impl PanelController {
             if let Some(power) = power {
                 power.disable_motion();
             }
+            controller.toolbar_popup_motion_disabled();
+            let menu = controller.launcher_app_menu.borrow().clone();
+            if let Some(menu) = menu {
+                menu.disable_motion();
+            }
         });
     }
 
@@ -332,9 +378,16 @@ impl PanelController {
 
     fn wire_dock(&self, dock: &Dock) {
         let weak = self.clone();
-        dock.on_launch_requested(move |key| weak.launch(&key));
+        dock.on_launch_requested(move |key| {
+            if weak.bar_input_ready(SurfaceKind::Dock) {
+                weak.launch(&key);
+            }
+        });
         let weak = self.clone();
         dock.on_window_command_requested(move |key, command| {
+            if !weak.bar_input_ready(SurfaceKind::Dock) {
+                return;
+            }
             let action = match command {
                 DockWindowCommand::Activate => WindowAction::Activate,
                 DockWindowCommand::Toggle => WindowAction::ActivateOrMinimize,
@@ -344,11 +397,22 @@ impl PanelController {
             weak.window_action(&key, action);
         });
         let weak = self.clone();
-        dock.on_open_settings_requested(move || weak.open_panel());
+        dock.on_open_settings_requested(move || {
+            if weak.bar_input_ready(SurfaceKind::Dock) {
+                weak.open_panel();
+            }
+        });
         let weak = self.clone();
-        dock.on_pin_toggle_requested(move |key, pin| weak.toggle_pin(&key, pin));
+        dock.on_pin_toggle_requested(move |key, pin| {
+            if weak.bar_input_ready(SurfaceKind::Dock) {
+                weak.toggle_pin(&key, pin);
+            }
+        });
         let weak = self.clone();
         dock.on_system_command_requested(move |command| {
+            if !weak.bar_input_ready(SurfaceKind::Dock) {
+                return;
+            }
             let action = match command {
                 DockSystemCommand::FileManager => SystemAction::OpenFileManager,
                 DockSystemCommand::TaskManager => SystemAction::OpenTaskManager,
@@ -357,22 +421,41 @@ impl PanelController {
             weak.system_action(action);
         });
         let weak = self.clone();
-        dock.on_reserved_action_requested(move |action| weak.request_dock_utility(action));
+        dock.on_reserved_action_requested(move |action| {
+            if weak.bar_input_ready(SurfaceKind::Dock) {
+                weak.request_dock_utility(action);
+            }
+        });
         let weak = self.clone();
         dock.on_utility_event_ready(move || weak.dock_utility_event_ready());
         let weak = self.clone();
-        dock.on_recycle_action_requested(move |action| weak.request_recycle_bin(action));
+        dock.on_recycle_action_requested(move |action| {
+            if weak.bar_input_ready(SurfaceKind::Dock) {
+                weak.request_recycle_bin(action);
+            }
+        });
         let weak = self.clone();
         dock.on_recycle_event_ready(move || weak.recycle_bin_event_ready());
         let weak = self.clone();
         dock.on_recycle_projection_changed(move || weak.refresh_recycle_actions());
         let weak = self.clone();
+        self.wire_media(dock);
         dock.on_context_menu_requested(move |kind, key, point| {
-            weak.open_dock_menu(kind, &key, (point.x, point.y));
+            if weak.bar_input_ready(SurfaceKind::Dock)
+                && !weak.preference_saving.get()
+                && weak
+                    .dock_and_upgrade()
+                    .is_some_and(|dock| dock.window().is_visible())
+            {
+                weak.open_dock_menu(kind, &key, (point.x, point.y));
+            }
         });
         let controller = self.clone();
         let owner = dock.as_weak();
         dock.on_tooltip_requested(move |content, bounds| {
+            if !controller.bar_input_ready(SurfaceKind::Dock) {
+                return;
+            }
             if let Some(dock) = owner.upgrade() {
                 let side = match crate::dock_edge_from_index(dock.get_edge()) {
                     crate::DockEdge::Bottom => crate::tooltip::Side::Top,
@@ -388,24 +471,212 @@ impl PanelController {
             controller.dismiss_hover_tooltip(SurfaceKind::Dock, origin, delayed);
         });
         let weak = self.clone();
-        dock.on_open_applications_requested(move || weak.toggle_launcher());
+        dock.on_open_applications_requested(move || {
+            if weak.bar_input_ready(SurfaceKind::Dock) {
+                weak.toggle_launcher();
+            }
+        });
         let weak = self.clone();
         dock.on_exit_requested(move || {
+            if !weak.bar_input_ready(SurfaceKind::Dock) {
+                return;
+            }
             // Explicit exit: quitting the loop ends the run; the retained
             // watcher guard and heartbeat timer drop together with it.
             let _ = slint::quit_event_loop();
-            let _ = weak;
         });
+    }
+
+    fn initialize_media(&self, dock: &Dock) {
+        let media = crate::dock_media::DockMediaController::new(self.core.host().clone(), dock);
+        *self.dock_media.borrow_mut() = Some(Rc::clone(&media));
+        media.update_applications(&self.core.catalog());
+        media.set_enabled(self.core.applied_preferences().media_enabled());
+    }
+
+    fn media_input_ready(&self) -> bool {
+        !self.power_admission_closed.get()
+            && self.bar_input_ready(SurfaceKind::Dock)
+            && self.core.applied_preferences().media_enabled()
+            && self
+                .dock_and_upgrade()
+                .is_some_and(|dock| dock.window().is_visible() && dock.get_media_view().enabled)
+            && self
+                .core
+                .dock_context()
+                .is_some_and(|context| !context.fullscreen_active())
+    }
+
+    fn wire_media(&self, dock: &Dock) {
+        let controller = self.clone();
+        dock.on_media_action_requested(move |action| {
+            if !controller.media_input_ready() {
+                return;
+            }
+            let media = controller.dock_media.borrow().clone();
+            if let Some(media) = media {
+                media.request(action);
+            }
+        });
+        let controller = self.clone();
+        dock.on_media_retry_requested(move || {
+            if !controller.media_input_ready() {
+                return;
+            }
+            let media = controller.dock_media.borrow().clone();
+            if let Some(media) = media {
+                media.retry();
+            }
+        });
+        let controller = self.clone();
+        dock.on_media_event_ready(move || {
+            if controller.power_admission_closed.get() {
+                return;
+            }
+            let media = controller.dock_media.borrow().clone();
+            if let Some(media) = media {
+                media.process_events();
+            }
+        });
+        let controller = self.clone();
+        dock.on_media_enabled_requested(move |enabled| controller.set_media_enabled(enabled));
+        let controller = self.clone();
+        dock.on_media_context_requested(move |point| controller.open_media_menu(point));
+    }
+
+    fn set_media_enabled(&self, enabled: bool) {
+        let Some(dock) = self.dock_and_upgrade() else {
+            return;
+        };
+        let applied = self.core.applied_preferences();
+        if self.power_admission_closed.get()
+            || self.preference_saving.get()
+            || !dock.window().is_visible()
+            || self
+                .core
+                .dock_context()
+                .is_none_or(|context| context.fullscreen_active())
+            || applied.media_enabled() != dock.get_media_view().enabled
+            || applied.media_enabled() == enabled
+        {
+            return;
+        }
+        let Some(_save) = self.begin_preference_save() else {
+            return;
+        };
+        let preferences = applied.with_media_enabled(enabled);
+        match self.core.host().save_preferences(&preferences) {
+            Ok(()) => {
+                self.core.record_applied(&preferences);
+                let media = self.dock_media.borrow().clone();
+                if let Some(media) = media {
+                    media.set_enabled(enabled);
+                }
+                self.update_geometry();
+                self.report_message(if enabled {
+                    "Media module added"
+                } else {
+                    "Media module removed"
+                });
+            }
+            Err(error) => self.report_message(&format!(
+                "Could not save media module: {}",
+                sanitize::bounded_text(&error, 200)
+            )),
+        }
+    }
+
+    fn open_media_menu(&self, point: slint::LogicalPosition) {
+        if !self.media_input_ready()
+            || self.preference_saving.get()
+            || !point.x.is_finite()
+            || !point.y.is_finite()
+        {
+            return;
+        }
+        let Some(dock) = self.dock_and_upgrade() else {
+            return;
+        };
+        let Some(context) = self.core.dock_context() else {
+            return;
+        };
+        let operation = self.popup_operation.borrow().clone();
+        self.dismiss_tooltip(false);
+        let current = || {
+            self.media_input_ready()
+                && !self.preference_saving.get()
+                && self.core.dock_context() == Some(context)
+                && Rc::ptr_eq(&operation, &self.popup_operation.borrow())
+        };
+        self.hide_launcher_app_menu();
+        if !current() {
+            return;
+        }
+        let existing = self.menus.borrow().clone();
+        let menu = match existing {
+            Some(menu) => menu,
+            None => {
+                let menu = match crate::context_menu::ContextMenuController::new(
+                    self.core.host().clone(),
+                    &dock,
+                ) {
+                    Ok(menu) => menu,
+                    Err(error) => {
+                        self.report_message(&format!("Could not create media menu: {error}"));
+                        return;
+                    }
+                };
+                if !current() {
+                    menu.hide();
+                    return;
+                }
+                let published = {
+                    let mut cache = self.menus.borrow_mut();
+                    if cache.is_none() {
+                        *cache = Some(Rc::clone(&menu));
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !published {
+                    menu.hide();
+                    return;
+                }
+                menu
+            }
+        };
+        let result = menu.show_media(&dock, point, context);
+        if current() {
+            self.popup_presentation_finished(popups::PopupKind::DockMenu, menu.is_open(), result);
+        }
     }
 
     fn wire_toolbar(&self, toolbar: &Toolbar) {
         let weak = self.clone();
-        toolbar.on_quick_settings_requested(move |bounds| weak.open_quick_settings(bounds));
+        toolbar.on_quick_settings_requested(move |bounds| {
+            if weak.bar_input_ready(SurfaceKind::Toolbar) {
+                weak.open_quick_settings(bounds);
+            }
+        });
         let weak = self.clone();
-        toolbar.on_calendar_requested(move |bounds| weak.open_calendar(bounds));
+        toolbar.on_calendar_requested(move |bounds| {
+            if weak.bar_input_ready(SurfaceKind::Toolbar) {
+                weak.open_calendar(bounds);
+            }
+        });
+        let weak = self.clone();
+        toolbar.on_network_requested(move |bounds| weak.open_network_menu(bounds));
+        let weak = self.clone();
+        toolbar.on_bluetooth_requested(move |bounds| weak.open_bluetooth(bounds));
+        let weak = self.clone();
+        toolbar.on_keyboard_requested(move |bounds| weak.open_input_language(bounds));
         let controller = self.clone();
         let owner = toolbar.as_weak();
         toolbar.on_tooltip_requested(move |content, bounds| {
+            if !controller.bar_input_ready(SurfaceKind::Toolbar) {
+                return;
+            }
             if let Some(toolbar) = owner.upgrade() {
                 controller.show_tooltip(
                     &toolbar,
@@ -454,14 +725,32 @@ impl PanelController {
         drop(attachment);
     }
 
+    #[cfg(test)]
     fn configure_lease(
         &self,
         kind: SurfaceKind,
         window: &slint::Window,
         rect: (i32, i32, u32, u32),
     ) -> Result<(), String> {
+        self.configure_lease_if(kind, window, rect, || !self.power_admission_closed.get())
+    }
+
+    fn configure_lease_if(
+        &self,
+        kind: SurfaceKind,
+        window: &slint::Window,
+        rect: (i32, i32, u32, u32),
+        current: impl Fn() -> bool,
+    ) -> Result<(), String> {
         self.detach_lease(kind);
+        if !current() {
+            return Ok(());
+        }
         let lease = self.core.host().configure_surface(kind, window)?;
+        if !current() {
+            drop(lease);
+            return Ok(());
+        }
         let replaced = self.leases.borrow_mut().store(kind, lease, rect);
         drop(replaced);
         Ok(())
@@ -514,6 +803,8 @@ impl PanelController {
     /// `None` (without queuing) when already refreshing, both surfaces are
     /// gone, or the worker could not be spawned.
     pub(crate) fn refresh(&self) -> Option<std::thread::JoinHandle<()>> {
+        self.cancel_launcher_input();
+        self.hide_launcher_app_menu();
         let panel = self.panel.upgrade()?;
         let worker = Self::refresh_from(&panel, &self.core);
         self.render();
@@ -613,6 +904,8 @@ impl PanelController {
             return;
         };
         if panel.get_refreshing() || panel.get_stale() {
+            launcher.invoke_cancel_input();
+            self.hide_launcher_app_menu();
             self.cancel_launcher_reorder();
         }
         launcher.set_refreshing(panel.get_refreshing());
@@ -674,6 +967,9 @@ impl PanelController {
                 })
             })
             .unwrap_or_default();
+        if let Some(launcher) = self.launcher_and_upgrade() {
+            launcher.set_user_name(identity.user_name.as_str().into());
+        }
         if let Some(toolbar) = self.toolbar_and_upgrade() {
             toolbar.set_user_name(identity.user_name.as_str().into());
             toolbar.set_focused_app(
@@ -698,6 +994,10 @@ impl PanelController {
         dock.set_focused_key(focused_key.into());
 
         self.refresh_strip(&dock);
+        let media = self.dock_media.borrow().clone();
+        if let Some(media) = media {
+            media.update_applications(&self.core.catalog());
+        }
         self.show_launcher_tiles();
         self.update_launcher_geometry();
     }
@@ -746,9 +1046,8 @@ impl PanelController {
     /// differs from the last attached one is the old lease dropped and the
     /// surface re-attached against the new RECT (the native side reserves at
     /// attach time only). Unchanged-geometry observations touch nothing
-    /// native. Fullscreen hides both bars (their leases drop first); the
-    /// heartbeat, watcher, and loop keep running, and the next
-    /// non-fullscreen observation shows both bars again.
+    /// native. Visibility is independent of placement: unchanged observations
+    /// must not reshow an overlap-hidden dock. Fullscreen still suppresses both.
     fn place_geometry(&self, context: crate::DockContext) -> Result<bool, String> {
         self.dismiss_tooltip(false);
         let Some(dock) = self.dock_and_upgrade() else {
@@ -756,8 +1055,17 @@ impl PanelController {
         };
         let scale = dock.window().scale_factor();
         let tile_count =
-            dock.get_pinned_apps().row_count() + dock.get_running_windows().row_count();
-        let compact = dock.get_compact();
+            // A 136px module occupies exactly three 40px/8px virtual slots.
+            dock.get_pinned_apps().row_count() + dock.get_running_windows().row_count()
+                + if dock.get_media_view().enabled { 3 } else { 0 };
+        // Read the live draft directly: an already visible bar must not need
+        // another show() merely to flush a deferred Panel.changed handler.
+        let compact = self
+            .panel
+            .upgrade()
+            .map(|panel| panel.get_compact())
+            .unwrap_or_else(|| self.core.applied_preferences().compact());
+        dock.set_compact(compact);
         // Preview positioning uses the current UI edge; pin saves still use
         // the independent last-saved edge from the core.
         let edge = self
@@ -767,7 +1075,6 @@ impl PanelController {
             .unwrap_or_else(|| self.core.applied_dock_edge());
         dock.set_edge(crate::dock_edge_to_index(edge));
         let rect = crate::dock::dock_rect(context, edge, tile_count, compact, scale);
-        let fullscreen = context.fullscreen_active();
         let quick = self.quick_settings.borrow().clone();
         if let Some(quick) = quick {
             quick.close_if_geometry_changed(context, scale);
@@ -784,70 +1091,21 @@ impl PanelController {
         {
             calendar.close_if_geometry_changed(context, toolbar.window().scale_factor());
         }
+        if let Some(toolbar) = self.toolbar_and_upgrade() {
+            self.toolbar_popup_geometry(context, toolbar.window().scale_factor());
+        }
 
-        if !fullscreen {
-            // Dock: never reserves (Seelen OnOverlap default), but its lease
-            // tracks the geometry for the shared registry bookkeeping.
-            let dock_rect_tuple = (rect.x, rect.y, rect.width, rect.height);
-            let changed = self
-                .leases
-                .borrow()
-                .geometry_changed(SurfaceKind::Dock, dock_rect_tuple);
-            if changed {
-                self.detach_lease(SurfaceKind::Dock);
-                dock.window()
-                    .set_size(slint::WindowSize::Physical(slint::PhysicalSize::new(
-                        rect.width,
-                        rect.height,
-                    )));
-                dock.window().set_position(slint::WindowPosition::Physical(
-                    slint::PhysicalPosition::new(rect.x, rect.y),
-                ));
-                dock.show().map_err(|error| error.to_string())?;
-                self.configure_lease(SurfaceKind::Dock, dock.window(), dock_rect_tuple)?;
-            } else {
-                dock.show().map_err(|error| error.to_string())?;
-            }
-            // Toolbar: full monitor bounds width at the top edge (32px).
-            if let Some(toolbar) = self.toolbar_and_upgrade() {
-                let rect = crate::dock::toolbar_rect(context, scale);
-                let toolbar_rect_tuple = (rect.x, rect.y, rect.width, rect.height);
-                let changed = self
-                    .leases
-                    .borrow()
-                    .geometry_changed(SurfaceKind::Toolbar, toolbar_rect_tuple);
-                if changed {
-                    self.detach_lease(SurfaceKind::Toolbar);
-                    toolbar.window().set_size(slint::WindowSize::Physical(
-                        slint::PhysicalSize::new(rect.width, rect.height),
-                    ));
-                    toolbar
-                        .window()
-                        .set_position(slint::WindowPosition::Physical(
-                            slint::PhysicalPosition::new(rect.x, rect.y),
-                        ));
-                    toolbar.show().map_err(|error| error.to_string())?;
-                    self.configure_lease(
-                        SurfaceKind::Toolbar,
-                        toolbar.window(),
-                        toolbar_rect_tuple,
-                    )?;
-                } else {
-                    toolbar.show().map_err(|error| error.to_string())?;
-                }
-            }
-            self.recycle_bin_shown();
-        } else {
-            // Fullscreen: drop both leases before the hides (the windows may
-            // lose their HWNDs); recovery stays possible via the launcher's
-            // rescue/menu actions once it is reopened.
-            self.recycle_bin_hidden();
-            self.detach_lease(SurfaceKind::Dock);
-            self.detach_lease(SurfaceKind::Toolbar);
-            dock.hide().map_err(|error| error.to_string())?;
-            if let Some(toolbar) = self.toolbar_and_upgrade() {
-                toolbar.hide().map_err(|error| error.to_string())?;
-            }
+        let toolbar_rect = crate::dock::toolbar_rect(context, scale);
+        let visible = self.visibility_for_geometry(context, rect, toolbar_rect, edge, scale)?;
+        self.place_bar(SurfaceKind::Dock, dock.window(), rect, visible.dock, None)?;
+        if let Some(toolbar) = self.toolbar_and_upgrade() {
+            self.place_bar(
+                SurfaceKind::Toolbar,
+                toolbar.window(),
+                toolbar_rect,
+                visible.toolbar,
+                None,
+            )?;
         }
         Ok(true)
     }
@@ -902,6 +1160,8 @@ impl PanelController {
             power.set_theme(current_theme);
             power.update_motion();
         }
+        self.toolbar_popup_theme(theme);
+        self.hide_launcher_app_menu();
         self.update_geometry();
     }
 
@@ -1020,8 +1280,8 @@ impl PanelController {
         });
     }
 
-    /// Saves the previewed appearance/edge while preserving the complete saved
-    /// pin/favorite record. Successful saves update geometry immediately.
+    /// Saves previewed appearance/edge and General policy as one complete
+    /// applied record. Calendar policy changes only after storage succeeds.
     pub(crate) fn save_preferences(&self) {
         let Some(_save) = self.begin_preference_save() else {
             return;
@@ -1029,14 +1289,26 @@ impl PanelController {
         let Some(panel) = self.panel.upgrade() else {
             return;
         };
-        let preferences = self.core.applied_preferences().with_appearance(
-            crate::theme_from_index(panel.get_theme_index()),
-            panel.get_compact(),
-            crate::dock_edge_from_index(panel.get_dock_edge_index()),
-        );
+        let Some(start) = crate::StartOfWeek::from_index(panel.get_start_of_week_index()) else {
+            self.report_message("Could not save preferences: invalid start-of-week choice.");
+            return;
+        };
+        let preferences = self
+            .core
+            .applied_preferences()
+            .with_appearance(
+                crate::theme_from_index(panel.get_theme_index()),
+                panel.get_compact(),
+                crate::dock_edge_from_index(panel.get_dock_edge_index()),
+            )
+            .with_general(crate::GeneralPreferences::default().with_start_of_week(start));
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {
                 self.core.record_applied(&preferences);
+                let calendar = self.calendar.borrow().clone();
+                if let Some(calendar) = calendar {
+                    calendar.set_start_of_week(start);
+                }
                 panel.set_status("Preferences saved".into());
                 self.update_geometry();
                 self.render();
@@ -1240,6 +1512,7 @@ pub(crate) fn run(
     panel.set_theme_index(crate::theme_to_index(preferences.theme()));
     panel.set_compact(preferences.compact());
     panel.set_dock_edge_index(crate::dock_edge_to_index(preferences.dock_edge()));
+    panel.set_start_of_week_index(preferences.general().start_of_week().index());
     panel.set_version(env!("CARGO_PKG_VERSION").into());
 
     let mut subscription_error = None;
@@ -1342,6 +1615,19 @@ pub(crate) fn run(
             let _tooltip_scope = crate::transient_window::TransientScope::new(
                 Rc::clone(&controller.tooltips),
                 crate::tooltip::TooltipController::hide,
+            );
+            let _toolbar_popup_scope = native_toolbar::ToolbarPopupScope::new(&controller);
+            let _launcher_app_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.launcher_app_menu),
+                crate::launcher::LauncherAppMenu::hide,
+            );
+            let _media_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.dock_media),
+                crate::dock_media::DockMediaController::close,
+            );
+            let _visibility_scope = crate::transient_window::TransientScope::new(
+                Rc::clone(&controller.visibility),
+                crate::visibility::VisibilityController::close,
             );
             let _motion_scope = match crate::motion::MotionSubscription::new(
                 core.host().as_ref(),

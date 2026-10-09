@@ -51,7 +51,7 @@ fn export_screenshot(name: &str, pixels: &[Rgb8Pixel], width: usize, height: usi
 /// platform per thread (the test harness runs each test on its own thread),
 /// so every renderer test installs its own platform — no cross-thread
 /// sharing, no process-wide state.
-fn software_window() -> Rc<MinimalSoftwareWindow> {
+pub(crate) fn software_window() -> Rc<MinimalSoftwareWindow> {
     software_window_with_clock(Rc::new(Cell::new(Duration::ZERO)))
 }
 
@@ -74,7 +74,7 @@ fn software_window_with_clock(clock: Rc<Cell<Duration>>) -> Rc<MinimalSoftwareWi
 
 /// Draws the current component state; asserts something was drawn and
 /// returns the pixels plus the drawn flag for the no-idle-render proof.
-fn draw(window: &MinimalSoftwareWindow, width: u32, height: u32) -> Vec<Rgb8Pixel> {
+pub(crate) fn draw(window: &MinimalSoftwareWindow, width: u32, height: u32) -> Vec<Rgb8Pixel> {
     let mut pixels = vec![Rgb8Pixel::default(); (width * height) as usize];
     let drawn = window.draw_if_needed(|renderer| {
         renderer.render(&mut pixels, width as usize);
@@ -119,7 +119,7 @@ fn set_launcher_tiles(launcher: &Launcher, tiles: Vec<LaunchTile>) {
     launcher.set_rows(ModelRc::new(VecModel::from(rows)));
 }
 
-fn native_key(window: &MinimalSoftwareWindow, text: slint::SharedString) {
+pub(crate) fn native_key(window: &MinimalSoftwareWindow, text: slint::SharedString) {
     window
         .window()
         .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
@@ -128,7 +128,7 @@ fn native_key(window: &MinimalSoftwareWindow, text: slint::SharedString) {
         .dispatch_event(WindowEvent::KeyReleased { text });
 }
 
-fn native_click(window: &MinimalSoftwareWindow, element: &ElementHandle) {
+pub(crate) fn native_click(window: &MinimalSoftwareWindow, element: &ElementHandle) {
     let position = element.absolute_position();
     let size = element.size();
     let center = slint::LogicalPosition::new(
@@ -1597,7 +1597,12 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
     let window = software_window();
     let dock = Dock::new().unwrap();
     let mut icon_pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(48, 48);
-    for pixel in icon_pixels.make_mut_bytes().chunks_exact_mut(4) {
+    for pixel in icon_pixels
+        .make_mut_bytes()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+    {
         pixel.copy_from_slice(&[255, 0, 255, 255]);
     }
     let genuine_icon = slint::Image::from_rgba8(icon_pixels);
@@ -4271,6 +4276,7 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
                     "Task Manager",
                     "Restore Explorer",
                     "Exit Tessera",
+                    "Add media module",
                 ]
                 .as_slice(),
             ),
@@ -4501,7 +4507,7 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     window.window().dispatch_event(WindowEvent::KeyPressed {
         text: Key::Return.into(),
     });
-    assert_eq!(selected.get(), Some(DockMenuAction::Exit));
+    assert_eq!(selected.get(), Some(DockMenuAction::MediaBarAdd));
     drop(menu);
 }
 
@@ -4626,6 +4632,30 @@ fn dock_right_click_emits_actual_window_relative_anchor_without_launching() {
 
 #[test]
 fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
+    use std::ops::ControlFlow;
+
+    use slint::private_unstable_api::re_exports::{
+        ComplexText, Item, ItemRc, Orientation, TextWrap, WindowInner,
+    };
+
+    // Only the known tooltip label/probe may be inspected before the native
+    // window receives its final viewport. Public AX queries remain below,
+    // after sizing and painting the real tooltip.
+    fn native_text(tooltip: &TooltipSurface, content: &str) -> ItemRc {
+        let root = ItemRc::new_root(WindowInner::from_pub(tooltip.window()).component());
+        root.visit_descendants(|item| {
+            if item
+                .downcast::<ComplexText>()
+                .is_some_and(|text| text.as_pin_ref().text().as_str() == content)
+            {
+                ControlFlow::Break(item.clone())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .expect("known native tooltip Text")
+    }
+
     let window = software_window();
     let tooltip = TooltipSurface::new().unwrap();
     let caption =
@@ -4665,20 +4695,58 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
                 scale_factor: scale,
             });
         let tokens = tooltip.global::<crate::generated::PopoverTokens>();
+        assert_eq!(tokens.get_font_size(), 12.8);
+        assert_eq!(tokens.get_line_height(), 1.4);
+        let adapter = WindowInner::from_pub(tooltip.window()).window_adapter();
+        let probe_item = native_text(&tooltip, "M");
+        let probe = probe_item.downcast::<ComplexText>().unwrap();
+        let probe = probe.as_pin_ref();
+        assert_eq!(probe.font_size().get(), tokens.get_font_size());
+        assert_eq!(probe.font_family(), tokens.get_font_family());
+        assert_eq!(probe.line_height_factor(), 1.0);
+        let natural_height = probe
+            .layout_info(Orientation::Vertical, -1.0, &adapter, &probe_item)
+            .preferred;
+        assert!(natural_height > 0.0);
+        let preferred_label_height = |content: &str| {
+            let item = native_text(&tooltip, content);
+            let text = item.downcast::<ComplexText>().unwrap();
+            let text = text.as_pin_ref();
+            assert_eq!(text.font_size().get(), tokens.get_font_size());
+            assert_eq!(text.font_family(), tokens.get_font_family());
+            assert_eq!(text.wrap(), TextWrap::WordWrap);
+            assert_eq!(
+                text.line_height_factor(),
+                tokens.get_font_size() * tokens.get_line_height() / natural_height,
+                "source spacing is relative to the SDK's natural single-line metric",
+            );
+            assert_eq!(
+                text.width().get(),
+                tooltip.get_tooltip_width() - 2.0 * tokens.get_shadow_margin() - 16.0,
+                "intrinsic wrapping uses the intended body width, not the provisional viewport",
+            );
+            // This asks the real Text for its intrinsic preferred height at
+            // its bound wrap width, not its allocated height. Font shaping,
+            // native line gaps and SDK rounding differ across OS fonts.
+            text.layout_info(Orientation::Vertical, -1.0, &adapter, &item)
+                .preferred
+        };
         for lines in [1, 2, 9] {
-            tooltip.set_content(vec!["Measured line"; lines].join("\n").into());
-            let expected_height = lines as f32 * tokens.get_font_size() * 1.4
-                + 8.0
-                + 2.0 * tokens.get_shadow_margin();
-            // Software intrinsic heights snap to logical pixels, before the
-            // native window size is scaled to physical pixels.
+            let content = vec!["Measured line"; lines].join("\n");
+            tooltip.set_content(content.clone().into());
             assert_eq!(
                 tooltip.get_tooltip_height(),
-                expected_height.round(),
-                "font-size-relative line-height: lines={lines}, scale={scale}"
+                preferred_label_height(&content) + 8.0 + 2.0 * tokens.get_shadow_margin(),
+                "native Text preferred height plus body padding/shadow: lines={lines}, scale={scale}",
             );
         }
         tooltip.set_content(caption.clone().into());
+        let preferred_height = preferred_label_height(&caption);
+        assert_eq!(
+            tooltip.get_tooltip_height(),
+            preferred_height + 8.0 + 2.0 * tokens.get_shadow_margin(),
+            "wrapped caption retains its complete native preferred height",
+        );
         let width = (tooltip.get_tooltip_width() * scale).ceil() as u32;
         let height = (tooltip.get_tooltip_height() * scale).ceil() as u32;
         assert!(width > 20 && width <= (520.0 * scale) as u32);
@@ -4747,6 +4815,42 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
             .next()
             .unwrap();
         assert_eq!(text.accessible_role(), Some(AccessibleRole::Text));
+        assert_eq!(text.size().height, preferred_height);
+        let origin = text.absolute_position();
+        assert_eq!(origin.y, tokens.get_shadow_margin() + 4.0);
+        assert_eq!(
+            origin.y + text.size().height + 4.0 + tokens.get_shadow_margin(),
+            tooltip.get_tooltip_height(),
+            "native label bounds leave the complete bottom padding and shadow gutter",
+        );
+        assert!(
+            ElementQuery::from_root(&tooltip)
+                .match_accessible_role(AccessibleRole::Button)
+                .find_all()
+                .is_empty(),
+            "the passive tooltip never adds actions",
+        );
+        let left = (origin.x * scale).ceil() as usize;
+        let right = ((origin.x + text.size().width) * scale).floor() as usize;
+        let top = (origin.y * scale).ceil() as usize;
+        let bottom = ((origin.y + text.size().height) * scale).floor() as usize;
+        let painted_text_rows: Vec<_> = (top..bottom)
+            .filter(|row| {
+                pixels[row * width as usize + left..row * width as usize + right]
+                    .iter()
+                    .any(|pixel| [pixel.r, pixel.g, pixel.b] != background)
+            })
+            .collect();
+        assert!(
+            !painted_text_rows.is_empty(),
+            "native caption glyphs are painted",
+        );
+        assert!(
+            painted_text_rows
+                .iter()
+                .any(|row| *row >= (72.0 * scale) as usize),
+            "native wrapped glyph coverage extends outside the bar",
+        );
         export_screenshot(name, &pixels, width as usize, height as usize);
         assert!(!window.draw_if_needed(|renderer| {
             let mut unchanged = pixels.clone();

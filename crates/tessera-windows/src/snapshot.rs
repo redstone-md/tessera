@@ -13,7 +13,7 @@ use tessera_core::{Rect, WindowId};
 pub struct MonitorId(u64);
 
 impl MonitorId {
-    #[cfg(windows)]
+    #[cfg(any(windows, test))]
     pub(crate) const fn new(value: u64) -> Self {
         Self(value)
     }
@@ -148,10 +148,13 @@ pub struct DesktopSnapshot {
     monitors: Vec<ObservedMonitor>,
     windows: Vec<ObservedWindow>,
     warnings: Vec<ObservationWarning>,
+    visibility_windows: Option<Vec<ObservedWindow>>,
+    foreground_window_id: Option<WindowId>,
+    foreground_interactable: Option<bool>,
 }
 
 impl DesktopSnapshot {
-    #[cfg(windows)]
+    #[cfg(any(windows, test))]
     pub(crate) fn new(
         monitors: Vec<ObservedMonitor>,
         windows: Vec<ObservedWindow>,
@@ -161,7 +164,41 @@ impl DesktopSnapshot {
             monitors,
             windows,
             warnings,
+            visibility_windows: None,
+            foreground_window_id: None,
+            foreground_interactable: None,
         }
+    }
+
+    /// Derives uncapped visibility facts from the same observation pass.
+    /// Authorization deliberately reuses activation admission, not a looser
+    /// shell-specific filter. Unknown reads never become an empty clear desktop.
+    #[cfg(any(windows, test))]
+    pub(crate) fn with_visibility_facts(mut self, foreground: Option<WindowId>) -> Self {
+        self.foreground_window_id = foreground;
+        if !self.warnings.is_empty() {
+            return self;
+        }
+        let eligible: Vec<_> = self
+            .windows
+            .iter()
+            .filter(|window| crate::ActivationTarget::from_window(window).is_some())
+            .collect();
+        if eligible.iter().any(|window| {
+            window.cloaked().is_none() || (!window.minimized() && window.monitor_id().is_none())
+        }) {
+            return self;
+        }
+        self.foreground_interactable =
+            foreground.map(|id| eligible.iter().any(|window| window.id() == id));
+        self.visibility_windows = Some(
+            eligible
+                .into_iter()
+                .filter(|window| !window.minimized())
+                .cloned()
+                .collect(),
+        );
+        self
     }
 
     pub fn monitors(&self) -> &[ObservedMonitor] {
@@ -174,5 +211,119 @@ impl DesktopSnapshot {
 
     pub fn warnings(&self) -> &[ObservationWarning] {
         &self.warnings
+    }
+
+    /// Complete, uncapped eligible nonminimized windows in physical pixels.
+    /// `None` means a window read or monitor assignment was incomplete.
+    pub fn visibility_windows(&self) -> Option<&[ObservedWindow]> {
+        self.visibility_windows.as_deref()
+    }
+
+    /// Foreground identity sampled immediately before this pass's enumeration.
+    pub fn foreground_window_id(&self) -> Option<WindowId> {
+        self.foreground_window_id
+    }
+
+    /// Whether that foreground belongs to the complete admitted window set.
+    /// A null foreground or incomplete pass remains unknown, not false.
+    pub fn foreground_interactable(&self) -> Option<bool> {
+        self.foreground_interactable
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(id: u64) -> ObservedWindow {
+        ObservedWindow {
+            id: WindowId::new(id),
+            process_id: std::process::id().wrapping_add(1),
+            title: format!("Application {id}"),
+            class_name: "Application".into(),
+            bounds: Rect::new(-1920, -100, 100, 100).unwrap(),
+            monitor_id: Some(MonitorId::new(1)),
+            minimized: false,
+            maximized: false,
+            cloaked: Some(false),
+            tool_window: false,
+            owned: false,
+            covers_monitor: false,
+        }
+    }
+
+    fn observe(windows: Vec<ObservedWindow>, foreground: Option<WindowId>) -> DesktopSnapshot {
+        DesktopSnapshot::new(Vec::new(), windows, Vec::new()).with_visibility_facts(foreground)
+    }
+
+    #[test]
+    fn visibility_facts_keep_all_windows_before_any_ui_cap() {
+        let mut windows: Vec<_> = (1..=200).map(window).collect();
+        windows[199].bounds = Rect::new(-2, -100, 100, 100).unwrap();
+        windows[199].monitor_id = Some(MonitorId::new(2));
+        let snapshot = observe(windows, Some(WindowId::new(1)));
+        let facts = snapshot.visibility_windows().unwrap();
+        assert_eq!(facts.len(), 200);
+        assert_eq!(facts[199].bounds().x(), -2);
+        assert_eq!(facts[199].monitor_id(), Some(MonitorId::new(2)));
+        assert_eq!(facts[0].bounds().x(), -1920);
+        assert_eq!(snapshot.foreground_interactable(), Some(true));
+        assert_eq!(snapshot.foreground_window_id(), Some(WindowId::new(1)));
+    }
+
+    #[test]
+    fn minimized_and_unadmitted_windows_preserve_records_but_not_overlap_facts() {
+        let mut minimized = window(1);
+        minimized.minimized = true;
+        minimized.monitor_id = None;
+        let mut tool = window(2);
+        tool.tool_window = true;
+        let mut desktop = window(3);
+        desktop.class_name = "WorkerW".into();
+        let snapshot = observe(
+            vec![minimized, tool, desktop, window(4)],
+            Some(WindowId::new(3)),
+        );
+        assert_eq!(snapshot.windows().len(), 4);
+        let facts = snapshot.visibility_windows().unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].id(), WindowId::new(4));
+        assert_eq!(snapshot.foreground_interactable(), Some(false));
+    }
+
+    #[test]
+    fn incomplete_cloak_or_monitor_read_stays_unknown() {
+        for missing_cloak in [false, true] {
+            let mut unknown = window(1);
+            if missing_cloak {
+                unknown.cloaked = None;
+            } else {
+                unknown.monitor_id = None;
+            }
+            let snapshot = observe(vec![unknown], Some(WindowId::new(1)));
+            assert!(snapshot.visibility_windows().is_none());
+            assert_eq!(snapshot.foreground_interactable(), None);
+            assert_eq!(snapshot.windows().len(), 1);
+        }
+    }
+
+    #[test]
+    fn null_foreground_is_unknown_not_noninteractable() {
+        let snapshot = observe(vec![window(1)], None);
+        assert!(snapshot.visibility_windows().is_some());
+        assert_eq!(snapshot.foreground_interactable(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_or_invalid_rectangle_never_becomes_empty_complete_facts() {
+        for operation in ["GetWindowRect", "ValidateWindowRect"] {
+            let warning = ObservationWarning::new(WindowId::new(2), operation, 13);
+            let snapshot = DesktopSnapshot::new(Vec::new(), vec![window(1)], vec![warning])
+                .with_visibility_facts(Some(WindowId::new(1)));
+            assert!(snapshot.visibility_windows().is_none());
+            assert_eq!(snapshot.foreground_interactable(), None);
+            assert_eq!(snapshot.warnings().len(), 1);
+        }
     }
 }

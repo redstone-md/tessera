@@ -598,7 +598,7 @@ fn recycle_context_real_empty_retry_inputs_enabled_repeat_and_other_scopes() {
     fixture.key(Key::UpArrow);
     assert_eq!(menu.get_selected_index(), 1);
     for (kind, expected) in [
-        (DockMenuKind::Bar, 5),
+        (DockMenuKind::Bar, 6),
         (DockMenuKind::Pinned, 2),
         (DockMenuKind::Window, 3),
     ] {
@@ -628,8 +628,16 @@ fn recycle_context_real_empty_retry_inputs_enabled_repeat_and_other_scopes() {
         fixture.key(Key::DownArrow);
         assert_eq!(menu.get_selected_index(), 0);
         fixture.render(240, 360, 1.0);
-        fixture.key(Key::Return);
+        fixture.event(WindowEvent::KeyReleased {
+            text: Key::Return.into(),
+        });
+        fixture.event(WindowEvent::KeyPressed {
+            text: Key::Return.into(),
+        });
         fixture.event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+        fixture.event(WindowEvent::KeyReleased {
             text: Key::Return.into(),
         });
         let expected_action = match kind {

@@ -13,6 +13,10 @@ pub(super) enum PopupKind {
     User,
     Calendar,
     Power,
+    Network,
+    Bluetooth,
+    InputLanguage,
+    LauncherAppMenu,
 }
 
 impl PanelController {
@@ -24,8 +28,11 @@ impl PanelController {
     ) {
         // Foreground denial can leave an honest visible popup. Conversely,
         // invalid or cancelled presentation must retain the previous popup.
-        if is_open {
-            self.dismiss_popups_except(Some(kind));
+        if self.power_admission_closed.get() {
+            return;
+        }
+        if is_open && !self.dismiss_popups_except(Some(kind)) {
+            return;
         }
         if let Err(error) = result {
             let label = match kind {
@@ -34,23 +41,37 @@ impl PanelController {
                 PopupKind::User => "User menu",
                 PopupKind::Calendar => "Calendar",
                 PopupKind::Power => "Power menu",
+                PopupKind::Network => "Network",
+                PopupKind::Bluetooth => "Bluetooth",
+                PopupKind::InputLanguage => "Keyboard selector",
+                PopupKind::LauncherAppMenu => "Application menu",
             };
             self.report_message(&format!("{label}: {error}"));
         }
     }
 
     /// Clone all caches before callbacks: hiding can synchronously reenter UI.
-    pub(super) fn dismiss_popups_except(&self, keep: Option<PopupKind>) {
+    pub(super) fn dismiss_popups_except(&self, keep: Option<PopupKind>) -> bool {
+        if self.power_admission_closed.get() {
+            return false;
+        }
         // Holding the old identity prevents allocator reuse: a reentrant newer
         // presentation wins without wrapping a counter or keeping a cache borrow.
         let operation = Rc::new(());
         self.popup_operation.replace(Rc::clone(&operation));
-        let current = || Rc::ptr_eq(&operation, &self.popup_operation.borrow());
+        let current = || {
+            !self.power_admission_closed.get()
+                && Rc::ptr_eq(&operation, &self.popup_operation.borrow())
+        };
         let menu = self.menus.borrow().clone();
         let quick = self.quick_settings.borrow().clone();
         let user = self.user_menu.borrow().clone();
         let calendar = self.calendar.borrow().clone();
         let power = self.power_menu.borrow().clone();
+        let network = self.network_menu.borrow().clone();
+        let bluetooth = self.bluetooth.borrow().clone();
+        let input = self.input_language.borrow().clone();
+        let launcher_app = self.launcher_app_menu.borrow().clone();
         if keep != Some(PopupKind::DockMenu)
             && current()
             && let Some(menu) = menu
@@ -81,5 +102,30 @@ impl PanelController {
         {
             power.hide();
         }
+        if keep != Some(PopupKind::Network)
+            && current()
+            && let Some(actor) = network
+        {
+            actor.hide();
+        }
+        if keep != Some(PopupKind::Bluetooth)
+            && current()
+            && let Some(actor) = bluetooth
+        {
+            actor.hide();
+        }
+        if keep != Some(PopupKind::InputLanguage)
+            && current()
+            && let Some(actor) = input
+        {
+            actor.hide();
+        }
+        if keep != Some(PopupKind::LauncherAppMenu)
+            && current()
+            && let Some(actor) = launcher_app
+        {
+            actor.hide();
+        }
+        current()
     }
 }

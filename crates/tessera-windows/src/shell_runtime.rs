@@ -92,6 +92,8 @@ mod identity_stub {
 pub(crate) mod error;
 #[cfg(windows)]
 pub(crate) mod heartbeat;
+#[cfg(any(windows, test))]
+pub(crate) mod runtime_proof;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 pub(crate) mod supervisor;
@@ -177,7 +179,7 @@ fn validate_takeover_record(
 pub fn verify_runtime() -> Result<(), ShellRuntimeError> {
     #[cfg(windows)]
     {
-        crate::shell_runtime::native::verify_runtime_impl()
+        crate::shell_runtime::native::verify_runtime_impl().map_err(runtime_proof::preflight_error)
     }
     #[cfg(not(windows))]
     {

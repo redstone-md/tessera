@@ -12,12 +12,20 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tessera_core::Rect;
 use tessera_system::display_context::{DisplayContextCompletion, DisplaySelection};
 use tessera_system::power::PowerCompletion;
+use tessera_system::power_updates::{
+    PowerUpdateHint, PowerUpdatesCompletion, PowerUpdatesError, PowerUpdatesHost,
+};
+
+mod lifetime_tests;
+mod six_tests;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Hook {
     DisplayFactory,
     Read,
     PowerFactory,
+    UpdatesFactory,
+    UpdatesRead,
     Perform,
     Configure,
     LeaseDrop,
@@ -77,7 +85,7 @@ impl<T, E> Default for Recording<T, E> {
     }
 }
 
-// One small fixture shared by the two independent typed provider contracts.
+// One small fixture shared by the three independent typed provider contracts.
 // Consumer callbacks and reentry hooks always run outside the recording lock.
 fn submit<T, E>(
     recording: &Mutex<Recording<T, E>>,
@@ -172,13 +180,33 @@ impl PowerHost for RecordingPower {
     }
 }
 
+struct RecordingUpdates {
+    state: Mutex<Recording<PowerUpdateHint, PowerUpdatesError>>,
+}
+
+impl PowerUpdatesHost for RecordingUpdates {
+    fn read(&self, completion: PowerUpdatesCompletion) -> Result<(), PowerUpdatesError> {
+        {
+            let mut state = self.state.lock();
+            if state.replies.is_empty() {
+                state
+                    .replies
+                    .push_back(Reply::Inline(Ok(PowerUpdateHint::NotDetected)));
+            }
+        }
+        submit(&self.state, Hook::UpdatesRead, completion)
+    }
+}
+
 struct RecordingDesktop {
     display: Mutex<Result<Option<Arc<dyn DisplayContextHost>>, DisplayContextError>>,
     power: Mutex<Result<Option<Arc<dyn PowerHost>>, PowerError>>,
     display_getters: AtomicUsize,
     power_getters: AtomicUsize,
+    updates: Mutex<Result<Option<Arc<dyn PowerUpdatesHost>>, PowerUpdatesError>>,
     deny_attachment: AtomicBool,
     deny_focus: AtomicBool,
+    updates_getters: AtomicUsize,
     animations: AtomicBool,
     trace: Arc<Trace>,
 }
@@ -237,6 +265,11 @@ impl DesktopHost for RecordingDesktop {
         run_hook(Hook::PowerFactory);
         self.power.lock().clone()
     }
+    fn power_updates_host(&self) -> Result<Option<Arc<dyn PowerUpdatesHost>>, PowerUpdatesError> {
+        self.updates_getters.fetch_add(1, Ordering::Relaxed);
+        run_hook(Hook::UpdatesFactory);
+        self.updates.lock().clone()
+    }
     fn configure_surface(
         &self,
         kind: SurfaceKind,
@@ -272,9 +305,11 @@ impl DesktopHost for RecordingDesktop {
 struct Fixture {
     host: Arc<RecordingDesktop>,
     display: Arc<RecordingDisplay>,
+    updates: Arc<RecordingUpdates>,
     power: Arc<RecordingPower>,
     sibling: Panel,
     popup: Rc<PowerMenuController>,
+    initial_component: PowerMenuSurface,
     opened: Rc<Cell<usize>>,
     results: Rc<RefCell<Vec<Result<(), String>>>>,
 }
@@ -296,11 +331,16 @@ impl Fixture {
             state: Mutex::default(),
             trace: trace.clone(),
         });
+        let updates = Arc::new(RecordingUpdates {
+            state: Mutex::default(),
+        });
         let host = Arc::new(RecordingDesktop {
             display: Mutex::new(Ok(Some(display.clone()))),
             power: Mutex::new(Ok(Some(power.clone()))),
+            updates: Mutex::new(Ok(Some(updates.clone()))),
             display_getters: AtomicUsize::new(0),
             power_getters: AtomicUsize::new(0),
+            updates_getters: AtomicUsize::new(0),
             deny_attachment: AtomicBool::new(false),
             deny_focus: AtomicBool::new(false),
             animations: AtomicBool::new(false),
@@ -324,16 +364,26 @@ impl Fixture {
             Rc::new(move |result| result_record.borrow_mut().push(result)),
         )
         .unwrap();
-        *host.trace.root.lock() = Some(popup.component().as_weak());
+        let initial_component = popup.component();
+        *host.trace.root.lock() = Some(initial_component.as_weak());
         Self {
             host,
             display,
             power,
+            updates,
             sibling,
             popup,
             opened,
+            initial_component,
             results,
         }
+    }
+
+    fn component(&self) -> PowerMenuSurface {
+        self.popup
+            .surface_snapshot()
+            .map(|(_, surface)| surface.clone_strong())
+            .unwrap_or_else(|| self.initial_component.clone_strong())
     }
 
     fn drain(&self) {
@@ -342,14 +392,14 @@ impl Fixture {
 
     fn loaded(&self) {
         assert!(self.popup.show(Theme::Dark).unwrap());
+        *self.host.trace.root.lock() = Some(self.component().as_weak());
         finish(&self.display.state, Ok(Some(layout())));
         self.drain();
         assert!(self.popup.is_visible());
     }
 
     fn lock(&self) {
-        self.popup
-            .component()
+        self.component()
             .invoke_action_requested(PowerMenuAction::LockSession);
     }
 
@@ -358,22 +408,23 @@ impl Fixture {
     }
 
     fn key(&self, key: Key) {
-        let window = self.popup.component().window();
+        let component = self.component();
+        let window = component.window();
         window.dispatch_event(WindowEvent::KeyPressed { text: key.into() });
         window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
     }
 
     fn click_lock(&self) {
-        let element =
-            ElementHandle::find_by_accessible_label(self.popup.component(), "Lock session")
-                .next()
-                .expect("genuine generated Lock tile");
+        let component = self.component();
+        let element = ElementHandle::find_by_accessible_label(&component, "Lock session")
+            .next()
+            .expect("genuine generated Lock tile");
         let origin = element.absolute_position();
         let size = element.size();
         assert!(size.width > 0.0 && size.height > 0.0);
         let position =
             LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0);
-        let window = self.popup.component().window();
+        let window = component.window();
         window.dispatch_event(WindowEvent::PointerPressed {
             position,
             button: PointerEventButton::Left,
@@ -409,7 +460,7 @@ fn opening_reads_fresh_context_but_never_acquires_power_and_only_success_dismiss
     assert!(fixture.popup.show(Theme::Light).unwrap());
     assert!(!fixture.popup.is_visible());
     assert!(fixture.sibling.window().is_visible());
-    assert!(!fixture.popup.component().get_action_enabled());
+    assert!(!fixture.component().get_action_enabled());
     fixture.lock();
     assert_eq!(fixture.power.state.lock().calls, 0);
     finish(&fixture.display.state, Ok(Some(layout())));
@@ -423,14 +474,14 @@ fn opening_reads_fresh_context_but_never_acquires_power_and_only_success_dismiss
     assert!(!fixture.sibling.window().is_visible());
     assert_eq!(fixture.opened.get(), 1);
     assert_eq!(
-        fixture.popup.component().window().size(),
+        fixture.component().window().size(),
         PhysicalSize::new(3840, 1320)
     );
-    assert_eq!(fixture.popup.component().get_selected_y(), 240.0);
-    assert_eq!(fixture.popup.component().get_metric_scale(), 1.5);
+    assert_eq!(fixture.component().get_selected_y(), 240.0);
+    assert_eq!(fixture.component().get_metric_scale(), 1.5);
     assert!(fixture.popup.show(Theme::Dark).unwrap());
     assert!(
-        !fixture.popup.component().get_action_enabled(),
+        !fixture.component().get_action_enabled(),
         "fresh read revokes old input authority"
     );
     finish(&fixture.display.state, Ok(Some(layout())));
@@ -477,7 +528,7 @@ fn empty_failed_over_budget_and_failed_native_attachment_preserve_existing_sibli
         finish(&fixture.display.state, result);
         fixture.drain();
         assert!(!fixture.popup.is_visible());
-        assert!(!fixture.popup.component().window().is_visible());
+        assert!(!fixture.component().window().is_visible());
         assert!(fixture.sibling.window().is_visible());
         assert_eq!(fixture.opened.get(), 0);
         fixture.lock();
@@ -487,7 +538,7 @@ fn empty_failed_over_budget_and_failed_native_attachment_preserve_existing_sibli
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(fixture.sibling.window().is_visible());
     assert_eq!(fixture.opened.get(), 0);
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 0);
@@ -544,7 +595,7 @@ fn power_getter_failures_retry_and_success_cache_does_not_cache_perform_failure(
         fixture.loaded();
         fixture.lock();
         assert!(!fixture.popup.is_visible());
-        assert!(!fixture.popup.component().get_lock_busy());
+        assert!(!fixture.component().get_lock_busy());
     }
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 3);
     assert_eq!(fixture.power.state.lock().calls, 0);
@@ -558,11 +609,11 @@ fn power_getter_failures_retry_and_success_cache_does_not_cache_perform_failure(
     fixture.loaded();
     fixture.lock();
     assert!(
-        fixture.popup.component().get_lock_busy(),
+        fixture.component().get_lock_busy(),
         "immediate Err retires via mailbox"
     );
     fixture.drain();
-    assert!(!fixture.popup.component().get_lock_busy());
+    assert!(!fixture.component().get_lock_busy());
     *fixture.host.power.lock() = Err(PowerError::Unavailable);
     fixture
         .power
@@ -573,7 +624,7 @@ fn power_getter_failures_retry_and_success_cache_does_not_cache_perform_failure(
     fixture.loaded();
     fixture.lock();
     assert!(
-        fixture.popup.component().get_lock_busy(),
+        fixture.component().get_lock_busy(),
         "inline completion cannot project synchronously"
     );
     fixture.drain();
@@ -607,7 +658,7 @@ fn immediate_read_rejection_and_inline_completion_are_mailboxed_and_retryable() 
     fixture.popup.show(Theme::Light).unwrap();
     assert!(!fixture.popup.is_visible());
     assert_eq!(fixture.opened.get(), 0);
-    fixture.popup.component().invoke_power_event_ready();
+    fixture.component().invoke_power_event_ready();
     assert!(fixture.popup.is_visible());
     assert_eq!(fixture.opened.get(), 1);
     assert_eq!(fixture.display.state.lock().active, 0);
@@ -672,7 +723,7 @@ fn close_discards_delayed_read_without_resurrection_or_sibling_dismissal() {
     fixture.lock();
     assert!(fixture.popup.show(Theme::Dark).is_err());
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(fixture.sibling.window().is_visible());
     assert_eq!(fixture.opened.get(), 0);
     assert!(fixture.results.borrow().is_empty());
@@ -695,16 +746,16 @@ fn typed_lock_detaches_and_hides_before_getter_and_perform_then_survives_hide_an
         ]
     );
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(
         fixture.results.borrow().is_empty(),
         "initiation is not observed locked state"
     );
     fixture.loaded();
-    assert!(fixture.popup.component().get_lock_busy());
-    assert!(!fixture.popup.component().get_action_enabled());
-    fixture.popup.component().set_action_enabled(true);
-    fixture.popup.component().set_lock_busy(false);
+    assert!(fixture.component().get_lock_busy());
+    assert!(!fixture.component().get_action_enabled());
+    fixture.component().set_action_enabled(true);
+    fixture.component().set_lock_busy(false);
     fixture.lock();
     assert_eq!(
         fixture.power.state.lock().calls,
@@ -717,15 +768,15 @@ fn typed_lock_detaches_and_hides_before_getter_and_perform_then_survives_hide_an
     fixture.popup.update_motion();
     fixture.popup.refresh_display();
     fixture.loaded();
-    assert!(fixture.popup.component().get_lock_busy());
+    assert!(fixture.component().get_lock_busy());
     assert_eq!(fixture.display.state.lock().maximum_active, 1);
     assert_eq!(fixture.power.state.lock().active, 1);
     finish(&fixture.power.state, Ok(PowerRequestAccepted));
-    assert!(fixture.popup.component().get_lock_busy());
+    assert!(fixture.component().get_lock_busy());
     fixture.drain();
     assert!(fixture.popup.is_visible());
-    assert!(!fixture.popup.component().get_lock_busy());
-    assert!(fixture.popup.component().get_action_enabled());
+    assert!(!fixture.component().get_lock_busy());
+    assert!(fixture.component().get_action_enabled());
     assert_eq!(fixture.results.borrow().as_slice(), [Ok(())]);
     assert_eq!(fixture.power.state.lock().calls, 1);
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 1);
@@ -761,11 +812,11 @@ fn live_reopened_root_receives_one_safe_failure_without_retrying_native_request(
     fixture.drain();
     fixture.drain();
     assert!(fixture.popup.is_visible());
-    assert!(fixture.popup.component().get_action_enabled());
+    assert!(fixture.component().get_action_enabled());
     assert_eq!(fixture.results.borrow().len(), 1);
     let results = fixture.results.borrow();
     let error = results[0].as_ref().unwrap_err();
-    assert!(error.starts_with("Lock request failed: "));
+    assert!(error.starts_with("Power request failed: "));
     assert!(!error.contains("123456"));
     assert_eq!(fixture.power.state.lock().calls, 1);
 }
@@ -784,7 +835,7 @@ fn lease_drop_show_then_hide_replacement_cannot_lend_hidden_authority_to_origina
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 0);
     assert_eq!(fixture.power.state.lock().calls, 0);
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().get_lock_busy());
+    assert!(!fixture.component().get_lock_busy());
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
@@ -806,10 +857,10 @@ fn lease_drop_presented_replacement_owns_visibility_and_original_lock_never_ente
     });
     fixture.lock();
     assert!(fixture.popup.is_visible());
-    assert!(fixture.popup.component().window().is_visible());
+    assert!(fixture.component().window().is_visible());
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 1);
-    assert!(!fixture.popup.component().get_lock_busy());
-    assert!(fixture.popup.component().get_action_enabled());
+    assert!(!fixture.component().get_lock_busy());
+    assert!(fixture.component().get_action_enabled());
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 0);
     assert_eq!(fixture.power.state.lock().calls, 0);
     assert_eq!(fixture.opened.get(), 2);
@@ -848,7 +899,7 @@ fn power_factory_close_reentry_never_enters_provider_or_reports_old_intent() {
     assert_eq!(fixture.power.state.lock().calls, 0);
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 0);
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(fixture.results.borrow().is_empty());
 }
 
@@ -929,7 +980,7 @@ fn configure_cancellation_releases_late_lease_before_hide_and_does_not_focus_or_
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(fixture.events().contains(&Event::Detach { visible: true }));
     assert!(!fixture.events().contains(&Event::Focus));
     assert_eq!(fixture.opened.get(), 0);
@@ -951,7 +1002,7 @@ fn configure_reentrant_show_cancels_old_native_effect_and_only_fresh_read_presen
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(fixture.sibling.window().is_visible());
     assert_eq!(fixture.opened.get(), 0);
     assert_eq!(fixture.display.state.lock().calls, 2);
@@ -989,7 +1040,7 @@ fn genuine_viewport_property_reentry_during_presentation_cancels_stale_projectio
     let weak = Rc::downgrade(&fixture.popup);
     let called = Rc::new(Cell::new(false));
     let recorded = called.clone();
-    fixture.popup.component().on_viewport_changed(move || {
+    fixture.component().on_viewport_changed(move || {
         if !recorded.replace(true) {
             weak.upgrade().unwrap().hide();
         }
@@ -1007,7 +1058,7 @@ fn genuine_viewport_property_reentry_during_presentation_cancels_stale_projectio
         "test must cross a genuine generated property callback"
     );
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert_eq!(fixture.opened.get(), 0);
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 0);
     assert!(!fixture.events().contains(&Event::Focus));
@@ -1020,14 +1071,14 @@ fn current_root_scale_after_configure_and_viewport_refit_preserve_lease_focus_an
     let fixture = Fixture::new();
     let weak = Rc::downgrade(&fixture.popup);
     hook(Hook::Configure, move || {
-        weak.upgrade()
-            .unwrap()
-            .component()
+        let popup = weak.upgrade().unwrap();
+        let component = popup.component();
+        component
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 });
     });
     fixture.loaded();
-    let root = fixture.popup.component();
+    let root = fixture.component();
     assert_eq!(root.window().scale_factor(), 2.0);
     assert_eq!(root.window().size(), PhysicalSize::new(3840, 1320));
     assert_eq!(root.get_metric_scale(), 0.75);
@@ -1085,7 +1136,7 @@ fn opened_and_focus_reentry_do_not_reauthorize_hidden_or_closed_surface() {
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 0);
     fixture.lock();
     assert_eq!(fixture.power.state.lock().calls, 0);
@@ -1118,12 +1169,12 @@ fn denied_foreground_does_not_immediately_destroy_unfocused_native_surface() {
 fn disabled_and_native_hidden_injected_generated_action_have_no_power_authority() {
     let fixture = Fixture::new();
     fixture.loaded();
-    fixture.popup.component().set_action_enabled(false);
+    fixture.component().set_action_enabled(false);
     fixture.click_lock();
     fixture.lock();
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 0);
-    fixture.popup.component().set_action_enabled(true);
-    fixture.popup.component().hide().unwrap();
+    fixture.component().set_action_enabled(true);
+    fixture.component().hide().unwrap();
     assert!(!fixture.popup.is_visible());
     fixture.lock();
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 0);
@@ -1137,14 +1188,14 @@ fn refresh_of_externally_native_hidden_surface_retires_lease_without_resurrectin
  {
     let fixture = Fixture::new();
     fixture.loaded();
-    fixture.popup.component().hide().unwrap();
+    fixture.component().hide().unwrap();
     assert!(!fixture.popup.is_visible());
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 1);
     fixture.popup.refresh_display();
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 0);
     assert!(fixture.events().contains(&Event::Detach { visible: false }));
     assert_eq!(
@@ -1184,7 +1235,7 @@ fn genuine_pointer_tab_return_and_space_dispatch_one_typed_direct_lock_each_with
     finish(&fixture.power.state, Ok(PowerRequestAccepted));
     fixture.drain();
     fixture.loaded();
-    fixture.popup.component().invoke_focus_content();
+    fixture.component().invoke_focus_content();
     fixture.key(Key::Tab);
     fixture.key(Key::Return);
     assert_eq!(fixture.power.state.lock().calls, 2);
@@ -1192,9 +1243,10 @@ fn genuine_pointer_tab_return_and_space_dispatch_one_typed_direct_lock_each_with
     finish(&fixture.power.state, Ok(PowerRequestAccepted));
     fixture.drain();
     fixture.loaded();
-    fixture.popup.component().invoke_focus_content();
+    fixture.component().invoke_focus_content();
     fixture.key(Key::Tab);
-    let window = fixture.popup.component().window();
+    let component = fixture.component();
+    let window = component.window();
     window.dispatch_event(WindowEvent::KeyPressed {
         text: Key::Space.into(),
     });
@@ -1351,7 +1403,8 @@ fn checked_presentation_and_request_identity_exhaustion_never_wraps_or_reuses_au
         state.token().unwrap(),
         Token {
             generation: u64::MAX,
-            sequence: u64::MAX
+            sequence: u64::MAX,
+            epoch: 0,
         }
     );
     assert!(state.advance().is_err());
@@ -1365,45 +1418,62 @@ fn checked_presentation_and_request_identity_exhaustion_never_wraps_or_reuses_au
 }
 
 #[test]
-fn two_slot_mailbox_rejects_stale_tokens_and_keeps_only_first_terminal_for_each_flight() {
+fn three_slot_mailbox_rejects_stale_tokens_and_keeps_only_first_terminal_for_each_flight() {
     let fixture = Fixture::new();
     let read = Token {
         generation: 1,
         sequence: 1,
+        epoch: 1,
     };
     let lock = Token {
         generation: 2,
         sequence: 2,
+        epoch: 1,
     };
     let stale = Token {
         generation: 0,
         sequence: 0,
+        epoch: 0,
+    };
+    let updates = Token {
+        generation: 3,
+        sequence: 3,
+        epoch: 1,
     };
     let mailbox = Arc::new(Mutex::new(Mailbox::default()));
-    let root = fixture.popup.component().as_weak();
+    mailbox
+        .lock()
+        .install(1, fixture.component().as_weak())
+        .unwrap();
     mailbox.lock().read.expected = Some(read);
     mailbox.lock().lock.expected = Some(lock);
-    complete_read(&mailbox, &root, stale, Ok(Some(layout())));
-    complete_lock(&mailbox, &root, stale, Ok(PowerRequestAccepted));
+    mailbox.lock().updates.expected = Some(updates);
+    complete_read(&mailbox, stale, Ok(Some(layout())));
+    complete_lock(&mailbox, stale, Ok(PowerRequestAccepted));
+    complete_updates(&mailbox, stale, Ok(PowerUpdateHint::Pending));
     assert!(mailbox.lock().read.terminal.is_none());
     assert!(mailbox.lock().lock.terminal.is_none());
-    complete_read(&mailbox, &root, read, Ok(None));
-    complete_lock(&mailbox, &root, lock, Err(PowerError::Busy));
+    assert!(mailbox.lock().updates.terminal.is_none());
+    complete_read(&mailbox, read, Ok(None));
+    complete_lock(&mailbox, lock, Err(PowerError::Busy));
+    complete_updates(&mailbox, updates, Ok(PowerUpdateHint::NotDetected));
     for _ in 0..128 {
-        complete_read(&mailbox, &root, read, Ok(Some(layout())));
-        complete_lock(&mailbox, &root, lock, Ok(PowerRequestAccepted));
-        complete_read(
-            &mailbox,
-            &root,
-            stale,
-            Err(DisplayContextError::Unavailable),
-        );
+        complete_read(&mailbox, read, Ok(Some(layout())));
+        complete_lock(&mailbox, lock, Ok(PowerRequestAccepted));
+        complete_updates(&mailbox, updates, Ok(PowerUpdateHint::Pending));
+        complete_updates(&mailbox, stale, Err(PowerUpdatesError::Unavailable));
+        complete_read(&mailbox, stale, Err(DisplayContextError::Unavailable));
     }
     let slots = mailbox.lock();
     assert_eq!(slots.read.terminal, Some((read, Ok(None))));
     assert_eq!(slots.lock.terminal, Some((lock, Err(PowerError::Busy))));
+    assert_eq!(
+        slots.updates.terminal,
+        Some((updates, Ok(PowerUpdateHint::NotDetected)))
+    );
     assert_eq!(slots.read.expected, Some(read));
     assert_eq!(slots.lock.expected, Some(lock));
+    assert_eq!(slots.updates.expected, Some(updates));
     assert_eq!(fixture.power.state.lock().calls, 0);
 }
 
@@ -1414,7 +1484,7 @@ fn exhausted_actor_request_identity_closes_visible_scope_without_native_lock_ent
     fixture.popup.state.borrow_mut().sequence = u64::MAX;
     fixture.lock();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert_eq!(fixture.host.trace.leases.load(Ordering::Relaxed), 0);
     assert_eq!(fixture.host.power_getters.load(Ordering::Relaxed), 0);
     assert_eq!(fixture.power.state.lock().calls, 0);
@@ -1503,7 +1573,7 @@ fn actual_generated_show_error_releases_presentation_and_preserves_sibling_witho
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(!fixture.popup.is_visible());
-    assert!(!fixture.popup.component().window().is_visible());
+    assert!(!fixture.component().window().is_visible());
     assert!(fixture.sibling.window().is_visible());
     assert_eq!(fixture.opened.get(), 0);
     assert_eq!(fixture.results.borrow().len(), 1);
@@ -1540,7 +1610,8 @@ fn configure_motion_off_reentry_overrides_cached_permission_without_replaying_pr
         weak.upgrade().unwrap().disable_motion()
     });
     fixture.loaded();
-    let motion = fixture.popup.component().global::<PopoverMotion>();
+    let component = fixture.component();
+    let motion = component.global::<PopoverMotion>();
     assert!(
         !motion.get_enabled(),
         "cached host permission must not override newer motion-off"

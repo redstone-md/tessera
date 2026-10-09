@@ -1,0 +1,218 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView as NativeScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+
+export enum BluetoothRadioStatus { On, Off, Disabled, Unknown }
+export enum BluetoothTransportKind { Classic, LowEnergy }
+export struct BluetoothRadioRow { name: string, state: BluetoothRadioStatus }
+export struct BluetoothDeviceRow { name: string, transport: BluetoothTransportKind }
+
+component BluetoothText inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    accessible-role: none;
+}
+
+component DeviceSection inherits VerticalLayout {
+    in property <string> heading;
+    in property <string> connection;
+    in property <[BluetoothDeviceRow]> rows;
+    in property <length> text-height;
+    in property <float> text-line-height-factor;
+    spacing: 4px;
+    BluetoothText {
+        height: root.text-height;
+        text: root.heading;
+        font-weight: 600;
+        line-height-factor: root.text-line-height-factor;
+        accessible-role: text;
+        accessible-label: self.text;
+    }
+    for row in root.rows: Rectangle {
+        height: 2 * root.text-height + 12px;
+        accessible-role: text;
+        accessible-label: (row.name != "" ? row.name : @tr("Unnamed device"));
+        accessible-description: root.connection + ", "
+            + (row.transport == BluetoothTransportKind.Classic ? @tr("Classic") : @tr("Low Energy"));
+        BluetoothText {
+            x: 4px;
+            y: 4px;
+            width: max(0px, parent.width - 8px);
+            height: root.text-height;
+            text: row.name != "" ? row.name : @tr("Unnamed device");
+            line-height-factor: root.text-line-height-factor;
+            overflow: elide;
+        }
+        BluetoothText {
+            x: 4px;
+            y: 6px + root.text-height;
+            width: max(0px, parent.width - 8px);
+            height: root.text-height;
+            text: row.transport == BluetoothTransportKind.Classic ? @tr("Classic") : @tr("Low Energy");
+            color: SeelenPalette.secondary;
+            line-height-factor: root.text-line-height-factor;
+            overflow: elide;
+        }
+    }
+}
+
+// This surface observes paired entries only. No discovery, selection or effect
+// authority is implied by a row, radio state, or the Refresh button.
+export component BluetoothMenu inherits Window {
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera Bluetooth";
+    min-width: 1px;
+    min-height: 1px;
+    in property <[BluetoothRadioRow]> radios;
+    in property <[BluetoothDeviceRow]> connected;
+    in property <[BluetoothDeviceRow]> paired;
+    in property <[BluetoothDeviceRow]> unknown;
+    in property <bool> loading;
+    in property <bool> has-snapshot;
+    in property <bool> no-radios;
+    in property <bool> empty-inventory;
+    in property <bool> partial-inventory;
+    in property <bool> refresh-enabled;
+    in property <string> notice;
+    callback refresh-requested();
+    callback hide-requested();
+    callback bluetooth-event-ready();
+    callback preferred-size-changed();
+    out property <length> popup-content-width: 350px + 2 * PopoverTokens.shadow-margin;
+    out property <length> popup-content-height: min(600px,
+        root.natural-content-height + 2 * root.viewport-inset) + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.popup-content-width;
+    preferred-height: root.popup-content-height;
+    changed popup-content-width => { root.preferred-size-changed(); }
+    changed popup-content-height => { root.preferred-size-changed(); }
+    property <length> text-height: max(1px, PopoverTokens.font-size * PopoverTokens.line-height);
+    property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
+    property <length> row-height: 2 * root.text-height + 12px;
+    property <int> section-count: (root.connected.length > 0 ? 1 : 0)
+        + (root.paired.length > 0 ? 1 : 0) + (root.unknown.length > 0 ? 1 : 0);
+    property <int> device-count: root.connected.length + root.paired.length + root.unknown.length;
+    property <string> empty-label: root.partial-inventory
+        ? @tr("No paired devices in the inventories read.") : @tr("No paired Bluetooth devices.");
+    property <string> feedback: root.loading ? (root.has-snapshot
+        ? @tr("Refreshing Bluetooth observations…") : @tr("Reading paired Bluetooth observations…")) : "";
+    property <length> measure-width: max(1px,
+        min(root.width > 0px ? root.width : root.popup-content-width,
+            400px + 2 * PopoverTokens.shadow-margin)
+        - 2 * PopoverTokens.shadow-margin - 2 * root.viewport-inset - 2 * FocusTokens.outer-margin);
+    property <int> block-count: 2 + root.radios.length + root.section-count
+        + (root.no-radios ? 1 : 0) + (root.empty-inventory ? 1 : 0)
+        + (root.feedback != "" ? 1 : 0) + (root.notice != "" ? 1 : 0);
+    property <length> natural-content-height: 2 * FocusTokens.outer-margin
+        + 2 * root.text-height + 4px + 16px + root.text-height
+        + root.radios.length * root.row-height
+        + root.section-count * root.text-height
+        + root.device-count * (root.row-height + 4px)
+        + (root.no-radios ? root.text-height : 0px)
+        + (root.empty-inventory ? empty-metrics.preferred-height : 0px)
+        + (root.feedback != "" ? feedback-metrics.preferred-height : 0px)
+        + (root.notice != "" ? notice-metrics.preferred-height : 0px)
+        + max(0, root.block-count - 1) * 8px;
+    empty-metrics := BluetoothText { width: root.measure-width; height: 0px; opacity: 0;
+        text: root.empty-label; wrap: word-wrap; line-height-factor: body.text-line-height-factor; }
+    feedback-metrics := BluetoothText { width: root.measure-width; height: 0px; opacity: 0;
+        text: root.feedback; wrap: word-wrap; line-height-factor: body.text-line-height-factor; }
+    notice-metrics := BluetoothText { width: root.measure-width; height: 0px; opacity: 0;
+        text: root.notice; wrap: word-wrap; line-height-factor: body.text-line-height-factor; }
+    function radio-status(state: BluetoothRadioStatus) -> string {
+        return state == BluetoothRadioStatus.On ? @tr("On")
+            : state == BluetoothRadioStatus.Off ? @tr("Off")
+            : state == BluetoothRadioStatus.Disabled ? @tr("Disabled") : @tr("Unknown");
+    }
+    public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
+    public function focus-content() { scroll.content-y = 0px; escape-scope.focus(); }
+    forward-focus: escape-scope;
+    escape-scope := FocusScope {
+        width: root.width;
+        height: root.height;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.hide-requested(); return accept; }
+            return reject;
+        }
+        body := PopoverBody {
+            x: (root.width - self.width) / 2;
+            width: min(root.width, 400px + 2 * PopoverTokens.shadow-margin);
+            height: root.height;
+            scroll := NativeScrollView {
+                x: root.viewport-inset;
+                y: root.viewport-inset;
+                width: max(0px, body.content-width - 2 * root.viewport-inset);
+                height: max(0px, body.content-height - 2 * root.viewport-inset);
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                content-width: self.visible-width;
+                content-height: root.natural-content-height;
+                VerticalLayout {
+                    width: parent.width;
+                    height: root.natural-content-height;
+                    padding: FocusTokens.outer-margin;
+                    spacing: 8px;
+                    VerticalLayout {
+                        height: 2 * root.text-height + 4px;
+                        spacing: 4px;
+                        BluetoothText { text: @tr("Bluetooth"); font-weight: 600;
+                            height: root.text-height; accessible-role: text; accessible-label: self.text; }
+                        BluetoothText { text: @tr("Paired inventory (read-only)"); color: SeelenPalette.secondary;
+                            height: root.text-height; accessible-role: text; accessible-label: self.text; }
+                    }
+                    // Refresh stays enabled during an accepted read; the controller
+                    // coalesces any number of presses into one subsequent read.
+                    refresh := TileButton {
+                        height: 16px + root.text-height;
+                        radius: 6px;
+                        filled: false;
+                        enabled: root.refresh-enabled;
+                        accessible-text: @tr("Refresh Bluetooth");
+                        clicked => { root.refresh-requested(); }
+                        focus-acquired => { scroll.content-y = 0px; }
+                        BluetoothText { x: 8px; width: max(0px, parent.width - 16px); height: parent.height;
+                            text: @tr("Refresh"); vertical-alignment: center; overflow: elide; }
+                    }
+                    if root.feedback != "": BluetoothText { text: root.feedback; wrap: word-wrap;
+                        height: feedback-metrics.preferred-height; color: SeelenPalette.secondary;
+                        line-height-factor: body.text-line-height-factor;
+                        accessible-role: text; accessible-label: self.text; }
+                    for radio in root.radios: Rectangle {
+                        height: root.row-height;
+                        accessible-role: text;
+                        accessible-label: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio");
+                        accessible-description: @tr("Bluetooth radio") + ", " + root.radio-status(radio.state);
+                        BluetoothText { x: 4px; y: 4px; width: max(0px, parent.width - 8px); height: root.text-height;
+                            text: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio"); overflow: elide; }
+                        BluetoothText { x: 4px; y: 6px + root.text-height; width: max(0px, parent.width - 8px);
+                            height: root.text-height; text: root.radio-status(radio.state);
+                            color: SeelenPalette.secondary; overflow: elide; }
+                    }
+                    if root.no-radios: BluetoothText { height: root.text-height;
+                        text: @tr("No Bluetooth radios exposed"); overflow: elide;
+                        accessible-role: text; accessible-label: self.text; }
+                    if root.connected.length > 0: DeviceSection { heading: @tr("Connected"); connection: @tr("Connected");
+                        rows: root.connected; text-height: root.text-height; text-line-height-factor: body.text-line-height-factor; }
+                    if root.paired.length > 0: DeviceSection { heading: @tr("Paired"); connection: @tr("Disconnected");
+                        rows: root.paired; text-height: root.text-height; text-line-height-factor: body.text-line-height-factor; }
+                    if root.unknown.length > 0: DeviceSection { heading: @tr("Connection unknown"); connection: @tr("Connection unknown");
+                        rows: root.unknown; text-height: root.text-height; text-line-height-factor: body.text-line-height-factor; }
+                    if root.empty-inventory: BluetoothText { text: root.empty-label; wrap: word-wrap;
+                        height: empty-metrics.preferred-height; accessible-role: text; accessible-label: self.text;
+                        line-height-factor: body.text-line-height-factor; }
+                    if root.notice != "": BluetoothText { text: root.notice; wrap: word-wrap;
+                        height: notice-metrics.preferred-height; color: SeelenPalette.secondary;
+                        line-height-factor: body.text-line-height-factor;
+                        accessible-role: text; accessible-label: self.text; }
+                }
+            }
+        }
+    }
+}

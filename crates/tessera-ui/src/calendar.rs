@@ -25,6 +25,12 @@ use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::{TransientComponent, TransientWindow};
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
+pub(crate) mod preferences;
+
+use preferences::StartOfWeek;
+
+#[cfg(test)]
+mod preferences_control_tests;
 #[cfg(test)]
 mod tests;
 
@@ -62,6 +68,7 @@ struct State {
     read_requested: bool,
     flight: Option<ReadToken>,
     calendar: Option<CalendarState>,
+    start_of_week: StartOfWeek,
     keys: Keys,
     notice: String,
 }
@@ -179,6 +186,7 @@ pub(crate) struct CalendarController {
     state: RefCell<State>,
     mailbox: Arc<Mutex<Mailbox>>,
     projecting: Cell<bool>,
+    policy_projection_pending: Cell<bool>,
     presenting: Cell<bool>,
     placement: Cell<Option<Placement>>,
     rect: RefCell<Option<PopupRect>>,
@@ -196,6 +204,7 @@ impl CalendarController {
             state: RefCell::default(),
             mailbox: Arc::new(Mutex::default()),
             projecting: Cell::new(false),
+            policy_projection_pending: Cell::new(false),
             presenting: Cell::new(false),
             placement: Cell::new(None),
             rect: RefCell::default(),
@@ -381,6 +390,29 @@ impl CalendarController {
     pub(crate) fn apply_theme(&self, theme: PresentationTheme) {
         self.component().apply_presentation_theme(theme);
         let _ = self.refit();
+    }
+
+    /// Apply a saved policy without acquiring metadata or reopening the native surface.
+    pub(crate) fn set_start_of_week(&self, start: StartOfWeek) {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.start_of_week == start {
+                return;
+            }
+            state.start_of_week = start;
+            if let Some(calendar) = state.calendar.as_mut() {
+                calendar.set_week_start(start.into());
+            }
+            // A previously queued input must not act on the newly aligned grid.
+            state.keys = Keys::default();
+        }
+        if self.is_open() {
+            if self.projecting.get() {
+                self.policy_projection_pending.set(true);
+            } else {
+                self.project_and_fit();
+            }
+        }
     }
 
     pub(crate) fn close_if_geometry_changed(&self, context: DockContext, scale: f32) {
@@ -590,7 +622,10 @@ impl CalendarController {
             {
                 state.flight = None;
                 if visible && state.session == completion.token.session {
-                    match completion.result {
+                    // Resolve the policy now, not when the asynchronous read was accepted.
+                    match completion.result.and_then(|snapshot| {
+                        preferences::adapt_snapshot(snapshot, state.start_of_week)
+                    }) {
                         Ok(snapshot) => {
                             if let Some(calendar) = state.calendar.as_mut() {
                                 calendar.refresh(snapshot);
@@ -616,6 +651,7 @@ impl CalendarController {
             return;
         }
         let _guard = Guard(&self.projecting);
+        self.policy_projection_pending.set(false);
         let (session, projection, keys, loading, notice, retry) = {
             let mut state = self.state.borrow_mut();
             let loading = state.loading();
@@ -739,6 +775,10 @@ impl CalendarController {
         } else {
             SharedString::default()
         });
+        drop(_guard);
+        if self.policy_projection_pending.replace(false) && self.is_open() {
+            self.project_and_fit();
+        }
     }
 
     fn schedule_refresh(self: &Rc<Self>) {

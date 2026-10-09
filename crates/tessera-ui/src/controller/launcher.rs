@@ -269,6 +269,7 @@ impl ReorderAccess {
         let state = self.state.borrow();
         ready
             && visible
+            && self.launcher.get_input_available()
             && search_empty
             && !self.saving.get()
             && state.session.visible.get()
@@ -774,6 +775,10 @@ impl PanelController {
         let Some(access) = self.reorder_access() else {
             return;
         };
+        if dragging {
+            access.launcher.invoke_cancel_input();
+            self.hide_launcher_app_menu();
+        }
         if dragging && !access.launcher.get_reorder_dragging() {
             return;
         }
@@ -826,6 +831,7 @@ impl PanelController {
     }
 
     fn reorder_window_hover(&self, event: DropEvent, origin: Point) {
+        self.hide_launcher_app_menu();
         let Some(access) = self.reorder_access() else {
             return;
         };
@@ -967,6 +973,11 @@ impl PanelController {
         launcher.on_favorite_toggle_requested(move |key, favorite| {
             let _callback = weak.launcher_callback();
             weak.toggle_launcher_favorite(&key, favorite);
+        });
+        let controller = self.clone();
+        launcher.on_app_menu_requested(move |key, point| {
+            let _callback = controller.launcher_callback();
+            controller.open_launcher_app_menu(&key, point);
         });
         let weak = self.clone();
         launcher.on_view_requested(move |view| {
@@ -1135,6 +1146,8 @@ impl PanelController {
     }
 
     fn publish_launcher_tiles(&self, ensure_selection: bool) {
+        self.cancel_launcher_input();
+        self.hide_launcher_app_menu();
         let Some(launcher) = self.launcher_and_upgrade() else {
             return;
         };
@@ -1232,6 +1245,8 @@ impl PanelController {
     }
 
     fn switch_launcher_view(&self, view: LauncherView) {
+        self.cancel_launcher_input();
+        self.hide_launcher_app_menu();
         let Some(launcher) = self.interactive_launcher() else {
             return;
         };
@@ -1256,7 +1271,10 @@ impl PanelController {
     /// Favorites are immediate saves of the complete applied record, never
     /// dock pins or an appearance preview. Stored IDs are not launch authority.
     fn toggle_launcher_favorite(&self, key: &str, favorite: bool) {
-        let Some(launcher) = self.interactive_launcher() else {
+        // An explicit favorite edit supersedes a transient reorder preview.
+        // Menu scope/drag rejection belongs to its adapter and opening guard,
+        // not to this existing complete-record transaction.
+        let Some(launcher) = self.launcher_result_ready(key) else {
             return;
         };
         let Some(key) = self
@@ -1270,10 +1288,22 @@ impl PanelController {
         if favorites.iter().any(|existing| existing == &key) == favorite {
             return;
         }
+        let session = self.launcher_session();
+        let generation = session.generation.get();
+        let projection = self.launcher_state.borrow().projection;
         let Some(_save) = self.begin_preference_save() else {
             return;
         };
-        let generation = self.launcher_session().generation.get();
+        // Admission cancels drag and retires menus; native lease destruction
+        // can synchronously replace the launcher/session/results.
+        if !Rc::ptr_eq(&session, &self.launcher_session())
+            || session.generation.get() != generation
+            || self.launcher_state.borrow().projection != projection
+            || self.core.launcher_favorites() != favorites
+            || !self.launcher_result_current(&launcher, &key)
+        {
+            return;
+        }
         if favorite {
             favorites.push(key);
         } else {
@@ -1334,6 +1364,136 @@ impl PanelController {
         session.visible.get() && !session.presenting.get()
     }
 
+    fn launcher_result_ready(&self, key: &str) -> Option<Launcher> {
+        let launcher = self.interactive_launcher()?;
+        self.launcher_result_current(&launcher, key)
+            .then_some(launcher)
+    }
+
+    /// Current result authority also applies while this caller owns the save
+    /// guard; its saving flag must not invalidate its own admitted transaction.
+    fn launcher_result_current(&self, launcher: &Launcher, key: &str) -> bool {
+        if self.power_admission_closed.get()
+            || self.guarded()
+            || !self.launcher_popup_ready()
+            || !launcher.window().is_visible()
+            || !launcher.get_input_available()
+        {
+            return false;
+        }
+        let query = launcher.get_search().to_string();
+        let valid = {
+            let state = self.launcher_state.borrow();
+            state.query == query
+                && state.view == launcher.get_view()
+                && state.resolve(key).is_some()
+                && state.catalog_membership.contains(key)
+        };
+        valid && self.core.catalog().iter().any(|app| app.key() == key)
+    }
+
+    fn launcher_app_menu_ready(&self, key: &str) -> Option<Launcher> {
+        let launcher = self.launcher_result_ready(key)?;
+        if self.launcher_reorder_active() || launcher.get_reorder_dragging() {
+            return None;
+        }
+        Some(launcher)
+    }
+
+    pub(super) fn open_launcher_app_menu(&self, key: &str, point: slint::LogicalPosition) {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return;
+        }
+        let Some(launcher) = self.launcher_app_menu_ready(key) else {
+            return;
+        };
+        let Some(context) = self.core.dock_context() else {
+            return;
+        };
+        let operation = self.popup_operation.borrow().clone();
+        let session = self.launcher_session();
+        let generation = session.generation.get();
+        let projection = self.launcher_state.borrow().projection;
+        let current = || {
+            self.launcher_app_menu_ready(key).is_some()
+                && session.generation.get() == generation
+                && self.launcher_state.borrow().projection == projection
+                && self.core.dock_context() == Some(context)
+                && Rc::ptr_eq(&operation, &self.popup_operation.borrow())
+        };
+        self.dismiss_tooltip(false);
+        if !current() {
+            return;
+        }
+        let existing = self.launcher_app_menu.borrow().clone();
+        let menu = match existing {
+            Some(menu) => menu,
+            None => {
+                let menu = match crate::launcher::LauncherAppMenu::new(self.core.host().clone()) {
+                    Ok(menu) => menu,
+                    Err(error) => {
+                        if current() {
+                            self.report_message(&format!(
+                                "Could not create application menu: {error}"
+                            ));
+                        }
+                        return;
+                    }
+                };
+                if !current() {
+                    menu.hide();
+                    return;
+                }
+                let published = {
+                    let mut cache = self.launcher_app_menu.borrow_mut();
+                    if cache.is_none() {
+                        *cache = Some(Rc::clone(&menu));
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !published {
+                    menu.hide();
+                    return;
+                }
+                menu
+            }
+        };
+        let favorite = self
+            .core
+            .launcher_favorites()
+            .iter()
+            .any(|favorite| favorite == key);
+        let result = menu.show(&launcher, key.into(), favorite, point, context);
+        let cached = self.launcher_app_menu.borrow().clone();
+        if current()
+            && cached
+                .as_ref()
+                .is_some_and(|cached| Rc::ptr_eq(cached, &menu))
+        {
+            self.popup_presentation_finished(
+                super::popups::PopupKind::LauncherAppMenu,
+                menu.is_open(),
+                result,
+            );
+        }
+    }
+
+    /// Revoke native captures even when a projection keeps the same app keys.
+    pub(super) fn cancel_launcher_input(&self) {
+        if let Some(launcher) = self.launcher_and_upgrade() {
+            launcher.invoke_cancel_input();
+        }
+    }
+
+    pub(super) fn hide_launcher_app_menu(&self) {
+        let menu = self.launcher_app_menu.borrow().clone();
+        if let Some(menu) = menu {
+            menu.hide();
+        }
+    }
+
     /// An absolute footer intent saves the complete applied record first.
     /// A failed save changes neither logical results nor native presentation.
     fn change_launcher_display_mode(&self, mode: LauncherDisplayMode) {
@@ -1390,6 +1550,8 @@ impl PanelController {
         };
         let session = self.launcher_session();
         if opening {
+            launcher.invoke_cancel_input();
+            self.hide_launcher_app_menu();
             self.cancel_launcher_reorder();
             self.flush_launcher_reorder_exit();
             session.advance();
@@ -1539,11 +1701,13 @@ impl PanelController {
     /// Detach before hide; an in-flight configure must drop its late lease
     /// before native hide, and a synchronous reopen waits for that cleanup.
     pub(crate) fn hide_launcher(&self) {
+        self.cancel_launcher_input();
         let session = self.launcher_session();
         session.advance();
         session.visible.set(false);
         session.reopen.set(false);
         session.refit.set(false);
+        self.hide_launcher_app_menu();
         self.cancel_launcher_reorder();
         self.hide_user_menu();
         self.hide_power_menu();
@@ -1574,7 +1738,8 @@ impl PanelController {
     /// Queued signals from hidden, stale or busy surfaces cannot launch apps.
     fn interactive_launcher(&self) -> Option<Launcher> {
         let session = self.launcher_session();
-        if self.guarded()
+        if self.power_admission_closed.get()
+            || self.guarded()
             || self.preference_saving.get()
             || !session.visible.get()
             || session.presenting.get()
@@ -1582,7 +1747,7 @@ impl PanelController {
             return None;
         }
         self.launcher_and_upgrade()
-            .filter(|launcher| launcher.window().is_visible())
+            .filter(|launcher| launcher.window().is_visible() && launcher.get_input_available())
     }
 
     fn select_launcher(&self, key: &str) {

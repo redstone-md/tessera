@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! Generated SDK input and software pixels only. Both callbacks record intent;
-//! there is no controller, host, native Lock invocation or session-state claim.
+//! there is no controller, host, native power invocation or session-state claim.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -29,14 +29,25 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        struct TestPlatform(Rc<MinimalSoftwareWindow>);
+        struct TestPlatform {
+            primary: Rc<MinimalSoftwareWindow>,
+            primary_available: std::cell::Cell<bool>,
+        }
         impl Platform for TestPlatform {
             fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-                Ok(self.0.clone())
+                if self.primary_available.replace(false) {
+                    Ok(self.primary.clone())
+                } else {
+                    Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+                }
             }
         }
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
+        slint::platform::set_platform(Box::new(TestPlatform {
+            primary: window.clone(),
+            primary_available: std::cell::Cell::new(true),
+        }))
+        .unwrap();
         let surface = PowerMenuSurface::new().unwrap();
         surface.apply_presentation_theme(PresentationTheme::uniform(
             slint::language::ColorScheme::Light,
@@ -105,8 +116,14 @@ impl Fixture {
     }
 
     fn lock(&self) -> ElementHandle {
+        self.by_id("lock")
+    }
+
+    fn tile_child(&self, tile: &str, child: &str) -> ElementHandle {
         Self::one(
-            ElementQuery::from_root(&self.surface).match_accessible_role(AccessibleRole::Button),
+            self.by_id(tile)
+                .query_descendants()
+                .match_id(format!("PowerActionTile::{child}")),
         )
     }
 
@@ -181,6 +198,17 @@ impl Fixture {
             vec![Request::Action(PowerMenuAction::LockSession)]
         );
     }
+}
+
+fn actions() -> [(&'static str, &'static str, PowerMenuAction); 6] {
+    [
+        ("lock", "Lock session", PowerMenuAction::LockSession),
+        ("log-out", "Log out", PowerMenuAction::LogOut),
+        ("power-off", "Power off", PowerMenuAction::PowerOff),
+        ("reboot", "Reboot", PowerMenuAction::Reboot),
+        ("suspend", "Suspend", PowerMenuAction::Suspend),
+        ("hibernate", "Hibernate", PowerMenuAction::Hibernate),
+    ]
 }
 
 fn near(actual: f32, expected: f32) {
@@ -265,47 +293,57 @@ fn changed_only_in_action(
 }
 
 #[test]
-fn power_surface_has_one_typed_lock_pointer_and_ax_action_without_preview_or_profile_routes() {
+fn power_surface_has_six_typed_pointer_and_ax_actions_without_preview_or_fake_profile_routes() {
     let fixture = Fixture::new();
-    let lock = fixture.lock();
-    assert_eq!(lock.accessible_label().as_deref(), Some("Lock session"));
-    assert_eq!(lock.accessible_enabled(), Some(true));
-    let labels = ElementQuery::from_root(&fixture.surface)
-        .match_accessible_role(AccessibleRole::Text)
-        .find_all()
-        .into_iter()
-        .filter_map(|element| element.accessible_label())
-        .map(|label| label.to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(labels, vec!["Power menu"]);
+    fixture.surface.set_user_name("Native fixture user".into());
+    fixture.render(960, 720);
+    assert_eq!(
+        fixture.by_id("greeting").accessible_label().as_deref(),
+        Some("Goodbye Native fixture user")
+    );
+    assert_eq!(
+        ElementQuery::from_root(&fixture.surface)
+            .match_accessible_role(AccessibleRole::Button)
+            .find_all()
+            .len(),
+        6
+    );
+    for (id, label, action) in actions() {
+        let tile = fixture.by_id(id);
+        assert_eq!(tile.accessible_role(), Some(AccessibleRole::Button));
+        assert_eq!(tile.accessible_label().as_deref(), Some(label));
+        assert_eq!(tile.accessible_enabled(), Some(true));
+        fixture.click_at(Fixture::center(&tile));
+        assert_eq!(fixture.take(), vec![Request::Action(action)]);
+        fixture.move_to(LogicalPosition::new(1.0, 1.0));
+        tile.invoke_accessible_default_action();
+        assert_eq!(fixture.take(), vec![Request::Action(action)]);
+    }
+    let suspend_image_size = fixture.surface.get_suspend_icon().size();
+    assert_eq!(
+        (suspend_image_size.width, suspend_image_size.height),
+        (0, 0)
+    );
+    let suspend_icon = fixture.tile_child("suspend", "icon");
+    near(suspend_icon.size().width, 25.0);
+    near(suspend_icon.size().height, 25.0);
     assert!(
         ElementQuery::from_root(&fixture.surface)
             .match_accessible_role(AccessibleRole::Image)
             .find_all()
             .is_empty(),
-        "there is no invented user profile"
+        "missing licensed moon and profile artwork must not become fake images"
     );
-    for absent in [
-        "Log out",
-        "Power off",
-        "Reboot",
-        "Suspend",
-        "Hibernate",
-        "Confirm",
-        "Exit",
-    ] {
+    for absent in ["Power menu", "Confirm", "Exit", "native@example.com"] {
         assert!(
             ElementHandle::find_by_accessible_label(&fixture.surface, absent)
                 .next()
                 .is_none(),
-            "unimplemented routes must not appear as fake buttons: {absent}"
+            "no invented route or profile detail: {absent}"
         );
     }
+    fixture.move_to(LogicalPosition::new(1.0, 1.0));
     assert!(fixture.take().is_empty());
-    fixture.click_at(Fixture::center(&lock));
-    fixture.expect_lock();
-    lock.invoke_accessible_default_action();
-    fixture.expect_lock();
 
     // A body click is consumed; it is not an outside dismiss or a Lock request.
     let body = fixture.by_id("body");
@@ -356,7 +394,10 @@ fn power_surface_tab_shift_tab_fresh_return_space_and_escape_use_real_focus_and_
         "Space activates only on armed release"
     );
     fixture.key_release(Key::Space);
-    fixture.expect_lock();
+    assert_eq!(
+        fixture.take(),
+        vec![Request::Action(PowerMenuAction::Hibernate)]
+    );
     fixture.key_release(Key::Space);
     assert!(
         fixture.take().is_empty(),
@@ -382,10 +423,12 @@ fn power_surface_disabled_and_busy_reject_pointer_ax_keys_and_cancel_armed_space
         fixture.surface.set_lock_busy(busy);
         fixture.key_release(Key::Space);
         fixture.render(960, 720);
-        let lock = fixture.lock();
-        assert_eq!(lock.accessible_enabled(), Some(false));
-        fixture.click_at(Fixture::center(&lock));
-        lock.invoke_accessible_default_action();
+        for (id, _, _) in actions() {
+            let tile = fixture.by_id(id);
+            assert_eq!(tile.accessible_enabled(), Some(false));
+            fixture.click_at(Fixture::center(&tile));
+            tile.invoke_accessible_default_action();
+        }
         fixture.key(Key::Return);
         fixture.repeat(Key::Return);
         fixture.key(Key::Space);
@@ -472,7 +515,7 @@ fn power_surface_selected_monitor_center_and_metrics_follow_current_root_not_des
         near(actual.x, center[0]);
         near(actual.y, center[1]);
         near(body.size().width * root_scale, physical_body_width);
-        near(body.size().height, 253.92 * metric);
+        near(body.size().height, 433.0 * metric);
         assert!(
             (actual.x - 1600.0 / root_scale).abs() > 100.0,
             "selected full monitor is not the aggregate desktop center"
@@ -485,11 +528,11 @@ fn power_surface_selected_monitor_center_and_metrics_follow_current_root_not_des
         let lock = fixture.lock();
         near(lock.size().width, 100.0 * metric);
         near(lock.size().height, 100.0 * metric);
-        let icon = fixture.by_id("lock-icon");
+        let icon = fixture.tile_child("lock", "icon");
         near(icon.size().width, 25.0 * metric);
         near(icon.size().height, 25.0 * metric);
-        let label = fixture.by_id("lock-label");
-        near(label.size().height, 17.92 * metric);
+        let label = fixture.tile_child("lock", "label");
+        near(label.size().height, 16.0 * 1.4 * metric);
         near(
             label.absolute_position().y - icon.absolute_position().y - icon.size().height,
             4.0 * metric,
@@ -562,7 +605,7 @@ fn power_surface_light_dark_body_scrim_icon_and_rounded_state_paint_scale_cohere
                 scrim,
                 "reserved shadow space must not become an opaque body extension"
             );
-            let icon = fixture.by_id("lock-icon");
+            let icon = fixture.tile_child("lock", "icon");
             let icon_origin = icon.absolute_position();
             let mut ink = 0;
             for y in 0..25 {
@@ -588,7 +631,7 @@ fn power_surface_light_dark_body_scrim_icon_and_rounded_state_paint_scale_cohere
             let lock = fixture.lock();
             let center = Fixture::center(&lock);
             let idle_origin = lock.absolute_position();
-            let idle_label = fixture.by_id("lock-label").absolute_position();
+            let idle_label = fixture.tile_child("lock", "label").absolute_position();
             near(lock.size().width, 100.0 * metric);
             near(lock.size().height, 100.0 * metric);
             near(icon.size().width, 25.0 * metric);
@@ -609,7 +652,7 @@ fn power_surface_light_dark_body_scrim_icon_and_rounded_state_paint_scale_cohere
             near(lock.absolute_position().y, idle_origin.y - 4.0 * metric);
             near(icon.absolute_position().y, icon_origin.y - 4.0 * metric);
             near(
-                fixture.by_id("lock-label").absolute_position().y,
+                fixture.tile_child("lock", "label").absolute_position().y,
                 idle_label.y - 4.0 * metric,
             );
             let corner = lock.absolute_position();
@@ -637,7 +680,7 @@ fn power_surface_light_dark_body_scrim_icon_and_rounded_state_paint_scale_cohere
             near(lock.absolute_position().y, idle_origin.y);
             near(icon.absolute_position().y, icon_origin.y);
             near(
-                fixture.by_id("lock-label").absolute_position().y,
+                fixture.tile_child("lock", "label").absolute_position().y,
                 idle_label.y,
             );
             assert!(fixture.take().is_empty(), "pointer down is not Lock");
@@ -680,7 +723,7 @@ fn power_surface_light_dark_body_scrim_icon_and_rounded_state_paint_scale_cohere
 }
 
 #[test]
-fn power_surface_tiny_both_axis_viewport_clips_but_focus_reveals_genuine_lock_and_outline() {
+fn power_surface_tiny_both_axis_viewport_clips_but_focus_reveals_all_six_actions_and_outline() {
     let fixture = Fixture::new();
     for (root_scale, metric, width, height) in [
         (1.0, 1.0, 124, 124),
@@ -697,27 +740,30 @@ fn power_surface_tiny_both_axis_viewport_clips_but_focus_reveals_genuine_lock_an
         let clipped = fixture.render(width, height);
         assert_eq!(clipped.len(), (width * height) as usize);
         assert!(fixture.take().is_empty());
-        fixture.key(Key::Tab);
-        fixture.render(width, height);
-        let lock = fixture.lock();
-        let origin = lock.absolute_position();
-        let size = lock.size();
-        let margin = 4.0 * metric;
-        assert!(
-            origin.x - margin >= -0.05
-                && origin.y - margin >= -0.05
-                && origin.x + size.width + margin <= logical_extent + 0.05
-                && origin.y + size.height + margin <= logical_extent + 0.05,
-            "both-axis focus reveal must reserve the entire Lock control and outline"
-        );
-        assert!(
-            fixture.take().is_empty(),
-            "scroll-to-focus is not activation"
-        );
-        fixture.key(Key::Return);
-        fixture.expect_lock();
-        fixture.click_at(Fixture::center(&lock));
-        fixture.expect_lock();
+        for (id, _, action) in actions() {
+            fixture.key(Key::Tab);
+            fixture.render(width, height);
+            let tile = fixture.by_id(id);
+            let origin = tile.absolute_position();
+            let size = tile.size();
+            let margin = 4.0 * metric;
+            assert!(
+                origin.x - margin >= -0.05
+                    && origin.y - margin >= -0.05
+                    && origin.x + size.width + margin <= logical_extent + 0.05
+                    && origin.y + size.height + margin <= logical_extent + 0.05,
+                "both-axis focus reveal must reserve {id} and its entire outline"
+            );
+            assert!(
+                fixture.take().is_empty(),
+                "scroll-to-focus is not activation"
+            );
+            fixture.key(Key::Return);
+            assert_eq!(fixture.take(), vec![Request::Action(action)]);
+            fixture.click_at(Fixture::center(&tile));
+            assert_eq!(fixture.take(), vec![Request::Action(action)]);
+            fixture.move_to(LogicalPosition::new(0.0, 0.0));
+        }
         fixture.key(Key::Escape);
         assert_eq!(fixture.take(), vec![Request::Hide]);
         fixture.render(1, 1);
@@ -802,11 +848,12 @@ fn power_action_native_transform_chain_preserves_layout_and_scales_icon_label_ab
         Fixture::one(ElementQuery::from_root(&surface).match_id(format!("PowerMenuSurface::{id}")))
     };
     let lock = element("lock");
-    let icon = element("lock-icon");
-    let label = element("lock-label");
+    let icon = Fixture::one(lock.query_descendants().match_id("PowerActionTile::icon"));
+    let label = Fixture::one(lock.query_descendants().match_id("PowerActionTile::label"));
     let origin = lock.absolute_position();
     let icon_origin = icon.absolute_position();
     let label_origin = label.absolute_position();
+    near(label_origin.x, origin.x);
     let center = Fixture::center(&lock);
     let check = |scale: f32, lift: f32| {
         let bounds = ActionPaint::source(origin, 1.0, scale, lift, 0.0);
@@ -818,7 +865,7 @@ fn power_action_native_transform_chain_preserves_layout_and_scales_icon_label_ab
         near(lock.size().height, 100.0);
         near(icon.size().width, 25.0);
         near(icon.size().height, 25.0);
-        near(label.size().width, 92.0);
+        near(label.size().width, 100.0);
         for (child, idle) in [(&icon, icon_origin), (&label, label_origin)] {
             near(
                 child.absolute_position().x,
@@ -867,4 +914,157 @@ fn power_action_native_transform_chain_preserves_layout_and_scales_icon_label_ab
         1,
         "settling cannot replay activation"
     );
+}
+
+#[test]
+fn power_surface_source_grid_pending_and_warning_rows_have_real_measured_bounds_and_tab_order() {
+    let fixture = Fixture::new();
+    for (scale, metric, width, height) in [(1.0, 1.0, 960, 720), (2.0, 1.0, 1920, 1440)] {
+        fixture.project(scale, metric, [0.0, 0.0, 960.0, 720.0]);
+        fixture.surface.set_updates_known_pending(false);
+        fixture.surface.set_updates_status("".into());
+        fixture.render(width, height);
+        let body = fixture.by_id("body");
+        near(body.size().width, 460.0 * metric);
+        near(body.size().height, 433.0 * metric);
+        let lock_origin = fixture.lock().absolute_position();
+        near(lock_origin.x, body.absolute_position().x + 56.0 * metric);
+        near(lock_origin.y, body.absolute_position().y + 153.0 * metric);
+        for (index, (id, _, _)) in actions().into_iter().enumerate() {
+            let origin = fixture.by_id(id).absolute_position();
+            near(
+                origin.x - lock_origin.x,
+                (index % 3) as f32 * 124.0 * metric,
+            );
+            near(
+                origin.y - lock_origin.y,
+                (index / 3) as f32 * 124.0 * metric,
+            );
+        }
+        fixture.surface.set_updates_known_pending(true);
+        fixture.surface.set_install_updates(true);
+        fixture.render(width, height);
+        let row = fixture.by_id("updates-row");
+        let expected_row = source_pending_row_height(&fixture.surface, metric);
+        near(row.size().height, expected_row);
+        near(
+            body.size().height,
+            433.0 * metric + 24.0 * metric + expected_row,
+        );
+        let choice = fixture.by_id("updates-choice");
+        near(choice.size().width, row.size().width);
+        near(choice.size().height, row.size().height);
+        for (index, (id, _, _)) in actions().into_iter().enumerate() {
+            let origin = fixture.by_id(id).absolute_position();
+            near(
+                origin.x,
+                body.absolute_position().x + (56.0 + (index % 3) as f32 * 124.0) * metric,
+            );
+            near(
+                origin.y,
+                body.absolute_position().y
+                    + (177.0 + (index / 3) as f32 * 124.0) * metric
+                    + expected_row,
+            );
+        }
+        assert_eq!(
+            fixture.by_id("power-off").accessible_label().as_deref(),
+            Some("Update and shut down")
+        );
+        assert_eq!(
+            fixture.by_id("reboot").accessible_label().as_deref(),
+            Some("Update and restart")
+        );
+        near(
+            fixture.tile_child("power-off", "update-badge").size().width,
+            10.0 * metric,
+        );
+        // Invisible measurement probes and decorative skin have no input/AX route.
+        for id in [
+            "updates-probe",
+            "status-probe",
+            "switch-track",
+            "switch-thumb",
+        ] {
+            let element = fixture.by_id(id);
+            assert_ne!(element.accessible_role(), Some(AccessibleRole::Button));
+            assert_ne!(element.accessible_role(), Some(AccessibleRole::Text));
+        }
+        fixture.surface.invoke_focus_content();
+        fixture.key(Key::Tab);
+        fixture.key(Key::Space);
+        assert!(!fixture.surface.get_install_updates());
+        assert!(
+            fixture.take().is_empty(),
+            "native checkbox changes choice, not OS state"
+        );
+        for (_, _, action) in actions() {
+            fixture.key(Key::Tab);
+            fixture.key(Key::Return);
+            assert_eq!(fixture.take(), vec![Request::Action(action)]);
+        }
+        fixture.surface.set_updates_known_pending(false);
+        fixture
+            .surface
+            .set_updates_status("Update status unavailable".into());
+        fixture.render(width, height);
+        let message = fixture.by_id("updates-message");
+        assert_eq!(
+            message.accessible_label().as_deref(),
+            Some("Update status unavailable")
+        );
+        let expected_message =
+            source_text_height(&fixture.surface, "Update status unavailable", 348.0, metric);
+        near(message.size().height, expected_message);
+        near(
+            body.size().height,
+            433.0 * metric + expected_message + 24.0 * metric,
+        );
+        assert_eq!(fixture.by_id("suspend").accessible_enabled(), Some(true));
+        fixture.surface.set_updates_status("".into());
+        fixture.surface.invoke_focus_content();
+        fixture.render(width, height);
+    }
+}
+
+use crate::power_menu::source_measure_tests as source_measure;
+
+// Share the independently laid-out native Text oracle with the GL assertions.
+// Neither wrapper reads the production surface's row/probe height binding.
+pub(crate) fn source_pending_row_height(surface: &PowerMenuSurface, metric: f32) -> f32 {
+    let measure = source_measure::measure_pending_text(
+        16.0,
+        surface
+            .global::<crate::generated::PopoverTokens>()
+            .get_font_family(),
+        1.4,
+        metric,
+        surface.window().scale_factor(),
+    );
+    near(measure.span_width, 292.0 * metric);
+    near(measure.row_height, measure.text_height.max(18.0 * metric));
+    assert!(measure.single_line_height > 0.0);
+    if measure.unwrapped_width > measure.span_width {
+        assert!(measure.text_height >= measure.single_line_height);
+    }
+    measure.row_height
+}
+
+pub(crate) fn source_text_height(
+    surface: &PowerMenuSurface,
+    text: &str,
+    source_width: f32,
+    metric: f32,
+) -> f32 {
+    source_measure::measure_source_text(
+        text,
+        source_width,
+        16.0,
+        surface
+            .global::<crate::generated::PopoverTokens>()
+            .get_font_family(),
+        1.4,
+        metric,
+        surface.window().scale_factor(),
+    )
 }

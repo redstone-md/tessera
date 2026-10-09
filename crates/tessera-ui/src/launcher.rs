@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
+mod app_menu;
+pub(crate) use app_menu::LauncherAppMenu;
 mod model;
 pub(crate) mod order;
 mod placement;
