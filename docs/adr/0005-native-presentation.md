@@ -264,6 +264,23 @@ whole-workspace build-lock stall remain harness risks, not production-fix claims
 All 35 notice assertions and original CC BY grant/attribution/hash collection
 passed. These receipts do not certify the separate Material 3 WIP or Windows.
 
+**Actual selector checkpoint (`384e005`) native RED:** authenticated
+[CI 37997372827](https://github.com/redstone-md/tessera/actions/runs/37997372827)
+passed Linux (1,448/19 suites, one ignored), but both Windows 1.92/stable
+aborted at the Network footer glyph-span assertion (968 passed/9 suites, one
+failed). [Native Debug 37997372907](https://github.com/redstone-md/tessera/actions/runs/37997372907)
+failed the same case; GUI build/pulses were skipped, never a runtime pass.
+The old oracle compared exact-solid-ink widths at unequal radio/footer
+coordinates and line layouts. Its narrow test-only replacement reuses the
+independent native Text module at the actual footer position/size with
+literal 12.8px/600 typography, default SDK line height and vertical centering.
+Keyboard/Bluetooth layout defaults and all production fonts remain unchanged.
+Native verification of that new source remains required; neither the old
+failed checkpoint nor the separate Material layer is certified by Linux.
+The replacement subsequently passed all 23 focused selector cases, the complete
+823-UI-test suite (one ignored GL case), strict Rust 1.92 Linux/MSVC all-target
+UI checks and format/diff. Its new native Windows checkpoint is still required.
+
 Seven additional original Tabler vectors retain the existing immutable
 [MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/tabler-icons-6d128ed/NOTICE.txt).
 Three original Ant Design navigation SVGs retain their independently pinned

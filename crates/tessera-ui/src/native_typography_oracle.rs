@@ -19,6 +19,10 @@ slint::slint! {
         in property <length> text-x;
         in property <length> text-y;
         in property <length> text-width;
+        // Existing Keyboard/Bluetooth source layout remains the default.
+        in property <length> text-height: 17.92px;
+        in property <bool> vertically-centered: false;
+        in property <bool> native-line-height: false;
         background: root.source-background;
         probe := Text {
             width: 0px; height: 0px; opacity: 0;
@@ -26,14 +30,15 @@ slint::slint! {
         }
         Text {
             x: root.text-x; y: root.text-y;
-            width: root.text-width; height: 17.92px;
+            width: root.text-width; height: root.text-height;
             text: root.caption;
             color: root.source-foreground;
             font-size: 12.8px;
             font-weight: root.source-weight;
             letter-spacing: root.source-tracking;
             horizontal-alignment: root.centered ? center : left;
-            line-height-factor: 17.92px / probe.preferred-height;
+            vertical-alignment: root.vertically-centered ? center : top;
+            line-height-factor: root.native-line-height ? 1 : 17.92px / probe.preferred-height;
             overflow: elide;
         }
     }

@@ -5,6 +5,7 @@
 //! These are test-only presentation fixtures, not WLAN/Windows privacy evidence.
 
 use crate::generated::{NetworkMenu, NetworkRow, SeelenPalette};
+use crate::native_typography_oracle::SourceTypographyText;
 use crate::theme::{PresentationTheme, ThemedComponent};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
@@ -63,19 +64,32 @@ enum Request {
 }
 struct Fixture {
     window: Rc<MinimalSoftwareWindow>,
+    source_window: Rc<MinimalSoftwareWindow>,
     popup: NetworkMenu,
     requests: Rc<RefCell<Vec<Request>>>,
 }
 impl Fixture {
     fn new(configure: impl FnOnce(&NetworkMenu)) -> Self {
-        struct TestPlatform(Rc<MinimalSoftwareWindow>);
+        struct TestPlatform {
+            popup: RefCell<Option<Rc<MinimalSoftwareWindow>>>,
+            source: Rc<MinimalSoftwareWindow>,
+        }
         impl Platform for TestPlatform {
             fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-                Ok(self.0.clone())
+                Ok(self
+                    .popup
+                    .borrow_mut()
+                    .take()
+                    .unwrap_or_else(|| self.source.clone()))
             }
         }
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-        slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
+        let source_window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(TestPlatform {
+            popup: RefCell::new(Some(window.clone())),
+            source: source_window.clone(),
+        }))
+        .unwrap();
         let popup = NetworkMenu::new().unwrap();
         popup.apply_presentation_theme(PresentationTheme::uniform(
             slint::language::ColorScheme::Light,
@@ -102,6 +116,7 @@ impl Fixture {
             .dispatch_event(WindowEvent::WindowActiveChanged(true));
         let fixture = Self {
             window,
+            source_window,
             popup,
             requests,
         };
@@ -234,44 +249,17 @@ fn rect_has_ink(
     })
 }
 
-fn ink_width(
-    pixels: &[Rgb8Pixel],
-    width: usize,
-    height: usize,
-    scale: f32,
-    node: &ElementHandle,
-    color: [u8; 3],
-) -> usize {
-    let p = node.absolute_position();
-    let s = node.size();
-    let mut columns = Vec::new();
-    for x in
-        (p.x * scale).ceil().max(0.0) as usize..((p.x + s.width) * scale).floor().max(0.0) as usize
-    {
-        if x < width
-            && ((p.y * scale).ceil().max(0.0) as usize
-                ..((p.y + s.height) * scale).floor().max(0.0) as usize)
-                .any(|y| {
-                    y < height && {
-                        let pixel = pixels[y * width + x];
-                        [pixel.r, pixel.g, pixel.b] == color
-                    }
-                })
-        {
-            columns.push(x);
-        }
-    }
-    columns
-        .last()
-        .expect("native caption must paint foreground ink")
-        - columns.first().unwrap()
-        + 1
-}
-
 #[test]
 fn network_popup_four_real_sections_have_source_ink_and_native_geometry_at_light_dark_scale_one_two()
  {
     let f = Fixture::new(ready);
+    let source = SourceTypographyText::new().unwrap();
+    source.set_source_weight(600);
+    source.set_source_tracking(0.0);
+    source.set_text_height(30.72);
+    source.set_vertically_centered(true);
+    source.set_native_line_height(true);
+    source.show().unwrap();
     for scheme in [
         slint::language::ColorScheme::Light,
         slint::language::ColorScheme::Dark,
@@ -292,6 +280,21 @@ fn network_popup_four_real_sections_have_source_ink_and_native_geometry_at_light
                 _ => ([242, 242, 242], [111, 111, 111]),
             };
             assert_eq!(background, surface);
+            let ink = match scheme {
+                slint::language::ColorScheme::Dark => 228,
+                _ => 18,
+            };
+            assert_eq!(foreground, [ink; 3]);
+            source.set_source_background(slint::Color::from_rgb_u8(
+                surface[0], surface[1], surface[2],
+            ));
+            source.set_source_foreground(slint::Color::from_rgb_u8(ink, ink, ink));
+            f.source_window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            f.source_window.set_size(size);
             assert_ne!(secondary, foreground);
             assert_eq!(
                 sample(
@@ -417,26 +420,46 @@ fn network_popup_four_real_sections_have_source_ink_and_native_geometry_at_light
                     .abs()
                     < 0.02
             );
-            let radio = f.element("Fixture adapter: Wi-Fi On");
             for (label, action) in actions {
                 assert!((action.size().height - SECTION_HEADER).abs() < 0.02);
                 assert!((action.size().width - rows[0].size().width).abs() < 0.02);
                 assert!(has_ink(&pixels, width, height, scale, &action, foreground));
-                // Same-string native radio text is an independent existing 600-weight
-                // reference. Compare painted glyph span, not a source-text assertion.
-                // Refresh deliberately shares footer typography, never Scan semantics.
-                f.popup.set_radio_text(label.into());
-                let reference = f.render_fit(scale);
-                let action_span = ink_width(&reference, width, height, scale, &action, foreground);
-                let reference_span =
-                    ink_width(&reference, width, height, scale, &radio, foreground);
+                // Radio uses a different x/y phase and explicit 17.92px line height.
+                // Fully covered ink spans there are not a portable weight oracle.
+                // Independent Text paints the entire footer line at its actual phase.
+                let origin = action.absolute_position();
+                let x = origin.x + 6.4;
+                let y = origin.y;
+                let text_width = action.size().width - 12.8;
+                source.set_text_x(x);
+                source.set_text_y(y);
+                source.set_text_width(text_width);
+                source.set_caption(label.into());
+                f.source_window.request_redraw();
+                let mut reference = vec![Rgb8Pixel::default(); width * height];
+                assert!(f.source_window.draw_if_needed(|renderer| {
+                    renderer.render(&mut reference, width);
+                }));
+                let mut glyph_pixels = 0;
+                for py in (y * scale).floor() as usize..((y + 30.72) * scale).ceil() as usize {
+                    for px in
+                        (x * scale).floor() as usize..((x + text_width) * scale).ceil() as usize
+                    {
+                        let offset = py * width + px;
+                        let expected = reference[offset];
+                        glyph_pixels +=
+                            usize::from([expected.r, expected.g, expected.b] != surface);
+                        assert_eq!(
+                            pixels[offset], expected,
+                            "footer native 12.8px/600 whole-line raster: {label}, {scheme:?}, scale={scale}, physical=({px},{py}), logical-origin=({x},{y}), text-width={text_width}"
+                        );
+                    }
+                }
                 assert!(
-                    action_span.abs_diff(reference_span) <= 1,
-                    "footer matches native 600 glyph geometry: {label}, {scheme:?}, {scale}"
+                    glyph_pixels > 0,
+                    "independent footer oracle must paint glyphs"
                 );
             }
-            f.popup.set_radio_text("Fixture adapter: Wi-Fi On".into());
-            f.render_fit(scale);
             assert!(
                 f.requests().is_empty(),
                 "theme/scale/render do not cause effects"
