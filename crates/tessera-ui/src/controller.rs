@@ -31,6 +31,7 @@ mod power_display;
 mod power_menu;
 mod quick_settings;
 mod recycle_bin;
+mod shortcuts;
 mod tooltip;
 mod user_menu;
 mod visibility;
@@ -159,6 +160,8 @@ pub(crate) struct PanelController {
     visibility_geometry: Rc<RefCell<visibility::RootGeometry>>,
     power_display: crate::transient_window::TransientCache<power_display::PowerDisplayWatch>,
     geometry: Rc<geometry::GeometryUpdates>,
+    admission: Rc<shortcuts::RootAdmission>,
+    shortcuts: Rc<shortcuts::ShortcutIntegration>,
 }
 
 /// Complete-record writes are single-flight even when a host callback re-enters
@@ -223,10 +226,13 @@ impl PanelController {
             visibility_geometry: Rc::default(),
             power_display: Rc::default(),
             geometry: Rc::default(),
+            admission: Rc::default(),
+            shortcuts: Rc::default(),
         };
         controller.wire_panel(panel);
         controller.wire_completion(panel);
         controller.wire_motion(panel);
+        controller.wire_shortcuts(panel);
         controller
     }
 
@@ -269,6 +275,8 @@ impl PanelController {
             visibility_geometry: Rc::default(),
             power_display: Rc::default(),
             geometry: Rc::default(),
+            admission: Rc::default(),
+            shortcuts: Rc::default(),
         };
         controller.wire_panel(panel);
         controller.wire_dock(dock);
@@ -278,6 +286,7 @@ impl PanelController {
         controller.wire_motion(panel);
         controller.initialize_media(dock);
         controller.wire_visibility(panel);
+        controller.wire_shortcuts(panel);
         controller
     }
 
@@ -768,17 +777,42 @@ impl PanelController {
 
     /// Shows the framed Panel: the native settings/recovery window.
     pub(crate) fn open_panel(&self) {
+        self.retire_shortcut_presentation();
+        self.present_panel(None);
+    }
+
+    fn open_panel_at_shortcut_monitor(&self) {
+        self.present_panel(self.shortcut_presentation_scope());
+    }
+
+    fn present_panel(&self, scope: Option<Rc<shortcuts::ShortcutPresentation>>) {
         self.dismiss_tooltip(false);
+        if !self.shortcut_presentation_current(scope.as_deref()) {
+            return;
+        }
         if let Some(panel) = self.panel.upgrade() {
+            if !panel.window().is_visible() {
+                self.prepare_shortcut_draft();
+            }
+            if !self.shortcut_presentation_current(scope.as_deref()) {
+                return;
+            }
             match panel.show() {
-                Ok(()) => self.request_ui_focus(panel.window()),
+                Ok(()) if self.shortcut_presentation_current(scope.as_deref()) => {
+                    self.request_ui_focus(panel.window());
+                }
+                Ok(()) => {}
                 Err(error) => self.report_message(&format!("Could not show settings: {error}")),
             }
         }
     }
 
     fn request_ui_focus(&self, window: &slint::Window) {
+        let scope = self.shortcut_presentation_scope();
         if let Err(error) = self.core.host().request_ui_focus(window) {
+            if !self.shortcut_presentation_current(scope.as_deref()) {
+                return;
+            }
             self.report_message(&sanitize::bounded_text(&error, 200));
             self.sync_launcher_status();
         }
@@ -1082,6 +1116,7 @@ impl PanelController {
         let user = self.user_menu.borrow().clone();
         if let Some(user) = user
             && let Some(launcher) = self.launcher_and_upgrade()
+            && let Some(context) = self.launcher_context()
         {
             user.close_if_geometry_changed(context, launcher.window().scale_factor());
         }
@@ -1301,19 +1336,39 @@ impl PanelController {
                 panel.get_compact(),
                 crate::dock_edge_from_index(panel.get_dock_edge_index()),
             )
-            .with_general(crate::GeneralPreferences::default().with_start_of_week(start));
+            .with_general(crate::GeneralPreferences::default().with_start_of_week(start))
+            .with_shortcuts(self.shortcut_draft());
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {
                 self.core.record_applied(&preferences);
+                if !self.root_current() {
+                    return;
+                }
+                self.shortcuts_saved(&preferences);
+                if !self.root_current() {
+                    return;
+                }
                 let calendar = self.calendar.borrow().clone();
                 if let Some(calendar) = calendar {
                     calendar.set_start_of_week(start);
                 }
+                if !self.root_current() {
+                    return;
+                }
                 panel.set_status("Preferences saved".into());
+                if !self.root_current() {
+                    return;
+                }
                 self.update_geometry();
+                if !self.root_current() {
+                    return;
+                }
                 self.render();
             }
             Err(error) => {
+                if !self.root_current() {
+                    return;
+                }
                 let detail = sanitize::bounded_text(&error, 200);
                 panel.set_status(format!("Could not save preferences: {detail}").into());
             }
@@ -1556,6 +1611,8 @@ pub(crate) fn run(
             let controller = PanelController::new(&panel, Arc::clone(&core));
             core.install_routes(controller.routes());
             controller.apply_filter();
+            let _capability_scope = shortcuts::RootCapabilityScope::new(&controller);
+            controller.start_shortcuts(run_options.global_shortcuts_enabled);
             // Panel mode pulses immediately: its only surface is ready.
             heartbeat.borrow_mut().arm();
             let _ = controller.refresh();
@@ -1673,8 +1730,10 @@ pub(crate) fn run(
             // immediately. No provisional/default appbar registration ever
             // happens. Attach errors exit for immediate restoration; geometry
             // that never arrives instead reaches the supervisor's timeout.
-            // Declared last: revoke Power input before any external teardown.
+            // Retire Root/global delivery and the existing Power gate before native teardown.
             let _power_scope = power_menu::PowerAdmissionScope::new(&controller);
+            let _capability_scope = shortcuts::RootCapabilityScope::new(&controller);
+            controller.start_shortcuts(run_options.global_shortcuts_enabled);
             dock.show()?;
             toolbar.show()?;
             // (2) Async first observation: its completion handler does

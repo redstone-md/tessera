@@ -37,7 +37,7 @@ fn load_preferences(
 }
 
 /// Map the complete applied record, never an appearance preview or partial launcher group.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::settings::Preferences {
     use crate::settings::{DockEdge, LauncherDisplayMode, Preferences, Theme};
 
@@ -67,9 +67,10 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         .with_launcher_display_mode(mode)
         .with_general(crate::settings::GeneralPreferences::default().with_start_of_week(start))
         .with_media_enabled(preferences.media_enabled())
+        .with_shortcuts(preferences.shortcuts().clone())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn to_ui_preferences(
     preferences: &crate::settings::Preferences,
 ) -> Result<tessera_ui::PanelPreferences, String> {
@@ -100,6 +101,7 @@ fn to_ui_preferences(
         .with_launcher_display_mode(mode)
         .with_general(tessera_ui::GeneralPreferences::default().with_start_of_week(start))
         .with_media_enabled(preferences.media_enabled())
+        .with_shortcuts(preferences.shortcuts().clone())
         .with_launcher_favorites(preferences.launcher_favorites().to_vec())
 }
 
@@ -121,8 +123,10 @@ mod desktop {
     use tessera_system::network::{NetworkError, NetworkHost};
     use tessera_system::power::{PowerError, PowerHost};
     use tessera_system::power_updates::{PowerUpdatesError, PowerUpdatesHost};
+    use tessera_system::profile::{ProfileError, ProfileHost};
     use tessera_system::recycle_bin::RecycleBinHost;
     use tessera_system::recycle_bin_mutation::RecycleBinMutationHost;
+    use tessera_system::shortcuts::{ShortcutError, ShortcutHost};
     use tessera_system::visibility::{PointerHost, PointerWatchError};
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
@@ -172,6 +176,8 @@ mod desktop {
         input_language: LazyLock<Provider<dyn InputLanguageHost>>,
         media: LazyLock<Provider<dyn MediaHost>>,
         pointer: LazyLock<Provider<dyn PointerHost>>,
+        shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
+        profile: LazyLock<Provider<dyn ProfileHost>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -253,6 +259,18 @@ mod desktop {
     }
 
     impl DesktopHost for AppHost {
+        fn shortcuts_host(&self) -> Result<Option<Arc<dyn ShortcutHost>>, ShortcutError> {
+            self.shortcuts
+                .get(tessera_windows::shortcuts::native_shortcuts_host)
+                .map(Some)
+        }
+
+        fn profile_host(&self) -> Result<Option<Arc<dyn ProfileHost>>, ProfileError> {
+            self.profile
+                .get(tessera_windows::profile::native_profile_host)
+                .map(Some)
+        }
+
         fn audio_host(&self) -> Result<Option<Arc<dyn AudioHost>>, AudioError> {
             self.audio
                 .get(|| {
@@ -625,6 +643,8 @@ mod desktop {
             input_language: LazyLock::new(Provider::default),
             media: LazyLock::new(Provider::default),
             pointer: LazyLock::new(Provider::default),
+            shortcuts: LazyLock::new(Provider::default),
+            profile: LazyLock::new(Provider::default),
         };
         tessera_ui::run(
             host,
@@ -637,6 +657,7 @@ mod desktop {
                     SurfaceMode::Dock
                 },
                 heartbeat,
+                global_shortcuts_enabled: true,
             },
         )?;
         Ok(())
@@ -680,6 +701,24 @@ pub(crate) fn run_desktop_diagnostic(_heartbeat: &str) -> Result<(), Box<dyn Err
 mod preference_tests {
     use super::*;
     use crate::settings::{Preferences, SettingsStore};
+    use tessera_system::shortcuts::{KeyChord, KeyModifiers, ShortcutConfig};
+
+    fn custom_shortcuts() -> ShortcutConfig {
+        ShortcutConfig::default()
+            .with_enabled(false)
+            .with_settings_override(Some(
+                KeyChord::new(
+                    KeyModifiers {
+                        control: true,
+                        shift: true,
+                        ..KeyModifiers::default()
+                    },
+                    0x50,
+                )
+                .unwrap(),
+            ))
+            .unwrap()
+    }
 
     #[test]
     fn invalid_or_future_startup_records_disable_all_normal_preference_saves() {
@@ -721,7 +760,6 @@ mod preference_tests {
         assert!(!path.exists());
     }
 
-    #[cfg(windows)]
     #[test]
     fn complete_preferences_map_both_directions_without_losing_launcher_mode_or_tail() {
         use crate::settings::{
@@ -765,7 +803,8 @@ mod preference_tests {
                                     .with_general(
                                         GeneralPreferences::default().with_start_of_week(start),
                                     )
-                                    .with_media_enabled(media_enabled);
+                                    .with_media_enabled(media_enabled)
+                                    .with_shortcuts(custom_shortcuts());
                                 let ui = to_ui_preferences(&stored).unwrap();
                                 assert_eq!(ui.theme(), ui_theme);
                                 assert_eq!(ui.compact(), compact);
@@ -775,6 +814,7 @@ mod preference_tests {
                                 assert_eq!(ui.pinned_apps(), ["dock-only"]);
                                 assert_eq!(ui.general().start_of_week(), ui_start);
                                 assert_eq!(ui.media_enabled(), media_enabled);
+                                assert_eq!(ui.shortcuts(), &custom_shortcuts());
                                 assert_eq!(from_ui_preferences(&ui), stored);
                                 assert_eq!(
                                     to_ui_preferences(&from_ui_preferences(&ui)).unwrap(),
@@ -788,7 +828,6 @@ mod preference_tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn applied_appearance_pin_and_favorite_edits_keep_complete_group_through_storage_mapping() {
         let directory = tempfile::tempdir().unwrap();
@@ -803,7 +842,8 @@ mod preference_tests {
                 tessera_ui::GeneralPreferences::default()
                     .with_start_of_week(tessera_ui::StartOfWeek::Saturday),
             )
-            .with_media_enabled(true);
+            .with_media_enabled(true)
+            .with_shortcuts(custom_shortcuts());
         for edited in [
             applied.clone().with_appearance(
                 tessera_ui::Theme::Light,
@@ -817,6 +857,9 @@ mod preference_tests {
                 .clone()
                 .with_launcher_favorites(vec!["missing-app".into()])
                 .unwrap(),
+            applied
+                .clone()
+                .with_shortcuts(ShortcutConfig::default().with_enabled(false)),
         ] {
             store.save(&from_ui_preferences(&edited)).unwrap();
             let reloaded = to_ui_preferences(&store.load().unwrap()).unwrap();
@@ -830,5 +873,72 @@ mod preference_tests {
             applied.with_launcher_display_mode(tessera_ui::LauncherDisplayMode::Windowed);
         store.save(&from_ui_preferences(&windowed)).unwrap();
         assert_eq!(to_ui_preferences(&store.load().unwrap()).unwrap(), windowed);
+    }
+
+    #[test]
+    fn every_shortcut_configuration_maps_bijectively_and_retains_all_saved_groups() {
+        for bits in 0..16 {
+            let modifiers = KeyModifiers {
+                control: bits & 1 != 0,
+                alt: bits & 2 != 0,
+                shift: bits & 4 != 0,
+                win: bits & 8 != 0,
+            };
+            for enabled in [false, true] {
+                for chord in [None, Some(KeyChord::new(modifiers, 0x4B).unwrap())] {
+                    let config = ShortcutConfig::default()
+                        .with_enabled(enabled)
+                        .with_settings_override(chord)
+                        .unwrap();
+                    let stored = Preferences::new(crate::settings::Theme::Dark, true)
+                        .with_dock(crate::settings::DockEdge::Right, vec!["dock-only".into()])
+                        .with_launcher_favorites(vec!["exact".into(), "EXACT".into()])
+                        .with_launcher_display_mode(
+                            crate::settings::LauncherDisplayMode::Fullscreen,
+                        )
+                        .with_general(
+                            crate::settings::GeneralPreferences::default()
+                                .with_start_of_week(crate::settings::StartOfWeek::Saturday),
+                        )
+                        .with_media_enabled(true)
+                        .with_shortcuts(config.clone());
+                    let ui = to_ui_preferences(&stored).unwrap();
+                    assert_eq!(ui.shortcuts(), &config);
+                    assert_eq!(from_ui_preferences(&ui), stored);
+                    assert_eq!(to_ui_preferences(&from_ui_preferences(&ui)).unwrap(), ui);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_v5_shortcuts_disable_saves_without_replacing_private_or_future_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let valid = serde_json::to_string(&Preferences::default()).unwrap();
+        for original in [
+            valid.replace(
+                r#","shortcuts":{"enabled":true,"settings_override":null}"#,
+                "",
+            ),
+            valid.replace(
+                r#""settings_override":null"#,
+                r#""settings_override":"bare_win""#,
+            ),
+            valid.replace(
+                r#""settings_override":null"#,
+                r#""settings_override":null,"personal_email":"private@example.invalid""#,
+            ),
+            valid.replace(r#""schema_version":5"#, r#""schema_version":6"#),
+        ] {
+            assert_ne!(original, valid);
+            std::fs::write(&path, &original).unwrap();
+            let (store, preferences, notice) =
+                load_preferences(Ok(SettingsStore::new(path.clone())));
+            assert!(store.is_none());
+            assert_eq!(preferences, Preferences::default());
+            assert!(notice.unwrap().contains("saving is disabled"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
     }
 }

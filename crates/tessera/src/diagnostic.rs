@@ -4,13 +4,11 @@
 //! Installer-only GUI startup fixture, not a source of desktop health or identity.
 //! No settings, native observations, providers, surface leases, or watchers are acquired.
 
-#[cfg(windows)]
 use std::sync::Arc;
 
 use tessera_ui::{
     DesktopHost, DockContext, PanelPreferences, PanelSnapshot, SystemAction, WindowAction,
 };
-#[cfg(windows)]
 use tessera_ui::{RunOptions, SurfaceMode};
 
 const NOTICE: &str =
@@ -99,6 +97,24 @@ impl DiagnosticHost {
 }
 
 impl DesktopHost for DiagnosticHost {
+    fn shortcuts_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::shortcuts::ShortcutHost>>,
+        tessera_system::shortcuts::ShortcutError,
+    > {
+        Ok(None)
+    }
+
+    fn profile_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::profile::ProfileHost>>,
+        tessera_system::profile::ProfileError,
+    > {
+        Ok(None)
+    }
+
     fn observe(&self) -> Result<PanelSnapshot, String> {
         Ok(self.snapshot.clone())
     }
@@ -127,6 +143,15 @@ impl DesktopHost for DiagnosticHost {
     // empty identity and clock, disabled motion, and no native focus request.
 }
 
+/// Diagnostic presentation is ephemeral and cannot admit global input providers.
+fn run_options(heartbeat: Option<Arc<dyn Fn() + Send + Sync>>) -> RunOptions {
+    RunOptions {
+        surface: SurfaceMode::Dock,
+        heartbeat,
+        global_shortcuts_enabled: false,
+    }
+}
+
 #[cfg(windows)]
 pub(crate) fn run(
     heartbeat: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -144,10 +169,7 @@ pub(crate) fn run(
                 host,
                 PanelPreferences::default(),
                 Some(NOTICE.into()),
-                RunOptions {
-                    surface: SurfaceMode::Dock,
-                    heartbeat,
-                },
+                run_options(heartbeat),
             )
             .map_err(Into::into)
         },
@@ -267,6 +289,8 @@ mod tests {
         assert!(host.dock_utilities_host().unwrap().is_none());
         assert!(host.recycle_bin_host().unwrap().is_none());
         assert!(host.recycle_bin_mutation_host().unwrap().is_none());
+        assert!(host.shortcuts_host().unwrap().is_none());
+        assert!(host.profile_host().unwrap().is_none());
 
         let calls = Arc::new(AtomicUsize::new(0));
         let desktop_calls = Arc::clone(&calls);
@@ -290,6 +314,16 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_options_disable_global_input_without_changing_saved_defaults() {
+        let options = run_options(None);
+        assert_eq!(options.surface, SurfaceMode::Dock);
+        assert!(!options.global_shortcuts_enabled);
+        assert!(options.heartbeat.is_none());
+        assert!(RunOptions::default().global_shortcuts_enabled);
+        assert!(PanelPreferences::default().shortcuts().enabled());
+    }
+
+    #[test]
     fn input_cannot_activate_launch_save_or_dispatch_desktop_effects() {
         let host = DiagnosticHost::new().unwrap();
         let preferences = PanelPreferences::default();
@@ -299,6 +333,8 @@ mod tests {
         assert!(preferences.launcher().favorites().is_empty());
         assert_eq!(preferences.dock_edge(), tessera_ui::DockEdge::Bottom);
         assert!(!preferences.media_enabled());
+        assert!(preferences.shortcuts().enabled());
+        assert!(preferences.shortcuts().settings_override().is_none());
         assert_eq!(
             preferences.general().start_of_week(),
             tessera_ui::StartOfWeek::Monday
@@ -316,6 +352,9 @@ mod tests {
                     .with_start_of_week(tessera_ui::StartOfWeek::Sunday),
             )
             .with_media_enabled(true)
+            .with_shortcuts(
+                tessera_system::shortcuts::ShortcutConfig::default().with_enabled(false),
+            )
             .with_launcher_favorites(vec!["stale-favorite".into()])
             .unwrap();
         assert_eq!(

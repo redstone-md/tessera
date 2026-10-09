@@ -3,6 +3,7 @@
 
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import { GeneralPreferences } from "general-preferences.slint";
+import { ShortcutPreferences } from "shortcut-preferences.slint";
 
 export { Dock, DockApp, DockWindow, DockStatus } from "dock.slint";
 export { DockWindowCommand, DockSystemCommand, DockMenuKind, DockMenuAction, DockReservedAction, DockRecycleAction, DockRecycleState } from "shell-commands.slint";
@@ -14,7 +15,7 @@ export { PopoverTokens, PopoverMotion } from "popover.slint";
 export { Toolbar } from "toolbar.slint";
 export { Launcher, LaunchTile, LaunchRow, LauncherNavigation, LauncherView, LauncherDisplayMode, LauncherGridMetrics, LauncherDragVisual } from "launcher.slint";
 export { QuickSettings, AudioRoute } from "quick-settings.slint";
-export { UserMenu, UserFolderKind, UserFolderRow } from "user-menu.slint";
+export { UserMenu, UserFolderKind, UserFolderRow, UserProfileAction } from "user-menu.slint";
 export { CalendarMenu, CalendarMode, CalendarDayCell, CalendarWeekRow, CalendarMonthCell, CalendarMonthRow } from "calendar.slint";
 export { PowerMenuSurface, PowerMenuAction } from "power-menu.slint";
 export { NetworkMenu, NetworkRow } from "network-menu.slint";
@@ -64,6 +65,15 @@ export component Panel inherits Window {
     in property <bool> stale;
     in property <string> startup-notice;
     in property <string> version;
+    in property <bool> shortcuts-controls-enabled: true;
+    in property <bool> shortcuts-enabled: true;
+    in property <string> shortcuts-settings-label: "Win + K";
+    in property <bool> shortcuts-capturing;
+    in property <bool> shortcuts-dirty;
+    in property <bool> shortcuts-applying;
+    in property <string> shortcuts-launcher-status: "Not applied";
+    in property <string> shortcuts-settings-status: "Not applied";
+    in property <string> shortcuts-message;
 
     callback refresh-requested();
     callback filter-requested();
@@ -73,6 +83,18 @@ export component Panel inherits Window {
     callback pin-toggle-requested(string /* key */, bool /* pinned */);
     callback system-action-requested(int /* action */);
     callback save-preferences-requested();
+    callback cancel-preferences-requested();
+    callback shortcuts-enabled-edited(bool);
+    callback shortcuts-capture-requested();
+    callback shortcuts-capture-cancelled();
+    callback shortcuts-reset-requested();
+    callback shortcuts-capture-pressed(KeyEvent) -> bool;
+    callback shortcuts-capture-released(KeyEvent) -> bool;
+    callback shortcuts-event-ready();
+    callback shortcut-trigger-ready();
+
+    public function focus-shortcut-capture() { shortcut-preferences.focus-capture(); }
+    public function cancel-shortcut-input() { shortcut-preferences.cancel-input(); }
     // A shared live appearance preview updates every surface without Save.
     callback appearance-changed();
     // The one-shot dock-mode readiness pulse: `run` wires this to the
@@ -143,15 +165,17 @@ export component Panel inherits Window {
                 text: "Compact";
                 checked <=> root.compact;
             }
-            Button {
-                text: "Save preferences";
-                clicked => { root.save-preferences-requested(); }
+            VerticalLayout {
+                spacing: 4px;
+                Button {
+                    text: "Save preferences";
+                    clicked => { root.save-preferences-requested(); }
+                }
+                Button {
+                    text: "Cancel changes";
+                    clicked => { root.cancel-preferences-requested(); }
+                }
             }
-        }
-
-        GeneralPreferences {
-            start-of-week-index <=> root.start-of-week-index;
-            compact: root.compact;
         }
 
         HorizontalLayout {
@@ -197,6 +221,28 @@ export component Panel inherits Window {
             vertical-stretch: 1;
             VerticalLayout {
                 spacing: 4px;
+                GeneralPreferences {
+                    start-of-week-index <=> root.start-of-week-index;
+                    compact: root.compact;
+                }
+                shortcut-preferences := ShortcutPreferences {
+                    compact: root.compact;
+                    controls-enabled: root.shortcuts-controls-enabled;
+                    draft-enabled: root.shortcuts-enabled;
+                    settings-label: root.shortcuts-settings-label;
+                    capturing: root.shortcuts-capturing;
+                    dirty: root.shortcuts-dirty;
+                    applying: root.shortcuts-applying;
+                    launcher-status: root.shortcuts-launcher-status;
+                    settings-status: root.shortcuts-settings-status;
+                    message: root.shortcuts-message;
+                    enabled-edited(enabled) => { root.shortcuts-enabled-edited(enabled); }
+                    capture-requested => { root.shortcuts-capture-requested(); }
+                    capture-cancelled => { root.shortcuts-capture-cancelled(); }
+                    settings-reset-requested => { root.shortcuts-reset-requested(); }
+                    capture-pressed(event) => { return root.shortcuts-capture-pressed(event); }
+                    capture-released(event) => { return root.shortcuts-capture-released(event); }
+                }
                 for row in root.rows: Button {
                     text: row.caption;
                     height: root.row-height;

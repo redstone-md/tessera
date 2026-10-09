@@ -13,7 +13,7 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, PhysicalSize, Rgb8Pixel};
 
-use crate::generated::{UserFolderKind, UserFolderRow, UserMenu};
+use crate::generated::{UserFolderKind, UserFolderRow, UserMenu, UserProfileAction};
 use crate::theme::{PresentationTheme, ThemedComponent};
 
 // Source order is an independent literal contract, not derived from the
@@ -73,6 +73,9 @@ enum Request {
     Open(UserFolderKind, String),
     Retry,
     Hide,
+    Profile(UserProfileAction, String),
+    OneDrive(String),
+    ProfileRetry(String),
 }
 
 struct Fixture {
@@ -108,6 +111,24 @@ impl Fixture {
         popup.on_retry_requested(move || recorded.borrow_mut().push(Request::Retry));
         let recorded = requests.clone();
         popup.on_hide_requested(move || recorded.borrow_mut().push(Request::Hide));
+        let recorded = requests.clone();
+        popup.on_profile_open_requested(move |action, key| {
+            recorded
+                .borrow_mut()
+                .push(Request::Profile(action, key.to_string()));
+        });
+        let recorded = requests.clone();
+        popup.on_onedrive_open_requested(move |key| {
+            recorded
+                .borrow_mut()
+                .push(Request::OneDrive(key.to_string()));
+        });
+        let recorded = requests.clone();
+        popup.on_profile_retry_requested(move |key| {
+            recorded
+                .borrow_mut()
+                .push(Request::ProfileRetry(key.to_string()));
+        });
         configure(&popup);
         popup.show().unwrap();
         window
@@ -931,4 +952,348 @@ fn user_menu_long_status_is_accessible_while_visible_text_and_wrapped_notice_sta
         fixture.take_requests().is_empty(),
         "a visually clipped status remains unavailable"
     );
+}
+
+fn configure_profile(popup: &UserMenu) {
+    popup.set_profile_name("Current profile fixture".into());
+    popup.set_profile_key("profile::current/session?語".into());
+    popup.set_onedrive_key("onedrive::opaque/current?א".into());
+    popup.set_profile_actions_ready(true);
+    popup.set_onedrive_ready(true);
+}
+
+#[test]
+fn profile_real_native_tab_return_space_pointer_and_ax_forward_only_closed_current_keys() {
+    let fixture = Fixture::new(configure_profile);
+    fixture.popup.invoke_focus_content();
+    fixture.key(Key::Tab);
+    fixture.key_press(Key::Return);
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::Profile(
+            UserProfileAction::Home,
+            "profile::current/session?語".into()
+        )]
+    );
+    fixture.key_release(Key::Return);
+    assert!(fixture.take_requests().is_empty());
+    fixture.key(Key::Tab);
+    fixture.key_press(Key::Space);
+    assert!(fixture.take_requests().is_empty());
+    fixture.key_release(Key::Space);
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::Profile(
+            UserProfileAction::Accounts,
+            "profile::current/session?語".into()
+        )]
+    );
+    fixture.key(Key::Tab);
+    fixture.key(Key::Return);
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::OneDrive("onedrive::opaque/current?א".into())]
+    );
+    for (label, expected) in [
+        (
+            "Open home folder",
+            Request::Profile(
+                UserProfileAction::Home,
+                "profile::current/session?語".into(),
+            ),
+        ),
+        (
+            "Open Accounts settings",
+            Request::Profile(
+                UserProfileAction::Accounts,
+                "profile::current/session?語".into(),
+            ),
+        ),
+        (
+            "Open OneDrive",
+            Request::OneDrive("onedrive::opaque/current?א".into()),
+        ),
+    ] {
+        let element = fixture.element(label);
+        assert_eq!(element.accessible_role(), Some(AccessibleRole::Button));
+        assert_eq!(element.accessible_enabled(), Some(true));
+        fixture.click(&element);
+        assert_eq!(fixture.take_requests(), vec![expected]);
+        element.invoke_accessible_default_action();
+        assert_eq!(fixture.take_requests().len(), 1);
+    }
+    fixture.key(Key::Escape);
+    assert_eq!(fixture.take_requests(), vec![Request::Hide]);
+    for absent in ["Log out", "Sign out", "Windows account email", "Power"] {
+        assert!(
+            !fixture.has_element(absent),
+            "no decorative/fake second power executor or account claim"
+        );
+    }
+}
+
+#[test]
+fn profile_busy_is_independent_from_folder_input_and_cancel_before_rebinding_stops_native_armed_gestures()
+ {
+    let fixture = Fixture::new(configure_profile);
+    let onedrive = fixture.element("Open OneDrive");
+    let position = Fixture::center(&onedrive);
+    fixture.press(position);
+    fixture.popup.invoke_cancel_profile_input();
+    fixture
+        .popup
+        .set_onedrive_key("onedrive::replacement".into());
+    fixture.release(position);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "old pointer cannot acquire replacement target"
+    );
+    fixture.popup.invoke_focus_content();
+    fixture.key(Key::Tab);
+    fixture.key(Key::Tab);
+    fixture.key(Key::Tab);
+    fixture.key_press(Key::Space);
+    fixture.popup.invoke_cancel_profile_input();
+    fixture
+        .popup
+        .set_onedrive_key("onedrive::replacement-2".into());
+    fixture.key_release(Key::Space);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "old Space cannot acquire replacement target"
+    );
+    fixture.key_press(Key::Return);
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::OneDrive("onedrive::replacement-2".into())]
+    );
+    fixture.popup.invoke_cancel_profile_input();
+    fixture
+        .popup
+        .set_onedrive_key("onedrive::replacement-3".into());
+    // The SDK distinguishes native auto-repeat from a fresh press.
+    fixture
+        .window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert!(
+        fixture.take_requests().is_empty(),
+        "a held Return cannot replay against replacement authority"
+    );
+    fixture.key_release(Key::Return);
+    fixture.key(Key::Return);
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::OneDrive("onedrive::replacement-3".into())],
+        "only a fresh native press after release admits replacement authority"
+    );
+    fixture.popup.set_profile_loading(true);
+    fixture.popup.set_profile_actions_ready(false);
+    fixture.popup.set_onedrive_ready(false);
+    fixture.render_fit(1.0);
+    assert!(fixture.has_element("Loading profile…"));
+    for label in [
+        "Open home folder",
+        "Open Accounts settings",
+        "Open OneDrive",
+    ] {
+        let element = fixture.element(label);
+        assert_eq!(element.accessible_enabled(), Some(false));
+        element.invoke_accessible_default_action();
+    }
+    fixture.key(Key::Return);
+    fixture.key(Key::Space);
+    assert!(fixture.take_requests().is_empty());
+    fixture.click(&fixture.element("Open Recent"));
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::Open(UserFolderKind::Recent, FOLDERS[0].2.into())]
+    );
+    fixture.popup.set_profile_loading(false);
+    fixture
+        .popup
+        .set_profile_status("Profile read unavailable.".into());
+    fixture.popup.set_profile_retry_enabled(true);
+    fixture
+        .popup
+        .set_profile_retry_key("retry::admitted-7".into());
+    fixture.render_fit(1.0);
+    fixture.click(&fixture.element("Retry profile"));
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::ProfileRetry("retry::admitted-7".into())]
+    );
+}
+
+#[test]
+fn profile_genuine_colored_premultiplied_photo_is_seventy_pixels_and_circle_clips_at_both_native_scales()
+ {
+    let fixture = Fixture::new(|popup| {
+        configure_profile(popup);
+        let mut bytes = Vec::with_capacity(70 * 70 * 4);
+        for y in 0..70 {
+            for x in 0..70 {
+                bytes.extend_from_slice(match (x < 35, y < 35) {
+                    (true, true) => &[128, 0, 0, 128],
+                    (false, true) => &[0, 255, 0, 255],
+                    (true, false) => &[0, 0, 255, 255],
+                    (false, false) => &[255, 255, 0, 255],
+                });
+            }
+        }
+        let photo = tessera_system::profile::ProfilePhoto::new(70, 70, bytes).unwrap();
+        popup.set_profile_photo(crate::user_menu::prepare_profile_photo(&photo));
+        popup.set_profile_fallback(false);
+        popup.set_has_photo(true);
+    });
+    for scale in [1.0, 2.0] {
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let pixels = fixture.render_fit(scale);
+        let width = (fixture.popup.get_popup_content_width() * scale).ceil() as usize;
+        let photo = fixture.element("Profile photo");
+        assert_eq!(photo.accessible_role(), Some(AccessibleRole::Image));
+        assert_eq!(photo.size().width, 70.0);
+        assert_eq!(photo.size().height, 70.0);
+        assert!(!fixture.has_element("Default user profile"));
+        let origin = photo.absolute_position();
+        let sample = |x: f32, y: f32| {
+            let pixel = pixels
+                [((origin.y + y) * scale) as usize * width + ((origin.x + x) * scale) as usize];
+            [pixel.r, pixel.g, pixel.b]
+        };
+        assert_eq!(
+            sample(1.0, 1.0),
+            [242, 242, 242],
+            "square photo corner must be clipped to genuine circle"
+        );
+        assert_eq!(sample(51.0, 18.0), [0, 255, 0]);
+        assert_eq!(
+            sample(30.0, 51.0),
+            [0, 0, 255],
+            "sample genuine photo outside the Accounts control overlay"
+        );
+        assert_eq!(sample(51.0, 51.0), [255, 255, 0]);
+        let half_red = sample(18.0, 18.0);
+        assert!(
+            half_red[0].abs_diff(249) <= 2
+                && half_red[1].abs_diff(121) <= 2
+                && half_red[2].abs_diff(121) <= 2,
+            "premultiplied half-red must blend once, not be multiplied twice: {half_red:?}"
+        );
+        assert!(
+            fixture.take_requests().is_empty(),
+            "photo upload/render is never an action"
+        );
+    }
+}
+
+#[test]
+fn profile_personal_email_wraps_naturally_has_honest_ax_source_and_tiny_rtl_native_tab_reveals_actions()
+ {
+    let email = "عنوان شخصي שלום 語 personal-email ".repeat(10);
+    let fixture = Fixture::new(|popup| {
+        configure_profile(popup);
+        popup.set_profile_name("مستخدم שלום 語 genuine long display name ".repeat(8).into());
+        popup.set_personal_email(email.clone().into());
+    });
+    let height = fixture.popup.get_popup_content_height();
+    let label = format!("OneDrive Personal email: {email}");
+    let element = fixture.element(&label);
+    assert_eq!(element.accessible_role(), Some(AccessibleRole::Text));
+    assert!(
+        element.size().height > 35.0,
+        "personal email owns actual measured lines, not a fake placeholder or one-line clipping"
+    );
+    assert!(height <= 720.0);
+    assert!(fixture.take_requests().is_empty());
+    fixture.render(180, 120);
+    fixture.popup.invoke_focus_content();
+    for (label, expected) in [
+        (
+            "Open home folder",
+            Request::Profile(
+                UserProfileAction::Home,
+                "profile::current/session?語".into(),
+            ),
+        ),
+        (
+            "Open Accounts settings",
+            Request::Profile(
+                UserProfileAction::Accounts,
+                "profile::current/session?語".into(),
+            ),
+        ),
+        (
+            "Open OneDrive",
+            Request::OneDrive("onedrive::opaque/current?א".into()),
+        ),
+    ] {
+        fixture.key(Key::Tab);
+        let element = fixture.element(label);
+        let center = Fixture::center(&element);
+        assert!(
+            center.x >= 0.0 && center.x < 180.0 && center.y >= 0.0 && center.y < 120.0,
+            "native focus reveals {label} inside tiny viewport despite real wrapped RTL email"
+        );
+        fixture.key(Key::Return);
+        assert_eq!(fixture.take_requests(), vec![expected]);
+    }
+    fixture.popup.set_personal_email("".into());
+    fixture.popup.invoke_focus_content();
+    fixture.render_fit(1.0);
+    assert!(
+        !fixture.has_element(&label),
+        "absence is not an account-email placeholder"
+    );
+    assert!(
+        fixture.popup.get_popup_content_height() < height,
+        "clearing genuine email removes only its measured height"
+    );
+    assert!(fixture.take_requests().is_empty());
+}
+
+#[test]
+fn profile_unknown_photo_has_no_fake_generic_image_and_absent_or_unavailable_uses_labeled_fallback_only()
+ {
+    let fixture = Fixture::new(|popup| {
+        popup.set_profile_loading(true);
+        popup.set_profile_fallback(false);
+    });
+    assert!(fixture.has_element("Loading profile…"));
+    assert!(!fixture.has_element("Default user profile"));
+    assert!(!fixture.has_element("Profile photo"));
+    assert!(
+        ElementQuery::from_root(&fixture.popup)
+            .match_accessible_role(AccessibleRole::Image)
+            .find_all()
+            .is_empty(),
+        "unknown/loading has no unlabeled semantic image wrapper"
+    );
+    fixture.popup.set_profile_loading(false);
+    fixture
+        .popup
+        .set_profile_status("Profile photo unavailable: Access denied.".into());
+    fixture.popup.set_profile_fallback(true);
+    fixture.render_fit(1.0);
+    assert!(fixture.has_element("Default user profile"));
+    let images = ElementQuery::from_root(&fixture.popup)
+        .match_accessible_role(AccessibleRole::Image)
+        .find_all();
+    assert_eq!(
+        images.len(),
+        1,
+        "only the actual schematic fallback owns the image role"
+    );
+    assert_eq!(images[0].size().width, 70.0);
+    assert_eq!(images[0].size().height, 70.0);
+    assert!(!fixture.has_element("Profile photo"));
+    assert!(fixture.has_element("Profile photo unavailable: Access denied."));
+    assert!(fixture.take_requests().is_empty());
 }

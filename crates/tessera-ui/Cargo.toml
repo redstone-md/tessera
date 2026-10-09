@@ -24,6 +24,7 @@ slint-build.workspace = true
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
 tessera-core.workspace = true
+tessera-system = { workspace = true, features = ["test-support"] }
 slint = { workspace = true, features = ["unstable-winit-030", "renderer-femtovg"] }
 
 [lints]

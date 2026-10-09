@@ -98,6 +98,7 @@ struct LauncherSession {
     visible: Cell<bool>,
     presenting: Cell<bool>,
     reopen: Cell<bool>,
+    reopen_scope: RefCell<Option<Rc<super::shortcuts::ShortcutPresentation>>>,
     refit: Cell<bool>,
 }
 
@@ -112,12 +113,18 @@ struct LauncherPresentation<'a> {
     launcher: &'a Launcher,
     session: Rc<LauncherSession>,
     generation: u64,
+    shortcut: Option<Rc<super::shortcuts::ShortcutPresentation>>,
     completed: bool,
 }
 
 impl LauncherPresentation<'_> {
     fn current(&self) -> bool {
-        self.session.visible.get() && self.session.generation.get() == self.generation
+        self.controller.root_current()
+            && self
+                .controller
+                .shortcut_presentation_current(self.shortcut.as_deref())
+            && self.session.visible.get()
+            && self.session.generation.get() == self.generation
     }
 }
 
@@ -136,7 +143,20 @@ impl Drop for LauncherPresentation<'_> {
         self.session.presenting.set(false);
         if self.session.reopen.replace(false) && self.session.visible.get() {
             self.session.refit.set(false);
-            self.controller.open_launcher();
+            let scope = self.session.reopen_scope.borrow_mut().take();
+            if let Some(scope) = scope {
+                let generation = self.session.generation.get();
+                if self.controller.shortcut_presentation_current(Some(&scope)) {
+                    self.controller.with_shortcut_presentation(scope, || {
+                        self.controller.open_launcher_at_shortcut_monitor();
+                    });
+                } else if self.session.generation.get() == generation {
+                    self.session.visible.set(false);
+                    self.session.advance();
+                }
+            } else {
+                self.controller.open_launcher();
+            }
         } else if self.session.refit.replace(false) && self.session.visible.get() {
             self.controller.update_launcher_geometry();
         }
@@ -1407,7 +1427,7 @@ impl PanelController {
         let Some(launcher) = self.launcher_app_menu_ready(key) else {
             return;
         };
-        let Some(context) = self.core.dock_context() else {
+        let Some(context) = self.launcher_context() else {
             return;
         };
         let operation = self.popup_operation.borrow().clone();
@@ -1418,7 +1438,7 @@ impl PanelController {
             self.launcher_app_menu_ready(key).is_some()
                 && session.generation.get() == generation
                 && self.launcher_state.borrow().projection == projection
-                && self.core.dock_context() == Some(context)
+                && self.launcher_context() == Some(context)
                 && Rc::ptr_eq(&operation, &self.popup_operation.borrow())
         };
         self.dismiss_tooltip(false);
@@ -1504,7 +1524,7 @@ impl PanelController {
         if applied.launcher().display_mode() == mode || self.preference_saving.get() {
             return;
         }
-        if mode == LauncherDisplayMode::Fullscreen && self.core.dock_context().is_none() {
+        if mode == LauncherDisplayMode::Fullscreen && self.launcher_context().is_none() {
             self.report_message(
                 "Could not save launcher display mode: monitor bounds are unavailable.",
             );
@@ -1545,6 +1565,7 @@ impl PanelController {
     }
 
     fn present_launcher(&self, opening: bool) -> Result<bool, String> {
+        let shortcut = self.shortcut_presentation_scope();
         let Some(launcher) = self.launcher_and_upgrade() else {
             return Ok(false);
         };
@@ -1554,10 +1575,14 @@ impl PanelController {
             self.hide_launcher_app_menu();
             self.cancel_launcher_reorder();
             self.flush_launcher_reorder_exit();
+            if !self.shortcut_presentation_current(shortcut.as_deref()) {
+                return Ok(false);
+            }
             session.advance();
             session.visible.set(true);
             if session.presenting.get() {
                 session.reopen.set(true);
+                session.reopen_scope.replace(shortcut);
                 return Ok(false);
             }
         } else {
@@ -1570,13 +1595,17 @@ impl PanelController {
             }
         }
         let mode = self.core.applied_preferences().launcher().display_mode();
-        let context = self.core.dock_context();
+        let context = self.launcher_context();
         if mode == LauncherDisplayMode::Fullscreen && context.is_none() {
             self.hide_launcher();
             return Err("Monitor bounds are unavailable.".into());
         }
         let rect = context.map(|context| {
-            crate::launcher::launcher_rect(context, launcher.window().scale_factor(), mode)
+            crate::launcher::launcher_rect(
+                context,
+                self.launcher_presentation_scale(launcher.window().scale_factor()),
+                mode,
+            )
         });
         let position = launcher.window().position();
         let size = launcher.window().size();
@@ -1591,22 +1620,41 @@ impl PanelController {
         if !opening && !geometry_changed && !mode_changed {
             return Ok(true);
         }
-        self.cancel_launcher_reorder();
-        self.dismiss_popups_except(None);
         session.presenting.set(true);
         let mut presentation = LauncherPresentation {
             controller: self,
             launcher: &launcher,
             generation: session.generation.get(),
             session,
+            shortcut,
             completed: false,
         };
+        self.cancel_launcher_reorder();
+        if !presentation.current() {
+            return Ok(false);
+        }
+        self.dismiss_popups_except(None);
+        if !presentation.current() {
+            return Ok(false);
+        }
         if opening {
             self.dismiss_tooltip(false);
+            if !presentation.current() {
+                return Ok(false);
+            }
             self.launcher_state.borrow_mut().reopen();
             launcher.set_search("".into());
+            if !presentation.current() {
+                return Ok(false);
+            }
             self.show_launcher_tiles();
+            if !presentation.current() {
+                return Ok(false);
+            }
             launcher.invoke_reset_scroll();
+            if !presentation.current() {
+                return Ok(false);
+            }
         }
         if opening || geometry_changed {
             self.detach_lease(SurfaceKind::Launcher);
@@ -1690,6 +1738,7 @@ impl PanelController {
 
     /// Explicit opens reset Favorites/search; visible refits deliberately do not.
     pub(crate) fn open_launcher(&self) {
+        self.clear_shortcut_launcher_monitor();
         if let Err(error) = self.present_launcher(true) {
             self.report_message(&format!(
                 "Could not present saved launcher display mode: {}",
@@ -1698,14 +1747,26 @@ impl PanelController {
         }
     }
 
+    /// Same existing presentation/lease/focus authority, with the admitted cursor monitor.
+    pub(super) fn open_launcher_at_shortcut_monitor(&self) {
+        if let Err(error) = self.present_launcher(true) {
+            self.report_message(&format!(
+                "Could not present shortcut launcher: {}",
+                crate::sanitize::bounded_text(&error, 200)
+            ));
+        }
+    }
+
     /// Detach before hide; an in-flight configure must drop its late lease
     /// before native hide, and a synchronous reopen waits for that cleanup.
     pub(crate) fn hide_launcher(&self) {
+        self.clear_shortcut_launcher_monitor();
         self.cancel_launcher_input();
         let session = self.launcher_session();
         session.advance();
         session.visible.set(false);
         session.reopen.set(false);
+        session.reopen_scope.replace(None);
         session.refit.set(false);
         self.hide_launcher_app_menu();
         self.cancel_launcher_reorder();
@@ -1722,13 +1783,18 @@ impl PanelController {
                 launcher: &launcher,
                 generation: session.generation.get(),
                 session,
+                shortcut: None,
                 completed: false,
             };
         }
     }
 
+    pub(super) fn launcher_visible(&self) -> bool {
+        self.launcher_session().visible.get()
+    }
+
     pub(super) fn toggle_launcher(&self) {
-        if self.launcher_session().visible.get() {
+        if self.launcher_visible() {
             self.hide_launcher();
         } else {
             self.open_launcher();

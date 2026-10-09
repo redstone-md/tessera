@@ -238,12 +238,24 @@ pub struct ShellIdentity {
 /// `heartbeat`, when supplied, is invoked only on the UI event loop: once
 /// right after the surface is shown, then every two seconds from an owned
 /// Slint timer. It reports supervisor health; it never observes the desktop.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct RunOptions {
     /// Which surface to present.
     pub surface: SurfaceMode,
     /// UI-thread heartbeat closure for the host's independent watchdog.
     pub heartbeat: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    /// Permit ordinary global bindings. Inert diagnostics must set this false.
+    pub global_shortcuts_enabled: bool,
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            surface: SurfaceMode::default(),
+            heartbeat: None,
+            global_shortcuts_enabled: true,
+        }
+    }
 }
 
 impl std::fmt::Debug for RunOptions {
@@ -252,6 +264,7 @@ impl std::fmt::Debug for RunOptions {
             .debug_struct("RunOptions")
             .field("surface", &self.surface)
             .field("heartbeat", &self.heartbeat.is_some())
+            .field("global_shortcuts_enabled", &self.global_shortcuts_enabled)
             .finish()
     }
 }

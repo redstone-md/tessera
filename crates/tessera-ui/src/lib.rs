@@ -49,6 +49,9 @@ pub(crate) mod quick_settings;
 pub(crate) mod recycle_bin;
 #[cfg(test)]
 mod recycle_bin_render_tests;
+pub(crate) mod shortcuts;
+#[cfg(test)]
+mod shortcuts_render_tests;
 pub(crate) mod user_menu;
 pub(crate) mod visibility;
 // Renderer-backed tests: test-only (they need the software renderer and the
@@ -214,6 +217,7 @@ pub struct PanelPreferences {
     launcher: LauncherPreferences,
     general: GeneralPreferences,
     media_enabled: bool,
+    shortcuts: tessera_system::shortcuts::ShortcutConfig,
 }
 
 impl PanelPreferences {
@@ -227,6 +231,7 @@ impl PanelPreferences {
             launcher: LauncherPreferences::default(),
             general: GeneralPreferences::default(),
             media_enabled: false,
+            shortcuts: tessera_system::shortcuts::ShortcutConfig::default(),
         }
     }
 
@@ -266,6 +271,17 @@ impl PanelPreferences {
 
     pub fn with_media_enabled(mut self, enabled: bool) -> Self {
         self.media_enabled = enabled;
+        self
+    }
+
+    /// Complete typed global bindings. Display labels never authorize native input.
+    pub fn shortcuts(&self) -> &tessera_system::shortcuts::ShortcutConfig {
+        &self.shortcuts
+    }
+
+    /// Changes global bindings without changing any other saved preference group.
+    pub fn with_shortcuts(mut self, shortcuts: tessera_system::shortcuts::ShortcutConfig) -> Self {
+        self.shortcuts = shortcuts;
         self
     }
 
@@ -480,6 +496,27 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::folders::FolderHost>>,
         tessera_system::folders::FolderError,
+    > {
+        Ok(None)
+    }
+
+    /// Current-user identity and closed trusted actions, acquired only on popup intent.
+    fn profile_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::profile::ProfileHost>>,
+        tessera_system::profile::ProfileError,
+    > {
+        Ok(None)
+    }
+
+    /// Independent global bindings, acquired only by admitted ordinary startup.
+    /// Diagnostics disable this entire path, including factory and subscription.
+    fn shortcuts_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::shortcuts::ShortcutHost>>,
+        tessera_system::shortcuts::ShortcutError,
     > {
         Ok(None)
     }

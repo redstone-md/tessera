@@ -22,6 +22,10 @@ use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::{TransientComponent, TransientWindow};
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
+mod profile;
+
+pub(crate) use profile::avatar::prepare as prepare_profile_photo;
+
 #[cfg(test)]
 mod tests;
 
@@ -190,6 +194,7 @@ pub(crate) struct UserMenuController {
     host: Arc<dyn DesktopHost>,
     state: RefCell<FolderState>,
     mailbox: Arc<Mutex<Mailbox>>,
+    profile: profile::ProfileController,
     placement: Cell<Option<Placement>>,
     rect: RefCell<Option<PopupRect>>,
     fit_timer: slint::Timer,
@@ -199,8 +204,14 @@ pub(crate) struct UserMenuController {
 
 impl UserMenuController {
     pub(crate) fn new(host: Arc<dyn DesktopHost>) -> Result<Rc<Self>, slint::PlatformError> {
-        let controller = Rc::new(Self {
-            surface: TransientWindow::new(host.clone(), UserMenu::new()?, SurfaceKind::Popup),
+        let component = UserMenu::new()?;
+        let controller = Rc::new_cyclic(|weak| Self {
+            profile: profile::ProfileController::new(
+                weak.clone(),
+                component.as_weak(),
+                host.clone(),
+            ),
+            surface: TransientWindow::new(host.clone(), component, SurfaceKind::Popup),
             host,
             state: RefCell::default(),
             mailbox: Arc::new(Mutex::default()),
@@ -210,6 +221,7 @@ impl UserMenuController {
             focus_watch: slint::Timer::default(),
             focus_seen: Cell::new(false),
         });
+        profile::ProfileController::bind_callbacks(&controller);
         let weak = Rc::downgrade(&controller);
         controller.surface.on_folder_event_ready(move || {
             if let Some(controller) = weak.upgrade() {
@@ -258,6 +270,12 @@ impl UserMenuController {
 
     pub(crate) fn is_open(&self) -> bool {
         self.surface.is_visible()
+    }
+
+    /// Parent supplies a pure weak Root/current-popup/current-source-session check.
+    /// Without this binding profile effects fail closed; folders remain independent.
+    pub(crate) fn bind_profile_admission(&self, admission: impl Fn() -> bool + 'static) {
+        self.profile.bind(admission);
     }
 
     /// The caller supplies genuine identity and applies its current pure theme.
@@ -310,21 +328,41 @@ impl UserMenuController {
             .into(),
         );
         self.project();
+        if self.state.borrow().generation != generation || !source.is_visible() {
+            return Ok(());
+        }
+        let profile_session = self.profile.prepare();
+        if self.state.borrow().generation != generation
+            || !self.profile.same_session(profile_session)
+            || !source.is_visible()
+        {
+            return Ok(());
+        }
         let presentation = self.preferred_rect().and_then(|rect| {
             self.surface
                 .present(rect.position, rect.size)
                 .map(|shown| (rect, shown))
         });
         match presentation {
-            Ok((rect, true)) if self.current(generation) => {
+            Ok((rect, true))
+                if self.current(generation) && self.profile.same_session(profile_session) =>
+            {
                 *self.rect.borrow_mut() = Some(rect);
             }
             Ok((_, _)) => {
-                self.hide();
+                if self.state.borrow().generation == generation
+                    && self.profile.same_session(profile_session)
+                {
+                    self.hide();
+                }
                 return Ok(());
             }
             Err(error) => {
-                self.hide();
+                if self.state.borrow().generation == generation
+                    && self.profile.same_session(profile_session)
+                {
+                    self.hide();
+                }
                 return Err(error);
             }
         }
@@ -338,6 +376,9 @@ impl UserMenuController {
         }
         self.watch_focus();
         self.pump();
+        if self.current(generation) && source.is_visible() {
+            self.profile.activate(profile_session);
+        }
         focus.map_err(|error| {
             bounded_text(
                 &format!("User popup opened, but keyboard focus was not granted: {error}"),
@@ -347,6 +388,9 @@ impl UserMenuController {
     }
 
     pub(crate) fn hide(&self) {
+        if !self.profile.retire() {
+            return;
+        }
         self.focus_watch.stop();
         self.fit_timer.stop();
         self.focus_seen.set(false);

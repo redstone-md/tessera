@@ -7,6 +7,7 @@ import { TileButton, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 
 export enum UserFolderKind { Recent, Desktop, Downloads, Documents, Music, Pictures, Videos }
+export enum UserProfileAction { Home, Accounts }
 
 export struct UserFolderRow {
     kind: UserFolderKind,
@@ -22,12 +23,61 @@ component UserMenuText inherits Text {
     accessible-role: none;
 }
 
+// One measured text module is shared by actual rows and pre-layout metrics.
+component FolderRowText inherits Rectangle {
+    in property <string> label;
+    in property <string> feedback;
+    in property <length> text-height;
+    in property <float> text-line-height-factor;
+    in property <bool> ready: true;
+    // Native font metrics include first-line leading; the source reserves
+    // exactly text-height for that line. Add only genuinely wrapped lines.
+    property <length> label-height: root.text-height
+        + max(0px, label-text.preferred-height - line-metrics.preferred-height);
+    property <length> feedback-height: root.text-height
+        + max(0px, feedback-text.preferred-height - line-metrics.preferred-height);
+    out property <length> natural-height: root.label-height
+        + (root.feedback != "" ? root.feedback-height + 4px : 0px);
+    line-metrics := UserMenuText {
+        width: parent.width;
+        height: 0px;
+        opacity: 0;
+        text: "M";
+        font-weight: 500;
+        line-height-factor: root.text-line-height-factor;
+    }
+    accessible-role: none;
+    label-text := UserMenuText {
+        width: parent.width;
+        height: root.label-height;
+        text: root.label;
+        font-weight: 500;
+        color: root.ready ? SeelenPalette.foreground : SeelenPalette.secondary;
+        line-height-factor: root.text-line-height-factor;
+        wrap: word-wrap;
+    }
+    feedback-text := UserMenuText {
+        y: label-text.height + 4px;
+        width: parent.width;
+        height: root.feedback != "" ? root.feedback-height : 0px;
+        text: root.feedback;
+        color: SeelenPalette.secondary;
+        line-height-factor: root.text-line-height-factor;
+        wrap: word-wrap;
+    }
+}
+
+component FolderRowMetrics inherits FolderRowText {
+    height: 0px;
+    opacity: 0;
+}
+
 component FolderOpenButton inherits TileButton {
     in property <string> label;
     in property <string> feedback;
     in property <length> text-height;
     in property <float> text-line-height-factor;
-    height: 16px + root.text-height + (root.feedback != "" ? root.text-height + 4px : 0px);
+    height: 16px + row-text.natural-height;
     radius: 6px;
     filled: false;
     // Unavailable status is still readable, not dimmed with its disabled action.
@@ -43,25 +93,31 @@ component FolderOpenButton inherits TileButton {
         colorize: SeelenPalette.secondary;
         accessible-role: none;
     }
-    UserMenuText {
+    row-text := FolderRowText {
         x: 32px;
         y: 8px;
         width: max(0px, parent.width - self.x - 8px);
-        height: root.text-height;
-        text: root.label;
-        font-weight: 500;
-        color: root.enabled ? SeelenPalette.foreground : SeelenPalette.secondary;
-        line-height-factor: root.text-line-height-factor;
-        overflow: elide;
+        height: self.natural-height;
+        label: root.label;
+        feedback: root.feedback;
+        ready: root.enabled;
+        text-height: root.text-height;
+        text-line-height-factor: root.text-line-height-factor;
     }
-    if root.feedback != "": UserMenuText {
-        x: 32px;
-        y: 12px + root.text-height;
-        width: max(0px, parent.width - self.x - 8px);
-        height: root.text-height;
-        text: root.feedback;
-        color: SeelenPalette.secondary;
-        line-height-factor: root.text-line-height-factor;
+}
+
+component ProfileActionButton inherits TileButton {
+    in property <string> label;
+    radius: 6px;
+    filled: false;
+    allow-return-repeat: false;
+    accessible-text: root.label;
+    UserMenuText {
+        x: 8px;
+        width: max(0px, parent.width - 16px);
+        height: parent.height;
+        text: root.label;
+        vertical-alignment: center;
         overflow: elide;
     }
 }
@@ -81,6 +137,25 @@ export component UserMenu inherits Window {
     in property <bool> opening;
     in property <string> notice;
     in property <bool> retry-enabled;
+    // Memory-only profile values, separate from all seven folder intentions.
+    in property <string> profile-name;
+    in property <image> profile-photo;
+    in property <bool> has-photo;
+    in property <bool> profile-fallback: true;
+    in property <string> personal-email;
+    in property <bool> profile-loading;
+    in property <bool> profile-opening;
+    in property <string> profile-status;
+    in property <bool> profile-actions-ready;
+    in property <string> profile-key;
+    in property <bool> onedrive-ready;
+    in property <string> onedrive-key;
+    in property <bool> profile-retry-enabled;
+    in property <string> profile-retry-key;
+    callback profile-open-requested(UserProfileAction, string);
+    callback onedrive-open-requested(string);
+    callback profile-retry-requested(string);
+    callback profile-event-ready();
     callback folder-open-requested(UserFolderKind, string);
     callback retry-requested();
     callback hide-requested();
@@ -97,20 +172,39 @@ export component UserMenu inherits Window {
 
     property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
     property <length> text-height: max(1px, PopoverTokens.font-size * PopoverTokens.line-height);
-    property <string> identity: root.user-name != "" ? root.user-name : @tr("User name unavailable");
+    property <string> identity: root.profile-name != "" ? root.profile-name
+        : root.user-name != "" ? root.user-name : @tr("User name unavailable");
     property <string> feedback: root.notice != "" ? root.notice
         : root.loading ? @tr("Loading folders…")
         : root.opening ? @tr("Opening folder…") : "";
     property <bool> show-retry: root.retry-enabled;
-    property <length> measure-width: max(1px,
+    property <length> available-measure-width:
         min(root.width > 0px ? root.width : root.popup-content-width,
             400px + 2 * PopoverTokens.shadow-margin)
-        - 2 * PopoverTokens.shadow-margin - 2 * root.viewport-inset - 2 * FocusTokens.outer-margin);
+        - 2 * PopoverTokens.shadow-margin - 2 * root.viewport-inset - 2 * FocusTokens.outer-margin;
+    // A real native scrollbar can reduce text width; measure the same viewport
+    // used by paint, not the unclipped preferred window width.
+    property <length> measure-width: max(1px,
+        root.width > 0px && scroll.visible-width > 0px
+            ? min(root.available-measure-width, scroll.visible-width - 2 * FocusTokens.outer-margin)
+            : root.available-measure-width);
+    property <string> profile-feedback: root.profile-status != "" ? root.profile-status
+        : root.profile-loading ? @tr("Loading profile…")
+        : root.profile-opening ? @tr("Opening profile destination…") : "";
+    property <bool> has-profile-actions: root.profile-key != "";
+    property <length> profile-info-width: max(1px, root.measure-width - 82px);
+    property <length> email-height: root.personal-email != "" ? email-metrics.preferred-height + 4px : 0px;
+    property <length> profile-info-height: root.text-height + root.email-height
+        + (root.onedrive-key != "" ? 16px + root.text-height + 4px : 0px);
+    property <length> profile-base-height: max(78px, root.profile-info-height + 8px);
+    property <length> profile-height: root.profile-base-height
+        + (root.profile-feedback != "" ? profile-feedback-metrics.preferred-height + 8px : 0px)
+        + (root.profile-retry-enabled ? 16px + root.text-height + 8px : 0px);
     property <int> block-count: 1 + root.rows.length + (root.feedback != "" ? 1 : 0)
         + (root.show-retry ? 1 : 0);
     // The closed snapshot has seven rows. Measure their projected text before
     // repeater layout settles, so a read completion cannot refit to old height.
-    property <length> natural-content-height: 2 * FocusTokens.outer-margin + 78px
+    property <length> natural-content-height: 2 * FocusTokens.outer-margin + root.profile-height
         + root.row-height(0) + root.row-height(1) + root.row-height(2)
         + root.row-height(3) + root.row-height(4) + root.row-height(5) + root.row-height(6)
         + (root.feedback != "" ? feedback-metrics.preferred-height : 0px)
@@ -133,9 +227,10 @@ export component UserMenu inherits Window {
             : !row.ready ? @tr("Unavailable") : "";
     }
     function row-height(index: int) -> length {
-        return index < root.rows.length
-            ? 16px + root.text-height + (root.row-feedback(index) != "" ? root.text-height + 4px : 0px)
-            : 0px;
+        if index < 0 || index >= root.rows.length { return 0px; }
+        return 16px + (index == 0 ? row0.natural-height : index == 1 ? row1.natural-height
+            : index == 2 ? row2.natural-height : index == 3 ? row3.natural-height
+            : index == 4 ? row4.natural-height : index == 5 ? row5.natural-height : row6.natural-height);
     }
     function reveal-focused(top: length, item-height: length) {
         let visible-top = -scroll.content-y;
@@ -148,6 +243,41 @@ export component UserMenu inherits Window {
                 min(desired-bottom - scroll.visible-height, scroll.content-height - scroll.visible-height));
         }
     }
+    row0 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Recent); feedback: root.row-feedback(0);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
+    row1 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Desktop); feedback: root.row-feedback(1);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
+    row2 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Downloads); feedback: root.row-feedback(2);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
+    row3 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Documents); feedback: root.row-feedback(3);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
+    row4 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Music); feedback: root.row-feedback(4);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
+    row5 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Pictures); feedback: root.row-feedback(5);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
+    row6 := FolderRowMetrics {
+        width: max(1px, root.measure-width - 40px);
+        label: root.folder-label(UserFolderKind.Videos); feedback: root.row-feedback(6);
+        text-height: root.text-height; text-line-height-factor: body.text-line-height-factor;
+    }
     feedback-metrics := UserMenuText {
         width: root.measure-width;
         height: 0px;
@@ -155,6 +285,28 @@ export component UserMenu inherits Window {
         text: root.feedback;
         wrap: word-wrap;
         line-height-factor: body.text-line-height-factor;
+    }
+    email-metrics := UserMenuText {
+        width: root.profile-info-width;
+        height: 0px;
+        opacity: 0;
+        text: root.personal-email;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    profile-feedback-metrics := UserMenuText {
+        width: root.measure-width;
+        height: 0px;
+        opacity: 0;
+        text: root.profile-feedback;
+        wrap: word-wrap;
+        line-height-factor: body.text-line-height-factor;
+    }
+    public function cancel-profile-input() {
+        home.cancel-input();
+        accounts.cancel-input();
+        onedrive.cancel-input();
+        profile-retry.cancel-input();
     }
     public function set-presentation-opacity(value: float) {
         body.set-presentation-opacity(value);
@@ -195,42 +347,56 @@ export component UserMenu inherits Window {
                     padding: FocusTokens.outer-margin;
                     spacing: 8px;
                     Rectangle {
-                        height: 78px;
+                        height: root.profile-height;
                         accessible-role: none;
-                        // Original schematic fallback, never an account photo.
                         profile := Rectangle {
                             x: 0px;
                             y: 4px;
                             width: 70px;
                             height: 70px;
                             border-radius: 35px;
-                            background: SeelenPalette.tile;
+                            background: root.profile-fallback ? SeelenPalette.tile : transparent;
                             clip: true;
-                            accessible-role: image;
-                            accessible-label: @tr("Default user profile");
-                            Rectangle {
-                                x: 26px;
-                                y: 14px;
-                                width: 18px;
-                                height: 18px;
-                                border-radius: 9px;
-                                background: SeelenPalette.secondary;
-                                accessible-role: none;
+                            accessible-role: none;
+                            if root.has-photo: Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: root.profile-photo;
+                                image-fit: cover;
+                                accessible-role: image;
+                                accessible-label: @tr("Profile photo");
                             }
-                            Rectangle {
-                                x: 17px;
-                                y: 38px;
-                                width: 36px;
-                                height: 22px;
-                                border-radius: 11px;
-                                background: SeelenPalette.secondary;
-                                accessible-role: none;
+                            // Original schematic is explicitly not an account photo.
+                            if root.profile-fallback && !root.has-photo: Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                accessible-role: image;
+                                accessible-label: @tr("Default user profile");
+                                Rectangle {
+                                    x: 26px;
+                                    y: 14px;
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: SeelenPalette.secondary;
+                                    accessible-role: none;
+                                }
+                                Rectangle {
+                                    x: 17px;
+                                    y: 38px;
+                                    width: 36px;
+                                    height: 22px;
+                                    border-radius: 11px;
+                                    background: SeelenPalette.secondary;
+                                    accessible-role: none;
+                                }
                             }
                         }
                         UserMenuText {
                             x: 82px;
-                            width: max(0px, parent.width - self.x);
-                            height: parent.height;
+                            y: root.personal-email != "" || root.has-profile-actions ? 4px : 0px;
+                            width: max(0px, parent.width - self.x - (root.has-profile-actions ? 32px : 0px));
+                            height: root.personal-email != "" || root.has-profile-actions ? root.text-height : root.profile-base-height;
                             text: root.identity;
                             font-weight: 600;
                             vertical-alignment: center;
@@ -238,6 +404,109 @@ export component UserMenu inherits Window {
                             overflow: elide;
                             accessible-role: text;
                             accessible-label: root.identity;
+                        }
+                        if root.personal-email != "": UserMenuText {
+                            x: 82px;
+                            y: 8px + root.text-height;
+                            width: max(0px, parent.width - self.x);
+                            height: email-metrics.preferred-height;
+                            text: root.personal-email;
+                            color: SeelenPalette.secondary;
+                            wrap: word-wrap;
+                            line-height-factor: body.text-line-height-factor;
+                            accessible-role: text;
+                            accessible-label: @tr("OneDrive Personal email: ") + root.personal-email;
+                        }
+                        home := TileButton {
+                            x: max(0px, parent.width - 28px);
+                            y: 0px;
+                            width: 28px;
+                            height: 28px;
+                            radius: 6px;
+                            filled: false;
+                            visible: root.has-profile-actions;
+                            interactive: root.has-profile-actions;
+                            enabled: root.profile-actions-ready;
+                            activation-key: root.profile-key;
+                            allow-return-repeat: false;
+                            accessible-text: @tr("Open home folder");
+                            clicked => {
+                                let key = self.activation-key;
+                                root.profile-open-requested(UserProfileAction.Home, key);
+                            }
+                            focus-acquired => { root.reveal-focused(parent.y + self.y, self.height); }
+                            Image {
+                                x: 6px; y: 6px; width: 16px; height: 16px;
+                                source: @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg");
+                                colorize: SeelenPalette.secondary;
+                                image-fit: contain;
+                                accessible-role: none;
+                            }
+                        }
+                        accounts := TileButton {
+                            x: 0px; y: 50px; width: 28px; height: 28px;
+                            radius: 14px;
+                            visible: root.has-profile-actions;
+                            interactive: root.has-profile-actions;
+                            enabled: root.profile-actions-ready;
+                            activation-key: root.profile-key;
+                            allow-return-repeat: false;
+                            accessible-text: @tr("Open Accounts settings");
+                            clicked => {
+                                let key = self.activation-key;
+                                root.profile-open-requested(UserProfileAction.Accounts, key);
+                            }
+                            focus-acquired => { root.reveal-focused(parent.y + self.y, self.height); }
+                            Image {
+                                x: 6px; y: 6px; width: 16px; height: 16px;
+                                source: @image-url("../assets/icons/lucide-0.468.0/settings-2.svg");
+                                colorize: SeelenPalette.secondary;
+                                image-fit: contain;
+                                accessible-role: none;
+                            }
+                        }
+                        onedrive := ProfileActionButton {
+                            x: 82px;
+                            y: 8px + root.text-height + root.email-height;
+                            width: max(0px, parent.width - self.x);
+                            height: 16px + root.text-height;
+                            label: @tr("Open OneDrive");
+                            visible: root.onedrive-key != "";
+                            interactive: root.onedrive-key != "";
+                            enabled: root.onedrive-ready;
+                            activation-key: root.onedrive-key;
+                            clicked => {
+                                let key = self.activation-key;
+                                root.onedrive-open-requested(key);
+                            }
+                            focus-acquired => { root.reveal-focused(parent.y + self.y, self.height); }
+                        }
+                        if root.profile-feedback != "": UserMenuText {
+                            y: root.profile-base-height + 8px;
+                            width: parent.width;
+                            height: profile-feedback-metrics.preferred-height;
+                            text: root.profile-feedback;
+                            color: SeelenPalette.secondary;
+                            wrap: word-wrap;
+                            line-height-factor: body.text-line-height-factor;
+                            accessible-role: text;
+                            accessible-label: self.text;
+                        }
+                        profile-retry := ProfileActionButton {
+                            y: root.profile-base-height
+                                + (root.profile-feedback != "" ? profile-feedback-metrics.preferred-height + 8px : 0px) + 8px;
+                            width: parent.width;
+                            height: 16px + root.text-height;
+                            label: @tr("Retry profile");
+                            visible: root.profile-retry-enabled;
+                            interactive: root.profile-retry-enabled;
+                            enabled: root.profile-retry-enabled && !root.profile-loading && !root.profile-opening;
+                            activation-key: root.profile-retry-key;
+                            clicked => {
+                                let key = self.activation-key;
+                                root.profile-retry-requested(key);
+                            }
+                            focus-acquired => { root.reveal-focused(parent.y + self.y, self.height); }
                         }
                     }
                     for row[index] in root.rows: FolderOpenButton {

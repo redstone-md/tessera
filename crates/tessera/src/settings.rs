@@ -10,6 +10,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 mod dock;
 mod general;
+mod shortcuts;
+
+use shortcuts::ShortcutPreferences;
+use tessera_system::shortcuts::ShortcutConfig;
 
 pub(crate) use dock::DockPreferences;
 pub(crate) use general::{GeneralPreferences, StartOfWeek};
@@ -90,8 +94,9 @@ pub(crate) struct Preferences {
     pinned_apps: Vec<String>,
     #[serde(deserialize_with = "deserialize_launcher_preferences")]
     launcher: LauncherPreferences,
-    pub(crate) general: GeneralPreferences,
-    pub(crate) dock: DockPreferences,
+    general: GeneralPreferences,
+    dock: DockPreferences,
+    shortcuts: ShortcutPreferences,
 }
 
 /// Only the discriminator is read here; the selected typed record below
@@ -142,6 +147,22 @@ struct LegacyPreferencesV3 {
     launcher: LauncherPreferences,
 }
 
+/// Exact V4 groups, migrated without touching the source file.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPreferencesV4 {
+    #[serde(rename = "schema_version")]
+    _schema_version: u32,
+    theme: Theme,
+    compact: bool,
+    dock_edge: DockEdge,
+    pinned_apps: Vec<String>,
+    #[serde(deserialize_with = "deserialize_launcher_preferences")]
+    launcher: LauncherPreferences,
+    general: GeneralPreferences,
+    dock: DockPreferences,
+}
+
 impl Default for Preferences {
     fn default() -> Self {
         Self::new(Theme::System, false)
@@ -151,7 +172,7 @@ impl Default for Preferences {
 impl Preferences {
     pub(crate) fn new(theme: Theme, compact: bool) -> Self {
         Self {
-            schema_version: 4,
+            schema_version: 5,
             theme,
             compact,
             dock_edge: DockEdge::default(),
@@ -159,6 +180,7 @@ impl Preferences {
             launcher: LauncherPreferences::default(),
             general: GeneralPreferences::default(),
             dock: DockPreferences::default(),
+            shortcuts: ShortcutPreferences::default(),
         }
     }
 
@@ -185,6 +207,15 @@ impl Preferences {
 
     pub(crate) fn with_media_enabled(mut self, enabled: bool) -> Self {
         self.dock = self.dock.with_media_enabled(enabled);
+        self
+    }
+
+    pub(crate) fn shortcuts(&self) -> &ShortcutConfig {
+        self.shortcuts.config()
+    }
+
+    pub(crate) fn with_shortcuts(mut self, config: ShortcutConfig) -> Self {
+        self.shortcuts = ShortcutPreferences::new(config);
         self
     }
 
@@ -247,7 +278,17 @@ impl Preferences {
                     .with_launcher_favorites(legacy.launcher.favorites)
                     .with_launcher_display_mode(legacy.launcher.display_mode)
             }
-            4 => serde_json::from_slice(contents)
+            4 => {
+                let legacy: LegacyPreferencesV4 = serde_json::from_slice(contents)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                Self::new(legacy.theme, legacy.compact)
+                    .with_dock(legacy.dock_edge, legacy.pinned_apps)
+                    .with_launcher_favorites(legacy.launcher.favorites)
+                    .with_launcher_display_mode(legacy.launcher.display_mode)
+                    .with_general(legacy.general)
+                    .with_media_enabled(legacy.dock.media_enabled())
+            }
+            5 => serde_json::from_slice(contents)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
             _ => {
                 return Err(io::Error::new(
@@ -261,7 +302,7 @@ impl Preferences {
     }
 
     fn validate(&self) -> io::Result<()> {
-        if self.schema_version != 4 {
+        if self.schema_version != 5 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Unsupported settings schema version",
@@ -368,12 +409,29 @@ impl SettingsStore {
 mod tests {
     use super::*;
 
+    fn custom_shortcuts() -> ShortcutConfig {
+        ShortcutConfig::default()
+            .with_enabled(false)
+            .with_settings_override(Some(
+                tessera_system::shortcuts::KeyChord::new(
+                    tessera_system::shortcuts::KeyModifiers {
+                        control: true,
+                        alt: true,
+                        ..Default::default()
+                    },
+                    0x4D,
+                )
+                .unwrap(),
+            ))
+            .unwrap()
+    }
+
     fn assert_source_groups(preferences: &Preferences) {
-        assert_eq!(preferences.schema_version, 4);
+        assert_eq!(preferences.schema_version, 5);
         assert_eq!(preferences.general().start_of_week(), StartOfWeek::Monday);
         assert!(!preferences.media_enabled());
-        assert_eq!(preferences.general, GeneralPreferences::default());
-        assert_eq!(preferences.dock, DockPreferences::default());
+        assert_eq!(preferences.general(), GeneralPreferences::default());
+        assert_eq!(preferences.shortcuts(), &ShortcutConfig::default());
     }
 
     #[test]
@@ -435,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v1_migration_is_read_only_until_complete_v4_explicit_save() {
+    fn legacy_v1_migration_is_read_only_until_complete_v5_explicit_save() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -471,7 +529,7 @@ mod tests {
                 .with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
             store.save(&complete).unwrap();
             let persisted = fs::read_to_string(&path).unwrap();
-            assert!(persisted.contains("\"schema_version\": 4"));
+            assert!(persisted.contains("\"schema_version\": 5"));
             assert!(persisted.contains("\"launcher\""));
             assert!(persisted.contains("\"display_mode\": \"fullscreen\""));
             assert!(persisted.contains("\"favorites\""));
@@ -483,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v2_migration_retains_exact_favorites_and_only_explicit_save_writes_v4() {
+    fn legacy_v2_migration_retains_exact_favorites_and_only_explicit_save_writes_v5() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -510,7 +568,7 @@ mod tests {
         let complete = migrated.with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
         store.save(&complete).unwrap();
         let persisted = fs::read_to_string(&path).unwrap();
-        assert!(persisted.contains("\"schema_version\": 4"));
+        assert!(persisted.contains("\"schema_version\": 5"));
         assert!(!persisted.contains("\"launcher_favorites\""));
         assert_eq!(store.load().unwrap(), complete);
 
@@ -561,7 +619,7 @@ mod tests {
                 .with_media_enabled(true);
             store.save(&complete).unwrap();
             let persisted = fs::read_to_string(&path).unwrap();
-            assert!(persisted.contains("\"schema_version\": 4"));
+            assert!(persisted.contains("\"schema_version\": 5"));
             assert!(persisted.contains("\"start_of_week\": \"sunday\""));
             assert!(persisted.contains("\"media_enabled\": true"));
             assert_eq!(store.load().unwrap(), complete);
@@ -572,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_v4_records_round_trip_every_general_and_dock_choice() {
+    fn complete_v5_records_round_trip_every_general_and_dock_choice() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -591,7 +649,7 @@ mod tests {
                 assert_eq!(
                     serde_json::to_value(&preferences).unwrap(),
                     serde_json::json!({
-                        "schema_version": 4,
+                        "schema_version": 5,
                         "theme": "light",
                         "compact": true,
                         "dock_edge": "left",
@@ -602,6 +660,7 @@ mod tests {
                         },
                         "general": { "start_of_week": name },
                         "dock": { "media_enabled": enabled },
+                        "shortcuts": { "enabled": true, "settings_override": null },
                     })
                 );
                 store.save(&preferences).unwrap();
@@ -620,7 +679,8 @@ mod tests {
             .with_launcher_favorites(vec!["missing".into(), "EXACT".into(), "exact".into()])
             .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
             .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Saturday))
-            .with_media_enabled(true);
+            .with_media_enabled(true)
+            .with_shortcuts(custom_shortcuts());
         let dock = original
             .clone()
             .with_dock(DockEdge::Top, vec!["replacement".into()]);
@@ -654,6 +714,12 @@ mod tests {
         let media = original.clone().with_media_enabled(false);
         assert!(!media.media_enabled());
         assert_eq!(media.with_media_enabled(original.media_enabled()), original);
+        let shortcuts = original.clone().with_shortcuts(ShortcutConfig::default());
+        assert_eq!(shortcuts.shortcuts(), &ShortcutConfig::default());
+        assert_eq!(
+            shortcuts.with_shortcuts(original.shortcuts().clone()),
+            original
+        );
     }
 
     #[test]
@@ -728,15 +794,17 @@ mod tests {
     }
 
     #[test]
-    fn v3_and_v4_require_complete_strict_launcher_groups_and_reject_duplicate_fields() {
+    fn v3_v4_and_v5_require_complete_strict_launcher_groups_and_reject_duplicate_fields() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
-        for version in [3, 4] {
-            let groups = if version == 4 {
-                r#","general":{"start_of_week":"monday"},"dock":{"media_enabled":false}"#
-            } else {
-                ""
+        for version in [3, 4, 5] {
+            let groups = match version {
+                3 => "",
+                4 => r#","general":{"start_of_week":"monday"},"dock":{"media_enabled":false}"#,
+                _ => {
+                    r#","general":{"start_of_week":"monday"},"dock":{"media_enabled":false},"shortcuts":{"enabled":true,"settings_override":null}"#
+                }
             };
             let record = |launcher: &str| {
                 format!(
@@ -832,6 +900,10 @@ mod tests {
                     4,
                     r#","launcher":{"display_mode":"fullscreen","favorites":[]},"general":{"start_of_week":"monday"},"dock":{"media_enabled":false}"#,
                 ),
+                (
+                    5,
+                    r#","launcher":{"display_mode":"fullscreen","favorites":[]},"general":{"start_of_week":"monday"},"dock":{"media_enabled":false},"shortcuts":{"enabled":true,"settings_override":null}"#,
+                ),
             ] {
                 let invalid = format!(
                     r#"{{"schema_version":{version},"theme":"dark","compact":true,"dock_edge":"top","pinned_apps":{encoded_pins}{launcher_fields}}}"#
@@ -922,7 +994,8 @@ mod tests {
         let mut preferences = Preferences::default()
             .with_launcher_favorites(favorites)
             .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Saturday))
-            .with_media_enabled(true);
+            .with_media_enabled(true)
+            .with_shortcuts(custom_shortcuts().with_enabled(true));
         let size = serde_json::to_vec_pretty(&preferences).unwrap().len() + 1;
         let padding = MAX_SETTINGS_BYTES as usize - size;
         preferences
@@ -951,6 +1024,18 @@ mod tests {
         assert_eq!(
             store
                 .save(&preferences.clone().with_media_enabled(false))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(
+            store
+                .save(
+                    &preferences
+                        .clone()
+                        .with_shortcuts(preferences.shortcuts().clone().with_enabled(false),),
+                )
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidData
@@ -996,7 +1081,8 @@ mod tests {
             .with_launcher_favorites(vec!["favorite".into()])
             .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
             .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Saturday))
-            .with_media_enabled(true);
+            .with_media_enabled(true)
+            .with_shortcuts(custom_shortcuts());
         store.save(&previous).unwrap();
         let original = fs::read(&path).unwrap();
         // Denying delete sharing forces the actual persist/replace step to fail.

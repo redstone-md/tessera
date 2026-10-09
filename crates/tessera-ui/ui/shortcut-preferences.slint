@@ -1,0 +1,207 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { CheckBox as NativeCheckBox, Palette } from "std-widgets.slint";
+import { TileButton, FocusTokens } from "tiles.slint";
+import { SeelenPalette } from "palette.slint";
+
+// Native focused capture and draft presentation only. Rust owns the typed chord;
+// these labels can never be parsed into persisted or native authority.
+export component ShortcutPreferences inherits VerticalLayout {
+    in property <bool> compact: false;
+    in property <bool> controls-enabled: true;
+    in property <bool> draft-enabled: true;
+    in property <string> settings-label: "Win + K";
+    in property <bool> capturing: false;
+    in property <bool> dirty: false;
+    in property <bool> applying: false;
+    in property <string> launcher-status: "Not applied";
+    in property <string> settings-status: "Not applied";
+    in property <string> message: "";
+
+    callback enabled-edited(bool);
+    callback capture-requested;
+    callback capture-cancelled;
+    callback settings-reset-requested;
+    callback capture-pressed(KeyEvent) -> bool;
+    callback capture-released(KeyEvent) -> bool;
+
+    spacing: root.compact ? 4px : 8px;
+    min-width: 0px;
+    vertical-stretch: 0;
+    padding-left: FocusTokens.outer-margin;
+    padding-right: FocusTokens.outer-margin;
+    padding-top: FocusTokens.outer-margin;
+    padding-bottom: FocusTokens.outer-margin;
+
+    public function focus-capture() {
+        if root.capturing && root.controls-enabled && root.draft-enabled {
+            capture-focus.focus();
+        }
+    }
+    public function cancel-input() {
+        capture-button.cancel-input();
+        reset-button.cancel-input();
+        root.capture-cancelled();
+    }
+    changed controls-enabled => {
+        if !root.controls-enabled { root.cancel-input(); }
+    }
+    changed draft-enabled => {
+        if !root.draft-enabled { root.cancel-input(); }
+    }
+
+    Text {
+        text: "Shortcuts";
+        color: Palette.foreground;
+        font-weight: 600;
+        accessible-role: text;
+    }
+    // Stock CheckBox's unwrapped caption supplies a single-line minimum. Keep
+    // its genuine glyph, full-row pointer/Tab/Space/AX input and focus border;
+    // only the inert caption wraps, measured at the actual available width.
+    enabled-row := Rectangle {
+        min-width: 0px;
+        min-height: max(18px, enabled-label.preferred-height);
+        preferred-height: self.min-height;
+        enabled-choice := NativeCheckBox {
+            width: parent.width;
+            height: parent.height;
+            text: "";
+            accessible-label: "Enable global shortcuts";
+            enabled: root.controls-enabled;
+            checked: root.draft-enabled;
+            toggled => { root.enabled-edited(self.checked); }
+        }
+        enabled-label := Text {
+            x: 30px;
+            y: (parent.height - self.height) / 2;
+            width: max(0px, parent.width - self.x);
+            height: self.preferred-height;
+            text: "Enable global shortcuts";
+            wrap: word-wrap;
+            color: Palette.foreground;
+            opacity: root.controls-enabled ? 1 : 0.5;
+            accessible-role: none;
+        }
+    }
+
+    // The literal Win binding is genuine source metadata, not a disabled editor.
+    launcher-row := VerticalLayout {
+        spacing: 2px;
+        Text {
+            text: "Launcher — Win (read-only)";
+            color: Palette.foreground;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-label: "Launcher shortcut: Win. Read-only system shortcut.";
+        }
+        Text {
+            text: root.launcher-status;
+            color: SeelenPalette.secondary;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-label: "Launcher registration: " + root.launcher-status;
+        }
+    }
+    settings-row := VerticalLayout {
+        spacing: root.compact ? 4px : 6px;
+        Text {
+            text: "Settings";
+            color: Palette.foreground;
+            accessible-role: text;
+        }
+        capture-button := TileButton {
+            min-width: 0px;
+            min-height: 36px;
+            preferred-height: max(36px, capture-label.preferred-height + 16px);
+            horizontal-stretch: 1;
+            radius: 4px;
+            enabled: root.controls-enabled && root.draft-enabled;
+            allow-return-repeat: false;
+            accessible-text: root.capturing
+                ? "Press a shortcut. Escape cancels capture."
+                : "Change Settings shortcut: " + root.settings-label;
+            clicked => {
+                root.capture-requested();
+                root.focus-capture();
+            }
+            capture-label := Text {
+                x: 8px;
+                y: 8px;
+                width: max(0px, parent.width - 16px);
+                text: root.capturing ? "Press a shortcut… Escape cancels" : root.settings-label;
+                wrap: word-wrap;
+                color: SeelenPalette.foreground;
+                accessible-role: none;
+            }
+        }
+        reset-button := TileButton {
+            min-width: 0px;
+            min-height: 32px;
+            preferred-height: max(32px, reset-label.preferred-height + 12px);
+            horizontal-stretch: 1;
+            radius: 4px;
+            enabled: root.controls-enabled && root.draft-enabled;
+            allow-return-repeat: false;
+            accessible-text: "Reset Settings shortcut to Win + K";
+            clicked => { root.settings-reset-requested(); }
+            reset-label := Text {
+                x: 8px;
+                y: 6px;
+                width: max(0px, parent.width - 16px);
+                text: "Reset to default (Win + K)";
+                wrap: word-wrap;
+                color: SeelenPalette.foreground;
+                accessible-role: none;
+            }
+        }
+        Text {
+            text: root.settings-status;
+            color: SeelenPalette.secondary;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-label: "Settings registration: " + root.settings-status;
+        }
+    }
+    Text {
+        text: root.applying ? "Applying saved shortcuts…"
+            : root.dirty ? "Unsaved shortcut changes. Use Save to apply."
+            : "Shortcut changes apply only when you save preferences.";
+        color: SeelenPalette.secondary;
+        wrap: word-wrap;
+        accessible-role: text;
+    }
+    if root.message != "": Text {
+        text: root.message;
+        color: Palette.foreground;
+        wrap: word-wrap;
+        accessible-role: text;
+    }
+
+    // Only this explicitly focused scope captures keys. It is not an ancestor
+    // key interceptor for the other controls or the parent settings window.
+    capture-focus := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.controls-enabled && root.draft-enabled && root.capturing;
+        focus-on-tab-navigation: false;
+        focus-lost(reason) => { if root.capturing { root.capture-cancelled(); } }
+        key-pressed(event) => {
+            if root.capturing && root.controls-enabled && root.draft-enabled {
+                let handled = root.capture-pressed(event);
+                if !root.capturing { capture-button.focus-for-keyboard(); }
+                return handled ? accept : reject;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if root.capturing && root.controls-enabled && root.draft-enabled {
+                let handled = root.capture-released(event);
+                if !root.capturing { capture-button.focus-for-keyboard(); }
+                return handled ? accept : reject;
+            }
+            return reject;
+        }
+    }
+}

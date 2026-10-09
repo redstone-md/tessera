@@ -19,6 +19,7 @@ mod launcher_app_menu_tests;
 mod module_integration_tests;
 mod power_display_tests;
 mod power_tests;
+mod shortcut_profile_tests;
 
 #[cfg(debug_assertions)]
 use i_slint_backend_testing::ElementHandle;
@@ -58,6 +59,8 @@ thread_local! {
     static TOOLTIP_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static TOOLTIP_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
     static POWER_WINDOW: RefCell<Option<slint::Weak<crate::generated::PowerMenuSurface>>> = const { RefCell::new(None) };
+    static SHORTCUT_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static PROFILE_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
 }
 
 struct FixtureHost {
@@ -104,6 +107,10 @@ struct FixtureHost {
     input_language_provider_calls: AtomicUsize,
     media_provider: Mutex<Option<Arc<dyn tessera_system::media::MediaHost>>>,
     media_provider_calls: AtomicUsize,
+    shortcuts_provider: Mutex<Option<Arc<dyn tessera_system::shortcuts::ShortcutHost>>>,
+    shortcuts_factory_calls: AtomicUsize,
+    profile_provider: Mutex<Option<Arc<dyn tessera_system::profile::ProfileHost>>>,
+    profile_factory_calls: AtomicUsize,
     pointer_provider: Mutex<Option<Arc<dyn tessera_system::visibility::PointerHost>>>,
     pointer_provider_calls: AtomicUsize,
     power_lease_drops: Arc<AtomicUsize>,
@@ -158,6 +165,10 @@ impl FixtureHost {
             input_language_provider_calls: AtomicUsize::new(0),
             media_provider: Mutex::default(),
             media_provider_calls: AtomicUsize::new(0),
+            shortcuts_provider: Mutex::default(),
+            shortcuts_factory_calls: AtomicUsize::new(0),
+            profile_provider: Mutex::default(),
+            profile_factory_calls: AtomicUsize::new(0),
             pointer_provider: Mutex::default(),
             pointer_provider_calls: AtomicUsize::new(0),
             power_lease_drops: Arc::default(),
@@ -198,6 +209,34 @@ impl DesktopHost for FixtureHost {
         tessera_system::folders::FolderError,
     > {
         Ok(self.folder_provider.lock().clone())
+    }
+
+    fn shortcuts_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::shortcuts::ShortcutHost>>,
+        tessera_system::shortcuts::ShortcutError,
+    > {
+        self.shortcuts_factory_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = SHORTCUT_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.shortcuts_provider.lock().clone())
+    }
+
+    fn profile_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::profile::ProfileHost>>,
+        tessera_system::profile::ProfileError,
+    > {
+        self.profile_factory_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = PROFILE_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.profile_provider.lock().clone())
     }
 
     fn calendar_host(
@@ -545,6 +584,7 @@ fn workers_are_single_flight_recover_from_errors_and_do_not_retain_closed_window
     let heartbeat = Rc::new(RefCell::new(crate::Heartbeat::unarmed(
         &crate::RunOptions {
             surface: crate::SurfaceMode::Panel,
+            global_shortcuts_enabled: true,
             heartbeat: Some(Arc::new(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
             })),

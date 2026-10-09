@@ -28,7 +28,7 @@ impl PanelController {
     ) {
         // Foreground denial can leave an honest visible popup. Conversely,
         // invalid or cancelled presentation must retain the previous popup.
-        if self.power_admission_closed.get() {
+        if !self.root_current() {
             return;
         }
         if is_open && !self.dismiss_popups_except(Some(kind)) {
@@ -52,17 +52,16 @@ impl PanelController {
 
     /// Clone all caches before callbacks: hiding can synchronously reenter UI.
     pub(super) fn dismiss_popups_except(&self, keep: Option<PopupKind>) -> bool {
-        if self.power_admission_closed.get() {
+        if !self.root_current() {
             return false;
         }
         // Holding the old identity prevents allocator reuse: a reentrant newer
         // presentation wins without wrapping a counter or keeping a cache borrow.
         let operation = Rc::new(());
+        self.admission.active_popup.set(keep);
         self.popup_operation.replace(Rc::clone(&operation));
-        let current = || {
-            !self.power_admission_closed.get()
-                && Rc::ptr_eq(&operation, &self.popup_operation.borrow())
-        };
+        let current =
+            || self.root_current() && Rc::ptr_eq(&operation, &self.popup_operation.borrow());
         let menu = self.menus.borrow().clone();
         let quick = self.quick_settings.borrow().clone();
         let user = self.user_menu.borrow().clone();
