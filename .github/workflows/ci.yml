@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     tags: ['v*']
-    branches: ['diagnostics/native-media-seek']
+    branches: ['diagnostics/native-media-seek', 'diagnostics/native-audio-admission']
 
 permissions:
   contents: read
