@@ -489,23 +489,25 @@ mod desktop {
         presentation: Presentation,
         heartbeat: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if presentation != Presentation::Utility {
-            // Shell surfaces start passive, including their first native
-            // show. Interactive windows request foreground explicitly only
-            // after their validated role is attached; never activate a hint.
-            slint::BackendSelector::new()
-                .with_winit_window_attributes_hook(|attributes| attributes.with_active(false))
-                .select()?;
-        }
-        let heartbeat = heartbeat
-            .map(tessera_windows::ShellHeartbeat::connect)
-            .transpose()?
-            .map(|event| {
-                // The independent supervisor handles a failed/absent heartbeat by restoring Explorer.
-                Arc::new(move || {
-                    let _ = event.pulse();
-                }) as Arc<dyn Fn() + Send + Sync>
-            });
+        let diagnostic = presentation == Presentation::Diagnostic;
+        // The production UI runner owns backend selection and its passive
+        // first-show hook. Selecting here too would recreate Winit's event loop.
+        let heartbeat = crate::diagnostic::startup_phase(
+            diagnostic,
+            crate::diagnostic::StartupPhase::HeartbeatEventConnect,
+            || {
+                heartbeat
+                    .map(tessera_windows::ShellHeartbeat::connect)
+                    .transpose()
+                    .map_err(Into::into)
+            },
+        )?
+        .map(|event| {
+            // The independent supervisor handles a failed/absent heartbeat by restoring Explorer.
+            Arc::new(move || {
+                let _ = event.pulse();
+            }) as Arc<dyn Fn() + Send + Sync>
+        });
         if presentation == Presentation::Diagnostic {
             return crate::diagnostic::run(heartbeat);
         }

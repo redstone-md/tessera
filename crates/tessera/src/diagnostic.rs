@@ -17,6 +17,62 @@ const NOTICE: &str =
     "Internal GUI startup diagnostic: synthetic geometry; desktop data and actions unavailable.";
 const ACTION_UNAVAILABLE: &str = "Desktop actions are unavailable in the internal GUI diagnostic";
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StartupPhase {
+    HeartbeatEventConnect,
+    DiagnosticFixture,
+    ProductionUiConstructionAndEventLoop,
+}
+
+impl StartupPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::HeartbeatEventConnect => "heartbeatEventConnect",
+            Self::DiagnosticFixture => "diagnosticFixture",
+            Self::ProductionUiConstructionAndEventLoop => "productionUiConstructionAndEventLoop",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StartupError {
+    phase: StartupPhase,
+    cause: Box<dyn std::error::Error>,
+}
+
+impl std::fmt::Display for StartupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "diagnostic phase={}: {}",
+            self.phase.label(),
+            self.cause
+        )
+    }
+}
+
+impl std::error::Error for StartupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+/// Context only for the inert diagnostic; ordinary session errors stay untouched.
+/// The operation runs exactly once, without retries, queries, or panic interception.
+pub(crate) fn startup_phase<T>(
+    diagnostic: bool,
+    phase: StartupPhase,
+    operation: impl FnOnce() -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    operation().map_err(|cause| {
+        if diagnostic {
+            Box::new(StartupError { phase, cause }) as Box<dyn std::error::Error>
+        } else {
+            cause
+        }
+    })
+}
+
 struct DiagnosticHost {
     snapshot: PanelSnapshot,
 }
@@ -75,13 +131,25 @@ impl DesktopHost for DiagnosticHost {
 pub(crate) fn run(
     heartbeat: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tessera_ui::run(
-        DiagnosticHost::new()?,
-        PanelPreferences::default(),
-        Some(NOTICE.into()),
-        RunOptions {
-            surface: SurfaceMode::Dock,
-            heartbeat,
+    let host = startup_phase(true, StartupPhase::DiagnosticFixture, || {
+        DiagnosticHost::new().map_err(Into::into)
+    })?;
+    // The public production runner owns both component construction and the loop;
+    // do not claim a more specific internal stage than this boundary can observe.
+    startup_phase(
+        true,
+        StartupPhase::ProductionUiConstructionAndEventLoop,
+        || {
+            tessera_ui::run(
+                host,
+                PanelPreferences::default(),
+                Some(NOTICE.into()),
+                RunOptions {
+                    surface: SurfaceMode::Dock,
+                    heartbeat,
+                },
+            )
+            .map_err(Into::into)
         },
     )?;
     Ok(())
@@ -95,6 +163,94 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn diagnostic_phase_preserves_each_original_typed_cause() {
+        for (phase, label) in [
+            (StartupPhase::HeartbeatEventConnect, "heartbeatEventConnect"),
+            (StartupPhase::DiagnosticFixture, "diagnosticFixture"),
+            (
+                StartupPhase::ProductionUiConstructionAndEventLoop,
+                "productionUiConstructionAndEventLoop",
+            ),
+        ] {
+            let calls = AtomicUsize::new(0);
+            let error = startup_phase::<()>(true, phase, || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(
+                    std::io::Error::new(std::io::ErrorKind::PermissionDenied, "original cause")
+                        .into(),
+                )
+            })
+            .unwrap_err();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                error.to_string(),
+                format!("diagnostic phase={label}: original cause")
+            );
+            let cause = error
+                .source()
+                .unwrap()
+                .downcast_ref::<std::io::Error>()
+                .unwrap();
+            assert_eq!(cause.kind(), std::io::ErrorKind::PermissionDenied);
+            assert_eq!(cause.to_string(), "original cause");
+        }
+    }
+
+    #[test]
+    fn ordinary_session_error_is_not_wrapped_or_replaced() {
+        let calls = AtomicUsize::new(0);
+        let cause: Box<dyn std::error::Error> =
+            std::io::Error::new(std::io::ErrorKind::NotFound, "ordinary cause").into();
+        let original = cause.as_ref() as *const dyn std::error::Error;
+        let error = startup_phase::<()>(false, StartupPhase::HeartbeatEventConnect, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(cause)
+        })
+        .unwrap_err();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(std::ptr::eq(original, error.as_ref()));
+        assert_eq!(error.to_string(), "ordinary cause");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn phase_success_runs_only_the_given_operation_once() {
+        for diagnostic in [false, true] {
+            let calls = AtomicUsize::new(0);
+            let result = startup_phase(diagnostic, StartupPhase::DiagnosticFixture, || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(42)
+            })
+            .unwrap();
+            assert_eq!(result, 42);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn diagnostic_route_precedes_user_state_and_leaves_backend_to_production_ui() {
+        let panel = include_str!("panel.rs");
+        let run = panel.split("pub(super) fn run(").nth(1).unwrap();
+        let startup = run.split("super::load_preferences(").next().unwrap();
+        assert!(startup.contains("return crate::diagnostic::run(heartbeat);"));
+        assert!(startup.contains("StartupPhase::HeartbeatEventConnect"));
+        assert!(!startup.contains("BackendSelector"));
+        assert!(!startup.contains("AppHost {"));
+        assert!(!startup.contains("SettingsStore::for_current_user"));
+        let ui = include_str!("../../tessera-ui/src/lib.rs");
+        let run = ui.split("pub fn run(").nth(1).unwrap();
+        let startup = run.split("controller::run(").next().unwrap();
+        assert_eq!(startup.matches("slint::BackendSelector::new()").count(), 1);
+        assert!(startup.contains(".backend_name(\"winit\".into())"));
+        assert!(
+            startup.contains(".with_winit_window_attributes_hook(nonactivating_window_attributes)")
+        );
+    }
 
     #[test]
     fn observation_is_only_the_fixed_explicit_internal_fixture() {

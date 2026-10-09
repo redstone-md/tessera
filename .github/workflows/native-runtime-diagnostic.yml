@@ -1,0 +1,54 @@
+name: Native runtime diagnostic (Debug; no release assets)
+
+on:
+  push:
+    branches: ['diagnostics/native-runtime']
+
+permissions:
+  contents: read
+
+jobs:
+  native-runtime:
+    name: Windows native GUI startup and owned cleanup (Debug)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install the documented Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed.' }
+      - name: Build the production GUI and supervisor (Debug, static CRT)
+        shell: pwsh
+        run: |
+          cargo +1.92.0 build -p tessera --bin tessera-desktop --bin tessera-shell --target x86_64-pc-windows-msvc --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Native diagnostic build failed.' }
+      - name: Require two real UI pulses and owned cleanup; retain bounded startup errors
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          Import-Module (Join-Path $env:GITHUB_WORKSPACE 'scripts/Tessera.Deployment.psm1')
+          $fixture = Join-Path ([IO.Path]::GetTempPath()) ('tessera-native-debug-' + [Guid]::NewGuid().ToString('N'))
+          $binaries = @{ 'Tessera.exe' = 'tessera-desktop.exe'; 'tessera-shell.exe' = 'tessera-shell.exe' }
+          try {
+            $null = [IO.Directory]::CreateDirectory($fixture)
+            foreach ($name in $binaries.Keys) {
+              $source = Join-Path $env:GITHUB_WORKSPACE ('target/x86_64-pc-windows-msvc/debug/' + $binaries[$name])
+              [IO.File]::Copy($source, (Join-Path $fixture $name), $false)
+            }
+            Invoke-SupervisorRuntimeVerification -SupervisorPath (Join-Path $fixture 'tessera-shell.exe') -DiagnosticDetails
+            Write-Host 'Native Debug smoke passed: two production UI pulses and owned GUI cleanup; not release certification. No assets published.'
+          } finally {
+            foreach ($name in $binaries.Keys) {
+              $path = Join-Path $fixture $name
+              if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
+            }
+            if ([IO.Directory]::Exists($fixture)) { [IO.Directory]::Delete($fixture, $false) }
+          }
