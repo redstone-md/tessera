@@ -186,11 +186,27 @@ impl Control {
     fn inject(&self, input: Input) {
         // The same mutex brackets condition checks and notifications, preventing
         // a lost wake between try_recv and the backend's blocking wait.
-        let _record = self.record.lock().expect("input lock");
-        self.input
-            .try_send(input)
-            .expect("bounded fixture input has room");
-        self.changed.notify_all();
+        let record = self.record.lock().expect("input lock");
+        match self.input.try_send(input) {
+            Ok(()) => self.changed.notify_all(),
+            Err(mpsc::TrySendError::Disconnected(Input::Wake)) => {
+                // The Rust command wake can retire the owner before its saved
+                // native wake runs. Like the SDK's Arc-owned event, that is safe.
+                assert!(
+                    record
+                        .gate
+                        .as_ref()
+                        .is_some_and(|gate| gate.closed.load(Ordering::Acquire)),
+                    "only a closed owner may retire fixture input"
+                );
+                assert_eq!(
+                    record.operations.last().map(|(_, operation)| operation),
+                    Some(&Operation::Drop),
+                    "a late wake requires completed backend resource retirement"
+                );
+            }
+            Err(error) => panic!("bounded fixture input has room: {error:?}"),
+        }
     }
 }
 
@@ -1188,7 +1204,8 @@ fn host_close_preserves_every_accepted_completion_and_cleans_up_on_owner() {
 fn cleanup_failure_reports_typed_unavailable_and_late_commands_do_not_reinstall() {
     let (fixture, host) = Fixture::create(Scenario::default());
     let (old_subscription, old_events) = subscribe(host.as_ref());
-    configure(host.as_ref(), ShortcutConfig::default()).expect("initial registration");
+    let initial =
+        configure(host.as_ref(), ShortcutConfig::default()).expect("initial registration");
     let error = ShortcutError::new(
         ShortcutErrorKind::AccessDenied,
         Some(5),
@@ -1198,6 +1215,8 @@ fn cleanup_failure_reports_typed_unavailable_and_late_commands_do_not_reinstall(
     let cleanup = fixture.arm(Phase::Cleanup);
     drop(old_subscription);
     cleanup.entered();
+    fixture.trigger(initial.generation, ShortcutAction::ToggleLauncher);
+    fixture.trigger(initial.generation, ShortcutAction::OpenSettings);
     let (subscription, events) = subscribe(host.as_ref());
     cleanup.release();
     let (event, callback_thread) = events
@@ -1244,6 +1263,33 @@ fn cleanup_failure_reports_typed_unavailable_and_late_commands_do_not_reinstall(
     fixture.set_cleanup_error(None);
     drop(subscription);
     fixture.close(host);
+    assert_eq!(
+        Authority::read(&fixture.gate()),
+        Authority {
+            generation: 0,
+            listening: false,
+            closed: true
+        }
+    );
+    assert_eq!(
+        fixture
+            .operations()
+            .iter()
+            .filter(|(_, operation)| matches!(operation, Operation::Register(..)))
+            .count(),
+        1,
+        "the one settings registration is retired, never replaced"
+    );
+    assert!(
+        matches!(
+            events.recv_timeout(DEADLINE),
+            Err(RecvTimeoutError::Disconnected)
+        ),
+        "close retires the sink without delivering old input or another fault"
+    );
+    // Deterministically exercise Host::drop's native wake after its Rust command
+    // wake has already retired the receiver; the real close can interleave so.
+    fixture.control.inject(Input::Wake);
 }
 
 #[test]
