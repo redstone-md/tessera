@@ -3,8 +3,8 @@
 
 //! Only open/close calls. No values, writes, services, COM or last-error reads.
 //!
-//! https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regopenkeyexw
-//! https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regclosekey
+//! <https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regopenkeyexw>
+//! <https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regclosekey>
 
 #![allow(unsafe_code)]
 
