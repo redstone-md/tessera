@@ -497,8 +497,6 @@ mod desktop {
                 .with_winit_window_attributes_hook(|attributes| attributes.with_active(false))
                 .select()?;
         }
-        let (settings, preferences, notice) =
-            super::load_preferences(SettingsStore::for_current_user());
         let heartbeat = heartbeat
             .map(tessera_windows::ShellHeartbeat::connect)
             .transpose()?
@@ -508,6 +506,11 @@ mod desktop {
                     let _ = event.pulse();
                 }) as Arc<dyn Fn() + Send + Sync>
             });
+        if presentation == Presentation::Diagnostic {
+            return crate::diagnostic::run(heartbeat);
+        }
+        let (settings, preferences, notice) =
+            super::load_preferences(SettingsStore::for_current_user());
         let host = AppHost {
             targets: Mutex::new(HashMap::new()),
             catalog: Mutex::new(None),

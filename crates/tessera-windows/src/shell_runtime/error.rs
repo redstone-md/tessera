@@ -35,6 +35,19 @@ pub enum ShellRuntimeError {
     /// Another presentation owner already runs for this user/session. The
     /// existing owner is left untouched; nothing was hidden or restored.
     PresentationOwnerBusy,
+    /// Diagnostic preflight failure, retaining the exact phase, child status,
+    /// cleanup error and at most 16 KiB of the owned GUI's stderr tail.
+    DiagnosticFailure {
+        stage: &'static str,
+        pulses: u8,
+        exit_code: Option<u32>,
+        source: Box<ShellRuntimeError>,
+        cleanup_error: Option<Box<ShellRuntimeError>>,
+        stderr: Vec<u8>,
+        stderr_truncated: bool,
+        stderr_status: &'static str,
+        stderr_native_code: Option<u32>,
+    },
 }
 
 impl fmt::Display for ShellRuntimeError {
@@ -65,11 +78,94 @@ impl fmt::Display for ShellRuntimeError {
                 f,
                 "another presentation owner already runs in this session; nothing was changed"
             ),
+            Self::DiagnosticFailure {
+                stage,
+                pulses,
+                exit_code,
+                source,
+                cleanup_error,
+                stderr,
+                stderr_truncated,
+                stderr_status,
+                stderr_native_code,
+            } => {
+                let stderr_hint = if stderr.is_empty() {
+                    "empty"
+                } else if stderr
+                    .windows(b"panicked at".len())
+                    .any(|part| part == b"panicked at")
+                {
+                    "panic"
+                } else {
+                    "other"
+                };
+                writeln!(
+                    f,
+                    "tessera-runtime stage={stage} error={} pulses={pulses} exit_code={} native_code={} cleanup_native_code={} stderr_bytes={} stderr_truncated={stderr_truncated} stderr_status={stderr_status} stderr_hint={stderr_hint} stderr_native_code={}",
+                    source.category(),
+                    NativeCode(*exit_code),
+                    NativeCode(source.native_code()),
+                    NativeCode(cleanup_error.as_deref().and_then(Self::native_code)),
+                    stderr.len(),
+                    NativeCode(*stderr_native_code),
+                )?;
+                write!(f, "runtime cause: {source}")?;
+                if let Some(error) = cleanup_error {
+                    write!(f, "; owned cleanup also failed: {error}")?;
+                }
+                if !stderr.is_empty() {
+                    // Debug escaping keeps GUI text off the machine-record line,
+                    // including embedded newlines/control characters.
+                    write!(
+                        f,
+                        "\nGUI stderr tail: {:?}",
+                        String::from_utf8_lossy(stderr)
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }
 
-impl std::error::Error for ShellRuntimeError {}
+impl ShellRuntimeError {
+    fn native_code(&self) -> Option<u32> {
+        match self {
+            Self::Windows { code, .. } | Self::SpawnFailed { code } => Some(*code),
+            _ => None,
+        }
+    }
+
+    fn category(&self) -> &'static str {
+        match self {
+            Self::Windows { .. } => "windows",
+            Self::SpawnFailed { .. } => "spawn",
+            Self::HeartbeatViolation { .. } => "heartbeat",
+            Self::UnusablePath { .. } => "path",
+            _ => "other",
+        }
+    }
+}
+
+struct NativeCode(Option<u32>);
+
+impl fmt::Display for NativeCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(code) => write!(f, "0x{code:08X}"),
+            None => write!(f, "none"),
+        }
+    }
+}
+
+impl std::error::Error for ShellRuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DiagnosticFailure { source, .. } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::ERROR_NO_MATCH;
