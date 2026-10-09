@@ -1935,16 +1935,26 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
                 sample(&keyboard, 3.5),
                 "the outline is exactly two logical pixels wide",
             );
+            let icon = start
+                .query_descendants()
+                .match_type_name("Image")
+                .find_first()
+                .unwrap();
+            let icon_origin = icon.absolute_position();
             window.window().dispatch_event(WindowEvent::KeyPressed {
                 text: Key::Space.into(),
             });
             assert_eq!(opens.get(), before + 2);
             let held = draw(&window, width, height);
-            assert_ne!(
+            assert_eq!(
                 sample(&held, -2.0),
                 sample(&keyboard, -2.0),
-                "held Space must paint the shared pressed state",
+                "source dock press retains hover fill rather than an extra-dark color",
             );
+            assert_eq!(start.absolute_position(), position);
+            assert_eq!(start.size(), size);
+            assert_eq!(icon.absolute_position().x, icon_origin.x);
+            assert_eq!(icon.absolute_position().y, icon_origin.y + 2.0);
 
             window
                 .window()
@@ -2175,20 +2185,65 @@ fn toolbar_renders_identity_and_settings_access() {
         assert_eq!(settings.accessible_role(), Some(AccessibleRole::Button));
         let origin = settings.absolute_position();
         let size = settings.size();
-        assert_eq!(origin.y, 8.0);
-        assert_eq!((size.width, size.height), (16.0, 16.0));
+        assert_eq!(origin.y, 4.0);
+        assert_eq!((size.width, size.height), (24.0, 24.0));
         let (x, y) = ((origin.x * scale) as usize, (origin.y * scale) as usize);
-        let inset = (3.0 * scale) as usize;
-        let end = (13.0 * scale) as usize;
+        let inset = (7.0 * scale) as usize;
+        let end = (17.0 * scale) as usize;
         assert!(
             (y + inset..y + end).any(|row| {
                 pixels[row * width as usize + x + inset..row * width as usize + x + end]
                     .iter()
                     .any(|pixel| *pixel != pixels[0])
             }),
-            "the settings vector renders inside its 16px tile at each DPI"
+            "the 16px settings vector renders inside its padded 24px wrapper at each DPI"
         );
-        let center = slint::LogicalPosition::new(origin.x + 8.0, origin.y + 8.0);
+        let title = ElementHandle::find_by_accessible_label(&toolbar, "Editor — window")
+            .next()
+            .unwrap();
+        let clock = ElementHandle::find_by_accessible_label(&toolbar, "Open calendar")
+            .next()
+            .unwrap();
+        let title_origin = title.absolute_position();
+        let title_size = title.size();
+        assert!(
+            title_size.width > 0.0,
+            "the focused title gets the remaining left budget"
+        );
+        assert_eq!((title_origin.y, title_size.height), (8.0, 16.0));
+        assert!(title_origin.x + title_size.width <= clock.absolute_position().x - 8.0);
+        toolbar.set_focused_app("".into());
+        let blank = draw(&window, width, height);
+        toolbar.set_focused_app("Editor — window".into());
+        let restored = draw(&window, width, height);
+        assert_eq!(
+            restored, pixels,
+            "restoring the title restores its actual pixels"
+        );
+        let in_title = |index: usize| {
+            let x = (index % width as usize) as f32 / scale;
+            let y = (index / width as usize) as f32 / scale;
+            x >= title_origin.x
+                && x < title_origin.x + title_size.width
+                && y >= title_origin.y
+                && y < title_origin.y + title_size.height
+        };
+        let mut glyph_pixels = 0;
+        for (index, (painted, empty)) in pixels.iter().zip(&blank).enumerate() {
+            if in_title(index) {
+                glyph_pixels += usize::from(painted != empty);
+            } else {
+                assert_eq!(
+                    painted, empty,
+                    "the focused title paints only inside its bounded slot"
+                );
+            }
+        }
+        assert!(
+            glyph_pixels > 8,
+            "actual focused-title glyphs must render at both DPIs/themes"
+        );
+        let center = slint::LogicalPosition::new(origin.x + 12.0, origin.y + 12.0);
         // Straight edge outside the independent SVG's stroke bounds.
         let index =
             (center.y * scale) as usize * width as usize + ((origin.x + 0.5) * scale) as usize;
@@ -2219,7 +2274,7 @@ fn toolbar_renders_identity_and_settings_access() {
             .expect("actual settings hover requests a hint");
         assert_eq!(content, "Quick settings");
         assert_eq!(bounds.origin, origin);
-        assert_eq!((bounds.width, bounds.height), (16.0, 16.0));
+        assert_eq!((bounds.width, bounds.height), (24.0, 24.0));
         drop(requested);
         let before = opened.get();
         window.window().dispatch_event(WindowEvent::PointerPressed {
@@ -2283,6 +2338,61 @@ fn toolbar_renders_identity_and_settings_access() {
             width as usize,
             height as usize,
         );
+        for logical_width in [320u32, 640] {
+            let test_width = (logical_width as f32 * scale) as u32;
+            window.set_size(slint::PhysicalSize::new(test_width, height));
+            for name in [
+                "alice",
+                "A genuinely very long desktop account name that must elide",
+            ] {
+                toolbar.set_user_name(name.into());
+                toolbar.set_focused_app("Editor — window".into());
+                window.request_redraw();
+                let _ = draw(&window, test_width, height);
+                let clock = ElementHandle::find_by_accessible_label(&toolbar, "Open calendar")
+                    .next()
+                    .unwrap();
+                assert_eq!(
+                    clock.absolute_position().x + clock.size().width / 2.0,
+                    logical_width as f32 / 2.0
+                );
+                let user = ElementHandle::find_by_accessible_label(&toolbar, name)
+                    .next()
+                    .unwrap();
+                assert!(
+                    user.absolute_position().x + user.size().width
+                        <= clock.absolute_position().x - 9.0,
+                    "username elision preserves divider and both gaps"
+                );
+                let title_end = clock.absolute_position().x - 4.0;
+                toolbar.set_focused_app("".into());
+                // A fully elided, zero-width title need not invalidate paint.
+                window.request_redraw();
+                let empty = draw(&window, test_width, height);
+                toolbar.set_focused_app("An exceptionally long foreground window title that must not paint into the centered clock".into());
+                window.request_redraw();
+                let long = draw(&window, test_width, height);
+                for (index, (empty, long)) in empty.iter().zip(&long).enumerate() {
+                    if (index % test_width as usize) as f32 / scale >= title_end {
+                        assert_eq!(
+                            empty, long,
+                            "long titles never paint beyond the bounded left group"
+                        );
+                    }
+                }
+                assert_eq!(
+                    (
+                        settings.absolute_position().y,
+                        settings.size().width,
+                        settings.size().height
+                    ),
+                    (4.0, 24.0, 24.0)
+                );
+            }
+        }
+        toolbar.set_user_name("alice".into());
+        toolbar.set_focused_app("Editor — window".into());
+        window.set_size(slint::PhysicalSize::new(width, height));
     }
     assert_eq!(
         opened.get(),
@@ -2555,7 +2665,7 @@ fn launcher_empty_unavailable_and_no_match_states_are_distinct_and_keep_recovery
     let launcher = Launcher::new().unwrap();
     launcher.show().unwrap();
     let messages = [
-        "Welcome to Tessera.\nYour favorite applications appear here. Open All Apps to add favorites.",
+        "Welcome to Tessera.",
         "Saved favorites are unavailable. Refresh to check installed applications.",
         "No matching applications.",
         "Working; results appear after the current refresh.",
@@ -2579,6 +2689,7 @@ fn launcher_empty_unavailable_and_no_match_states_are_distinct_and_keep_recovery
             launcher.set_view(view);
             launcher.set_saved_favorites_present(saved);
             launcher.set_refreshing(refreshing);
+            launcher.set_feedback_visible(index > 0);
             launcher.set_search(if view == LauncherView::All {
                 "missing".into()
             } else {
@@ -2605,20 +2716,36 @@ fn launcher_empty_unavailable_and_no_match_states_are_distinct_and_keep_recovery
                 );
             }
             previous_pixels = Some(pixels);
-            for label in ["Open settings and recovery", "Exit Tessera"] {
-                let rescue = ElementHandle::find_by_accessible_label(&launcher, label)
+            let settings =
+                ElementHandle::find_by_accessible_label(&launcher, "Open settings and recovery")
                     .next()
                     .unwrap();
-                assert_eq!(rescue.accessible_enabled(), Some(true));
+            assert_eq!(settings.accessible_enabled(), Some(true));
+            assert!(
+                message.absolute_position().y + message.size().height
+                    < settings.absolute_position().y
+            );
+            let exit = ElementHandle::find_by_accessible_label(&launcher, "Exit Tessera").next();
+            let refresh =
+                ElementHandle::find_by_accessible_label(&launcher, "Refresh the desktop").next();
+            if index == 0 {
                 assert!(
-                    message.absolute_position().y + message.size().height
-                        < rescue.absolute_position().y
+                    exit.is_none() && refresh.is_none(),
+                    "normal source footer has no recovery command band"
                 );
+                assert!(
+                    ElementHandle::find_by_accessible_label(
+                        &launcher,
+                        "Your favorite applications appear here. Open All Apps to add favorites.",
+                    )
+                    .next()
+                    .is_some(),
+                    "welcome has a separately spaced second paragraph"
+                );
+            } else {
+                assert_eq!(exit.unwrap().accessible_enabled(), Some(true));
+                assert_eq!(refresh.unwrap().accessible_enabled(), Some(!refreshing));
             }
-            let refresh = ElementHandle::find_by_accessible_label(&launcher, "Refresh the desktop")
-                .next()
-                .unwrap();
-            assert_eq!(refresh.accessible_enabled(), Some(!refreshing));
             let navigation_label = if view == LauncherView::Favorites {
                 "All Apps"
             } else {
@@ -3114,16 +3241,37 @@ fn launcher_native_final_partial_row_keys_tab_footer_and_narrow_rows_remain_real
     );
     native_key(&window, Key::Tab.into());
     native_key(&window, Key::Return.into());
-    assert_eq!(refresh.get(), 1, "recovery Refresh is still reachable");
-    native_key(&window, Key::Tab.into());
-    native_key(&window, Key::Return.into());
-    assert_eq!(exit.get(), 1, "application Exit is not a session action");
-    native_key(&window, Key::Tab.into());
-    native_key(&window, Key::Return.into());
     assert_eq!(
         modes.borrow().as_slice(),
         &[crate::generated::LauncherDisplayMode::Fullscreen]
     );
+    assert!(
+        ElementHandle::find_by_accessible_label(&fixture.launcher, "Refresh the desktop")
+            .next()
+            .is_none()
+    );
+    assert!(
+        ElementHandle::find_by_accessible_label(&fixture.launcher, "Exit Tessera")
+            .next()
+            .is_none()
+    );
+    fixture.launcher.set_feedback_visible(true);
+    let _ = draw(&window, 560, 420);
+    let recovery =
+        ElementHandle::find_by_accessible_label(&fixture.launcher, "Refresh the desktop")
+            .next()
+            .unwrap();
+    native_click(&window, &recovery);
+    assert_eq!(
+        refresh.get(),
+        1,
+        "conditional recovery Refresh remains a genuine action"
+    );
+    let leave = ElementHandle::find_by_accessible_label(&fixture.launcher, "Exit Tessera")
+        .next()
+        .unwrap();
+    native_click(&window, &leave);
+    assert_eq!(exit.get(), 1, "conditional Exit is not a session action");
     assert_eq!(settings.get(), 1);
     assert_eq!(user.get(), 1);
     assert_eq!(fixture.launches.borrow().len(), 2);
@@ -3757,6 +3905,7 @@ fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scale
     let window = software_window();
     let launcher = Launcher::new().unwrap();
     set_launcher_tiles(&launcher, vec![app("editor", "Rust Editor")]);
+    launcher.set_feedback_visible(true);
     launcher.show().unwrap();
     for (scheme, scale, background) in [
         (slint::language::ColorScheme::Dark, 1.0, 24),
@@ -4149,9 +4298,9 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
         (
             true,
             false,
-            vec!["user", "settings", "power", "refresh", "exit"],
+            vec!["refresh", "exit", "user", "settings", "power"],
         ),
-        (false, true, vec!["user", "settings", "power", "exit"]),
+        (false, true, vec!["exit", "user", "settings", "power"]),
     ] {
         launcher.set_stale(stale);
         launcher.set_refreshing(refreshing);
@@ -5025,4 +5174,241 @@ fn popover_show_motion_settles_cancels_and_skips_when_not_permitted() {
         let mut pixels = skipped.clone();
         renderer.render(&mut pixels, width as usize);
     }));
+}
+
+#[test]
+fn settings_source_shell_routes_real_controls_without_saving_or_losing_drafts() {
+    use crate::generated::Panel;
+    use slint::language::ColorScheme;
+
+    let clock = Rc::new(Cell::new(Duration::ZERO));
+    let window = software_window_with_clock(clock.clone());
+    let panel = Panel::new().unwrap();
+    panel.set_version("0.1.0-alpha.21".into());
+    panel.set_status("Ready".into());
+    panel.set_start_of_week_index(2);
+    panel.set_dock_edge_index(1);
+    let saves = Rc::new(Cell::new(0));
+    let count = Rc::clone(&saves);
+    panel.on_save_preferences_requested(move || count.set(count.get() + 1));
+    let refreshes = Rc::new(Cell::new(0));
+    let count = Rc::clone(&refreshes);
+    panel.on_refresh_requested(move || count.set(count.get() + 1));
+    panel.show().unwrap();
+
+    for (scheme, scale, logical_width, logical_height) in [
+        (ColorScheme::Light, 1.0, 800u32, 500u32),
+        (ColorScheme::Dark, 2.0, 800, 500),
+        (ColorScheme::Light, 2.0, 600, 400),
+        (ColorScheme::Dark, 1.0, 600, 400),
+    ] {
+        panel.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        let width = (logical_width as f32 * scale) as u32;
+        let height = (logical_height as f32 * scale) as u32;
+        window.set_size(slint::PhysicalSize::new(width, height));
+        slint::platform::update_timers_and_animations();
+        window.request_redraw();
+        let _ = draw(&window, width, height);
+        // Settle stock native widget colors after a genuine scheme transition.
+        clock.set(clock.get() + Duration::from_millis(200));
+        slint::platform::update_timers_and_animations();
+        window.request_redraw();
+        let pixels = draw(&window, width, height);
+        let general = ElementHandle::find_by_accessible_label(&panel, "General")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap();
+        assert_eq!(general.size().height, 30.0);
+        assert!(general.absolute_position().x < 192.0);
+        let selector = ElementHandle::find_by_accessible_label(&panel, "Start of week")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+            .unwrap();
+        assert_eq!(
+            (selector.size().width, selector.size().height),
+            (200.0, 24.0)
+        );
+        let group = ElementHandle::find_by_element_id(&panel, "Panel::general-group")
+            .next()
+            .unwrap();
+        assert_eq!(
+            group.size().height,
+            48.0,
+            "the source small row plus 12px padding stays content-sized"
+        );
+        assert!(selector.absolute_position().y >= group.absolute_position().y + 12.0);
+        assert!(
+            selector.absolute_position().y + selector.size().height
+                <= group.absolute_position().y + 36.0
+        );
+        assert!(selector.absolute_position().x >= 204.0);
+        assert!(selector.absolute_position().x + selector.size().width <= logical_width as f32);
+        assert_eq!(selector.accessible_value().as_deref(), Some("Saturday"));
+        let save = ElementHandle::find_by_accessible_label(&panel, "Save preferences")
+            .next()
+            .unwrap();
+        assert_eq!(
+            (save.absolute_position().y, save.size().height),
+            (13.0, 24.0)
+        );
+        let cancel = ElementHandle::find_by_accessible_label(&panel, "Cancel changes")
+            .next()
+            .unwrap();
+        assert_eq!(
+            (cancel.absolute_position().y, cancel.size().height),
+            (13.0, 24.0)
+        );
+        export_screenshot(
+            &format!("settings-general-{scheme:?}-{scale}x-{logical_width}"),
+            &pixels,
+            width as usize,
+            height as usize,
+        );
+
+        let appearance = ElementHandle::find_by_accessible_label(&panel, "Appearance")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap();
+        native_click(&window, &appearance);
+        let appearance_pixels = draw(&window, width, height);
+        for (label, role) in [
+            ("Appearance theme", AccessibleRole::Combobox),
+            ("Compact", AccessibleRole::Checkbox),
+        ] {
+            let control = ElementHandle::find_by_accessible_label(&panel, label)
+                .find(|element| element.accessible_role() == Some(role))
+                .unwrap();
+            assert_eq!(
+                control.size().height,
+                24.0,
+                "source small action lane: {label}"
+            );
+        }
+        export_screenshot(
+            &format!("settings-appearance-{scheme:?}-{scale}x-{logical_width}"),
+            &appearance_pixels,
+            width as usize,
+            height as usize,
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&panel, "Start of week")
+                .next()
+                .is_none(),
+            "hidden pages are absent from native accessibility traversal"
+        );
+        assert_eq!(panel.get_start_of_week_index(), 2);
+        assert_eq!(panel.get_dock_edge_index(), 1);
+        let dock = ElementHandle::find_by_accessible_label(&panel, "Dock")
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+            .unwrap();
+        native_click(&window, &dock);
+        let dock_pixels = draw(&window, width, height);
+        let edge =
+            ElementHandle::find_by_accessible_label(&panel, "Dock edge (saved with preferences)")
+                .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+                .unwrap();
+        assert_eq!(edge.size().height, 24.0);
+        assert_eq!(edge.accessible_value().as_deref(), Some("Top"));
+        export_screenshot(
+            &format!("settings-dock-{scheme:?}-{scale}x-{logical_width}"),
+            &dock_pixels,
+            width as usize,
+            height as usize,
+        );
+        native_click(&window, &general);
+        let _ = draw(&window, width, height);
+        assert_eq!(panel.get_start_of_week_index(), 2);
+        let collapse = ElementHandle::find_by_accessible_label(&panel, "Collapse settings sidebar")
+            .next()
+            .unwrap();
+        native_click(&window, &collapse);
+        let _ = draw(&window, width, height);
+        assert!(
+            ElementHandle::find_by_accessible_label(&panel, "General")
+                .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap()
+                .size()
+                .width
+                <= 44.0
+        );
+        let expand = ElementHandle::find_by_accessible_label(&panel, "Expand settings sidebar")
+            .next()
+            .unwrap();
+        native_click(&window, &expand);
+        let _ = draw(&window, width, height);
+        assert_eq!(saves.get(), 0);
+        assert_eq!(refreshes.get(), 0);
+        assert!(!window.draw_if_needed(|_| panic!("settled settings must not redraw")));
+    }
+    let save = ElementHandle::find_by_accessible_label(&panel, "Save preferences")
+        .next()
+        .unwrap();
+    native_click(&window, &save);
+    assert_eq!(saves.get(), 1);
+}
+
+#[test]
+fn dock_reference_indicators_paint_outside_fixed_tiles_on_all_edges() {
+    use slint::language::ColorScheme;
+
+    let window = software_window();
+    let dock = Dock::new().unwrap();
+    dock.set_running_windows(ModelRc::new(VecModel::from(vec![DockWindow {
+        key: "native-window".into(),
+        caption: "Browser".into(),
+        icon: slint::Image::default(),
+    }])));
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_accent(slint::Color::from_rgb_u8(37, 171, 86).into());
+    dock.show().unwrap();
+    for scheme in [ColorScheme::Light, ColorScheme::Dark] {
+        dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        for scale in [1.0, 2.0] {
+            window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            for edge in 0..4 {
+                dock.set_edge(edge);
+                let (width, height) = if edge < 2 { (216, 72) } else { (72, 216) };
+                let width = (width as f32 * scale) as u32;
+                let height = (height as f32 * scale) as u32;
+                window.set_size(slint::PhysicalSize::new(width, height));
+                dock.set_focused_key("native-window".into());
+                window.request_redraw();
+                let pixels = draw(&window, width, height);
+                let tile = ElementHandle::find_by_accessible_label(&dock, "Switch to Browser")
+                    .next()
+                    .unwrap();
+                let origin = tile.absolute_position();
+                let size = tile.size();
+                assert_eq!(size, slint::LogicalSize::new(40.0, 40.0));
+                let (x, y) = match edge {
+                    0 => (origin.x + 20.0, origin.y + 44.0),
+                    1 => (origin.x + 20.0, origin.y - 4.0),
+                    2 => (origin.x - 4.0, origin.y + 20.0),
+                    _ => (origin.x + 44.0, origin.y + 20.0),
+                };
+                let index = (y * scale) as usize * width as usize + (x * scale) as usize;
+                let color = pixels[index];
+                assert_eq!((color.r, color.g, color.b), (37, 171, 86));
+                dock.set_focused_key("absent-window".into());
+                let unfocused = draw(&window, width, height);
+                let expected = dock
+                    .global::<crate::generated::SeelenPalette>()
+                    .get_running_indicator()
+                    .to_argb_u8();
+                let color = unfocused[index];
+                assert_eq!(
+                    (color.r, color.g, color.b),
+                    (expected.red, expected.green, expected.blue)
+                );
+                assert_eq!(tile.absolute_position(), origin);
+                assert_eq!(tile.size(), size);
+            }
+        }
+    }
 }

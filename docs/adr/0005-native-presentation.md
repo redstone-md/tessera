@@ -131,6 +131,57 @@ Independent original Power glyph additions are [Ionicons logout (MIT)](../../cra
 
 Automated recording/SDK-shape tests never certify actual Power, TSF, player transport, WLAN/radio effects or mouse-hook delivery. Native WinRT artwork decoder/filesystem fixtures are narrower evidence; the two-heartbeat packaging GUI is diagnostic and skips normal desktop attachment/focus/pointer watch. Software and genuine Linux Mesa GL1×/2× do not certify native Windows DPI/focus/accessibility/composition, resolve the user's VM toolbar offset or waive sign-in/recovery/security-product gates. See the [focused safe tester checklist](../alpha-testing.md#eight-focused-checks--ordinary-session-first) and [distribution requirements](../distribution-and-trust.md).
 
+### Alpha.21 source visual layer (development)
+
+The visual layer is measured against the same pinned Seelen reference, not a
+new theme or framework. It starts from the verified alpha.20 checkpoint in an
+isolated worktree; the separately parked media-display changes are excluded.
+This is development source, not a published alpha.21 or completed 1:1 contract.
+
+- **Toolbar:** 24px wrappers at y=4, 16px glyphs, 4px inner padding/gaps,
+  source accent hover/press states, a bounded real user/focused-title group and
+  an unchanged centered clock. Keyboard/Bluetooth/network/settings controls
+  use existing typed routes; generic glyphs do not invent connection state.
+- **Dock:** ordinary tiles retain fixed input/tooltip bounds while their paint
+  translates down 2px on press, without scaling. Independent 1px/1px/2px,
+  black-8% shadows and a scroll-synchronized external running-indicator rail
+  follow the source geometry on all four edges. Media retains its own treatment.
+- **Settings:** native 800×500 preferred/600×400 minimum shell, 192px/44px
+  sidebar, 50px header, source gradient layers and compact content-sized groups.
+  The pinned Settings `ConfigProvider` uses **small** controls: 24px actions and
+  selectors, a 48px single-row General group and centered header actions.
+  Only five genuinely supported pages are exposed; missing reference pages
+  are not decorative placeholders. Existing drafts, native capture/reset,
+  explicit Save/Cancel and recovery commands remain authoritative.
+- **Launcher:** native transparent search input, source header/body/footer
+  tracks, real user-menu/settings/Power/mode routes, two welcome paragraphs and
+  recovery-only Refresh/Exit controls. Explicit feedback is projected from
+  Root on both command and observation completion, without matching status
+  strings. Tooltip retirement fingerprints/revalidates the original source
+  before admitting a footer action.
+  Its original 35.2px clipped label track is retained; native Text receives
+  two complete 17.92px line boxes and `max-lines: 2`. This fixes a reproduced
+  2×-only single-line elision without enlarging tiles or weakening glyph tests.
+
+**Local verified checkpoint:** 1,444 workspace tests/19 suites passed
+(819 UI, one separately gated GL case ignored in the workspace run).
+Strict warnings-denied all-target Clippy passed on Linux and MSVC shapes with
+Rust 1.92/1.99. Owned Linux Mesa GL passed at 1×/2×, preserving original input,
+two-line/icon and 2/255 same-position shader guards, with 132 complete P6 frames
+(66/scale, 302,771,276 bytes) on a synthetic neutral backdrop. The seven new
+asset hashes/full retained MIT license and all 35 notice assertions passed.
+Source review closed its three concrete P2 findings; it is not runtime proof.
+The dedicated source-only diagnostic branch enables the existing Windows CI
+and owned GUI preflight without allowing diagnostic-branch publication.
+
+Seven additional original Tabler vectors retain the existing immutable
+[MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/tabler-icons-6d128ed/NOTICE.txt).
+No Seelen code/assets, new provider, preference schema or rendering framework
+is imported. Font/native-control skins, exact rights-blocked artwork,
+frameless Settings chrome, complete source modules and Windows backdrop/
+composition remain gaps. Source renderer tests are not a correction of the
+reported VM toolbar offset or native Windows certification.
+
 ## Historical post-alpha.10 tracer layers
 
 The following chronological notes preserve prior decisions/controlled receipts, **not current alpha.16 or development-source verification**. “Current”, schema 3, first Lock-only Power and then-missing modules refer to each tracer snapshot. Current receipts distinguish alpha.11's code failure, alpha.12/.13 green matrices/failed packaging, corrected NativeDebug startup and alpha.14's immutable source/local success/green production CI/published baseline; none verifies integrated alpha.15 or completes native parity.

@@ -196,6 +196,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         verify_frame("user-menu", &user);
         verify_frame("calendar", &calendar);
         verify_frame("dock", &dock);
+        verify_dock_reference_paint(&dock);
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
@@ -892,20 +893,13 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
         ColorScheme::Light => "light",
         _ => panic!("The settlement scenario requires an explicit color scheme"),
     };
-    let frame = launcher.window().take_snapshot().unwrap();
-    let scale = launcher.window().scale_factor();
-    for label in [
-        "Open settings and recovery",
-        "Refresh the desktop",
-        "Exit Tessera",
-        "Expand applications menu",
-        "Open power menu",
-    ] {
+    let assert_control = |label: &str, frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>| {
         let button =
             i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
                 .next()
                 .unwrap();
         let position = button.absolute_position();
+        let scale = launcher.window().scale_factor();
         let x = ((position.x + button.size().width / 2.0) * scale) as usize;
         let y = ((position.y + 4.0) * scale) as usize;
         let pixel = frame.as_slice()[y * frame.width() as usize + x];
@@ -918,11 +912,145 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
             },
             "{label} must settle to its {theme} idle color: {pixel:?}",
         );
+    };
+    let frame = launcher.window().take_snapshot().unwrap();
+    let scale = launcher.window().scale_factor();
+    for label in [
+        "Open user menu",
+        "Open settings and recovery",
+        "Expand applications menu",
+        "Open power menu",
+    ] {
+        assert_control(label, &frame);
+    }
+    for label in ["Refresh the desktop", "Exit Tessera"] {
+        assert!(
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
+                .next()
+                .is_none(),
+            "{label} is not a normal source footer control",
+        );
     }
     verify_launcher_footer_glyph(launcher, scheme, "Expand applications menu", &frame);
     verify_launcher_footer_glyph(launcher, scheme, "Open power menu", &frame);
     export_frame(&format!("gl-launcher-{theme}-settled-{scale}x"), &frame);
+    launcher.set_feedback_visible(true);
+    let recovery = launcher.window().take_snapshot().unwrap();
+    for label in ["Refresh the desktop", "Exit Tessera"] {
+        assert_control(label, &recovery);
+    }
+    export_frame(&format!("gl-launcher-{theme}-recovery-{scale}x"), &recovery);
+    launcher.set_feedback_visible(false);
     verify_launcher_press_scale(launcher);
+}
+
+// Genuine fixed input slots, native GL shadow pixels and paint-only press offset.
+fn verify_dock_reference_paint(dock: &Dock) {
+    use i_slint_backend_testing::ElementHandle;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    let actions = Rc::new(Cell::new(0));
+    let count = actions.clone();
+    dock.on_open_applications_requested(move || count.set(count.get() + 1));
+    let tile = ElementHandle::find_by_accessible_label(dock, "Open applications and settings")
+        .next()
+        .unwrap();
+    let image = tile
+        .query_descendants()
+        .match_type_name("Image")
+        .find_first()
+        .unwrap();
+    let position = tile.absolute_position();
+    let size = tile.size();
+    let scale = dock.window().scale_factor();
+    let center = slint::LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    );
+    let sample = |frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, x: f32, y: f32| {
+        frame.as_slice()[(y * scale) as usize * frame.width() as usize + (x * scale) as usize]
+    };
+    dock.window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    for (theme, scheme) in [("light", ColorScheme::Light), ("dark", ColorScheme::Dark)] {
+        dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        dock.window().dispatch_event(WindowEvent::PointerExited);
+        let idle = dock.window().take_snapshot().unwrap();
+        let shadow = sample(&idle, position.x + size.width + 0.5, center.y);
+        let body = sample(&idle, position.x + size.width + 5.5, center.y);
+        assert!(
+            shadow.a > body.a,
+            "the ordinary tile shadow must paint outside its fixed slot: {theme} {shadow:?} vs {body:?}"
+        );
+        assert!(
+            shadow.r <= body.r && shadow.g <= body.g && shadow.b <= body.b,
+            "the source black shadow must not brighten the bar"
+        );
+        export_frame(&format!("gl-dock-{theme}-shadow-{scale}x"), &idle);
+        for source in [PressSource::Pointer, PressSource::Space] {
+            dock.window()
+                .dispatch_event(WindowEvent::PointerMoved { position: center });
+            let hover = dock.window().take_snapshot().unwrap();
+            let image_position = image.absolute_position();
+            let before = actions.get();
+            match source {
+                PressSource::Pointer => dock.window().dispatch_event(WindowEvent::PointerPressed {
+                    position: center,
+                    button: PointerEventButton::Left,
+                }),
+                PressSource::Space => {
+                    dock.window().dispatch_event(WindowEvent::KeyPressed {
+                        text: Key::Space.into(),
+                    });
+                    dock.window().dispatch_event(WindowEvent::KeyPressRepeated {
+                        text: Key::Space.into(),
+                    });
+                }
+            }
+            let pressed = dock.window().take_snapshot().unwrap();
+            assert_eq!(actions.get(), before, "press/repeat never activates");
+            assert_eq!(
+                tile.absolute_position(),
+                position,
+                "the input slot never moves"
+            );
+            assert_eq!(
+                tile.size(),
+                size,
+                "ordinary dock tiles do not scale on press"
+            );
+            assert_eq!(
+                image.absolute_position(),
+                slint::LogicalPosition::new(image_position.x, image_position.y + 2.0)
+            );
+            assert_ne!(
+                sample(&hover, center.x, position.y + 0.5),
+                sample(&pressed, center.x, position.y + 0.5),
+                "native GL must paint the 2px translation"
+            );
+            export_frame(
+                &format!("gl-dock-{theme}-{source:?}-pressed-{scale}x"),
+                &pressed,
+            );
+            match source {
+                PressSource::Pointer => {
+                    dock.window().dispatch_event(WindowEvent::PointerReleased {
+                        position: center,
+                        button: PointerEventButton::Left,
+                    })
+                }
+                PressSource::Space => dock.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: Key::Space.into(),
+                }),
+            }
+            assert_eq!(actions.get(), before + 1, "one real release acts once");
+            assert_eq!(image.absolute_position(), image_position);
+            assert_eq!(tile.absolute_position(), position);
+            assert_eq!(tile.size(), size);
+            dock.window().dispatch_event(WindowEvent::PointerExited);
+        }
+    }
+    assert_eq!(actions.get(), 4);
 }
 
 fn verify_launcher_footer_glyph(
@@ -1055,6 +1183,14 @@ fn assert_gl_launcher_tile_geometry(
     let label = tile
         .query_descendants()
         .match_type_name("Text")
+        .find_all()
+        .into_iter()
+        // Exclude the zero-sized font metrics probe, not the actual label track.
+        .find(|label| label.size().height > 0.0)
+        .unwrap();
+    let track = tile
+        .query_descendants()
+        .match_id("LauncherTile::label-track")
         .find_first()
         .unwrap();
     let side = (size.height - 59.2)
@@ -1074,8 +1210,22 @@ fn assert_gl_launcher_tile_geometry(
         &[origin, slint::LogicalPosition::new(size.width, size.height)],
     );
     assert!(
-        (label.size().height - 35.2).abs() < 0.001,
+        (track.size().height - 35.2).abs() < 0.001,
         "label track is fixed at both window widths"
+    );
+    assert!(
+        (label.size().height - 35.84).abs() < 0.001,
+        "native allocation fits both 17.92px line boxes"
+    );
+    let label_inputs = [
+        origin,
+        slint::LogicalPosition::new(size.width, size.height),
+        track.absolute_position(),
+    ];
+    assert_gl_input_position(
+        label.absolute_position(),
+        track.absolute_position(),
+        &label_inputs,
     );
     assert_gl_input_position(
         label.absolute_position(),
@@ -1083,7 +1233,7 @@ fn assert_gl_launcher_tile_geometry(
             origin.x + 8.0 * appearance,
             origin.y + (size.height - 43.2) * appearance,
         ),
-        &[origin, slint::LogicalPosition::new(size.width, size.height)],
+        &label_inputs,
     );
 }
 
@@ -1122,15 +1272,24 @@ fn gl_scaled_tile_region(
     )
 }
 
+struct GlTilePaintSource {
+    bounds: TileBounds,
+    favorite: TileBounds,
+}
+
 fn assert_gl_whole_tile_pixels(
     pressed: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
     baseline: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
     floating: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
-    source: TileBounds,
+    source: GlTilePaintSource,
     visual: LauncherDragVisual,
     scale: f32,
     genuine: bool,
 ) {
+    let GlTilePaintSource {
+        bounds: source,
+        favorite,
+    } = source;
     let appearance = visual.source_scale;
     let ghost = visual.bounds;
     // Integer logical translation retains subpixel phase at genuine 1x/2x.
@@ -1151,12 +1310,47 @@ fn assert_gl_whole_tile_pixels(
     let original_content = gl_region(pressed, source_content_origin, scaled_content, scale);
     let ghost_content = gl_region(floating, ghost_content_origin, scaled_content, scale);
     assert_eq!(ghost_content.len(), original_content.len());
+    // A passive drag ghost deliberately omits the real interactive checkbox.
+    // Exclude only its measured native slot; icon, name, skin and outline keep
+    // the same-position 2/255 comparison everywhere else.
+    let (favorite_origin, favorite_size) = gl_scaled_tile_region(
+        &source,
+        appearance,
+        slint::LogicalPosition::new(
+            favorite.origin.x - source.origin.x,
+            favorite.origin.y - source.origin.y,
+        ),
+        slint::LogicalSize::new(favorite.width, favorite.height),
+    );
+    let favorite_left = (favorite_origin.x * scale).ceil() as usize;
+    let favorite_right = ((favorite_origin.x + favorite_size.width) * scale).floor() as usize;
+    let favorite_top = (favorite_origin.y * scale).ceil() as usize;
+    let favorite_bottom = ((favorite_origin.y + favorite_size.height) * scale).floor() as usize;
+    let in_favorite = |index: usize, origin: slint::LogicalPosition, size: slint::LogicalSize| {
+        let start_x = (origin.x * scale).ceil() as usize;
+        let width = ((origin.x + size.width) * scale).floor() as usize - start_x;
+        let x = start_x + index % width;
+        let y = (origin.y * scale).ceil() as usize + index / width;
+        x >= favorite_left && x < favorite_right && y >= favorite_top && y < favorite_bottom
+    };
+    assert!(
+        ghost_content.iter().zip(&original_content).enumerate().any(
+            |(index, (actual, expected))| {
+                in_favorite(index, source_content_origin, scaled_content)
+                    && (actual.r.abs_diff(expected.r) > 2
+                        || actual.g.abs_diff(expected.g) > 2
+                        || actual.b.abs_diff(expected.b) > 2)
+            }
+        ),
+        "the actual hover checkbox decoration differs from the noninteractive ghost",
+    );
     // Same-position comparison allows only 2/255 antialias/compositing rounding
     // (<0.8% per channel), never spatial matching or missing icon/name content.
     let (index, difference) = ghost_content
         .iter()
         .zip(&original_content)
         .enumerate()
+        .filter(|(index, _)| !in_favorite(*index, source_content_origin, scaled_content))
         .map(|(index, (actual, expected))| {
             let difference = [
                 actual.r.abs_diff(expected.r),
@@ -1198,6 +1392,9 @@ fn assert_gl_whole_tile_pixels(
     let ghost_skin = gl_region(floating, outline_origin, outline_size, scale);
     assert_eq!(source_skin.len(), ghost_skin.len());
     for (index, (expected, actual)) in source_skin.iter().zip(&ghost_skin).enumerate() {
+        if in_favorite(index, source_outline_origin, outline_size) {
+            continue;
+        }
         assert!(
             expected.r.abs_diff(actual.r) <= 2
                 && expected.g.abs_diff(actual.g) <= 2
@@ -1457,6 +1654,27 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
             width: source_weak.size().width,
             height: source_weak.size().height,
         };
+        let favorite = source_weak
+            .query_descendants()
+            .find_all()
+            .into_iter()
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Checkbox))
+            .expect("measure the real native favorite input slot, not an arbitrary pixel mask");
+        let favorite_bounds = TileBounds {
+            origin: favorite.absolute_position(),
+            width: favorite.size().width,
+            height: favorite.size().height,
+        };
+        assert_eq!(
+            (favorite_bounds.width, favorite_bounds.height),
+            (16.0, 16.0)
+        );
+        assert_eq!(favorite_bounds.origin.y, bounds.origin.y);
+        assert!(
+            (favorite_bounds.origin.x + favorite_bounds.width - bounds.origin.x - bounds.width)
+                .abs()
+                < 0.001
+        );
         // The accessible tile is inside a centered Transform. Retain its
         // untransformed enclosing slot, not that paint-mapped tile position.
         let source_slot = ElementQuery::from_root(launcher)
@@ -1729,7 +1947,10 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
             &pressed,
             &original,
             &floating,
-            bounds.clone(),
+            GlTilePaintSource {
+                bounds: bounds.clone(),
+                favorite: favorite_bounds,
+            },
             visual.clone(),
             scale,
             genuine,
@@ -1834,7 +2055,9 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
             source_tile.absolute_position().y + 13.0,
         );
         let grid_top = launcher.get_reorder_metrics().viewport.origin.y;
-        let outside_pointer = slint::LogicalPosition::new(320.0, grid_top - 10.0);
+        // Reach actual fallback SVG ink above the boundary, not only its
+        // transparent inset at the source header's new fractional raster phase.
+        let outside_pointer = slint::LogicalPosition::new(320.0, grid_top - 20.0);
         // Alternate positive metadata uses the same public Down callback route;
         // its transport and centered paint must not collapse to the default skin.
         appearance_override.set(Some(0.8));

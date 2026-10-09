@@ -1074,11 +1074,11 @@ fn record_launcher_intents(launcher: &Launcher) -> Rc<LauncherIntentRequests> {
 
 const LAUNCHER_COMMAND_LABELS: &[&str] = &[
     "Back to favorites",
+    "Refresh the desktop",
+    "Exit Tessera",
     "Open user menu",
     "Open settings and recovery",
     "Open power menu",
-    "Refresh the desktop",
-    "Exit Tessera",
     "Expand applications menu",
 ];
 
@@ -1154,6 +1154,7 @@ fn window_cancel_revokes_retained_same_key_pointer_and_context_gestures() {
 #[test]
 fn window_cancel_revokes_held_space_on_body_favorite_header_and_every_footer_without_refocus() {
     let (host, launcher, _) = setup();
+    launcher.set_feedback_visible(true);
     let requests = record_launcher_intents(&launcher);
     let labels = [
         "Launch Context application",
@@ -1251,6 +1252,7 @@ fn window_cancel_revokes_held_return_repeats_but_keeps_fresh_stable_scope_app_re
 #[test]
 fn window_cancel_revokes_every_static_command_pointer_and_preserves_return_policy() {
     let (host, launcher, _) = setup();
+    launcher.set_feedback_visible(true);
     let requests = record_launcher_intents(&launcher);
     for label in LAUNCHER_COMMAND_LABELS {
         let position = center(&button(&launcher, label));

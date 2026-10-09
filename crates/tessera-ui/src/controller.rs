@@ -922,6 +922,7 @@ impl PanelController {
         };
         panel.set_refreshing(busy);
         if !message.is_empty() {
+            panel.set_status_is_feedback(false);
             panel.set_status(message.into());
         }
     }
@@ -929,6 +930,7 @@ impl PanelController {
     /// Writes one status message to every live surface.
     fn report_message(&self, message: &str) {
         if let Some(panel) = self.panel.upgrade() {
+            panel.set_status_is_feedback(true);
             panel.set_status(message.into());
         }
         if let Some(dock) = self.dock_and_upgrade() {
@@ -947,11 +949,13 @@ impl PanelController {
         success: &str,
         failure: F,
     ) {
+        let feedback_visible = result.is_err();
         let message = match result {
             Ok(()) => success.to_string(),
             Err(error) => failure(sanitize::bounded_text(&error, 200)),
         };
         if let Some(panel) = self.panel.upgrade() {
+            panel.set_status_is_feedback(feedback_visible);
             panel.set_status(message.as_str().into());
         }
         if let Some(dock) = self.dock_and_upgrade() {
@@ -979,6 +983,7 @@ impl PanelController {
         launcher.set_refreshing(panel.get_refreshing());
         launcher.set_stale(panel.get_stale());
         launcher.set_status(panel.get_status());
+        launcher.set_feedback_visible(panel.get_status_is_feedback());
         launcher.set_notice(panel.get_startup_notice());
         self.sync_launcher_reorder();
     }
@@ -1007,8 +1012,8 @@ impl PanelController {
         self.toolbar.as_ref().and_then(|toolbar| toolbar.upgrade())
     }
 
-    /// Mirrors the panel's busy/stale/status state into the dock and repaints
-    /// the strip models. Called after every state change.
+    /// Mirrors the panel's busy/stale/feedback state into the live shell
+    /// surfaces and repaints the strip models after every state change.
     fn render(&self) {
         self.dismiss_tooltip(false);
         let Some(dock) = self.dock_and_upgrade() else {
@@ -1017,6 +1022,7 @@ impl PanelController {
         let Some(panel) = self.panel.upgrade() else {
             return;
         };
+        self.sync_launcher_status();
         let mut status = dock.get_surface_status();
         status.refreshing = panel.get_refreshing();
         status.stale = panel.get_stale();
@@ -1390,6 +1396,7 @@ impl PanelController {
                     return;
                 }
                 panel.set_status("Preferences saved".into());
+                panel.set_status_is_feedback(false);
                 if !self.root_current() {
                     return;
                 }
@@ -1405,6 +1412,7 @@ impl PanelController {
                 }
                 let detail = sanitize::bounded_text(&error, 200);
                 panel.set_status(format!("Could not save preferences: {detail}").into());
+                panel.set_status_is_feedback(true);
             }
         }
     }
@@ -1524,6 +1532,7 @@ pub(crate) fn apply_result(
             show(panel, &projection);
             controller.show_apps(panel, &panel.get_search());
             panel.set_status(projection.status.as_str().into());
+            panel.set_status_is_feedback(false);
             panel.set_has_snapshot(true);
             panel.set_stale(false);
         }
@@ -1535,6 +1544,7 @@ pub(crate) fn apply_result(
             };
             let detail = sanitize::bounded_text(&error, 200);
             panel.set_status(format!("{prefix}: {detail}. Try Refresh.").into());
+            panel.set_status_is_feedback(true);
             // A failed refresh means the desktop may have changed; activation
             // stays paused until the next successful observation confirms it.
             panel.set_stale(true);

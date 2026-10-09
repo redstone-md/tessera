@@ -648,6 +648,11 @@ fn workers_are_single_flight_recover_from_errors_and_do_not_retain_closed_window
         "Rust Editor window"
     );
     #[cfg(debug_assertions)]
+    ElementHandle::find_by_accessible_label(&panel, "Desktop & recovery")
+        .next()
+        .unwrap()
+        .invoke_accessible_default_action();
+    #[cfg(debug_assertions)]
     assert_eq!(
         ElementHandle::find_by_accessible_label(&panel, "Refresh")
             .next()

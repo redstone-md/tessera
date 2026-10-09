@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { CheckBox as NativeCheckBox, Palette } from "std-widgets.slint";
+import { CheckBox as NativeCheckBox } from "std-widgets.slint";
 import { TileButton, FocusTokens } from "tiles.slint";
 import { SeelenPalette } from "palette.slint";
 
@@ -9,6 +9,7 @@ import { SeelenPalette } from "palette.slint";
 // these labels can never be parsed into persisted or native authority.
 export component ShortcutPreferences inherits VerticalLayout {
     in property <bool> compact: false;
+    in property <bool> page-active: true;
     in property <bool> controls-enabled: true;
     in property <bool> draft-enabled: true;
     in property <string> settings-label: "Win + K";
@@ -26,7 +27,7 @@ export component ShortcutPreferences inherits VerticalLayout {
     callback capture-pressed(KeyEvent) -> bool;
     callback capture-released(KeyEvent) -> bool;
 
-    spacing: root.compact ? 4px : 8px;
+    spacing: 12px;
     min-width: 0px;
     vertical-stretch: 0;
     padding-left: FocusTokens.outer-margin;
@@ -35,7 +36,7 @@ export component ShortcutPreferences inherits VerticalLayout {
     padding-bottom: FocusTokens.outer-margin;
 
     public function focus-capture() {
-        if root.capturing && root.controls-enabled && root.draft-enabled {
+        if root.page-active && root.capturing && root.controls-enabled && root.draft-enabled {
             capture-focus.focus();
         }
     }
@@ -51,15 +52,8 @@ export component ShortcutPreferences inherits VerticalLayout {
         if !root.draft-enabled { root.cancel-input(); }
     }
 
-    Text {
-        text: "Shortcuts";
-        color: Palette.foreground;
-        font-weight: 600;
-        accessible-role: text;
-    }
-    // Stock CheckBox's unwrapped caption supplies a single-line minimum. Keep
-    // its genuine glyph, full-row pointer/Tab/Space/AX input and focus border;
-    // only the inert caption wraps, measured at the actual available width.
+    // Keep the genuine full-row native checkbox; its inert caption wraps at
+    // the measured width instead of imposing a single-line layout minimum.
     enabled-row := Rectangle {
         min-width: 0px;
         min-height: max(18px, enabled-label.preferred-height);
@@ -69,7 +63,7 @@ export component ShortcutPreferences inherits VerticalLayout {
             height: parent.height;
             text: "";
             accessible-label: "Enable global shortcuts";
-            enabled: root.controls-enabled;
+            enabled: root.page-active && root.controls-enabled;
             checked: root.draft-enabled;
             toggled => { root.enabled-edited(self.checked); }
         }
@@ -79,9 +73,10 @@ export component ShortcutPreferences inherits VerticalLayout {
             width: max(0px, parent.width - self.x);
             height: self.preferred-height;
             text: "Enable global shortcuts";
+            color: SeelenPalette.foreground;
+            font-weight: 600;
             wrap: word-wrap;
-            color: Palette.foreground;
-            opacity: root.controls-enabled ? 1 : 0.5;
+            opacity: root.controls-enabled ? 1 : 0.6;
             accessible-role: none;
         }
     }
@@ -91,24 +86,27 @@ export component ShortcutPreferences inherits VerticalLayout {
         spacing: 2px;
         Text {
             text: "Launcher — Win (read-only)";
-            color: Palette.foreground;
+            color: SeelenPalette.foreground;
+            font-weight: 600;
             wrap: word-wrap;
             accessible-role: text;
             accessible-label: "Launcher shortcut: Win. Read-only system shortcut.";
         }
         Text {
             text: root.launcher-status;
-            color: SeelenPalette.secondary;
+            color: SeelenPalette.running-indicator;
+            font-size: 12.8px;
             wrap: word-wrap;
             accessible-role: text;
             accessible-label: "Launcher registration: " + root.launcher-status;
         }
     }
     settings-row := VerticalLayout {
-        spacing: root.compact ? 4px : 6px;
+        spacing: 8px;
         Text {
             text: "Settings";
-            color: Palette.foreground;
+            color: SeelenPalette.foreground;
+            font-weight: 600;
             accessible-role: text;
         }
         capture-button := TileButton {
@@ -117,7 +115,7 @@ export component ShortcutPreferences inherits VerticalLayout {
             preferred-height: max(36px, capture-label.preferred-height + 16px);
             horizontal-stretch: 1;
             radius: 4px;
-            enabled: root.controls-enabled && root.draft-enabled;
+            enabled: root.page-active && root.controls-enabled && root.draft-enabled;
             allow-return-repeat: false;
             accessible-text: root.capturing
                 ? "Press a shortcut. Escape cancels capture."
@@ -130,6 +128,7 @@ export component ShortcutPreferences inherits VerticalLayout {
                 x: 8px;
                 y: 8px;
                 width: max(0px, parent.width - 16px);
+                height: self.preferred-height;
                 text: root.capturing ? "Press a shortcut… Escape cancels" : root.settings-label;
                 wrap: word-wrap;
                 color: SeelenPalette.foreground;
@@ -138,18 +137,19 @@ export component ShortcutPreferences inherits VerticalLayout {
         }
         reset-button := TileButton {
             min-width: 0px;
-            min-height: 32px;
-            preferred-height: max(32px, reset-label.preferred-height + 12px);
+            min-height: 36px;
+            preferred-height: max(36px, reset-label.preferred-height + 16px);
             horizontal-stretch: 1;
             radius: 4px;
-            enabled: root.controls-enabled && root.draft-enabled;
+            enabled: root.page-active && root.controls-enabled && root.draft-enabled;
             allow-return-repeat: false;
             accessible-text: "Reset Settings shortcut to Win + K";
             clicked => { root.settings-reset-requested(); }
             reset-label := Text {
                 x: 8px;
-                y: 6px;
+                y: 8px;
                 width: max(0px, parent.width - 16px);
+                height: self.preferred-height;
                 text: "Reset to default (Win + K)";
                 wrap: word-wrap;
                 color: SeelenPalette.foreground;
@@ -158,7 +158,8 @@ export component ShortcutPreferences inherits VerticalLayout {
         }
         Text {
             text: root.settings-status;
-            color: SeelenPalette.secondary;
+            color: SeelenPalette.running-indicator;
+            font-size: 12.8px;
             wrap: word-wrap;
             accessible-role: text;
             accessible-label: "Settings registration: " + root.settings-status;
@@ -168,13 +169,14 @@ export component ShortcutPreferences inherits VerticalLayout {
         text: root.applying ? "Applying saved shortcuts…"
             : root.dirty ? "Unsaved shortcut changes. Use Save to apply."
             : "Shortcut changes apply only when you save preferences.";
-        color: SeelenPalette.secondary;
+        color: SeelenPalette.running-indicator;
+        font-size: 12.8px;
         wrap: word-wrap;
         accessible-role: text;
     }
     if root.message != "": Text {
         text: root.message;
-        color: Palette.foreground;
+        color: SeelenPalette.foreground;
         wrap: word-wrap;
         accessible-role: text;
     }
@@ -184,11 +186,11 @@ export component ShortcutPreferences inherits VerticalLayout {
     capture-focus := FocusScope {
         width: 0px;
         height: 0px;
-        enabled: root.controls-enabled && root.draft-enabled && root.capturing;
+        enabled: root.page-active && root.controls-enabled && root.draft-enabled && root.capturing;
         focus-on-tab-navigation: false;
         focus-lost(reason) => { if root.capturing { root.capture-cancelled(); } }
         key-pressed(event) => {
-            if root.capturing && root.controls-enabled && root.draft-enabled {
+            if root.page-active && root.capturing && root.controls-enabled && root.draft-enabled {
                 let handled = root.capture-pressed(event);
                 if !root.capturing { capture-button.focus-for-keyboard(); }
                 return handled ? accept : reject;
@@ -196,7 +198,7 @@ export component ShortcutPreferences inherits VerticalLayout {
             return reject;
         }
         key-released(event) => {
-            if root.capturing && root.controls-enabled && root.draft-enabled {
+            if root.page-active && root.capturing && root.controls-enabled && root.draft-enabled {
                 let handled = root.capture-released(event);
                 if !root.capturing { capture-button.focus-for-keyboard(); }
                 return handled ? accept : reject;

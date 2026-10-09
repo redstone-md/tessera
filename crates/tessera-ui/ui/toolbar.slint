@@ -5,8 +5,17 @@ import { SeelenPalette } from "palette.slint";
 import { DockStatus } from "dock.slint";
 import { TileButton, TileBounds } from "tiles.slint";
 
+// Toolbar wrappers share accent states without changing TileButton input.
+component ToolbarButton inherits TileButton {
+    radius: 4.8px;
+    filled: false;
+    background: !self.enabled ? transparent :
+        self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
+        self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+}
+
 // One top toolbar, full monitor bounds width, 32 logical pixels tall
-// (Seelen fancy-toolbar default: item 16 + padding 8 * 2 + margin 0).
+// (Seelen default: content 16 + wrapper padding 4 * 2 + bar padding 4 * 2).
 // Left: user and foreground app. Center: native clock. Right: language and
 // quick settings. Only genuine host values appear; absent slots stay empty.
 export component Toolbar inherits Window {
@@ -30,10 +39,9 @@ export component Toolbar inherits Window {
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
 
-    property <length> pad: 8px;
+    property <length> pad: 4px;
     property <length> side-pad: 16px;
     property <length> item: 16px;
-    property <length> tile-radius: 4.8px; // Seelen: item * 0.3
 
     Rectangle {
         background: SeelenPalette.bar.with-alpha(0.9);
@@ -42,46 +50,58 @@ export component Toolbar inherits Window {
             x: root.side-pad;
             y: root.pad;
             width: max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad);
-            height: root.item;
+            height: root.item + 2 * root.pad;
             spacing: root.pad;
-            alignment: start;
-            Text {
-                text: root.user-name;
-                color: SeelenPalette.foreground;
-                font-size: 12.8px;
-                font-weight: 500;
-                vertical-alignment: center;
-                overflow: elide;
-                accessible-role: text;
+            // The title wrapper has no intrinsic width; assign it the spare
+            // left-group budget instead of packing its preferred width (0).
+            alignment: stretch;
+            Rectangle {
+                width: min(user-label.preferred-width + 2 * root.pad, max(0px, parent.width - 1px - 2 * root.pad));
+                user-label := Text {
+                    x: root.pad;
+                    y: root.pad;
+                    width: max(0px, parent.width - 2 * root.pad);
+                    height: root.item;
+                    text: root.user-name;
+                    color: SeelenPalette.foreground;
+                    font-size: 12.8px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    accessible-role: text;
+                }
             }
             Rectangle {
+                y: root.pad;
                 width: 1px;
+                height: root.item;
                 background: SeelenPalette.muted.with-alpha(0.5);
                 accessible-role: none;
             }
-            Text {
-                text: root.focused-app;
-                color: SeelenPalette.secondary;
-                font-size: 12.8px;
-                font-weight: 500;
-                vertical-alignment: center;
-                overflow: elide;
+            Rectangle {
                 horizontal-stretch: 1;
-                accessible-role: text;
+                min-width: 0px;
+                Text {
+                    x: root.pad;
+                    y: root.pad;
+                    width: max(0px, parent.width - 2 * root.pad);
+                    height: root.item;
+                    text: root.focused-app;
+                    color: SeelenPalette.secondary;
+                    font-size: 12.8px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    accessible-role: text;
+                }
             }
         }
-        clock-text := TileButton {
+        clock-text := ToolbarButton {
             x: (parent.width - self.width) / 2;
             y: root.pad;
-            width: min(clock-label.preferred-width, parent.width / 3);
-            height: root.item;
-            radius: root.tile-radius;
-            filled: false;
+            width: min(clock-label.preferred-width + 2 * root.pad, parent.width / 3);
+            height: root.item + 2 * root.pad;
             enabled: root.clock != "";
-            // Like the reference toolbar wrapper, not a common press-scale button.
-            background: !self.enabled ? transparent :
-                self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
-                self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
             accessible-text: @tr("Open calendar");
             tooltip-text: @tr("Calendar");
             tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
@@ -92,10 +112,10 @@ export component Toolbar inherits Window {
                 height: self.height
             }); }
             clock-label := Text {
-                x: 0px;
-                y: 0px;
-                width: parent.width;
-                height: parent.height;
+                x: root.pad;
+                y: root.pad;
+                width: max(0px, parent.width - 2 * root.pad);
+                height: root.item;
                 text: root.clock;
                 color: SeelenPalette.foreground;
                 font-size: 12.8px;
@@ -110,76 +130,71 @@ export component Toolbar inherits Window {
             x: parent.width / 2 + clock-text.width / 2 + root.pad;
             y: root.pad;
             width: max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad);
-            height: root.item;
+            height: root.item + 2 * root.pad;
             spacing: root.pad;
             alignment: end;
-            TileButton {
-                width: network-label.preferred-width;
-                height: root.item;
-                radius: root.tile-radius;
-                filled: false;
-                accessible-text: @tr("Open network");
-                tooltip-text: @tr("Network");
-                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
-                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
-                clicked => { root.network-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
-                network-label := Text {
-                    text: @tr("Network");
-                    color: SeelenPalette.secondary;
-                    font-size: 12.8px;
-                    vertical-alignment: center;
-                    width: parent.width;
-                    height: parent.height;
-                }
-            }
-            TileButton {
-                width: bluetooth-label.preferred-width;
-                height: root.item;
-                radius: root.tile-radius;
-                filled: false;
-                accessible-text: @tr("Open Bluetooth");
-                tooltip-text: @tr("Bluetooth");
-                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
-                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
-                clicked => { root.bluetooth-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
-                bluetooth-label := Text {
-                    text: @tr("Bluetooth");
-                    color: SeelenPalette.secondary;
-                    font-size: 12.8px;
-                    vertical-alignment: center;
-                    width: parent.width;
-                    height: parent.height;
-                }
-            }
-            TileButton {
-                width: max(root.item, language-label.preferred-width);
-                height: root.item;
-                radius: root.tile-radius;
-                filled: false;
+            property <length> control-budget: min(root.item + 2 * root.pad, max(0px, (self.width - 3 * root.pad) / 4));
+            property <length> text-budget: max(0px, self.width - 3 * self.control-budget - 3 * root.pad);
+            ToolbarButton {
+                width: min(max(root.item, language-label.preferred-width) + 2 * root.pad, parent.text-budget);
+                height: root.item + 2 * root.pad;
                 accessible-text: @tr("Open keyboard selector");
                 tooltip-text: @tr("Keyboard language");
                 tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                 tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                 clicked => { root.keyboard-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
                 language-label := Text {
+                    x: root.pad;
+                    y: root.pad;
+                    width: max(0px, parent.width - 2 * root.pad);
+                    height: root.item;
                     text: root.language == "" ? @tr("Keyboard") : root.language;
                     color: SeelenPalette.secondary;
                     font-size: 12.8px;
+                    font-weight: 600;
                     vertical-alignment: center;
-                    width: parent.width;
-                    height: parent.height;
+                    overflow: elide;
                 }
             }
-            TileButton {
-                width: root.item;
-                height: root.item;
-                radius: root.tile-radius;
-                filled: false;
-                // Reference Settings is a toolbar-item div, not a common
-                // button: accent overlays apply, but no active transform.
-                background: !self.enabled ? transparent :
-                    self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
-                    self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+            ToolbarButton {
+                width: parent.control-budget;
+                height: root.item + 2 * root.pad;
+                accessible-text: @tr("Open Bluetooth");
+                tooltip-text: @tr("Bluetooth");
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+                clicked => { root.bluetooth-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
+                Image {
+                    x: root.pad;
+                    y: root.pad;
+                    width: max(0px, parent.width - 2 * root.pad);
+                    height: root.item;
+                    source: @image-url("../assets/icons/tabler-icons-6d128ed/bluetooth.svg");
+                    colorize: SeelenPalette.secondary;
+                    accessible-role: none;
+                }
+            }
+            ToolbarButton {
+                width: parent.control-budget;
+                height: root.item + 2 * root.pad;
+                accessible-text: @tr("Open network");
+                tooltip-text: @tr("Network");
+                tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
+                tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
+                clicked => { root.network-requested({ origin: self.absolute-position, width: self.width, height: self.height }); }
+                Image {
+                    x: root.pad;
+                    y: root.pad;
+                    width: max(0px, parent.width - 2 * root.pad);
+                    height: root.item;
+                    source: @image-url("../assets/icons/tabler-icons-6d128ed/world.svg");
+                    colorize: SeelenPalette.secondary;
+                    accessible-role: none;
+                }
+            }
+            settings-button := ToolbarButton {
+                width: parent.control-budget;
+                height: root.item + 2 * root.pad;
                 accessible-text: "Open quick settings";
                 tooltip-text: @tr("Quick settings");
                 tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
@@ -190,9 +205,11 @@ export component Toolbar inherits Window {
                     height: self.height
                 }); }
                 Image {
-                    width: parent.width;
-                    height: parent.height;
-                    source: @image-url("../assets/icons/lucide-0.468.0/settings-2.svg");
+                    x: root.pad;
+                    y: root.pad;
+                    width: max(0px, parent.width - 2 * root.pad);
+                    height: root.item;
+                    source: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg");
                     colorize: SeelenPalette.foreground;
                     accessible-role: none;
                 }

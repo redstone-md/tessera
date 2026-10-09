@@ -983,7 +983,87 @@ impl PanelController {
         }
     }
 
+    // Retiring a native hint lease may synchronously replace the popup intent
+    // or hide/reopen this same window. Revoke the old held gesture before Up.
+    fn cancel_retired_launcher_hint(&self, launcher: &Launcher, current: bool) {
+        if !current
+            && self.root_current()
+            && self
+                .launcher_and_upgrade()
+                .is_some_and(|owner| std::ptr::eq(owner.window(), launcher.window()))
+        {
+            launcher.invoke_cancel_input();
+        }
+    }
+
     pub(super) fn wire_launcher(&self, launcher: &Launcher) {
+        let controller = self.clone();
+        let owner = launcher.as_weak();
+        launcher.on_tooltip_requested(move |content, bounds| {
+            let _callback = controller.launcher_callback();
+            let Some(launcher) = owner.upgrade() else {
+                return;
+            };
+            let current = controller.launcher_source_guard();
+            let menu_open = controller
+                .launcher_app_menu
+                .borrow()
+                .as_ref()
+                .is_some_and(|menu| menu.is_open());
+            if !current()
+                || controller
+                    .interactive_launcher()
+                    .is_none_or(|current| !std::ptr::eq(current.window(), launcher.window()))
+                || launcher.get_refreshing()
+                || launcher.get_stale()
+                || launcher.get_reorder_visual().visible
+                || controller.launcher_reorder_active()
+                || menu_open
+            {
+                return;
+            }
+            let operation = controller.popup_operation.borrow().clone();
+            let content = crate::sanitize::bounded_text(&content, 400);
+            controller.show_tooltip(
+                &launcher,
+                SurfaceKind::Launcher,
+                &content,
+                bounds,
+                crate::tooltip::Side::Top,
+            );
+            let still_current =
+                current() && Rc::ptr_eq(&operation, &controller.popup_operation.borrow());
+            controller.cancel_retired_launcher_hint(&launcher, still_current);
+        });
+        let controller = self.clone();
+        let owner = launcher.as_weak();
+        launcher.on_tooltip_dismissed(move |delayed, origin| {
+            let Some(launcher) = owner.upgrade() else {
+                return;
+            };
+            let current = controller.launcher_source_guard();
+            if !current() {
+                return;
+            }
+            let operation = controller.popup_operation.borrow().clone();
+            controller.dismiss_hover_tooltip(SurfaceKind::Launcher, origin, delayed);
+            let still_current =
+                current() && Rc::ptr_eq(&operation, &controller.popup_operation.borrow());
+            controller.cancel_retired_launcher_hint(&launcher, still_current);
+        });
+        let controller = self.clone();
+        let owner = launcher.as_weak();
+        launcher.on_tooltip_cancelled(move || {
+            if controller.root_current()
+                && owner.upgrade().is_some_and(|owner| {
+                    controller
+                        .launcher_and_upgrade()
+                        .is_some_and(|current| std::ptr::eq(current.window(), owner.window()))
+                })
+            {
+                controller.dismiss_tooltip(false);
+            }
+        });
         let weak = self.clone();
         launcher.on_launch_requested(move |key| {
             let _callback = weak.launcher_callback();
@@ -1069,8 +1149,8 @@ impl PanelController {
             }
         });
         let weak = self.clone();
-        // The footer's explicit Exit button quits the run (the host
-        // supervisor follows by restoring the Explorer shell).
+        // Explicit recovery-band Exit quits the run; the host supervisor
+        // follows by restoring the Explorer shell.
         launcher.on_exit_requested(move || {
             let _ = slint::quit_event_loop();
             let _ = weak;
@@ -1539,6 +1619,8 @@ impl PanelController {
     pub(super) fn cancel_launcher_input(&self) {
         if let Some(launcher) = self.launcher_and_upgrade() {
             launcher.invoke_cancel_input();
+        } else {
+            self.dismiss_tooltip(false);
         }
     }
 

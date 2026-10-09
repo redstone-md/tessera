@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 import { SeelenPalette } from "palette.slint";
+import { PopoverTokens } from "popover.slint";
 import { ApplicationIcon, TileButton, TileBounds } from "tiles.slint";
 
 export struct LaunchTile {
@@ -23,6 +24,7 @@ export component LauncherTile inherits TileButton {
     out property <float> appearance-scale: self.pressed ? 0.95 : 1;
     callback favorite-pointer-metadata(PointerEvent, TileBounds, Point);
     callback favorite-toggle-requested();
+    property <length> label-line-height: 17.92px;
     radius: 10px;
     filled: false;
     transform-scale: root.interactive ? root.appearance-scale : root.feedback-scale;
@@ -36,6 +38,16 @@ export component LauncherTile inherits TileButton {
     }
     changed keyboard-selected => {
         if root.keyboard-selected { root.focus-for-keyboard(); }
+    }
+    label-metrics := Text {
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: "M";
+        font-family: PopoverTokens.font-family;
+        font-size: 12.8px;
+        font-weight: 600;
+        accessible-role: none;
     }
 
     // Clip icon/name content, not the external focus ring. Keep the fixed
@@ -60,23 +72,38 @@ export component LauncherTile inherits TileButton {
                 source: root.tile.icon;
             }
         }
-        Text {
+        // Track geometry stays source-sized. Native height elision needs the
+        // full two line boxes; at 2x, ceil(35.2 * 2) cannot fit 2 * 17.92 * 2.
+        label-track := Rectangle {
             x: 8px;
             y: icon-row.y + icon-row.height + 8px;
             width: max(0px, parent.width - 16px);
             height: 35.2px;
-            text: root.tile.label;
-            color: SeelenPalette.foreground;
-            font-size: 12.8px;
-            font-weight: 600;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-            overflow: elide;
+            clip: true;
             accessible-role: none;
+            Text {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 2 * root.label-line-height;
+                text: root.tile.label;
+                color: SeelenPalette.foreground;
+                font-size: 12.8px;
+                font-weight: 600;
+                font-family: PopoverTokens.font-family;
+                line-height-factor: label-metrics.preferred-height > 0px
+                    ? root.label-line-height / label-metrics.preferred-height : 1;
+                horizontal-alignment: center;
+                vertical-alignment: top;
+                wrap: word-wrap;
+                overflow: elide;
+                max-lines: 2;
+                accessible-role: none;
+            }
         }
     }
 
-    TileButton {
+    favorite-control := TileButton {
         activation-key: root.input-scope + root.tile.key;
         width: 16px;
         height: 16px;
@@ -97,9 +124,10 @@ export component LauncherTile inherits TileButton {
             "Add to favorites: ") + root.tile.label;
         clicked => { root.favorite-toggle-requested(); }
     }
-    // Keep the favorite glyph painted in passive feedback without retaining
-    // an accessible or interactive corner control there.
-    Rectangle {
+    // Native checkbox remains reachable; hover or genuine keyboard focus
+    // exposes its state/action. Idle tiles and passive drag feedback stay clean.
+    if root.interactive && (root.hovered || root.focus-visible
+        || favorite-control.hovered || favorite-control.has-focus): Rectangle {
         width: 8px;
         height: 8px;
         x: root.width - 12px;

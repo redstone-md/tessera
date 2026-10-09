@@ -11,6 +11,25 @@ export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
 export struct DockStatus { notice: string, status: string, refreshing: bool, stale: bool }
 
+// Keep the action/input slot fixed while only ordinary tile paint moves.
+// Media deliberately retains its separate, stationary interaction treatment.
+component DockButton inherits TileButton {
+    background: transparent;
+    Rectangle {
+        y: root.pressed ? 2px : 0px;
+        width: root.width;
+        height: root.height;
+        border-radius: root.radius;
+        background: root.enabled && (root.hovered || root.pressed)
+            ? SeelenPalette.hover : SeelenPalette.tile;
+        drop-shadow-color: #000000.with-alpha(0.08);
+        drop-shadow-offset-x: 1px;
+        drop-shadow-offset-y: 1px;
+        drop-shadow-blur: 2px;
+        accessible-role: none;
+        @children
+    }
+}
 
 
 // One bounded floating dock bar, centered on the primary monitor bounds by
@@ -104,7 +123,7 @@ export component Dock inherits Window {
         clip: true;
 
         // The Start tile also exposes recovery commands while data is stale.
-        TileButton {
+        DockButton {
             x: root.pad;
             y: root.pad;
             width: root.item;
@@ -131,7 +150,7 @@ export component Dock inherits Window {
             }
         }
 
-        TileButton {
+        DockButton {
             x: root.vertical ? root.pad : root.pad + root.item + root.gap;
             y: root.vertical ? root.pad + root.item + root.gap : root.pad;
             width: root.item;
@@ -161,10 +180,13 @@ export component Dock inherits Window {
         }
 
         scroll := ScrollView {
-            x: root.vertical ? root.pad : root.pad + 2 * (root.item + root.gap);
-            y: root.vertical ? root.pad + 2 * (root.item + root.gap) : root.pad;
-            width: max(0px, parent.width - 2 * root.pad - (root.vertical ? 0px : 3 * (root.item + root.gap)));
-            height: max(0px, parent.height - 2 * root.pad - (root.vertical ? 3 * (root.item + root.gap) : 0px));
+            // Reserve the existing cross-axis bar padding inside the clipped
+            // viewport. Compensating content offsets keep every tile/input
+            // slot unchanged and let indicators/shadows paint outside it.
+            x: root.vertical ? 0px : root.pad + 2 * (root.item + root.gap);
+            y: root.vertical ? root.pad + 2 * (root.item + root.gap) : 0px;
+            width: max(0px, parent.width - (root.vertical ? 0px : 2 * root.pad + 3 * (root.item + root.gap)));
+            height: max(0px, parent.height - (root.vertical ? 2 * root.pad + 3 * (root.item + root.gap) : 0px));
             // Desktop tiles own button-down; overflow uses wheel/scrollbars,
             // not a competing mouse-pan gesture that delays those events.
             mouse-drag-pan-enabled: false;
@@ -177,8 +199,8 @@ export component Dock inherits Window {
 
 
             if root.media-view.enabled: DockMediaTile {
-                x: 0px;
-                y: 0px;
+                x: root.vertical ? root.pad : 0px;
+                y: root.vertical ? 0px : root.pad;
                 view: root.media-view;
                 compact: root.compact;
                 edge: root.edge;
@@ -192,13 +214,13 @@ export component Dock inherits Window {
             for tile[i] in root.pinned-apps: Rectangle {
                 property <length> step: root.item + root.gap;
                 property <length> offset: root.media-length + i * step;
-                x: root.vertical ? 0px : self.offset;
-                y: root.vertical ? self.offset : 0px;
+                x: root.vertical ? root.pad : self.offset;
+                y: root.vertical ? self.offset : root.pad;
                 width: root.item;
                 height: root.item;
                 clip: false;
 
-                TileButton {
+                DockButton {
                     width: parent.width;
                     height: parent.height;
                     radius: root.tile-radius;
@@ -226,14 +248,13 @@ export component Dock inherits Window {
             for tile[i] in root.running-windows: Rectangle {
                 property <length> step: root.item + root.gap;
                 property <length> offset: root.media-length + (root.pinned-apps.length + i) * step;
-                property <bool> focused: tile.key == root.focused-key;
-                x: root.vertical ? 0px : self.offset;
-                y: root.vertical ? self.offset : 0px;
+                x: root.vertical ? root.pad : self.offset;
+                y: root.vertical ? self.offset : root.pad;
                 width: root.item;
                 height: root.item;
                 clip: false;
 
-                TileButton {
+                DockButton {
                     width: parent.width;
                     height: parent.height;
                     radius: root.tile-radius;
@@ -256,24 +277,41 @@ export component Dock inherits Window {
                         accessible-role: none;
                     }
                 }
-                // Running indicator: 3px dot on the outer edge; the focused
-                // window's indicator widens to half the tile in the accent.
-                Rectangle {
-                    property <length> indicator: parent.focused ? root.item / 2 : 3px;
-                    width: root.vertical ? 3px : self.indicator;
-                    height: root.vertical ? self.indicator : 3px;
-                    border-radius: 999px;
-                    background: parent.focused ? SeelenPalette.accent : SeelenPalette.muted;
-                    x: root.edge == 2 ? 0px : root.edge == 3 ? parent.width - self.width : (parent.width - self.width) / 2;
-                    y: root.edge == 1 ? 0px : root.edge == 0 ? parent.height - self.height : (parent.height - self.height) / 2;
-                    visible: !root.surface-status.refreshing;
-                    accessible-role: none;
-                }
+            }
+        }
+
+        // The indicator rail shares the real scroll offset and clips only
+        // along the scrolling axis. Native scrollbars cannot clip its outer
+        // padding, and pressed tile paint never moves it.
+        Rectangle {
+            x: scroll.x;
+            y: scroll.y;
+            width: root.vertical ? parent.width : scroll.visible-width;
+            height: root.vertical ? scroll.visible-height : parent.height;
+            clip: true;
+            accessible-role: none;
+            for tile[i] in root.running-windows: Rectangle {
+                property <bool> focused: tile.key == root.focused-key;
+                property <length> offset: root.media-length
+                    + (root.pinned-apps.length + i) * (root.item + root.gap);
+                property <length> indicator: self.focused ? root.item / 2 : 3px;
+                width: root.vertical ? 3px : self.indicator;
+                height: root.vertical ? self.indicator : 3px;
+                border-radius: 999px;
+                background: self.focused ? SeelenPalette.accent : SeelenPalette.running-indicator;
+                x: root.vertical
+                    ? (root.edge == 2 ? root.pad / 2 : root.pad + root.item + root.pad / 2) - self.width / 2
+                    : self.offset + scroll.content-x + (root.item - self.width) / 2;
+                y: root.vertical
+                    ? self.offset + scroll.content-y + (root.item - self.height) / 2
+                    : (root.edge == 1 ? root.pad / 2 : root.pad + root.item + root.pad / 2) - self.height / 2;
+                visible: !root.surface-status.refreshing;
+                accessible-role: none;
             }
         }
 
         // Literal trailing utility: declaration/Tab order follows all apps.
-        TileButton {
+        DockButton {
             x: root.vertical ? root.pad : max(root.pad, parent.width - root.pad - root.item);
             y: root.vertical ? max(root.pad, parent.height - root.pad - root.item) : root.pad;
             width: root.item;

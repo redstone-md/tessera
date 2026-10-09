@@ -93,7 +93,7 @@ fn native_general_combobox_reflects_loaded_choice_in_all_panel_themes_densities_
                     .dispatch_event(WindowEvent::ScaleFactorChanged {
                         scale_factor: scale,
                     });
-                let width = (560.0 * scale) as u32;
+                let width = (600.0 * scale) as u32;
                 let height = (620.0 * scale) as u32;
                 panel.window().set_size(PhysicalSize::new(width, height));
                 for (index, value) in [(0, "Monday"), (1, "Sunday"), (2, "Saturday")] {
@@ -110,7 +110,7 @@ fn native_general_combobox_reflects_loaded_choice_in_all_panel_themes_densities_
                     assert!(size.width > 0.0 && size.height > 0.0);
                     assert!(origin.x >= 0.0 && origin.y >= 0.0);
                     assert!(
-                        origin.x + size.width <= 560.5,
+                        origin.x + size.width <= 600.5,
                         "native selector fits narrow panel"
                     );
                     assert!(origin.y + size.height <= 620.5);

@@ -334,31 +334,117 @@ fn present_toolbar_tooltip(fixture: &LauncherFixture) {
     TOOLTIP_CONFIGURE_HOOK.with(|hook| assert!(hook.borrow().is_none()));
 }
 
-fn activate_power_with_live_toolbar_tooltip(fixture: &LauncherFixture) {
+#[derive(Clone, Copy)]
+enum TooltipRetirementInput {
+    FocusedAccessible,
+    Pointer,
+}
+
+fn prepare_power_tooltip_retirement(fixture: &LauncherFixture, input: TooltipRetirementInput) {
+    use slint::platform::{Key, WindowEvent};
+    if matches!(input, TooltipRetirementInput::FocusedAccessible) {
+        // Clear a cached fixture's previous pointer hover before presenting the
+        // foreign Tooltip. Native Tab then focuses the actual normal footer.
+        fixture
+            .launcher
+            .window()
+            .dispatch_event(WindowEvent::PointerExited);
+        fixture.launcher.invoke_focus_search();
+        assert!(!fixture.launcher.get_feedback_visible());
+        assert!(!fixture.launcher.get_refreshing());
+        assert!(!fixture.launcher.get_stale());
+        for _ in 0..2 * fixture.launcher.get_application_count() + 4 {
+            native_key(&fixture.launcher, Key::Tab);
+        }
+    }
+}
+
+fn activate_power_with_live_toolbar_tooltip(
+    fixture: &LauncherFixture,
+    input: TooltipRetirementInput,
+) {
     use i_slint_backend_testing::ElementHandle;
     use slint::platform::{PointerEventButton, WindowEvent};
     let footer = ElementHandle::find_by_accessible_label(&fixture.launcher, "Open power menu")
         .next()
         .unwrap();
-    let position = native_center(&footer);
-    fixture
-        .launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerPressed {
-            position,
-            button: PointerEventButton::Left,
-        });
-    // A primitive press/hover must not consume the retirement seam. The
-    // different Toolbar owner keeps this lease for root open_power_menu.
     TOOLTIP_DROP_HOOK.with(|hook| assert!(hook.borrow().is_some()));
-    fixture
-        .launcher
-        .window()
-        .dispatch_event(WindowEvent::PointerReleased {
-            position,
-            button: PointerEventButton::Left,
-        });
+    match input {
+        TooltipRetirementInput::FocusedAccessible => {
+            // No hover relay: the real AX action reaches Root's guarded
+            // open_power_menu retirement seam, as in the original regression.
+            footer.invoke_accessible_default_action();
+        }
+        TooltipRetirementInput::Pointer => {
+            let position = native_center(&footer);
+            fixture
+                .launcher
+                .window()
+                .dispatch_event(WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+            // Launcher now owns real hints. Hover/Down legitimately retires
+            // the previous Toolbar lease, before the old pointer's release.
+            TOOLTIP_DROP_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+            fixture
+                .launcher
+                .window()
+                .dispatch_event(WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+        }
+    }
     TOOLTIP_DROP_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+}
+
+#[test]
+fn launcher_observation_results_refresh_actual_feedback_visibility() {
+    use i_slint_backend_testing::ElementHandle;
+    let fixture = LauncherFixture::new();
+    fixture.controller.open_launcher();
+    let assert_feedback = |visible| {
+        assert_eq!(fixture.panel.get_status_is_feedback(), visible);
+        assert_eq!(fixture.launcher.get_feedback_visible(), visible);
+        assert_eq!(fixture.launcher.get_status(), fixture.panel.get_status());
+        for label in ["Refresh the desktop", "Exit Tessera"] {
+            let control = ElementHandle::find_by_accessible_label(&fixture.launcher, label).next();
+            assert_eq!(control.is_some(), visible, "{label}");
+            if let Some(control) = control {
+                assert_eq!(control.accessible_enabled(), Some(true), "{label}");
+            }
+        }
+    };
+    assert_feedback(false);
+    fixture.controller.report(
+        Err("controlled command failure".into()),
+        "Command accepted",
+        |error| format!("Could not launch: {error}"),
+    );
+    assert_feedback(true);
+    assert!(!fixture.launcher.get_stale());
+
+    // Exercise the actual completion -> render -> launcher projection path,
+    // not a manually synchronized property or a cosmetic flag reset.
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(launcher_snapshot()));
+    assert_feedback(false);
+    assert!(fixture.panel.get_has_snapshot());
+    assert!(!fixture.launcher.get_stale());
+    apply_result_to_both(
+        &fixture.controller,
+        &fixture.panel,
+        Err("controlled observation failure".into()),
+    );
+    assert_feedback(true);
+    assert!(fixture.panel.get_has_snapshot());
+    assert!(fixture.panel.get_stale());
+    assert!(fixture.launcher.get_stale());
+    assert!(!fixture.launcher.get_refreshing());
+    apply_result_to_both(&fixture.controller, &fixture.panel, Ok(launcher_snapshot()));
+    assert_feedback(false);
+    assert!(!fixture.panel.get_stale());
+    assert!(!fixture.launcher.get_stale());
 }
 
 #[test]
@@ -372,8 +458,7 @@ fn genuine_power_footer_pointer_and_tab_return_query_without_command_or_sibling_
         "Open user menu",
         "Open settings and recovery",
         "Open power menu",
-        "Refresh the desktop",
-        "Exit Tessera",
+        "Expand applications menu",
     ] {
         assert!(
             ElementHandle::find_by_accessible_label(&fixture.launcher, label)
@@ -381,6 +466,21 @@ fn genuine_power_footer_pointer_and_tab_return_query_without_command_or_sibling_
                 .is_some()
         );
     }
+    for label in ["Refresh the desktop", "Exit Tessera"] {
+        assert!(
+            ElementHandle::find_by_accessible_label(&fixture.launcher, label)
+                .next()
+                .is_none()
+        );
+    }
+    fixture.launcher.set_feedback_visible(true);
+    for label in ["Refresh the desktop", "Exit Tessera"] {
+        let control = ElementHandle::find_by_accessible_label(&fixture.launcher, label)
+            .next()
+            .expect("real conditional recovery control");
+        assert_eq!(control.accessible_enabled(), Some(true));
+    }
+    fixture.launcher.set_feedback_visible(false);
     let actor = open_power(&fixture);
     assert_eq!(display.reads.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
@@ -829,8 +929,7 @@ fn newer_actual_calendar_during_user_retirement_wins_over_old_power_coordination
     RECYCLE_MENU_DROP_HOOK.with(|hook| assert!(hook.borrow().is_none()));
 }
 
-#[test]
-fn toolbar_tooltip_retirement_hides_or_reopens_launcher_and_revokes_old_power_footer() {
+fn assert_toolbar_tooltip_retirement_revokes_old_power_footer(input: TooltipRetirementInput) {
     for cached in [false, true] {
         for reopen in [false, true] {
             let (fixture, display, power) =
@@ -842,6 +941,7 @@ fn toolbar_tooltip_retirement_hides_or_reopens_launcher_and_revokes_old_power_fo
             });
             let reads = display.reads.load(Ordering::SeqCst);
             let getters = fixture.host.display_provider_calls.load(Ordering::SeqCst);
+            prepare_power_tooltip_retirement(&fixture, input);
             present_toolbar_tooltip(&fixture);
             let operation = fixture.controller.popup_operation.borrow().clone();
             let retired = Rc::new(Cell::new(false));
@@ -874,7 +974,7 @@ fn toolbar_tooltip_retirement_hides_or_reopens_launcher_and_revokes_old_power_fo
             POWER_CONFIGURE_HOOK.with(|hook| {
                 *hook.borrow_mut() = Some(Box::new(|_| panic!("stale Power attached")));
             });
-            activate_power_with_live_toolbar_tooltip(&fixture);
+            activate_power_with_live_toolbar_tooltip(&fixture, input);
             assert!(retired.get());
             assert_eq!(fixture.launcher.window().is_visible(), reopen);
             if reopen {
@@ -908,9 +1008,21 @@ fn toolbar_tooltip_retirement_hides_or_reopens_launcher_and_revokes_old_power_fo
 }
 
 #[test]
-fn toolbar_tooltip_retirement_opens_newer_actual_calendar_without_stale_power() {
+fn toolbar_tooltip_retirement_hides_or_reopens_launcher_and_revokes_old_power_footer() {
+    assert_toolbar_tooltip_retirement_revokes_old_power_footer(
+        TooltipRetirementInput::FocusedAccessible,
+    );
+}
+
+#[test]
+fn launcher_pointer_hint_retirement_hides_or_reopens_without_stale_power() {
+    assert_toolbar_tooltip_retirement_revokes_old_power_footer(TooltipRetirementInput::Pointer);
+}
+
+fn assert_toolbar_tooltip_retirement_preserves_newer_calendar(input: TooltipRetirementInput) {
     let (fixture, display, power) =
         fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    prepare_power_tooltip_retirement(&fixture, input);
     present_toolbar_tooltip(&fixture);
     let operation = fixture.controller.popup_operation.borrow().clone();
     let retired = Rc::new(Cell::new(false));
@@ -943,7 +1055,7 @@ fn toolbar_tooltip_retirement_opens_newer_actual_calendar_without_stale_power() 
     POWER_CONFIGURE_HOOK.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(|_| panic!("stale Power attached")));
     });
-    activate_power_with_live_toolbar_tooltip(&fixture);
+    activate_power_with_live_toolbar_tooltip(&fixture, input);
     slint::platform::update_timers_and_animations();
     assert!(retired.get());
     assert!(fixture.controller.launcher_popup_ready());
@@ -964,6 +1076,18 @@ fn toolbar_tooltip_retirement_opens_newer_actual_calendar_without_stale_power() 
     assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
     assert!(power.actions.lock().is_empty());
     assert!(POWER_CONFIGURE_HOOK.with(|hook| hook.borrow_mut().take().is_some()));
+}
+
+#[test]
+fn toolbar_tooltip_retirement_opens_newer_actual_calendar_without_stale_power() {
+    assert_toolbar_tooltip_retirement_preserves_newer_calendar(
+        TooltipRetirementInput::FocusedAccessible,
+    );
+}
+
+#[test]
+fn launcher_pointer_hint_retirement_opens_newer_actual_calendar_without_stale_power() {
+    assert_toolbar_tooltip_retirement_preserves_newer_calendar(TooltipRetirementInput::Pointer);
 }
 
 #[test]

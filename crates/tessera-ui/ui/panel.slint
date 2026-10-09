@@ -4,6 +4,8 @@
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import { GeneralPreferences } from "general-preferences.slint";
 import { ShortcutPreferences } from "shortcut-preferences.slint";
+import { TileButton } from "tiles.slint";
+import { SeelenPalette } from "palette.slint";
 
 export { Dock, DockApp, DockWindow, DockStatus } from "dock.slint";
 export { DockWindowCommand, DockSystemCommand, DockMenuKind, DockMenuAction, DockReservedAction, DockRecycleAction, DockRecycleState } from "shell-commands.slint";
@@ -38,13 +40,95 @@ export struct AppRow {
     pinned: bool,
 }
 
+// Settings use flat translucent groups, not the shared shell's raised tiles.
+component SettingsGroup inherits Rectangle {
+    border-radius: 10px;
+    background: SeelenPalette.dark ? rgba(0, 0, 0, 0.10) : rgba(0, 0, 0, 0.03);
+    vertical-stretch: 0;
+    max-height: self.preferred-height;
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+        @children
+    }
+}
+
+component SettingsRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> description;
+    spacing: 12px;
+    vertical-stretch: 0;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        Text {
+            text: root.label;
+            color: SeelenPalette.foreground;
+            font-weight: 600;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+        if root.description != "": Text {
+            text: root.description;
+            color: SeelenPalette.running-indicator;
+            font-size: 12.8px;
+            wrap: word-wrap;
+        }
+    }
+    HorizontalLayout {
+        min-width: 150px;
+        horizontal-stretch: 0;
+        min-height: 24px;
+        max-height: 24px;
+        vertical-stretch: 0;
+        spacing: 8px;
+        alignment: end;
+        @children
+    }
+}
+
+component SettingsNavigation inherits TileButton {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> collapsed;
+    accessible-text: root.label;
+    height: 30px;
+    min-width: 0px;
+    radius: 8px;
+    filled: false;
+    background: root.selected ? SeelenPalette.accent
+        : root.hovered ? Palette.accent-background : transparent;
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 4px;
+        Image {
+            source: root.icon;
+            width: 20px;
+            height: 20px;
+            image-fit: contain;
+            colorize: SeelenPalette.foreground;
+            accessible-role: none;
+        }
+        if !root.collapsed: Text {
+            text: root.label;
+            color: SeelenPalette.foreground;
+            font-size: 12.8px;
+            font-weight: 600;
+            overflow: elide;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
 export component Panel inherits Window {
     title: "Tessera " + root.version + " — alpha";
-    background: Palette.background;
-    preferred-width: 640px;
-    preferred-height: 520px;
-    min-width: 560px;
-    min-height: 340px;
+    background: SeelenPalette.surface;
+    default-font-size: 16px;
+    preferred-width: 800px;
+    preferred-height: 500px;
+    min-width: 600px;
+    min-height: 400px;
 
     // In/out state (the controller reads and writes these).
     in-out property <[Row]> rows;
@@ -58,6 +142,7 @@ export component Panel inherits Window {
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
+    in-out property <bool> status-is-feedback: false;
     in property <bool> refreshing;
     in property <bool> has-snapshot;
     // True while the retained data must not be activated: refreshing or
@@ -93,7 +178,10 @@ export component Panel inherits Window {
     callback shortcuts-event-ready();
     callback shortcut-trigger-ready();
 
-    public function focus-shortcut-capture() { shortcut-preferences.focus-capture(); }
+    public function focus-shortcut-capture() {
+        root.select-page(3);
+        shortcut-preferences.focus-capture();
+    }
     public function cancel-shortcut-input() { shortcut-preferences.cancel-input(); }
     // A shared live appearance preview updates every surface without Save.
     callback appearance-changed();
@@ -125,162 +213,407 @@ export component Panel inherits Window {
     changed dock-edge-index => { root.appearance-changed(); }
 
     property <length> row-height: root.compact ? 24px : 32px;
-    property <length> gap: root.compact ? 6px : 12px;
+    property <int> selected-page: 0;
+    property <bool> sidebar-collapsed;
+    property <length> sidebar-width: root.sidebar-collapsed ? 44px : 192px;
+    property <color> divider: SeelenPalette.dark ? oklch(0.36, 0, 0) : oklch(0.81, 0, 0);
+    property <color> shell-overlay: SeelenPalette.dark ? #0000001a : #00000008;
+    property <string> page-title: ["General", "Appearance", "Dock", "Shortcuts", "Desktop & recovery"][root.selected-page];
 
-    VerticalLayout {
-        padding: 16px;
-        spacing: root.gap;
-
-        if root.startup-notice != "": Rectangle {
-            border-radius: 8px;
-            background: Palette.control-background;
-            height: notice-text.preferred-height + 16px;
-            notice-text := Text {
-                x: 8px;
-                y: 8px;
-                width: parent.width - 16px;
-                text: root.startup-notice;
-                wrap: word-wrap;
-                color: Palette.foreground;
-            }
+    // Navigation is presentation only: retain root drafts and cancel the scoped
+    // key capture synchronously before its controls are hidden.
+    function select-page(page: int) {
+        if page >= 0 && page < 5 && page != root.selected-page {
+            if root.selected-page == 3 { root.cancel-shortcut-input(); }
+            root.selected-page = page;
+            page-scroll.content-y = 0px;
+            page-scroll.content-x = 0px;
         }
+    }
 
-        HorizontalLayout {
-            spacing: root.gap;
-            Text {
-                text: "Observed desktop";
-                font-size: 20px;
-                font-weight: 600;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            ComboBox {
-                accessible-label: "Appearance theme";
-                model: ["System", "Light", "Dark"];
-                current-index <=> root.theme-index;
-            }
-            ComboBox {
-                accessible-label: "Dock edge (saved with preferences)";
-                model: ["Bottom", "Top", "Left", "Right"];
-                current-index <=> root.dock-edge-index;
-            }
-            CheckBox {
-                text: "Compact";
-                checked <=> root.compact;
-            }
-            VerticalLayout {
-                spacing: 4px;
-                Button {
-                    text: "Save preferences";
-                    clicked => { root.save-preferences-requested(); }
-                }
-                Button {
-                    text: "Cancel changes";
-                    clicked => { root.cancel-preferences-requested(); }
-                }
-            }
-        }
+    // The source paints cyan, blue, then red (CSS lists the top layer first).
+    Rectangle {
+        background: @linear-gradient(336deg,
+            (SeelenPalette.dark ? oklch(0.27, 0.056, 230) : oklch(0.90, 0.053, 230)) 0%,
+            rgba(0, 255, 0, 0) 70%);
+    }
+    Rectangle {
+        background: @linear-gradient(127deg,
+            (SeelenPalette.dark ? oklch(0.27, 0.111, 260) : oklch(0.90, 0.042, 260)) 0%,
+            rgba(0, 0, 255, 0) 70%);
+    }
+    Rectangle {
+        background: @linear-gradient(217deg,
+            (SeelenPalette.dark ? oklch(0.27, 0.096, 30) : oklch(0.90, 0.054, 30)) 0%,
+            rgba(255, 0, 0, 0) 70%);
+    }
 
-        HorizontalLayout {
-            spacing: root.gap;
-            LineEdit {
-                accessible-label: "Search window titles";
-                placeholder-text: "Search window and application names (case-insensitive)";
-                text <=> root.search;
-            }
-            Button {
-                text: "Refresh";
-                enabled: !root.refreshing;
-                clicked => { root.refresh-requested(); }
-            }
-        }
-
-        Text { text: root.summary; wrap: word-wrap; }
-        Text { text: root.status; wrap: word-wrap; }
-        if root.stale && root.has-snapshot: Text {
-            text: "Last observation is stale. Refresh before switching windows.";
-            wrap: word-wrap;
-        }
-
-        // System actions stay directly visible; restoring the Windows
-        // Explorer shell affects this session and future logins.
-        HorizontalLayout {
-            spacing: root.gap;
-            Button {
-                text: "File Explorer";
-                clicked => { root.system-action-requested(0); }
-            }
-            Button {
-                text: "Task Manager";
-                clicked => { root.system-action-requested(1); }
-            }
-            Button {
-                text: "Restore Windows Explorer (session + future logins)";
-                clicked => { root.system-action-requested(2); }
-            }
-        }
-
-        ScrollView {
-            vertical-stretch: 1;
-            VerticalLayout {
-                spacing: 4px;
-                GeneralPreferences {
-                    start-of-week-index <=> root.start-of-week-index;
-                    compact: root.compact;
-                }
-                shortcut-preferences := ShortcutPreferences {
-                    compact: root.compact;
-                    controls-enabled: root.shortcuts-controls-enabled;
-                    draft-enabled: root.shortcuts-enabled;
-                    settings-label: root.shortcuts-settings-label;
-                    capturing: root.shortcuts-capturing;
-                    dirty: root.shortcuts-dirty;
-                    applying: root.shortcuts-applying;
-                    launcher-status: root.shortcuts-launcher-status;
-                    settings-status: root.shortcuts-settings-status;
-                    message: root.shortcuts-message;
-                    enabled-edited(enabled) => { root.shortcuts-enabled-edited(enabled); }
-                    capture-requested => { root.shortcuts-capture-requested(); }
-                    capture-cancelled => { root.shortcuts-capture-cancelled(); }
-                    settings-reset-requested => { root.shortcuts-reset-requested(); }
-                    capture-pressed(event) => { return root.shortcuts-capture-pressed(event); }
-                    capture-released(event) => { return root.shortcuts-capture-released(event); }
-                }
-                for row in root.rows: Button {
-                    text: row.caption;
-                    height: root.row-height;
-                    horizontal-stretch: 1;
-                    // Activation is an explicit button action only, and is
-                    // paused while refreshing or when the snapshot is stale.
-                    enabled: !root.refreshing && !root.stale && root.has-snapshot;
-                    clicked => { root.activate-requested(row.key); }
-                }
-                for app in root.apps: HorizontalLayout {
-                    height: root.row-height;
-                    spacing: root.gap;
-                    Button {
-                        text: app.label;
-                        horizontal-stretch: 1;
-                        // Launching is an explicit action for a currently
-                        // displayed application only.
-                        enabled: !root.refreshing && !root.stale;
-                        clicked => { root.launch-requested(app.key); }
+    sidebar := Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.sidebar-width;
+        height: parent.height;
+        background: root.shell-overlay;
+        clip: true;
+        VerticalLayout {
+            spacing: 0px;
+            TileButton {
+                height: 50px;
+                radius: 0px;
+                filled: false;
+                accessible-text: root.sidebar-collapsed ? "Expand settings sidebar" : "Collapse settings sidebar";
+                clicked => { root.sidebar-collapsed = !root.sidebar-collapsed; }
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 8px;
+                    Text {
+                        text: "T";
+                        width: 28px;
+                        color: SeelenPalette.foreground;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        accessible-role: none;
                     }
-                    Button {
-                        text: app.pinned ? "Unpin" : "Pin";
-                        accessible-label: (app.pinned ? "Unpin " : "Pin ") + app.label;
-                        clicked => {
-                            root.pin-toggle-requested(app.key, app.pinned);
+                    if !root.sidebar-collapsed: Text {
+                        text: "Tessera";
+                        color: SeelenPalette.foreground;
+                        font-size: 19.2px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accessible-role: none;
+                    }
+                    if !root.sidebar-collapsed: Text {
+                        text: "‹";
+                        color: SeelenPalette.foreground;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    width: parent.width;
+                    background: root.divider;
+                }
+            }
+            ScrollView {
+                min-width: 0px;
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout {
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 12px;
+                    SettingsNavigation {
+                        label: "General";
+                        icon: @image-url("../assets/icons/tabler-icons-6d128ed/settings.svg");
+                        collapsed: root.sidebar-collapsed;
+                        selected: root.selected-page == 0;
+                        clicked => { root.select-page(0); }
+                    }
+                    Rectangle { height: 1px; background: root.divider; }
+                    VerticalLayout {
+                        spacing: 8px;
+                        SettingsNavigation {
+                            label: "Appearance";
+                            icon: @image-url("../assets/icons/tabler-icons-6d128ed/palette.svg");
+                            collapsed: root.sidebar-collapsed;
+                            selected: root.selected-page == 1;
+                            clicked => { root.select-page(1); }
+                        }
+                        SettingsNavigation {
+                            label: "Dock";
+                            icon: @image-url("../assets/icons/tabler-icons-6d128ed/layout-bottombar.svg");
+                            collapsed: root.sidebar-collapsed;
+                            selected: root.selected-page == 2;
+                            clicked => { root.select-page(2); }
+                        }
+                    }
+                    Rectangle { height: 1px; background: root.divider; }
+                    VerticalLayout {
+                        spacing: 8px;
+                        SettingsNavigation {
+                            label: "Shortcuts";
+                            icon: @image-url("../assets/icons/tabler-icons-6d128ed/keyboard.svg");
+                            collapsed: root.sidebar-collapsed;
+                            selected: root.selected-page == 3;
+                            clicked => { root.select-page(3); }
+                        }
+                        SettingsNavigation {
+                            label: "Desktop & recovery";
+                            icon: @image-url("../assets/icons/tabler-icons-6d128ed/tool.svg");
+                            collapsed: root.sidebar-collapsed;
+                            selected: root.selected-page == 4;
+                            clicked => { root.select-page(4); }
                         }
                     }
                 }
             }
+            Rectangle { height: 1px; background: root.divider; }
+            if !root.sidebar-collapsed: Text {
+                text: "Tessera " + root.version + " · alpha";
+                color: SeelenPalette.running-indicator;
+                font-size: 12.8px;
+                height: self.preferred-height + 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
+    }
 
-        Text {
-            text: "Tessera " + root.version + " — unsigned test alpha. Windows activate only on explicit input; Explorer is unchanged unless you press the restore button.";
-            wrap: word-wrap;
-            font-size: 12px;
+    Rectangle {
+        x: root.sidebar-width;
+        y: 0px;
+        width: parent.width - self.x;
+        height: parent.height;
+        VerticalLayout {
+            spacing: 0px;
+            header := Rectangle {
+                height: 50px;
+                background: root.shell-overlay;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 12px;
+                    Text {
+                        text: root.page-title;
+                        color: SeelenPalette.foreground;
+                        font-size: 19.2px;
+                        font-weight: 600;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 0;
+                        min-width: header-actions.min-width;
+                        preferred-width: header-actions.preferred-width;
+                        height: header.height;
+                        header-actions := HorizontalLayout {
+                            y: (parent.height - self.height) / 2;
+                            height: 24px;
+                            spacing: 4px;
+                            Button {
+                                text: "Cancel";
+                                accessible-label: "Cancel changes";
+                                min-width: 60px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                clicked => { root.cancel-preferences-requested(); }
+                            }
+                            Button {
+                                text: "Save";
+                                accessible-label: "Save preferences";
+                                min-width: 60px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                clicked => { root.save-preferences-requested(); }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    width: parent.width;
+                    background: root.divider;
+                }
+            }
+            // Host feedback is global, including failed Save and startup recovery.
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 8px;
+                padding-bottom: 4px;
+                spacing: 4px;
+                Text {
+                    text: root.status;
+                    color: SeelenPalette.foreground;
+                    font-size: 12.8px;
+                    wrap: word-wrap;
+                }
+                if root.startup-notice != "": Text {
+                    text: root.startup-notice;
+                    color: SeelenPalette.foreground;
+                    font-size: 12.8px;
+                    wrap: word-wrap;
+                }
+            }
+            page-scroll := ScrollView {
+                vertical-stretch: 1;
+                content-width: self.visible-width;
+                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 0px;
+                    alignment: start;
+                    if root.selected-page == 0: general-group := SettingsGroup {
+                        GeneralPreferences {
+                            start-of-week-index <=> root.start-of-week-index;
+                            compact: root.compact;
+                        }
+                    }
+                    if root.selected-page == 1: SettingsGroup {
+                        SettingsRow {
+                            label: "Theme";
+                            description: "Preview immediately. Save to keep this appearance.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Appearance theme";
+                                model: ["System", "Light", "Dark"];
+                                current-index <=> root.theme-index;
+                            }
+                        }
+                        SettingsRow {
+                            label: "Compact";
+                            description: "Use denser desktop observation rows.";
+                            CheckBox {
+                                text: "";
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Compact";
+                                checked <=> root.compact;
+                            }
+                        }
+                    }
+                    if root.selected-page == 2: SettingsGroup {
+                        SettingsRow {
+                            label: "Dock edge";
+                            description: "Preview the dock position. Save to keep it.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Dock edge (saved with preferences)";
+                                model: ["Bottom", "Top", "Left", "Right"];
+                                current-index <=> root.dock-edge-index;
+                            }
+                        }
+                    }
+                    // Keep the focus/input object stable; hidden controls cannot
+                    // enter Tab navigation or continue a captured gesture.
+                    SettingsGroup {
+                        visible: root.selected-page == 3;
+                        min-height: root.selected-page == 3 ? shortcut-preferences.preferred-height + 24px : 0px;
+                        max-height: self.min-height;
+                        shortcut-preferences := ShortcutPreferences {
+                            page-active: root.selected-page == 3;
+                            compact: root.compact;
+                            controls-enabled: root.shortcuts-controls-enabled;
+                            draft-enabled: root.shortcuts-enabled;
+                            settings-label: root.shortcuts-settings-label;
+                            capturing: root.shortcuts-capturing;
+                            dirty: root.shortcuts-dirty;
+                            applying: root.shortcuts-applying;
+                            launcher-status: root.shortcuts-launcher-status;
+                            settings-status: root.shortcuts-settings-status;
+                            message: root.shortcuts-message;
+                            enabled-edited(enabled) => { root.shortcuts-enabled-edited(enabled); }
+                            capture-requested => { root.shortcuts-capture-requested(); }
+                            capture-cancelled => { root.shortcuts-capture-cancelled(); }
+                            settings-reset-requested => { root.shortcuts-reset-requested(); }
+                            capture-pressed(event) => { return root.shortcuts-capture-pressed(event); }
+                            capture-released(event) => { return root.shortcuts-capture-released(event); }
+                        }
+                    }
+                    if root.selected-page == 4: SettingsGroup {
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit {
+                                accessible-label: "Search window titles";
+                                placeholder-text: "Search windows and applications";
+                                text <=> root.search;
+                            }
+                            Button {
+                                text: "Refresh";
+                                enabled: !root.refreshing;
+                                clicked => { root.refresh-requested(); }
+                            }
+                        }
+                        Text { text: root.summary; color: SeelenPalette.foreground; wrap: word-wrap; }
+                        if root.stale && root.has-snapshot: Text {
+                            text: "Last observation is stale. Refresh before switching windows.";
+                            color: SeelenPalette.foreground;
+                            wrap: word-wrap;
+                        }
+                        for row in root.rows: Button {
+                            text: row.caption;
+                            height: root.row-height;
+                            horizontal-stretch: 1;
+                            enabled: !root.refreshing && !root.stale && root.has-snapshot;
+                            clicked => { root.activate-requested(row.key); }
+                        }
+                        for app in root.apps: HorizontalLayout {
+                            height: root.row-height;
+                            spacing: 8px;
+                            Button {
+                                text: app.label;
+                                horizontal-stretch: 1;
+                                enabled: !root.refreshing && !root.stale;
+                                clicked => { root.launch-requested(app.key); }
+                            }
+                            Button {
+                                text: app.pinned ? "Unpin" : "Pin";
+                                accessible-label: (app.pinned ? "Unpin " : "Pin ") + app.label;
+                                clicked => { root.pin-toggle-requested(app.key, app.pinned); }
+                            }
+                        }
+                    }
+                    if root.selected-page == 4: Rectangle { height: 12px; }
+                    if root.selected-page == 4: SettingsGroup {
+                        SettingsRow {
+                            label: "System tools";
+                            Button {
+                                text: "File Explorer";
+                                min-height: 24px;
+                                max-height: 24px;
+                                clicked => { root.system-action-requested(0); }
+                            }
+                            Button {
+                                text: "Task Manager";
+                                min-height: 24px;
+                                max-height: 24px;
+                                clicked => { root.system-action-requested(1); }
+                            }
+                        }
+                        Text {
+                            text: "Restore Windows Explorer (session + future logins)";
+                            color: SeelenPalette.foreground;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: "Explorer is unchanged unless you press the restore button. Restoring affects this session and future logins.";
+                            color: SeelenPalette.running-indicator;
+                            font-size: 12.8px;
+                            wrap: word-wrap;
+                        }
+                        Button {
+                            text: "Restore Windows Explorer";
+                            accessible-label: "Restore Windows Explorer (session + future logins)";
+                            clicked => { root.system-action-requested(2); }
+                        }
+                    }
+                }
+            }
+            Text {
+                text: "Unsigned test alpha · Windows activate only on explicit input.";
+                color: SeelenPalette.running-indicator;
+                font-size: 12.8px;
+                wrap: word-wrap;
+                height: self.preferred-height + 16px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
         }
     }
 }

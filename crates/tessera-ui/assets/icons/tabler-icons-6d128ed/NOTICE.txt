@@ -29,3 +29,56 @@ Package manifest SHA-256: c58f1047fa9a76d899f9a6dd96aa0a03476a6b28de334015173161
 The studied reference at 53274fa9f45ad1b0ebd798e2d464858a213d9022 declares react-icons ^5.6.0 and selects TbZzz. That range/export alone does not establish its installed package revision; the pinned family manifest above establishes this independent artwork selection. The older v5.6.0 source tag uses a different family pin and is not asserted to be this pin.
 
 This independently licensed upstream SVG is not reference-exported React/SSR serialization. Original SVG bytes, metadata and stroke geometry are retained, not transformed into React's generated shape or attributes. Permissive artwork provenance is separate from serialized-byte/native-pixel equivalence; visual equivalence requires separate verification. No author endorsement or trademark rights are claimed.
+
+Additional toolbar control artwork, from the same immutable revision and MIT grant:
+
+Bluetooth — unmodified icons/outline/bluetooth.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/bluetooth.svg
+Local artwork: bluetooth.svg
+Bytes: 414
+Git blob: 55e57e0c265ecf55e6671b1c6f51bc304bc9c20e
+SHA-256: 9e580e6b5b6c8af8408f841bf48c594ecfbd50a95c2130971c21876a84cd4d26
+
+Network control — unmodified icons/outline/world.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/world.svg
+Local artwork: world.svg
+Bytes: 542
+Git blob: 9803590c17e1f207c78f55aa68c958915a248684
+SHA-256: ab71e6f58782ae4b2aa099ca869627c6051840f95e727d261f0d994c9fac7619
+
+Both Git blobs and byte counts were matched against the immutable upstream tree members. Original comments, SVG bytes and metadata are retained without conversion. The adjacent full MIT LICENSE remains unchanged and applies to both files.
+These are controls, not observed connection facts. The generic world glyph does not claim Wi-Fi, Ethernet, online or offline status; the Bluetooth glyph does not claim a connected device. Live reference-state glyph selection remains separate work.
+
+Additional Settings navigation artwork, from the same immutable revision and MIT grant:
+
+General: settings.svg — original icons/outline/settings.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/settings.svg
+Bytes: 944
+Git blob: 68704930426e4778aded56a8ce37daab88f14ea6
+SHA-256: d71136dfd83ad19efe1777d01768a5d23d7b295de5dde3b1fccc50806809a423
+
+Appearance: palette.svg — original icons/outline/palette.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/palette.svg
+Bytes: 689
+Git blob: 24a69f49e90464caa4fb4e8ab9c12ce5be5a4873
+SHA-256: 27a5a19ae4b0f73ff4089b7f5a6c8fdf17f19ecc853e19fa04494f083943e778
+
+Dock: layout-bottombar.svg — original icons/outline/layout-bottombar.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/layout-bottombar.svg
+Bytes: 484
+Git blob: bfd23e879230f42b02c8188a060a1a2139b3a152
+SHA-256: d0d1b5ed2279e4e0013d8e95b98fb997ba447f39d59f3d5645b77b25e1749047
+
+Shortcuts: keyboard.svg — original icons/outline/keyboard.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/keyboard.svg
+Bytes: 656
+Git blob: d1b52ed775da416a7fbed10bc9a5aa0a58f0e682
+SHA-256: 8dcb52240a7f121651455a0a71322cb306c7e4695c70b4a9c14c453dc231c5da
+
+Desktop & recovery: tool.svg — original icons/outline/tool.svg
+https://raw.githubusercontent.com/tabler/tabler-icons/6d128ed935d4546607b1e4d5d08c8b27bdbe7758/icons/outline/tool.svg
+Bytes: 459
+Git blob: 50f54a9d230dd2b8b238a8605e02ce5194bd70b1
+SHA-256: b432e73424230f357f46decbcdb37b2c6f4b3f223f7169c204af819bcbcb3e34
+
+All five original SVG files and metadata are retained byte-for-byte; Git blob identities and sizes were matched against their immutable upstream tree members. The unchanged adjacent full MIT LICENSE applies to each. These consistent native navigation glyphs are independently licensed equivalents, not a claim of exact reference icon geometry.

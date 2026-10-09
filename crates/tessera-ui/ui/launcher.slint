@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { Button, LineEdit, ListView, Palette, StyleMetrics } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { TileButton, FocusTokens, TileBounds } from "tiles.slint";
@@ -10,38 +10,121 @@ import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
 export { LaunchTile } from "launcher-tile.slint";
 
-// Labels reuse the shared input owner, so window retirement can revoke both
-// application and command gestures without touching private stock widgets.
+// A launcher-local skin around the public native editor. The pinned LineEdit
+// interface exposes no fill, border or padding; TextInput owns editing and IME.
+component LauncherSearchField inherits Rectangle {
+    in-out property <string> text <=> editor.text;
+    out property <bool> has-focus: editor.has-focus;
+    callback key-pressed(KeyEvent) -> EventResult;
+    min-width: 1px;
+    min-height: 32.4px;
+    vertical-stretch: 0;
+    horizontal-stretch: 1;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: transparent;
+    background: transparent;
+    forward-focus: editor;
+    viewport := Rectangle {
+        x: 9px;
+        y: 5px;
+        width: max(1px, root.width - 18px);
+        height: max(1px, root.height - 10px);
+        clip: true;
+        accessible-role: none;
+        // Public TextInput has no preedit getter. Do not paint a placeholder
+        // over composition text or depend on the SDK's private preedit property.
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.text == "" && !root.has-focus ? @tr("Applications") : "";
+            font-size: 16px;
+            font-family: PopoverTokens.font-family;
+            color: SeelenPalette.secondary;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+        ContextMenuArea {
+            Menu {
+                MenuItem { title: @tr("Undo"); activated => { editor.undo(); } }
+                MenuItem { title: @tr("Redo"); activated => { editor.redo(); } }
+                MenuSeparator {}
+                MenuItem { title: @tr("Cut"); activated => { editor.cut(); } }
+                MenuItem { title: @tr("Copy"); activated => { editor.copy(); } }
+                MenuItem { title: @tr("Paste"); activated => { editor.paste(); } }
+                MenuItem { title: @tr("Select All"); activated => { editor.select-all(); } }
+            }
+            editor := TextInput {
+                property <length> scroll-x: 0px;
+                x: clamp(self.scroll-x,
+                    min(0px, viewport.width - self.width), 0px);
+                width: max(viewport.width, self.preferred-width + self.text-cursor-width);
+                height: viewport.height;
+                single-line: true;
+                font-size: 16px;
+                font-family: PopoverTokens.font-family;
+                color: SeelenPalette.foreground;
+                vertical-alignment: center;
+                accessible-label: @tr("Search applications");
+                accessible-placeholder-text: @tr("Applications");
+                cursor-position-changed(point) => {
+                    if point.x + self.x < 0px {
+                        self.scroll-x = -point.x;
+                    } else if point.x + self.x + self.text-cursor-width > viewport.width {
+                        self.scroll-x = viewport.width - point.x - self.text-cursor-width;
+                    }
+                }
+                key-pressed(event) => { return root.key-pressed(event); }
+            }
+        }
+    }
+}
+
+// Header/recovery commands retain the shared keyboard/pointer owner.
 component LauncherCommandButton inherits TileButton {
     in property <string> text;
     in property <string> input-scope;
     activation-key: root.input-scope + root.accessible-text;
-    min-width: metrics.min-width;
-    min-height: metrics.min-height;
+    min-width: label.preferred-width + 16px;
+    min-height: 30.4px;
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    radius: 4px;
+    radius: 6px;
+    background: SeelenPalette.tile;
+    transform-scale: root.pressed ? 0.98 : 1;
+    drop-shadow-color: #00000014;
+    drop-shadow-offset-x: 1px;
+    drop-shadow-offset-y: 1px;
+    drop-shadow-blur: 2px;
     allow-return-repeat: false;
     focus-on-pointer: false;
-    // Delegate native size/font metrics to the installed widget, not a frozen
-    // pixel estimate. The probe is never visible, focusable or actionable.
-    metrics := Button {
-        text: root.text;
-        enabled: false;
-        visible: false;
-        accessible-role: none;
-        accessible-label: "";
-    }
     label := Text {
-        x: 12px;
-        width: max(0px, root.width - 24px);
+        x: 8px;
+        width: max(0px, root.width - 16px);
         height: root.height;
         text: root.text;
-        color: root.enabled ? Palette.control-foreground : SeelenPalette.muted;
+        font-family: PopoverTokens.font-family;
+        font-size: 16px;
+        color: !root.enabled ? SeelenPalette.muted :
+            root.hovered ? SeelenPalette.accent : SeelenPalette.foreground;
         horizontal-alignment: center;
         vertical-alignment: center;
+        overflow: elide;
         accessible-role: none;
     }
+}
+
+component LauncherFooterButton inherits TileButton {
+    height: 32px;
+    vertical-stretch: 0;
+    horizontal-stretch: 0;
+    radius: 6px;
+    filled: false;
+    allow-return-repeat: false;
+    background: !root.enabled ? transparent :
+        root.pressed ? SeelenPalette.accent.with-alpha(0.3) :
+        root.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+    transform-scale: root.pressed ? 0.98 : 1;
 }
 
 export struct LauncherDragVisual {
@@ -72,9 +155,9 @@ export enum LauncherView { favorites, all }
 export enum LauncherDisplayMode { Windowed, Fullscreen }
 
 // Frameless OPAQUE centered launcher (source apps-menu has no translucency):
-// a search header, a 7-column icon grid of
-// genuine cached application icons, and a footer with settings/recovery and
-// exit. Seelen apps-menu facts: 7 columns, 8px gap, 16px body inset, square tiles with
+// a transparent native search header, a 7-column genuine application grid,
+// and a profile/icon footer. Explicit feedback owns a separate recovery band.
+// Seelen apps-menu facts: 7 columns, 8px gap, 16px body inset, square tiles with
 // icon and a 0.8rem name, radius 10. Escape hides the window (FocusScope at
 // the window level). No fake media, tray, or workspace data is rendered.
 export component Launcher inherits Window {
@@ -94,6 +177,7 @@ export component Launcher inherits Window {
     in property <string> notice;
     in property <bool> refreshing;
     in property <bool> stale;
+    in property <bool> feedback-visible: false;
     in property <string> user-name;
     in property <string> version;
     in-out property <string> search;
@@ -132,7 +216,10 @@ export component Launcher inherits Window {
     callback reorder-finished(DragAction);
     callback reorder-metrics-changed();
     callback reorder-target-changed(bool);
-    changed reorder-metrics => { root.reorder-metrics-changed(); }
+    changed reorder-metrics => {
+        root.tooltip-cancelled();
+        root.reorder-metrics-changed();
+    }
     function veto-reorder(event: PointerEvent, bounds: TileBounds, point: Point) {
         if event.kind == PointerEventKind.down {
             root.reorder-armed = false;
@@ -171,6 +258,14 @@ export component Launcher inherits Window {
     callback refresh-requested();
     callback hide-requested();
     callback exit-requested();
+    callback tooltip-requested(string, TileBounds);
+    callback tooltip-dismissed(bool, Point);
+    callback tooltip-cancelled();
+    // A nonhover keyboard/AX command never owned the foreign surface's hint.
+    // Its Root action still retires other owners at its guarded transaction seam.
+    function dismiss-source-tooltip(delayed: bool, origin: Point, hovered: bool) {
+        if delayed || hovered { root.tooltip-dismissed(delayed, origin); }
+    }
     callback focus-search();
     focus-search => {
         root.grid-navigation = false;
@@ -181,6 +276,7 @@ export component Launcher inherits Window {
     // Scoped keys revoke virtual delegates synchronously when input is checked;
     // named commands also release their held visual/input state immediately.
     public function cancel-input() {
+        root.tooltip-cancelled();
         if root.input-generation < 2147483647 {
             root.input-generation += 1;
         } else {
@@ -190,8 +286,6 @@ export component Launcher inherits Window {
         user-command.cancel-input();
         settings-command.cancel-input();
         power-command.cancel-input();
-        refresh-command.cancel-input();
-        exit-command.cancel-input();
         mode-command.cancel-input();
     }
 
@@ -222,7 +316,21 @@ export component Launcher inherits Window {
     }
     property <length> gap: 8px;
     property <length> pad: 8px;
+    property <float> empty-line-height-factor: empty-font-metrics.preferred-height > 0px
+        ? 22.4px / empty-font-metrics.preferred-height : 1;
+    empty-font-metrics := Text {
+        width: 0px;
+        height: 0px;
+        opacity: 0;
+        text: "M";
+        font-family: PopoverTokens.font-family;
+        font-size: 16px;
+        font-weight: 600;
+        font-italic: true;
+        accessible-role: none;
+    }
     property <bool> blocked: root.refreshing || root.stale || root.input-exhausted;
+    changed blocked => { if root.blocked { root.tooltip-cancelled(); } }
     // Only arrows originating in the grid move real tile focus. Search
     // preselection stays semantic so native text editing retains focus.
     property <bool> grid-navigation: false;
@@ -270,18 +378,15 @@ export component Launcher inherits Window {
             }
 
         VerticalLayout {
-            padding: root.pad;
-            spacing: root.pad;
+            padding: 0px;
+            spacing: 0px;
 
             // Genuine data-view navigation; the host accepts and resets a view.
             HorizontalLayout {
+                padding: root.pad;
                 spacing: root.pad;
-            search-field := LineEdit {
-                horizontal-stretch: 1;
-                accessible-label: "Search applications";
-                placeholder-text: "Search applications";
+            search-field := LauncherSearchField {
                 text <=> root.search;
-                enabled: true;
                 changed has-focus => {
                     if self.has-focus { root.grid-navigation = false; }
                 }
@@ -301,8 +406,7 @@ export component Launcher inherits Window {
                         }
                         return accept;
                     }
-                    // Native LineEdit exposes no caret getter in the pinned SDK.
-                    // Left/Right remain normal editing, including Right at end.
+                    // Left/Right remain native caret/selection editing.
                     return reject;
                 }
             }
@@ -310,6 +414,11 @@ export component Launcher inherits Window {
                     input-scope: root.input-scope;
                     text: root.view == LauncherView.favorites ? "All Apps" : "Back";
                     accessible-text: root.view == LauncherView.favorites ? "All Apps" : "Back to favorites";
+                    tooltip-text: self.accessible-text;
+                    tooltip-requested(content, bounds) => { root.tooltip-requested(content, bounds); }
+                    tooltip-dismissed(delayed, origin) => {
+                        root.dismiss-source-tooltip(delayed, origin, self.hovered);
+                    }
                     enabled: !root.blocked;
                     allow-return-repeat: true;
                     clicked => {
@@ -323,9 +432,9 @@ export component Launcher inherits Window {
 
             // Grid: 7 columns of square tiles; overflow scrolls.
             HorizontalLayout {
-                // Total body inset: root padding 8 + inner padding 4 +
-                // outline gutter 4 = the reference 16px (not an 8px grid).
-                padding: max(0px, root.pad - FocusTokens.outer-margin);
+                // The body owns its 16px inset independently of header/footer.
+                // Keep the external focus gutter and native hitbox unchanged.
+                padding: max(0px, 16px - FocusTokens.outer-margin);
                 vertical-stretch: 1;
             grid-key := FocusScope {
                 horizontal-stretch: 1;
@@ -457,6 +566,13 @@ export component Launcher inherits Window {
                             height: parent.height;
                             tile: tile;
                             input-scope: root.input-scope;
+                            tooltip-text: tile.label;
+                            tooltip-requested(content, bounds) => {
+                                root.tooltip-requested(content, bounds);
+                            }
+                            tooltip-dismissed(delayed, origin) => {
+                                root.dismiss-source-tooltip(delayed, origin, self.hovered);
+                            }
                             // Keep the native slot and its geometry alive.
                             opacity: root.reorder-visual.visible
                                 && root.reorder-visual.source.key == tile.key ? 0 : root.blocked ? 0.5 : 1;
@@ -519,111 +635,195 @@ export component Launcher inherits Window {
             }
             }
 
-                if root.application-count == 0: Text {
-                    x: 0;
+                if root.application-count == 0: VerticalLayout {
+                    x: 0px;
                     y: (grid-scroll.visible-height - self.preferred-height) / 2;
                     width: grid-scroll.visible-width;
-                    text: root.blocked ? "Working; results appear after the current refresh." :
-                        root.view == LauncherView.all ? "No matching applications." :
-                        root.saved-favorites-present ? "Saved favorites are unavailable. Refresh to check installed applications." :
-                        "Welcome to Tessera.\nYour favorite applications appear here. Open All Apps to add favorites.";
+                    height: self.preferred-height;
+                    spacing: 8px;
+                    Text {
+                        text: root.blocked ? "Working; results appear after the current refresh." :
+                            root.view == LauncherView.all ? "No matching applications." :
+                            root.saved-favorites-present ? "Saved favorites are unavailable. Refresh to check installed applications." :
+                            "Welcome to Tessera.";
+                        color: SeelenPalette.secondary;
+                        font-family: PopoverTokens.font-family;
+                        font-size: 16px;
+                        font-weight: 600;
+                        font-italic: true;
+                        line-height-factor: root.empty-line-height-factor;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        accessible-role: text;
+                    }
+                    if !root.blocked && root.view == LauncherView.favorites
+                        && !root.saved-favorites-present: Text {
+                        text: "Your favorite applications appear here. Open All Apps to add favorites.";
+                        color: SeelenPalette.secondary;
+                        font-family: PopoverTokens.font-family;
+                        font-size: 16px;
+                        font-weight: 600;
+                        font-italic: true;
+                        line-height-factor: root.empty-line-height-factor;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        accessible-role: text;
+                    }
+                }
+            }
+            }
+
+            // Notice is always visible. Routine successful diagnostics are not
+            // a permanent track; only explicit feedback or recovery owns one.
+            if root.notice != "": HorizontalLayout {
+                padding: root.pad;
+                Text {
+                    text: root.notice;
                     color: SeelenPalette.secondary;
-                    font-italic: true;
-                    horizontal-alignment: center;
+                    font-size: 11px;
                     wrap: word-wrap;
                     accessible-role: text;
                 }
             }
-            }
-
-            // Recovery actions remain truthful; expand/contract is a separate
-            // persisted layout request, not a substitute for the power menu.
-            if root.notice != "": Text {
-                text: root.notice;
-                color: SeelenPalette.secondary;
-                font-size: 11px;
-                wrap: word-wrap;
-                accessible-role: text;
-            }
-            Text {
-                text: root.status;
-                color: SeelenPalette.secondary;
-                font-size: 11px;
-                overflow: elide;
-                accessible-role: text;
-            }
-            HorizontalLayout {
+            if root.refreshing || root.stale || root.feedback-visible: HorizontalLayout {
+                padding: root.pad;
                 spacing: root.pad;
-                alignment: end;
-
-                user-command := LauncherCommandButton {
-                    input-scope: root.input-scope;
-                    enabled: root.input-available;
-                    text: root.user-name == "" ? "User" : root.user-name;
-                    accessible-text: "Open user menu";
-                    clicked => {
-                        root.open-user-menu-requested({
-                            origin: self.absolute-position,
-                            width: self.width,
-                            height: self.height
-                        });
-                    }
+                Text {
+                    text: root.status;
+                    color: SeelenPalette.secondary;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                    accessible-role: text;
                 }
-                Rectangle { horizontal-stretch: 1; }
-                settings-command := LauncherCommandButton {
-                    input-scope: root.input-scope;
-                    enabled: root.input-available;
-                    text: "Settings";
-                    accessible-text: "Open settings and recovery";
-                    clicked => { root.open-settings-requested(); }
-                }
-                power-command := TileButton {
-                    activation-key: root.input-scope + "power";
-                    width: 32px;
-                    height: 32px;
-                    radius: 6px;
-                    filled: false;
-                    // Session actions do not borrow application refresh state.
-                    enabled: root.input-available && !root.reorder-dragging;
-                    allow-return-repeat: false;
-                    accessible-text: @tr("Open power menu");
-                    tooltip-text: @tr("Power menu");
-                    clicked => { root.open-power-menu-requested(); }
-                    Image {
-                        x: 6px;
-                        y: 6px;
-                        width: 20px;
-                        height: 20px;
-                        source: @image-url("../assets/icons/ionicons-5.5.4/power.svg");
-                        image-fit: contain;
-                        colorize: SeelenPalette.foreground;
-                        accessible-role: none;
-                    }
-                }
-                refresh-command := LauncherCommandButton {
+                LauncherCommandButton {
                     input-scope: root.input-scope;
                     text: "Refresh";
                     enabled: root.input-available && !root.refreshing;
                     accessible-text: "Refresh the desktop";
                     clicked => { root.refresh-requested(); }
                 }
-                exit-command := LauncherCommandButton {
+                LauncherCommandButton {
                     input-scope: root.input-scope;
                     enabled: root.input-available;
                     text: "Exit";
                     accessible-text: "Exit Tessera";
                     clicked => { root.exit-requested(); }
                 }
-                mode-command := TileButton {
+            }
+            HorizontalLayout {
+                padding: root.pad;
+                spacing: root.pad;
+                alignment: start;
+                user-command := LauncherFooterButton {
+                    activation-key: root.input-scope + "user";
+                    min-width: 40px;
+                    preferred-width: user-label.preferred-width + 48px;
+                    max-width: max(40px, parent.width - 144px);
+                    enabled: root.input-available;
+                    accessible-text: "Open user menu";
+                    tooltip-text: root.user-name == "" ? @tr("User name unavailable") : root.user-name;
+                    tooltip-requested(content, bounds) => { root.tooltip-requested(content, bounds); }
+                    tooltip-dismissed(delayed, origin) => {
+                        root.dismiss-source-tooltip(delayed, origin, self.hovered);
+                    }
+                    clicked => {
+                        root.open-user-menu-requested({
+                            origin: self.absolute-position,
+                            width: self.width, height: self.height
+                        });
+                    }
+                    // Original generic schematic, explicitly not an account photo.
+                    Rectangle {
+                        x: 8px; y: 4px;
+                        width: 24px; height: 24px;
+                        border-radius: 12px;
+                        background: SeelenPalette.tile;
+                        clip: true;
+                        accessible-role: image;
+                        accessible-label: @tr("Default user profile");
+                        Rectangle {
+                            x: 9px; y: 5px;
+                            width: 6px; height: 6px;
+                            border-radius: 3px;
+                            background: SeelenPalette.secondary;
+                            accessible-role: none;
+                        }
+                        Rectangle {
+                            x: 6px; y: 13px;
+                            width: 12px; height: 8px;
+                            border-radius: 4px;
+                            background: SeelenPalette.secondary;
+                            accessible-role: none;
+                        }
+                    }
+                    user-label := Text {
+                        x: 40px;
+                        width: max(0px, parent.width - 48px);
+                        height: parent.height;
+                        text: root.user-name == "" ? @tr("User name unavailable") : root.user-name;
+                        font-family: PopoverTokens.font-family;
+                        font-size: 16px;
+                        font-weight: 600;
+                        color: SeelenPalette.foreground;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        accessible-role: none;
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                settings-command := LauncherFooterButton {
+                    activation-key: root.input-scope + "settings";
+                    width: 32px;
+                    enabled: root.input-available;
+                    accessible-text: "Open settings and recovery";
+                    tooltip-text: @tr("Settings");
+                    tooltip-requested(content, bounds) => { root.tooltip-requested(content, bounds); }
+                    tooltip-dismissed(delayed, origin) => {
+                        root.dismiss-source-tooltip(delayed, origin, self.hovered);
+                    }
+                    clicked => { root.open-settings-requested(); }
+                    Image {
+                        x: 6px; y: 6px;
+                        width: 20px; height: 20px;
+                        source: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg");
+                        image-fit: contain;
+                        colorize: SeelenPalette.foreground;
+                        accessible-role: none;
+                    }
+                }
+                power-command := LauncherFooterButton {
+                    activation-key: root.input-scope + "power";
+                    width: 32px;
+                    // Session actions do not borrow application refresh state.
+                    enabled: root.input-available && !root.reorder-dragging;
+                    accessible-text: @tr("Open power menu");
+                    tooltip-text: @tr("Power menu");
+                    tooltip-requested(content, bounds) => { root.tooltip-requested(content, bounds); }
+                    tooltip-dismissed(delayed, origin) => {
+                        root.dismiss-source-tooltip(delayed, origin, self.hovered);
+                    }
+                    clicked => { root.open-power-menu-requested(); }
+                    Image {
+                        x: 6px; y: 6px;
+                        width: 20px; height: 20px;
+                        source: @image-url("../assets/icons/ionicons-5.5.4/power.svg");
+                        image-fit: contain;
+                        colorize: SeelenPalette.foreground;
+                        accessible-role: none;
+                    }
+                }
+                mode-command := LauncherFooterButton {
                     activation-key: root.input-scope + "display-mode";
                     width: 32px;
-                    height: 32px;
-                    radius: 6px;
-                    filled: false;
                     enabled: !root.blocked;
-                    allow-return-repeat: false;
                     accessible-text: root.display-mode == LauncherDisplayMode.Windowed
                         ? @tr("Expand applications menu") : @tr("Contract applications menu");
+                    tooltip-text: self.accessible-text;
+                    tooltip-requested(content, bounds) => { root.tooltip-requested(content, bounds); }
+                    tooltip-dismissed(delayed, origin) => {
+                        root.dismiss-source-tooltip(delayed, origin, self.hovered);
+                    }
                     accessible-description: root.display-mode == LauncherDisplayMode.Windowed
                         ? @tr("Windowed") : @tr("Fullscreen");
                     accessible-checkable: true;
@@ -633,10 +833,8 @@ export component Launcher inherits Window {
                             ? LauncherDisplayMode.Fullscreen : LauncherDisplayMode.Windowed);
                     }
                     Image {
-                        x: 6px;
-                        y: 6px;
-                        width: 20px;
-                        height: 20px;
+                        x: 6px; y: 6px;
+                        width: 20px; height: 20px;
                         source: root.display-mode == LauncherDisplayMode.Windowed
                             ? @image-url("../assets/icons/ionicons-5.5.4/expand-outline.svg")
                             : @image-url("../assets/icons/ionicons-5.5.4/contract-outline.svg");

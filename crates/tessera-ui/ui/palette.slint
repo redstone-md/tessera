@@ -19,6 +19,8 @@ export global SeelenPalette {
     out property <color> foreground: self.dark ? #e4e4e4 : #121212;
     out property <color> secondary: self.dark ? #bababa : #3d3d3d;
     out property <color> muted: self.dark ? #898989 : #6f6f6f;
+    // Running indicators use gray-600, not the shared muted gray-500.
+    out property <color> running-indicator: self.dark ? oklch(0.72, 0, 0) : oklch(0.45, 0, 0);
     // Reference red-600: dark/light OKLCH from libs/core/styles/colors.css.
     out property <color> danger: self.dark ? oklch(0.72, 0.178, 30) : oklch(0.45, 0.161, 30);
     in-out property <brush> accent: Palette.accent-background;
