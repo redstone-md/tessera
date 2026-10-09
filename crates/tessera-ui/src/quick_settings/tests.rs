@@ -73,7 +73,7 @@ impl MediaHost for RecordingPopupMedia {
 type ResultSnapshot = Result<AudioSnapshot, AudioError>;
 
 #[derive(Clone, Debug, PartialEq)]
-enum RecordedRequest {
+pub(crate) enum RecordedRequest {
     Read,
     Command(AudioCommand),
 }
@@ -109,7 +109,7 @@ struct RecordingState {
 }
 
 #[derive(Default)]
-struct RecordingAudio {
+pub(crate) struct RecordingAudio {
     state: Mutex<RecordingState>,
     events: Arc<Mutex<Vec<&'static str>>>,
 }
@@ -155,8 +155,16 @@ impl RecordingAudio {
         }
     }
 
-    fn requests(&self) -> Vec<RecordedRequest> {
+    pub(crate) fn requests(&self) -> Vec<RecordedRequest> {
         self.state.lock().requests.clone()
+    }
+
+    pub(crate) fn watch_count(&self) -> usize {
+        self.state.lock().watchers.len()
+    }
+
+    pub(crate) fn maximum_active(&self) -> usize {
+        self.state.lock().maximum_active
     }
 
     fn reply(&self, reply: Reply) {
@@ -174,7 +182,7 @@ impl RecordingAudio {
         completion
     }
 
-    fn finish(&self, result: ResultSnapshot) {
+    pub(crate) fn finish(&self, result: ResultSnapshot) {
         self.take_completion()(result);
     }
 
@@ -185,7 +193,7 @@ impl RecordingAudio {
         self.finish(result);
     }
 
-    fn event(&self, event: AudioEvent) {
+    pub(crate) fn event(&self, event: AudioEvent) {
         let watcher = self
             .state
             .lock()
@@ -379,7 +387,7 @@ fn ready(id: &str, percent: f32, muted: bool) -> EndpointState {
     })
 }
 
-fn snapshot(output: f32, input: f32) -> AudioSnapshot {
+pub(crate) fn snapshot(output: f32, input: f32) -> AudioSnapshot {
     AudioSnapshot {
         output: ready("output-A", output, false),
         input: ready("input-I", input, false),
@@ -401,7 +409,7 @@ fn loaded(
     assert!(!controller.surface.get_loading());
 }
 
-fn volume_command(flow: AudioFlow, id: &str, percent: f32) -> RecordedRequest {
+pub(crate) fn volume_command(flow: AudioFlow, id: &str, percent: f32) -> RecordedRequest {
     RecordedRequest::Command(AudioCommand::SetVolume {
         flow,
         expected_id: EndpointId::new(id.into()).unwrap(),

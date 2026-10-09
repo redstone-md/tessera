@@ -2,6 +2,10 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
+use crate::quick_settings::{
+    RecordedAudioRequest, RecordingAudioHost, recorded_audio_snapshot, recorded_audio_volume,
+};
+use tessera_system::audio::{AudioError, AudioErrorKind, AudioEvent, AudioFlow};
 use tessera_system::calendar::{
     CalendarError, CalendarHost, CalendarReadCompletion, CalendarSnapshot, CivilDate, WeekStart,
 };
@@ -614,6 +618,261 @@ fn same_key_launcher_projection_reopen_and_save_revoke_a_held_native_tile_click(
             usize::from(replacement == "save")
         );
         assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+fn toolbar_audio_fixture() -> (LauncherFixture, Arc<RecordingAudioHost>) {
+    let audio = Arc::new(RecordingAudioHost::default());
+    let fixture = LauncherFixture::with_snapshot_host_configured(
+        seeded_preferences().with_media_enabled(false),
+        launcher_snapshot(),
+        |host| *host.audio_provider.lock() = Some(audio.clone()),
+        |_| {},
+    );
+    assert!(fixture.host.media_provider.lock().is_none());
+    assert_eq!(fixture.host.audio_provider_calls.load(Ordering::SeqCst), 0);
+    (fixture, audio)
+}
+
+fn loaded_toolbar_audio(
+    fixture: &LauncherFixture,
+    audio: &RecordingAudioHost,
+) -> Rc<crate::quick_settings::QuickSettingsController> {
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    audio.finish(Ok(recorded_audio_snapshot(40.0, 30.0)));
+    quick.component().invoke_audio_event_ready();
+    assert!(quick.component().get_output_ready());
+    quick
+}
+
+fn toolbar_audio_slider(
+    popup: &crate::generated::QuickSettings,
+) -> i_slint_backend_testing::ElementHandle {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    ElementHandle::find_by_accessible_label(popup, "Output volume")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Slider))
+        .expect("real native output Slider")
+}
+
+fn retire_toolbar_audio_source(fixture: &LauncherFixture, retirement: &str) {
+    match retirement {
+        "hidden toolbar" => fixture.toolbar.hide().unwrap(),
+        "toolbar geometry" => {
+            let size = fixture.toolbar.window().size();
+            fixture
+                .toolbar
+                .window()
+                .set_size(slint::PhysicalSize::new(size.width + 1, size.height));
+        }
+        "root scope" => drop(power_menu::PowerAdmissionScope::new(&fixture.controller)),
+        _ => unreachable!(),
+    }
+    assert!(
+        fixture
+            .controller
+            .quick_settings
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .is_open(),
+        "exercise Root source retirement without closing Quick Settings",
+    );
+}
+
+fn advance_toolbar_audio_timer(milliseconds: u64) {
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(milliseconds));
+    slint::platform::update_timers_and_animations();
+}
+
+#[test]
+fn toolbar_audio_trailing_volume_rejects_retired_sources_without_media() {
+    for retirement in ["hidden toolbar", "toolbar geometry", "root scope"] {
+        let (fixture, audio) = toolbar_audio_fixture();
+        let quick = loaded_toolbar_audio(&fixture, &audio);
+        let popup = quick.component();
+        toolbar_audio_slider(&popup).set_accessible_value("60");
+        assert_eq!(audio.requests(), [RecordedAudioRequest::Read]);
+        retire_toolbar_audio_source(&fixture, retirement);
+        advance_toolbar_audio_timer(100);
+        assert_eq!(
+            audio.requests(),
+            [RecordedAudioRequest::Read],
+            "the native 100ms trailing volume timer survived {retirement}",
+        );
+        assert_eq!(audio.watch_count(), 1);
+        assert_eq!(fixture.host.audio_provider_calls.load(Ordering::SeqCst), 1);
+        if retirement == "hidden toolbar" {
+            fixture.toolbar.show().unwrap();
+            advance_toolbar_audio_timer(1000);
+            assert_eq!(
+                audio.requests(),
+                [RecordedAudioRequest::Read],
+                "restored Toolbar visibility cannot resurrect an observed retired intent",
+            );
+        }
+        assert!(fixture.host.saves.lock().is_empty());
+    }
+}
+
+#[test]
+fn toolbar_audio_mute_and_refresh_reject_retired_sources_without_media() {
+    for action in ["mute", "refresh", "retry provider"] {
+        let (fixture, audio) = toolbar_audio_fixture();
+        let quick = if action == "retry provider" {
+            *fixture.host.audio_provider.lock() = None;
+            click_component(&fixture.toolbar, "Open quick settings");
+            fixture.controller.quick_settings.borrow().clone().unwrap()
+        } else {
+            loaded_toolbar_audio(&fixture, &audio)
+        };
+        let popup = quick.component();
+        if action == "refresh" {
+            audio.event(AudioEvent::WatchUnavailable(AudioError::new(
+                AudioErrorKind::Other,
+                "Recording watch unavailable",
+            )));
+            popup.invoke_audio_event_ready();
+        }
+        let requests = audio.requests();
+        let watches = audio.watch_count();
+        let acquisitions = fixture.host.audio_provider_calls.load(Ordering::SeqCst);
+        retire_toolbar_audio_source(&fixture, "hidden toolbar");
+        if action == "mute" {
+            click_component(&popup, "Mute output");
+        } else {
+            click_component(&popup, toolbar_media_refresh_label(&popup));
+        }
+        advance_toolbar_audio_timer(100);
+        assert_eq!(audio.requests(), requests, "retired Root accepted {action}");
+        assert_eq!(
+            audio.watch_count(),
+            watches,
+            "retired Root subscribed for {action}"
+        );
+        assert_eq!(
+            fixture.host.audio_provider_calls.load(Ordering::SeqCst),
+            acquisitions,
+            "retired Root acquired the audio factory for {action}",
+        );
+        assert!(quick.is_open());
+        assert!(fixture.host.saves.lock().is_empty());
+    }
+}
+
+#[test]
+fn toolbar_audio_factory_source_retirement_prevents_watch_and_read_without_media() {
+    for retirement in ["hidden toolbar", "toolbar geometry", "root scope"] {
+        let (fixture, audio) = toolbar_audio_fixture();
+        let toolbar = fixture.toolbar.clone_strong();
+        let root = fixture.controller.clone();
+        AUDIO_FACTORY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || match retirement {
+                "hidden toolbar" => toolbar.hide().unwrap(),
+                "toolbar geometry" => {
+                    let size = toolbar.window().size();
+                    toolbar
+                        .window()
+                        .set_size(slint::PhysicalSize::new(size.width + 1, size.height));
+                }
+                "root scope" => drop(power_menu::PowerAdmissionScope::new(&root)),
+                _ => unreachable!(),
+            }));
+        });
+        click_component(&fixture.toolbar, "Open quick settings");
+        assert!(AUDIO_FACTORY_HOOK.with(|hook| hook.borrow().is_none()));
+        assert_eq!(fixture.host.audio_provider_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            audio.requests().is_empty(),
+            "factory source retired before native read: {retirement}"
+        );
+        assert_eq!(
+            audio.watch_count(),
+            0,
+            "factory source retired before subscription: {retirement}"
+        );
+        assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 0);
+        assert!(
+            fixture
+                .controller
+                .quick_settings
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .is_open()
+        );
+        assert!(fixture.host.saves.lock().is_empty());
+    }
+}
+
+#[test]
+fn toolbar_audio_accepted_completion_retires_source_without_pending_replay_or_overlap() {
+    for reopen_before_completion in [false, true] {
+        let (fixture, audio) = toolbar_audio_fixture();
+        let quick = loaded_toolbar_audio(&fixture, &audio);
+        let popup = quick.component();
+        toolbar_audio_slider(&popup).set_accessible_value("60");
+        advance_toolbar_audio_timer(100);
+        let accepted = recorded_audio_volume(AudioFlow::Output, "output-A", 60.0);
+        assert_eq!(
+            audio.requests(),
+            [RecordedAudioRequest::Read, accepted.clone()]
+        );
+        toolbar_audio_slider(&popup).set_accessible_value("90");
+        advance_toolbar_audio_timer(100);
+        retire_toolbar_audio_source(&fixture, "hidden toolbar");
+        if reopen_before_completion {
+            click_component(&popup, toolbar_media_refresh_label(&popup));
+            fixture.toolbar.show().unwrap();
+            click_component(&fixture.toolbar, "Open quick settings");
+            assert_eq!(
+                audio.requests(),
+                [RecordedAudioRequest::Read, accepted.clone()],
+                "a new popup must wait for the already accepted audio flight",
+            );
+        }
+        audio.finish(Ok(recorded_audio_snapshot(60.0, 30.0)));
+        popup.invoke_audio_event_ready();
+        if !reopen_before_completion {
+            assert_eq!(
+                audio.requests(),
+                [RecordedAudioRequest::Read, accepted.clone()],
+                "accepted completion must not submit the retired trailing volume",
+            );
+            assert!(
+                !popup.get_output_ready(),
+                "retired source cannot present current audio authority"
+            );
+            fixture.toolbar.show().unwrap();
+            click_component(&fixture.toolbar, "Open quick settings");
+        }
+        assert_eq!(
+            audio.requests(),
+            [
+                RecordedAudioRequest::Read,
+                accepted,
+                RecordedAudioRequest::Read
+            ],
+        );
+        assert!(
+            !popup.get_output_ready(),
+            "old flight cannot confirm the reopened popup"
+        );
+        audio.finish(Ok(recorded_audio_snapshot(30.0, 20.0)));
+        popup.invoke_audio_event_ready();
+        assert!((popup.get_output_percent() - 30.0).abs() < 0.001);
+        advance_toolbar_audio_timer(1000);
+        assert_eq!(
+            audio.requests().len(),
+            3,
+            "no replay of retired 90 percent intent"
+        );
+        assert_eq!(
+            audio.maximum_active(),
+            1,
+            "one shared audio flight across retirement/reopen"
+        );
+        assert!(fixture.host.saves.lock().is_empty());
     }
 }
 

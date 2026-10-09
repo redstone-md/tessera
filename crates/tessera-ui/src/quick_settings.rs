@@ -26,6 +26,12 @@ use crate::{DesktopHost, DockContext, SurfaceKind};
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use tests::{
+    RecordedRequest as RecordedAudioRequest, RecordingAudio as RecordingAudioHost,
+    snapshot as recorded_audio_snapshot, volume_command as recorded_audio_volume,
+};
+
 mod seek;
 use seek::{InputScope, SeekInput};
 
@@ -415,6 +421,16 @@ struct Placement {
     scale: f32,
 }
 
+/// Presentation admission is independent of either provider's availability.
+/// Awaiting Root has no input authority; a revoked source stays revoked until
+/// an explicit new presentation, even if its old predicate later returns true.
+enum PopupSource {
+    AwaitingRoot,
+    Standalone,
+    Scoped(Rc<dyn Fn() -> bool>),
+    Retired,
+}
+
 pub(crate) struct QuickSettingsController {
     surface: TransientWindow<QuickSettings>,
     host: Arc<dyn DesktopHost>,
@@ -423,6 +439,7 @@ pub(crate) struct QuickSettingsController {
     media_attachment: Cell<Option<PopupMediaToken>>,
     media_attaching: Cell<bool>,
     presentation_epoch: RefCell<Rc<()>>,
+    source: RefCell<PopupSource>,
     // AX has no physical hold. Its latest frame still scopes trailing input
     // after the leading command completes and clears the visual preview.
     latest_seek_input: RefCell<Option<CapturedSeekInput>>,
@@ -458,6 +475,7 @@ impl QuickSettingsController {
             media_attachment: Cell::new(None),
             media_attaching: Cell::new(false),
             presentation_epoch: RefCell::new(Rc::new(())),
+            source: RefCell::new(PopupSource::Retired),
             latest_seek_input: RefCell::default(),
             seek_input: RefCell::default(),
             #[cfg(any(windows, test))]
@@ -602,6 +620,100 @@ impl QuickSettingsController {
         Rc::ptr_eq(&self.presentation_epoch.borrow(), epoch)
     }
 
+    fn source_input_ready(&self) -> bool {
+        let epoch = self.presentation_epoch.borrow().clone();
+        self.source_is_current(&epoch)
+    }
+
+    fn source_is_current(&self, epoch: &Rc<()>) -> bool {
+        if !self.presentation_is_current(epoch) {
+            return false;
+        }
+        let admission = {
+            let source = self.source.borrow();
+            match &*source {
+                PopupSource::AwaitingRoot | PopupSource::Retired => return false,
+                PopupSource::Standalone => None,
+                PopupSource::Scoped(admission) => Some(admission.clone()),
+            }
+        };
+        // Never run Root or host callbacks while holding presentation/state
+        // borrows. Reentry may install a different presentation or source.
+        let admitted = admission.as_ref().is_none_or(|admission| admission());
+        let same_source = match (&*self.source.borrow(), &admission) {
+            (PopupSource::Standalone, None) => true,
+            (PopupSource::Scoped(current), Some(admission)) => Rc::ptr_eq(current, admission),
+            _ => false,
+        };
+        if !self.presentation_is_current(epoch) || !same_source {
+            return false;
+        }
+        if admitted && self.is_open() && self.surface.window().is_visible() {
+            return true;
+        }
+        self.retire_source(epoch);
+        false
+    }
+
+    /// Root calls this after successful presentation/exclusive-popup admission,
+    /// before any provider acquisition. Media gets the same revocable source,
+    /// not a second authority predicate or an audio dependency on media readiness.
+    pub(crate) fn attach_source_scoped(self: &Rc<Self>, admission: Rc<dyn Fn() -> bool>) {
+        let epoch = self.presentation_epoch.borrow().clone();
+        if !matches!(*self.source.borrow(), PopupSource::AwaitingRoot) || !self.is_open() {
+            return;
+        }
+        self.source.replace(PopupSource::Scoped(admission));
+        self.start_audio();
+        if !self.source_is_current(&epoch) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        self.attach_media_scoped(Rc::new(move || {
+            weak.upgrade()
+                .is_some_and(|controller| controller.source_is_current(&epoch))
+        }));
+    }
+
+    fn retire_source(&self, epoch: &Rc<()>) {
+        self.source.replace(PopupSource::Retired);
+        self.volume_timer.stop();
+        self.fit_timer.stop();
+        {
+            let mut state = self.state.borrow_mut();
+            state.generation = state.generation.wrapping_add(1);
+            state.confirmed = None;
+            state.pending = Default::default();
+            state.read_requested = false;
+            state.watch_live = false;
+            state.status = "Quick settings source expired; reopen from the toolbar.".into();
+            state.watch_status.clear();
+            // Keep the accepted flight/expected completion until terminal.
+        }
+        {
+            let mut mailbox = self.mailbox.lock();
+            mailbox.generation = None;
+            mailbox.watch_epoch = mailbox.watch_epoch.wrapping_add(1);
+            mailbox.changed = false;
+            mailbox.watch = None;
+        }
+        let watch = self.watch.borrow_mut().take();
+        drop(watch);
+        if !self.presentation_is_current(epoch) {
+            return;
+        }
+        self.cancel_seek_input();
+        if !self.presentation_is_current(epoch) {
+            return;
+        }
+        if let Some(token) = self.media_attachment.take() {
+            self.media.detach_popup(token);
+        }
+        if self.presentation_is_current(epoch) {
+            self.project_and_fit();
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn attach_media(&self) {
         self.attach_media_scoped(Rc::new(|| true));
@@ -657,6 +769,9 @@ impl QuickSettingsController {
     }
 
     pub(crate) fn media_input_ready(&self) -> bool {
+        if !self.source_input_ready() {
+            return false;
+        }
         let Some(token) = self.media_attachment.get() else {
             return false;
         };
@@ -1023,6 +1138,7 @@ impl QuickSettingsController {
         self.show_scoped(theme, anchor, context, scale, || true)
     }
 
+    #[cfg(test)]
     pub(crate) fn show_scoped(
         self: &Rc<Self>,
         theme: PresentationTheme,
@@ -1031,11 +1147,38 @@ impl QuickSettingsController {
         scale: f32,
         current: impl Fn() -> bool,
     ) -> Result<(), String> {
+        self.present_scoped_inner(theme, anchor, context, scale, current, true)
+    }
+
+    pub(crate) fn present_scoped(
+        self: &Rc<Self>,
+        theme: PresentationTheme,
+        anchor: PhysicalPosition,
+        context: DockContext,
+        scale: f32,
+        current: impl Fn() -> bool,
+    ) -> Result<(), String> {
+        self.present_scoped_inner(theme, anchor, context, scale, current, false)
+    }
+
+    fn present_scoped_inner(
+        self: &Rc<Self>,
+        theme: PresentationTheme,
+        anchor: PhysicalPosition,
+        context: DockContext,
+        scale: f32,
+        current: impl Fn() -> bool,
+        standalone: bool,
+    ) -> Result<(), String> {
         if !current() {
             return Ok(());
         }
         let epoch = Rc::new(());
         self.hide_in(epoch.clone());
+        if !self.presentation_is_current(&epoch) {
+            return Ok(());
+        }
+        self.source.replace(PopupSource::AwaitingRoot);
         let is_current = || current() && self.presentation_is_current(&epoch);
         if !is_current() {
             return Ok(());
@@ -1092,9 +1235,12 @@ impl QuickSettingsController {
         if !is_current() {
             return Ok(());
         }
-        self.start_audio();
-        if !is_current() {
-            return Ok(());
+        if standalone {
+            self.source.replace(PopupSource::Standalone);
+            self.start_audio();
+            if !is_current() {
+                return Ok(());
+            }
         }
         focus.map_err(|error| {
             bounded_text(
@@ -1110,6 +1256,7 @@ impl QuickSettingsController {
 
     fn hide_in(&self, epoch: Rc<()>) {
         self.presentation_epoch.replace(epoch.clone());
+        self.source.replace(PopupSource::Retired);
         self.cancel_seek_input();
         if !self.presentation_is_current(&epoch) {
             return;
@@ -1206,37 +1353,55 @@ impl QuickSettingsController {
     }
 
     fn start_audio(self: &Rc<Self>) {
-        if !self.is_open() {
+        let epoch = self.presentation_epoch.borrow().clone();
+        if !self.source_is_current(&epoch) {
             return;
         }
-        if self.state.borrow().audio.is_none() {
-            match self.host.audio_host() {
-                Ok(Some(audio)) => self.state.borrow_mut().audio = Some(audio),
-                result => {
-                    let mut state = self.state.borrow_mut();
-                    state.read_requested = false;
-                    state.status = match result {
-                        Err(error) => failure("Audio is unavailable", &error),
-                        Ok(None) => "Audio controls are not supported on this platform.".into(),
-                        Ok(Some(_)) => unreachable!(),
-                    };
-                    drop(state);
-                    self.project_and_fit();
-                    return;
+        let needs_provider = self.state.borrow().audio.is_none();
+        if needs_provider {
+            let provider = self.host.audio_host();
+            if !self.source_is_current(&epoch) {
+                return;
+            }
+            // A reentrant valid acquisition may already have cached the one
+            // provider. Never replace it or overwrite its successful status.
+            if self.state.borrow().audio.is_none() {
+                match provider {
+                    Ok(Some(audio)) => self.state.borrow_mut().audio = Some(audio),
+                    result => {
+                        let mut state = self.state.borrow_mut();
+                        state.read_requested = false;
+                        state.status = match result {
+                            Err(error) => failure("Audio is unavailable", &error),
+                            Ok(None) => "Audio controls are not supported on this platform.".into(),
+                            Ok(Some(_)) => unreachable!(),
+                        };
+                        drop(state);
+                        self.project_and_fit();
+                        return;
+                    }
                 }
             }
         }
-        self.subscribe();
+        self.subscribe(&epoch);
+        if !self.source_is_current(&epoch) {
+            return;
+        }
         {
             let mut state = self.state.borrow_mut();
             state.status.clear();
             state.read_requested = true;
         }
         self.project_and_fit();
-        self.pump();
+        if self.source_is_current(&epoch) {
+            self.pump();
+        }
     }
 
-    fn subscribe(&self) {
+    fn subscribe(&self, epoch: &Rc<()>) {
+        if !self.source_is_current(epoch) {
+            return;
+        }
         if self.watch.borrow().is_some() {
             return;
         }
@@ -1271,7 +1436,15 @@ impl QuickSettingsController {
             }
             wake(&mailbox, &root);
         });
-        match audio.subscribe(notification) {
+        let subscribed = audio.subscribe(notification);
+        let source_current = self.source_is_current(epoch);
+        let same_watch = self.mailbox.lock().watch_epoch == watch_epoch;
+        if !source_current || !same_watch {
+            // Drop only the returned old lease, never a reentrant new watch.
+            drop(subscribed);
+            return;
+        }
+        match subscribed {
             Ok(guard) => *self.watch.borrow_mut() = guard,
             Err(error) => {
                 self.state.borrow_mut().watch_status =
@@ -1281,7 +1454,8 @@ impl QuickSettingsController {
     }
 
     fn volume(self: &Rc<Self>, route: AudioRoute, percent: f32, released: bool) {
-        if !self.is_open() {
+        let epoch = self.presentation_epoch.borrow().clone();
+        if !self.source_is_current(&epoch) {
             return;
         }
         if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
@@ -1315,6 +1489,9 @@ impl QuickSettingsController {
             });
         }
         self.project();
+        if !self.source_is_current(&epoch) {
+            return;
+        }
         if !self.state.borrow().has_unready_volume() {
             self.volume_timer.stop();
         } else if !self.volume_timer.running() {
@@ -1327,7 +1504,9 @@ impl QuickSettingsController {
                     let Some(controller) = weak.upgrade() else {
                         return;
                     };
-                    if !controller.is_open() || controller.state.borrow().generation != generation {
+                    if !controller.source_is_current(&epoch)
+                        || controller.state.borrow().generation != generation
+                    {
                         return;
                     }
                     for flow in &mut controller.state.borrow_mut().pending {
@@ -1343,7 +1522,8 @@ impl QuickSettingsController {
     }
 
     fn mute(self: &Rc<Self>, route: AudioRoute, value: bool) {
-        if !self.is_open() {
+        let epoch = self.presentation_epoch.borrow().clone();
+        if !self.source_is_current(&epoch) {
             return;
         }
         let flow = route_flow(route);
@@ -1361,11 +1541,14 @@ impl QuickSettingsController {
             state.pending[flow_index(flow)].muted = Some(Desired { id, value });
         }
         self.project();
-        self.pump();
+        if self.source_is_current(&epoch) {
+            self.pump();
+        }
     }
 
     fn pump(self: &Rc<Self>) {
-        if !self.is_open() {
+        let epoch = self.presentation_epoch.borrow().clone();
+        if !self.source_is_current(&epoch) {
             return;
         }
         let (audio, token, request) = {
@@ -1397,9 +1580,24 @@ impl QuickSettingsController {
         };
         self.mailbox.lock().expected = Some(token);
         self.project_and_fit();
-        if !self.is_open() || self.state.borrow().generation != token.generation {
-            self.state.borrow_mut().flight = None;
-            self.mailbox.lock().expected = None;
+        if !self.source_is_current(&epoch) || self.state.borrow().generation != token.generation {
+            let mut state = self.state.borrow_mut();
+            if state
+                .flight
+                .as_ref()
+                .is_some_and(|flight| flight.token == token)
+            {
+                state.flight = None;
+            }
+            drop(state);
+            let mut mailbox = self.mailbox.lock();
+            if mailbox.expected == Some(token) {
+                mailbox.expected = None;
+            }
+            drop(mailbox);
+            if !self.presentation_is_current(&epoch) {
+                self.pump();
+            }
             return;
         }
         let mailbox = Arc::clone(&self.mailbox);
@@ -1412,6 +1610,9 @@ impl QuickSettingsController {
         if let Err(error) = accepted {
             complete(&self.mailbox, &self.surface.as_weak(), token, Err(error));
         }
+        // Acceptance is not cancellation or confirmation. A source lost inside
+        // the host call retires pending work but keeps its accepted flight.
+        self.source_is_current(&epoch);
     }
 
     fn drain(self: &Rc<Self>) {
@@ -1429,7 +1630,7 @@ impl QuickSettingsController {
                 completion,
             )
         };
-        let visible = self.is_open();
+        let visible = self.source_input_ready();
         let mut drop_watch = false;
         {
             let mut state = self.state.borrow_mut();
@@ -1490,12 +1691,13 @@ impl QuickSettingsController {
                 mailbox.watch_epoch = mailbox.watch_epoch.wrapping_add(1);
                 mailbox.watch = None;
             }
-            drop(self.watch.borrow_mut().take());
+            let watch = self.watch.borrow_mut().take();
+            drop(watch);
         }
         if !self.state.borrow().has_unready_volume() {
             self.volume_timer.stop();
         }
-        if visible {
+        if self.is_open() {
             self.project_and_fit();
             self.pump();
         }

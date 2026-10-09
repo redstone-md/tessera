@@ -112,7 +112,7 @@ impl PanelController {
                 quick
             }
         };
-        let result = quick.show_scoped(
+        let result = quick.present_scoped(
             toolbar.presentation_theme(),
             anchor,
             context,
@@ -186,10 +186,9 @@ impl PanelController {
                         .as_ref()
                         .is_some_and(|cached| Rc::ptr_eq(cached, &quick))
             });
-            let input_source = Rc::clone(&source_admission);
             let admitted = Rc::new(move || {
                 let quick = expected.upgrade()?;
-                if quick.media_input_ready() && input_source() {
+                if quick.media_input_ready() {
                     Some(quick)
                 } else {
                     None
@@ -217,7 +216,7 @@ impl PanelController {
             if source_current()
                 && self.admission.active_popup.get() == Some(PopupKind::QuickSettings)
             {
-                quick.attach_media_scoped(Rc::clone(&source_admission));
+                quick.attach_source_scoped(Rc::clone(&source_admission));
             }
         }
         if let Err(error) = result

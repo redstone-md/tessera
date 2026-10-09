@@ -54,6 +54,7 @@ thread_local! {
     static POWER_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static POWER_UPDATES_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static MEDIA_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static AUDIO_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static POWER_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
     static POWER_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static TOOLTIP_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
@@ -107,6 +108,8 @@ struct FixtureHost {
     input_language_provider_calls: AtomicUsize,
     media_provider: Mutex<Option<Arc<dyn tessera_system::media::MediaHost>>>,
     media_provider_calls: AtomicUsize,
+    audio_provider: Mutex<Option<Arc<dyn tessera_system::audio::AudioHost>>>,
+    audio_provider_calls: AtomicUsize,
     shortcuts_provider: Mutex<Option<Arc<dyn tessera_system::shortcuts::ShortcutHost>>>,
     shortcuts_factory_calls: AtomicUsize,
     profile_provider: Mutex<Option<Arc<dyn tessera_system::profile::ProfileHost>>>,
@@ -165,6 +168,8 @@ impl FixtureHost {
             input_language_provider_calls: AtomicUsize::new(0),
             media_provider: Mutex::default(),
             media_provider_calls: AtomicUsize::new(0),
+            audio_provider: Mutex::default(),
+            audio_provider_calls: AtomicUsize::new(0),
             shortcuts_provider: Mutex::default(),
             shortcuts_factory_calls: AtomicUsize::new(0),
             profile_provider: Mutex::default(),
@@ -200,6 +205,18 @@ impl DesktopHost for FixtureHost {
     fn observe(&self) -> Result<PanelSnapshot, String> {
         self.observe_calls.fetch_add(1, Ordering::SeqCst);
         (self.source)()
+    }
+
+    fn audio_host(
+        &self,
+    ) -> Result<Option<Arc<dyn tessera_system::audio::AudioHost>>, tessera_system::audio::AudioError>
+    {
+        self.audio_provider_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = AUDIO_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.audio_provider.lock().clone())
     }
 
     fn folder_host(
