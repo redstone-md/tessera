@@ -95,11 +95,19 @@ struct Class {
 impl Class {
     fn register() -> Result<Self, u32> {
         static NEXT_CLASS: AtomicU64 = AtomicU64::new(1);
-        let sequence = NEXT_CLASS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| 0x8000_4005_u32)?;
+        let mut value = NEXT_CLASS.load(Ordering::Relaxed);
+        let sequence = loop {
+            let next = value.checked_add(1).ok_or(0x8000_4005_u32)?;
+            match NEXT_CLASS.compare_exchange_weak(
+                value,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(old) => break old,
+                Err(actual) => value = actual,
+            }
+        };
         let name: Vec<u16> = format!("TesseraRecycleBinWatch-{sequence}")
             .encode_utf16()
             .chain(Some(0))

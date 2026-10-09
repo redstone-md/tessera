@@ -1197,7 +1197,7 @@ fn verify_launcher_reorder_at_width(launcher: &Launcher, width: f32) {
     }
     for genuine in [true, false] {
         let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(16, 16);
-        for pixel in pixels.make_mut_bytes().chunks_exact_mut(4) {
+        for pixel in pixels.make_mut_bytes().as_chunks_mut::<4>().0.iter_mut() {
             pixel.copy_from_slice(&[255, 0, 255, 255]);
         }
         let tile = LaunchTile {
@@ -1758,7 +1758,7 @@ fn verify_menu_press_scale(menu: &ContextMenuSurface) {
 
 fn verify_menu_application_image(menu: &ContextMenuSurface) {
     let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
-    for pixel in pixels.make_mut_bytes().chunks_exact_mut(4) {
+    for pixel in pixels.make_mut_bytes().as_chunks_mut::<4>().0.iter_mut() {
         pixel.copy_from_slice(&[255, 0, 255, 255]);
     }
     menu.set_kind(DockMenuKind::Pinned);

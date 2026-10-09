@@ -306,7 +306,7 @@ fn synchronous_close_during_attachment_cannot_resurrect_a_tooltip_or_keep_its_le
         !tooltip.surface.is_visible(),
         "a reentrant close must win: actual_window_visible={}, native_events={:?}",
         tooltip.window().is_visible(),
-        &*host.events.lock(),
+        *host.events.lock(),
     );
     assert!(!tooltip.window().is_visible());
     assert_eq!(&*host.events.lock(), &["attach", "detach"]);

@@ -181,11 +181,19 @@ impl Contexts {
         if slot.is_some() {
             return Err(0x8000_4005);
         }
-        let token = NEXT_TOKEN
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| 0x8000_4005_u32)?;
+        let mut value = NEXT_TOKEN.load(Ordering::Relaxed);
+        let token = loop {
+            let next = value.checked_add(1).ok_or(0x8000_4005_u32)?;
+            match NEXT_TOKEN.compare_exchange_weak(
+                value,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(old) => break old,
+                Err(actual) => value = actual,
+            }
+        };
         let context = Rc::new(WindowContext {
             token,
             window,

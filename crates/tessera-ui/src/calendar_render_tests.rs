@@ -269,39 +269,78 @@ impl Fixture {
         pixels
     }
 
-    // A thin native font400 glyph can have no fully covered foreground pixel.
-    // Compare the entire same-cell raster against its actual normal-color glyph
-    // and glyph-free background. Model changes are fixture-only and restored;
-    // label/position/font remain identical between normal and off-month glyphs.
-    fn assert_off_month_mask(
+    // Native font400 glyphs need not contain any fully covered pixel. Capture
+    // the same glyph with two contrasting fixture palettes and glyph-free
+    // backgrounds, then project their exact SDK coverage onto the actual paint.
+    // Selected/today flags, native font weights, keys, bounds and pointer stay
+    // fixed. References clear only off-month (which does not affect the font),
+    // retaining the independent full-opacity font400 proof for muted text.
+    fn assert_day_mask(
         &self,
         actual: &[Rgb8Pixel],
         width: usize,
         scale: f32,
         index: usize,
         foreground: [u8; 3],
-        muted: [u8; 3],
     ) {
         let row = self.popup.get_weeks().row_data(index / 7).unwrap();
         let original = row.days.row_data(index % 7).unwrap();
-        assert!(original.off_month && !original.today && !original.selected);
         let element = self.element(&day_description(index));
         let origin = element.absolute_position();
         let size = element.size();
-        let mut normal = original.clone();
-        normal.off_month = false;
-        row.days.set_row_data(index % 7, normal.clone());
-        let reference = self.render_fit(scale);
-        assert_eq!(element.absolute_position(), origin);
-        assert_eq!(element.size(), size);
-        normal.label = "".into();
-        row.days.set_row_data(index % 7, normal);
-        let background = self.render_fit(scale);
-        row.days.set_row_data(index % 7, original);
-        let restored = self.render_fit(scale);
-        assert_eq!(element.absolute_position(), origin);
-        assert_eq!(element.size(), size);
+        let id = element.id();
+        let mut blank = original.clone();
+        blank.label = "".into();
+        let mut reference_day = original.clone();
+        reference_day.off_month = false;
+        let mut reference_blank = reference_day.clone();
+        reference_blank.label = "".into();
+        let capture = |cell: CalendarDayCell| {
+            row.days.set_row_data(index % 7, cell);
+            let pixels = self.render_fit(scale);
+            let current = self.element(&day_description(index));
+            assert_eq!(current.id(), id, "reference must keep the genuine day node");
+            assert_eq!(current.absolute_position(), origin);
+            assert_eq!(current.size(), size);
+            assert_eq!(current.accessible_role(), Some(AccessibleRole::Button));
+            assert_eq!(pixels.len(), actual.len());
+            pixels
+        };
+        let background = capture(blank.clone());
+        let theme = self.popup.presentation_theme();
+        let accent = self.popup.global::<SeelenPalette>().get_accent();
+        let mut references = Vec::new();
+        for (scheme, accent, selected, today, normal) in [
+            (slint::language::ColorScheme::Light, 0, 255, 0, 18),
+            (slint::language::ColorScheme::Dark, 255, 0, 255, 228),
+        ] {
+            self.popup
+                .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            self.popup
+                .global::<SeelenPalette>()
+                .set_accent(slint::Color::from_rgb_u8(accent, accent, accent).into());
+            // These are independent source constants, not property getters or
+            // colors sampled from the glyph being tested.
+            let reference_foreground = if original.selected {
+                selected
+            } else if original.today {
+                today
+            } else {
+                normal
+            };
+            let glyph = capture(reference_day.clone());
+            let base = capture(reference_blank.clone());
+            references.push((glyph, base, reference_foreground));
+        }
+        self.popup.apply_presentation_theme(theme);
+        self.popup.global::<SeelenPalette>().set_accent(accent);
+        let restored = capture(original);
+        assert!(
+            restored.as_slice() == actual,
+            "restoring fixture labels/flags/palettes must restore the exact same calendar raster"
+        );
         let mut glyph_pixels = 0;
+        let mut visible_pixels = 0;
         for y in
             (origin.y * scale).ceil() as usize..((origin.y + size.height) * scale).floor() as usize
         {
@@ -310,27 +349,34 @@ impl Fixture {
             {
                 let offset = y * width + x;
                 let base = background[offset];
-                let normal = reference[offset];
-                let off_month = actual[offset];
-                assert_eq!(
-                    restored[offset], off_month,
-                    "restoring fixture flags must restore the exact same off-month raster"
-                );
-                if normal == base {
+                let painted = actual[offset];
+                if references
+                    .iter()
+                    .all(|(glyph, background, _)| glyph[offset] == background[offset])
+                {
                     assert_eq!(
-                        off_month, base,
-                        "off-month recolor cannot add glyph/background pixels at ({x},{y})"
+                        painted, base,
+                        "day recolor cannot add glyph/background pixels at ({x},{y})"
                     );
                     continue;
                 }
                 glyph_pixels += 1;
-                // Quantization can map adjacent coverage levels to the same
-                // reference RGB. Accept only muted output from one such exact
-                // SDK coverage level, not a nearest-color/spatial tolerance.
-                let mut matches = false;
-                for coverage in 0..=u8::MAX {
-                    let mut normal_pixel = base;
-                    normal_pixel.blend(
+                visible_pixels += usize::from(painted != base);
+                // Quantization may leave several exact coverage candidates.
+                // Intersect both independent native references, then require
+                // the actual RGB to equal the SDK blend of the expected source
+                // foreground over its own glyph-free background. Rounded fills
+                // and hover overlays are thus preserved, not treated as glyphs.
+                let matches = (0..=u8::MAX).any(|coverage| {
+                    let reference_matches = references.iter().all(|(glyph, base, color)| {
+                        let mut expected = base[offset];
+                        expected.blend(
+                            slint::Color::from_argb_u8(coverage, *color, *color, *color).into(),
+                        );
+                        expected == glyph[offset]
+                    });
+                    let mut expected = base;
+                    expected.blend(
                         slint::Color::from_argb_u8(
                             coverage,
                             foreground[0],
@@ -339,27 +385,25 @@ impl Fixture {
                         )
                         .into(),
                     );
-                    if normal_pixel != normal {
-                        continue;
-                    }
-                    let mut muted_pixel = base;
-                    muted_pixel.blend(
-                        slint::Color::from_argb_u8(coverage, muted[0], muted[1], muted[2]).into(),
-                    );
-                    if muted_pixel == off_month {
-                        matches = true;
-                        break;
-                    }
-                }
+                    reference_matches && expected == painted
+                });
                 assert!(
                     matches,
-                    "font400 off-month must recolor the same native glyph mask at ({x},{y}) scale={scale}: normal={normal:?} background={base:?} actual={off_month:?} source_foreground={foreground:?} source_muted={muted:?}"
+                    "day {index} must paint its priority foreground with the same native glyph coverage at ({x},{y}) scale={scale}: actual={painted:?} glyph_free_background={base:?}; {}",
+                    paint_diagnostics(
+                        actual,
+                        width,
+                        scale,
+                        &element,
+                        foreground,
+                        [base.r, base.g, base.b],
+                    ),
                 );
             }
         }
         assert!(
-            glyph_pixels > 0,
-            "same-label normal reference must contain a real native glyph"
+            glyph_pixels > 0 && visible_pixels > 0,
+            "independent references and actual day {index} must contain a real visible native glyph"
         );
     }
 
@@ -1011,11 +1055,20 @@ fn calendar_selected_today_and_off_month_priorities_are_real_pixels_not_shared_b
             .popup
             .global::<SeelenPalette>()
             .set_accent(accent.into());
-        let inverse = rgb(fixture
-            .popup
-            .global::<Palette>()
-            .get_accent_foreground()
-            .color());
+        let inverse = if scheme == slint::language::ColorScheme::Dark {
+            [0, 0, 0]
+        } else {
+            [255, 255, 255]
+        };
+        assert_eq!(
+            rgb(fixture
+                .popup
+                .global::<Palette>()
+                .get_accent_foreground()
+                .color()),
+            inverse,
+            "selected glyphs use the source Fluent inverse foreground"
+        );
         for scale in [1.0_f32, 2.0] {
             fixture.scale(scale);
             fixture.hover(LogicalPosition::new(0.0, 0.0));
@@ -1035,15 +1088,7 @@ fn calendar_selected_today_and_off_month_priorities_are_real_pixels_not_shared_b
                     sample(&pixels, width, scale, origin.x + 10.0, origin.y + 5.0),
                     fill
                 );
-                if index == 2 {
-                    fixture.assert_off_month_mask(&pixels, width, scale, index, foreground, muted);
-                } else {
-                    assert!(
-                        !ink(&pixels, width, scale, &element, text_color).is_empty(),
-                        "day {index} scheme={scheme:?} scale={scale} must paint its priority foreground; {}",
-                        paint_diagnostics(&pixels, width, scale, &element, text_color, fill),
-                    );
-                }
+                fixture.assert_day_mask(&pixels, width, scale, index, text_color);
                 if matches!(index, 0 | 3) {
                     assert_eq!(
                         sample(
@@ -1072,7 +1117,7 @@ fn calendar_selected_today_and_off_month_priorities_are_real_pixels_not_shared_b
                     sample(&hovered, width, scale, origin.x + 10.0, origin.y + 5.0),
                     rgb(hover_color)
                 );
-                assert!(!ink(&hovered, width, scale, &element, inverse).is_empty());
+                fixture.assert_day_mask(&hovered, width, scale, index, inverse);
             }
             for index in [1, 2, 4, 5] {
                 let element = fixture.element(&day_description(index));
@@ -1094,11 +1139,7 @@ fn calendar_selected_today_and_off_month_priorities_are_real_pixels_not_shared_b
                 } else {
                     foreground
                 };
-                if index == 2 {
-                    fixture.assert_off_month_mask(&hovered, width, scale, index, foreground, muted);
-                } else {
-                    assert!(!ink(&hovered, width, scale, &element, text).is_empty());
-                }
+                fixture.assert_day_mask(&hovered, width, scale, index, text);
             }
             assert!(
                 fixture.take_requests().is_empty(),
