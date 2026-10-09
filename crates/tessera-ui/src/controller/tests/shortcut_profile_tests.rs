@@ -683,10 +683,10 @@ fn root_point_factory_reentry_rejects_returned_provider_before_any_monitor_read(
 }
 
 #[derive(Default)]
-struct RootProfile {
+pub(super) struct RootProfile {
     reads: AtomicUsize,
     pending: Mutex<Vec<ProfileReadCompletion>>,
-    opened: Mutex<Vec<&'static str>>,
+    pub(super) opened: Mutex<Vec<&'static str>>,
 }
 impl ProfileHost for RootProfile {
     fn read(&self, completion: ProfileReadCompletion) -> Result<(), ProfileError> {
@@ -713,7 +713,7 @@ impl ProfileHost for RootProfile {
     }
 }
 impl RootProfile {
-    fn finish(&self) {
+    pub(super) fn finish(&self) {
         let completion = self.pending.lock().remove(0);
         completion(Ok(ProfileSnapshot::new(
             "Recording user".into(),
@@ -726,8 +726,8 @@ impl RootProfile {
 }
 
 #[derive(Default)]
-struct RootFolders {
-    opened: Mutex<Vec<tessera_system::folders::FolderId>>,
+pub(super) struct RootFolders {
+    pub(super) opened: Mutex<Vec<tessera_system::folders::FolderId>>,
 }
 impl tessera_system::folders::FolderHost for RootFolders {
     fn read(

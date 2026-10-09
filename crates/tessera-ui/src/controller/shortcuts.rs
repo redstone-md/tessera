@@ -533,6 +533,10 @@ impl PanelController {
         self.shortcuts.presentation.borrow().clone()
     }
 
+    pub(super) fn shortcut_input_guard(&self) -> impl Fn() -> bool + '_ {
+        self.shortcuts.display.input_guard()
+    }
+
     pub(super) fn with_shortcut_presentation(
         &self,
         scope: Rc<ShortcutPresentation>,

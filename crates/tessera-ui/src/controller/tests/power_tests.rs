@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
+use super::super::popups::PopupKind;
 use super::*;
 use crate::generated::{PowerMenuAction, PowerMenuSurface};
 use crate::power_menu::PowerMenuController;
@@ -34,6 +35,7 @@ struct RecordingDisplayHost {
     reply: Mutex<DisplayReply>,
     reads: AtomicUsize,
     completion: Mutex<Option<DisplayContextCompletion>>,
+    selections: Mutex<Vec<DisplaySelection>>,
 }
 
 impl RecordingDisplayHost {
@@ -42,6 +44,7 @@ impl RecordingDisplayHost {
             reply: Mutex::new(reply),
             reads: AtomicUsize::new(0),
             completion: Mutex::default(),
+            selections: Mutex::default(),
         })
     }
 
@@ -68,6 +71,15 @@ impl DisplayContextHost for RecordingDisplayHost {
             }
         }
         Ok(())
+    }
+
+    fn read_selected(
+        &self,
+        selection: DisplaySelection,
+        completion: DisplayContextCompletion,
+    ) -> Result<(), DisplayContextError> {
+        self.selections.lock().push(selection);
+        self.read(completion)
     }
 }
 
@@ -229,7 +241,19 @@ fn fixture_with_power(
     Arc<RecordingDisplayHost>,
     Arc<RecordingPowerHost>,
 ) {
-    let fixture = LauncherFixture::new();
+    fixture_with_power_preferences(reply, inline, seeded_preferences())
+}
+
+fn fixture_with_power_preferences(
+    reply: DisplayReply,
+    inline: bool,
+    preferences: PanelPreferences,
+) -> (
+    LauncherFixture,
+    Arc<RecordingDisplayHost>,
+    Arc<RecordingPowerHost>,
+) {
+    let fixture = LauncherFixture::with_preferences(preferences);
     let display = RecordingDisplayHost::new(reply);
     let power = Arc::new(RecordingPowerHost {
         inline,
@@ -1607,7 +1631,7 @@ fn root_late_hint_from_old_launcher_scope_cannot_initialize_or_mutate_fresh_powe
 }
 
 #[test]
-fn root_accepted_power_survives_actual_thirty_second_presentation_retirement_and_drains_held_terminal_on_genuine_reopen()
+fn root_accepted_power_survives_actual_thirty_second_presentation_retirement_and_drains_held_terminal_on_weak_root_wake()
  {
     use slint::platform::Key;
     for complete_while_retired in [false, true] {
@@ -1636,14 +1660,15 @@ fn root_accepted_power_survives_actual_thirty_second_presentation_retirement_and
         );
         assert!(!old.window().is_visible());
         assert!(!actor.is_visible());
-        let status = fixture.panel.get_status();
         if complete_while_retired {
             power.complete();
-            slint::platform::update_timers_and_animations();
+            fixture.panel.invoke_power_command_event_ready();
+            assert!(!actor.command_busy());
+            assert!(actor.component_if_present().is_none());
             assert_eq!(
                 fixture.panel.get_status(),
-                status,
-                "presentationless terminal remains bounded until explicit open"
+                "Power request accepted; OS state and update completion are not observed.",
+                "presentationless command terminal needs no explicit Power reopen"
             );
         }
         actor.set_theme(Theme::Light);
@@ -1814,4 +1839,888 @@ fn root_power_uses_genuine_bounded_launcher_account_without_extra_identity_obser
     );
     assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
     assert!(power.actions.lock().is_empty());
+}
+
+fn open_logout_user(fixture: &LauncherFixture) -> Rc<crate::user_menu::UserMenuController> {
+    fixture.click_launcher("Open user menu");
+    let user = fixture.controller.user_menu.borrow().clone().unwrap();
+    assert!(user.is_open());
+    assert!(user.component().window().is_visible());
+    user
+}
+
+fn logout_control(
+    user: &crate::user_menu::UserMenuController,
+) -> i_slint_backend_testing::ElementHandle {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    let mut controls = ElementHandle::find_by_accessible_label(user.component(), "Log out")
+        .filter(|element| element.accessible_role() == Some(AccessibleRole::Button));
+    let control = controls.next().expect("genuine bound User Logout");
+    assert!(controls.next().is_none());
+    control
+}
+
+fn assert_no_logout_side_routes(fixture: &LauncherFixture, display: &RecordingDisplayHost) {
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(fixture.host.system_actions.lock().is_empty());
+    assert!(fixture.host.launches.lock().is_empty());
+    assert_eq!(
+        fixture.host.shortcuts_factory_calls.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        fixture
+            .host
+            .power_updates_factory_calls
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        fixture.host.display_provider_calls.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(display.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.host.power_lease_drops.load(Ordering::SeqCst), 0);
+    assert!(!fixture.panel.window().is_visible());
+}
+
+#[test]
+fn genuine_user_logout_pointer_return_space_and_ax_share_exact_log_out_without_power_presentation()
+{
+    use slint::platform::{Key, WindowEvent};
+    for input in 0..4 {
+        let (fixture, display, power) =
+            fixture_with_power(DisplayReply::Ready(desktop_layout()), true);
+        let user = open_logout_user(&fixture);
+        let surface = user.component();
+        let control = logout_control(&user);
+        assert_eq!(control.accessible_enabled(), Some(true));
+        assert_eq!((control.size().width, control.size().height), (28.0, 28.0));
+        assert!(
+            fixture.controller.power_menu.borrow().is_none(),
+            "paint never discovers Power"
+        );
+        let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+        let detached = Rc::new(Cell::new(false));
+        POWER_FACTORY_HOOK.with(|hook| {
+            let user = Rc::clone(&user);
+            let leases = Arc::clone(&fixture.host.lease_drops);
+            let cache = Rc::clone(&fixture.controller.power_menu);
+            let detached = detached.clone();
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(!user.is_open());
+                assert!(!user.component().window().is_visible());
+                assert_eq!(leases.load(Ordering::SeqCst), drops + 1);
+                assert!(
+                    cache
+                        .borrow()
+                        .as_ref()
+                        .unwrap()
+                        .component_if_present()
+                        .is_none()
+                );
+                detached.set(true);
+            }));
+        });
+        POWER_PERFORM_HOOK.with(|hook| {
+            let user = Rc::clone(&user);
+            let detached = detached.clone();
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(detached.get());
+                assert!(!user.is_open());
+                assert!(!user.component().window().is_visible());
+            }));
+        });
+        match input {
+            0 => click_component(surface, "Log out"),
+            3 => control.invoke_accessible_default_action(),
+            _ => {
+                surface.invoke_focus_content();
+                // Unsupported profile has no Home/Accounts tab stops.
+                native_key(surface, Key::Tab);
+                let key = if input == 1 { Key::Return } else { Key::Space };
+                surface
+                    .window()
+                    .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+                surface
+                    .window()
+                    .dispatch_event(WindowEvent::KeyPressRepeated { text: key.into() });
+                if input == 2 {
+                    assert!(
+                        power.actions.lock().is_empty(),
+                        "Space release owns activation"
+                    );
+                }
+                surface
+                    .window()
+                    .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+            }
+        }
+        let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+        assert!(
+            authority.command_busy(),
+            "inline terminal remains asynchronous"
+        );
+        assert_eq!(*power.actions.lock(), [PowerAction::LogOut]);
+        assert!(authority.component_if_present().is_none());
+        fixture.panel.invoke_power_command_event_ready();
+        assert!(!authority.command_busy());
+        assert!(
+            authority.component_if_present().is_none(),
+            "terminal cannot create Power"
+        );
+        assert!(detached.get());
+        assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 1);
+        assert_no_logout_side_routes(&fixture, &display);
+        assert_eq!(
+            fixture.panel.get_status(),
+            "Power request accepted; OS state and update completion are not observed."
+        );
+        surface.invoke_logout_requested(surface.get_logout_key());
+        control.invoke_accessible_default_action();
+        assert_eq!(power.actions.lock().len(), 1, "hidden input never replays");
+    }
+}
+
+#[test]
+fn user_and_six_action_power_share_busy_both_directions_and_only_fresh_input_after_terminal() {
+    for user_first in [true, false] {
+        let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+        if user_first {
+            let user = open_logout_user(&fixture);
+            click_component(user.component(), "Log out");
+        } else {
+            let power = open_power(&fixture);
+            click_component(&power.component(), "Suspend");
+        }
+        let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+        let power = open_power(&fixture);
+        assert!(Rc::ptr_eq(&authority, &power));
+        assert!(power.component().get_lock_busy());
+        assert_native_actions_enabled(&power.component(), false);
+        for (label, action, _) in native_power_cases(false) {
+            click_component(&power.component(), label);
+            power.component().invoke_action_requested(action);
+        }
+        let user = open_logout_user(&fixture);
+        assert!(user.component().get_logout_busy());
+        assert!(!user.component().get_logout_ready());
+        logout_control(&user).invoke_accessible_default_action();
+        user.component()
+            .invoke_logout_requested(user.component().get_logout_key());
+        assert_eq!(native.actions.lock().len(), 1);
+        native.complete();
+        fixture.panel.invoke_power_command_event_ready();
+        assert!(!authority.command_busy());
+        assert!(!user.component().get_logout_busy());
+        assert!(user.component().get_logout_ready());
+        assert!(
+            user.is_open(),
+            "terminal does not dismiss unrelated current input"
+        );
+        assert_eq!(native.actions.lock().len(), 1);
+        click_component(user.component(), "Log out");
+        assert_eq!(native.actions.lock().last(), Some(&PowerAction::LogOut));
+        assert_eq!(native.actions.lock().len(), 2);
+        assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 1);
+        native.complete();
+        fixture.panel.invoke_power_command_event_ready();
+    }
+}
+
+#[test]
+fn stale_user_logout_keys_hidden_native_cache_popup_and_closed_root_fail_before_provider() {
+    for invalid in 0..10 {
+        let preferences = if invalid == 9 {
+            reorder_preferences()
+        } else {
+            seeded_preferences()
+        };
+        let (fixture, _, native) = fixture_with_power_preferences(
+            DisplayReply::Ready(desktop_layout()),
+            false,
+            preferences,
+        );
+        let user = open_logout_user(&fixture);
+        let key = user.component().get_logout_key();
+        match invalid {
+            0 => user.hide(),
+            1 => {
+                user.hide();
+                open_logout_user(&fixture);
+            }
+            2 => user.component().window().hide().unwrap(),
+            3 => {
+                fixture.controller.user_menu.borrow_mut().take();
+            }
+            4 => fixture
+                .controller
+                .admission
+                .active_popup
+                .set(Some(PopupKind::Calendar)),
+            5 => fixture.controller.power_admission_closed.set(true),
+            6 => fixture.controller.admission.alive.set(false),
+            7 => {
+                apply_result(
+                    &fixture.controller,
+                    &fixture.panel,
+                    Ok(launcher_snapshot().with_dock_context(
+                        crate::DockContext::new(0, 0, 1920, 1040, true).unwrap(),
+                    )),
+                );
+            }
+            8 => fixture.launcher.window().hide().unwrap(),
+            9 => {
+                begin_editor_reorder(&fixture);
+                assert!(fixture.launcher.get_reorder_dragging());
+            }
+            _ => unreachable!(),
+        }
+        user.component().invoke_logout_requested(key);
+        assert!(native.actions.lock().is_empty());
+        assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
+        assert!(fixture.controller.power_menu.borrow().is_none());
+        if invalid == 9 {
+            fixture.controller.cancel_launcher_reorder();
+            slint::platform::update_timers_and_animations();
+        }
+    }
+}
+
+#[test]
+fn borrowed_launcher_fingerprint_rejects_reopen_native_mismatch_geometry_and_dpi() {
+    use slint::platform::WindowEvent;
+    for change in 0..4 {
+        let fixture = LauncherFixture::new();
+        fixture.controller.open_launcher();
+        let guard = fixture.controller.launcher_source_guard();
+        assert!(guard());
+        match change {
+            0 => {
+                fixture.controller.hide_launcher();
+                fixture.controller.open_launcher();
+            }
+            1 => fixture.launcher.window().hide().unwrap(),
+            2 => fixture
+                .launcher
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 2.0 }),
+            3 => {
+                let snapshot = launcher_snapshot()
+                    .with_dock_context(crate::DockContext::new(0, 0, 1920, 1080, true).unwrap());
+                apply_result(&fixture.controller, &fixture.panel, Ok(snapshot));
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            !guard(),
+            "same actual source after {change} is not captured input"
+        );
+    }
+}
+
+#[test]
+fn user_logout_cancel_profile_and_lease_retirement_reentry_preserves_new_intent() {
+    use crate::user_menu::LogoutRetirementStage;
+    for stage in 0..3 {
+        for replacement in 0..6 {
+            let (fixture, display, native) =
+                fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+            let user = open_logout_user(&fixture);
+            let launcher = fixture.launcher.as_weak();
+            let toolbar = fixture.toolbar.as_weak();
+            let root = fixture.controller.clone();
+            let callback_display = display.clone();
+            let callback = move || {
+                assert!(root.user_menu.try_borrow_mut().is_ok());
+                assert!(root.power_menu.try_borrow_mut().is_ok());
+                match replacement {
+                    0 => click_component(&launcher.upgrade().unwrap(), "Open user menu"),
+                    1 => click_component(&toolbar.upgrade().unwrap(), "Open calendar"),
+                    2 => {
+                        *callback_display.reply.lock() = DisplayReply::Delayed;
+                        click_component(&launcher.upgrade().unwrap(), "Open power menu");
+                        let power = root.power_menu.borrow().clone().unwrap();
+                        POWER_WINDOW.with(|window| {
+                            *window.borrow_mut() = Some(power.component().as_weak())
+                        });
+                    }
+                    3 => root.open_panel(),
+                    4 => {
+                        root.hide_launcher();
+                        root.open_launcher();
+                    }
+                    5 => drop(shortcuts::RootCapabilityScope::new(&root)),
+                    _ => unreachable!(),
+                }
+            };
+            match stage {
+                0 => user.on_logout_retirement(LogoutRetirementStage::InputCancelled, callback),
+                1 => user.on_logout_retirement(LogoutRetirementStage::ProfileRetired, callback),
+                2 => RECYCLE_MENU_DROP_HOOK
+                    .with(|hook| *hook.borrow_mut() = Some(Box::new(callback))),
+                _ => unreachable!(),
+            }
+            click_component(user.component(), "Log out");
+            assert!(native.actions.lock().is_empty());
+            assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
+            let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+            assert!(!authority.command_busy());
+            match replacement {
+                0 => {
+                    assert!(user.is_open());
+                    assert!(user.component().window().is_visible());
+                    assert!(user.component().get_logout_ready());
+                }
+                1 => {
+                    let calendar = fixture.controller.calendar.borrow().clone().unwrap();
+                    assert!(calendar.is_open());
+                    assert!(calendar.component().window().is_visible());
+                    assert!(!user.is_open());
+                }
+                2 => {
+                    assert!(!authority.is_visible());
+                    assert!(display.completion.lock().is_some());
+                    display.complete(Ok(Some(desktop_layout())));
+                    drain_power(&authority);
+                    assert!(authority.is_visible(), "new pending Power was not revoked");
+                    assert_native_actions_enabled(&authority.component(), true);
+                }
+                3 => assert!(fixture.panel.window().is_visible()),
+                4 => assert!(fixture.controller.launcher_popup_ready()),
+                5 => assert!(!fixture.controller.root_current()),
+                _ => unreachable!(),
+            }
+            assert!(native.actions.lock().is_empty());
+        }
+    }
+}
+
+#[test]
+fn user_logout_provider_reentry_rejects_old_command_and_preserves_exact_new_intent() {
+    for replacement in 0..6 {
+        let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+        let user = open_logout_user(&fixture);
+        POWER_FACTORY_HOOK.with(|hook| {
+            let root = fixture.controller.clone();
+            let launcher = fixture.launcher.as_weak();
+            let toolbar = fixture.toolbar.as_weak();
+            let user = Rc::clone(&user);
+            *hook.borrow_mut() = Some(Box::new(move || {
+                assert!(!user.is_open());
+                assert!(!user.component().window().is_visible());
+                match replacement {
+                    0 => click_component(&launcher.upgrade().unwrap(), "Open user menu"),
+                    1 => click_component(&toolbar.upgrade().unwrap(), "Open calendar"),
+                    2 => {
+                        click_component(&launcher.upgrade().unwrap(), "Open power menu");
+                        let power = root.power_menu.borrow().clone().unwrap();
+                        POWER_WINDOW.with(|window| {
+                            *window.borrow_mut() = Some(power.component().as_weak())
+                        });
+                        drain_power(&power);
+                    }
+                    3 => {
+                        root.hide_launcher();
+                        root.open_launcher();
+                    }
+                    4 => {
+                        root.power_admission_closed.set(true);
+                        root.admission.alive.set(false);
+                    }
+                    5 => root.open_panel(),
+                    _ => unreachable!(),
+                }
+            }));
+        });
+        click_component(user.component(), "Log out");
+        let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+        assert!(!authority.command_busy());
+        assert!(native.actions.lock().is_empty());
+        assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 1);
+        match replacement {
+            0 => {
+                assert!(user.is_open());
+                assert!(user.component().get_logout_ready());
+            }
+            1 => assert!(
+                fixture
+                    .controller
+                    .calendar
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .is_open()
+            ),
+            2 => assert!(authority.is_visible()),
+            3 => assert!(fixture.controller.launcher_popup_ready()),
+            4 => assert!(!fixture.controller.root_current()),
+            5 => assert!(fixture.panel.window().is_visible()),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn user_logout_admission_error_inline_error_and_unsupported_are_terminal_without_replay() {
+    for failure in 0..3 {
+        let (fixture, display, _) =
+            fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+        let native = Arc::new(RecordingPowerHost {
+            inline: failure == 1,
+            admission_error: (failure == 0).then_some(PowerError::AccessDenied),
+            inline_error: (failure == 1).then_some(PowerError::Unavailable),
+            ..Default::default()
+        });
+        *fixture.host.power_provider.lock() =
+            (failure != 2).then(|| native.clone() as Arc<dyn PowerHost>);
+        let user = open_logout_user(&fixture);
+        click_component(user.component(), "Log out");
+        let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+        fixture.panel.invoke_power_command_event_ready();
+        assert!(!authority.command_busy());
+        assert!(!fixture.panel.get_status().contains("request accepted"));
+        assert!(fixture.panel.get_status().contains("Power request failed"));
+        assert_eq!(
+            native.completions.load(Ordering::SeqCst),
+            usize::from(failure == 1)
+        );
+        assert_eq!(native.actions.lock().len(), usize::from(failure != 2));
+        open_logout_user(&fixture);
+        assert!(user.component().get_logout_ready());
+        assert_eq!(
+            native.actions.lock().len(),
+            usize::from(failure != 2),
+            "reopen is not retry"
+        );
+        assert_no_logout_side_routes(&fixture, &display);
+    }
+}
+
+#[test]
+fn user_logout_submitted_before_perform_reentry_and_inline_completion_releases_same_flight() {
+    let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), true);
+    let user = open_logout_user(&fixture);
+    POWER_PERFORM_HOOK.with(|hook| {
+        let launcher = fixture.launcher.as_weak();
+        let user = Rc::clone(&user);
+        let cache = Rc::clone(&fixture.controller.power_menu);
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let power = cache.borrow().clone().unwrap();
+            assert!(power.command_busy());
+            click_component(&launcher.upgrade().unwrap(), "Open user menu");
+            assert!(user.is_open());
+            assert!(user.component().get_logout_busy());
+            assert!(!user.component().get_logout_ready());
+            user.component()
+                .invoke_logout_requested(user.component().get_logout_key());
+        }));
+    });
+    click_component(user.component(), "Log out");
+    assert_eq!(*native.actions.lock(), [PowerAction::LogOut]);
+    assert!(user.is_open());
+    fixture.panel.invoke_power_command_event_ready();
+    assert!(!user.component().get_logout_busy());
+    assert!(user.component().get_logout_ready());
+    assert_eq!(native.completions.load(Ordering::SeqCst), 1);
+    assert_eq!(native.actions.lock().len(), 1);
+}
+
+#[test]
+fn weak_root_command_wake_drains_user_terminal_with_power_never_opened_or_actually_evicted() {
+    for prior_power in [false, true] {
+        let (fixture, display, native) =
+            fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+        if prior_power {
+            let authority = open_power(&fixture);
+            fixture.controller.hide_power_menu();
+            advance_recycle_timer(30_000);
+            assert!(authority.component_if_present().is_none());
+        }
+        let user = open_logout_user(&fixture);
+        click_component(user.component(), "Log out");
+        let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+        assert!(authority.component_if_present().is_none());
+        fixture.controller.hide_launcher();
+        advance_recycle_timer(30_000);
+        native.complete();
+        fixture.panel.invoke_power_command_event_ready();
+        assert!(!authority.command_busy());
+        assert!(authority.component_if_present().is_none());
+        assert!(!user.is_open());
+        assert!(!fixture.launcher.window().is_visible());
+        assert_eq!(native.actions.lock().as_slice(), [PowerAction::LogOut]);
+        assert_eq!(
+            display.reads.load(Ordering::SeqCst),
+            usize::from(prior_power)
+        );
+        assert_eq!(
+            fixture.panel.get_status(),
+            "Power request accepted; OS state and update completion are not observed."
+        );
+        fixture.panel.invoke_power_command_event_ready();
+        assert_eq!(
+            native.actions.lock().len(),
+            1,
+            "duplicate wake cannot replay"
+        );
+    }
+}
+
+#[test]
+fn accepted_user_logout_completion_owns_no_strong_root_user_power_or_presentation_after_drop() {
+    let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    let user = open_logout_user(&fixture);
+    click_component(user.component(), "Log out");
+    let authority = fixture.controller.power_menu.borrow().clone().unwrap();
+    let power = Rc::downgrade(&authority);
+    let user_weak = Rc::downgrade(&user);
+    let window = user.component().as_weak();
+    let panel = fixture.panel.as_weak();
+    assert!(native.completion.lock().is_some());
+    drop(authority);
+    drop(user);
+    drop(fixture);
+    assert!(power.upgrade().is_none());
+    assert!(user_weak.upgrade().is_none());
+    assert!(window.upgrade().is_none());
+    assert!(panel.upgrade().is_none());
+    native.complete();
+    slint::platform::update_timers_and_animations();
+    assert_eq!(native.actions.lock().as_slice(), [PowerAction::LogOut]);
+    assert!(power.upgrade().is_none());
+    assert!(panel.upgrade().is_none());
+}
+
+#[test]
+fn newer_already_visible_settings_focus_during_logout_factory_retires_unsubmitted_command() {
+    let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    fixture.controller.open_panel();
+    assert!(fixture.panel.window().is_visible());
+    let user = open_logout_user(&fixture);
+    let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    POWER_FACTORY_HOOK.with(|hook| {
+        let root = fixture.controller.clone();
+        *hook.borrow_mut() = Some(Box::new(move || root.open_panel()));
+    });
+    click_component(user.component(), "Log out");
+    assert!(fixture.panel.window().is_visible());
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus + 1
+    );
+    assert!(native.actions.lock().is_empty());
+    assert!(
+        !fixture
+            .controller
+            .power_menu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .command_busy()
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn older_settings_tooltip_retirement_cannot_present_or_focus_over_new_user_intent() {
+    let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    present_toolbar_tooltip(&fixture);
+    let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    TOOLTIP_DROP_HOOK.with(|hook| {
+        let launcher = fixture.launcher.as_weak();
+        *hook.borrow_mut() = Some(Box::new(move || {
+            click_component(&launcher.upgrade().unwrap(), "Open user menu");
+        }));
+    });
+    fixture.controller.open_panel();
+    let user = fixture.controller.user_menu.borrow().clone().unwrap();
+    assert!(user.is_open());
+    assert!(user.component().window().is_visible());
+    assert!(
+        !fixture.panel.window().is_visible(),
+        "older Settings loses exact transaction"
+    );
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus + 1
+    );
+    assert!(native.actions.lock().is_empty());
+    assert!(fixture.host.saves.lock().is_empty());
+    TOOLTIP_DROP_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+}
+
+#[test]
+fn pending_genuine_global_settings_monitor_read_retires_logout_before_any_new_popup_attaches() {
+    use tessera_system::shortcuts::mocks::RecordingShortcutHost;
+    use tessera_system::shortcuts::{ShortcutAction, ShortcutEvent, ShortcutTrigger, TriggerPoint};
+    let (fixture, display, native) = fixture_with_power(DisplayReply::Delayed, false);
+    let shortcuts = Arc::new(RecordingShortcutHost::default());
+    *fixture.host.shortcuts_provider.lock() = Some(shortcuts.clone());
+    let _scope = shortcuts::RootCapabilityScope::new(&fixture.controller);
+    fixture.controller.start_shortcuts(true);
+    let configuration = shortcuts.take_next_completion().unwrap();
+    let generation = configuration.generation();
+    configuration.complete_registered();
+    fixture.panel.invoke_shortcuts_event_ready();
+    let user = open_logout_user(&fixture);
+    let point = TriggerPoint { x: -600, y: 100 };
+    POWER_FACTORY_HOOK.with(|hook| {
+        let shortcuts = shortcuts.clone();
+        let panel = fixture.panel.as_weak();
+        let display = display.clone();
+        *hook.borrow_mut() = Some(Box::new(move || {
+            shortcuts.emit(ShortcutEvent::Triggered(ShortcutTrigger {
+                generation,
+                action: ShortcutAction::OpenSettings,
+                cursor: Some(point),
+            }));
+            panel.upgrade().unwrap().invoke_shortcuts_event_ready();
+            assert!(display.completion.lock().is_some());
+            assert!(!panel.upgrade().unwrap().window().is_visible());
+        }));
+    });
+    click_component(user.component(), "Log out");
+    assert!(native.actions.lock().is_empty());
+    assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        !fixture
+            .controller
+            .power_menu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .command_busy()
+    );
+    let selection = DisplaySelection::AtPoint {
+        x: point.x,
+        y: point.y,
+    };
+    assert_eq!(display.selections.lock().as_slice(), [selection]);
+    display.complete(Ok(Some(
+        DisplayLayout::new(
+            Rect::new(-1200, 0, 3120, 1080).unwrap(),
+            Rect::new(-1200, 0, 1200, 900).unwrap(),
+            1.5,
+            selection,
+        )
+        .unwrap(),
+    )));
+    fixture.panel.invoke_shortcuts_event_ready();
+    assert!(
+        fixture.panel.window().is_visible(),
+        "new pending Settings is preserved"
+    );
+    assert_eq!(
+        shortcuts.configurations().len(),
+        1,
+        "Logout never mutates bindings"
+    );
+    assert!(native.actions.lock().is_empty());
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn direct_user_logout_is_independent_of_accepted_profile_read_and_late_identity_has_no_effect() {
+    use tessera_system::profile::{
+        ProfileCommand, ProfileError, ProfileHost, ProfileOpenCompletion, ProfilePhotoState,
+        ProfileReadCompletion, ProfileSnapshot,
+    };
+    #[derive(Default)]
+    struct ReadingProfile {
+        pending: Mutex<Option<ProfileReadCompletion>>,
+    }
+    impl ProfileHost for ReadingProfile {
+        fn read(&self, completion: ProfileReadCompletion) -> Result<(), ProfileError> {
+            assert!(self.pending.lock().replace(completion).is_none());
+            Ok(())
+        }
+        fn execute(&self, _: ProfileCommand, _: ProfileOpenCompletion) -> Result<(), ProfileError> {
+            panic!("Logout must never use ProfileHost.execute");
+        }
+    }
+    let (fixture, display, native) =
+        fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    let profile = Arc::new(ReadingProfile::default());
+    *fixture.host.profile_provider.lock() = Some(profile.clone());
+    let user = open_logout_user(&fixture);
+    assert!(user.component().get_profile_loading());
+    assert!(profile.pending.lock().is_some());
+    assert!(user.component().get_logout_ready());
+    click_component(user.component(), "Log out");
+    assert_eq!(native.actions.lock().as_slice(), [PowerAction::LogOut]);
+    assert!(
+        profile.pending.lock().is_some(),
+        "visual retirement does not cancel accepted read"
+    );
+    let completion = profile.pending.lock().take().unwrap();
+    completion(Ok(ProfileSnapshot::new(
+        "Late recording identity".into(),
+        ProfilePhotoState::Absent,
+        None,
+        None,
+    )
+    .unwrap()));
+    user.component().invoke_profile_event_ready();
+    assert!(!user.is_open());
+    assert!(user.component().get_profile_name().is_empty());
+    assert!(user.component().get_logout_key().is_empty());
+    native.complete();
+    fixture.panel.invoke_power_command_event_ready();
+    assert_no_logout_side_routes(&fixture, &display);
+}
+
+#[test]
+fn older_user_reopen_retirement_cannot_present_or_focus_over_new_settings_intent() {
+    use crate::user_menu::LogoutRetirementStage;
+    let (fixture, _, native) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    let user = open_logout_user(&fixture);
+    let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    let root = fixture.controller.clone();
+    user.on_logout_retirement(LogoutRetirementStage::ProfileRetired, move || {
+        root.open_panel()
+    });
+    fixture.click_launcher("Open user menu");
+    assert!(fixture.panel.window().is_visible());
+    assert!(!user.is_open());
+    assert!(!user.component().window().is_visible());
+    assert_eq!(
+        fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+        focus + 1
+    );
+    assert!(native.actions.lock().is_empty());
+    assert!(fixture.controller.power_menu.borrow().is_none());
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+fn assert_user_logout_exhaustion_keeps_other_user_intents(counter: &'static str) {
+    use super::shortcut_profile_tests::{RootFolders, RootProfile};
+    use tessera_system::folders::FolderId;
+    let (fixture, _, power) = fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+    let folders = Arc::new(RootFolders::default());
+    let profile = Arc::new(RootProfile::default());
+    *fixture.host.folder_provider.lock() = Some(folders.clone());
+    *fixture.host.profile_provider.lock() = Some(profile.clone());
+    let user = open_logout_user(&fixture);
+    user.component().invoke_folder_event_ready();
+    profile.finish();
+    user.component().invoke_profile_event_ready();
+    assert_eq!(user.component().get_rows().row_count(), FolderId::ALL.len());
+    assert_eq!(user.component().get_profile_name(), "Recording user");
+    user.exhaust_logout_counter_for_test(counter);
+    if counter == "issuance" {
+        click_component(user.component(), "Log out");
+    } else {
+        // The real next prepare/activation, not injected UI flags, reaches the
+        // exhausted presentation-key/session counter.
+        user.hide();
+        open_logout_user(&fixture);
+        user.component().invoke_folder_event_ready();
+        profile.finish();
+        user.component().invoke_profile_event_ready();
+    }
+    assert!(!user.component().get_logout_ready());
+    assert!(user.component().get_logout_key().is_empty());
+    assert!(power.actions.lock().is_empty());
+    assert!(fixture.controller.power_menu.borrow().is_none());
+    assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
+    let drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    user.hide();
+    assert!(
+        !user.is_open(),
+        "exhausted Logout cannot block User teardown"
+    );
+    assert!(!user.component().window().is_visible());
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops + 1);
+    user.hide();
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), drops + 1);
+    open_logout_user(&fixture);
+    user.component().invoke_folder_event_ready();
+    profile.finish();
+    user.component().invoke_profile_event_ready();
+    assert_eq!(user.component().get_rows().row_count(), FolderId::ALL.len());
+    assert_eq!(user.component().get_profile_name(), "Recording user");
+    assert!(!user.component().get_logout_ready());
+    assert!(user.component().get_logout_key().is_empty());
+    click_component(user.component(), "Open Desktop");
+    user.component().invoke_folder_event_ready();
+    click_component(user.component(), "Open home folder");
+    user.component().invoke_profile_event_ready();
+    assert_eq!(folders.opened.lock().as_slice(), [FolderId::Desktop]);
+    assert_eq!(profile.opened.lock().as_slice(), ["home"]);
+    assert!(power.actions.lock().is_empty());
+    assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn root_user_logout_issuance_exhaustion_retires_popup_and_reopens_folders_profile() {
+    assert_user_logout_exhaustion_keeps_other_user_intents("issuance");
+}
+
+#[test]
+fn root_user_logout_key_exhaustion_retires_popup_and_reopens_folders_profile() {
+    assert_user_logout_exhaustion_keeps_other_user_intents("keys");
+}
+
+#[test]
+fn root_user_logout_session_exhaustion_retires_popup_and_reopens_folders_profile() {
+    assert_user_logout_exhaustion_keeps_other_user_intents("sessions");
+}
+
+#[test]
+fn exhausted_user_logout_reopen_reentry_preserves_exact_new_user_or_settings_intent() {
+    use crate::user_menu::LogoutRetirementStage;
+    for lease_drop in [false, true] {
+        for settings in [false, true] {
+            let (fixture, _, power) =
+                fixture_with_power(DisplayReply::Ready(desktop_layout()), false);
+            let user = open_logout_user(&fixture);
+            user.exhaust_logout_counter_for_test("issuance");
+            click_component(user.component(), "Log out");
+            assert!(user.is_open());
+            assert!(user.component().get_logout_key().is_empty());
+            let focus = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+            let root = fixture.controller.clone();
+            let launcher = fixture.launcher.as_weak();
+            let callback = move || {
+                if settings {
+                    root.open_panel();
+                } else {
+                    click_component(&launcher.upgrade().unwrap(), "Open user menu");
+                }
+            };
+            if lease_drop {
+                RECYCLE_MENU_DROP_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(callback)));
+            } else {
+                user.on_logout_retirement(LogoutRetirementStage::ProfileRetired, callback);
+            }
+            fixture.click_launcher("Open user menu");
+            assert_eq!(
+                fixture.host.ui_focus_calls.load(Ordering::SeqCst),
+                focus + 1
+            );
+            assert!(user.component().get_logout_key().is_empty());
+            assert!(!user.component().get_logout_ready());
+            if settings {
+                assert!(fixture.panel.window().is_visible());
+                assert!(
+                    !user.is_open(),
+                    "old exhausted User cannot regain native presentation"
+                );
+            } else {
+                assert!(
+                    user.is_open(),
+                    "old exhausted hide cannot tear down replacement"
+                );
+                assert!(user.component().window().is_visible());
+                assert!(!fixture.panel.window().is_visible());
+            }
+            assert!(power.actions.lock().is_empty());
+            assert_eq!(fixture.host.power_provider_calls.load(Ordering::SeqCst), 0);
+            assert!(fixture.controller.power_menu.borrow().is_none());
+            assert!(fixture.host.saves.lock().is_empty());
+            RECYCLE_MENU_DROP_HOOK.with(|hook| assert!(hook.borrow().is_none()));
+        }
+    }
 }

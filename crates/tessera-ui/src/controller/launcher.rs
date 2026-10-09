@@ -1384,6 +1384,41 @@ impl PanelController {
         session.visible.get() && !session.presenting.get()
     }
 
+    /// Borrowed command admission fingerprint. A visible replacement, the same
+    /// HWND after hide/reopen, or changed source geometry/DPI is never this input.
+    pub(super) fn launcher_source_guard(&self) -> impl Fn() -> bool + '_ {
+        let shortcut_current = self.shortcut_input_guard();
+        let session = self.launcher_session();
+        let generation = session.generation.get();
+        let source = self
+            .launcher_and_upgrade()
+            .map(|launcher| launcher.as_weak());
+        let context = self.launcher_context();
+        let scale = source
+            .as_ref()
+            .and_then(slint::Weak::upgrade)
+            .map(|launcher| launcher.window().scale_factor());
+        move || {
+            let Some(source) = source.as_ref().and_then(slint::Weak::upgrade) else {
+                return false;
+            };
+            self.root_current()
+                && shortcut_current()
+                && Rc::ptr_eq(&session, &self.launcher_session())
+                && session.generation.get() == generation
+                && session.visible.get()
+                && !session.presenting.get()
+                && self
+                    .launcher_and_upgrade()
+                    .is_some_and(|current| std::ptr::eq(current.window(), source.window()))
+                && source.window().is_visible()
+                && !source.get_reorder_dragging()
+                && Some(source.window().scale_factor()) == scale
+                && self.launcher_context() == context
+                && context.is_some_and(|context| !context.fullscreen_active())
+        }
+    }
+
     fn launcher_result_ready(&self, key: &str) -> Option<Launcher> {
         let launcher = self.interactive_launcher()?;
         self.launcher_result_current(&launcher, key)

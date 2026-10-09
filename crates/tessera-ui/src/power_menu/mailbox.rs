@@ -61,6 +61,8 @@ pub(super) struct Mailbox {
     pub(super) lock: Slot<LockResult>,
     pub(super) updates: Slot<UpdatesResult>,
     pub(super) wake_queued: bool,
+    pub(super) command_wake_queued: bool,
+    pub(super) command_target: Option<slint::Weak<crate::generated::Panel>>,
     revision: u64,
     target: Option<WakeTarget>,
 }
@@ -99,6 +101,8 @@ impl Mailbox {
     pub(super) fn close(&mut self) {
         self.target = None;
         self.wake_queued = false;
+        self.command_target = None;
+        self.command_wake_queued = false;
         self.read = Slot::default();
         self.lock = Slot::default();
         self.updates = Slot::default();
@@ -151,10 +155,32 @@ pub(super) fn complete_read(mailbox: &Arc<Mutex<Mailbox>>, token: Token, result:
     }
 }
 
+fn wake_command(mailbox: &Arc<Mutex<Mailbox>>) {
+    let target = {
+        let mut state = mailbox.lock();
+        if state.command_wake_queued || state.lock.terminal.is_none() {
+            return;
+        }
+        let Some(target) = state.command_target.clone() else {
+            drop(state);
+            wake(mailbox);
+            return;
+        };
+        state.command_wake_queued = true;
+        target
+    };
+    if target
+        .upgrade_in_event_loop(|panel| panel.invoke_power_command_event_ready())
+        .is_err()
+    {
+        mailbox.lock().command_wake_queued = false;
+    }
+}
+
 pub(super) fn complete_lock(mailbox: &Arc<Mutex<Mailbox>>, token: Token, result: LockResult) {
     let delivered = mailbox.lock().lock.complete(token, result);
     if delivered {
-        wake(mailbox);
+        wake_command(mailbox);
     }
 }
 

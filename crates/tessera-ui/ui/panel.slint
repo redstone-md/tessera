@@ -106,6 +106,9 @@ export component Panel inherits Window {
     // Weak component relays keep independent Power actors out of root cycles.
     callback power-popup-opened();
     callback power-action-result(bool, string);
+    callback power-command-event-ready();
+    callback power-command-busy-changed(bool);
+    callback user-logout-event-ready();
     callback power-display-event-ready();
     callback visibility-event-ready();
 

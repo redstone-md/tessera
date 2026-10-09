@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! Genuine generated-component input, accessibility and software pixels.
-//! Callbacks are recorded only: this fixture has no folder host, OS open,
+//! Callbacks are recorded only: this fixture has no folder/Power host, OS open,
 //! persistence, controller replacement or production-only testing switches.
+//! Logout binds the genuine private input actor to a recording typed sink only.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,6 +16,7 @@ use slint::{ComponentHandle, LogicalPosition, PhysicalSize, Rgb8Pixel};
 
 use crate::generated::{UserFolderKind, UserFolderRow, UserMenu, UserProfileAction};
 use crate::theme::{PresentationTheme, ThemedComponent};
+use crate::user_menu::UserLogoutController;
 
 // Source order is an independent literal contract, not derived from the
 // implementation's model or labels. Keys deliberately are not paths/indices.
@@ -76,16 +78,26 @@ enum Request {
     Profile(UserProfileAction, String),
     OneDrive(String),
     ProfileRetry(String),
+    Logout,
 }
 
 struct Fixture {
     window: Rc<MinimalSoftwareWindow>,
     popup: UserMenu,
     requests: Rc<RefCell<Vec<Request>>>,
+    logout: Option<Rc<UserLogoutController>>,
 }
 
 impl Fixture {
     fn new(configure: impl FnOnce(&UserMenu)) -> Self {
+        Self::with_logout(configure, false)
+    }
+
+    fn bound_logout(configure: impl FnOnce(&UserMenu)) -> Self {
+        Self::with_logout(configure, true)
+    }
+
+    fn with_logout(configure: impl FnOnce(&UserMenu), bound: bool) -> Self {
         struct TestPlatform(Rc<MinimalSoftwareWindow>);
         impl Platform for TestPlatform {
             fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
@@ -130,7 +142,24 @@ impl Fixture {
                 .push(Request::ProfileRetry(key.to_string()));
         });
         configure(&popup);
+        let logout = bound.then(|| {
+            let actor = UserLogoutController::new(&popup);
+            let weak = popup.as_weak();
+            let recorded = requests.clone();
+            assert!(actor.bind_root(
+                move || {
+                    weak.upgrade()
+                        .is_some_and(|popup| popup.window().is_visible())
+                },
+                move |_intent| recorded.borrow_mut().push(Request::Logout),
+            ));
+            actor
+        });
+        let session = logout.as_ref().and_then(|actor| actor.prepare());
         popup.show().unwrap();
+        if let (Some(actor), Some(session)) = (&logout, session) {
+            assert!(actor.activate(session));
+        }
         window
             .window()
             .dispatch_event(WindowEvent::WindowActiveChanged(true));
@@ -138,6 +167,7 @@ impl Fixture {
             window,
             popup,
             requests,
+            logout,
         };
         fixture.render_fit(1.0);
         fixture
@@ -271,6 +301,16 @@ impl Fixture {
     fn key(&self, key: Key) {
         self.key_press(key);
         self.key_release(key);
+    }
+
+    fn reopen_logout(&self) {
+        let actor = self.logout.as_ref().expect("bound input fixture");
+        actor.retire();
+        self.popup.hide().unwrap();
+        let session = actor.prepare().unwrap();
+        self.popup.show().unwrap();
+        assert!(actor.activate(session));
+        self.render_fit(1.0);
     }
 
     fn take_requests(&self) -> Vec<Request> {
@@ -1296,4 +1336,347 @@ fn profile_unknown_photo_has_no_fake_generic_image_and_absent_or_unavailable_use
     assert!(!fixture.has_element("Profile photo"));
     assert!(fixture.has_element("Profile photo unavailable: Access denied."));
     assert!(fixture.take_requests().is_empty());
+}
+
+#[test]
+fn logout_bound_genuine_pointer_fresh_return_space_release_and_ax_issue_only_typed_logout() {
+    let fixture = Fixture::bound_logout(|_| {});
+    assert!(
+        fixture.take_requests().is_empty(),
+        "binding/rendering is not Logout"
+    );
+    let logout = fixture.element("Log out");
+    assert_eq!(logout.accessible_role(), Some(AccessibleRole::Button));
+    assert_eq!(logout.accessible_enabled(), Some(true));
+    fixture.click(&logout);
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+    fixture.popup.invoke_focus_content();
+    fixture.key(Key::Tab);
+    fixture.key_press(Key::Return);
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+    fixture
+        .window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert!(
+        fixture.take_requests().is_empty(),
+        "held Return cannot repeat a non-idempotent command"
+    );
+    fixture.key_release(Key::Return);
+    fixture.key_press(Key::Space);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "Space acts on release only"
+    );
+    fixture.key_release(Key::Space);
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+    logout.invoke_accessible_default_action();
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+    for absent in ["Sign out", "Lock session", "Confirm log out", "Power"] {
+        assert!(
+            !fixture.has_element(absent),
+            "no synthetic confirmation, lock or Power navigation"
+        );
+    }
+    assert_eq!(
+        fixture.buttons().len(),
+        8,
+        "only bound Logout joins the seven frozen folders"
+    );
+}
+
+#[test]
+fn logout_replacement_sessions_cancel_held_pointer_space_and_return_without_replaying() {
+    let fixture = Fixture::bound_logout(|_| {});
+    let position = Fixture::center(&fixture.element("Log out"));
+    fixture.press(position);
+    fixture.reopen_logout();
+    fixture.release(position);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "old pointer release cannot acquire replacement session"
+    );
+    fixture.popup.invoke_focus_content();
+    fixture.key(Key::Tab);
+    fixture.key_press(Key::Space);
+    fixture.reopen_logout();
+    fixture.key_release(Key::Space);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "old Space release cannot acquire replacement session"
+    );
+    fixture.popup.invoke_focus_content();
+    fixture.key(Key::Tab);
+    fixture.key_press(Key::Return);
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+    fixture.reopen_logout();
+    fixture
+        .window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert!(
+        fixture.take_requests().is_empty(),
+        "held Return cannot revive across native hide/reopen"
+    );
+    fixture.key_release(Key::Return);
+    fixture.popup.invoke_focus_content();
+    fixture.key(Key::Tab);
+    fixture.key(Key::Return);
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::Logout],
+        "fresh explicit input alone admits replacement"
+    );
+}
+
+#[test]
+fn logout_busy_truthfully_disables_ax_and_native_input_without_coupling_profile_or_folders() {
+    let fixture = Fixture::bound_logout(configure_profile);
+    let actor = fixture.logout.as_ref().unwrap();
+    let position = Fixture::center(&fixture.element("Log out"));
+    fixture.press(position);
+    actor.set_busy(true);
+    fixture.render_fit(1.0);
+    let logout = fixture.element("Log out");
+    assert_eq!(logout.accessible_enabled(), Some(false));
+    assert_eq!(
+        logout.accessible_description().as_deref(),
+        Some("Power action in progress")
+    );
+    fixture.release(position);
+    logout.invoke_accessible_default_action();
+    fixture.key(Key::Return);
+    fixture.key(Key::Space);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "busy is an actual shared-flight projection, not confirmation"
+    );
+    fixture.click(&fixture.element("Open home folder"));
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::Profile(
+            UserProfileAction::Home,
+            "profile::current/session?語".into(),
+        )]
+    );
+    fixture.click(&fixture.element("Open Recent"));
+    assert_eq!(
+        fixture.take_requests(),
+        vec![Request::Open(UserFolderKind::Recent, FOLDERS[0].2.into())]
+    );
+    actor.set_busy(false);
+    fixture.render_fit(1.0);
+    assert_eq!(fixture.element("Log out").accessible_enabled(), Some(true));
+    fixture.press(position);
+    actor.set_busy(true);
+    actor.set_busy(false);
+    fixture.release(position);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "synchronous cancellation survives coalesced busy true→false without a render tick"
+    );
+    fixture
+        .element("Log out")
+        .invoke_accessible_default_action();
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+    // A profile read/error projection does not revoke the independent action.
+    fixture.popup.set_profile_actions_ready(false);
+    fixture.popup.set_onedrive_ready(false);
+    fixture.popup.set_profile_loading(true);
+    fixture.render_fit(1.0);
+    fixture.click(&fixture.element("Log out"));
+    assert_eq!(fixture.take_requests(), vec![Request::Logout]);
+}
+
+#[test]
+fn logout_border_box_source_geometry_photo_circle_and_outside_clip_hover_hold_light_dark_one_two_x()
+{
+    let fixture = Fixture::bound_logout(|popup| {
+        configure_profile(popup);
+        let photo =
+            tessera_system::profile::ProfilePhoto::new(70, 70, [0, 150, 230, 255].repeat(70 * 70))
+                .unwrap();
+        popup.set_profile_photo(crate::user_menu::prepare_profile_photo(&photo));
+        popup.set_profile_fallback(false);
+        popup.set_has_photo(true);
+    });
+    for (scheme, scale, body, hover) in [
+        (
+            slint::language::ColorScheme::Light,
+            1.0,
+            [242, 242, 242],
+            [232, 232, 232],
+        ),
+        (
+            slint::language::ColorScheme::Light,
+            2.0,
+            [242, 242, 242],
+            [232, 232, 232],
+        ),
+        (
+            slint::language::ColorScheme::Dark,
+            1.0,
+            [24, 24, 24],
+            [18, 18, 18],
+        ),
+        (
+            slint::language::ColorScheme::Dark,
+            2.0,
+            [24, 24, 24],
+            [18, 18, 18],
+        ),
+    ] {
+        fixture
+            .popup
+            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::PointerExited);
+        fixture.popup.invoke_focus_content();
+        let pixels = fixture.render_fit(scale);
+        let width = (fixture.popup.get_popup_content_width() * scale).ceil() as usize;
+        let photo = fixture.element("Profile photo");
+        let logout = fixture.element("Log out");
+        assert_eq!(photo.size().width, 70.0);
+        assert_eq!(photo.size().height, 70.0);
+        assert_eq!(
+            logout.size().width,
+            28.0,
+            "reference reset is border-box: border2 is INSIDE outer28"
+        );
+        assert_eq!(logout.size().height, 28.0);
+        let avatar = photo.absolute_position();
+        let origin = logout.absolute_position();
+        let expected_offset = 70.0 - 28.0 + 4.0;
+        assert!((origin.x - avatar.x - expected_offset).abs() < 0.01);
+        assert!((origin.y - avatar.y - expected_offset).abs() < 0.01);
+        assert!((origin.x + logout.size().width - (avatar.x + 70.0) - 4.0).abs() < 0.01);
+        assert!((origin.y + logout.size().height - (avatar.y + 70.0) - 4.0).abs() < 0.01);
+        let sample = |pixels: &[Rgb8Pixel], point: LogicalPosition| {
+            let pixel = pixels[(point.y * scale) as usize * width + (point.x * scale) as usize];
+            [pixel.r, pixel.g, pixel.b]
+        };
+        assert_eq!(
+            sample(
+                &pixels,
+                LogicalPosition::new(avatar.x + 1.0, avatar.y + 1.0)
+            ),
+            body
+        );
+        assert_eq!(
+            sample(
+                &pixels,
+                LogicalPosition::new(avatar.x + 18.0, avatar.y + 18.0)
+            ),
+            [0, 150, 230]
+        );
+        assert_eq!(
+            sample(&pixels, LogicalPosition::new(origin.x, origin.y)),
+            [0, 150, 230],
+            "circular control corner leaves underlying genuine photo intact"
+        );
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved {
+                position: Fixture::center(&logout),
+            });
+        let hovered = fixture.render_fit(scale);
+        assert_eq!(
+            sample(
+                &hovered,
+                LogicalPosition::new(origin.x + 25.0, origin.y + 14.0)
+            ),
+            hover,
+            "hover paint beyond avatar's right edge proves sibling overlay is outside its circle clip"
+        );
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::PointerExited);
+        fixture.popup.invoke_focus_content();
+        fixture.key(Key::Tab); // Home remains the first admitted profile stop.
+        fixture.key(Key::Tab); // Only genuinely bound Logout adds this stop.
+        let focused = fixture.render_fit(scale);
+        let outline_point = LogicalPosition::new(origin.x - 3.0, origin.y + 14.0);
+        assert_ne!(
+            sample(&focused, outline_point),
+            sample(&pixels, outline_point),
+            "native keyboard focus paints the existing circular external outline"
+        );
+        assert!(
+            fixture.take_requests().is_empty(),
+            "theme/photo/hover is silent"
+        );
+    }
+}
+
+#[test]
+fn logout_bound_native_tab_order_and_tiny_rtl_focus_reveal_preserve_profile_and_seven_folders() {
+    let fixture = Fixture::bound_logout(|popup| {
+        configure_profile(popup);
+        popup.set_profile_name("مستخدم שלום 語 genuine long display name ".repeat(8).into());
+        popup.set_personal_email("عنوان شخصي שלום 語 personal-email ".repeat(10).into());
+    });
+    for scale in [1.0, 2.0] {
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: scale,
+            });
+        fixture.render((180.0 * scale) as u32, (120.0 * scale) as u32);
+        fixture.popup.invoke_focus_content();
+        for (label, expected) in [
+            (
+                "Open home folder",
+                Request::Profile(
+                    UserProfileAction::Home,
+                    "profile::current/session?語".into(),
+                ),
+            ),
+            ("Log out", Request::Logout),
+            (
+                "Open Accounts settings",
+                Request::Profile(
+                    UserProfileAction::Accounts,
+                    "profile::current/session?語".into(),
+                ),
+            ),
+            (
+                "Open OneDrive",
+                Request::OneDrive("onedrive::opaque/current?א".into()),
+            ),
+        ] {
+            fixture.key(Key::Tab);
+            let element = fixture.element(label);
+            let center = Fixture::center(&element);
+            assert!(
+                center.x >= 0.0 && center.x < 180.0 && center.y >= 0.0 && center.y < 120.0,
+                "native Tab reveals {label} in tiny viewport with real wrapped RTL content"
+            );
+            fixture.key(Key::Return);
+            assert_eq!(fixture.take_requests(), vec![expected]);
+        }
+        for (kind, label, key) in FOLDERS {
+            fixture.key(Key::Tab);
+            fixture.key(Key::Return);
+            assert_eq!(
+                fixture.take_requests(),
+                vec![Request::Open(kind, key.into())],
+                "the bound control changes only its genuine tab stop; folder ordering remains {label}"
+            );
+        }
+    }
 }

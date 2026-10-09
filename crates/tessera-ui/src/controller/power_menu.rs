@@ -95,6 +95,85 @@ impl PanelController {
         });
         let controller = self.clone();
         panel.on_power_display_event_ready(move || controller.power_display_event_ready());
+        let controller = self.clone();
+        panel.on_power_command_event_ready(move || {
+            if !controller.root_current() {
+                return;
+            }
+            let power = controller.power_menu.borrow().clone();
+            if let Some(power) = power {
+                power.process_events();
+            }
+        });
+        let controller = self.clone();
+        panel.on_power_command_busy_changed(move |busy| {
+            if !controller.root_current() {
+                return;
+            }
+            let user = controller.user_menu.borrow().clone();
+            if let Some(user) = user {
+                user.set_logout_busy(busy);
+            }
+        });
+    }
+
+    /// Cache/command creation only. Native display/update reads and Power UI
+    /// creation remain exclusively behind explicit Power show().
+    pub(super) fn ensure_power_controller(
+        &self,
+        current: impl Fn() -> bool,
+    ) -> Option<Rc<PowerMenuController>> {
+        if !self.root_current() || !current() {
+            return None;
+        }
+        if let Some(power) = self.power_menu.borrow().clone() {
+            return Some(power);
+        }
+        let panel = self.panel.clone();
+        let on_opened = Rc::new(move || {
+            if let Some(panel) = panel.upgrade() {
+                panel.invoke_power_popup_opened();
+            }
+        });
+        let panel = self.panel.clone();
+        let on_result = Rc::new(move |result: Result<(), String>| {
+            if let Some(panel) = panel.upgrade() {
+                match result {
+                    Ok(()) => panel.invoke_power_action_result(true, "".into()),
+                    Err(error) => panel.invoke_power_action_result(false, error.into()),
+                }
+            }
+        });
+        let power =
+            PowerMenuController::command_actor(self.core.host().clone(), on_opened, on_result);
+        let panel = self.panel.clone();
+        power.bind_command_relay(
+            self.panel.clone(),
+            Rc::new(move |busy| {
+                if let Some(panel) = panel.upgrade() {
+                    panel.invoke_power_command_busy_changed(busy);
+                }
+            }),
+        );
+        if !self.root_current() || !current() {
+            power.close();
+            return None;
+        }
+        let published = {
+            let mut cache = self.power_menu.borrow_mut();
+            if cache.is_none() {
+                *cache = Some(Rc::clone(&power));
+                true
+            } else {
+                false
+            }
+        };
+        if published {
+            Some(power)
+        } else {
+            power.close();
+            None
+        }
     }
 
     pub(super) fn open_power_menu(&self) {
@@ -116,57 +195,19 @@ impl PanelController {
         if !current() {
             return;
         }
-        let existing = self.power_menu.borrow().clone();
-        let power = match existing {
-            Some(power) => power,
-            None => {
-                // Weak component relays avoid cache -> actor -> root -> cache.
-                let panel = self.panel.clone();
-                let on_opened = Rc::new(move || {
-                    if let Some(panel) = panel.upgrade() {
-                        panel.invoke_power_popup_opened();
-                    }
-                });
-                let panel = self.panel.clone();
-                let on_result = Rc::new(move |result: Result<(), String>| {
-                    if let Some(panel) = panel.upgrade() {
-                        match result {
-                            Ok(()) => panel.invoke_power_action_result(true, "".into()),
-                            Err(error) => panel.invoke_power_action_result(false, error.into()),
-                        }
-                    }
-                });
-                match PowerMenuController::new(self.core.host().clone(), on_opened, on_result) {
-                    Ok(power) => {
-                        if !current() {
-                            power.close();
-                            return;
-                        }
-                        let published = {
-                            let mut cache = self.power_menu.borrow_mut();
-                            if cache.is_none() {
-                                *cache = Some(Rc::clone(&power));
-                                true
-                            } else {
-                                false
-                            }
-                        };
-                        if !published {
-                            power.close();
-                            return;
-                        }
-                        power
-                    }
-                    Err(error) => {
-                        if current() {
-                            self.report_message(&format!(
-                                "Could not create the power menu: {error}"
-                            ));
-                        }
-                        return;
-                    }
-                }
-            }
+        // A genuine pending Power intent retires an older command transaction
+        // without pretending the new surface is visible or dismissing User yet.
+        let operation = Rc::new(());
+        self.popup_operation.replace(Rc::clone(&operation));
+        let current = || {
+            self.root_current()
+                && Rc::ptr_eq(&operation, &self.popup_operation.borrow())
+                && self.launcher_popup_ready()
+                && launcher.window().is_visible()
+                && !launcher.get_reorder_dragging()
+        };
+        let Some(power) = self.ensure_power_controller(current) else {
+            return;
         };
         let theme = self
             .panel

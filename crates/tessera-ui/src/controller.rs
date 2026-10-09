@@ -777,32 +777,66 @@ impl PanelController {
 
     /// Shows the framed Panel: the native settings/recovery window.
     pub(crate) fn open_panel(&self) {
+        if !self.root_current() {
+            return;
+        }
+        let operation = Rc::new(());
+        self.popup_operation.replace(Rc::clone(&operation));
         self.retire_shortcut_presentation();
-        self.present_panel(None);
+        if self.root_current() && Rc::ptr_eq(&operation, &self.popup_operation.borrow()) {
+            self.present_panel(None, &operation);
+        }
     }
 
     fn open_panel_at_shortcut_monitor(&self) {
-        self.present_panel(self.shortcut_presentation_scope());
+        let scope = self.shortcut_presentation_scope();
+        if !self.shortcut_presentation_current(scope.as_deref()) {
+            return;
+        }
+        let operation = Rc::new(());
+        self.popup_operation.replace(Rc::clone(&operation));
+        self.present_panel(scope, &operation);
     }
 
-    fn present_panel(&self, scope: Option<Rc<shortcuts::ShortcutPresentation>>) {
+    fn present_panel(
+        &self,
+        scope: Option<Rc<shortcuts::ShortcutPresentation>>,
+        operation: &Rc<()>,
+    ) {
+        let current = || {
+            self.shortcut_presentation_current(scope.as_deref())
+                && Rc::ptr_eq(operation, &self.popup_operation.borrow())
+        };
+        if !current() {
+            return;
+        }
         self.dismiss_tooltip(false);
-        if !self.shortcut_presentation_current(scope.as_deref()) {
+        if !current() {
             return;
         }
         if let Some(panel) = self.panel.upgrade() {
             if !panel.window().is_visible() {
                 self.prepare_shortcut_draft();
             }
-            if !self.shortcut_presentation_current(scope.as_deref()) {
+            if !current() {
                 return;
             }
             match panel.show() {
-                Ok(()) if self.shortcut_presentation_current(scope.as_deref()) => {
-                    self.request_ui_focus(panel.window());
+                Ok(()) if current() => {
+                    if let Err(error) = self.core.host().request_ui_focus(panel.window())
+                        && current()
+                    {
+                        self.report_message(&sanitize::bounded_text(&error, 200));
+                        if current() {
+                            self.sync_launcher_status();
+                        }
+                    }
                 }
                 Ok(()) => {}
-                Err(error) => self.report_message(&format!("Could not show settings: {error}")),
+                Err(error) if current() => {
+                    self.report_message(&format!("Could not show settings: {error}"));
+                }
+                Err(_) => {}
             }
         }
     }

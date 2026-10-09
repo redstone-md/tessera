@@ -152,6 +152,11 @@ export component UserMenu inherits Window {
     in property <string> onedrive-key;
     in property <bool> profile-retry-enabled;
     in property <string> profile-retry-key;
+    // Independent admitted Logout input; profile/folder observations never enable it.
+    in property <string> logout-key;
+    in property <bool> logout-ready;
+    in property <bool> logout-busy;
+    callback logout-requested(string);
     callback profile-open-requested(UserProfileAction, string);
     callback onedrive-open-requested(string);
     callback profile-retry-requested(string);
@@ -308,6 +313,9 @@ export component UserMenu inherits Window {
         onedrive.cancel-input();
         profile-retry.cancel-input();
     }
+    public function cancel-logout-input() {
+        logout.cancel-input();
+    }
     public function set-presentation-opacity(value: float) {
         body.set-presentation-opacity(value);
     }
@@ -438,6 +446,39 @@ export component UserMenu inherits Window {
                             Image {
                                 x: 6px; y: 6px; width: 16px; height: 16px;
                                 source: @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg");
+                                colorize: SeelenPalette.secondary;
+                                image-fit: contain;
+                                accessible-role: none;
+                            }
+                        }
+                        // Outside the 70px avatar clip: avatar-relative right/bottom -4px.
+                        logout := TileButton {
+                            x: profile.x + profile.width - self.width + 4px;
+                            y: profile.y + profile.height - self.height + 4px;
+                            width: 28px; height: 28px;
+                            radius: 14px;
+                            border-width: 2px;
+                            border-color: SeelenPalette.surface;
+                            background: self.pressed ? SeelenPalette.pressed
+                                : self.hovered ? SeelenPalette.hover : SeelenPalette.surface;
+                            visible: root.logout-key != "";
+                            interactive: root.logout-key != "";
+                            enabled: root.logout-ready && !root.logout-busy;
+                            activation-key: root.logout-key;
+                            allow-return-repeat: false;
+                            accessible-text: @tr("Log out");
+                            accessible-description: root.logout-busy ? @tr("Power action in progress") : "";
+                            tooltip-text: @tr("Log out");
+                            clicked => {
+                                let key = self.activation-key;
+                                root.logout-requested(key);
+                            }
+                            focus-acquired => { root.reveal-focused(parent.y + self.y, self.height); }
+                            Tooltip { text: @markdown("\{@tr("Log out")}"); }
+                            Image {
+                                x: 6px; y: 6px; width: 16px; height: 16px;
+                                // OFL font-derived output; independently verified normalized Boxicons geometry.
+                                source: @image-url("../assets/icons/boxicons-font-9ffa913/log-out.svg");
                                 colorize: SeelenPalette.secondary;
                                 image-fit: contain;
                                 accessible-role: none;

@@ -139,9 +139,9 @@ impl PowerMenuController {
             self.close();
             return Err(error);
         }
-        // Held command terminals release their domain flight before any busy
-        // projection. Old observations cannot fulfill this epoch's first barrier.
-        self.process_events();
+        // Publish only. show() owns the single first drain/pump, including held
+        // command terminals before busy projection; construction must not consume
+        // inline display/update results and attach the native popup early.
         Ok(self.current(generation) && self.epoch_is(epoch))
     }
 
@@ -210,8 +210,8 @@ impl PowerMenuController {
             state.authorized = None;
             self.surface.borrow_mut().take()
         };
-        // Invalidate the wake target before either native/UI destructor runs.
-        // Terminal slots intentionally survive until the next genuine open.
+        // Retire only the presentation wake before native/UI destructors.
+        // The weak Root command wake and bounded command terminal survive.
         self.mailbox.lock().retire(epoch);
         self.fit_timer.stop();
         self.work_timer.stop();

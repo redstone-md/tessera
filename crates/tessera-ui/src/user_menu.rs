@@ -22,6 +22,10 @@ use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::{TransientComponent, TransientWindow};
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
+mod logout;
+#[cfg(test)]
+pub(crate) use logout::UserLogoutController;
+pub(crate) use logout::UserLogoutIntent;
 mod profile;
 
 pub(crate) use profile::avatar::prepare as prepare_profile_photo;
@@ -189,12 +193,26 @@ struct Placement {
     scale: f32,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogoutRetirementStage {
+    InputCancelled,
+    ProfileRetired,
+}
+
+#[cfg(test)]
+type LogoutRetirementHook = (LogoutRetirementStage, Box<dyn FnOnce()>);
+
 pub(crate) struct UserMenuController {
     surface: TransientWindow<UserMenu>,
     host: Arc<dyn DesktopHost>,
     state: RefCell<FolderState>,
     mailbox: Arc<Mutex<Mailbox>>,
     profile: profile::ProfileController,
+    logout: Rc<logout::UserLogoutController>,
+    lifecycle: RefCell<Rc<()>>,
+    #[cfg(test)]
+    logout_retirement_hook: RefCell<Option<LogoutRetirementHook>>,
     placement: Cell<Option<Placement>>,
     rect: RefCell<Option<PopupRect>>,
     fit_timer: slint::Timer,
@@ -206,6 +224,7 @@ impl UserMenuController {
     pub(crate) fn new(host: Arc<dyn DesktopHost>) -> Result<Rc<Self>, slint::PlatformError> {
         let component = UserMenu::new()?;
         let controller = Rc::new_cyclic(|weak| Self {
+            logout: logout::UserLogoutController::new(&component),
             profile: profile::ProfileController::new(
                 weak.clone(),
                 component.as_weak(),
@@ -216,6 +235,9 @@ impl UserMenuController {
             state: RefCell::default(),
             mailbox: Arc::new(Mutex::default()),
             placement: Cell::new(None),
+            lifecycle: RefCell::new(Rc::new(())),
+            #[cfg(test)]
+            logout_retirement_hook: RefCell::default(),
             rect: RefCell::default(),
             fit_timer: slint::Timer::default(),
             focus_watch: slint::Timer::default(),
@@ -278,8 +300,29 @@ impl UserMenuController {
         self.profile.bind(admission);
     }
 
+    pub(crate) fn bind_logout(
+        &self,
+        admission: impl Fn() -> bool + 'static,
+        request: impl Fn(UserLogoutIntent) + 'static,
+    ) {
+        self.logout.bind_root(admission, request);
+    }
+
+    pub(crate) fn logout_current(&self, intent: &UserLogoutIntent) -> bool {
+        self.is_open() && self.logout.is_current(intent)
+    }
+
+    pub(crate) fn logout_retired(&self, intent: &UserLogoutIntent) -> bool {
+        !self.is_open() && self.logout.is_exact_retired(intent)
+    }
+
+    pub(crate) fn set_logout_busy(&self, busy: bool) {
+        self.logout.set_busy(busy);
+    }
+
     /// The caller supplies genuine identity and applies its current pure theme.
     /// Bounds are logical input geometry on the source window, not magic pixels.
+    #[cfg(test)]
     pub(crate) fn show(
         self: &Rc<Self>,
         source: &slint::Window,
@@ -287,7 +330,32 @@ impl UserMenuController {
         context: DockContext,
         user_name: &str,
     ) -> Result<(), String> {
-        self.hide();
+        self.show_for_root(source, bounds, context, user_name, || true)
+    }
+
+    /// Borrowed Root/source transaction guard; no Root is retained by the actor.
+    pub(crate) fn show_for_root(
+        self: &Rc<Self>,
+        source: &slint::Window,
+        bounds: TileBounds,
+        context: DockContext,
+        user_name: &str,
+        admitted: impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if !admitted() || !self.retire_presentation() || !admitted() {
+            return Ok(());
+        }
+        // Native User presentation has its own non-wrapping receipt. Exhausted
+        // Logout input stays closed without disabling folder/profile lifecycle.
+        let operation = self.lifecycle.borrow().clone();
+        let same_operation = || Rc::ptr_eq(&operation, &self.lifecycle.borrow());
+        let logout_session = self.logout.prepare();
+        let same_logout =
+            || logout_session.is_none_or(|session| self.logout.session_current(session));
+        let current = || admitted() && same_operation() && same_logout();
+        if !current() {
+            return Ok(());
+        }
         if !source.is_visible()
             || context.fullscreen_active()
             || !bounds.origin.x.is_finite()
@@ -327,31 +395,42 @@ impl UserMenuController {
             }
             .into(),
         );
+        if !current() {
+            return Ok(());
+        }
         self.project();
-        if self.state.borrow().generation != generation || !source.is_visible() {
+        if self.state.borrow().generation != generation || !current() || !source.is_visible() {
             return Ok(());
         }
         let profile_session = self.profile.prepare();
         if self.state.borrow().generation != generation
+            || !current()
             || !self.profile.same_session(profile_session)
             || !source.is_visible()
         {
             return Ok(());
         }
         let presentation = self.preferred_rect().and_then(|rect| {
+            if !current() {
+                return Ok((rect, false));
+            }
             self.surface
                 .present(rect.position, rect.size)
                 .map(|shown| (rect, shown))
         });
         match presentation {
             Ok((rect, true))
-                if self.current(generation) && self.profile.same_session(profile_session) =>
+                if self.current(generation)
+                    && current()
+                    && self.profile.same_session(profile_session) =>
             {
                 *self.rect.borrow_mut() = Some(rect);
             }
             Ok((_, _)) => {
                 if self.state.borrow().generation == generation
                     && self.profile.same_session(profile_session)
+                    && same_operation()
+                    && same_logout()
                 {
                     self.hide();
                 }
@@ -360,6 +439,8 @@ impl UserMenuController {
             Err(error) => {
                 if self.state.borrow().generation == generation
                     && self.profile.same_session(profile_session)
+                    && same_operation()
+                    && same_logout()
                 {
                     self.hide();
                 }
@@ -367,17 +448,23 @@ impl UserMenuController {
             }
         }
         self.surface.invoke_focus_content();
-        if !self.current(generation) {
+        if !current() || !self.current(generation) {
             return Ok(());
         }
         let focus = self.surface.request_focus();
-        if !self.current(generation) {
+        if !current() || !self.current(generation) {
             return Ok(());
         }
         self.watch_focus();
         self.pump();
-        if self.current(generation) && source.is_visible() {
+        if self.current(generation) && current() && source.is_visible() {
             self.profile.activate(profile_session);
+            if current()
+                && self.current(generation)
+                && let Some(logout_session) = logout_session
+            {
+                self.logout.activate(logout_session);
+            }
         }
         focus.map_err(|error| {
             bounded_text(
@@ -387,9 +474,59 @@ impl UserMenuController {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn exhaust_logout_counter_for_test(&self, counter: &'static str) {
+        self.logout.exhaust_counter_for_test(counter);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn on_logout_retirement(
+        &self,
+        stage: LogoutRetirementStage,
+        callback: impl FnOnce() + 'static,
+    ) {
+        self.logout_retirement_hook
+            .replace(Some((stage, Box::new(callback))));
+    }
+
+    #[cfg(test)]
+    fn logout_retirement_stage(&self, stage: LogoutRetirementStage) {
+        let callback = {
+            let mut hook = self.logout_retirement_hook.borrow_mut();
+            if hook
+                .as_ref()
+                .is_some_and(|(expected, _)| *expected == stage)
+            {
+                hook.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, callback)) = callback {
+            callback();
+        }
+    }
+
     pub(crate) fn hide(&self) {
-        if !self.profile.retire() {
-            return;
+        self.retire_presentation();
+    }
+
+    fn retire_presentation(&self) -> bool {
+        let operation = Rc::new(());
+        self.lifecycle.replace(Rc::clone(&operation));
+        let current = || Rc::ptr_eq(&operation, &self.lifecycle.borrow());
+        // Revoke/cancel Logout before profile cancellation/setters or lease Drop.
+        let logout_session = self.logout.retire();
+        #[cfg(test)]
+        self.logout_retirement_stage(LogoutRetirementStage::InputCancelled);
+        if !current() || !self.profile.retire() {
+            return false;
+        }
+        #[cfg(test)]
+        self.logout_retirement_stage(LogoutRetirementStage::ProfileRetired);
+        if !current() || logout_session.is_some_and(|session| !self.logout.session_retired(session))
+        {
+            return false;
         }
         self.focus_watch.stop();
         self.fit_timer.stop();
@@ -406,6 +543,7 @@ impl UserMenuController {
         self.placement.set(None);
         self.rect.borrow_mut().take();
         self.surface.hide();
+        current()
     }
 
     pub(crate) fn disable_motion(&self) {

@@ -41,6 +41,13 @@ pub(super) struct DisplayTargeting {
 }
 
 impl DisplayTargeting {
+    /// Pure borrowed fingerprint; pending newer input retires an older command
+    /// even before any monitor read completes or popup acquires a native lease.
+    pub fn input_guard(&self) -> impl Fn() -> bool + '_ {
+        let input = self.input.borrow().clone();
+        move || Rc::ptr_eq(&input, &self.input.borrow())
+    }
+
     pub fn retire_input(&self) {
         self.input.replace(Rc::new(()));
     }

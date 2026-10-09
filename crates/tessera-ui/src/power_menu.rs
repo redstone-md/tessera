@@ -113,6 +113,18 @@ impl State {
         })
     }
 
+    fn reserve_command(&mut self) -> Result<Option<Token>, String> {
+        if self.closed || self.lock.is_some() {
+            return Ok(None);
+        }
+        let token = self.token()?;
+        self.lock = Some(Flight {
+            token,
+            phase: Phase::Reserved,
+        });
+        Ok(Some(token))
+    }
+
     fn current(&self, generation: u64) -> bool {
         !self.closed && self.desired && self.generation == generation
     }
@@ -224,6 +236,59 @@ impl Drop for NativeEffect<'_> {
     }
 }
 
+/// Only a genuine opaque User receipt can cross this source-specific seam.
+/// The borrowed Root fingerprint/retirement closures never enter native work.
+pub(crate) struct UserLogoutAuthority<'a> {
+    user: &'a crate::user_menu::UserMenuController,
+    intent: &'a crate::user_menu::UserLogoutIntent,
+    current: &'a dyn Fn() -> bool,
+    retire: &'a dyn Fn() -> bool,
+    retired: &'a dyn Fn() -> bool,
+}
+
+impl<'a> UserLogoutAuthority<'a> {
+    pub(crate) fn new(
+        user: &'a crate::user_menu::UserMenuController,
+        intent: &'a crate::user_menu::UserLogoutIntent,
+        current: &'a dyn Fn() -> bool,
+        retire: &'a dyn Fn() -> bool,
+        retired: &'a dyn Fn() -> bool,
+    ) -> Self {
+        Self {
+            user,
+            intent,
+            current,
+            retire,
+            retired,
+        }
+    }
+
+    fn current(&self) -> bool {
+        (self.current)() && self.user.logout_current(self.intent) && (self.current)()
+    }
+
+    fn retire(&self) -> bool {
+        self.current() && (self.retire)() && self.retired()
+    }
+
+    fn retired(&self) -> bool {
+        (self.retired)() && self.user.logout_retired(self.intent) && (self.retired)()
+    }
+}
+
+enum CommandAuthority<'a> {
+    Power {
+        retirement: u64,
+    },
+    User {
+        authority: &'a UserLogoutAuthority<'a>,
+        generation: u64,
+        epoch: u64,
+    },
+}
+
+type BusyProjection = Rc<dyn Fn(bool)>;
+
 pub(crate) struct PowerMenuController {
     surface: RefCell<Option<Rc<TransientWindow<PowerMenuSurface>>>>,
     host: Arc<dyn DesktopHost>,
@@ -232,6 +297,7 @@ pub(crate) struct PowerMenuController {
     weak: Weak<Self>,
     on_opened: Rc<dyn Fn()>,
     on_result: Rc<dyn Fn(Result<(), String>)>,
+    on_busy: RefCell<Option<BusyProjection>>,
     frame: Cell<Option<Frame>>,
     fit_timer: slint::Timer,
     work_timer: slint::Timer,
@@ -244,6 +310,7 @@ pub(crate) struct PowerMenuController {
 }
 
 impl PowerMenuController {
+    #[cfg(test)]
     pub(crate) fn new(
         host: Arc<dyn DesktopHost>,
         on_opened: Rc<dyn Fn()>,
@@ -256,11 +323,27 @@ impl PowerMenuController {
             component,
             SurfaceKind::Popup,
         ));
-        let controller = Rc::new_cyclic(|weak| Self {
-            surface: RefCell::new(Some(surface.clone())),
+        let controller = Self::command_actor(host, on_opened, on_result);
+        controller.surface.replace(Some(surface.clone()));
+        controller.state.borrow_mut().epoch = 1;
+        controller.attach_callbacks(&surface, 1);
+        controller.mailbox.lock().install(1, surface.as_weak())?;
+        controller.project(0);
+        Ok(controller)
+    }
+
+    /// Lazy command authority does not create/show/focus a Power presentation,
+    /// discover display/update providers, or manufacture a visible Power epoch.
+    pub(crate) fn command_actor(
+        host: Arc<dyn DesktopHost>,
+        on_opened: Rc<dyn Fn()>,
+        on_result: Rc<dyn Fn(Result<(), String>)>,
+    ) -> Rc<Self> {
+        Rc::new_cyclic(|weak| Self {
+            surface: RefCell::default(),
             host,
             state: RefCell::new(State {
-                epoch: 1,
+                epoch: 0,
                 install_updates: true,
                 ..State::default()
             }),
@@ -268,6 +351,7 @@ impl PowerMenuController {
             weak: weak.clone(),
             on_opened,
             on_result,
+            on_busy: RefCell::default(),
             frame: Cell::new(None),
             fit_timer: slint::Timer::default(),
             work_timer: slint::Timer::default(),
@@ -277,11 +361,30 @@ impl PowerMenuController {
             processing: Cell::new(false),
             native_effect: Cell::new(false),
             motion_suppressed: Cell::new(false),
-        });
-        controller.attach_callbacks(&surface, 1);
-        controller.mailbox.lock().install(1, surface.as_weak())?;
-        controller.project(0);
-        Ok(controller)
+        })
+    }
+
+    pub(crate) fn bind_command_relay(
+        &self,
+        panel: slint::Weak<crate::generated::Panel>,
+        on_busy: BusyProjection,
+    ) {
+        if self.on_busy.borrow().is_some() || self.state.borrow().closed {
+            return;
+        }
+        self.on_busy.replace(Some(on_busy));
+        self.mailbox.lock().command_target = Some(panel);
+    }
+
+    pub(crate) fn command_busy(&self) -> bool {
+        self.state.borrow().lock.is_some()
+    }
+
+    fn project_command_busy(&self) {
+        let callback = self.on_busy.borrow().clone();
+        if let Some(callback) = callback {
+            callback(self.command_busy());
+        }
     }
 
     #[cfg(test)]
@@ -551,6 +654,7 @@ impl PowerMenuController {
         let (read, lock, updates) = {
             let mut mailbox = self.mailbox.lock();
             mailbox.wake_queued = false;
+            mailbox.command_wake_queued = false;
             (
                 mailbox.read.take(),
                 mailbox.lock.take(),
@@ -569,6 +673,7 @@ impl PowerMenuController {
             };
             if live {
                 let generation = self.state.borrow().generation;
+                self.project_command_busy();
                 self.project(generation);
                 if !self.state.borrow().closed {
                     (self.on_result)(
@@ -608,8 +713,8 @@ impl PowerMenuController {
         }
         self.pump_read();
         self.pump_updates();
-        // Only finite terminal draining while a current presentation exists.
-        // Presentationless terminals/root receipts may wait for explicit reopen.
+        // Finite presentation reads keep their own surface wake. Commands also
+        // have a weak Root wake, independent of any Power presentation lifetime.
         let pending = self.mailbox.lock().pending();
         if pending {
             self.schedule_work();
@@ -830,8 +935,9 @@ impl PowerMenuController {
                 PowerMenuAction::Suspend => PowerAction::Suspend,
                 PowerMenuAction::Hibernate => PowerAction::Hibernate,
             };
-            let token = match state.token() {
-                Ok(token) => token,
+            let token = match state.reserve_command() {
+                Ok(Some(token)) => token,
+                Ok(None) => return,
                 Err(error) => {
                     drop(state);
                     self.report(Err(error));
@@ -839,10 +945,6 @@ impl PowerMenuController {
                     return;
                 }
             };
-            state.lock = Some(Flight {
-                token,
-                phase: Phase::Reserved,
-            });
             (token, native_action)
         };
         let enabled = surface.get_action_enabled();
@@ -873,6 +975,88 @@ impl PowerMenuController {
             self.cancel_lock(token);
             return;
         }
+        self.submit_command(token, native_action, CommandAuthority::Power { retirement });
+    }
+
+    /// User admission is independent of Power presentation authorization, but
+    /// shares exactly the same Reserved/Submitted slot, provider and mailbox.
+    pub(crate) fn request_user_logout(&self, authority: &UserLogoutAuthority<'_>) {
+        if !authority.current() {
+            return;
+        }
+        let token = {
+            let mut state = self.state.borrow_mut();
+            match state.reserve_command() {
+                Ok(Some(token)) => token,
+                Ok(None) => return,
+                Err(error) => {
+                    drop(state);
+                    self.report(Err(error));
+                    self.close();
+                    return;
+                }
+            }
+        };
+        if !authority.retire() || !self.command_reserved(token) {
+            self.cancel_lock(token);
+            return;
+        }
+        let (generation, epoch) = {
+            let state = self.state.borrow();
+            (state.generation, state.epoch)
+        };
+        self.submit_command(
+            token,
+            PowerAction::LogOut,
+            CommandAuthority::User {
+                authority,
+                generation,
+                epoch,
+            },
+        );
+    }
+
+    fn command_reserved(&self, token: Token) -> bool {
+        let state = self.state.borrow();
+        !state.closed
+            && state
+                .lock
+                .is_some_and(|flight| flight.token == token && flight.phase == Phase::Reserved)
+    }
+
+    fn command_retired(&self, token: Token, authority: &CommandAuthority<'_>) -> bool {
+        self.command_reserved(token)
+            && match authority {
+                CommandAuthority::Power { retirement } => self.lock_retired(token, *retirement),
+                CommandAuthority::User {
+                    authority,
+                    generation,
+                    epoch,
+                } => {
+                    self.user_command_scope(*generation, *epoch)
+                        && authority.retired()
+                        && self.user_command_scope(*generation, *epoch)
+                }
+            }
+            && self.command_reserved(token)
+    }
+
+    fn user_command_scope(&self, generation: u64, epoch: u64) -> bool {
+        let state = self.state.borrow();
+        !state.closed
+            && state.generation == generation
+            && state.epoch == epoch
+            && !state.desired
+            && !state.opening
+            && state.authorized.is_none()
+    }
+
+    fn submit_command(&self, token: Token, action: PowerAction, authority: CommandAuthority<'_>) {
+        self.project_command_busy();
+        if !self.command_retired(token, &authority) {
+            self.cancel_lock(token);
+            return;
+        }
         let cached = self.state.borrow().power.clone();
         let provider = match cached {
             Some(provider) => Ok(Some(provider)),
@@ -880,11 +1064,11 @@ impl PowerMenuController {
         };
         let provider = match provider {
             Ok(Some(provider)) => {
-                {
-                    let mut state = self.state.borrow_mut();
-                    if !state.closed && state.power.is_none() {
-                        state.power = Some(provider.clone());
-                    }
+                let mut state = self.state.borrow_mut();
+                // Provider lifetime is independent of presentation/input receipt.
+                // Retain successful acquisition without replacing a newer cache.
+                if !state.closed && state.power.is_none() {
+                    state.power = Some(provider.clone());
                 }
                 provider
             }
@@ -894,15 +1078,23 @@ impl PowerMenuController {
                     Err(error) => error,
                     Ok(Some(_)) => unreachable!(),
                 };
-                let current = self.lock_retired(token, retirement);
+                let current = self.command_retired(token, &authority);
                 self.cancel_lock(token);
-                if current && self.retired(retirement) {
+                let source_current = match &authority {
+                    CommandAuthority::Power { retirement } => self.retired(*retirement),
+                    CommandAuthority::User {
+                        authority,
+                        generation,
+                        epoch,
+                    } => self.user_command_scope(*generation, *epoch) && authority.retired(),
+                };
+                if current && source_current {
                     self.report(Err(format!("Power request failed: {error}")));
                 }
                 return;
             }
         };
-        if !self.lock_retired(token, retirement) {
+        if !self.command_retired(token, &authority) {
             self.cancel_lock(token);
             return;
         }
@@ -916,10 +1108,8 @@ impl PowerMenuController {
         }
         let mailbox = self.mailbox.clone();
         let result = provider.perform(
-            native_action,
-            Box::new(move |result| {
-                complete_lock(&mailbox, token, result);
-            }),
+            action,
+            Box::new(move |result| complete_lock(&mailbox, token, result)),
         );
         // Accepted work outlives every presentation. No replay, queue or join.
         if let Err(error) = result {
@@ -961,6 +1151,7 @@ impl PowerMenuController {
         };
         self.clear_lock_slot(token);
         self.project(generation);
+        self.project_command_busy();
     }
 
     fn apply_fit(
