@@ -11,15 +11,16 @@ use super::{
 use std::{marker::PhantomData, ptr::null_mut, rc::Rc, sync::Arc};
 use tessera_system::media::{
     MediaAction, MediaArtwork, MediaCapabilities, MediaError, MediaErrorKind, MediaSession,
-    MediaSessionKey,
+    MediaSessionKey, MediaTimeline,
 };
 use windows::{
-    Foundation::TypedEventHandler,
+    Foundation::{DateTime, TimeSpan, TypedEventHandler},
     Media::Control::{
         CurrentSessionChangedEventArgs, GlobalSystemMediaTransportControlsSession as Session,
         GlobalSystemMediaTransportControlsSessionManager as Manager,
         GlobalSystemMediaTransportControlsSessionMediaProperties as Properties,
         MediaPropertiesChangedEventArgs, PlaybackInfoChangedEventArgs, SessionsChangedEventArgs,
+        TimelinePropertiesChangedEventArgs,
     },
     Storage::Streams::IRandomAccessStreamReference,
     Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize},
@@ -88,6 +89,7 @@ pub(super) enum Token {
     Current(Manager, i64),
     Properties(Session, i64),
     Playback(Session, i64),
+    Timeline(Session, i64),
 }
 
 impl WindowsCalls {
@@ -190,6 +192,7 @@ impl Calls for WindowsCalls {
             .map_err(|e| error(MediaErrorKind::Unavailable, "Read media playback status", e))?;
         let playback = super::owner::playback(status.0)?;
         let capabilities = self.capabilities(session)?;
+        let timeline = timeline(&session.object);
         let (artwork, artwork_notice) = match thumbnail(&properties) {
             Ok(artwork) => (artwork, None),
             Err(error) => (None, Some(error)),
@@ -201,6 +204,7 @@ impl Calls for WindowsCalls {
             author,
             playback,
             capabilities,
+            timeline,
             artwork,
             artwork_notice,
         })
@@ -311,6 +315,24 @@ impl Calls for WindowsCalls {
                     )
                     .map(|token| Token::Playback(session.object.clone(), token))
             }
+            Event::Timeline => {
+                let session = session.ok_or_else(|| {
+                    MediaError::new(
+                        MediaErrorKind::WatchUnavailable,
+                        "Missing media event source",
+                    )
+                })?;
+                session
+                    .object
+                    .TimelinePropertiesChanged(&TypedEventHandler::<
+                        Session,
+                        TimelinePropertiesChangedEventArgs,
+                    >::new(move |_, _| {
+                        dirty();
+                        Ok(())
+                    }))
+                    .map(|token| Token::Timeline(session.object.clone(), token))
+            }
         };
         result.map_err(|e| {
             error(
@@ -329,8 +351,51 @@ impl Calls for WindowsCalls {
             Token::Current(source, token) => source.RemoveCurrentSessionChanged(token),
             Token::Properties(source, token) => source.RemoveMediaPropertiesChanged(token),
             Token::Playback(source, token) => source.RemovePlaybackInfoChanged(token),
+            Token::Timeline(source, token) => source.RemoveTimelinePropertiesChanged(token),
         };
     }
+}
+
+fn timeline(session: &Session) -> Result<MediaTimeline, MediaError> {
+    let properties = session.GetTimelineProperties().map_err(|e| {
+        error(
+            MediaErrorKind::Unavailable,
+            "Read current media timeline",
+            e,
+        )
+    })?;
+    timeline_facts(
+        [
+            properties.StartTime(),
+            properties.EndTime(),
+            properties.Position(),
+            properties.MinSeekTime(),
+            properties.MaxSeekTime(),
+        ],
+        properties.LastUpdatedTime(),
+    )
+}
+
+/// Project copied SDK values without converting, clamping or inventing ticks.
+/// Kept separate so field failures can be exercised without a player or COM.
+pub(super) fn timeline_facts(
+    fields: [windows::core::Result<TimeSpan>; 5],
+    last_updated: windows::core::Result<DateTime>,
+) -> Result<MediaTimeline, MediaError> {
+    let [start, end, position, min_seek, max_seek] = fields;
+    let ticks = |value: windows::core::Result<TimeSpan>, operation| {
+        value
+            .map(|value| value.Duration)
+            .map_err(|e| error(MediaErrorKind::Unavailable, operation, e))
+    };
+    Ok(MediaTimeline {
+        start_ticks: ticks(start, "Read media timeline start")?,
+        end_ticks: ticks(end, "Read media timeline end")?,
+        position_ticks: ticks(position, "Read media timeline position")?,
+        min_seek_ticks: ticks(min_seek, "Read media minimum seek time")?,
+        max_seek_ticks: ticks(max_seek, "Read media maximum seek time")?,
+        last_updated_utc_ticks: last_updated.ok().map(|value| value.UniversalTime),
+    })
 }
 
 fn thumbnail(properties: &Properties) -> Result<Option<MediaArtwork>, MediaError> {

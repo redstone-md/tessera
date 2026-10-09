@@ -32,6 +32,7 @@ pub(crate) mod dock_utilities;
 mod dock_utilities_render_tests;
 pub(crate) mod dto;
 pub(crate) mod icons;
+pub(crate) mod image_mask;
 pub(crate) mod input_language;
 #[cfg(test)]
 mod input_language_render_tests;

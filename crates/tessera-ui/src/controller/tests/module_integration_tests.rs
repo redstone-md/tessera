@@ -616,3 +616,877 @@ fn same_key_launcher_projection_reopen_and_save_revoke_a_held_native_tile_click(
         assert_eq!(fixture.host.observe_calls.load(Ordering::SeqCst), 0);
     }
 }
+
+type ToolbarMediaObserver = Arc<dyn Fn(tessera_system::media::MediaEvent) + Send + Sync>;
+
+#[derive(Default)]
+struct ToolbarRecordingMedia {
+    reads: AtomicUsize,
+    commands: Mutex<Vec<tessera_system::media::MediaCommand>>,
+    pending_reads: Mutex<std::collections::VecDeque<tessera_system::media::MediaReadCompletion>>,
+    pending_commands:
+        Mutex<std::collections::VecDeque<tessera_system::media::MediaCommandCompletion>>,
+    watches: Mutex<Vec<ToolbarMediaObserver>>,
+    watch_drops: Arc<AtomicUsize>,
+}
+
+struct ToolbarMediaWatch(Arc<AtomicUsize>);
+
+impl Drop for ToolbarMediaWatch {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl tessera_system::media::MediaHost for ToolbarRecordingMedia {
+    fn read(
+        &self,
+        completion: tessera_system::media::MediaReadCompletion,
+    ) -> Result<(), tessera_system::media::MediaError> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.pending_reads.lock().push_back(completion);
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        command: tessera_system::media::MediaCommand,
+        completion: tessera_system::media::MediaCommandCompletion,
+    ) -> Result<(), tessera_system::media::MediaError> {
+        self.commands.lock().push(command);
+        self.pending_commands.lock().push_back(completion);
+        Ok(())
+    }
+
+    fn subscribe(
+        &self,
+        changed: Arc<dyn Fn(tessera_system::media::MediaEvent) + Send + Sync>,
+    ) -> Result<Option<Box<dyn Send>>, tessera_system::media::MediaError> {
+        self.watches.lock().push(changed.clone());
+        changed(tessera_system::media::MediaEvent::WatchReady);
+        Ok(Some(Box::new(ToolbarMediaWatch(self.watch_drops.clone()))))
+    }
+}
+
+impl ToolbarRecordingMedia {
+    fn finish_read(
+        &self,
+        fixture: &LauncherFixture,
+        snapshot: tessera_system::media::MediaSnapshot,
+    ) {
+        let completion = self
+            .pending_reads
+            .lock()
+            .pop_front()
+            .expect("accepted media read");
+        completion(Ok(snapshot));
+        // The real root wake route drains the shared domain even with Dock media off.
+        fixture.dock.invoke_media_event_ready();
+    }
+
+    fn finish_command(&self, fixture: &LauncherFixture) {
+        let completion = self
+            .pending_commands
+            .lock()
+            .pop_front()
+            .expect("accepted transport");
+        completion(Ok(()));
+        fixture.dock.invoke_media_event_ready();
+    }
+
+    fn event(&self, event: tessera_system::media::MediaEvent) {
+        let callback = self
+            .watches
+            .lock()
+            .last()
+            .cloned()
+            .expect("existing media watch");
+        callback(event);
+    }
+}
+
+fn toolbar_media_fixture(enabled: bool) -> (LauncherFixture, Arc<ToolbarRecordingMedia>) {
+    let media = Arc::new(ToolbarRecordingMedia::default());
+    let fixture = LauncherFixture::with_snapshot_host_configured(
+        seeded_preferences().with_media_enabled(enabled),
+        launcher_snapshot(),
+        |host| *host.media_provider.lock() = Some(media.clone()),
+        |_| {},
+    );
+    (fixture, media)
+}
+
+fn toolbar_media_snapshot() -> tessera_system::media::MediaSnapshot {
+    use tessera_system::media::{
+        MediaCapabilities, MediaPlayback, MediaSession, MediaSessionKey, MediaSnapshot,
+        MediaTimeline,
+    };
+    MediaSnapshot {
+        current: Some(MediaSession {
+            key: MediaSessionKey::issue().unwrap(),
+            source_app_id: "actual.player".into(),
+            title: "Observed current track".into(),
+            author: "Observed artist".into(),
+            playback: MediaPlayback::Playing,
+            capabilities: MediaCapabilities {
+                previous: true,
+                toggle: true,
+                next: true,
+            },
+            timeline: Ok(MediaTimeline {
+                start_ticks: 100_000_000,
+                end_ticks: 1_300_000_000,
+                position_ticks: 400_000_000,
+                min_seek_ticks: 100_000_000,
+                max_seek_ticks: 1_300_000_000,
+                last_updated_utc_ticks: Some(133_000_000_000_000_000),
+            }),
+            artwork: None,
+            artwork_notice: None,
+        }),
+    }
+}
+
+fn press_toolbar_media(
+    popup: &crate::generated::QuickSettings,
+    label: &str,
+) -> slint::LogicalPosition {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    let control = ElementHandle::find_by_accessible_label(popup, label)
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+        .expect("real current-player transport");
+    let position = native_center(&control);
+    popup
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+    position
+}
+
+fn release_toolbar_media(
+    popup: &crate::generated::QuickSettings,
+    position: slint::LogicalPosition,
+) {
+    popup
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position,
+            button: slint::platform::PointerEventButton::Left,
+        });
+}
+
+fn toolbar_media_refresh_label(popup: &crate::generated::QuickSettings) -> &'static str {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    ["Retry audio", "Refresh audio and media", "Refresh audio"]
+        .into_iter()
+        .find(|label| {
+            ElementHandle::find_by_accessible_label(popup, label)
+                .any(|element| element.accessible_role() == Some(AccessibleRole::Button))
+        })
+        .expect("real audio/media refresh footer")
+}
+
+#[test]
+fn toolbar_current_player_default_dock_off_observes_timeline_and_three_real_transports_without_saves()
+ {
+    use i_slint_backend_testing::ElementHandle;
+    use tessera_system::media::{MediaAction, MediaCommand};
+    let (fixture, media) = toolbar_media_fixture(false);
+    let activity = fixture.host.unrelated_activity();
+    let dock_rect = fixture
+        .controller
+        .leases
+        .borrow()
+        .attachments
+        .get(&SurfaceKind::Dock)
+        .unwrap()
+        .rect;
+    assert!(
+        !fixture
+            .controller
+            .core
+            .applied_preferences()
+            .media_enabled()
+    );
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(media.reads.load(Ordering::SeqCst), 0);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    assert!(quick.is_open() && quick.media_input_ready());
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert_eq!(media.reads.load(Ordering::SeqCst), 1);
+    let snapshot = toolbar_media_snapshot();
+    let key = snapshot.current.as_ref().unwrap().key;
+    media.finish_read(&fixture, snapshot.clone());
+    let view = popup.get_media_view();
+    assert!(view.enabled && view.current_present && !view.stale && !view.busy);
+    assert_eq!(view.title.as_str(), "Observed current track");
+    assert_eq!(view.author.as_str(), "Observed artist");
+    assert_eq!(view.playback.as_str(), "Playing");
+    assert!(popup.get_timeline_available());
+    assert_eq!(popup.get_timeline_time().as_str(), "0:30 / 2:00 · observed");
+    assert!((popup.get_timeline_progress() - 0.25).abs() < 0.0001);
+    assert!(popup.get_timeline_notice().is_empty());
+    for (index, (label, action)) in [
+        ("Previous track", MediaAction::Previous),
+        ("Pause", MediaAction::Toggle),
+        ("Next track", MediaAction::Next),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        click_component(&popup, label);
+        assert_eq!(
+            media.commands.lock().as_slice(),
+            &[
+                MediaCommand {
+                    expected_session: key,
+                    action: MediaAction::Previous
+                },
+                MediaCommand {
+                    expected_session: key,
+                    action: MediaAction::Toggle
+                },
+                MediaCommand {
+                    expected_session: key,
+                    action: MediaAction::Next
+                },
+            ][..index + 1],
+        );
+        assert_eq!(media.commands.lock()[index].action, action);
+        assert!(popup.get_media_view().busy);
+        click_component(&popup, "Next track");
+        assert_eq!(
+            media.commands.lock().len(),
+            index + 1,
+            "busy input is not queued"
+        );
+        media.finish_command(&fixture);
+        assert!(
+            popup.get_media_view().busy,
+            "OS acceptance still needs readback"
+        );
+        assert_eq!(media.pending_reads.lock().len(), 1);
+        assert_eq!(popup.get_media_view().playback.as_str(), "Playing");
+        media.finish_read(&fixture, snapshot.clone());
+        assert!(!popup.get_media_view().busy);
+    }
+    click_component(&popup, toolbar_media_refresh_label(&popup));
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        5,
+        "current Toolbar scope admits refresh"
+    );
+    click_component(&popup, toolbar_media_refresh_label(&popup));
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        5,
+        "refresh shares the existing read flight"
+    );
+    media.finish_read(&fixture, snapshot);
+    assert_eq!(
+        media.commands.lock().len(),
+        3,
+        "refresh only observes; transports never replay"
+    );
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert!(!fixture.dock.get_media_view().enabled);
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&fixture.dock, "Media module").count(),
+        0,
+    );
+    assert_eq!(
+        fixture
+            .controller
+            .leases
+            .borrow()
+            .attachments
+            .get(&SurfaceKind::Dock)
+            .unwrap()
+            .rect,
+        dock_rect,
+        "popup demand adds no Dock geometry slots",
+    );
+    assert!(
+        !fixture
+            .controller
+            .core
+            .applied_preferences()
+            .media_enabled()
+    );
+    assert_eq!(fixture.host.unrelated_activity(), activity);
+    quick.hide();
+    assert!(!quick.media_input_ready());
+    assert_eq!(media.watch_drops.load(Ordering::SeqCst), 1);
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_hide_reopen_serializes_accepted_read_and_command_without_replay() {
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    assert_eq!(media.pending_reads.lock().len(), 1);
+    quick.hide();
+    click_component(&fixture.toolbar, "Open quick settings");
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        1,
+        "accepted old read owns the flight"
+    );
+    media.finish_read(&fixture, toolbar_media_snapshot());
+    assert!(
+        !popup.get_media_view().current_present,
+        "old presentation cannot publish metadata"
+    );
+    assert_eq!(media.reads.load(Ordering::SeqCst), 2);
+    let snapshot = toolbar_media_snapshot();
+    media.finish_read(&fixture, snapshot.clone());
+    click_component(&popup, "Pause");
+    assert_eq!(media.commands.lock().len(), 1);
+    quick.hide();
+    click_component(&fixture.toolbar, "Open quick settings");
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        2,
+        "accepted transport owns the flight"
+    );
+    assert_eq!(media.commands.lock().len(), 1);
+    media.finish_command(&fixture);
+    assert_eq!(
+        media.commands.lock().len(),
+        1,
+        "reopen never replays an accepted transport"
+    );
+    assert_eq!(media.reads.load(Ordering::SeqCst), 3);
+    assert!(!popup.get_media_view().current_present);
+    media.finish_read(&fixture, snapshot);
+    assert!(quick.media_input_ready());
+    assert!(popup.get_media_view().current_present);
+    assert!(!popup.get_media_view().busy);
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.pending_reads.lock().len(), 0);
+    assert_eq!(media.pending_commands.lock().len(), 0);
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_held_input_rejects_old_popup_hidden_toolbar_and_exclusive_popup() {
+    for refresh in [false, true] {
+        for retirement in [
+            "reopen",
+            "hidden toolbar",
+            "toolbar geometry",
+            "root scope",
+            "exclusive popup",
+        ] {
+            let (fixture, media) = toolbar_media_fixture(false);
+            click_component(&fixture.toolbar, "Open quick settings");
+            let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+            let popup = quick.component();
+            let label = if refresh {
+                toolbar_media_refresh_label(&popup)
+            } else {
+                "Next track"
+            };
+            let snapshot = toolbar_media_snapshot();
+            media.finish_read(&fixture, snapshot.clone());
+            let position = press_toolbar_media(&popup, label);
+            match retirement {
+                "reopen" => {
+                    quick.hide();
+                    click_component(&fixture.toolbar, "Open quick settings");
+                    media.finish_read(&fixture, snapshot.clone());
+                    assert!(quick.media_input_ready());
+                }
+                "hidden toolbar" => {
+                    fixture.toolbar.hide().unwrap();
+                    assert!(
+                        quick.is_open(),
+                        "test root source admission, not just popup visibility"
+                    );
+                }
+                "root scope" => {
+                    drop(power_menu::PowerAdmissionScope::new(&fixture.controller));
+                    assert!(
+                        quick.is_open(),
+                        "test root authority independent of popup visibility"
+                    );
+                }
+                "toolbar geometry" => {
+                    let size = fixture.toolbar.window().size();
+                    fixture
+                        .toolbar
+                        .window()
+                        .set_size(slint::PhysicalSize::new(size.width + 1, size.height));
+                    assert!(
+                        quick.is_open(),
+                        "test actual captured Toolbar geometry admission"
+                    );
+                }
+                "exclusive popup" => {
+                    click_component(&fixture.toolbar, "Open network");
+                    assert!(
+                        fixture
+                            .controller
+                            .network_menu
+                            .borrow()
+                            .as_ref()
+                            .unwrap()
+                            .is_open()
+                    );
+                    assert!(!quick.is_open());
+                }
+                _ => unreachable!(),
+            }
+            let reads = media.reads.load(Ordering::SeqCst);
+            let watches = media.watches.lock().len();
+            let acquisitions = fixture.host.media_provider_calls.load(Ordering::SeqCst);
+            release_toolbar_media(&popup, position);
+            assert!(
+                media.commands.lock().is_empty(),
+                "held {label} input survived {retirement}"
+            );
+            assert_eq!(
+                media.reads.load(Ordering::SeqCst),
+                reads,
+                "held {label} refreshed after {retirement}"
+            );
+            assert_eq!(media.watches.lock().len(), watches);
+            assert_eq!(
+                fixture.host.media_provider_calls.load(Ordering::SeqCst),
+                acquisitions
+            );
+            if matches!(
+                retirement,
+                "hidden toolbar" | "toolbar geometry" | "root scope"
+            ) {
+                assert!(
+                    !quick.media_input_ready(),
+                    "retired source has no media authority"
+                );
+                let view = popup.get_media_view();
+                assert!(!view.enabled && !view.current_present);
+                assert!(view.session_identity.is_empty());
+                assert!(!popup.get_timeline_available());
+                assert!(popup.get_timeline_time().is_empty());
+                assert_eq!(popup.get_timeline_progress(), 0.0);
+                assert!(
+                    i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                        &popup,
+                        "Next track",
+                    )
+                    .next()
+                    .is_none(),
+                    "retired current-player transport is no longer an AX input target",
+                );
+                if refresh {
+                    click_component(&popup, toolbar_media_refresh_label(&popup));
+                } else {
+                    // The truthful retired projection removes this AX node. A new
+                    // native gesture at its captured former position still has no authority.
+                    popup
+                        .window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                            position,
+                            button: slint::platform::PointerEventButton::Left,
+                        });
+                    release_toolbar_media(&popup, position);
+                }
+                assert!(
+                    media.commands.lock().is_empty(),
+                    "new input needs its actual Toolbar source"
+                );
+                assert_eq!(media.reads.load(Ordering::SeqCst), reads);
+                assert_eq!(media.watches.lock().len(), watches);
+                assert_eq!(
+                    fixture.host.media_provider_calls.load(Ordering::SeqCst),
+                    acquisitions
+                );
+            }
+            assert!(fixture.host.saves.lock().is_empty());
+            assert!(!fixture.dock.get_media_view().enabled);
+        }
+    }
+}
+
+#[test]
+fn toolbar_current_player_invalidation_session_switch_and_timeline_failure_keep_authority_truthful()
+{
+    use tessera_system::media::{MediaError, MediaErrorKind, MediaEvent};
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let original = toolbar_media_snapshot();
+    media.finish_read(&fixture, original.clone());
+    let position = press_toolbar_media(&popup, "Next track");
+    media.event(MediaEvent::Changed);
+    release_toolbar_media(&popup, position);
+    assert!(
+        media.commands.lock().is_empty(),
+        "undrained native invalidation blocks dispatch"
+    );
+    fixture.dock.invoke_media_event_ready();
+    assert_eq!(media.pending_reads.lock().len(), 1);
+    media.event(MediaEvent::Changed);
+    media.finish_read(&fixture, original.clone());
+    assert!(popup.get_media_view().stale);
+    assert_eq!(
+        media.pending_reads.lock().len(),
+        1,
+        "late invalidation needs one follow-up read"
+    );
+    media.finish_read(&fixture, original);
+    let position = press_toolbar_media(&popup, "Next track");
+    media.event(MediaEvent::Changed);
+    fixture.dock.invoke_media_event_ready();
+    let mut replacement = toolbar_media_snapshot();
+    let session = replacement.current.as_mut().unwrap();
+    session.title = "Replacement current track".into();
+    session.timeline = Err(MediaError::new(
+        MediaErrorKind::Unavailable,
+        "Timeline not exposed",
+    ));
+    let replacement_key = session.key;
+    media.finish_read(&fixture, replacement.clone());
+    release_toolbar_media(&popup, position);
+    assert!(
+        media.commands.lock().is_empty(),
+        "old press cannot target replacement incarnation"
+    );
+    assert_eq!(
+        popup.get_media_view().title.as_str(),
+        "Replacement current track"
+    );
+    assert!(!popup.get_timeline_available());
+    assert!(popup.get_timeline_time().is_empty());
+    assert_eq!(popup.get_timeline_progress(), 0.0);
+    assert!(
+        popup
+            .get_timeline_notice()
+            .as_str()
+            .contains("Timeline not exposed")
+    );
+    assert!(popup.get_media_view().previous_enabled);
+    assert!(popup.get_media_view().toggle_enabled);
+    assert!(popup.get_media_view().next_enabled);
+    media.event(MediaEvent::WatchUnavailable(MediaError::new(
+        MediaErrorKind::Unavailable,
+        "Recorded watch failure",
+    )));
+    fixture.dock.invoke_media_event_ready();
+    assert_eq!(
+        popup.get_media_view().watch_notice.as_str(),
+        "Recorded watch failure"
+    );
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        4,
+        "watch failure is not a retry loop"
+    );
+    click_component(&popup, "Next track");
+    assert_eq!(media.commands.lock()[0].expected_session, replacement_key);
+    media.finish_command(&fixture);
+    media.finish_read(&fixture, replacement);
+    assert_eq!(media.commands.lock().len(), 1);
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_and_saved_dock_media_share_one_provider_watch_and_readback() {
+    let (fixture, media) = toolbar_media_fixture(true);
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.pending_reads.lock().len(), 1);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    assert_eq!(media.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    let snapshot = toolbar_media_snapshot();
+    media.finish_read(&fixture, snapshot.clone());
+    assert_eq!(
+        fixture.dock.get_media_view().title,
+        popup.get_media_view().title
+    );
+    click_component(&popup, "Pause");
+    assert!(fixture.dock.get_media_view().busy);
+    quick.hide();
+    assert_eq!(
+        media.watch_drops.load(Ordering::SeqCst),
+        0,
+        "saved Dock demand retains its watch"
+    );
+    media.finish_command(&fixture);
+    assert_eq!(media.reads.load(Ordering::SeqCst), 2);
+    media.finish_read(&fixture, snapshot);
+    assert!(!fixture.dock.get_media_view().busy);
+    click_component(&fixture.toolbar, "Open quick settings");
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        2,
+        "attach reuses confirmed shared observation"
+    );
+    assert!(popup.get_media_view().current_present);
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert_eq!(media.commands.lock().len(), 1);
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_media_factory_source_retirement_prevents_unaccepted_native_observation() {
+    for root_closed in [false, true] {
+        let (fixture, media) = toolbar_media_fixture(false);
+        let root = fixture.controller.clone();
+        let toolbar = fixture.toolbar.clone_strong();
+        MEDIA_FACTORY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                if root_closed {
+                    drop(power_menu::PowerAdmissionScope::new(&root));
+                } else {
+                    toolbar.hide().unwrap();
+                }
+            }));
+        });
+        click_component(&fixture.toolbar, "Open quick settings");
+        assert!(MEDIA_FACTORY_HOOK.with(|hook| hook.borrow().is_none()));
+        assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            media.reads.load(Ordering::SeqCst),
+            0,
+            "retired source must reject native read before acceptance",
+        );
+        assert!(
+            media.watches.lock().is_empty(),
+            "retired source must not subscribe"
+        );
+        assert!(media.pending_reads.lock().is_empty());
+        assert!(media.commands.lock().is_empty());
+        assert!(fixture.host.saves.lock().is_empty());
+        assert!(!fixture.dock.get_media_view().enabled);
+        if root_closed {
+            assert!(fixture.controller.power_admission_closed.get());
+            fixture.dock.invoke_media_event_ready();
+            assert_eq!(media.reads.load(Ordering::SeqCst), 0);
+        } else {
+            assert!(!fixture.toolbar.window().is_visible());
+            fixture.toolbar.show().unwrap();
+            click_component(&fixture.toolbar, "Open quick settings");
+            let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+            assert!(quick.media_input_ready());
+            assert_eq!(media.reads.load(Ordering::SeqCst), 1);
+            assert_eq!(media.watches.lock().len(), 1);
+            media.finish_read(&fixture, toolbar_media_snapshot());
+            click_component(&quick.component(), "Next track");
+            assert_eq!(
+                media.commands.lock().len(),
+                1,
+                "new real source can dispatch"
+            );
+        }
+    }
+}
+
+#[test]
+fn toolbar_current_player_media_factory_reentry_preserves_new_popup_without_old_observation() {
+    for replacement in ["quick settings", "network"] {
+        let (fixture, media) = toolbar_media_fixture(false);
+        let toolbar = fixture.toolbar.clone_strong();
+        MEDIA_FACTORY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                click_component(
+                    &toolbar,
+                    if replacement == "network" {
+                        "Open network"
+                    } else {
+                        "Open quick settings"
+                    },
+                );
+            }));
+        });
+        click_component(&fixture.toolbar, "Open quick settings");
+        assert!(MEDIA_FACTORY_HOOK.with(|hook| hook.borrow().is_none()));
+        let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+        if replacement == "network" {
+            assert!(
+                fixture
+                    .controller
+                    .network_menu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .is_open()
+            );
+            assert!(!quick.is_open());
+            assert!(!quick.media_input_ready());
+            assert_eq!(media.reads.load(Ordering::SeqCst), 0);
+            assert!(media.watches.lock().is_empty());
+            assert_eq!(media.watch_drops.load(Ordering::SeqCst), 0);
+            click_component(&fixture.toolbar, "Open quick settings");
+            assert!(
+                !fixture
+                    .controller
+                    .network_menu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .is_open()
+            );
+        }
+        assert!(quick.is_open() && quick.media_input_ready());
+        assert_eq!(
+            media.reads.load(Ordering::SeqCst),
+            1,
+            "only replacement Quick can observe"
+        );
+        assert_eq!(media.pending_reads.lock().len(), 1);
+        assert_eq!(
+            media.watches.lock().len(),
+            1,
+            "old factory cannot duplicate a subscription"
+        );
+        assert_eq!(media.watch_drops.load(Ordering::SeqCst), 0);
+        let snapshot = toolbar_media_snapshot();
+        let key = snapshot.current.as_ref().unwrap().key;
+        media.finish_read(&fixture, snapshot.clone());
+        click_component(&quick.component(), "Next track");
+        assert_eq!(media.commands.lock()[0].expected_session, key);
+        media.finish_command(&fixture);
+        media.finish_read(&fixture, snapshot);
+        assert!(quick.is_open() && quick.media_input_ready());
+        assert_eq!(media.commands.lock().len(), 1);
+        assert!(fixture.host.saves.lock().is_empty());
+    }
+}
+
+#[test]
+fn toolbar_current_player_finite_overflow_open_preserves_live_popup_lease_and_input_authority() {
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_media_snapshot();
+    media.finish_read(&fixture, snapshot.clone());
+    let identity = popup.get_media_view().session_identity;
+    let position = press_toolbar_media(&popup, "Next track");
+    let lease_drops = fixture.host.lease_drops.load(Ordering::SeqCst);
+    let focuses = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
+    let popup_position = popup.window().position();
+    let popup_size = popup.window().size();
+    // Rejected coordinates are synthetic; accepted activation remains genuine input.
+    fixture
+        .toolbar
+        .invoke_quick_settings_requested(crate::generated::TileBounds {
+            origin: slint::LogicalPosition::new(f32::MAX, 0.0),
+            width: 16.0,
+            height: 16.0,
+        });
+    assert!(quick.is_open() && quick.media_input_ready());
+    assert!(Rc::ptr_eq(
+        &quick,
+        fixture.controller.quick_settings.borrow().as_ref().unwrap()
+    ));
+    assert_eq!(popup.get_media_view().session_identity, identity);
+    assert_eq!(popup.window().position(), popup_position);
+    assert_eq!(popup.window().size(), popup_size);
+    assert_eq!(fixture.host.lease_drops.load(Ordering::SeqCst), lease_drops);
+    assert_eq!(fixture.host.ui_focus_calls.load(Ordering::SeqCst), focuses);
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert_eq!(media.watch_drops.load(Ordering::SeqCst), 0);
+    release_toolbar_media(&popup, position);
+    assert_eq!(
+        media.commands.lock().len(),
+        1,
+        "rejected placement must retain the already-captured genuine transport scope",
+    );
+    media.finish_command(&fixture);
+    media.finish_read(&fixture, snapshot.clone());
+    click_component(&popup, toolbar_media_refresh_label(&popup));
+    assert_eq!(media.reads.load(Ordering::SeqCst), 3);
+    media.finish_read(&fixture, snapshot);
+    assert_eq!(
+        media.commands.lock().len(),
+        1,
+        "refresh observes without replay"
+    );
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert_eq!(media.watch_drops.load(Ordering::SeqCst), 0);
+    assert!(quick.is_open() && quick.media_input_ready());
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_retained_domain_does_not_retain_closed_root_caches_or_windows() {
+    let (fixture, media) = toolbar_media_fixture(false);
+    let quick_cache_owners = Rc::strong_count(&fixture.controller.quick_settings);
+    let media_cache_owners = Rc::strong_count(&fixture.controller.dock_media);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    media.finish_read(&fixture, toolbar_media_snapshot());
+    assert!(quick.is_open() && quick.media_input_ready());
+    assert!(quick.component().get_media_view().current_present);
+    assert_eq!(fixture.host.media_provider_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(media.watches.lock().len(), 1);
+    assert_eq!(
+        Rc::strong_count(&fixture.controller.quick_settings),
+        quick_cache_owners,
+        "live SourceGuard and media/refresh callbacks must not add a Root Quick-cache owner",
+    );
+    assert_eq!(
+        Rc::strong_count(&fixture.controller.dock_media),
+        media_cache_owners,
+        "live popup attachment must not strongly capture the Root media cache",
+    );
+    let domain = fixture.controller.dock_media.borrow().clone().unwrap();
+    let domain_weak = Rc::downgrade(&domain);
+    let quick_cache = Rc::downgrade(&fixture.controller.quick_settings);
+    let media_cache = Rc::downgrade(&fixture.controller.dock_media);
+    let geometry = Rc::downgrade(&fixture.controller.visibility_geometry);
+    let popup_window = quick.component().as_weak();
+    let panel_window = fixture.panel.as_weak();
+    let dock_window = fixture.dock.as_weak();
+    let toolbar_window = fixture.toolbar.as_weak();
+    let launcher_window = fixture.launcher.as_weak();
+    drop(quick);
+    drop(fixture);
+    assert!(
+        quick_cache.upgrade().is_none(),
+        "media callbacks must not retain the Root Quick cache"
+    );
+    assert!(
+        media_cache.upgrade().is_none(),
+        "SourceGuard must not retain the Root media cache"
+    );
+    assert!(
+        geometry.upgrade().is_none(),
+        "SourceGuard keeps Root geometry weak"
+    );
+    assert!(popup_window.upgrade().is_none());
+    assert!(panel_window.upgrade().is_none());
+    assert!(dock_window.upgrade().is_none());
+    assert!(toolbar_window.upgrade().is_none());
+    assert!(launcher_window.upgrade().is_none());
+    assert!(
+        domain_weak.upgrade().is_some(),
+        "externally retained media domain still exists"
+    );
+    assert_eq!(media.watch_drops.load(Ordering::SeqCst), 1);
+    domain.close();
+    drop(domain);
+    assert!(
+        domain_weak.upgrade().is_none(),
+        "cleanup does not leave a domain ownership cycle"
+    );
+}

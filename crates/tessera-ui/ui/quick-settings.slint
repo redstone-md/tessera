@@ -5,6 +5,8 @@ import { Slider, ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { TileButton, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
+import { DockMediaView, MediaAction } from "dock-media.slint";
+import { MediaPlayer } from "media-player.slint";
 
 export enum AudioRoute { output, input }
 
@@ -119,6 +121,16 @@ export component QuickSettings inherits Window {
     in property <image> input-icon: @image-url("../assets/icons/ionicons-5.5.4/mic-outline.svg");
     in property <image> input-muted-icon: @image-url("../assets/icons/ionicons-5.5.4/mic-off-outline.svg");
     in property <image> settings-icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg");
+    in property <DockMediaView> media-view;
+    in property <bool> timeline-available;
+    in property <string> timeline-notice;
+    in property <string> timeline-time;
+    in property <float> timeline-progress;
+    callback media-action-requested(MediaAction, string);
+    // Root applies the same current popup/Toolbar admission as transports.
+    callback media-refresh-requested();
+    // Shared Rust projection batch boundary; settle native fit before input/AX.
+    callback media-projection-complete();
     out property <length> preferred-popup-width: 300px + 2 * PopoverTokens.shadow-margin;
     out property <length> preferred-popup-height: min(700px,
         root.natural-content-height + 2 * viewport-inset) + 2 * PopoverTokens.shadow-margin;
@@ -143,8 +155,11 @@ export component QuickSettings inherits Window {
         : root.loading ? @tr("Loading audio devices…")
         : !root.output-ready && !root.input-ready && root.output-status == "" && root.input-status == ""
             ? @tr("No audio endpoints available") : "";
-    property <bool> can-refresh: !root.watch-live || root.status != ""
-        || root.output-status != "" || root.input-status != "";
+    property <bool> audio-needs-retry: root.status != "" || root.output-status != "" || root.input-status != "";
+    property <bool> media-needs-refresh: root.media-view.enabled
+        && (!root.media-view.current-present || root.media-view.stale
+            || root.media-view.read-notice != "" || root.media-view.watch-notice != "");
+    property <bool> can-refresh: !root.watch-live || root.audio-needs-retry || root.media-needs-refresh;
     property <string> output-feedback: root.output-status != ""
         ? @tr("Output: ") + root.output-status
         : !root.output-ready && !root.loading && root.input-ready ? @tr("Output: Unavailable") : "";
@@ -154,7 +169,7 @@ export component QuickSettings inherits Window {
     property <int> ready-count: (root.output-ready ? 1 : 0) + (root.input-ready ? 1 : 0);
     property <int> block-count: (root.ready-count > 0 ? 1 : 0)
         + (root.feedback != "" ? 1 : 0) + root.ready-count
-        + (root.output-feedback != "" ? 1 : 0) + (root.input-feedback != "" ? 1 : 0) + 1;
+        + (root.output-feedback != "" ? 1 : 0) + (root.input-feedback != "" ? 1 : 0) + 2;
     // Static probes can be measured before conditional children are created.
     // Using repeater/layout preferred-height here gives the presenter the old
     // height for one event, clipping real rows or footer controls after a read.
@@ -167,6 +182,7 @@ export component QuickSettings inherits Window {
         + root.ready-count * 30px
         + (root.output-feedback != "" ? output-metrics.preferred-height : 0px)
         + (root.input-feedback != "" ? input-metrics.preferred-height : 0px)
+        + (root.media-view.enabled ? player.natural-height : 0px)
         + 30px + max(0, root.block-count - 1) * 8px;
     heading-metrics := AudioText {
         width: root.measure-width;
@@ -201,6 +217,9 @@ export component QuickSettings inherits Window {
     }
     public function focus-content() {
         escape-scope.focus();
+    }
+    public function cancel-media-input() {
+        player.cancel-input();
     }
     forward-focus: escape-scope;
 
@@ -279,6 +298,17 @@ export component QuickSettings inherits Window {
                     wrap: word-wrap;
                     color: SeelenPalette.secondary;
                 }
+                player := MediaPlayer {
+                    visible: root.media-view.enabled;
+                    height: root.media-view.enabled ? self.natural-height : 0px;
+                    measure-width: root.measure-width;
+                    view: root.media-view;
+                    timeline-available: root.timeline-available;
+                    timeline-notice: root.timeline-notice;
+                    timeline-time: root.timeline-time;
+                    timeline-progress: root.timeline-progress;
+                    action-requested(action, identity) => { root.media-action-requested(action, identity); }
+                }
                 HorizontalLayout {
                     spacing: 8px;
                     TileButton {
@@ -312,12 +342,11 @@ export component QuickSettings inherits Window {
                         width: 72px;
                         radius: 6px;
                         enabled: !root.loading;
-                        accessible-text: root.status != "" || root.output-status != "" || root.input-status != ""
-                            ? @tr("Retry audio") : @tr("Refresh audio");
+                        accessible-text: root.audio-needs-retry ? @tr("Retry audio")
+                            : root.media-needs-refresh ? @tr("Refresh audio and media") : @tr("Refresh audio");
                         clicked => { root.refresh-requested(); }
                         AudioText {
-                            text: root.status != "" || root.output-status != "" || root.input-status != ""
-                                ? @tr("Retry") : @tr("Refresh");
+                            text: root.audio-needs-retry ? @tr("Retry") : @tr("Refresh");
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }

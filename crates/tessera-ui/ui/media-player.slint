@@ -1,0 +1,142 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+import { PopoverTokens } from "popover.slint";
+import { TileButton } from "tiles.slint";
+import { DockMediaView, MediaAction } from "dock-media.slint";
+
+component PlayerText inherits Text {
+    color: SeelenPalette.foreground;
+    font-size: PopoverTokens.font-size;
+    font-family: PopoverTokens.font-family;
+    wrap: word-wrap;
+    accessible-role: text;
+    accessible-label: self.text;
+}
+
+component TransportButton inherits TileButton {
+    in property <DockMediaView> view;
+    in property <MediaAction> action;
+    callback requested(MediaAction, string);
+    height: 30px;
+    horizontal-stretch: 1;
+    radius: 6px;
+    activation-key: root.view.session-identity;
+    allow-return-repeat: false;
+    enabled: root.view.enabled && root.view.current-present && !root.view.busy && !root.view.stale
+        && (root.action == MediaAction.previous ? root.view.previous-enabled
+            : root.action == MediaAction.toggle ? root.view.toggle-enabled : root.view.next-enabled);
+    accessible-text: root.action == MediaAction.previous ? @tr("Previous track")
+        : root.action == MediaAction.toggle ? (root.view.playing ? @tr("Pause") : @tr("Play")) : @tr("Next track");
+    clicked => { root.requested(root.action, root.view.session-identity); }
+    PlayerText {
+        width: parent.width;
+        height: parent.height;
+        text: root.action == MediaAction.previous ? @tr("Prev")
+            : root.action == MediaAction.toggle ? (root.view.playing ? @tr("Pause") : @tr("Play")) : @tr("Next");
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+        accessible-label: "";
+    }
+}
+
+// Current-only projection of the shared media domain. Timeline is an observed
+// fact, not a clock or a seek input. Unknown timeline never gates transports.
+export component MediaPlayer inherits Rectangle {
+    in property <DockMediaView> view;
+    in property <bool> timeline-available;
+    in property <string> timeline-notice;
+    in property <string> timeline-time;
+    in property <float> timeline-progress;
+    in property <length> measure-width;
+    callback action-requested(MediaAction, string);
+    accessible-role: groupbox;
+    accessible-label: @tr("Media playback");
+
+    property <string> notices: (root.view.stale ? @tr("Stale media observation") : "")
+        + (root.view.read-notice == "" ? "" : (root.view.stale ? "\n" : "") + root.view.read-notice)
+        + (root.view.watch-notice == "" ? "" : (root.view.stale || root.view.read-notice != "" ? "\n" : "") + root.view.watch-notice)
+        + (root.view.action-notice == "" ? "" : (root.view.stale || root.view.read-notice != "" || root.view.watch-notice != "" ? "\n" : "") + root.view.action-notice)
+        + (root.view.artwork-notice == "" ? "" : (root.view.stale || root.view.read-notice != "" || root.view.watch-notice != "" || root.view.action-notice != "" ? "\n" : "") + root.view.artwork-notice);
+    property <string> metadata: root.view.title
+        + (root.view.author == "" ? "" : "\n" + root.view.author)
+        + (root.view.playback == "" ? "" : "\n" + root.view.playback);
+    property <string> observed-time: root.timeline-time == "" ? "" : @tr("Observed position: ") + root.timeline-time;
+    property <int> block-count: 2 + (root.view.current-present ? 1 : 0)
+        + (root.view.status != "" ? 1 : 0) + (root.notices != "" ? 1 : 0)
+        + (root.timeline-available ? 1 : 0) + (root.timeline-notice != "" ? 1 : 0);
+    out property <length> natural-height: heading-metrics.preferred-height
+        + (root.view.current-present ? max(40px, metadata-metrics.preferred-height) + 30px : 0px)
+        + (root.view.status != "" ? status-metrics.preferred-height : 0px)
+        + (root.notices != "" ? notice-metrics.preferred-height : 0px)
+        + (root.timeline-available ? 4px + (root.observed-time != "" ? time-metrics.preferred-height + 4px : 0px) : 0px)
+        + (root.timeline-notice != "" ? timeline-metrics.preferred-height : 0px)
+        + max(0, root.block-count - 1) * 8px;
+    height: root.natural-height;
+
+    // Static probes settle directly from the new projection, before layout.
+    heading-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: @tr("Current player"); font-weight: 600; accessible-role: none; accessible-label: ""; }
+    metadata-metrics := PlayerText { width: max(1px, root.measure-width - (root.view.has-artwork ? 48px : 0px) - (root.view.has-app-icon ? 24px : 0px)); height: 0px; opacity: 0; text: root.metadata; accessible-role: none; accessible-label: ""; }
+    status-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.view.status; accessible-role: none; accessible-label: ""; }
+    notice-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.notices; accessible-role: none; accessible-label: ""; }
+    time-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.observed-time; accessible-role: none; accessible-label: ""; }
+    timeline-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.timeline-notice; accessible-role: none; accessible-label: ""; }
+
+    public function cancel-input() {
+        previous.cancel-input();
+        toggle.cancel-input();
+        next.cancel-input();
+    }
+    VerticalLayout {
+        spacing: 8px;
+        PlayerText { text: @tr("Current player"); font-weight: 600; }
+        if root.view.current-present: HorizontalLayout {
+            spacing: 8px;
+            height: max(40px, metadata-metrics.preferred-height);
+            // Shared projection supplies any raster-rounded cover; the app
+            // identity stays a separate trusted sibling, as in the reference.
+            if root.view.has-artwork: Image {
+                width: 40px;
+                height: 40px;
+                source: root.view.artwork;
+                image-fit: cover;
+                accessible-role: none;
+            }
+            PlayerText { text: root.metadata; horizontal-stretch: 1; }
+            if root.view.has-app-icon: Image {
+                width: 16px;
+                height: 16px;
+                source: root.view.app-icon;
+                image-fit: contain;
+                accessible-role: none;
+            }
+        }
+        if root.view.status != "": PlayerText { text: root.view.status; color: SeelenPalette.secondary; }
+        if root.notices != "": PlayerText { text: root.notices; color: SeelenPalette.secondary; }
+        transports := Rectangle {
+            visible: root.view.current-present;
+            height: root.view.current-present ? 30px : 0px;
+            accessible-role: none;
+            HorizontalLayout {
+                spacing: 8px;
+                previous := TransportButton { view: root.view; action: MediaAction.previous; requested(action, identity) => { root.action-requested(action, identity); } }
+                toggle := TransportButton { view: root.view; action: MediaAction.toggle; requested(action, identity) => { root.action-requested(action, identity); } }
+                next := TransportButton { view: root.view; action: MediaAction.next; requested(action, identity) => { root.action-requested(action, identity); } }
+            }
+        }
+        if root.timeline-available: VerticalLayout {
+            spacing: 4px;
+            if root.observed-time != "": PlayerText { text: root.observed-time; }
+            Rectangle {
+                height: 4px;
+                background: SeelenPalette.tile;
+                border-radius: 2px;
+                accessible-role: none;
+                Rectangle { width: parent.width * clamp(root.timeline-progress, 0, 1); height: parent.height; background: SeelenPalette.foreground; border-radius: 2px; accessible-role: none; }
+            }
+        }
+        if root.timeline-notice != "": PlayerText { text: root.timeline-notice; color: SeelenPalette.secondary; }
+    }
+}

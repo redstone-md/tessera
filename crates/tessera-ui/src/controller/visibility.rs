@@ -33,6 +33,17 @@ pub(super) struct RootGeometry {
     attempted: bool,
 }
 
+impl RootGeometry {
+    pub(super) fn desired_visible(&self, kind: SurfaceKind) -> bool {
+        self.placement.is_none()
+            || match kind {
+                SurfaceKind::Dock => self.desired.dock,
+                SurfaceKind::Toolbar => self.desired.toolbar,
+                _ => true,
+            }
+    }
+}
+
 fn edge(edge: DockEdge) -> Edge {
     match edge {
         DockEdge::Bottom => Edge::Bottom,
@@ -58,13 +69,7 @@ impl PanelController {
         if self.power_admission_closed.get() {
             return false;
         }
-        let root = self.visibility_geometry.borrow();
-        root.placement.is_none()
-            || match kind {
-                SurfaceKind::Dock => root.desired.dock,
-                SurfaceKind::Toolbar => root.desired.toolbar,
-                _ => true,
-            }
+        self.visibility_geometry.borrow().desired_visible(kind)
     }
     pub(super) fn bar_input_ready(&self, kind: SurfaceKind) -> bool {
         self.bar_desired_visible(kind)

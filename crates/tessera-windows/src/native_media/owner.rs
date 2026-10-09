@@ -18,6 +18,7 @@ pub(super) enum Event {
     Current,
     Properties,
     Playback,
+    Timeline,
 }
 
 /// All methods run on the actor owner. Session equality is canonical COM
@@ -120,8 +121,8 @@ impl<C: Calls> Owner<C> {
             return Ok(MediaSnapshot { current: None });
         };
         let result = self.calls.snapshot(&session, key);
-        // Metadata and thumbnail operations can outlive their session. Recheck
-        // even when a property failed so replacement never masquerades as A.
+        // Metadata, artwork and timeline reads can outlive their session.
+        // Recheck even when a property failed so replacement never poses as A.
         if self
             .current()?
             .as_ref()
@@ -229,7 +230,7 @@ impl<C: Calls> Owner<C> {
         // Install state before the first register so an error or unwind leaves
         // every acquired token visible to stop_watch/Drop on this same owner.
         watch.session = Some((session, Registrations::new()));
-        for event in [Event::Properties, Event::Playback] {
+        for event in [Event::Properties, Event::Playback, Event::Timeline] {
             let (session, registrations) = watch.session.as_mut().expect("session installed");
             let token =
                 self.calls

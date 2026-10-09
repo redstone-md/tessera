@@ -137,6 +137,22 @@ fn invalid_artwork(message: &str) -> MediaError {
     MediaError::new(MediaErrorKind::Other, message)
 }
 
+/// Owned OS timeline facts, in signed 100 ns ticks without normalization.
+///
+/// Bounds may be inverted, degenerate, or outside the position; consumers must
+/// validate them before deriving duration/progress. Observed zero is not absence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaTimeline {
+    pub start_ticks: i64,
+    pub end_ticks: i64,
+    pub position_ticks: i64,
+    pub min_seek_ticks: i64,
+    pub max_seek_ticks: i64,
+    /// UTC wall-clock ticks, not an elapsed time or a monotonic observation age.
+    /// A failed timestamp read does not discard the five timeline fields.
+    pub last_updated_utc_ticks: Option<i64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MediaSession {
     pub key: MediaSessionKey,
@@ -146,6 +162,8 @@ pub struct MediaSession {
     pub author: String,
     pub playback: MediaPlayback,
     pub capabilities: MediaCapabilities,
+    /// Independent timeline read failure; metadata/artwork/transports survive.
+    pub timeline: Result<MediaTimeline, MediaError>,
     pub artwork: Option<MediaArtwork>,
     /// Independent thumbnail failure; usable metadata/controls remain available.
     pub artwork_notice: Option<MediaError>,

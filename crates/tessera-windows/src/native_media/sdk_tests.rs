@@ -1,19 +1,123 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Actual SDK decoder tests, no GSMTC manager, player, filesystem, GUI or command.
+//! Actual SDK decode/timeline projection tests, no GSMTC manager or player.
 //! Fixtures are independently generated solid-color PNGs, not imported artwork.
 
 use super::{
     artwork::MAX_ENCODED_BYTES,
-    sdk::{Apartment, decode_reference},
+    sdk::{Apartment, decode_reference, timeline_facts},
 };
 use crate::image_decode::{ImageDecodeLimits, decode_bytes};
-use tessera_system::media::{MediaArtwork, MediaError};
-use windows::Storage::Streams::{
-    DataWriter, IRandomAccessStreamReference, InMemoryRandomAccessStream,
-    RandomAccessStreamReference,
+use tessera_system::media::{MediaArtwork, MediaError, MediaErrorKind, MediaTimeline};
+use windows::{
+    Foundation::{DateTime, TimeSpan},
+    Media::Control::{
+        GlobalSystemMediaTransportControlsSession as Session,
+        GlobalSystemMediaTransportControlsSessionTimelineProperties as TimelineProperties,
+        IGlobalSystemMediaTransportControlsSession_Vtbl as SessionVtable,
+    },
+    Storage::Streams::{
+        DataWriter, IRandomAccessStreamReference, InMemoryRandomAccessStream,
+        RandomAccessStreamReference,
+    },
+    core::{Error, HRESULT},
 };
+
+#[test]
+fn sdk_timeline_method_shapes_match_the_pinned_sdk_without_invoking_a_player() {
+    let _: fn(&Session) -> windows::core::Result<TimelineProperties> =
+        Session::GetTimelineProperties;
+    let _: fn(&TimelineProperties) -> windows::core::Result<TimeSpan> =
+        TimelineProperties::StartTime;
+    let _: fn(&TimelineProperties) -> windows::core::Result<TimeSpan> = TimelineProperties::EndTime;
+    let _: fn(&TimelineProperties) -> windows::core::Result<TimeSpan> =
+        TimelineProperties::Position;
+    let _: fn(&TimelineProperties) -> windows::core::Result<TimeSpan> =
+        TimelineProperties::MinSeekTime;
+    let _: fn(&TimelineProperties) -> windows::core::Result<TimeSpan> =
+        TimelineProperties::MaxSeekTime;
+    let _: fn(&TimelineProperties) -> windows::core::Result<DateTime> =
+        TimelineProperties::LastUpdatedTime;
+    let _: fn(&Session, i64) -> windows::core::Result<()> =
+        Session::RemoveTimelinePropertiesChanged;
+    // Typecheck registration's exact generated ABI without constructing an
+    // interface or calling the registration function.
+    let _registration_shape = |vtable: &SessionVtable| {
+        let _: unsafe extern "system" fn(
+            *mut core::ffi::c_void,
+            *mut core::ffi::c_void,
+            *mut i64,
+        ) -> HRESULT = vtable.TimelinePropertiesChanged;
+    };
+}
+
+#[test]
+fn sdk_timeline_projection_preserves_signed_zero_invalid_extreme_and_utc_ticks() {
+    for (values, utc) in [
+        ([0, 0, 0, 0, 0], 0),
+        ([-50, 50, -25, -40, 40], -1),
+        ([10, -10, 20, 15, -15], 133_000_000_000_000_000),
+        ([i64::MIN, i64::MAX, i64::MIN, i64::MIN, i64::MAX], i64::MAX),
+        ([i64::MAX, i64::MIN, i64::MAX, i64::MAX, i64::MIN], i64::MIN),
+    ] {
+        let actual = timeline_facts(
+            values.map(|ticks| Ok(TimeSpan { Duration: ticks })),
+            Ok(DateTime { UniversalTime: utc }),
+        )
+        .unwrap();
+        assert_eq!(
+            actual,
+            MediaTimeline {
+                start_ticks: values[0],
+                end_ticks: values[1],
+                position_ticks: values[2],
+                min_seek_ticks: values[3],
+                max_seek_ticks: values[4],
+                last_updated_utc_ticks: Some(utc),
+            }
+        );
+    }
+}
+
+#[test]
+fn sdk_each_required_timeline_field_failure_is_not_synthesized_as_zero() {
+    let operations = [
+        "Read media timeline start",
+        "Read media timeline end",
+        "Read media timeline position",
+        "Read media minimum seek time",
+        "Read media maximum seek time",
+    ];
+    for (failed, operation) in operations.into_iter().enumerate() {
+        let mut fields = [0, 90, 30, 0, 90].map(|ticks| Ok(TimeSpan { Duration: ticks }));
+        fields[failed] = Err(Error::from_hresult(HRESULT(-2147024891)));
+        let failure = timeline_facts(fields, Ok(DateTime { UniversalTime: 123 })).unwrap_err();
+        assert_eq!(failure.kind, MediaErrorKind::Unavailable);
+        assert_eq!(failure.hresult, Some(-2147024891));
+        assert!(failure.message.starts_with(operation));
+    }
+}
+
+#[test]
+fn sdk_optional_utc_failure_does_not_discard_five_usable_timeline_fields() {
+    let actual = timeline_facts(
+        [-50, 90, -30, -40, 80].map(|ticks| Ok(TimeSpan { Duration: ticks })),
+        Err(Error::from_hresult(HRESULT(-2147024891))),
+    )
+    .unwrap();
+    assert_eq!(
+        actual,
+        MediaTimeline {
+            start_ticks: -50,
+            end_ticks: 90,
+            position_ticks: -30,
+            min_seek_ticks: -40,
+            max_seek_ticks: 80,
+            last_updated_utc_ticks: None,
+        }
+    );
+}
 
 struct FixtureStream(InMemoryRandomAccessStream);
 impl Drop for FixtureStream {

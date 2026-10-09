@@ -834,6 +834,10 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
         },
         artwork: None,
         artwork_notice: None,
+        timeline: Err(MediaError::new(
+            MediaErrorKind::Unavailable,
+            "Timeline not observed",
+        )),
     };
     let media = Arc::new(RecordingMedia {
         observation: Mutex::new(Ok(MediaSnapshot {

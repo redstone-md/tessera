@@ -12,7 +12,7 @@ use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferTyp
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, PhysicalSize, Rgb8Pixel};
 
-use crate::generated::{AudioRoute, QuickSettings};
+use crate::generated::{AudioRoute, DockMediaView, MediaAction, QuickSettings};
 use crate::theme::{PresentationTheme, ThemedComponent};
 
 #[derive(Debug, PartialEq)]
@@ -20,6 +20,7 @@ enum Request {
     Volume(AudioRoute, f32),
     Released(AudioRoute, f32),
     Mute(AudioRoute, bool),
+    Media(MediaAction, String),
     Settings,
     Refresh,
     Dismiss,
@@ -64,6 +65,12 @@ impl Fixture {
         popup.on_refresh_requested(move || recorded.borrow_mut().push(Request::Refresh));
         let recorded = requests.clone();
         popup.on_dismiss_requested(move || recorded.borrow_mut().push(Request::Dismiss));
+        let recorded = requests.clone();
+        popup.on_media_action_requested(move |action, identity| {
+            recorded
+                .borrow_mut()
+                .push(Request::Media(action, identity.to_string()));
+        });
         configure(&popup);
         popup.show().unwrap();
         let fixture = Self {
@@ -82,6 +89,16 @@ impl Fixture {
             popup.set_output_percent(25.0);
             popup.set_input_percent(60.0);
             popup.set_watch_live(true);
+        })
+    }
+
+    fn player() -> Self {
+        Self::new(|popup| {
+            popup.set_output_ready(true);
+            popup.set_input_ready(true);
+            popup.set_watch_live(true);
+            popup.set_media_view(current_player());
+            popup.set_timeline_notice("Timeline unavailable".into());
         })
     }
 
@@ -172,6 +189,12 @@ impl Fixture {
         self.window
             .window()
             .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+    }
+
+    fn key_repeat(&self, key: Key) {
+        self.window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressRepeated { text: key.into() });
     }
 
     fn take_requests(&self) -> Vec<Request> {
@@ -459,4 +482,354 @@ fn quick_settings_content_fits_opaque_body_and_small_viewport_clips_safely() {
         fixture.take_requests().is_empty(),
         "layout and clipping are presentation only"
     );
+}
+
+fn current_player() -> DockMediaView {
+    DockMediaView {
+        enabled: true,
+        current_present: true,
+        session_identity: "recorded-popup-1:session-1".into(),
+        status: "Current session".into(),
+        title: "Actual title 後".into(),
+        author: "Recorded artist · Björk".into(),
+        playback: "Paused".into(),
+        previous_enabled: true,
+        toggle_enabled: true,
+        next_enabled: true,
+        ..DockMediaView::default()
+    }
+}
+
+fn image(rgb: [u8; 3]) -> slint::Image {
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(8, 8);
+    for pixel in pixels.make_mut_bytes().as_chunks_mut::<4>().0 {
+        pixel.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+    }
+    slint::Image::from_rgba8(pixels)
+}
+
+#[test]
+fn quick_settings_current_player_pointer_tab_key_and_ax_emit_captured_source_actions() {
+    let fixture = Fixture::player();
+    assert!(fixture.has_element("Current player"));
+    assert!(fixture.has_element("Actual title 後\nRecorded artist · Björk\nPaused"));
+    assert!(
+        fixture.take_requests().is_empty(),
+        "projection is observation-only"
+    );
+    for (label, action) in [
+        ("Previous track", MediaAction::Previous),
+        ("Play", MediaAction::Toggle),
+        ("Next track", MediaAction::Next),
+    ] {
+        let element = fixture.element(label);
+        assert_eq!(element.accessible_role(), Some(AccessibleRole::Button));
+        assert_eq!(element.accessible_enabled(), Some(true));
+        fixture.click(&element);
+        assert_eq!(
+            fixture.take_requests(),
+            [Request::Media(action, "recorded-popup-1:session-1".into())]
+        );
+        element.invoke_accessible_default_action();
+        assert_eq!(
+            fixture.take_requests(),
+            [Request::Media(action, "recorded-popup-1:session-1".into())]
+        );
+    }
+
+    fixture.click(&fixture.element("Previous track"));
+    fixture.take_requests();
+    fixture.key_press(Key::Tab);
+    fixture.key_release(Key::Tab);
+    fixture.key_press(Key::Return);
+    fixture.key_repeat(Key::Return);
+    fixture.key_release(Key::Return);
+    assert_eq!(
+        fixture.take_requests(),
+        [Request::Media(
+            MediaAction::Toggle,
+            "recorded-popup-1:session-1".into()
+        )]
+    );
+    fixture.key_press(Key::Tab);
+    fixture.key_release(Key::Tab);
+    fixture.key_press(Key::Space);
+    fixture.key_repeat(Key::Space);
+    assert!(fixture.take_requests().is_empty());
+    fixture.key_release(Key::Space);
+    assert_eq!(
+        fixture.take_requests(),
+        [Request::Media(
+            MediaAction::Next,
+            "recorded-popup-1:session-1".into()
+        )]
+    );
+    fixture.key_press(Key::Escape);
+    fixture.key_release(Key::Escape);
+    assert_eq!(fixture.take_requests(), [Request::Dismiss]);
+}
+
+#[test]
+fn quick_settings_current_player_rebinding_and_hide_cancel_held_pointer_and_space() {
+    let fixture = Fixture::player();
+    fixture.click(&fixture.element("Play"));
+    fixture.take_requests();
+    fixture.key_press(Key::Space);
+    let mut replacement = current_player();
+    replacement.session_identity = "recorded-popup-2:session-2".into();
+    fixture.popup.set_media_view(replacement.clone());
+    fixture.render_fit();
+    fixture.key_release(Key::Space);
+    assert!(fixture.take_requests().is_empty());
+
+    let position = Fixture::point(&fixture.element("Play"), 0.5);
+    fixture.press(position);
+    fixture.popup.set_media_view(current_player());
+    fixture.render_fit();
+    fixture.release(position);
+    assert!(fixture.take_requests().is_empty());
+
+    // Synchronous cancellation is required even if hide/reopen coalesces
+    // property changes and the final projected incarnation stays the same.
+    fixture.click(&fixture.element("Play"));
+    fixture.take_requests();
+    fixture.key_press(Key::Space);
+    fixture.popup.invoke_cancel_media_input();
+    fixture.key_release(Key::Space);
+    assert!(fixture.take_requests().is_empty());
+    fixture.press(position);
+    fixture.popup.invoke_cancel_media_input();
+    fixture.release(position);
+    assert!(fixture.take_requests().is_empty());
+
+    for state in 0..3 {
+        let mut disabled = current_player();
+        match state {
+            0 => disabled.busy = true,
+            1 => disabled.stale = true,
+            _ => disabled.toggle_enabled = false,
+        }
+        fixture.popup.set_media_view(disabled);
+        fixture.render_fit();
+        let play = fixture.element("Play");
+        assert_eq!(play.accessible_enabled(), Some(false));
+        fixture.click(&play);
+        play.invoke_accessible_default_action();
+        fixture.key_press(Key::Return);
+        fixture.key_release(Key::Return);
+        assert!(fixture.take_requests().is_empty());
+        if state == 2 {
+            assert_eq!(
+                fixture.element("Previous track").accessible_enabled(),
+                Some(true)
+            );
+            assert_eq!(
+                fixture.element("Next track").accessible_enabled(),
+                Some(true)
+            );
+        }
+    }
+    replacement.playing = true;
+    fixture.popup.set_media_view(replacement);
+    fixture.render_fit();
+    fixture.element("Pause").invoke_accessible_default_action();
+    assert_eq!(
+        fixture.take_requests(),
+        [Request::Media(
+            MediaAction::Toggle,
+            "recorded-popup-2:session-2".into()
+        )]
+    );
+}
+
+#[test]
+fn quick_settings_unknown_and_observed_timeline_are_read_only_and_do_not_gate_transports() {
+    let fixture = Fixture::player();
+    let unknown = fixture.element("Timeline unavailable");
+    assert_eq!(unknown.accessible_role(), Some(AccessibleRole::Text));
+    for label in ["Previous track", "Play", "Next track"] {
+        assert_eq!(fixture.element(label).accessible_enabled(), Some(true));
+    }
+    fixture.click(&unknown);
+    assert!(fixture.take_requests().is_empty());
+    let unknown_height = fixture.popup.get_preferred_popup_height();
+    fixture.popup.set_timeline_notice("".into());
+    fixture.popup.set_timeline_available(true);
+    fixture.popup.set_timeline_time("0:30 / 3:00".into());
+    fixture.popup.set_timeline_progress(1.0 / 6.0);
+    fixture.render_fit();
+    let observed = fixture.element("Observed position: 0:30 / 3:00");
+    assert_eq!(observed.accessible_role(), Some(AccessibleRole::Text));
+    fixture.click(&observed);
+    observed.invoke_accessible_default_action();
+    assert!(
+        fixture.take_requests().is_empty(),
+        "no seek path is fabricated"
+    );
+    assert!(fixture.popup.get_preferred_popup_height() > unknown_height);
+    fixture.popup.set_timeline_time("0:45 / 3:00".into());
+    fixture.popup.set_timeline_progress(0.25);
+    fixture.render_fit();
+    assert!(fixture.has_element("Observed position: 0:45 / 3:00"));
+    assert_eq!(fixture.element("Play").accessible_enabled(), Some(true));
+    assert!(fixture.take_requests().is_empty());
+
+    fixture.popup.set_media_view(DockMediaView {
+        enabled: true,
+        status: "Not playing".into(),
+        ..DockMediaView::default()
+    });
+    fixture.popup.set_timeline_available(false);
+    fixture.popup.set_timeline_time("".into());
+    fixture.render_fit();
+    assert!(fixture.has_element("Current player"));
+    assert!(fixture.has_element("Not playing"));
+    for label in [
+        "Previous track",
+        "Play",
+        "Next track",
+        "Observed position: 0:45 / 3:00",
+    ] {
+        assert!(
+            !fixture.has_element(label),
+            "absence must not retain {label}"
+        );
+    }
+    assert!(fixture.take_requests().is_empty());
+}
+
+#[test]
+fn quick_settings_late_media_timeline_and_all_notices_fit_real_art_and_preserve_audio_footer() {
+    let fixture = Fixture::ready();
+    let audio_height = fixture.popup.get_preferred_popup_height();
+    let mut view = current_player();
+    view.artwork = image([219, 13, 73]);
+    view.has_artwork = true;
+    view.app_icon = image([11, 187, 31]);
+    view.has_app_icon = true;
+    view.read_notice = "Recorded read notice".into();
+    view.watch_notice = "Recorded watch notice".into();
+    view.action_notice = "Recorded action notice".into();
+    view.artwork_notice = "Recorded artwork notice".into();
+    fixture.popup.set_media_view(view.clone());
+    fixture.popup.set_timeline_notice("Timeline observation is unavailable for this current player; transports still use independently observed capabilities.".into());
+    let pixels = fixture.render_fit();
+    let height = fixture.popup.get_preferred_popup_height();
+    assert!(height > audio_height && height <= 720.0);
+    assert!(fixture.has_element("Recorded read notice\nRecorded watch notice\nRecorded action notice\nRecorded artwork notice"));
+    assert!(fixture.has_element("Current session"));
+    assert!(fixture.has_element("Timeline observation is unavailable for this current player; transports still use independently observed capabilities."));
+    // This fixture supplies raw square pixels, not the shared cover mask.
+    // Verify genuine dimensions and the reference's separate metadata/icon
+    // siblings without pretending that Slint clips image corners.
+    let width = fixture.popup.get_preferred_popup_width().ceil() as usize;
+    let coordinates = |rgb| {
+        pixels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pixel)| {
+                ([pixel.r, pixel.g, pixel.b] == rgb).then_some((index % width, index / width))
+            })
+            .collect::<Vec<_>>()
+    };
+    let cover = coordinates([219, 13, 73]);
+    let app = coordinates([11, 187, 31]);
+    assert!(cover.len() >= 1400, "actual raw 40px cover must render");
+    assert!(app.len() >= 200, "actual trusted 16px app icon must render");
+    let cover_right = cover.iter().map(|(x, _)| *x).max().unwrap();
+    let cover_left = cover.iter().map(|(x, _)| *x).min().unwrap();
+    let cover_top = cover.iter().map(|(_, y)| *y).min().unwrap();
+    let cover_bottom = cover.iter().map(|(_, y)| *y).max().unwrap();
+    assert!((39..=40).contains(&(cover_right - cover_left + 1)));
+    assert!((39..=40).contains(&(cover_bottom - cover_top + 1)));
+    let app_left = app.iter().map(|(x, _)| *x).min().unwrap();
+    let app_right = app.iter().map(|(x, _)| *x).max().unwrap();
+    assert!((15..=16).contains(&(app_right - app_left + 1)));
+    assert!(
+        app_left > cover_right,
+        "app icon is a sibling, never a cover overlay"
+    );
+    let metadata = fixture.element("Actual title 後\nRecorded artist · Björk\nPaused");
+    let covered_metadata_x = metadata.absolute_position().x;
+    assert!(
+        app_left as f32 >= metadata.absolute_position().x + metadata.size().width,
+        "trusted app icon belongs after the metadata column"
+    );
+    for label in [
+        "Mute output",
+        "Mute input",
+        "Previous track",
+        "Play",
+        "Next track",
+        "App Settings",
+    ] {
+        let element = fixture.element(label);
+        let origin = element.absolute_position();
+        let size = element.size();
+        assert!(origin.x >= 18.0 && origin.y >= 18.0);
+        assert!(origin.x + size.width <= 302.0);
+        assert!(
+            origin.y + size.height <= height - 18.0,
+            "late data must not clip {label}"
+        );
+    }
+
+    view.has_artwork = false;
+    fixture.popup.set_media_view(view.clone());
+    let pixels = fixture.render_fit();
+    assert!(
+        pixels
+            .iter()
+            .all(|pixel| [pixel.r, pixel.g, pixel.b] != [219, 13, 73])
+    );
+    assert!(
+        pixels
+            .iter()
+            .filter(|pixel| [pixel.r, pixel.g, pixel.b] == [11, 187, 31])
+            .count()
+            >= 200,
+        "trusted app icon remains independent when no cover was observed"
+    );
+    let uncovered_metadata = fixture.element("Actual title 後\nRecorded artist · Björk\nPaused");
+    assert!(
+        uncovered_metadata.absolute_position().x < covered_metadata_x,
+        "missing cover must not reserve a fabricated album slot"
+    );
+    view.has_app_icon = false;
+    fixture.popup.set_media_view(view);
+    fixture.popup.set_timeline_notice("".into());
+    fixture.popup.set_timeline_available(true);
+    fixture.popup.set_timeline_time("0:30 / 3:00".into());
+    fixture.popup.set_timeline_progress(1.0 / 6.0);
+    let pixels = fixture.render_fit();
+    assert!(
+        pixels
+            .iter()
+            .all(|pixel| [pixel.r, pixel.g, pixel.b] != [219, 13, 73]
+                && [pixel.r, pixel.g, pixel.b] != [11, 187, 31]),
+        "no fabricated or retained artwork"
+    );
+    assert!(fixture.has_element("Observed position: 0:30 / 3:00"));
+    fixture.render(180, 80);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "layout never emits transports or seek"
+    );
+}
+
+#[test]
+fn quick_settings_media_observation_failure_exposes_existing_refresh_without_transport_replay() {
+    let fixture = Fixture::player();
+    let mut view = current_player();
+    view.read_notice = "Media read failed".into();
+    view.stale = true;
+    fixture.popup.set_media_view(view);
+    fixture.render_fit();
+    let refresh = fixture.element("Refresh audio and media");
+    assert_eq!(refresh.accessible_role(), Some(AccessibleRole::Button));
+    fixture.click(&refresh);
+    assert_eq!(fixture.take_requests(), [Request::Refresh]);
+    refresh.invoke_accessible_default_action();
+    assert_eq!(fixture.take_requests(), [Request::Refresh]);
+    assert_eq!(fixture.element("Play").accessible_enabled(), Some(false));
 }

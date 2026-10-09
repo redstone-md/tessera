@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use tessera_system::media::{
     MediaAction, MediaCapabilities, MediaHost, MediaPlayback, MediaSession, MediaSessionKey,
+    MediaTimeline,
 };
 
 use super::*;
@@ -260,6 +261,14 @@ fn session() -> MediaSession {
             toggle: true,
             next: true,
         },
+        timeline: Ok(MediaTimeline {
+            start_ticks: 0,
+            end_ticks: 900_000_000,
+            position_ticks: 300_000_000,
+            min_seek_ticks: 0,
+            max_seek_ticks: 900_000_000,
+            last_updated_utc_ticks: None,
+        }),
         artwork: None,
         artwork_notice: None,
     }
@@ -336,6 +345,42 @@ fn production_driver_preserves_empty_error_playback_and_artwork_health() {
         assert_eq!(actual.artwork_notice, Some(error(MediaErrorKind::Other)));
         assert!(actual.capabilities.toggle);
     }
+    finish(harness);
+}
+
+#[test]
+fn actor_preserves_independent_timeline_failure_and_existing_transport_completion() {
+    let harness = start(Recording::new());
+    let mut expected = session();
+    expected.timeline = Err(error(MediaErrorKind::Unavailable));
+    expected.artwork_notice = Some(error(MediaErrorKind::Other));
+    harness.recording.lock().snapshot = Ok(MediaSnapshot {
+        current: Some(expected.clone()),
+    });
+    assert_eq!(
+        read(&harness.service).unwrap().current,
+        Some(expected.clone())
+    );
+    for action in [
+        MediaAction::Previous,
+        MediaAction::Toggle,
+        MediaAction::Next,
+    ] {
+        execute(&harness.service, expected.key, action).unwrap();
+    }
+    assert_eq!(
+        harness.recording.lock().commands,
+        [
+            MediaAction::Previous,
+            MediaAction::Toggle,
+            MediaAction::Next
+        ]
+        .map(|action| MediaCommand {
+            expected_session: expected.key,
+            action
+        })
+    );
+    assert_eq!(harness.recording.lock().reads, 1);
     finish(harness);
 }
 

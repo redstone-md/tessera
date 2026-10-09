@@ -1442,6 +1442,15 @@ impl LauncherFixture {
         snapshot: PanelSnapshot,
         configure: impl FnOnce(&Self),
     ) -> Self {
+        Self::with_snapshot_host_configured(preferences, snapshot, |_| {}, configure)
+    }
+
+    fn with_snapshot_host_configured(
+        preferences: PanelPreferences,
+        snapshot: PanelSnapshot,
+        configure_host: impl FnOnce(&Arc<FixtureHost>),
+        configure: impl FnOnce(&Self),
+    ) -> Self {
         LAUNCHER_BACKEND_INITIALIZED.with(|initialized| {
             if !initialized.replace(true) {
                 i_slint_backend_testing::init_no_event_loop();
@@ -1450,6 +1459,7 @@ impl LauncherFixture {
         let panel = Panel::new().unwrap();
         panel.set_start_of_week_index(preferences.general().start_of_week().index());
         let host = FixtureHost::returning(snapshot.clone());
+        configure_host(&host);
         let mut subscription_error = None;
         let (core, _guard) = SurfaceCore::new(host.clone(), &preferences, &mut subscription_error);
         let dock = Dock::new().unwrap();

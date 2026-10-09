@@ -2,11 +2,66 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
+use crate::generated::Dock;
 use crate::{PanelPreferences, PanelSnapshot, SystemAction};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle};
 use slint::platform::{Key, WindowEvent};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tessera_system::audio::AudioCompletion;
+use tessera_system::media::{
+    MediaCapabilities, MediaCommand, MediaCommandCompletion, MediaError, MediaEvent, MediaHost,
+    MediaPlayback, MediaReadCompletion, MediaSession, MediaSessionKey, MediaSnapshot,
+    MediaTimeline,
+};
+
+thread_local! {
+    static MEDIA_FACTORY_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    static MEDIA_RETIRE_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    static FOCUS_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+}
+
+#[derive(Default)]
+struct RecordingPopupMedia {
+    reads: AtomicUsize,
+    events: Arc<Mutex<Vec<&'static str>>>,
+    observation: Mutex<MediaSnapshot>,
+}
+
+struct PopupMediaLease(Arc<Mutex<Vec<&'static str>>>);
+
+impl Drop for PopupMediaLease {
+    fn drop(&mut self) {
+        self.0.lock().push("media-unwatch");
+        let hook = MEDIA_RETIRE_HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+}
+
+impl MediaHost for RecordingPopupMedia {
+    fn read(&self, completion: MediaReadCompletion) -> Result<(), MediaError> {
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        self.events.lock().push("media-read");
+        let snapshot = self.observation.lock().clone();
+        completion(Ok(snapshot));
+        Ok(())
+    }
+
+    fn execute(&self, _: MediaCommand, _: MediaCommandCompletion) -> Result<(), MediaError> {
+        panic!("Quick Settings lifecycle/fit fixtures must not dispatch transports")
+    }
+
+    fn subscribe(
+        &self,
+        changed: Arc<dyn Fn(MediaEvent) + Send + Sync>,
+    ) -> Result<Option<Box<dyn Send>>, MediaError> {
+        self.events.lock().push("media-watch");
+        changed(MediaEvent::WatchReady);
+        Ok(Some(Box::new(PopupMediaLease(self.events.clone()))))
+    }
+}
 
 type ResultSnapshot = Result<AudioSnapshot, AudioError>;
 
@@ -175,6 +230,8 @@ struct RecordingDesktop {
     deny_focus: AtomicBool,
     deny_attachment: AtomicBool,
     close_during_attachment: AtomicBool,
+    media: Arc<RecordingPopupMedia>,
+    media_provider_calls: AtomicUsize,
 }
 
 struct SurfaceLease(Arc<Mutex<Vec<&'static str>>>);
@@ -206,6 +263,15 @@ impl DesktopHost for RecordingDesktop {
         self.provider.lock().clone()
     }
 
+    fn media_host(&self) -> Result<Option<Arc<dyn MediaHost>>, MediaError> {
+        self.media_provider_calls.fetch_add(1, Ordering::Relaxed);
+        let hook = MEDIA_FACTORY_HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(Some(self.media.clone()))
+    }
+
     fn configure_surface(
         &self,
         kind: SurfaceKind,
@@ -231,6 +297,10 @@ impl DesktopHost for RecordingDesktop {
     fn request_ui_focus(&self, window: &slint::Window) -> Result<(), String> {
         assert!(window.is_visible());
         self.events.lock().push("focus");
+        let hook = FOCUS_HOOK.with(|slot| slot.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
         if self.deny_focus.load(Ordering::Relaxed) {
             Err("OS denied foreground".into())
         } else {
@@ -254,9 +324,17 @@ fn setup() -> (
         deny_focus: AtomicBool::new(false),
         deny_attachment: AtomicBool::new(false),
         close_during_attachment: AtomicBool::new(false),
+        media: Arc::new(RecordingPopupMedia {
+            reads: AtomicUsize::new(0),
+            events: Arc::clone(&audio.events),
+            observation: Mutex::default(),
+        }),
+        media_provider_calls: AtomicUsize::new(0),
     });
     let panel = Panel::new().unwrap();
-    let controller = QuickSettingsController::new(host.clone(), &panel).unwrap();
+    let dock = Dock::new().unwrap();
+    let media = DockMediaController::new(host.clone(), &dock);
+    let controller = QuickSettingsController::new(host.clone(), &panel, media).unwrap();
     (host, audio, panel, controller)
 }
 
@@ -1229,4 +1307,420 @@ fn preferred_size_notifications_coalesce_refit_and_cannot_revive_a_closed_sessio
         [RecordedRequest::Read],
         "geometry notifications never start audio work"
     );
+}
+
+#[test]
+fn media_attachment_requires_authorized_native_show_and_retires_before_audio_and_surface() {
+    let (host, audio, _panel, controller) = setup();
+    controller.attach_media();
+    controller.surface.set_timeline_available(true);
+    controller.surface.set_timeline_time("0:30 / 3:00".into());
+    controller
+        .surface
+        .invoke_media_action_requested(MediaAction::Toggle, "untrusted".into());
+    assert!(!controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 0);
+
+    host.deny_attachment.store(true, Ordering::Relaxed);
+    assert!(show(&controller).is_err());
+    controller.attach_media();
+    assert!(!controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 0);
+    host.deny_attachment.store(false, Ordering::Relaxed);
+    host.close_during_attachment.store(true, Ordering::Relaxed);
+    show(&controller).unwrap();
+    controller.attach_media();
+    assert!(!controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 0);
+    host.close_during_attachment.store(false, Ordering::Relaxed);
+
+    // OS focus denial is distinct from a genuinely visible native popup.
+    host.deny_focus.store(true, Ordering::Relaxed);
+    assert!(show(&controller).is_err());
+    assert!(controller.is_open());
+    assert!(
+        !controller.media_input_ready(),
+        "show itself never attaches media"
+    );
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 0);
+    controller.attach_media();
+    controller.attach_media();
+    assert!(controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    controller.media.process_events();
+    controller.request_media(MediaAction::Toggle, "not-current");
+    assert!(controller.surface.get_media_view().enabled);
+
+    host.events.lock().clear();
+    controller.hide();
+    assert!(!controller.media_input_ready());
+    assert!(!controller.surface.get_media_view().enabled);
+    assert!(!controller.surface.get_timeline_available());
+    assert!(controller.surface.get_timeline_time().is_empty());
+    assert_eq!(
+        &*host.events.lock(),
+        &["media-unwatch", "unwatch", "detach"],
+        "shared media demand must retire before audio watch and native lease"
+    );
+    controller.request_media(MediaAction::Next, "not-current");
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    audio.finish(Ok(snapshot(30.0, 20.0)));
+    drain(&controller);
+}
+
+#[test]
+fn pending_media_attachment_reentry_cannot_detach_the_newer_same_window_token() {
+    let (host, _audio, _panel, controller) = setup();
+    show(&controller).unwrap();
+    let reopened = controller.clone();
+    MEDIA_FACTORY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            assert!(
+                reopened.media_input_ready(),
+                "token is installed before provider effects"
+            );
+            reopened.hide();
+            show(&reopened).unwrap();
+            reopened.attach_media();
+            assert!(reopened.media_input_ready());
+        }));
+    });
+    controller.attach_media();
+    assert!(controller.is_open());
+    assert!(controller.media_input_ready());
+    assert!(controller.surface.get_media_view().enabled);
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    controller.media.process_events();
+    assert_eq!(controller.surface.get_media_view().status, "Not playing");
+    controller.hide();
+    assert!(!controller.media_input_ready());
+}
+
+#[test]
+fn media_watch_retirement_reentry_preserves_new_attachment_audio_watch_and_native_lease() {
+    let (host, audio, _panel, controller) = setup();
+    loaded(&controller, &audio, snapshot(30.0, 20.0));
+    controller.attach_media();
+    controller.media.process_events();
+    let old_token = controller.media_attachment.get().unwrap();
+    let reopened = controller.clone();
+    MEDIA_RETIRE_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            show(&reopened).unwrap();
+            reopened.attach_media();
+        }));
+    });
+    controller.hide();
+    assert!(controller.is_open());
+    assert!(controller.media_input_ready());
+    assert!(controller.surface.get_media_view().enabled);
+    assert!(controller.watch.borrow().is_some());
+    assert_ne!(controller.media_attachment.get(), Some(old_token));
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 2);
+    controller.media.detach_popup(old_token);
+    controller.media.process_events();
+    assert!(controller.media_input_ready());
+    assert_eq!(controller.surface.get_media_view().status, "Not playing");
+    host.events.lock().clear();
+    controller.hide();
+    assert_eq!(
+        &*host.events.lock(),
+        &["media-unwatch", "unwatch", "detach"]
+    );
+}
+
+#[test]
+fn scoped_show_stops_after_focus_callback_replaces_the_root_popup_operation() {
+    let (host, audio, _panel, controller) = setup();
+    let current = Rc::new(Cell::new(true));
+    let replaced = current.clone();
+    let reopened = controller.clone();
+    FOCUS_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            replaced.set(false);
+            reopened.hide();
+            show(&reopened).unwrap();
+            reopened.attach_media();
+        }));
+    });
+    controller
+        .show_scoped(
+            PresentationTheme::uniform(slint::language::ColorScheme::Dark),
+            PhysicalPosition::new(-960, 60),
+            DockContext::new(-1920, 0, 1920, 1080, false).unwrap(),
+            1.5,
+            || current.get(),
+        )
+        .unwrap();
+    assert!(controller.is_open());
+    assert!(controller.media_input_ready());
+    assert_eq!(audio.requests(), [RecordedRequest::Read]);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    let token = controller.media_attachment.get();
+    controller
+        .show_scoped(
+            PresentationTheme::uniform(slint::language::ColorScheme::Light),
+            PhysicalPosition::new(0, 0),
+            DockContext::new(0, 0, 1920, 1080, false).unwrap(),
+            1.0,
+            || false,
+        )
+        .unwrap();
+    assert!(controller.is_open());
+    assert_eq!(controller.media_attachment.get(), token);
+    controller.hide();
+}
+
+#[test]
+fn late_media_and_timeline_refit_preserves_audio_intent_attachment_and_native_lease() {
+    let (host, audio, _panel, controller) = setup();
+    loaded(&controller, &audio, snapshot(40.0, 30.0));
+    controller.attach_media();
+    controller.media.process_events();
+    let initial_height = controller.surface.window().size().height;
+    let generation = controller.state.borrow().generation;
+    let token = controller.media_attachment.get();
+    controller
+        .surface
+        .invoke_volume_requested(AudioRoute::Output, 55.0);
+    *host.media.observation.lock() = MediaSnapshot {
+        current: Some(MediaSession {
+            key: MediaSessionKey::issue().unwrap(),
+            source_app_id: "actual.player".into(),
+            title: "Actual title".into(),
+            author: "Actual artist".into(),
+            playback: MediaPlayback::Paused,
+            capabilities: MediaCapabilities {
+                previous: true,
+                toggle: true,
+                next: true,
+            },
+            timeline: Ok(MediaTimeline {
+                start_ticks: 0,
+                end_ticks: 1_800_000_000,
+                position_ticks: 300_000_000,
+                min_seek_ticks: 0,
+                max_seek_ticks: 1_800_000_000,
+                last_updated_utc_ticks: Some(123),
+            }),
+            artwork: None,
+            artwork_notice: None,
+        }),
+    };
+    controller.retry_media();
+    host.events.lock().clear();
+    controller.media.process_events();
+    let size = controller.surface.window().size();
+    assert!(
+        size.height > initial_height,
+        "completed domain batch must immediately refit the native viewport"
+    );
+    assert!(controller.surface.get_timeline_available());
+    assert_eq!(
+        controller.surface.get_timeline_time(),
+        "0:30 / 3:00 · observed"
+    );
+    for label in ["Previous track", "Play", "Next track"] {
+        let node = ElementHandle::find_by_accessible_label(&controller.component(), label)
+            .next()
+            .unwrap_or_else(|| {
+                panic!("completed projection must immediately expose real AX transport: {label}")
+            });
+        assert_eq!(node.accessible_role(), Some(AccessibleRole::Button));
+        assert_eq!(node.accessible_enabled(), Some(true));
+        let origin = node.absolute_position();
+        let bounds = node.size();
+        assert!(bounds.width > 0.0 && bounds.height > 0.0);
+        assert!(origin.x >= 0.0 && origin.y >= 0.0);
+        assert!(origin.x + bounds.width <= size.width as f32);
+        assert!(
+            origin.y + bounds.height <= size.height as f32,
+            "real {label} must not remain clipped by the old native viewport"
+        );
+    }
+    assert_eq!(controller.state.borrow().generation, generation);
+    assert_eq!(controller.media_attachment.get(), token);
+    assert!(controller.media_input_ready());
+    assert_eq!(controller.surface.get_output_percent(), 55.0);
+    assert!(
+        host.events.lock().is_empty(),
+        "late fit cannot reattach or steal focus"
+    );
+    assert_eq!(audio.requests(), [RecordedRequest::Read]);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 2);
+    controller.hide();
+    let hidden_size = controller.surface.window().size();
+    controller.surface.invoke_media_projection_complete();
+    assert_eq!(controller.surface.window().size(), hidden_size);
+    controller.surface.invoke_preferred_size_changed();
+    advance(0);
+    assert!(!controller.is_open());
+    assert_eq!(controller.surface.window().size(), hidden_size);
+    assert!(!controller.media_input_ready());
+}
+
+#[test]
+fn existing_refresh_requires_root_admission_before_attached_media_observation() {
+    let (host, audio, _panel, controller) = setup();
+    loaded(&controller, &audio, snapshot(40.0, 30.0));
+    controller.attach_media();
+    controller.media.process_events();
+    controller.surface.invoke_refresh_requested();
+    assert_eq!(
+        host.media.reads.load(Ordering::Relaxed),
+        1,
+        "constructor cannot admit media refresh"
+    );
+    let admitted = Rc::new(Cell::new(false));
+    let root_admission = admitted.clone();
+    let weak = Rc::downgrade(&controller);
+    controller.surface.on_media_refresh_requested(move || {
+        if root_admission.get()
+            && let Some(controller) = weak.upgrade()
+        {
+            controller.retry_media();
+        }
+    });
+    controller.surface.invoke_refresh_requested();
+    assert_eq!(
+        host.media.reads.load(Ordering::Relaxed),
+        1,
+        "retired Root/Toolbar rejects media refresh"
+    );
+    admitted.set(true);
+    controller.surface.invoke_refresh_requested();
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        audio.requests(),
+        [RecordedRequest::Read, RecordedRequest::Read]
+    );
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 1);
+    controller.media.process_events();
+    controller.hide();
+    controller.surface.invoke_refresh_requested();
+    controller.surface.invoke_media_refresh_requested();
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        audio.requests(),
+        [RecordedRequest::Read, RecordedRequest::Read]
+    );
+    assert!(!controller.media_input_ready());
+}
+
+#[test]
+fn scoped_media_attachment_rechecks_root_admission_after_factory_before_watch_and_read() {
+    let (host, _audio, _panel, controller) = setup();
+    show(&controller).unwrap();
+    let admitted = Rc::new(Cell::new(false));
+    let current_scope = admitted.clone();
+    let admission: Rc<dyn Fn() -> bool> = Rc::new(move || current_scope.get());
+    controller.attach_media_scoped(admission.clone());
+    assert!(!controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 0);
+
+    admitted.set(true);
+    let retired_scope = admitted.clone();
+    MEDIA_FACTORY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || retired_scope.set(false)));
+    });
+    controller.attach_media_scoped(admission.clone());
+    assert!(
+        controller.is_open(),
+        "local native visibility is not Root source authority"
+    );
+    assert!(!controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 0);
+    assert!(
+        host.events
+            .lock()
+            .iter()
+            .all(|event| *event != "media-watch" && *event != "media-read"),
+        "factory retirement must reject all subsequent native subscription/read effects"
+    );
+    controller.retry_media();
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 1);
+
+    admitted.set(true);
+    controller.attach_media_scoped(admission);
+    assert!(controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    controller.media.process_events();
+    assert_eq!(controller.surface.get_media_view().status, "Not playing");
+    controller.hide();
+}
+
+#[test]
+fn scoped_media_admission_callback_reentry_preserves_new_popup_attachment() {
+    let (host, _audio, _panel, controller) = setup();
+    show(&controller).unwrap();
+    let first_check = Cell::new(true);
+    let weak = Rc::downgrade(&controller);
+    let admission: Rc<dyn Fn() -> bool> = Rc::new(move || {
+        if first_check.replace(false) {
+            let reopened = weak.upgrade().unwrap();
+            reopened.hide();
+            show(&reopened).unwrap();
+            reopened.attach_media();
+        }
+        true
+    });
+    controller.attach_media_scoped(admission);
+    assert!(controller.is_open());
+    assert!(controller.media_input_ready());
+    assert_eq!(host.media_provider_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    controller.media.process_events();
+    assert_eq!(controller.surface.get_media_view().status, "Not playing");
+    controller.hide();
+}
+
+#[test]
+fn durable_media_admission_retirement_disables_input_without_replaying_accepted_read() {
+    let (host, _audio, _panel, controller) = setup();
+    show(&controller).unwrap();
+    let admitted = Rc::new(Cell::new(true));
+    let current_scope = admitted.clone();
+    let admission: Rc<dyn Fn() -> bool> = Rc::new(move || current_scope.get());
+    controller.attach_media_scoped(admission.clone());
+    assert!(controller.media_input_ready());
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+    controller.surface.set_timeline_available(true);
+    controller.surface.set_timeline_time("0:30 / 3:00".into());
+    controller
+        .surface
+        .set_timeline_notice("Recorded timeline notice".into());
+    admitted.set(false);
+    assert!(!controller.media_input_ready());
+    assert!(
+        controller.is_open(),
+        "actual native visibility alone cannot revive retired Root authority"
+    );
+    assert!(!controller.surface.get_media_view().enabled);
+    assert!(!controller.surface.get_timeline_available());
+    assert!(controller.surface.get_timeline_time().is_empty());
+    assert!(controller.surface.get_timeline_notice().is_empty());
+    controller.media.process_events();
+    assert_eq!(
+        host.media.reads.load(Ordering::Relaxed),
+        1,
+        "accepted read retires without replay"
+    );
+    admitted.set(true);
+    controller.retry_media();
+    controller.request_media(MediaAction::Toggle, "retired-source");
+    assert!(!controller.media_input_ready());
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 1);
+
+    show(&controller).unwrap();
+    controller.attach_media_scoped(admission);
+    assert!(controller.media_input_ready());
+    assert_eq!(host.media.reads.load(Ordering::Relaxed), 2);
+    controller.media.process_events();
+    assert_eq!(controller.surface.get_media_view().status, "Not playing");
+    controller.hide();
 }

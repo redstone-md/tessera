@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Identity-bound audio intentions and the lifetime of one owned interactive popup.
+//! Identity-bound audio intentions and shared current-player attachment for one owned popup.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -15,7 +15,8 @@ use tessera_system::audio::{
     AudioSnapshot, EndpointId, EndpointState, Volume,
 };
 
-use crate::generated::{AudioRoute, Panel, PopoverMotion, QuickSettings};
+use crate::dock_media::{DockMediaController, PopupMediaToken};
+use crate::generated::{AudioRoute, MediaAction, Panel, PopoverMotion, QuickSettings};
 use crate::popup_placement::{self as placement, PopupRect};
 use crate::sanitize::bounded_text;
 use crate::theme::{PresentationTheme, ThemedComponent};
@@ -362,6 +363,10 @@ pub(crate) struct QuickSettingsController {
     surface: TransientWindow<QuickSettings>,
     host: Arc<dyn DesktopHost>,
     panel: slint::Weak<Panel>,
+    media: Rc<DockMediaController>,
+    media_attachment: Cell<Option<PopupMediaToken>>,
+    media_attaching: Cell<bool>,
+    presentation_epoch: RefCell<Rc<()>>,
     state: RefCell<AudioState>,
     mailbox: Arc<Mutex<Mailbox>>,
     watch: RefCell<Option<Box<dyn Send>>>,
@@ -377,11 +382,16 @@ impl QuickSettingsController {
     pub(crate) fn new(
         host: Arc<dyn DesktopHost>,
         panel: &Panel,
+        media: Rc<DockMediaController>,
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let controller = Rc::new(Self {
             surface: TransientWindow::new(host.clone(), QuickSettings::new()?, SurfaceKind::Popup),
             host,
             panel: panel.as_weak(),
+            media,
+            media_attachment: Cell::new(None),
+            media_attaching: Cell::new(false),
+            presentation_epoch: RefCell::new(Rc::new(())),
             state: RefCell::default(),
             mailbox: Arc::new(Mutex::default()),
             watch: RefCell::default(),
@@ -402,6 +412,15 @@ impl QuickSettingsController {
         controller.surface.on_preferred_size_changed(move || {
             if let Some(controller) = weak.upgrade() {
                 controller.schedule_fit();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_projection_complete(move || {
+            if let Some(controller) = weak.upgrade() {
+                let epoch = controller.presentation_epoch.borrow().clone();
+                if controller.media_input_ready() && controller.presentation_is_current(&epoch) {
+                    controller.fit();
+                }
             }
         });
         let weak = Rc::downgrade(&controller);
@@ -429,7 +448,11 @@ impl QuickSettingsController {
         let weak = Rc::downgrade(&controller);
         controller.surface.on_refresh_requested(move || {
             if let Some(controller) = weak.upgrade() {
+                let epoch = controller.presentation_epoch.borrow().clone();
                 controller.start_audio();
+                if controller.presentation_is_current(&epoch) && controller.media_input_ready() {
+                    controller.surface.invoke_media_refresh_requested();
+                }
             }
         });
         let weak = Rc::downgrade(&controller);
@@ -458,6 +481,98 @@ impl QuickSettingsController {
         self.surface.is_visible()
     }
 
+    pub(crate) fn component(&self) -> QuickSettings {
+        self.surface.clone_strong()
+    }
+
+    fn presentation_is_current(&self, epoch: &Rc<()>) -> bool {
+        Rc::ptr_eq(&self.presentation_epoch.borrow(), epoch)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach_media(&self) {
+        self.attach_media_scoped(Rc::new(|| true));
+    }
+
+    /// Root's durable admission follows the attachment into shared projection
+    /// and native submission; local visibility alone is not source authority.
+    pub(crate) fn attach_media_scoped(&self, admission: Rc<dyn Fn() -> bool>) {
+        let epoch = self.presentation_epoch.borrow().clone();
+        if !admission()
+            || !self.presentation_is_current(&epoch)
+            || !self.is_open()
+            || !self.surface.window().is_visible()
+            || self.media_attachment.get().is_some()
+            || self.media_attaching.get()
+        {
+            return;
+        }
+        self.media_attaching.set(true);
+        let installed_token = Cell::new(None);
+        let returned_token =
+            self.media
+                .attach_popup_scoped(&self.surface, admission.clone(), |token| {
+                    if !admission()
+                        || !self.presentation_is_current(&epoch)
+                        || !self.is_open()
+                        || !self.surface.window().is_visible()
+                        || self.media_attachment.get().is_some()
+                    {
+                        return false;
+                    }
+                    self.media_attachment.set(Some(token));
+                    installed_token.set(Some(token));
+                    true
+                });
+        if self.presentation_is_current(&epoch) {
+            self.media_attaching.set(false);
+        }
+        let Some(token) = returned_token.or(installed_token.get()) else {
+            return;
+        };
+        if returned_token.is_none()
+            || !admission()
+            || !self.presentation_is_current(&epoch)
+            || !self.is_open()
+            || !self.surface.window().is_visible()
+        {
+            if self.media_attachment.get() == Some(token) {
+                self.media_attachment.set(None);
+            }
+            self.media.detach_popup(token);
+        }
+    }
+
+    pub(crate) fn media_input_ready(&self) -> bool {
+        let Some(token) = self.media_attachment.get() else {
+            return false;
+        };
+        let epoch = self.presentation_epoch.borrow().clone();
+        self.is_open()
+            && self.surface.window().is_visible()
+            && self.media.popup_input_ready(token)
+            && self.presentation_is_current(&epoch)
+            && self.media_attachment.get() == Some(token)
+            && self.is_open()
+            && self.surface.window().is_visible()
+    }
+
+    /// Root owns the source/visibility admission callback, not this constructor.
+    pub(crate) fn request_media(&self, action: MediaAction, identity: &str) {
+        if self.media_input_ready()
+            && let Some(token) = self.media_attachment.get()
+        {
+            self.media.request_from_popup(token, action, identity);
+        }
+    }
+
+    pub(crate) fn retry_media(&self) {
+        if self.media_input_ready() {
+            self.media.retry();
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn show(
         self: &Rc<Self>,
         theme: PresentationTheme,
@@ -465,9 +580,27 @@ impl QuickSettingsController {
         context: DockContext,
         scale: f32,
     ) -> Result<(), String> {
-        self.hide();
-        // The tile supplies its physical center and bottom. Align the body, not
-        // its ten-logical-pixel shadow footprint, immediately below that tile.
+        self.show_scoped(theme, anchor, context, scale, || true)
+    }
+
+    pub(crate) fn show_scoped(
+        self: &Rc<Self>,
+        theme: PresentationTheme,
+        anchor: PhysicalPosition,
+        context: DockContext,
+        scale: f32,
+        current: impl Fn() -> bool,
+    ) -> Result<(), String> {
+        if !current() {
+            return Ok(());
+        }
+        let epoch = Rc::new(());
+        self.hide_in(epoch.clone());
+        let is_current = || current() && self.presentation_is_current(&epoch);
+        if !is_current() {
+            return Ok(());
+        }
+        // Align the body, not its shadow footprint, immediately below the tile.
         let anchor = placement::physical_anchor(anchor, scale, (0.0, -10.0))?;
         self.placement.set(Some(Placement {
             anchor,
@@ -477,12 +610,24 @@ impl QuickSettingsController {
         self.state.borrow_mut().read_requested = true;
         self.mailbox.lock().generation = Some(self.state.borrow().generation);
         self.surface.apply_presentation_theme(theme);
+        if !is_current() {
+            return Ok(());
+        }
         self.project();
+        if !is_current() {
+            return Ok(());
+        }
         let presentation = self.preferred_rect().and_then(|rect| {
+            if !is_current() {
+                return Ok((rect, false));
+            }
             self.surface
                 .present(rect.position, rect.size)
                 .map(|shown| (rect, shown))
         });
+        if !is_current() {
+            return Ok(());
+        }
         let rect = match presentation {
             Ok((rect, true)) => rect,
             Ok((_, false)) => {
@@ -496,9 +641,21 @@ impl QuickSettingsController {
         };
         *self.rect.borrow_mut() = Some(rect);
         self.surface.invoke_focus_content();
+        if !is_current() {
+            return Ok(());
+        }
         let focus = self.surface.request_focus();
+        if !is_current() {
+            return Ok(());
+        }
         self.watch_focus();
+        if !is_current() {
+            return Ok(());
+        }
         self.start_audio();
+        if !is_current() {
+            return Ok(());
+        }
         focus.map_err(|error| {
             bounded_text(
                 &format!("Audio popup opened, but keyboard focus was not granted: {error}"),
@@ -508,6 +665,44 @@ impl QuickSettingsController {
     }
 
     pub(crate) fn hide(&self) {
+        self.hide_in(Rc::new(()));
+    }
+
+    fn hide_in(&self, epoch: Rc<()>) {
+        self.presentation_epoch.replace(epoch.clone());
+        self.media_attaching.set(false);
+        if let Some(token) = self.media_attachment.take() {
+            self.media.detach_popup(token);
+        }
+        // Detachment setters can reenter show/attach. Old cleanup must not
+        // cancel the new source, stop its timers or release its native lease.
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
+        self.surface.invoke_cancel_media_input();
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
+        self.surface.set_media_view(Default::default());
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
+        self.surface.set_timeline_available(false);
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
+        self.surface.set_timeline_notice(Default::default());
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
+        self.surface.set_timeline_time(Default::default());
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
+        self.surface.set_timeline_progress(0.0);
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
         self.focus_watch.stop();
         self.volume_timer.stop();
         self.fit_timer.stop();
@@ -531,7 +726,11 @@ impl QuickSettingsController {
             mailbox.changed = false;
             mailbox.watch = None;
         }
-        drop(self.watch.borrow_mut().take());
+        let watch = self.watch.borrow_mut().take();
+        drop(watch);
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
         self.placement.set(None);
         self.rect.borrow_mut().take();
         self.surface.hide();

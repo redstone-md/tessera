@@ -18,6 +18,14 @@ fn session() -> MediaSession {
             toggle: true,
             next: false,
         },
+        timeline: Ok(MediaTimeline {
+            start_ticks: 0,
+            end_ticks: 900_000_000,
+            position_ticks: 300_000_000,
+            min_seek_ticks: 0,
+            max_seek_ticks: 900_000_000,
+            last_updated_utc_ticks: Some(133_000_000_000_000_000),
+        }),
         artwork: None,
         artwork_notice: None,
     }
@@ -137,4 +145,86 @@ fn playback_capabilities_absence_and_native_error_are_not_synthesized() {
         MediaError::new(MediaErrorKind::Rejected, "OS refused transport").hresult,
         None
     );
+}
+
+#[test]
+fn timeline_failure_is_independent_of_metadata_artwork_and_transports() {
+    let mut original = session();
+    let expected = original.clone();
+    let notice = MediaError::with_hresult(
+        MediaErrorKind::Unavailable,
+        "Recorded timeline failure",
+        -2147024891,
+    );
+    original.timeline = Err(notice.clone());
+    let bounded = original.bounded();
+    assert_eq!(bounded.timeline, Err(notice));
+    assert_eq!(bounded.key, expected.key);
+    assert_eq!(bounded.title, expected.title);
+    assert_eq!(bounded.author, expected.author);
+    assert_eq!(bounded.playback, expected.playback);
+    assert_eq!(bounded.capabilities, expected.capabilities);
+    assert_eq!(bounded.artwork, expected.artwork);
+    assert_eq!(bounded.artwork_notice, expected.artwork_notice);
+}
+
+#[test]
+fn timeline_ingress_preserves_zero_signed_invalid_and_extreme_observations() {
+    for (start, end, position, min_seek, max_seek, utc) in [
+        (0, 0, 0, 0, 0, None),
+        (-50, 50, -25, -40, 40, Some(-1)),
+        (10, -10, 20, 15, -15, Some(0)),
+        (
+            i64::MIN,
+            i64::MAX,
+            i64::MIN,
+            i64::MIN,
+            i64::MAX,
+            Some(i64::MAX),
+        ),
+        (
+            i64::MAX,
+            i64::MIN,
+            i64::MAX,
+            i64::MAX,
+            i64::MIN,
+            Some(i64::MIN),
+        ),
+    ] {
+        let facts = MediaTimeline {
+            start_ticks: start,
+            end_ticks: end,
+            position_ticks: position,
+            min_seek_ticks: min_seek,
+            max_seek_ticks: max_seek,
+            last_updated_utc_ticks: utc,
+        };
+        let mut original = session();
+        original.timeline = Ok(facts);
+        let bounded = original.bounded();
+        assert_eq!(bounded.timeline, Ok(facts));
+        assert!(
+            MediaSnapshot {
+                current: Some(bounded)
+            }
+            .current
+            .is_some()
+        );
+    }
+}
+
+#[test]
+fn missing_utc_timestamp_keeps_five_timeline_facts_available() {
+    let mut original = session();
+    let mut facts = *original.timeline.as_ref().unwrap();
+    let expected = facts;
+    facts.last_updated_utc_ticks = None;
+    original.timeline = Ok(facts);
+    let observed = original.bounded().timeline.unwrap();
+    assert_eq!(observed.start_ticks, expected.start_ticks);
+    assert_eq!(observed.end_ticks, expected.end_ticks);
+    assert_eq!(observed.position_ticks, expected.position_ticks);
+    assert_eq!(observed.min_seek_ticks, expected.min_seek_ticks);
+    assert_eq!(observed.max_seek_ticks, expected.max_seek_ticks);
+    assert_eq!(observed.last_updated_utc_ticks, None);
 }

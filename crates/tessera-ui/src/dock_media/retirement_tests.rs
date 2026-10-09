@@ -85,3 +85,52 @@ fn dock_media_gesture_identity_uses_session_incarnation_and_enabled_generation_n
     assert!(fixture.view().session_identity.is_empty());
     assert!(fixture.media.commands.lock().is_empty());
 }
+
+#[test]
+fn popup_pending_attach_reentry_cannot_detach_newer_same_window_presentation() {
+    let fixture = Fixture::new();
+    let popup = QuickSettings::new().unwrap();
+    popup.show().unwrap();
+    let weak = Rc::downgrade(&fixture.controller);
+    let view = popup.as_weak();
+    let newer = Rc::new(Cell::new(None));
+    let recorded = Rc::clone(&newer);
+    FACTORY_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            let controller = weak.upgrade().unwrap();
+            let old = controller.state.borrow().popup.as_ref().unwrap().token;
+            controller.detach_popup(old);
+            let popup = view.upgrade().unwrap();
+            recorded.set(controller.attach_popup(&popup));
+        }));
+    });
+    let old = fixture.controller.attach_popup(&popup).unwrap();
+    let new = newer.get().unwrap();
+    assert_ne!(old, new);
+    fixture.controller.detach_popup(old);
+    assert_eq!(
+        fixture
+            .controller
+            .state
+            .borrow()
+            .popup
+            .as_ref()
+            .unwrap()
+            .token,
+        new
+    );
+    assert_eq!(fixture.host.acquisitions.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        fixture.media.reads(),
+        1,
+        "retired unsubmitted factory result never reads"
+    );
+    assert_eq!(fixture.media.changed.lock().len(), 1);
+    fixture.media.finish_read(Ok(MediaSnapshot {
+        current: Some(session(MediaPlayback::Paused)),
+    }));
+    fixture.drain();
+    assert_eq!(popup.get_media_view().playback, "Paused");
+    fixture.controller.detach_popup(new);
+    popup.hide().unwrap();
+}

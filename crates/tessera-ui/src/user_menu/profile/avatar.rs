@@ -10,6 +10,8 @@
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use tessera_system::profile::ProfilePhoto;
 
+use crate::image_mask::{Mask, cover_pixels};
+
 const AVATAR_AXIS: u32 = 512;
 
 pub(crate) fn prepare(photo: &ProfilePhoto) -> Image {
@@ -17,51 +19,13 @@ pub(crate) fn prepare(photo: &ProfilePhoto) -> Image {
 }
 
 fn pixels(photo: &ProfilePhoto) -> SharedPixelBuffer<Rgba8Pixel> {
-    let width = photo.width() as usize;
-    let height = photo.height() as usize;
-    let side = width.min(height) as f32;
-    let left = (width as f32 - side) / 2.0;
-    let top = (height as f32 - side) / 2.0;
-    let axis = AVATAR_AXIS as usize;
-    let radius = AVATAR_AXIS as f32 / 2.0;
-    let source = photo.rgba().as_chunks::<4>().0;
-    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(AVATAR_AXIS, AVATAR_AXIS);
-    for (index, pixel) in buffer
-        .make_mut_bytes()
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .enumerate()
-    {
-        let x = index % axis;
-        let y = index / axis;
-        let dx = x as f32 + 0.5 - radius;
-        let dy = y as f32 + 0.5 - radius;
-        let coverage = (radius - dx.hypot(dy) + 0.5).clamp(0.0, 1.0);
-        if coverage == 0.0 {
-            continue;
-        }
-        // Match Image's centered cover crop, preserving aspect rather than
-        // stretching the canonical provider photo. Interpolate premul channels.
-        let sx = (left + (x as f32 + 0.5) * side / AVATAR_AXIS as f32 - 0.5)
-            .clamp(0.0, (width - 1) as f32);
-        let sy = (top + (y as f32 + 0.5) * side / AVATAR_AXIS as f32 - 0.5)
-            .clamp(0.0, (height - 1) as f32);
-        let x0 = sx.floor() as usize;
-        let y0 = sy.floor() as usize;
-        let x1 = (x0 + 1).min(width - 1);
-        let y1 = (y0 + 1).min(height - 1);
-        let tx = sx - x0 as f32;
-        let ty = sy - y0 as f32;
-        for (channel, output) in pixel.iter_mut().enumerate() {
-            let upper = source[y0 * width + x0][channel] as f32 * (1.0 - tx)
-                + source[y0 * width + x1][channel] as f32 * tx;
-            let lower = source[y1 * width + x0][channel] as f32 * (1.0 - tx)
-                + source[y1 * width + x1][channel] as f32 * tx;
-            *output = ((upper * (1.0 - ty) + lower * ty) * coverage).round() as u8;
-        }
-    }
-    buffer
+    cover_pixels(
+        photo.width(),
+        photo.height(),
+        photo.rgba(),
+        AVATAR_AXIS,
+        Mask::Circle,
+    )
 }
 
 #[cfg(test)]

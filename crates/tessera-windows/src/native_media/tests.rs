@@ -16,7 +16,7 @@ use std::{
 };
 use tessera_system::media::{
     MediaAction, MediaCapabilities, MediaCommand, MediaError, MediaErrorKind, MediaPlayback,
-    MediaSession, MediaSessionKey,
+    MediaSession, MediaSessionKey, MediaTimeline,
 };
 
 type Dirty = Arc<dyn Fn() + Send + Sync>;
@@ -28,6 +28,7 @@ struct Record {
     capabilities: MediaCapabilities,
     snapshot_error: Option<MediaError>,
     art_error: Option<MediaError>,
+    timeline: Result<MediaTimeline, MediaError>,
     snapshot_replacement: Option<u64>,
     capability_replacement: Option<u64>,
     transport_result: Result<bool, MediaError>,
@@ -52,6 +53,14 @@ impl Record {
             },
             snapshot_error: None,
             art_error: None,
+            timeline: Ok(MediaTimeline {
+                start_ticks: 0,
+                end_ticks: 900_000_000,
+                position_ticks: 300_000_000,
+                min_seek_ticks: 0,
+                max_seek_ticks: 900_000_000,
+                last_updated_utc_ticks: Some(133_000_000_000_000_000),
+            }),
             snapshot_replacement: None,
             capability_replacement: None,
             transport_result: Ok(true),
@@ -107,6 +116,7 @@ impl Calls for RecordingCalls {
                 author: "Recorded artist".into(),
                 playback: MediaPlayback::Playing,
                 capabilities: record.capabilities,
+                timeline: record.timeline.clone(),
                 artwork: None,
                 artwork_notice: record.art_error.clone(),
             }),
@@ -425,7 +435,8 @@ fn watch_registers_both_manager_and_current_events_and_callbacks_only_dirty() {
             (Event::Sessions, None),
             (Event::Current, None),
             (Event::Properties, Some(1)),
-            (Event::Playback, Some(1))
+            (Event::Playback, Some(1)),
+            (Event::Timeline, Some(1))
         ]
     );
     let callbacks = record
@@ -440,7 +451,7 @@ fn watch_registers_both_manager_and_current_events_and_callbacks_only_dirty() {
             callback();
         }
     }
-    assert_eq!(count.load(Ordering::Relaxed), 400);
+    assert_eq!(count.load(Ordering::Relaxed), 500);
     assert_eq!(record.borrow().log, log_before);
     assert!(record.borrow().effects.is_empty());
     // Coalescing belongs to the actor; this adapter never queues read/effects.
@@ -452,17 +463,22 @@ fn rebind_retires_old_callbacks_before_registering_replacement() {
     let (dirty, count) = dirty_counter();
     owner.start_watch(dirty).unwrap();
     let old_properties = record.borrow().registrations[2].3.clone();
+    let old_timeline = record.borrow().registrations[4].3.clone();
     let manager = record.borrow().registrations[0].3.clone();
     record.borrow_mut().replace(2);
     owner.refresh_watch().unwrap();
-    assert_eq!(record.borrow().removed, [4, 3]);
-    assert_eq!(record.borrow().registrations[4].1, Event::Properties);
-    assert_eq!(record.borrow().registrations[4].2, Some(2));
+    assert_eq!(record.borrow().removed, [5, 4, 3]);
+    assert_eq!(record.borrow().registrations[5].1, Event::Properties);
+    assert_eq!(record.borrow().registrations[5].2, Some(2));
+    assert_eq!(record.borrow().registrations[7].1, Event::Timeline);
+    assert_eq!(record.borrow().registrations[7].2, Some(2));
     old_properties();
+    old_timeline();
     assert_eq!(count.load(Ordering::Relaxed), 0);
     manager();
-    record.borrow().registrations[4].3.clone()();
-    assert_eq!(count.load(Ordering::Relaxed), 2);
+    record.borrow().registrations[5].3.clone()();
+    record.borrow().registrations[7].3.clone()();
+    assert_eq!(count.load(Ordering::Relaxed), 3);
     let attempts = record.borrow().register_attempts;
     owner.refresh_watch().unwrap();
     assert_eq!(record.borrow().register_attempts, attempts);
@@ -470,7 +486,7 @@ fn rebind_retires_old_callbacks_before_registering_replacement() {
 
 #[test]
 fn partial_registration_rolls_back_every_acquired_token_and_late_callbacks() {
-    for failed in 1..=4 {
+    for failed in 1..=5 {
         let (mut owner, record) = fixture();
         let (dirty, count) = dirty_counter();
         record.borrow_mut().fail_registration = Some(failed);
@@ -492,25 +508,27 @@ fn partial_registration_rolls_back_every_acquired_token_and_late_callbacks() {
 
 #[test]
 fn rebind_failure_and_drop_cleanup_are_idempotent_and_owner_local() {
-    let (mut owner, record) = fixture();
-    let (dirty, count) = dirty_counter();
-    owner.start_watch(dirty).unwrap();
-    record.borrow_mut().replace(2);
-    record.borrow_mut().fail_registration = Some(6);
-    assert_eq!(
-        owner.refresh_watch().unwrap_err().kind,
-        MediaErrorKind::WatchUnavailable
-    );
-    let mut removed = record.borrow().removed.clone();
-    removed.sort_unstable();
-    assert_eq!(removed, [1, 2, 3, 4, 5]);
-    for (_, _, _, callback) in &record.borrow().registrations {
-        callback();
+    for failed in 6..=8 {
+        let (mut owner, record) = fixture();
+        let (dirty, count) = dirty_counter();
+        owner.start_watch(dirty).unwrap();
+        record.borrow_mut().replace(2);
+        record.borrow_mut().fail_registration = Some(failed);
+        assert_eq!(
+            owner.refresh_watch().unwrap_err().kind,
+            MediaErrorKind::WatchUnavailable
+        );
+        let mut removed = record.borrow().removed.clone();
+        removed.sort_unstable();
+        assert_eq!(removed, (1..failed).collect::<Vec<_>>());
+        for (_, _, _, callback) in &record.borrow().registrations {
+            callback();
+        }
+        assert_eq!(count.load(Ordering::Relaxed), 0);
+        drop(owner);
+        assert_eq!(record.borrow().log.last(), Some(&"drop-calls"));
+        assert_eq!(record.borrow().removed.len(), failed - 1);
     }
-    assert_eq!(count.load(Ordering::Relaxed), 0);
-    drop(owner);
-    assert_eq!(record.borrow().log.last(), Some(&"drop-calls"));
-    assert_eq!(record.borrow().removed.len(), 5);
 }
 
 #[test]
@@ -525,7 +543,7 @@ fn stopping_and_dropping_watch_suppresses_all_late_delivery() {
         .map(|(_, _, _, callback)| callback.clone())
         .collect::<Vec<_>>();
     drop(owner);
-    assert_eq!(record.borrow().removed, [4, 3, 2, 1]);
+    assert_eq!(record.borrow().removed, [5, 4, 3, 2, 1]);
     for callback in late {
         callback();
     }
@@ -543,10 +561,12 @@ fn no_current_session_watch_stays_truthful_and_binds_only_when_current_exists() 
     owner.refresh_watch().unwrap();
     assert_eq!(record.borrow().registrations[2].2, Some(2));
     assert_eq!(record.borrow().registrations[3].2, Some(2));
+    assert_eq!(record.borrow().registrations[4].1, Event::Timeline);
+    assert_eq!(record.borrow().registrations[4].2, Some(2));
     record.borrow_mut().current = Ok(None);
     owner.refresh_watch().unwrap();
-    assert_eq!(record.borrow().removed, [4, 3]);
-    assert_eq!(record.borrow().register_attempts, 4);
+    assert_eq!(record.borrow().removed, [5, 4, 3]);
+    assert_eq!(record.borrow().register_attempts, 5);
 }
 
 #[test]
@@ -594,4 +614,57 @@ fn artwork_decode_plan_preserves_aspect_without_upscaling_and_validates_output()
     assert!(plan.accept(&[]).is_err());
     assert!(plan.accept(&rgba[..4]).is_err());
     assert!(plan.accept(&[255, 0, 0, 128, 9, 10, 11, 255]).is_err());
+}
+
+#[test]
+fn timeline_failure_preserves_metadata_artwork_and_all_three_transport_authorities() {
+    let (mut owner, record) = fixture();
+    let notice = MediaError::with_hresult(
+        MediaErrorKind::Unavailable,
+        "Recorded timeline failure",
+        -77,
+    );
+    let artwork_notice = MediaError::new(MediaErrorKind::Other, "Recorded thumbnail failure");
+    record.borrow_mut().timeline = Err(notice.clone());
+    record.borrow_mut().art_error = Some(artwork_notice.clone());
+    let session = displayed(&mut owner);
+    assert_eq!(session.timeline, Err(notice));
+    assert_eq!(session.title, "Recorded title");
+    assert_eq!(session.author, "Recorded artist");
+    assert_eq!(session.playback, MediaPlayback::Playing);
+    assert_eq!(session.capabilities, record.borrow().capabilities);
+    assert_eq!(session.artwork_notice, Some(artwork_notice));
+    assert!(session.artwork.is_none());
+    for action in [
+        MediaAction::Previous,
+        MediaAction::Toggle,
+        MediaAction::Next,
+    ] {
+        owner.execute(command(session.key, action)).unwrap();
+    }
+    assert_eq!(
+        record.borrow().effects,
+        [
+            (1, MediaAction::Previous),
+            (1, MediaAction::Toggle),
+            (1, MediaAction::Next)
+        ]
+    );
+}
+
+#[test]
+fn replacement_after_independent_timeline_failure_is_still_revalidated() {
+    let (mut owner, record) = fixture();
+    let old_key = displayed(&mut owner).key;
+    record.borrow_mut().timeline = Err(MediaError::new(
+        MediaErrorKind::Unavailable,
+        "Recorded timeline failure",
+    ));
+    record.borrow_mut().snapshot_replacement = Some(2);
+    assert_eq!(
+        owner.read().unwrap_err().kind,
+        MediaErrorKind::SessionChanged
+    );
+    assert_ne!(displayed(&mut owner).key, old_key);
+    assert!(record.borrow().effects.is_empty());
 }
