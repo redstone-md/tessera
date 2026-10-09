@@ -23,6 +23,7 @@ mod apps;
 mod audio;
 pub mod calendar;
 mod diagnostics;
+pub mod display_context;
 pub mod dock_utilities;
 mod error;
 mod events;
@@ -46,6 +47,9 @@ mod native_audio;
 mod native_calendar;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
+mod native_display_context;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
 mod native_dock_utilities;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -55,6 +59,9 @@ mod native_events;
 mod native_folders;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
+mod native_power;
+#[cfg(any(windows, test))]
+#[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
@@ -62,11 +69,14 @@ mod native_recycle_bin_mutation;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_window_actions;
+pub mod power;
 pub mod recycle_bin;
 pub mod recycle_bin_mutation;
 #[cfg(any(windows, test))]
 mod shell_recovery;
 mod shell_runtime;
+#[cfg(any(windows, test))]
+mod single_flight;
 mod snapshot;
 mod ui_preferences;
 mod window_actions;

@@ -27,6 +27,19 @@ https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256
 src/svg/contract-outline.svg
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/contract-outline.svg
 
+Unmodified launcher power and first-lock control artwork sources:
+src/svg/power.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/power.svg
+Bytes: 499
+Git blob: ff3a34b9436039f171e80c95421d2c33123dccd5
+SHA-256: d4d70119baa318e4bf21a5e4f37a1cf711d762a01811cee5fa760e5ce0d1d033
+src/svg/lock-closed.svg
+https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/src/svg/lock-closed.svg
+Bytes: 318
+Git blob: 6b57967bbe9542d7c2ed53e616c90f823297d4e6
+SHA-256: 58c0fad45808e4cbb27614a8a649c5c87d8397ad9bac73c7c266fdb928468ea1
+These are original independently licensed upstream SVGs, not reference-exported serialization.
+
 Full original MIT grant is retained in the adjacent LICENSE:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/LICENSE
 Copyright (c) 2015-present Ionic (http://ionic.io/)
@@ -34,5 +47,5 @@ Retain that copyright and complete permission notice with copies or substantial 
 
 The pinned upstream readme.md identifies the project license as MIT:
 https://raw.githubusercontent.com/ionic-team/ionicons/728aa746a0bcd49badc6bbf256994cdb41cdc927/readme.md
-The SVG titles ionicons-v5-k and ionicons-v5-b are retained verbatim; they are not copyright notices.
+The SVG titles ionicons-v5-k, ionicons-v5-b, ionicons-v5-p and ionicons-v5-g are retained verbatim; they are not copyright notices.
 No author endorsement or trademark rights are claimed.

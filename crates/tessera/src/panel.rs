@@ -98,8 +98,10 @@ mod desktop {
     use parking_lot::Mutex;
     use tessera_system::audio::{AudioError, AudioHost};
     use tessera_system::calendar::{CalendarError, CalendarHost};
+    use tessera_system::display_context::{DisplayContextError, DisplayContextHost};
     use tessera_system::dock_utilities::{DockUtilitiesHost, DockUtilityError};
     use tessera_system::folders::{FolderError, FolderHost};
+    use tessera_system::power::{PowerError, PowerHost};
     use tessera_system::recycle_bin::RecycleBinHost;
     use tessera_system::recycle_bin_mutation::RecycleBinMutationHost;
     use tessera_ui::{
@@ -142,6 +144,8 @@ mod desktop {
         dock_utilities: LazyLock<Provider<dyn DockUtilitiesHost>>,
         recycle_bin: LazyLock<Provider<dyn RecycleBinHost>>,
         recycle_bin_mutation: LazyLock<Provider<dyn RecycleBinMutationHost>>,
+        display_context: LazyLock<Provider<dyn DisplayContextHost>>,
+        power: LazyLock<Provider<dyn PowerHost>>,
     }
 
     fn icon(pixels: &IconPixels) -> Option<PixelIcon> {
@@ -241,6 +245,19 @@ mod desktop {
         fn calendar_host(&self) -> Result<Option<Arc<dyn CalendarHost>>, CalendarError> {
             self.calendar
                 .get(tessera_windows::calendar::native_calendar_host)
+                .map(Some)
+        }
+        fn display_context_host(
+            &self,
+        ) -> Result<Option<Arc<dyn DisplayContextHost>>, DisplayContextError> {
+            self.display_context
+                .get(tessera_windows::display_context::native_display_context_host)
+                .map(Some)
+        }
+
+        fn power_host(&self) -> Result<Option<Arc<dyn PowerHost>>, PowerError> {
+            self.power
+                .get(tessera_windows::power::native_power_host)
                 .map(Some)
         }
 
@@ -503,6 +520,8 @@ mod desktop {
             dock_utilities: LazyLock::new(Provider::default),
             recycle_bin: LazyLock::new(Provider::default),
             recycle_bin_mutation: LazyLock::new(Provider::default),
+            display_context: LazyLock::new(Provider::default),
+            power: LazyLock::new(Provider::default),
         };
         tessera_ui::run(
             host,

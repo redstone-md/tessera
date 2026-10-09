@@ -7,7 +7,7 @@ export { Dock, DockApp, DockWindow, DockStatus } from "dock.slint";
 export { DockWindowCommand, DockSystemCommand, DockMenuKind, DockMenuAction, DockReservedAction, DockRecycleAction, DockRecycleState } from "shell-commands.slint";
 export { ContextMenuSurface } from "context-menu.slint";
 export { TooltipSurface } from "tooltip.slint";
-export { TileBounds } from "tiles.slint";
+export { TileBounds, FocusTokens } from "tiles.slint";
 export { SeelenPalette } from "palette.slint";
 export { PopoverTokens, PopoverMotion } from "popover.slint";
 export { Toolbar } from "toolbar.slint";
@@ -15,6 +15,7 @@ export { Launcher, LaunchTile, LaunchRow, LauncherNavigation, LauncherView, Laun
 export { QuickSettings, AudioRoute } from "quick-settings.slint";
 export { UserMenu, UserFolderKind, UserFolderRow } from "user-menu.slint";
 export { CalendarMenu, CalendarMode, CalendarDayCell, CalendarWeekRow, CalendarMonthCell, CalendarMonthRow } from "calendar.slint";
+export { PowerMenuSurface, PowerMenuAction } from "power-menu.slint";
 // Re-export the style Palette global so Rust can drive the dock strip's
 // scheme from the panel's live preview without a second settings surface.
 export { Palette } from "std-widgets.slint";
@@ -74,6 +75,9 @@ export component Panel inherits Window {
     callback readiness-pulse();
     callback observation-result-ready();
     callback motion-policy-changed(bool /* enabled */);
+    // Weak component relays keep independent Power actors out of root cycles.
+    callback power-popup-opened();
+    callback power-action-result(bool, string);
 
     // Live preview: only explicit Save persists through the host. The
     // two-way binding keeps the user's choice while propagating to Palette.

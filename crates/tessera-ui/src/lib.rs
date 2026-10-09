@@ -28,6 +28,9 @@ pub(crate) mod icons;
 pub(crate) mod launcher;
 pub(crate) mod motion;
 pub(crate) mod popup_placement;
+pub(crate) mod power_menu;
+#[cfg(test)]
+mod power_menu_render_tests;
 pub(crate) mod projection;
 pub(crate) mod quick_settings;
 pub(crate) mod recycle_bin;
@@ -459,6 +462,28 @@ pub trait DesktopHost: Send + Sync + 'static {
     ) -> Result<
         Option<std::sync::Arc<dyn tessera_system::recycle_bin_mutation::RecycleBinMutationHost>>,
         tessera_system::dock_utilities::DockUtilityError,
+    > {
+        Ok(None)
+    }
+
+    /// Fresh independent display reads for desktop-spanning presentation.
+    /// Query infrastructure and DPI/text-scale work belong to its worker.
+    fn display_context_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::display_context::DisplayContextHost>>,
+        tessera_system::display_context::DisplayContextError,
+    > {
+        Ok(None)
+    }
+
+    /// Explicit typed session/power capability, acquired only on user intent.
+    /// Acceptance means native initiation, never observed session state.
+    fn power_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::power::PowerHost>>,
+        tessera_system::power::PowerError,
     > {
         Ok(None)
     }

@@ -14,6 +14,8 @@ use tessera_system::recycle_bin_mutation::{
     RecycleBinEmptyCompletion, RecycleBinEmptyOutcome, RecycleBinMutationHost,
 };
 
+mod power_tests;
+
 #[cfg(debug_assertions)]
 use i_slint_backend_testing::ElementHandle;
 
@@ -43,6 +45,13 @@ thread_local! {
     static RECYCLE_READ_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static RECYCLE_EMPTY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
     static RECYCLE_MENU_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static POWER_DISPLAY_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static POWER_FACTORY_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static POWER_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
+    static POWER_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static TOOLTIP_DROP_HOOK: RefCell<Option<UiHook>> = const { RefCell::new(None) };
+    static TOOLTIP_CONFIGURE_HOOK: RefCell<Option<NativeHook>> = const { RefCell::new(None) };
+    static POWER_WINDOW: RefCell<Option<slint::Weak<crate::generated::PowerMenuSurface>>> = const { RefCell::new(None) };
 }
 
 struct FixtureHost {
@@ -74,6 +83,11 @@ struct FixtureHost {
     recycle_provider_calls: AtomicUsize,
     recycle_mutation_provider: Mutex<Option<Arc<dyn RecycleBinMutationHost>>>,
     recycle_mutation_provider_calls: AtomicUsize,
+    display_provider: Mutex<Option<Arc<dyn tessera_system::display_context::DisplayContextHost>>>,
+    display_provider_calls: AtomicUsize,
+    power_provider: Mutex<Option<Arc<dyn tessera_system::power::PowerHost>>>,
+    power_provider_calls: AtomicUsize,
+    power_lease_drops: Arc<AtomicUsize>,
 }
 
 impl FixtureHost {
@@ -109,6 +123,11 @@ impl FixtureHost {
             recycle_provider_calls: AtomicUsize::new(0),
             recycle_mutation_provider: Mutex::default(),
             recycle_mutation_provider_calls: AtomicUsize::new(0),
+            display_provider: Mutex::default(),
+            display_provider_calls: AtomicUsize::new(0),
+            power_provider: Mutex::default(),
+            power_provider_calls: AtomicUsize::new(0),
+            power_lease_drops: Arc::default(),
         })
     }
 
@@ -184,6 +203,32 @@ impl DesktopHost for FixtureHost {
         Ok(self.recycle_mutation_provider.lock().clone())
     }
 
+    fn display_context_host(
+        &self,
+    ) -> Result<
+        Option<Arc<dyn tessera_system::display_context::DisplayContextHost>>,
+        tessera_system::display_context::DisplayContextError,
+    > {
+        self.display_provider_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = POWER_DISPLAY_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.display_provider.lock().clone())
+    }
+
+    fn power_host(
+        &self,
+    ) -> Result<Option<Arc<dyn tessera_system::power::PowerHost>>, tessera_system::power::PowerError>
+    {
+        self.power_provider_calls.fetch_add(1, Ordering::SeqCst);
+        let hook = POWER_FACTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if let Some(hook) = hook {
+            hook();
+        }
+        Ok(self.power_provider.lock().clone())
+    }
+
     fn activate(&self, key: &str) -> Result<(), String> {
         self.activations.lock().push(key.to_owned());
         self.activation_result.lock().clone()
@@ -235,14 +280,43 @@ impl DesktopHost for FixtureHost {
             }
             self.launcher_attachment_result.lock().clone()?;
         }
+        if kind == SurfaceKind::Tooltip {
+            let hook = TOOLTIP_CONFIGURE_HOOK.with(|hook| hook.borrow_mut().take());
+            if let Some(hook) = hook {
+                hook(window);
+            }
+        }
+        let power = kind == SurfaceKind::Popup
+            && POWER_WINDOW.with(|expected| {
+                expected
+                    .borrow()
+                    .as_ref()
+                    .and_then(slint::Weak::upgrade)
+                    .is_some_and(|component| std::ptr::eq(component.window(), window))
+            });
+        if power {
+            let hook = POWER_CONFIGURE_HOOK.with(|hook| hook.borrow_mut().take());
+            if let Some(hook) = hook {
+                hook(window);
+            }
+        }
         struct Lease {
             dropped: Arc<AtomicUsize>,
             _ui_thread: Rc<()>,
             kind: SurfaceKind,
+            power: bool,
+            power_dropped: Arc<AtomicUsize>,
         }
         impl Drop for Lease {
             fn drop(&mut self) {
                 self.dropped.fetch_add(1, Ordering::SeqCst);
+                if self.power {
+                    self.power_dropped.fetch_add(1, Ordering::SeqCst);
+                    let hook = POWER_DROP_HOOK.with(|hook| hook.borrow_mut().take());
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
                 if self.kind == SurfaceKind::Launcher {
                     let hook = LAUNCHER_DROP_HOOK.with(|hook| hook.borrow_mut().take());
                     if let Some(hook) = hook {
@@ -255,12 +329,20 @@ impl DesktopHost for FixtureHost {
                         hook();
                     }
                 }
+                if self.kind == SurfaceKind::Tooltip {
+                    let hook = TOOLTIP_DROP_HOOK.with(|hook| hook.borrow_mut().take());
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
             }
         }
         Ok(Some(Box::new(Lease {
             dropped: Arc::clone(&self.lease_drops),
             _ui_thread: Rc::new(()),
             kind,
+            power,
+            power_dropped: Arc::clone(&self.power_lease_drops),
         })))
     }
 
@@ -1167,6 +1249,7 @@ impl Drop for FixtureWindowScope {
 
 struct LauncherFixture {
     // Drop transient and bar attachments before the owned component windows.
+    _power_scope: power_menu::PowerAdmissionScope,
     _recycle_scope:
         crate::transient_window::TransientScope<crate::recycle_bin::RecycleBinController>,
     _menu_scope:
@@ -1234,6 +1317,7 @@ impl LauncherFixture {
             Rc::clone(&controller.calendar),
             crate::calendar::CalendarController::hide,
         );
+        let power_scope = power_menu::PowerAdmissionScope::new(&controller);
         let dock_utility_scope = crate::transient_window::TransientScope::new(
             Rc::clone(&controller.dock_utilities),
             crate::dock_utilities::DockUtilitiesController::close,
@@ -1263,6 +1347,7 @@ impl LauncherFixture {
             _dock_utility_scope: dock_utility_scope,
             _calendar_scope: calendar_scope,
             _user_scope: user_scope,
+            _power_scope: power_scope,
             _quick_scope: quick_scope,
             _scope: scope,
             _window_scope: window_scope,

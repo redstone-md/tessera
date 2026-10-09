@@ -3066,6 +3066,61 @@ fn launcher_native_final_partial_row_keys_tab_footer_and_narrow_rows_remain_real
         "the distinct Settings footer action remains keyboard-accessible after User"
     );
     assert_eq!(user.get(), 1);
+    let power = Rc::new(Cell::new(0));
+    let requests = Rc::clone(&power);
+    fixture.launcher.on_open_power_menu_requested(move || {
+        requests.set(requests.get() + 1);
+    });
+    let refresh = Rc::new(Cell::new(0));
+    let requests = Rc::clone(&refresh);
+    fixture.launcher.on_refresh_requested(move || {
+        requests.set(requests.get() + 1);
+    });
+    let exit = Rc::new(Cell::new(0));
+    let requests = Rc::clone(&exit);
+    fixture.launcher.on_exit_requested(move || {
+        requests.set(requests.get() + 1);
+    });
+    let modes = Rc::new(RefCell::new(Vec::new()));
+    let requests = Rc::clone(&modes);
+    fixture.launcher.on_display_mode_requested(move |mode| {
+        requests.borrow_mut().push(mode);
+    });
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(power.get(), 1, "Power is a separate native footer stop");
+    assert_eq!(refresh.get(), 0);
+    assert_eq!(exit.get(), 0);
+    window
+        .window()
+        .dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    assert_eq!(
+        power.get(),
+        1,
+        "held Return cannot replay the Power trigger"
+    );
+    native_key(&window, Key::Space.into());
+    assert_eq!(
+        power.get(),
+        2,
+        "a fresh Space activates the genuine Power tile"
+    );
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(refresh.get(), 1, "recovery Refresh is still reachable");
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(exit.get(), 1, "application Exit is not a session action");
+    native_key(&window, Key::Tab.into());
+    native_key(&window, Key::Return.into());
+    assert_eq!(
+        modes.borrow().as_slice(),
+        &[crate::generated::LauncherDisplayMode::Fullscreen]
+    );
+    assert_eq!(settings.get(), 1);
+    assert_eq!(user.get(), 1);
     assert_eq!(fixture.launches.borrow().len(), 2);
     assert_eq!(fixture.favorites.borrow().len(), 2);
     for width in [128, 96, 560] {
@@ -4066,6 +4121,8 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
     let log = actions.clone();
     launcher.on_open_settings_requested(move || log.borrow_mut().push("settings"));
     let log = actions.clone();
+    launcher.on_open_power_menu_requested(move || log.borrow_mut().push("power"));
+    let log = actions.clone();
     launcher.on_refresh_requested(move || log.borrow_mut().push("refresh"));
     let log = actions.clone();
     launcher.on_exit_requested(move || log.borrow_mut().push("exit"));
@@ -4084,8 +4141,12 @@ fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
         .window()
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
     for (stale, refreshing, expected) in [
-        (true, false, vec!["user", "settings", "refresh", "exit"]),
-        (false, true, vec!["user", "settings", "exit"]),
+        (
+            true,
+            false,
+            vec!["user", "settings", "power", "refresh", "exit"],
+        ),
+        (false, true, vec!["user", "settings", "power", "exit"]),
     ] {
         launcher.set_stale(stale);
         launcher.set_refreshing(refreshing);

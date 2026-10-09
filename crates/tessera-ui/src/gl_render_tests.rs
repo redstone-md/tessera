@@ -17,6 +17,7 @@ use crate::generated::{
     LauncherDragVisual, QuickSettings, TileBounds, TooltipSurface, UserFolderKind, UserFolderRow,
     UserMenu,
 };
+use crate::generated::{FocusTokens, PowerMenuAction, PowerMenuSurface};
 use crate::theme::{PresentationTheme, ThemedComponent};
 
 #[test]
@@ -152,6 +153,13 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     dock.window().set_size(slint::LogicalSize::new(216.0, 72.0));
     dock.show().unwrap();
 
+    // Paint-only Power fixture: no actor, DesktopHost, native query or OS action.
+    let power = PowerMenuSurface::new().unwrap();
+    power
+        .window()
+        .set_size(slint::LogicalSize::new(1600.0, 900.0));
+    power.show().unwrap();
+
     let completed = Rc::new(Cell::new(false));
     let result = Rc::clone(&completed);
     slint::spawn_local(async move {
@@ -162,6 +170,23 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         user.window().winit_window().await.unwrap();
         calendar.window().winit_window().await.unwrap();
         dock.window().winit_window().await.unwrap();
+        power.window().winit_window().await.unwrap();
+        let power_scale = power.window().scale_factor();
+        assert!(power_scale == 1.0 || power_scale == 2.0);
+        // Physical aggregate [-640,-160..960,740], selected full [0,0..960,740].
+        // Native root DPI is observed, never borrowed from another surface.
+        power.window().set_size(slint::PhysicalSize::new(1600, 900));
+        power.set_selected_x(640.0 / power_scale);
+        power.set_selected_y(160.0 / power_scale);
+        power.set_selected_width(960.0 / power_scale);
+        power.set_selected_height(740.0 / power_scale);
+        power.set_metric_scale(1.5 / power_scale);
+        power
+            .global::<FocusTokens>()
+            .set_outline_width(3.0 / power_scale);
+        power
+            .global::<FocusTokens>()
+            .set_outline_offset(3.0 / power_scale);
         verify_frame("launcher", &launcher);
         verify_launcher_fullscreen_edges(&launcher);
         verify_frame("tooltip", &tooltip);
@@ -175,6 +200,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
         menu.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
         slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+            verify_power_frames(&power);
             verify_launcher_controls(ColorScheme::Dark, &launcher);
             verify_menu_press_scale(&menu);
             verify_menu_application_image(&menu);
@@ -194,6 +220,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
                         user.hide().unwrap();
                         calendar.hide().unwrap();
                         dock.hide().unwrap();
+                        power.hide().unwrap();
                         result.set(true);
                         slint::quit_event_loop().unwrap();
                     }),
@@ -207,6 +234,269 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         completed.get(),
         "The real GL scenario must reach every frame assertion"
     );
+}
+
+fn verify_power_frames(power: &PowerMenuSurface) {
+    use i_slint_backend_testing::ElementQuery;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    let native_gl = Rc::new(Cell::new(false));
+    power
+        .window()
+        .set_rendering_notifier({
+            let native_gl = Rc::clone(&native_gl);
+            move |_, graphics| {
+                if matches!(graphics, slint::GraphicsAPI::NativeOpenGL { .. }) {
+                    native_gl.set(true);
+                }
+            }
+        })
+        .expect("Power pixels must traverse production native GL");
+    let actions = Rc::new(Cell::new(0));
+    power.on_action_requested({
+        let actions = Rc::clone(&actions);
+        move |action| {
+            assert_eq!(action, PowerMenuAction::LockSession);
+            actions.set(actions.get() + 1);
+        }
+    });
+    let element = |id: &str| {
+        let matches = ElementQuery::from_root(power)
+            .match_id(format!("PowerMenuSurface::{id}"))
+            .find_all();
+        assert_eq!(matches.len(), 1, "one genuine Power {id}");
+        matches.into_iter().next().unwrap()
+    };
+    let window = power.window();
+    let scale = window.scale_factor();
+    let metric = power.get_metric_scale();
+    let near = |actual: f32, expected: f32| {
+        assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
+    };
+    near(metric * scale, 1.5);
+    let snapshot = || {
+        let frame = window.take_snapshot().expect("real Power GL pixels");
+        assert!(native_gl.get(), "never silently substitute software pixels");
+        assert_eq!((frame.width(), frame.height()), (1600, 900));
+        frame
+    };
+    let sample = |frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, x: f32, y: f32| {
+        let x = (x * scale).floor() as usize;
+        let y = (y * scale).floor() as usize;
+        assert!(x < frame.width() as usize && y < frame.height() as usize);
+        frame.as_slice()[y * frame.width() as usize + x]
+    };
+    let ink_count = |frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+                     origin: slint::LogicalPosition,
+                     extent: f32,
+                     foreground: u8| {
+        let left = (origin.x * scale).floor() as usize;
+        let top = (origin.y * scale).floor() as usize;
+        let right = ((origin.x + extent) * scale).ceil() as usize;
+        let bottom = ((origin.y + extent) * scale).ceil() as usize;
+        (top..bottom)
+            .flat_map(|y| (left..right).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                let p = frame.as_slice()[y * frame.width() as usize + x];
+                p.a == 255
+                    && [p.r, p.g, p.b]
+                        .into_iter()
+                        .all(|c| c.abs_diff(foreground) <= 1)
+            })
+            .count()
+    };
+    window.dispatch_event(WindowEvent::WindowActiveChanged(true));
+    for (theme, scheme, background, foreground) in [
+        ("dark", ColorScheme::Dark, 31, 228),
+        ("light", ColorScheme::Light, 252, 18),
+    ] {
+        power.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        window.dispatch_event(WindowEvent::PointerExited);
+        power.invoke_focus_content();
+        let idle = snapshot();
+        let viewport = element("selected-viewport");
+        near(viewport.absolute_position().x * scale, 640.0);
+        near(viewport.absolute_position().y * scale, 160.0);
+        near(viewport.size().width * scale, 960.0);
+        near(viewport.size().height * scale, 740.0);
+        let body = element("body");
+        let origin = body.absolute_position();
+        let size = body.size();
+        near(size.width, 460.0 * metric);
+        near(size.height, 253.92 * metric);
+        near((origin.x + size.width / 2.0) * scale, 1120.0);
+        near((origin.y + size.height / 2.0) * scale, 530.0);
+        let left = origin.x + 32.0 * metric;
+        let top = origin.y + 32.0 * metric;
+        let right = origin.x + size.width - 32.0 * metric;
+        let bottom = origin.y + size.height - 32.0 * metric;
+        let center_x = (left + right) / 2.0;
+        let center_y = (top + bottom) / 2.0;
+        let body_pixel = sample(&idle, right - 12.0 * metric, top + 40.0 * metric);
+        assert_eq!(
+            (body_pixel.r, body_pixel.g, body_pixel.b, body_pixel.a),
+            (background, background, background, 255),
+            "Power {theme} bg-light role",
+        );
+        let scrim = sample(&idle, 1.0, 1.0);
+        assert_eq!(scrim.a, 102, "source .4 scrim, not opaque desktop paint");
+        assert!(
+            [scrim.r, scrim.g, scrim.b]
+                .into_iter()
+                .all(|c| c.abs_diff(7) <= 1)
+        );
+        assert!(sample(&idle, left + 2.0 * metric, top + 2.0 * metric).a < 255);
+        assert_eq!(
+            sample(&idle, left + 16.0 * metric, top + 2.0 * metric),
+            body_pixel
+        );
+        // Premultiplied black shadow over the scrim: .4 + .6*.24 <= .544.
+        // The source positive8 offset must be observable on BOTH axes.
+        for (positive, negative, farther) in [
+            (
+                sample(&idle, right + 8.0 * metric, center_y),
+                sample(&idle, left - 8.0 * metric, center_y),
+                sample(&idle, right + 24.0 * metric, center_y),
+            ),
+            (
+                sample(&idle, center_x, bottom + 8.0 * metric),
+                sample(&idle, center_x, top - 8.0 * metric),
+                sample(&idle, center_x, bottom + 24.0 * metric),
+            ),
+        ] {
+            assert!(
+                positive.a > negative.a,
+                "Power {theme} actual positive8 shadow offset"
+            );
+            assert!(
+                positive.a > scrim.a && positive.a <= 140,
+                "Power {theme} black-.24 shadow: {positive:?}"
+            );
+            assert!(
+                farther.a >= scrim.a && farther.a < positive.a,
+                "actual24 blur fades"
+            );
+            assert_eq!(positive.r, positive.g);
+            assert_eq!(positive.g, positive.b);
+            let shadow_alpha = f32::from(positive.a - scrim.a) / f32::from(255 - scrim.a);
+            let expected = (f32::from(scrim.r) * (1.0 - shadow_alpha)).round() as u8;
+            assert!(
+                positive.r.abs_diff(expected) <= 1,
+                "black shadow retains premultiplication"
+            );
+        }
+        let lock = element("lock");
+        let lock_origin = lock.absolute_position();
+        let lock_size = lock.size();
+        near(lock_size.width, 100.0 * metric);
+        near(lock_size.height, 100.0 * metric);
+        let icon = element("lock-icon");
+        let icon_origin = icon.absolute_position();
+        near(icon.size().width, 25.0 * metric);
+        near(icon.size().height, 25.0 * metric);
+        near(
+            element("lock-label").absolute_position().y - icon_origin.y - icon.size().height,
+            4.0 * metric,
+        );
+        let idle_ink = ink_count(&idle, icon_origin, 25.0 * metric, foreground);
+        assert!(idle_ink > 50, "licensed real Lock glyph must render/tint");
+        export_frame(&format!("gl-power-{theme}-idle-{scale}x"), &idle);
+
+        let center = slint::LogicalPosition::new(
+            lock_origin.x + lock_size.width / 2.0,
+            lock_origin.y + lock_size.height / 2.0,
+        );
+        window.dispatch_event(WindowEvent::PointerMoved { position: center });
+        let hover = snapshot();
+        near(lock.absolute_position().x, lock_origin.x - 2.5 * metric);
+        near(lock.absolute_position().y, lock_origin.y - 6.5 * metric);
+        assert_eq!(
+            lock.size(),
+            lock_size,
+            "hover never rewrites action layout bounds"
+        );
+        let hover_icon = icon.absolute_position();
+        near(hover_icon.x, center.x + (icon_origin.x - center.x) * 1.05);
+        near(
+            hover_icon.y,
+            center.y + (icon_origin.y - center.y) * 1.05 - 4.0 * metric,
+        );
+        assert!(
+            ink_count(&hover, hover_icon, 25.0 * metric * 1.05, foreground) > idle_ink,
+            "native GL scales the actual icon subtree, not only queried geometry"
+        );
+        let action_shadow_point = (lock_origin.x - 8.0 * metric, center.y);
+        let action_shadow = sample(&hover, action_shadow_point.0, action_shadow_point.1);
+        assert_eq!(action_shadow.a, 255, "action shadow overlays opaque body");
+        assert!(
+            action_shadow.r < background
+                && action_shadow.r >= (f32::from(background) * 0.8).round() as u8 - 1,
+            "real hover black-.2 shadow0x8/blur16: {action_shadow:?}"
+        );
+        export_frame(&format!("gl-power-{theme}-hover-{scale}x"), &hover);
+
+        let before = actions.get();
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+        let pressed = snapshot();
+        assert_eq!(actions.get(), before, "press is not a command");
+        near(lock.absolute_position().x, lock_origin.x + 2.5 * metric);
+        near(lock.absolute_position().y, lock_origin.y + 2.5 * metric);
+        assert_eq!(lock.size(), lock_size);
+        assert_eq!(
+            sample(&pressed, lock_origin.x + 0.5 * metric, center.y),
+            body_pixel,
+            "actual .95 rendering uncovers original edge"
+        );
+        assert_ne!(
+            sample(&pressed, lock_origin.x + 3.5 * metric, center.y),
+            body_pixel,
+            "actual .95 rendering shrinks, not hides, pressed action"
+        );
+        assert_eq!(
+            sample(&pressed, action_shadow_point.0, action_shadow_point.1),
+            body_pixel,
+            "active removes hover shadow"
+        );
+        export_frame(&format!("gl-power-{theme}-pressed-{scale}x"), &pressed);
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: center,
+            button: PointerEventButton::Left,
+        });
+        assert_eq!(
+            actions.get(),
+            before + 1,
+            "only one typed paint-fixture intent"
+        );
+        window.dispatch_event(WindowEvent::PointerExited);
+        power.invoke_focus_content();
+        snapshot();
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Tab.into(),
+        });
+        window.dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Tab.into(),
+        });
+        let focused = snapshot();
+        near(lock.absolute_position().x, lock_origin.x);
+        near(lock.absolute_position().y, lock_origin.y);
+        let ring = sample(&focused, lock_origin.x - 3.0 * metric, center.y);
+        assert_ne!(ring, body_pixel, "real external2 outline/2 offset");
+        assert_eq!(
+            sample(&focused, lock_origin.x - 5.0 * metric, center.y),
+            body_pixel,
+            "focus paint stops outside its source4 margin"
+        );
+        assert_eq!(
+            actions.get(),
+            before + 1,
+            "native Tab/focus never activates Lock"
+        );
+        export_frame(&format!("gl-power-{theme}-focused-{scale}x"), &focused);
+    }
+    assert_eq!(actions.get(), 2, "paint fixture cannot invoke an OS action");
 }
 
 fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
@@ -367,7 +657,7 @@ fn verify_launcher_fullscreen_edges(launcher: &Launcher) {
                 "native GL {theme} {scale}x fullscreen edge {index}"
             );
         }
-        verify_launcher_mode_glyph(launcher, scheme, "Contract applications menu", &frame);
+        verify_launcher_footer_glyph(launcher, scheme, "Contract applications menu", &frame);
         assert!(
             !window.is_fullscreen(),
             "the monitor overlay is not backend fullscreen"
@@ -397,6 +687,7 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
         "Refresh the desktop",
         "Exit Tessera",
         "Expand applications menu",
+        "Open power menu",
     ] {
         let button =
             i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
@@ -416,21 +707,22 @@ fn verify_launcher_controls(scheme: ColorScheme, launcher: &Launcher) {
             "{label} must settle to its {theme} idle color: {pixel:?}",
         );
     }
-    verify_launcher_mode_glyph(launcher, scheme, "Expand applications menu", &frame);
+    verify_launcher_footer_glyph(launcher, scheme, "Expand applications menu", &frame);
+    verify_launcher_footer_glyph(launcher, scheme, "Open power menu", &frame);
     export_frame(&format!("gl-launcher-{theme}-settled-{scale}x"), &frame);
     verify_launcher_press_scale(launcher);
 }
 
-fn verify_launcher_mode_glyph(
+fn verify_launcher_footer_glyph(
     launcher: &Launcher,
     scheme: ColorScheme,
     label: &str,
     frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
 ) {
-    let mode = i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
+    let control = i_slint_backend_testing::ElementHandle::find_by_accessible_label(launcher, label)
         .next()
         .unwrap();
-    let position = mode.absolute_position();
+    let position = control.absolute_position();
     let scale = launcher.window().scale_factor();
     let width = frame.width() as usize;
     let foreground_pixels = (0..20)

@@ -11,8 +11,14 @@ pub mod calendar;
 /// Explicit reserved Dock effects, independent of application identities.
 pub mod dock_utilities;
 
+/// Fresh display geometry and source-selected monitor presentation scaling.
+pub mod display_context;
+
 /// Current-user known-folder observations and identity-bound opening.
 pub mod folders;
+
+/// Explicit typed session/power requests, separate from display observation.
+pub mod power;
 
 /// Confirmed Recycle Bin information, fixed opening and scoped change hints.
 pub mod recycle_bin;

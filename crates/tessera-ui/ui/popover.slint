@@ -30,6 +30,12 @@ export component PopoverBody inherits Rectangle {
     in property <length> surface-radius: PopoverTokens.radius;
     in property <length> shadow-margin: PopoverTokens.shadow-margin;
     in property <bool> shadow-enabled: true;
+    // Instance roles may differ; existing popups retain the token defaults.
+    in property <brush> surface-background: SeelenPalette.surface;
+    in property <color> surface-shadow-color: PopoverTokens.shadow-color;
+    in property <length> surface-shadow-offset-x: PopoverTokens.shadow-offset-x;
+    in property <length> surface-shadow-offset-y: PopoverTokens.shadow-offset-y;
+    in property <length> surface-shadow-blur: PopoverTokens.shadow-blur;
     opacity: 1;
     animate opacity {
         enabled: PopoverMotion.enabled;
@@ -62,11 +68,11 @@ export component PopoverBody inherits Rectangle {
         width: max(0px, parent.width - 2 * root.shadow-margin);
         height: max(0px, parent.height - 2 * root.shadow-margin);
         border-radius: root.surface-radius;
-        background: SeelenPalette.surface;
-        drop-shadow-color: root.shadow-enabled ? PopoverTokens.shadow-color : transparent;
-        drop-shadow-offset-x: root.shadow-enabled ? PopoverTokens.shadow-offset-x : 0px;
-        drop-shadow-offset-y: root.shadow-enabled ? PopoverTokens.shadow-offset-y : 0px;
-        drop-shadow-blur: root.shadow-enabled ? PopoverTokens.shadow-blur : 0px;
+        background: root.surface-background;
+        drop-shadow-color: root.shadow-enabled ? root.surface-shadow-color : transparent;
+        drop-shadow-offset-x: root.shadow-enabled ? root.surface-shadow-offset-x : 0px;
+        drop-shadow-offset-y: root.shadow-enabled ? root.surface-shadow-offset-y : 0px;
+        drop-shadow-blur: root.shadow-enabled ? root.surface-shadow-blur : 0px;
         clip: true;
         accessible-role: none;
         @children

@@ -55,12 +55,23 @@ pub(crate) fn observe() -> Result<DesktopSnapshot, ObservationError> {
     ))
 }
 
+/// Monitor-only collection reuses the exact observer callback without window,
+/// foreground, or application-catalog enumeration. Caller owns its DPI scope.
+pub(crate) fn collect_monitors() -> Result<Vec<ObservedMonitor>, ObservationError> {
+    let mut observer = Observer::default();
+    let context = &mut observer as *mut Observer as LPARAM;
+    // SAFETY: synchronous callback, exclusively borrowing this live observer.
+    let ok = unsafe { EnumDisplayMonitors(null_mut(), null(), Some(monitor_callback), context) };
+    observer.check_enumeration(ok, "EnumDisplayMonitors")?;
+    Ok(observer.monitors)
+}
+
 /// Raw DPI-context tokens are not Send/Sync. The guard never leaves the
 /// observing thread and restores its caller's context on every exit path.
-struct DpiGuard(DPI_AWARENESS_CONTEXT);
+pub(crate) struct DpiGuard(DPI_AWARENESS_CONTEXT);
 
 impl DpiGuard {
-    fn enter() -> Result<Self, ObservationError> {
+    pub(crate) fn enter() -> Result<Self, ObservationError> {
         // SAFETY: the predefined context is valid on supported Windows 11.
         let previous =
             unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
@@ -70,13 +81,29 @@ impl DpiGuard {
             Ok(Self(previous))
         }
     }
+
+    pub(crate) fn restore(&mut self) -> Result<(), ObservationError> {
+        if self.0.is_null() {
+            return Ok(());
+        }
+        // SAFETY: token belongs to this same owner thread's successful entry.
+        if unsafe { SetThreadDpiAwarenessContext(self.0) }.is_null() {
+            return Err(windows_error("SetThreadDpiAwarenessContext(restore)"));
+        }
+        self.0 = null_mut();
+        Ok(())
+    }
+
+    /// Used only after the display owner's checked restoration and fallback.
+    /// Observation keeps its existing automatic restoration behavior.
+    pub(crate) fn disarm(&mut self) {
+        self.0 = null_mut();
+    }
 }
 
 impl Drop for DpiGuard {
     fn drop(&mut self) {
-        // SAFETY: this token was returned by the successful context change on
-        // this same thread; it is not a resource handle to close.
-        unsafe { SetThreadDpiAwarenessContext(self.0) };
+        let _ = self.restore();
     }
 }
 

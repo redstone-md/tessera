@@ -1013,6 +1013,11 @@ impl PanelController {
             weak.open_user_menu(bounds);
         });
         let weak = self.clone();
+        launcher.on_open_power_menu_requested(move || {
+            let _callback = weak.launcher_callback();
+            weak.open_power_menu();
+        });
+        let weak = self.clone();
         launcher.on_refresh_requested(move || {
             let _callback = weak.launcher_callback();
             let _ = weak.refresh();
@@ -1541,6 +1546,7 @@ impl PanelController {
         session.refit.set(false);
         self.cancel_launcher_reorder();
         self.hide_user_menu();
+        self.hide_power_menu();
         if session.presenting.get() {
             self.detach_lease(SurfaceKind::Launcher);
             return;

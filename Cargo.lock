@@ -4212,6 +4212,7 @@ name = "tessera-system"
 version = "0.1.0-alpha.10"
 dependencies = [
  "chrono",
+ "tessera-core",
 ]
 
 [[package]]
@@ -4222,6 +4223,7 @@ dependencies = [
  "parking_lot",
  "slint",
  "slint-build",
+ "tessera-core",
  "tessera-system",
 ]
 

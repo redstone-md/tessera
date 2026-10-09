@@ -26,6 +26,7 @@ mod dock_utilities;
 mod geometry;
 mod launcher;
 mod popups;
+mod power_menu;
 mod quick_settings;
 mod recycle_bin;
 mod tooltip;
@@ -33,6 +34,7 @@ mod user_menu;
 use calendar::CalendarPopups;
 use context_menu::Menus;
 use dock_utilities::DockUtilities;
+use power_menu::PowerPopups;
 use quick_settings::QuickPopups;
 use recycle_bin::RecycleBins;
 use tooltip::Tooltips;
@@ -134,10 +136,13 @@ pub(crate) struct PanelController {
     launcher_state: Rc<RefCell<launcher::LauncherState>>,
     preference_saving: Rc<Cell<bool>>,
     surface_failure: Rc<RefCell<Option<String>>>,
+    popup_operation: Rc<RefCell<Rc<()>>>,
+    power_admission_closed: Rc<Cell<bool>>,
     menus: Menus,
     quick_settings: QuickPopups,
     user_menu: UserPopups,
     calendar: CalendarPopups,
+    power_menu: PowerPopups,
     dock_utilities: DockUtilities,
     recycle_bin: RecycleBins,
     tooltips: Tooltips,
@@ -176,10 +181,13 @@ impl PanelController {
             launcher_state: Rc::default(),
             preference_saving: Rc::default(),
             surface_failure: Rc::default(),
+            popup_operation: Rc::default(),
+            power_admission_closed: Rc::default(),
             menus: Rc::default(),
             quick_settings: Rc::default(),
             user_menu: Rc::default(),
             calendar: Rc::default(),
+            power_menu: Rc::default(),
             dock_utilities: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
@@ -211,10 +219,13 @@ impl PanelController {
             launcher_state: Rc::default(),
             preference_saving: Rc::default(),
             surface_failure: Rc::default(),
+            popup_operation: Rc::default(),
+            power_admission_closed: Rc::default(),
             menus: Rc::default(),
             quick_settings: Rc::default(),
             user_menu: Rc::default(),
             calendar: Rc::default(),
+            power_menu: Rc::default(),
             dock_utilities: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
@@ -278,6 +289,10 @@ impl PanelController {
             if let Some(calendar) = calendar {
                 calendar.disable_motion();
             }
+            let power = controller.power_menu.borrow().clone();
+            if let Some(power) = power {
+                power.disable_motion();
+            }
         });
     }
 
@@ -312,6 +327,7 @@ impl PanelController {
         // All surfaces preview one appearance without writing preferences.
         let weak = self.clone();
         panel.on_appearance_changed(move || weak.sync_appearance());
+        self.wire_power(panel);
     }
 
     fn wire_dock(&self, dock: &Dock) {
@@ -845,12 +861,13 @@ impl PanelController {
 
     /// Apply the shared live color/density/edge preview without saving it.
     fn sync_appearance(&self) {
-        let scheme = match crate::theme_from_index(
+        let current_theme = crate::theme_from_index(
             self.panel
                 .upgrade()
                 .map(|panel| panel.get_theme_index())
                 .unwrap_or(0),
-        ) {
+        );
+        let scheme = match current_theme {
             crate::Theme::Light => slint::language::ColorScheme::Light,
             crate::Theme::Dark => slint::language::ColorScheme::Dark,
             crate::Theme::System => slint::language::ColorScheme::Unknown,
@@ -879,6 +896,11 @@ impl PanelController {
         let calendar = self.calendar.borrow().clone();
         if let Some(calendar) = calendar {
             calendar.apply_theme(theme);
+        }
+        let power = self.power_menu.borrow().clone();
+        if let Some(power) = power {
+            power.set_theme(current_theme);
+            power.update_motion();
         }
         self.update_geometry();
     }
@@ -1365,6 +1387,8 @@ pub(crate) fn run(
             // immediately. No provisional/default appbar registration ever
             // happens. Attach errors exit for immediate restoration; geometry
             // that never arrives instead reaches the supervisor's timeout.
+            // Declared last: revoke Power input before any external teardown.
+            let _power_scope = power_menu::PowerAdmissionScope::new(&controller);
             dock.show()?;
             toolbar.show()?;
             // (2) Async first observation: its completion handler does
