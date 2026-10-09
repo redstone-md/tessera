@@ -2,7 +2,7 @@ name: Native runtime diagnostic (Debug; no release assets)
 
 on:
   push:
-    branches: ['diagnostics/native-runtime', 'diagnostics/native-fullwave', 'diagnostics/native-input-profile']
+    branches: ['diagnostics/native-runtime', 'diagnostics/native-fullwave', 'diagnostics/native-input-profile', 'diagnostics/native-user-logout']
 
 permissions:
   contents: read
