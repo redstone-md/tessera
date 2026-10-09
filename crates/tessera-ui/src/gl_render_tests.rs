@@ -79,6 +79,14 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     // no OS folder resolution/opening is performed by this renderer test.
     let user = UserMenu::new().unwrap();
     user.set_user_name("Native user".into());
+    user.set_profile_name("Native current profile".into());
+    user.set_profile_key("gl-current-profile".into());
+    user.set_profile_actions_ready(true);
+    let photo =
+        tessera_system::profile::ProfilePhoto::new(70, 70, [0, 150, 230, 255].repeat(70 * 70))
+            .unwrap();
+    user.set_profile_photo(crate::user_menu::prepare_profile_photo(&photo));
+    user.set_has_photo(true);
     user.set_rows(slint::ModelRc::new(slint::VecModel::from(
         [
             UserFolderKind::Recent,
@@ -194,6 +202,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         verify_frame("context-menu", &menu);
         verify_frame("quick-settings", &quick);
         verify_frame("user-menu", &user);
+        verify_user_fallback_frames(&user);
         verify_frame("calendar", &calendar);
         verify_frame("dock", &dock);
         verify_dock_reference_paint(&dock);
@@ -710,6 +719,34 @@ fn verify_power_frames(power: &PowerMenuSurface) {
         power.invoke_focus_content();
     }
     assert_eq!(actions.get(), 2, "paint fixture cannot invoke an OS action");
+}
+
+fn verify_user_fallback_frames(user: &UserMenu) {
+    use i_slint_backend_testing::ElementHandle;
+
+    user.set_has_photo(false);
+    user.set_profile_fallback(true);
+    for (theme, scheme, gray) in [
+        ("dark", ColorScheme::Dark, 61),
+        ("light", ColorScheme::Light, 193),
+    ] {
+        user.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        let frame = user.window().take_snapshot().unwrap();
+        let avatars = ElementHandle::find_by_accessible_label(user, "Default user profile")
+            .collect::<Vec<_>>();
+        assert_eq!(avatars.len(), 1);
+        let avatar = avatars[0].absolute_position();
+        let scale = user.window().scale_factor();
+        let point = frame.as_slice()[((avatar.y + 20.0) * scale) as usize * frame.width() as usize
+            + ((avatar.x + 14.0) * scale) as usize];
+        assert_eq!(
+            (point.r, point.g, point.b, point.a),
+            (gray, gray, gray, 255)
+        );
+        export_frame(&format!("gl-user-fallback-{theme}-{scale}x"), &frame);
+    }
+    user.set_profile_fallback(false);
+    user.set_has_photo(true);
 }
 
 fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {

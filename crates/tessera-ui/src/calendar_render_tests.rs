@@ -1419,3 +1419,81 @@ fn calendar_long_rtl_titles_weekdays_months_and_error_text_remain_bounded_and_ac
         "native Tab reveals actual Retry below a long wrapped notice"
     );
 }
+
+#[test]
+fn calendar_original_navigation_vectors_keep_one_em_tint_and_native_hit_slots() {
+    let fixture = Fixture::ready(4);
+    for (scheme, body, foreground) in [
+        (slint::language::ColorScheme::Light, 242_u8, 18_u8),
+        (slint::language::ColorScheme::Dark, 24_u8, 228_u8),
+    ] {
+        fixture
+            .popup
+            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+        for scale in [1.0, 2.0] {
+            fixture.scale(scale);
+            fixture
+                .window
+                .window()
+                .dispatch_event(WindowEvent::PointerExited);
+            fixture.popup.invoke_focus_content();
+            let pixels = fixture.render_fit(scale);
+            let width = (fixture.popup.get_popup_content_width() * scale).ceil() as usize;
+            for label in ["Previous month", "Today", "Next month"] {
+                let button = fixture.element(label);
+                assert!((button.size().width - 28.8).abs() < 0.01);
+                assert!((button.size().height - 22.4).abs() < 0.01);
+                let images = button
+                    .query_descendants()
+                    .match_type_name("Image")
+                    .find_all();
+                assert_eq!(
+                    images.len(),
+                    1,
+                    "one genuine original vector, not a Unicode fallback"
+                );
+                let image = &images[0];
+                assert!((image.size().width - 12.8).abs() < 0.01);
+                assert!((image.size().height - 12.8).abs() < 0.01);
+                let origin = button.absolute_position();
+                let icon = image.absolute_position();
+                assert!((icon.x - origin.x - 8.0).abs() < 0.01);
+                assert!((icon.y - origin.y - 4.8).abs() < 0.01);
+                let mut painted = 0;
+                for y in (icon.y * scale).ceil() as usize
+                    ..((icon.y + image.size().height) * scale).floor() as usize
+                {
+                    for x in (icon.x * scale).ceil() as usize
+                        ..((icon.x + image.size().width) * scale).floor() as usize
+                    {
+                        let pixel = pixels[y * width + x];
+                        assert_eq!(
+                            pixel.r, pixel.g,
+                            "foreground alpha mask is neutrally tinted"
+                        );
+                        assert_eq!(pixel.g, pixel.b);
+                        assert!(
+                            (body.min(foreground)..=body.max(foreground)).contains(&pixel.r),
+                            "original vector coverage blends source foreground over body"
+                        );
+                        painted += usize::from(pixel.r != body);
+                    }
+                }
+                assert!(
+                    painted > 5,
+                    "{label} paints its original path at {scale}x/{scheme:?}"
+                );
+                if scale == 2.0 {
+                    assert!(
+                        !ink(&pixels, width, scale, image, [foreground; 3]).is_empty(),
+                        "full-coverage vector ink must be exact source foreground, not secondary"
+                    );
+                }
+            }
+            assert!(
+                fixture.take_requests().is_empty(),
+                "paint and theme changes have no host effects"
+            );
+        }
+    }
+}

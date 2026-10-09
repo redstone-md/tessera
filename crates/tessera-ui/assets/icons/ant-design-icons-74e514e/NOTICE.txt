@@ -1,0 +1,47 @@
+Ant Design Icons — outlined Calendar navigation vectors (MIT)
+
+Original XML SVGs are retained unmodified from ant-design/ant-design-icons at
+immutable commit 74e514ef000262527ecbe0344ff5cc59d37d359a.
+Rights holder: Ant UED, as named in the original full MIT grant in LICENSE.
+The source-tree icons-svg package at this pin reports version 4.4.2 and MIT.
+Individual per-icon authorship is not asserted.
+
+Source repository:
+https://github.com/ant-design/ant-design-icons/tree/74e514ef000262527ecbe0344ff5cc59d37d359a
+Original package metadata:
+https://raw.githubusercontent.com/ant-design/ant-design-icons/74e514ef000262527ecbe0344ff5cc59d37d359a/packages/icons-svg/package.json
+Original license (1099 bytes):
+https://raw.githubusercontent.com/ant-design/ant-design-icons/74e514ef000262527ecbe0344ff5cc59d37d359a/LICENSE
+License Git blob SHA-1: dfe5c2183e82554ef991024afb81baac82c7e10a
+License SHA-256: 5d367fb0a07340571542eb4ee8eb1add62d37b71bad6786a57c2e9a86bf76c70
+
+left.svg — 321 bytes, viewBox 0 0 1024 1024
+https://raw.githubusercontent.com/ant-design/ant-design-icons/74e514ef000262527ecbe0344ff5cc59d37d359a/packages/icons-svg/svg/outlined/left.svg
+Git blob SHA-1: 315ac54d2c47fef232cbcaaa6fdf88e63bee1f0f
+SHA-256: ad57185c76c87cde35f2df54c70ad5367000b01c9857971abed7a9d7f8fff088
+
+home.svg — 511 bytes, viewBox 0 0 1024 1024
+https://raw.githubusercontent.com/ant-design/ant-design-icons/74e514ef000262527ecbe0344ff5cc59d37d359a/packages/icons-svg/svg/outlined/home.svg
+Git blob SHA-1: bb6688e424369d4490f0754add1fdfa2ba3e7d90
+SHA-256: 4cbf3b2a5e6b7af19fd39309804193ed385b7beb6efbab23ce2b420c2a4aceec
+
+right.svg — 324 bytes, viewBox 0 0 1024 1024
+https://raw.githubusercontent.com/ant-design/ant-design-icons/74e514ef000262527ecbe0344ff5cc59d37d359a/packages/icons-svg/svg/outlined/right.svg
+Git blob SHA-1: 02438c67f36485b594cf6c23b691f39471ccc82e
+SHA-256: c89e39577920098b1f5cc19a68658ee99e8acfb39ccb48e4d642ddbad47a8683
+
+Reference provenance, not an additional runtime dependency:
+The reference lock resolves react-icons 5.7.0. Its ai generator at immutable
+React Icons commit 87470d588c5624bf3e291f17527c3ecd1419c8ae pins the original
+Ant Design source commit above and generates AiOutlineLeft/Home/Right.
+https://raw.githubusercontent.com/react-icons/react-icons/87470d588c5624bf3e291f17527c3ecd1419c8ae/packages/react-icons/src/icons/index.ts
+https://unpkg.com/react-icons@5.7.0/ai/index.mjs
+The original viewBox and complete path data match these published named
+imports; XML wrappers need not match React serialization. Right is its own
+original drawing, not a mirrored reconstruction of Left. Seelen's AGPL
+serialization, build output, assets and code are not included. Runtime cache,
+native tint, raster/font/scale and Windows composition require separate proof.
+
+Git blob IDs above include Git's blob header; they are not plain-file SHA-1.
+The existing recursive third-party notice collector retains this provenance
+and the full original copyright, permission and disclaimer in LICENSE.

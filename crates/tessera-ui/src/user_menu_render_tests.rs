@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
-use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType, TargetPixel};
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, PhysicalSize, Rgb8Pixel};
 
@@ -1586,6 +1586,51 @@ fn logout_border_box_source_geometry_photo_circle_and_outside_clip_hover_hold_li
             [0, 150, 230],
             "circular control corner leaves underlying genuine photo intact"
         );
+        let accounts = fixture.element("Open Accounts settings");
+        let accounts_origin = accounts.absolute_position();
+        assert_eq!(accounts.size().width, 28.0);
+        assert_eq!(accounts.size().height, 28.0);
+        assert!((accounts_origin.x - avatar.x + 4.0).abs() < 0.01);
+        assert!((accounts_origin.y - avatar.y - expected_offset).abs() < 0.01);
+        let crescent = LogicalPosition::new(accounts_origin.x + 3.0, accounts_origin.y + 14.0);
+        assert!(
+            crescent.x < avatar.x,
+            "Accounts extends beyond the photo clip"
+        );
+        assert_eq!(
+            sample(
+                &pixels,
+                LogicalPosition::new(accounts_origin.x + 1.0, crescent.y)
+            ),
+            body,
+            "Accounts retains the same internal 2px surface rim as Logout"
+        );
+        assert_eq!(sample(&pixels, crescent), body);
+        fixture
+            .window
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position: crescent });
+        let accounts_hovered = fixture.render_fit(scale);
+        assert_eq!(sample(&accounts_hovered, crescent), hover);
+        assert_eq!(
+            sample(
+                &accounts_hovered,
+                LogicalPosition::new(accounts_origin.x + 1.0, crescent.y)
+            ),
+            body,
+            "the internal rim stays surface while its adjacent interior paints hover"
+        );
+        fixture.press(crescent);
+        assert!(fixture.take_requests().is_empty());
+        fixture.release(crescent);
+        assert_eq!(
+            fixture.take_requests(),
+            vec![Request::Profile(
+                UserProfileAction::Accounts,
+                "profile::current/session?語".into()
+            )],
+            "the genuine outside-photo crescent activates only current Accounts, not Logout/folders"
+        );
         fixture
             .window
             .window()
@@ -1677,6 +1722,102 @@ fn logout_bound_native_tab_order_and_tiny_rtl_focus_reveal_preserve_profile_and_
                 vec![Request::Open(kind, key.into())],
                 "the bound control changes only its genuine tab stop; folder ordering remains {label}"
             );
+        }
+    }
+}
+
+#[test]
+fn user_source_fallback_gray_and_folder_accent_hover_hold_keep_native_admission() {
+    let fixture = Fixture::new(|popup| {
+        configure_profile(popup);
+        popup.set_profile_fallback(true);
+        popup.set_has_photo(false);
+    });
+    for (scheme, disk, body) in [
+        (
+            slint::language::ColorScheme::Light,
+            [193, 193, 193],
+            [242, 242, 242],
+        ),
+        (
+            slint::language::ColorScheme::Dark,
+            [61, 61, 61],
+            [24, 24, 24],
+        ),
+    ] {
+        fixture
+            .popup
+            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+        fixture
+            .popup
+            .global::<crate::generated::SeelenPalette>()
+            .set_accent(slint::Color::from_rgb_u8(64, 128, 192).into());
+        for scale in [1.0, 2.0] {
+            fixture
+                .window
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged {
+                    scale_factor: scale,
+                });
+            fixture
+                .window
+                .window()
+                .dispatch_event(WindowEvent::PointerExited);
+            fixture.popup.invoke_focus_content();
+            let pixels = fixture.render_fit(scale);
+            let width = (fixture.popup.get_popup_content_width() * scale).ceil() as usize;
+            let sample = |pixels: &[Rgb8Pixel], point: LogicalPosition| {
+                let p = pixels[(point.y * scale) as usize * width + (point.x * scale) as usize];
+                [p.r, p.g, p.b]
+            };
+            let avatar = fixture.element("Default user profile").absolute_position();
+            assert_eq!(
+                sample(
+                    &pixels,
+                    LogicalPosition::new(avatar.x + 14.0, avatar.y + 20.0)
+                ),
+                disk,
+                "independent source gray-200, away from the schematic/buttons"
+            );
+            let folder = fixture.element("Open Recent");
+            let origin = folder.absolute_position();
+            let blank =
+                LogicalPosition::new(origin.x + folder.size().width - 12.0, origin.y + 12.0);
+            assert_eq!(sample(&pixels, blank), body);
+            fixture.press(blank);
+            let held = fixture.render_fit(scale);
+            // Literal source .2 alpha; reuse SDK-exact premultiplication/blending,
+            // not guessed float rounding or the component's paint property.
+            let mut blend = Rgb8Pixel::new(body[0], body[1], body[2]);
+            blend.blend(slint::Color::from_argb_u8(51, 64, 128, 192).into());
+            let expected = [blend.r, blend.g, blend.b];
+            assert_eq!(
+                sample(&held, blank),
+                expected,
+                "held press retains source accent alpha .2"
+            );
+            assert!(fixture.take_requests().is_empty());
+            fixture.release(blank);
+            assert_eq!(
+                fixture.take_requests(),
+                vec![Request::Open(UserFolderKind::Recent, FOLDERS[0].2.into())]
+            );
+            assert_eq!(sample(&fixture.render_fit(scale), blank), expected);
+            let mut rows = ready_rows();
+            rows[0].ready = false;
+            fixture
+                .popup
+                .set_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+            assert_eq!(sample(&fixture.render_fit(scale), blank), body);
+            fixture.press(blank);
+            fixture.release(blank);
+            assert!(
+                fixture.take_requests().is_empty(),
+                "disabled row remains inert and unhighlighted"
+            );
+            fixture
+                .popup
+                .set_rows(slint::ModelRc::new(slint::VecModel::from(ready_rows())));
         }
     }
 }

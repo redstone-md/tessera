@@ -228,12 +228,14 @@ The [tester guide](docs/alpha-testing.md) targets published alpha.20 with eight 
 
 **Alpha.20 is latest available and independently verified:** production CI, optimized runtime verification and all three actual downloaded-asset hash/package/source checks passed; see the [published receipt](docs/distribution-and-trust.md#published-alpha20-receipt). Historical seek and independently repaired audio-admission source proofs above are included in alpha.20, not retroactively in alpha.19. Alpha.21 development work is outside these receipts; parked media-display changes have no completed gates. Native effects and full native parity remain uncertified.
 
-**Alpha.21 visual development:** toolbar/dock paint and geometry, a source-shaped
-native Settings shell, and launcher search/footer/empty-state presentation are
-being transferred from the pinned Seelen reference. Existing native input,
-provider and explicit-save boundaries remain in use. See the
-[visual layer and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
-this is not a published release or a fix claim for the reported VM toolbar offset.
+**Alpha.21 visual development:** source-backed toolbar/dock geometry and paint,
+native Settings shell, and launcher search/footer/empty states are in main.
+That shell checkpoint passed the actual Linux/Windows CI and native Debug
+GUI two-pulse/owned-cleanup gate. User avatar/Accounts/folder paint and original
+MIT Calendar vectors form the next locally verified popup layer. Existing native
+input, providers and explicit Save remain unchanged. See the
+[exact source/gate boundaries and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
+this is not a published release, complete 1:1 parity or a fix claim for the VM toolbar offset.
 
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 

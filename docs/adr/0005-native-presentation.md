@@ -162,8 +162,18 @@ This is development source, not a published alpha.21 or completed 1:1 contract.
   Its original 35.2px clipped label track is retained; native Text receives
   two complete 17.92px line boxes and `max-lines: 2`. This fixes a reproduced
   2×-only single-line elision without enlarging tiles or weakening glyph tests.
+- **User popup:** Accounts now retains the source avatar-relative (-4,+46)
+  overlay, 28px border-box and internal 2px surface rim. Fallback uses local
+  source gray-200; admitted folder hover/held paint uses accent alpha .2.
+  Existing typed profile/folder actions, unavailable states, focus and tiny RTL
+  scrolling remain unchanged; the fallback silhouette/settings artwork are
+  still honest differences.
+- **Calendar:** original independently licensed Ant Design Left/Home/Right
+  vectors replace Unicode navigation at the source's centered 12.8px/1em size.
+  Fixed 28.8×22.4 input slots, navigator-only .98/+1px press, month/year/Today,
+  cancellation and native accessibility remain authoritative.
 
-**Local verified checkpoint:** 1,444 workspace tests/19 suites passed
+**First shell layer local checkpoint (`dd467ef`):** 1,444 workspace tests/19 suites passed
 (819 UI, one separately gated GL case ignored in the workspace run).
 Strict warnings-denied all-target Clippy passed on Linux and MSVC shapes with
 Rust 1.92/1.99. Owned Linux Mesa GL passed at 1×/2×, preserving original input,
@@ -174,8 +184,33 @@ Source review closed its three concrete P2 findings; it is not runtime proof.
 The dedicated source-only diagnostic branch enables the existing Windows CI
 and owned GUI preflight without allowing diagnostic-branch publication.
 
+**Actual native shell checkpoint (`dd467ef`):**
+[CI 37984532715](https://github.com/redstone-md/tessera/actions/runs/37984532715)
+passed Linux stable (1,444/19 suites, one ignored) and Windows 1.92/stable
+(each 1,533/19 suites, zero failed/ignored), including strict Clippy/rustdoc.
+Complete archived job logs were independently recounted; diagnostic-branch
+packaging was skipped. [Native Debug 37984532774](https://github.com/redstone-md/tessera/actions/runs/37984532774)
+passed at the same exact source in 11m8s: 1,533/19 suites, actual static-CRT
+production GUI/supervisor, two real UI-thread pulses and owned cleanup.
+This hosted diagnostic startup excludes ordinary providers/preferences/hooks;
+it does not certify popup continuation, native effects, VM pixels or release assets.
+
+**Popup continuation local proof:** all 821 UI tests passed, with one separately
+gated GL case ignored. Its 20 genuine User and nine Calendar render/input cases
+include the outside-photo Accounts crescent, contrasting rim,
+independent gray-200 and literal ARGB51 accent compositing, plus exact 2× vector
+foreground. Strict Rust 1.92 UI/all-target Clippy and owned Mesa GL1× (9.66s)/
+2× (15.39s) passed. All 136 complete P6 frames (68/scale, 307,293,476 bytes)
+were validated, including actual controlled-photo/Accounts, fallback and Calendar
+images. The original shader/input/two-line guards are retained; grayscale/range
+checks alone are not claimed as independent original-path mask equality.
+All 35 notice assertions and the existing recursive package collector retain
+the full original Ant UED MIT grant and exact adjacent provenance.
+
 Seven additional original Tabler vectors retain the existing immutable
 [MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/tabler-icons-6d128ed/NOTICE.txt).
+Three original Ant Design navigation SVGs retain their independently pinned
+[MIT grant and per-file receipts](../../crates/tessera-ui/assets/icons/ant-design-icons-74e514e/NOTICE.txt).
 No Seelen code/assets, new provider, preference schema or rendering framework
 is imported. Font/native-control skins, exact rights-blocked artwork,
 frameless Settings chrome, complete source modules and Windows backdrop/

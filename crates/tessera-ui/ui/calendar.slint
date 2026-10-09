@@ -35,7 +35,7 @@ component CalendarText inherits Text {
 }
 
 component CalendarNavigator inherits TileButton {
-    in property <string> glyph;
+    in property <image> icon;
     radius: 6px;
     filled: false;
     background: transparent;
@@ -51,16 +51,17 @@ component CalendarNavigator inherits TileButton {
             : root.pressed ? SeelenPalette.accent.with-alpha(0.3)
             : root.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
         accessible-role: none;
-        CalendarText {
-            x: 0px;
-            y: 0px;
-            width: parent.width;
-            height: parent.height;
-            text: root.glyph;
-            font-size: 16px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            overflow: elide;
+        // Source Icon.svelte uses 1em; navigator buttons inherit the popup's
+        // 12.8px font. Keep the original square SVG viewBox and tint its mask.
+        Image {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: PopoverTokens.font-size;
+            height: PopoverTokens.font-size;
+            source: root.icon;
+            image-fit: contain;
+            colorize: SeelenPalette.foreground;
+            accessible-role: none;
         }
     }
 }
@@ -343,12 +344,16 @@ export component CalendarMenu inherits Window {
                             width: header.nav-width;
                             height: 22.4px;
                             accessible-role: none;
-                            for glyph[index] in ["‹", "⌂", "›"]: CalendarNavigator {
+                            for icon[index] in [
+                                @image-url("../assets/icons/ant-design-icons-74e514e/left.svg"),
+                                @image-url("../assets/icons/ant-design-icons-74e514e/home.svg"),
+                                @image-url("../assets/icons/ant-design-icons-74e514e/right.svg")
+                            ]: CalendarNavigator {
                                 x: index * (header.nav-slot + header.nav-gap);
                                 y: 0px;
                                 width: header.nav-slot;
                                 height: 22.4px;
-                                glyph: glyph;
+                                icon: icon;
                                 enabled: root.interactive && (index == 0 ? root.can-previous : index == 2 ? root.can-next : true);
                                 accessible-text: index == 1 ? @tr("Today")
                                     : index == 0 ? (root.view-mode == CalendarMode.Month ? @tr("Previous month") : @tr("Previous year"))

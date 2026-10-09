@@ -80,6 +80,7 @@ component FolderOpenButton inherits TileButton {
     height: 16px + row-text.natural-height;
     radius: 6px;
     filled: false;
+    background: root.enabled && root.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
     // Unavailable status is still readable, not dimmed with its disabled action.
     opacity: 1;
     accessible-description: root.feedback;
@@ -363,7 +364,9 @@ export component UserMenu inherits Window {
                             width: 70px;
                             height: 70px;
                             border-radius: 35px;
-                            background: root.profile-fallback ? SeelenPalette.tile : transparent;
+                            background: root.profile-fallback
+                                ? (SeelenPalette.dark ? oklch(0.36, 0, 0) : oklch(0.81, 0, 0))
+                                : transparent;
                             clip: true;
                             accessible-role: none;
                             if root.has-photo: Image {
@@ -485,8 +488,14 @@ export component UserMenu inherits Window {
                             }
                         }
                         accounts := TileButton {
-                            x: 0px; y: 50px; width: 28px; height: 28px;
+                            x: profile.x - 4px;
+                            y: profile.y + profile.height - self.height + 4px;
+                            width: 28px; height: 28px;
                             radius: 14px;
+                            border-width: 2px;
+                            border-color: SeelenPalette.surface;
+                            background: self.pressed ? SeelenPalette.pressed
+                                : self.hovered ? SeelenPalette.hover : SeelenPalette.surface;
                             visible: root.has-profile-actions;
                             interactive: root.has-profile-actions;
                             enabled: root.profile-actions-ready;
