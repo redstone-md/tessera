@@ -20,9 +20,12 @@ component DockButton inherits TileButton {
         width: root.width;
         height: root.height;
         border-radius: root.radius;
-        background: root.enabled && (root.hovered || root.pressed)
-            ? SeelenPalette.hover : SeelenPalette.tile;
-        drop-shadow-color: #000000.with-alpha(0.08);
+        background: SeelenPalette.reference-mode
+            ? (root.enabled && (root.hovered || root.pressed) ? SeelenPalette.hover : SeelenPalette.tile)
+            : (!root.enabled ? transparent :
+                root.pressed ? SeelenPalette.pressed :
+                root.hovered ? SeelenPalette.hover : transparent);
+        drop-shadow-color: SeelenPalette.reference-mode ? #000000.with-alpha(0.08) : transparent;
         drop-shadow-offset-x: 1px;
         drop-shadow-offset-y: 1px;
         drop-shadow-blur: 2px;
@@ -34,8 +37,8 @@ component DockButton inherits TileButton {
 
 // One bounded floating dock bar, centered on the primary monitor bounds by
 // the controller (MinContent by the actual tile count; overflow scrolls).
-// Click targets are icon tiles with Seelen radius 10; running windows carry
-// a 3px indicator, the focused window a half-tile accent indicator.
+// Source-informed 46px fixed slots surround 33px icons; only paint moves.
+// Running/focused indicators stay on the existing independent edge rail.
 export component Dock inherits Window {
     no-frame: true;
     always-on-top: true;
@@ -87,15 +90,16 @@ export component Dock inherits Window {
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
 
-    // Seelen tokens (exact defaults; compact shrinks proportionally).
+    // Chosen native Material3 geometry; compact shrinks proportionally.
+    // Keep item/pad/gap/margin synchronized with src/dock.rs placement.
     property <float> factor: root.compact ? 0.8 : 1;
-    property <length> item: 40px * root.factor;
-    property <length> gap: 8px * root.factor;
-    property <length> pad: 8px * root.factor;
-    property <length> margin: 8px * root.factor;
-    property <length> bar-radius: 16px * root.factor;
-    property <length> tile-radius: 10px * root.factor;
-    property <length> icon-pad: 6px * root.factor;
+    property <length> item: 46px * root.factor;
+    property <length> gap: 3px * root.factor;
+    property <length> pad: 5px * root.factor;
+    property <length> margin: 5px * root.factor;
+    property <length> bar-radius: 23px * root.factor;
+    property <length> tile-radius: 17px * root.factor;
+    property <length> icon-pad: 6.5px * root.factor;
     property <bool> blocked: root.surface-status.refreshing || root.surface-status.stale;
     // Only confirmed projections carry counts. Notices retain independent
     // read/watch/open/empty health; the generic glyph does not certify emptiness.
@@ -119,7 +123,9 @@ export component Dock inherits Window {
         width: max(0px, parent.width - 2 * root.margin);
         height: max(0px, parent.height - 2 * root.margin);
         border-radius: root.bar-radius;
-        background: SeelenPalette.bar.with-alpha(0.8);
+        background: SeelenPalette.reference-mode ? SeelenPalette.bar.with-alpha(0.8) : SeelenPalette.surface-container;
+        border-width: SeelenPalette.reference-mode ? 0px : 1px;
+        border-color: SeelenPalette.outline-variant;
         clip: true;
 
         // The Start tile also exposes recovery commands while data is stale.

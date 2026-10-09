@@ -43,7 +43,9 @@ export struct AppRow {
 // Settings use flat translucent groups, not the shared shell's raised tiles.
 component SettingsGroup inherits Rectangle {
     border-radius: 10px;
-    background: SeelenPalette.dark ? rgba(0, 0, 0, 0.10) : rgba(0, 0, 0, 0.03);
+    background: SeelenPalette.reference-mode
+        ? (SeelenPalette.dark ? rgba(0, 0, 0, 0.10) : rgba(0, 0, 0, 0.03))
+        : SeelenPalette.surface-container;
     vertical-stretch: 0;
     max-height: self.preferred-height;
     VerticalLayout {
@@ -95,8 +97,11 @@ component SettingsNavigation inherits TileButton {
     min-width: 0px;
     radius: 8px;
     filled: false;
+    property <color> navigation-foreground: root.selected && !SeelenPalette.reference-mode
+        ? SeelenPalette.on-primary : SeelenPalette.foreground;
     background: root.selected ? SeelenPalette.accent
-        : root.hovered ? Palette.accent-background : transparent;
+        : root.hovered ? (SeelenPalette.reference-mode ? Palette.accent-background : SeelenPalette.hover)
+        : transparent;
     HorizontalLayout {
         padding-left: 4px;
         padding-right: 4px;
@@ -106,12 +111,12 @@ component SettingsNavigation inherits TileButton {
             width: 20px;
             height: 20px;
             image-fit: contain;
-            colorize: SeelenPalette.foreground;
+            colorize: root.navigation-foreground;
             accessible-role: none;
         }
         if !root.collapsed: Text {
             text: root.label;
-            color: SeelenPalette.foreground;
+            color: root.navigation-foreground;
             font-size: 12.8px;
             font-weight: 600;
             overflow: elide;
@@ -216,8 +221,12 @@ export component Panel inherits Window {
     property <int> selected-page: 0;
     property <bool> sidebar-collapsed;
     property <length> sidebar-width: root.sidebar-collapsed ? 44px : 192px;
-    property <color> divider: SeelenPalette.dark ? oklch(0.36, 0, 0) : oklch(0.81, 0, 0);
-    property <color> shell-overlay: SeelenPalette.dark ? #0000001a : #00000008;
+    property <color> divider: SeelenPalette.reference-mode
+        ? (SeelenPalette.dark ? oklch(0.36, 0, 0) : oklch(0.81, 0, 0))
+        : SeelenPalette.outline-variant;
+    property <color> shell-overlay: SeelenPalette.reference-mode
+        ? (SeelenPalette.dark ? #0000001a : #00000008)
+        : SeelenPalette.surface-container-low;
     property <string> page-title: ["General", "Appearance", "Dock", "Shortcuts", "Desktop & recovery"][root.selected-page];
 
     // Navigation is presentation only: retain root drafts and cancel the scoped
@@ -231,18 +240,22 @@ export component Panel inherits Window {
         }
     }
 
-    // The source paints cyan, blue, then red (CSS lists the top layer first).
+    // Retain the neutral source gradients only in its explicit reference skin.
+    // Material uses the shared opaque surface/container roles instead.
     Rectangle {
+        visible: SeelenPalette.reference-mode;
         background: @linear-gradient(336deg,
             (SeelenPalette.dark ? oklch(0.27, 0.056, 230) : oklch(0.90, 0.053, 230)) 0%,
             rgba(0, 255, 0, 0) 70%);
     }
     Rectangle {
+        visible: SeelenPalette.reference-mode;
         background: @linear-gradient(127deg,
             (SeelenPalette.dark ? oklch(0.27, 0.111, 260) : oklch(0.90, 0.042, 260)) 0%,
             rgba(0, 0, 255, 0) 70%);
     }
     Rectangle {
+        visible: SeelenPalette.reference-mode;
         background: @linear-gradient(217deg,
             (SeelenPalette.dark ? oklch(0.27, 0.096, 30) : oklch(0.90, 0.054, 30)) 0%,
             rgba(255, 0, 0, 0) 70%);

@@ -13,16 +13,14 @@ use winit::platform::x11::EventLoopBuilderExtX11;
 
 use crate::generated::{
     CalendarDayCell, CalendarMenu, CalendarWeekRow, ContextMenuSurface, Dock, DockApp,
-    DockMenuAction, DockMenuKind, LaunchRow, LaunchTile, Launcher, LauncherDisplayMode,
-    LauncherDragVisual, QuickSettings, TileBounds, TooltipSurface, UserFolderKind, UserFolderRow,
-    UserMenu,
+    DockMenuAction, DockMenuKind, DockWindow, LaunchRow, LaunchTile, Launcher, LauncherDisplayMode,
+    LauncherDragVisual, Panel, QuickSettings, TileBounds, Toolbar, TooltipSurface, UserFolderKind,
+    UserFolderRow, UserMenu,
 };
 use crate::generated::{FocusTokens, PowerMenuAction, PowerMenuSurface};
 use crate::theme::{PresentationTheme, ThemedComponent};
 
-#[test]
-#[ignore = "Requires an owned X11 display and isolated --exact test process"]
-fn native_gl_frames_render_reference_shadow_alpha() {
+fn select_native_gl_backend() {
     let mut builder = winit::event_loop::EventLoop::<SlintEvent>::with_user_event();
     builder.with_x11().with_any_thread(true);
     slint::BackendSelector::new()
@@ -33,8 +31,731 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         .with_winit_window_attributes_hook(|attributes| attributes.with_active(false))
         .select()
         .unwrap();
+}
+
+#[test]
+#[ignore = "Requires an owned X11 display and isolated --exact test process"]
+fn native_gl_material3_toolbar_and_dock_frames() {
+    select_native_gl_backend();
+    let toolbar = Toolbar::new().unwrap();
+    toolbar.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
+    toolbar.set_user_name("Alex Morgan".into());
+    toolbar.set_focused_app("Design system — Tessera".into());
+    toolbar.set_clock("Fri, Oct 9 · 14:32".into());
+    toolbar.set_language("ENG".into());
+    toolbar
+        .window()
+        .set_size(slint::LogicalSize::new(1280.0, crate::dock::TOOLBAR_HEIGHT));
+
+    // Closed projections only: no provider, shell, utility or Power effects.
+    let dock = Dock::new().unwrap();
+    dock.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
+    let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(33, 33);
+    for pixel in pixels.make_mut_slice() {
+        *pixel = slint::Rgba8Pixel {
+            r: 255,
+            g: 0,
+            b: 255,
+            a: 255,
+        };
+    }
+    let icon = slint::Image::from_rgba8(pixels);
+    dock.set_pinned_apps(slint::ModelRc::new(slint::VecModel::from(vec![
+        DockApp {
+            key: "fixture-editor".into(),
+            label: "Editor".into(),
+            icon: icon.clone(),
+            pinned: true,
+        },
+        DockApp {
+            key: "fixture-files".into(),
+            label: "Files".into(),
+            icon: icon.clone(),
+            pinned: true,
+        },
+    ])));
+    dock.set_running_windows(slint::ModelRc::new(slint::VecModel::from(vec![
+        DockWindow {
+            key: "fixture-browser".into(),
+            caption: "Research browser".into(),
+            icon,
+        },
+    ])));
+    dock.set_focused_key("fixture-browser".into());
+    dock.set_compact(false);
+    dock.set_edge(0);
+    // Default cleared utility DTOs intentionally retain their generic artwork.
+    dock.window().set_size(slint::LogicalSize::new(
+        crate::dock::dock_length(3, false),
+        crate::dock::dock_thickness(false),
+    ));
+    let bar_gl = record_native_gl(toolbar.window());
+    let dock_gl = record_native_gl(dock.window());
+    // Genuine default General/Home page, without any host or Save callback.
+    let panel = Panel::new().unwrap();
+    panel.set_theme_index(2);
+    panel.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
+    panel.set_version("native GL fixture".into());
+    panel
+        .window()
+        .set_size(slint::LogicalSize::new(800.0, 500.0));
+    let panel_gl = record_native_gl(panel.window());
+    let calendar = native_gl_calendar_fixture(PresentationTheme::uniform(ColorScheme::Dark));
+    let calendar_gl = record_native_gl(calendar.window());
+    let bar_actions = Rc::new(Cell::new(0));
+    toolbar.on_calendar_requested({
+        let actions = Rc::clone(&bar_actions);
+        move |bounds| {
+            assert_eq!(bounds.origin.y, 4.0);
+            assert_eq!(bounds.height, 32.0);
+            actions.set(actions.get() + 1);
+        }
+    });
+    let dock_actions = Rc::new(Cell::new(0));
+    dock.on_launch_requested({
+        let actions = Rc::clone(&dock_actions);
+        move |key| {
+            assert_eq!(key, "fixture-editor");
+            actions.set(actions.get() + 1);
+        }
+    });
+    toolbar.show().unwrap();
+    dock.show().unwrap();
+    panel.show().unwrap();
+    calendar.show().unwrap();
+    let completed = Rc::new(Cell::new(false));
+    let result = Rc::clone(&completed);
+    slint::spawn_local(async move {
+        toolbar.window().winit_window().await.unwrap();
+        dock.window().winit_window().await.unwrap();
+        panel.window().winit_window().await.unwrap();
+        calendar.window().winit_window().await.unwrap();
+        for (name, scheme, container, foreground, body, outline) in [
+            (
+                "dark",
+                ColorScheme::Dark,
+                [0x30, 0x4f, 0x18],
+                [0xc6, 0xed, 0xaa],
+                [0x1d, 0x23, 0x19],
+                [0x44, 0x4c, 0x3c],
+            ),
+            (
+                "light",
+                ColorScheme::Light,
+                [0xc6, 0xed, 0xaa],
+                [0x10, 0x20, 0x04],
+                [0xe8, 0xed, 0xdf],
+                [0xc4, 0xcc, 0xba],
+            ),
+        ] {
+            toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
+            dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+            toolbar
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::PointerExited);
+            dock.window()
+                .dispatch_event(slint::platform::WindowEvent::PointerExited);
+            let bar_frame = toolbar.window().take_snapshot().unwrap();
+            let dock_frame = dock.window().take_snapshot().unwrap();
+            assert!(
+                bar_gl.get() && dock_gl.get(),
+                "both real production surfaces must traverse NativeOpenGL"
+            );
+            let scale = toolbar.window().scale_factor();
+            let dock_scale = dock.window().scale_factor();
+            assert!(scale == 1.0 || scale == 2.0);
+            assert_eq!(dock_scale, scale);
+            assert_eq!(
+                (bar_frame.width(), bar_frame.height()),
+                ((1280.0 * scale) as u32, (40.0 * scale) as u32)
+            );
+            assert_eq!(
+                (dock_frame.width(), dock_frame.height()),
+                (
+                    (crate::dock::dock_length(3, false) * scale) as u32,
+                    (66.0 * scale) as u32,
+                )
+            );
+            // Export first: even an oracle failure leaves genuine diagnostic frames.
+            export_frame(&format!("material3-toolbar-{name}-{scale}x"), &bar_frame);
+            export_frame(&format!("material3-dock-{name}-{scale}x"), &dock_frame);
+            verify_material3_toolbar(&toolbar, &bar_frame, scale, container, foreground);
+            verify_material3_dock(&dock, &dock_frame, scale, body, outline);
+        }
+        for (name, scheme, primary, on_primary) in [
+            (
+                "dark",
+                ColorScheme::Dark,
+                [0xaa, 0xd3, 0x8e],
+                [0x1c, 0x37, 0x0a],
+            ),
+            (
+                "light",
+                ColorScheme::Light,
+                [0x45, 0x68, 0x2b],
+                [0xff, 0xff, 0xff],
+            ),
+        ] {
+            panel.set_theme_index(if scheme == ColorScheme::Dark { 2 } else { 1 });
+            panel.apply_presentation_theme(PresentationTheme::uniform(scheme));
+            let frame = panel.window().take_snapshot().unwrap();
+            let scale = panel.window().scale_factor();
+            assert!(
+                panel_gl.get(),
+                "selected settings navigation must traverse NativeOpenGL"
+            );
+            assert_eq!(
+                (frame.width(), frame.height()),
+                ((800.0 * scale) as u32, (500.0 * scale) as u32)
+            );
+            export_frame(&format!("material3-settings-{name}-{scale}x"), &frame);
+            verify_material3_settings_navigation(
+                &panel, &frame, scale, scheme, primary, on_primary,
+            );
+            calendar.apply_presentation_theme(PresentationTheme::uniform(scheme));
+            calendar
+                .window()
+                .dispatch_event(slint::platform::WindowEvent::PointerExited);
+            let calendar_frame = calendar.window().take_snapshot().unwrap();
+            let calendar_scale = calendar.window().scale_factor();
+            assert!(
+                calendar_gl.get(),
+                "selected calendar must traverse NativeOpenGL"
+            );
+            assert_eq!(calendar_scale, scale);
+            export_frame(
+                &format!("material3-calendar-{name}-{calendar_scale}x"),
+                &calendar_frame,
+            );
+            verify_material3_calendar_selection(
+                &calendar,
+                &calendar_frame,
+                calendar_scale,
+                primary,
+                on_primary,
+            );
+        }
+        // Keep unfocused island/outer-alpha oracles independent of keyboard rings.
+        for (name, scheme) in [("dark", ColorScheme::Dark), ("light", ColorScheme::Light)] {
+            toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
+            dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+            let clock = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &toolbar,
+                "Open calendar",
+            )
+            .next()
+            .unwrap();
+            let app = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &dock,
+                "Launch Editor",
+            )
+            .next()
+            .unwrap();
+            verify_material3_input(
+                toolbar.window(),
+                &clock,
+                &bar_actions,
+                &format!("material3-toolbar-{name}"),
+                0.0,
+            );
+            verify_material3_input(
+                dock.window(),
+                &app,
+                &dock_actions,
+                &format!("material3-dock-{name}"),
+                2.0,
+            );
+        }
+        assert_eq!(bar_actions.get(), 6);
+        assert_eq!(dock_actions.get(), 6);
+        toolbar.hide().unwrap();
+        dock.hide().unwrap();
+        panel.hide().unwrap();
+        calendar.hide().unwrap();
+        result.set(true);
+        slint::quit_event_loop().unwrap();
+    })
+    .unwrap();
+    slint::run_event_loop().unwrap();
+    assert!(
+        completed.get(),
+        "the bounded native Material3 scenario must complete"
+    );
+}
+
+fn verify_material3_settings_navigation(
+    panel: &Panel,
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    scheme: ColorScheme,
+    primary: [u8; 3],
+    on_primary: [u8; 3],
+) {
+    use i_slint_backend_testing::ElementHandle;
+    let (surface, low, container, outline) = match scheme {
+        ColorScheme::Dark => (
+            [0x10, 0x15, 0x0d],
+            [0x19, 0x1e, 0x15],
+            [0x1d, 0x23, 0x19],
+            [0x44, 0x4c, 0x3c],
+        ),
+        ColorScheme::Light => (
+            [0xf6, 0xfa, 0xf0],
+            [0xee, 0xf3, 0xe8],
+            [0xe8, 0xed, 0xdf],
+            [0xc4, 0xcc, 0xba],
+        ),
+        _ => panic!("the native Material fixture requires an explicit theme"),
+    };
+    // Independent opaque-role probes: source gradients must not survive
+    // beneath the Material root, sidebar, header or genuine General group.
+    for (label, x, y, color) in [
+        ("empty main body", 400.0, 300.0, surface),
+        ("lower-right main body", 780.0, 480.0, surface),
+        ("empty sidebar", 4.0, 350.0, low),
+        ("empty header", 500.0, 8.0, low),
+        ("header divider", 400.0, 49.0, outline),
+    ] {
+        assert!(
+            material3_rgb(material3_pixel(frame, scale, x, y), color),
+            "Settings {label} paints the independent literal role, not the neutral source gradient"
+        );
+    }
+    let group = ElementHandle::find_by_element_id(panel, "Panel::general-group")
+        .next()
+        .unwrap();
+    let group_origin = group.absolute_position();
+    let group_size = group.size();
+    assert_eq!(group_origin.x, 204.0);
+    assert!(group_origin.y >= 80.0 && group_origin.y < 110.0);
+    assert_eq!(group_size.width, 584.0);
+    assert_eq!(group_size.height, 48.0);
+    assert!(
+        material3_rgb(
+            material3_pixel(frame, scale, 496.0, group_origin.y + 4.0),
+            container,
+        ),
+        "Settings General padding paints the literal opaque surfaceContainer away from controls"
+    );
+    // The real selected first page is labelled General, not a synthetic Home.
+    let selected = ElementHandle::find_by_accessible_label(panel, "General")
+        .next()
+        .unwrap();
+    let origin = selected.absolute_position();
+    let size = selected.size();
+    assert_eq!(size.height, 30.0);
+    assert!(origin.x >= 0.0 && origin.y >= 50.0 && size.width > 100.0);
+    assert!(origin.x + size.width <= 192.0 && origin.y + size.height <= 500.0);
+    assert!(
+        material3_rgb(
+            material3_pixel(frame, scale, origin.x + size.width - 10.0, origin.y + 15.0),
+            primary,
+        ),
+        "selected genuine General control paints the independent literal primary"
+    );
+    for kind in ["Text", "Image"] {
+        let child = selected
+            .query_descendants()
+            .match_type_name(kind)
+            .find_first()
+            .unwrap();
+        let child_origin = child.absolute_position();
+        let child_size = child.size();
+        assert!(child_size.width > 0.0 && child_size.height > 0.0);
+        assert!(child_origin.x >= origin.x && child_origin.y >= origin.y);
+        assert!(child_origin.x + child_size.width <= origin.x + size.width);
+        assert!(child_origin.y + child_size.height <= origin.y + size.height);
+        if kind == "Image" {
+            assert_eq!(child_size, slint::LogicalSize::new(20.0, 20.0));
+        }
+        let pixels = gl_region(frame, child_origin, child_size, scale);
+        assert!(
+            pixels
+                .into_iter()
+                .any(|pixel| material3_rgb(pixel, on_primary)),
+            "selected navigation {kind} paints the independent literal onPrimary, not generic foreground"
+        );
+    }
+}
+
+fn verify_material3_calendar_selection(
+    calendar: &CalendarMenu,
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    primary: [u8; 3],
+    on_primary: [u8; 3],
+) {
+    use i_slint_backend_testing::ElementHandle;
+    // The closed October projection selects Friday 9, not an invented UI date.
+    let selected = ElementHandle::find_by_accessible_label(calendar, "Friday, October 9, 2026")
+        .next()
+        .unwrap();
+    let origin = selected.absolute_position();
+    let size = selected.size();
+    // 300px body, 8px content inset per side, seven cells and six 4px gaps.
+    let day_size = (300.0_f32 - 16.0 - 24.0) / 7.0;
+    assert!((size.width - day_size).abs() <= f32::EPSILON * 300.0);
+    assert!((size.height - day_size).abs() <= f32::EPSILON * 300.0);
+    let selected_x = 18.0 + 4.0 * (day_size + 4.0);
+    let selected_y = 18.0 + 25.92 + 16.0 + 33.92 + 8.0 + day_size + 4.0;
+    assert!((origin.x - selected_x).abs() <= f32::EPSILON * 300.0);
+    assert!((origin.y - selected_y).abs() <= f32::EPSILON * 300.0);
+    assert!(origin.x + size.width <= 302.0);
+    assert!(origin.y + size.height <= frame.height() as f32 / scale - 18.0);
+    assert_eq!(frame.width(), (320.0 * scale) as u32);
+    let center_x = origin.x + size.width / 2.0;
+    let center_y = origin.y + size.height / 2.0;
+    assert!(
+        material3_rgb(
+            material3_pixel(frame, scale, center_x, origin.y + 3.0),
+            primary,
+        ),
+        "selected genuine October 9 cell paints the independent literal primary"
+    );
+    let text = selected
+        .query_descendants()
+        .match_type_name("CalendarText")
+        .find_first()
+        .unwrap();
+    assert_eq!(text.absolute_position(), origin);
+    assert_eq!(text.size(), size);
+    // Restrict the proof to the centered numeral, excluding its rounded skin.
+    let glyphs = gl_region(
+        frame,
+        slint::LogicalPosition::new(center_x - 9.0, center_y - 10.0),
+        slint::LogicalSize::new(18.0, 20.0),
+        scale,
+    );
+    assert!(glyphs.iter().all(|pixel| pixel.a == 255));
+    assert!(
+        glyphs
+            .into_iter()
+            .any(|pixel| material3_rgb(pixel, on_primary)),
+        "selected date numeral paints the independent literal onPrimary, not accent foreground"
+    );
+}
+
+fn native_gl_calendar_fixture(theme: PresentationTheme) -> CalendarMenu {
+    // Closed six-week civil projection only: no provider, clock, locale or OS effect.
+    let calendar = CalendarMenu::new().unwrap();
+    calendar.apply_presentation_theme(theme);
+    calendar.set_title_text("October 2026".into());
+    calendar.set_action_key("gl-calendar-actions".into());
+    calendar.set_can_previous(true);
+    calendar.set_can_next(true);
+    calendar.set_weekdays(slint::ModelRc::new(slint::VecModel::from(
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            .map(slint::SharedString::from)
+            .to_vec(),
+    )));
+    calendar.set_weeks(slint::ModelRc::new(slint::VecModel::from(
+        (0..6)
+            .map(|week| CalendarWeekRow {
+                days: slint::ModelRc::new(slint::VecModel::from(
+                    (0..7)
+                        .map(|column| {
+                            let index = week * 7 + column;
+                            let day = if index < 3 {
+                                index + 28
+                            } else if index < 34 {
+                                index - 2
+                            } else {
+                                index - 33
+                            };
+                            CalendarDayCell {
+                                key: format!("gl-calendar-day-{index}").into(),
+                                label: day.to_string().into(),
+                                description: if index == 11 {
+                                    "Friday, October 9, 2026".into()
+                                } else {
+                                    format!("GL civil day {index}").into()
+                                },
+                                off_month: !(3..34).contains(&index),
+                                today: index == 11,
+                                selected: index == 11,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )),
+            })
+            .collect::<Vec<_>>(),
+    )));
+    // Native physical resize rounding must not manufacture fractional overflow
+    // and reserve Fluent's scrollbar gutter in this unconstrained fixture.
+    calendar.window().set_size(slint::LogicalSize::new(
+        calendar.get_popup_content_width(),
+        calendar.get_popup_content_height().ceil(),
+    ));
+    calendar
+}
+
+fn record_native_gl(window: &slint::Window) -> Rc<Cell<bool>> {
+    let native_gl = Rc::new(Cell::new(false));
+    window
+        .set_rendering_notifier({
+            let native_gl = Rc::clone(&native_gl);
+            move |_, graphics| {
+                if matches!(graphics, slint::GraphicsAPI::NativeOpenGL { .. }) {
+                    native_gl.set(true);
+                }
+            }
+        })
+        .expect("the actual production renderer must expose NativeOpenGL");
+    native_gl
+}
+
+fn material3_pixel(
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    x: f32,
+    y: f32,
+) -> slint::Rgba8Pixel {
+    frame.as_slice()[(y * scale) as usize * frame.width() as usize + (x * scale) as usize]
+}
+
+fn material3_rgb(pixel: slint::Rgba8Pixel, expected: [u8; 3]) -> bool {
+    pixel.a == 255
+        && [pixel.r, pixel.g, pixel.b]
+            .into_iter()
+            .zip(expected)
+            .all(|(actual, expected)| actual.abs_diff(expected) <= 2)
+}
+
+fn verify_material3_toolbar(
+    toolbar: &Toolbar,
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    container: [u8; 3],
+    foreground: [u8; 3],
+) {
+    use i_slint_backend_testing::ElementHandle;
+    let clock = ElementHandle::find_by_accessible_label(toolbar, "Open calendar")
+        .next()
+        .unwrap();
+    assert_eq!(clock.absolute_position().y, 4.0);
+    assert_eq!(clock.size().height, 32.0);
+    let center = clock.absolute_position().x + clock.size().width / 2.0;
+    assert!(
+        material3_rgb(material3_pixel(frame, scale, center, 7.0), container),
+        "literal primaryContainer in the real clock island"
+    );
+    let glyphs = gl_region(
+        frame,
+        slint::LogicalPosition::new(clock.absolute_position().x + 8.0, 12.0),
+        slint::LogicalSize::new(clock.size().width - 16.0, 16.0),
+        scale,
+    );
+    assert!(
+        glyphs
+            .into_iter()
+            .any(|pixel| material3_rgb(pixel, foreground)),
+        "literal paired onPrimaryContainer glyphs"
+    );
+    for label in [
+        "Open keyboard selector",
+        "Open Bluetooth",
+        "Open network",
+        "Open quick settings",
+    ] {
+        let tile = ElementHandle::find_by_accessible_label(toolbar, label)
+            .next()
+            .unwrap();
+        assert_eq!(tile.absolute_position().y, 4.0);
+        assert_eq!(tile.size().height, 32.0);
+    }
+    // Every outer row and the unoccupied gap remain alpha zero, not a flat bar.
+    for y in [0, 1, 2, 3, 36, 37, 38, 39] {
+        for x in 0..frame.width() {
+            assert_eq!(
+                frame.as_slice()[(y as f32 * scale) as usize * frame.width() as usize + x as usize]
+                    .a,
+                0
+            );
+        }
+    }
+    assert_eq!(material3_pixel(frame, scale, 2.0, 20.0).a, 0);
+    assert_eq!(
+        material3_pixel(frame, scale, clock.absolute_position().x - 4.0, 20.0).a,
+        0
+    );
+    assert_eq!(material3_pixel(frame, scale, center, 4.0).a, 255);
+    assert_eq!(material3_pixel(frame, scale, center, 35.0).a, 255);
+}
+
+fn verify_material3_dock(
+    dock: &Dock,
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    body: [u8; 3],
+    outline: [u8; 3],
+) {
+    use i_slint_backend_testing::ElementHandle;
+    let labels = [
+        "Open applications and settings",
+        "Show desktop",
+        "Launch Editor",
+        "Launch Files",
+        "Switch to Research browser",
+        "Recycle Bin\nUnknown",
+    ];
+    for (index, label) in labels.into_iter().enumerate() {
+        let tile = ElementHandle::find_by_accessible_label(dock, label)
+            .next()
+            .unwrap();
+        assert_eq!(tile.size(), slint::LogicalSize::new(46.0, 46.0));
+        assert_eq!(
+            tile.absolute_position(),
+            slint::LogicalPosition::new(10.0 + index as f32 * 49.0, 10.0)
+        );
+        let image = tile
+            .query_descendants()
+            .match_type_name("Image")
+            .find_first()
+            .unwrap();
+        assert_eq!(image.size(), slint::LogicalSize::new(33.0, 33.0));
+        assert_eq!(
+            image.absolute_position(),
+            slint::LogicalPosition::new(tile.absolute_position().x + 6.5, 16.5)
+        );
+    }
+    assert!(
+        material3_rgb(material3_pixel(frame, scale, 80.0, 8.0), body),
+        "literal surfaceContainer dock body"
+    );
+    let top = gl_region(
+        frame,
+        slint::LogicalPosition::new(40.0, 5.0),
+        slint::LogicalSize::new(20.0, 2.0),
+        scale,
+    );
+    assert!(
+        top.into_iter().any(|pixel| material3_rgb(pixel, outline)),
+        "production one-pixel outline"
+    );
+    // 23px rounded body inside the 5px outer margin, independent of its contents.
+    assert_eq!(material3_pixel(frame, scale, 6.0, 6.0).a, 0);
+    assert_eq!(material3_pixel(frame, scale, 28.0, 7.0).a, 255);
+    assert_eq!(material3_pixel(frame, scale, 7.0, 28.0).a, 255);
+    assert_eq!(
+        material3_pixel(frame, scale, 16.0, 7.0).a,
+        0,
+        "23px radius leaves the upper-left arc clear"
+    );
+    assert_eq!(
+        material3_pixel(frame, scale, 20.0, 7.0).a,
+        255,
+        "23px radius paints inside the upper-left arc"
+    );
+    for (x, y) in [(4.0, 33.0), (80.0, 4.0), (80.0, 61.0)] {
+        assert_eq!(material3_pixel(frame, scale, x, y).a, 0);
+    }
+    let editor = ElementHandle::find_by_accessible_label(dock, "Launch Editor")
+        .next()
+        .unwrap();
+    let icon = gl_region(
+        frame,
+        slint::LogicalPosition::new(editor.absolute_position().x + 7.0, 17.0),
+        slint::LogicalSize::new(32.0, 32.0),
+        scale,
+    );
+    assert!(
+        icon.into_iter()
+            .all(|pixel| (pixel.r, pixel.g, pixel.b, pixel.a) == (255, 0, 255, 255)),
+        "actual untinted in-memory RGBA icon content"
+    );
+}
+
+fn verify_material3_input(
+    window: &slint::Window,
+    tile: &i_slint_backend_testing::ElementHandle,
+    actions: &Cell<usize>,
+    export: &str,
+    image_translation: f32,
+) {
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    window.dispatch_event(WindowEvent::WindowActiveChanged(true));
+    let position = tile.absolute_position();
+    let size = tile.size();
+    let center = slint::LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    );
+    let image = tile
+        .query_descendants()
+        .match_type_name("Image")
+        .find_first();
+    for source in [PressSource::Pointer, PressSource::Space] {
+        window.dispatch_event(WindowEvent::PointerMoved { position: center });
+        let image_position = image.as_ref().map(|image| image.absolute_position());
+        let hover = window.take_snapshot().unwrap();
+        let before = actions.get();
+        match source {
+            PressSource::Pointer => window.dispatch_event(WindowEvent::PointerPressed {
+                position: center,
+                button: PointerEventButton::Left,
+            }),
+            PressSource::Space => {
+                window.dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::Space.into(),
+                });
+                window.dispatch_event(WindowEvent::KeyPressRepeated {
+                    text: Key::Space.into(),
+                });
+            }
+        }
+        let pressed = window.take_snapshot().unwrap();
+        assert_eq!(actions.get(), before);
+        assert_eq!(
+            tile.absolute_position(),
+            position,
+            "pressed paint never moves input"
+        );
+        assert_eq!(tile.size(), size);
+        assert_ne!(
+            pressed.as_slice(),
+            hover.as_slice(),
+            "native pressed pixels must change"
+        );
+        if let (Some(image), Some(origin)) = (&image, image_position) {
+            assert_eq!(
+                image.absolute_position(),
+                slint::LogicalPosition::new(origin.x, origin.y + image_translation)
+            );
+        }
+        export_frame(
+            &format!("{export}-{source:?}-pressed-{}x", window.scale_factor()),
+            &pressed,
+        );
+        match source {
+            PressSource::Pointer => window.dispatch_event(WindowEvent::PointerReleased {
+                position: center,
+                button: PointerEventButton::Left,
+            }),
+            PressSource::Space => window.dispatch_event(WindowEvent::KeyReleased {
+                text: Key::Space.into(),
+            }),
+        }
+        assert_eq!(actions.get(), before + 1);
+        assert_eq!(tile.absolute_position(), position);
+        assert_eq!(tile.size(), size);
+    }
+    let before = actions.get();
+    tile.invoke_accessible_default_action();
+    assert_eq!(
+        actions.get(),
+        before + 1,
+        "real AX activation reaches the recording callback"
+    );
+    window.dispatch_event(WindowEvent::PointerExited);
+}
+
+#[test]
+#[ignore = "Requires an owned X11 display and isolated --exact test process"]
+fn native_gl_frames_render_reference_shadow_alpha() {
+    select_native_gl_backend();
 
     let launcher = Launcher::new().unwrap();
+    launcher.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     launcher.set_application_count(1);
     launcher.set_rows(slint::ModelRc::new(slint::VecModel::from(vec![
         LaunchRow {
@@ -51,6 +772,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         .set_size(slint::LogicalSize::new(560.0, 420.0));
     launcher.show().unwrap();
     let tooltip = TooltipSurface::new().unwrap();
+    tooltip.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     tooltip.set_content("Native tooltip".into());
     tooltip.window().set_size(slint::LogicalSize::new(
         tooltip.get_tooltip_width(),
@@ -58,6 +780,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     ));
     tooltip.show().unwrap();
     let menu = ContextMenuSurface::new_with_metrics().unwrap();
+    menu.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     menu.set_kind(DockMenuKind::Bar);
     menu.set_selected_index(-1);
     menu.window().set_size(slint::LogicalSize::new(
@@ -66,6 +789,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     ));
     menu.show().unwrap();
     let quick = QuickSettings::new().unwrap();
+    quick.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     quick.set_output_ready(true);
     quick.set_output_percent(37.0);
     quick.set_input_ready(true);
@@ -78,6 +802,7 @@ fn native_gl_frames_render_reference_shadow_alpha() {
     // Render the genuine popup component with a closed, paint-only fixture:
     // no OS folder resolution/opening is performed by this renderer test.
     let user = UserMenu::new().unwrap();
+    user.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     user.set_user_name("Native user".into());
     user.set_profile_name("Native current profile".into());
     user.set_profile_key("gl-current-profile".into());
@@ -112,57 +837,28 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         user.get_popup_content_height(),
     ));
     user.show().unwrap();
-    // Closed six-week paint fixture, not an OS date/locale fallback.
-    let calendar = CalendarMenu::new().unwrap();
-    calendar.set_title_text("Native calendar".into());
-    calendar.set_action_key("gl-calendar-actions".into());
-    calendar.set_can_previous(true);
-    calendar.set_can_next(true);
-    calendar.set_weekdays(slint::ModelRc::new(slint::VecModel::from(
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-            .map(slint::SharedString::from)
-            .to_vec(),
-    )));
-    calendar.set_weeks(slint::ModelRc::new(slint::VecModel::from(
-        (0..6)
-            .map(|week| CalendarWeekRow {
-                days: slint::ModelRc::new(slint::VecModel::from(
-                    (0..7)
-                        .map(|column| {
-                            let index = week * 7 + column;
-                            CalendarDayCell {
-                                key: format!("gl-calendar-day-{index}").into(),
-                                label: (index % 31 + 1).to_string().into(),
-                                description: format!("GL civil day {index}").into(),
-                                off_month: week == 5,
-                                today: index == 10,
-                                selected: index == 10,
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                )),
-            })
-            .collect::<Vec<_>>(),
-    )));
-    calendar.window().set_size(slint::LogicalSize::new(
-        calendar.get_popup_content_width(),
-        calendar.get_popup_content_height(),
-    ));
+    let calendar =
+        native_gl_calendar_fixture(PresentationTheme::seelen_reference(ColorScheme::Dark));
     calendar.show().unwrap();
 
     // Paint-only recording fixture: no DesktopHost/native Shell is wired here.
     let dock = Dock::new().unwrap();
+    dock.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     dock.set_pinned_apps(slint::ModelRc::new(slint::VecModel::from(vec![DockApp {
         key: "fixture-app".into(),
         label: "Fixture app".into(),
         icon: slint::Image::default(),
         pinned: true,
     }])));
-    dock.window().set_size(slint::LogicalSize::new(216.0, 72.0));
+    dock.window().set_size(slint::LogicalSize::new(
+        crate::dock::dock_length(1, false),
+        crate::dock::dock_thickness(false),
+    ));
     dock.show().unwrap();
 
     // Paint-only Power fixture: no actor, DesktopHost, native query or OS action.
     let power = PowerMenuSurface::new().unwrap();
+    power.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
     power
         .window()
         .set_size(slint::LogicalSize::new(1600.0, 900.0));
@@ -208,15 +904,16 @@ fn native_gl_frames_render_reference_shadow_alpha() {
         verify_dock_reference_paint(&dock);
         // Stock control colors have their own 150ms transitions. Let the
         // genuine loop settle them; cold frame pixels are not theme proof.
-        launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
-        menu.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Dark));
+        launcher.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
+        menu.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Dark));
         slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
             verify_power_frames(&power);
             verify_launcher_controls(ColorScheme::Dark, &launcher);
             verify_menu_press_scale(&menu);
             verify_menu_application_image(&menu);
-            launcher.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
-            menu.apply_presentation_theme(PresentationTheme::uniform(ColorScheme::Light));
+            launcher
+                .apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Light));
+            menu.apply_presentation_theme(PresentationTheme::seelen_reference(ColorScheme::Light));
             slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
                 verify_launcher_controls(ColorScheme::Light, &launcher);
                 verify_menu_press_scale(&menu);
@@ -329,7 +1026,7 @@ fn verify_power_frames(power: &PowerMenuSurface) {
         ("dark", ColorScheme::Dark, 31, 228),
         ("light", ColorScheme::Light, 252, 18),
     ] {
-        power.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        power.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window.dispatch_event(WindowEvent::PointerExited);
         power.invoke_focus_content();
         let idle = snapshot();
@@ -730,7 +1427,7 @@ fn verify_user_fallback_frames(user: &UserMenu) {
         ("dark", ColorScheme::Dark, 61),
         ("light", ColorScheme::Light, 193),
     ] {
-        user.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        user.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         let frame = user.window().take_snapshot().unwrap();
         let avatars = ElementHandle::find_by_accessible_label(user, "Default user profile")
             .collect::<Vec<_>>();
@@ -766,7 +1463,7 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
         ("dark", ColorScheme::Dark, 24),
         ("light", ColorScheme::Light, 242),
     ] {
-        component.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        component.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         let window = component.window();
         let scale = window.scale_factor();
         let frame = window
@@ -782,8 +1479,10 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
         let logical_height = height as f32 / scale;
         let sample =
             |x: f32, y: f32| frame.as_slice()[(y * scale) as usize * width + (x * scale) as usize];
+        export_frame(&format!("gl-{name}-{theme}-{scale}x"), &frame);
         let body = sample(logical_width / 2.0, 15.0);
         if name == "dock" {
+            assert_eq!((logical_width, logical_height), (213.0, 66.0));
             // Native GL snapshots retain premultiplied channels. Account for
             // separate RGBA8 draw-pass rounding; opaque popup checks stay exact.
             let body_color = (f32::from(background) * 0.8).round() as u8;
@@ -798,14 +1497,15 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
             // TileButton is filled: its opaque neutral tile, not the bare
             // translucent bar, is the duotone screen's actual substrate.
             let tile_color = if scheme == ColorScheme::Dark { 31 } else { 252 };
-            let tile = sample(72.0, 20.0);
+            // Show desktop: literal slot (59,10), 33px SVG at (65.5,16.5).
+            let tile = sample(62.0, 33.0);
             assert_eq!(
                 (tile.r, tile.g, tile.b, tile.a),
                 (tile_color, tile_color, tile_color, 255),
                 "{name} {theme} utility tile"
             );
             let tint_color = (f32::from(foreground) * 0.2).round() as u8;
-            let screen = sample(84.0, 33.0);
+            let screen = sample(82.0, 29.0);
             let screen_color = (f32::from(tint_color) + f32::from(tile_color) * 0.8).round() as u8;
             assert_eq!(screen.a, 255, "{name} {theme} screen over opaque tile");
             for channel in [screen.r, screen.g, screen.b] {
@@ -814,14 +1514,16 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
                     "{name} {theme} screen tint: {screen:?}"
                 );
             }
-            let bezel = sample(84.0, 27.0);
+            // At 33px/half-pixel placement, y22 is the rasterized edge; y23 is
+            // strictly inside the original y40..56 bezel (actual native proof).
+            let bezel = sample(82.0, 23.0);
             assert_eq!(bezel.a, 255, "{name} {theme} opaque bezel: {bezel:?}");
             for channel in [bezel.r, bezel.g, bezel.b] {
                 assert_eq!(channel, foreground, "{name} {theme} bezel tint");
             }
             // Generic independent Trash identity artwork, not reference
-            // empty/full SVG parity. The trailing tile is fixed at x=160.
-            let trash_exterior = sample(166.0, 36.0);
+            // empty/full SVG parity. Literal trailing slot (157,10), icon (163.5,16.5).
+            let trash_exterior = sample(160.0, 33.0);
             assert_eq!(
                 (
                     trash_exterior.r,
@@ -832,7 +1534,7 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
                 (tile_color, tile_color, tile_color, 255),
                 "{name} {theme} transparent Trash exterior over neutral tile"
             );
-            let trash_interior = sample(180.0, 36.0);
+            let trash_interior = sample(180.0, 33.0);
             assert_eq!(trash_interior.a, 255, "{name} {theme} Trash interior");
             for channel in [trash_interior.r, trash_interior.g, trash_interior.b] {
                 assert!(
@@ -840,7 +1542,7 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
                     "{name} {theme} original .2-alpha Trash interior: {trash_interior:?}"
                 );
             }
-            let trash_lid = sample(180.0, 28.0);
+            let trash_lid = sample(180.0, 24.0);
             assert_eq!(trash_lid.a, 255, "{name} {theme} opaque Trash lid");
             for channel in [trash_lid.r, trash_lid.g, trash_lid.b] {
                 assert_eq!(channel, foreground, "{name} {theme} Trash lid tint");
@@ -867,7 +1569,6 @@ fn verify_frame<C: ThemedComponent>(name: &str, component: &C) {
             );
             assert_eq!((shadow.r, shadow.g, shadow.b), (0, 0, 0));
         }
-        export_frame(&format!("gl-{name}-{theme}-{scale}x"), &frame);
     }
 }
 
@@ -877,7 +1578,7 @@ fn verify_launcher_fullscreen_edges(launcher: &Launcher) {
         ("dark", ColorScheme::Dark, 24),
         ("light", ColorScheme::Light, 242),
     ] {
-        launcher.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        launcher.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         launcher.set_display_mode(LauncherDisplayMode::Windowed);
         let windowed = window.take_snapshot().expect("actual GL windowed frame");
         let width = windowed.width() as usize;
@@ -999,6 +1700,13 @@ fn verify_dock_reference_paint(dock: &Dock) {
         .unwrap();
     let position = tile.absolute_position();
     let size = tile.size();
+    assert_eq!(position, slint::LogicalPosition::new(10.0, 10.0));
+    assert_eq!(size, slint::LogicalSize::new(46.0, 46.0));
+    assert_eq!(
+        image.absolute_position(),
+        slint::LogicalPosition::new(16.5, 16.5)
+    );
+    assert_eq!(image.size(), slint::LogicalSize::new(33.0, 33.0));
     let scale = dock.window().scale_factor();
     let center = slint::LogicalPosition::new(
         position.x + size.width / 2.0,
@@ -1010,11 +1718,13 @@ fn verify_dock_reference_paint(dock: &Dock) {
     dock.window()
         .dispatch_event(WindowEvent::WindowActiveChanged(true));
     for (theme, scheme) in [("light", ColorScheme::Light), ("dark", ColorScheme::Dark)] {
-        dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        dock.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         dock.window().dispatch_event(WindowEvent::PointerExited);
         let idle = dock.window().take_snapshot().unwrap();
-        let shadow = sample(&idle, position.x + size.width + 0.5, center.y);
-        let body = sample(&idle, position.x + size.width + 5.5, center.y);
+        // The literal 3px inter-slot gap is x=56..59. Compare its shadow
+        // against unobstructed body above the tiles, not inside Show desktop.
+        let shadow = sample(&idle, 56.5, 33.0);
+        let body = sample(&idle, 80.0, 7.0);
         assert!(
             shadow.a > body.a,
             "the ordinary tile shadow must paint outside its fixed slot: {theme} {shadow:?} vs {body:?}"

@@ -47,7 +47,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let dock = Dock::new().unwrap();
-        dock.apply_presentation_theme(PresentationTheme::uniform(
+        dock.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         let requests = Rc::new(RefCell::new(Vec::new()));
@@ -210,12 +210,12 @@ fn dock_utilities_fixed_slots_and_app_order_on_four_edges_compact_themes_and_dpi
             ] {
                 fixture
                     .dock
-                    .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                    .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
                 for scale in [1.0, 2.0] {
                     let (width, height) = if edge < 2 {
-                        (312.0, 72.0)
+                        (311.0, 66.0)
                     } else {
-                        (72.0, 312.0)
+                        (66.0, 311.0)
                     };
                     fixture.render(
                         (width * factor * scale).ceil() as u32,
@@ -234,11 +234,11 @@ fn dock_utilities_fixed_slots_and_app_order_on_four_edges_compact_themes_and_dpi
                         assert_eq!(tile.accessible_role(), Some(AccessibleRole::Button));
                         assert_eq!(tile.accessible_enabled(), Some(true));
                         let origin = tile.absolute_position();
-                        let along = (16.0 + index as f32 * 48.0) * factor;
-                        close(origin.x, if edge < 2 { along } else { 16.0 * factor });
-                        close(origin.y, if edge < 2 { 16.0 * factor } else { along });
-                        close(tile.size().width, 40.0 * factor);
-                        close(tile.size().height, 40.0 * factor);
+                        let along = (10.0 + index as f32 * 49.0) * factor;
+                        close(origin.x, if edge < 2 { along } else { 10.0 * factor });
+                        close(origin.y, if edge < 2 { 10.0 * factor } else { along });
+                        close(tile.size().width, 46.0 * factor);
+                        close(tile.size().height, 46.0 * factor);
                     }
                     let viewport = fixture.viewport();
                     close(
@@ -247,7 +247,7 @@ fn dock_utilities_fixed_slots_and_app_order_on_four_edges_compact_themes_and_dpi
                         } else {
                             viewport.absolute_position().y
                         },
-                        112.0 * factor,
+                        108.0 * factor,
                     );
                     assert_eq!(
                         fixture.dock.get_pinned_apps().row_data(0).unwrap().key,
@@ -560,7 +560,7 @@ fn assert_duotone_mask_matches_native_pixels(source: &slint::Image, label: &str)
             ] {
                 fixture
                     .dock
-                    .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                    .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
                 let (tile, foreground) = if scheme == slint::language::ColorScheme::Dark {
                     (31, 228)
                 } else {
@@ -568,9 +568,9 @@ fn assert_duotone_mask_matches_native_pixels(source: &slint::Image, label: &str)
                 };
                 for scale in [1.0, 2.0] {
                     let (width, height) = if edge < 2 {
-                        (168.0, 72.0)
+                        (164.0, 66.0)
                     } else {
-                        (72.0, 168.0)
+                        (66.0, 164.0)
                     };
                     let width = (width * factor * scale).ceil() as u32;
                     let pixels =
@@ -583,10 +583,10 @@ fn assert_duotone_mask_matches_native_pixels(source: &slint::Image, label: &str)
                         .find_first()
                         .unwrap();
                     let image_origin = image.absolute_position();
-                    close(image_origin.x - origin.x, 6.0 * factor);
-                    close(image_origin.y - origin.y, 6.0 * factor);
-                    close(image.size().width, 28.0 * factor);
-                    close(image.size().height, 28.0 * factor);
+                    close(image_origin.x - origin.x, 6.5 * factor);
+                    close(image_origin.y - origin.y, 6.5 * factor);
+                    close(image.size().width, 33.0 * factor);
+                    close(image.size().height, 33.0 * factor);
                     // Pinned SDK 1.18.1 draw_image_impl rounds the physical
                     // destination rect and rasterizes SVG at that exact size.
                     // Keep this unstable SDK instrumentation test-local.

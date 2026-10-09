@@ -5,17 +5,27 @@ import { SeelenPalette } from "palette.slint";
 import { DockStatus } from "dock.slint";
 import { TileButton, TileBounds } from "tiles.slint";
 
-// Toolbar wrappers share accent states without changing TileButton input.
+// Native TileButton remains the sole input/focus/tooltip owner.
 component ToolbarButton inherits TileButton {
-    radius: 4.8px;
+    radius: SeelenPalette.reference-mode ? 4.8px : self.height / 2;
     filled: false;
-    background: !self.enabled ? transparent :
-        self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
-        self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent;
+    background: SeelenPalette.reference-mode
+        ? (!self.enabled ? transparent :
+            self.pressed ? SeelenPalette.accent.with-alpha(0.3) :
+            self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent)
+        : (!self.enabled ? (self.filled ? SeelenPalette.primary-container : transparent) :
+            self.pressed ? SeelenPalette.primary-container-pressed :
+            self.hovered ? SeelenPalette.primary-container-hover :
+            self.filled ? SeelenPalette.primary-container : transparent);
 }
 
-// One top toolbar, full monitor bounds width, 32 logical pixels tall
-// (Seelen default: content 16 + wrapper padding 4 * 2 + bar padding 4 * 2).
+component BarIsland inherits Rectangle {
+    border-radius: self.height / 2;
+    background: SeelenPalette.reference-mode ? transparent : SeelenPalette.primary-container;
+}
+
+// Source-informed 40px allocation, with 32px visible islands at 4px inset.
+// This is a chosen native arrangement, not a certified video measurement.
 // Left: user and foreground app. Center: native clock. Right: language and
 // quick settings. Only genuine host values appear; absent slots stay empty.
 export component Toolbar inherits Window {
@@ -39,18 +49,21 @@ export component Toolbar inherits Window {
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
 
-    property <length> pad: 4px;
+    property <length> pad: 8px;
+    property <length> inset: 4px;
     property <length> side-pad: 16px;
     property <length> item: 16px;
 
     Rectangle {
-        background: SeelenPalette.bar.with-alpha(0.9);
+        background: SeelenPalette.reference-mode ? SeelenPalette.bar.with-alpha(0.9) : transparent;
 
-        HorizontalLayout {
+        BarIsland {
             x: root.side-pad;
-            y: root.pad;
-            width: max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad);
+            y: root.inset;
+            width: min(user-label.preferred-width + focused-label.preferred-width + 6 * root.pad + 1px,
+                max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad));
             height: root.item + 2 * root.pad;
+            HorizontalLayout {
             spacing: root.pad;
             // The title wrapper has no intrinsic width; assign it the spare
             // left-group budget instead of packing its preferred width (0).
@@ -63,7 +76,7 @@ export component Toolbar inherits Window {
                     width: max(0px, parent.width - 2 * root.pad);
                     height: root.item;
                     text: root.user-name;
-                    color: SeelenPalette.foreground;
+                    color: SeelenPalette.bar-content;
                     font-size: 12.8px;
                     font-weight: 500;
                     vertical-alignment: center;
@@ -81,13 +94,13 @@ export component Toolbar inherits Window {
             Rectangle {
                 horizontal-stretch: 1;
                 min-width: 0px;
-                Text {
+                focused-label := Text {
                     x: root.pad;
                     y: root.pad;
                     width: max(0px, parent.width - 2 * root.pad);
                     height: root.item;
                     text: root.focused-app;
-                    color: SeelenPalette.secondary;
+                    color: SeelenPalette.bar-secondary;
                     font-size: 12.8px;
                     font-weight: 500;
                     vertical-alignment: center;
@@ -96,11 +109,13 @@ export component Toolbar inherits Window {
                 }
             }
         }
+        }
         clock-text := ToolbarButton {
             x: (parent.width - self.width) / 2;
-            y: root.pad;
+            y: root.inset;
             width: min(clock-label.preferred-width + 2 * root.pad, parent.width / 3);
             height: root.item + 2 * root.pad;
+            filled: true;
             enabled: root.clock != "";
             accessible-text: @tr("Open calendar");
             tooltip-text: @tr("Calendar");
@@ -117,7 +132,7 @@ export component Toolbar inherits Window {
                 width: max(0px, parent.width - 2 * root.pad);
                 height: root.item;
                 text: root.clock;
-                color: SeelenPalette.foreground;
+                color: SeelenPalette.bar-content;
                 font-size: 12.8px;
                 font-weight: 500;
                 vertical-alignment: center;
@@ -126,11 +141,14 @@ export component Toolbar inherits Window {
                 accessible-role: text;
             }
         }
-        HorizontalLayout {
-            x: parent.width / 2 + clock-text.width / 2 + root.pad;
-            y: root.pad;
-            width: max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad);
+        BarIsland {
+            x: parent.width - root.side-pad - self.width;
+            y: root.inset;
+            width: min(max(root.item, language-label.preferred-width) + 2 * root.pad
+                + 3 * (root.item + 2 * root.pad) + 3 * root.pad,
+                max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad));
             height: root.item + 2 * root.pad;
+            HorizontalLayout {
             spacing: root.pad;
             alignment: end;
             property <length> control-budget: min(root.item + 2 * root.pad, max(0px, (self.width - 3 * root.pad) / 4));
@@ -149,7 +167,7 @@ export component Toolbar inherits Window {
                     width: max(0px, parent.width - 2 * root.pad);
                     height: root.item;
                     text: root.language == "" ? @tr("Keyboard") : root.language;
-                    color: SeelenPalette.secondary;
+                    color: SeelenPalette.bar-secondary;
                     font-size: 12.8px;
                     font-weight: 600;
                     vertical-alignment: center;
@@ -170,7 +188,7 @@ export component Toolbar inherits Window {
                     width: max(0px, parent.width - 2 * root.pad);
                     height: root.item;
                     source: @image-url("../assets/icons/tabler-icons-6d128ed/bluetooth.svg");
-                    colorize: SeelenPalette.secondary;
+                    colorize: SeelenPalette.bar-secondary;
                     accessible-role: none;
                 }
             }
@@ -188,7 +206,7 @@ export component Toolbar inherits Window {
                     width: max(0px, parent.width - 2 * root.pad);
                     height: root.item;
                     source: @image-url("../assets/icons/tabler-icons-6d128ed/world.svg");
-                    colorize: SeelenPalette.secondary;
+                    colorize: SeelenPalette.bar-secondary;
                     accessible-role: none;
                 }
             }
@@ -210,10 +228,11 @@ export component Toolbar inherits Window {
                     width: max(0px, parent.width - 2 * root.pad);
                     height: root.item;
                     source: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg");
-                    colorize: SeelenPalette.foreground;
+                    colorize: SeelenPalette.bar-content;
                     accessible-role: none;
                 }
             }
+        }
         }
     }
 }

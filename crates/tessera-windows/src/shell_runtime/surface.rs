@@ -81,10 +81,11 @@ impl AppBarReservation {
             return Err(windows_error("GetDpiForWindow(toolbar)"));
         }
         let height = bounds.bottom - bounds.top;
-        let expected_height = ((32u64 * u64::from(dpi) + 48) / 96) as i32;
+        let expected_height =
+            ((u64::from(tessera_core::TOOLBAR_HEIGHT_LOGICAL) * u64::from(dpi) + 48) / 96) as i32;
         if height != expected_height || bounds.right <= bounds.left {
             return Err(ShellRuntimeError::Windows {
-                operation: "toolbar rectangle is not 32 logical pixels",
+                operation: "toolbar rectangle violates logical height contract",
                 code: 87,
             });
         }

@@ -49,7 +49,7 @@ impl Fixture {
         }))
         .unwrap();
         let surface = PowerMenuSurface::new().unwrap();
-        surface.apply_presentation_theme(PresentationTheme::uniform(
+        surface.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         surface.set_action_enabled(true);
@@ -565,7 +565,7 @@ fn power_surface_light_dark_body_scrim_icon_and_rounded_state_paint_scale_cohere
         ] {
             fixture
                 .surface
-                .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
             fixture.project(root_scale, metric, [0.0, 0.0, 960.0, 720.0]);
             fixture.move_to(LogicalPosition::new(1.0, 1.0));
             fixture.surface.invoke_focus_content();
@@ -837,6 +837,9 @@ fn power_surface_presentation_opacity_affects_body_not_desktop_scrim_or_callback
 fn power_action_native_transform_chain_preserves_layout_and_scales_icon_label_about_center() {
     i_slint_backend_testing::init_no_event_loop();
     let surface = PowerMenuSurface::new().unwrap();
+    surface.apply_presentation_theme(PresentationTheme::seelen_reference(
+        slint::language::ColorScheme::Light,
+    ));
     surface.window().set_size(PhysicalSize::new(960, 720));
     surface.set_selected_width(960.0);
     surface.set_selected_height(720.0);

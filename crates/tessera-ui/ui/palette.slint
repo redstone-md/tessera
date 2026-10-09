@@ -3,25 +3,65 @@
 
 import { Palette } from "std-widgets.slint";
 
-// Seelen default neutral colors, converted from its published OKLCH values.
-// System mode follows the toolkit's resolved native background brightness,
-// rather than treating ColorScheme.unknown as an explicit light theme.
+// Presentation roles shared by independently owned native windows. The product
+// uses a chosen deterministic green preset informed by the Material3 reference;
+// this is neither an HCT/generated scheme nor an exact video-sampled table.
+// Explicit reference mode retains the published Seelen neutral fixture colors.
+// System follows the stock toolkit's resolved brightness; stock Palette colors
+// remain native and are never replaced with our presentation roles.
 export global SeelenPalette {
     in-out property <ColorScheme> color-scheme;
+    in-out property <bool> reference-mode: false;
     out property <bool> dark: self.color-scheme == ColorScheme.dark
         || (self.color-scheme == ColorScheme.unknown
             && Palette.background.to-oklch().lightness < 0.5);
-    out property <color> surface: self.dark ? #181818 : #f2f2f2;
+    // Complete green light/dark role table, independent of the toolkit accent.
+    out property <color> green-surface: self.dark ? #10150d : #f6faf0;
+    out property <color> surface-container-low: self.dark ? #191e15 : #eef3e8;
+    out property <color> surface-container: self.dark ? #1d2319 : #e8eddf;
+    out property <color> surface-container-high: self.dark ? #272d23 : #e2e7d9;
+    out property <color> surface-container-highest: self.dark ? #32382d : #dce1d3;
+    out property <color> on-surface: self.dark ? #e0e5d6 : #191d16;
+    out property <color> on-surface-variant: self.dark ? #c4ccba : #444b3d;
+    out property <color> primary: self.dark ? #aad38e : #45682b;
+    out property <color> on-primary: self.dark ? #1c370a : #ffffff;
+    out property <color> primary-container: self.dark ? #304f18 : #c6edaa;
+    out property <color> on-primary-container: self.dark ? #c6edaa : #102004;
+    out property <color> outline: self.dark ? #8e9784 : #747d6b;
+    out property <color> outline-variant: self.dark ? #444c3c : #c4ccba;
+    out property <color> surface-hover: self.dark ? #2a3026 : #dcded2;
+    out property <color> surface-pressed: self.dark ? #363d30 : #cfd2c5;
+    out property <color> primary-container-hover: self.dark ? #3f5f27 : #b4d899;
+    out property <color> primary-container-pressed: self.dark ? #4e6f35 : #a2c289;
+    out property <color> error: self.dark ? #ffb4ab : #ba1a1a;
+    out property <color> on-error: self.dark ? #690005 : #ffffff;
+    out property <color> error-container: self.dark ? #93000a : #ffdad6;
+    out property <color> on-error-container: self.dark ? #ffdad6 : #410002;
+
+    // Compatibility names keep existing surfaces on consistent paired roles
+    // without rewriting their input/state modules or native stock controls.
+    out property <color> surface: self.reference-mode
+        ? (self.dark ? #181818 : #f2f2f2) : self.green-surface;
     out property <color> bar: self.surface;
-    out property <color> tile: self.dark ? #1f1f1f : #fcfcfc;
-    out property <color> hover: self.dark ? #121212 : #e8e8e8;
-    out property <color> pressed: self.dark ? #0a0a0a : #dcdcdc;
-    out property <color> foreground: self.dark ? #e4e4e4 : #121212;
-    out property <color> secondary: self.dark ? #bababa : #3d3d3d;
-    out property <color> muted: self.dark ? #898989 : #6f6f6f;
-    // Running indicators use gray-600, not the shared muted gray-500.
-    out property <color> running-indicator: self.dark ? oklch(0.72, 0, 0) : oklch(0.45, 0, 0);
-    // Reference red-600: dark/light OKLCH from libs/core/styles/colors.css.
-    out property <color> danger: self.dark ? oklch(0.72, 0.178, 30) : oklch(0.45, 0.161, 30);
-    in-out property <brush> accent: Palette.accent-background;
+    out property <color> tile: self.reference-mode
+        ? (self.dark ? #1f1f1f : #fcfcfc) : self.surface-container-low;
+    out property <color> hover: self.reference-mode
+        ? (self.dark ? #121212 : #e8e8e8) : self.surface-hover;
+    out property <color> pressed: self.reference-mode
+        ? (self.dark ? #0a0a0a : #dcdcdc) : self.surface-pressed;
+    out property <color> foreground: self.reference-mode
+        ? (self.dark ? #e4e4e4 : #121212) : self.on-surface;
+    out property <color> secondary: self.reference-mode
+        ? (self.dark ? #bababa : #3d3d3d) : self.on-surface-variant;
+    out property <color> muted: self.reference-mode
+        ? (self.dark ? #898989 : #6f6f6f) : (self.dark ? #abb59e : #58634e);
+    out property <color> running-indicator: self.reference-mode
+        ? (self.dark ? oklch(0.72, 0, 0) : oklch(0.45, 0, 0)) : self.primary;
+    out property <color> danger: self.reference-mode
+        ? (self.dark ? oklch(0.72, 0.178, 30) : oklch(0.45, 0.161, 30)) : self.error;
+    in-out property <brush> accent: self.reference-mode ? Palette.accent-background : self.primary;
+
+    // Bar groups pair their stronger container with its own foreground.
+    out property <color> bar-content: self.reference-mode ? self.foreground : self.on-primary-container;
+    out property <color> bar-secondary: self.reference-mode ? self.secondary : self.on-primary-container;
 }

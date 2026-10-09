@@ -204,7 +204,7 @@ pub enum SurfaceKind {
     /// Bottom-center MinContent dock bar.
     #[default]
     Dock,
-    /// 32px top toolbar.
+    /// Top toolbar using the shared logical toolbar allocation.
     Toolbar,
     /// Frameless centered icon-grid launcher.
     Launcher,

@@ -36,7 +36,7 @@ pub use surface::{OwnedShellSurface, request_owned_foreground};
 pub enum ShellSurfaceKind {
     /// Floating dock; never reserves the work area.
     Dock,
-    /// The only appbar surface: a 32-logical-pixel top toolbar.
+    /// The only appbar surface: a top toolbar using the shared logical allocation.
     Toolbar,
     /// Activatable tool window for search.
     Launcher,

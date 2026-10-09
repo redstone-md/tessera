@@ -73,7 +73,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let popup = InputLanguageMenu::new().unwrap();
-        popup.apply_presentation_theme(PresentationTheme::uniform(
+        popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         let requests = Rc::new(RefCell::new(Vec::new()));
@@ -400,7 +400,7 @@ fn input_language_300px_body_source_row_metrics_and_theme_scale_matrix_render_wi
         slint::language::ColorScheme::Unknown,
     ] {
         f.popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             f.scale(scale);
             let pixels = f.render_fit(scale);

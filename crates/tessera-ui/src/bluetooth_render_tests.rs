@@ -42,7 +42,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let popup = BluetoothMenu::new().unwrap();
-        popup.apply_presentation_theme(PresentationTheme::uniform(
+        popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         popup.set_refresh_enabled(true);
@@ -337,7 +337,7 @@ fn bluetooth_generated_long_rtl_control_names_remain_bounded_semantic_text_in_bo
     let light = fixture.render_fit(1.0);
     fixture
         .popup
-        .apply_presentation_theme(PresentationTheme::uniform(
+        .apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Dark,
         ));
     let dark = fixture.render_fit(1.0);

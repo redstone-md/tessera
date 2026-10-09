@@ -149,7 +149,7 @@ fn launcher_app_menu_real_pixels_ax_and_focus_outline_at_both_scales_and_negativ
     ] {
         fixture
             .launcher
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0, 2.0] {
             for (favorite, label) in [(false, "Pin"), (true, "Unpin")] {
                 fixture.show(

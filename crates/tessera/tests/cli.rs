@@ -178,8 +178,9 @@ mod check_surfaces {
         let (monitor_x, monitor_y, monitor_width, _) = fixture.monitor_bounds();
         let dpi = fixture.dpi();
         assert_ne!(dpi, 0, "fixture window must report a real DPI");
-        // Expected contract height: round(32 logical * dpi / 96).
-        let expected_height = (32u64 * u64::from(dpi) + 48) / 96;
+        // Expected contract height: round(shared logical toolbar height * dpi / 96).
+        let expected_height =
+            (u64::from(tessera_core::TOOLBAR_HEIGHT_LOGICAL) * u64::from(dpi) + 48) / 96;
         let (style_before, ex_style_before) = fixture.styles();
         let assert_fixture_untouched = |fixture: &Fixture, styles: (isize, isize)| {
             assert!(fixture.visible());

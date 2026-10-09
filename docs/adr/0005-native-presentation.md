@@ -88,6 +88,15 @@ Window menus activate without toggling, request asynchronous minimize, and post 
 
 The immutable [alpha.10 CI run](https://github.com/redstone-md/tessera/actions/runs/37675695227) passed on Windows stable and Rust 1.92.0, including actual execution of the controlled toolbar green/offset-red/restored-green CLI fixture, and published only after native packaging/runtime preflight passed. This verifies the diagnostic feedback loop, not the cause or correction of the user's VM toolbar offset.
 
+The current Material development layer uses a shared **40px** logical toolbar
+allocation: 32px islands with 4px top/bottom gutters. The existing core geometry
+facade supplies the Rust constant to UI sizing, native AppBar reservation,
+inspection and its owned CLI fixture. Native integer and inspector floating
+rounding retain their previous policy; focused portable checks cover
+96/99/120/144/192 DPI, negative origins, mismatches and nonvacuous observations.
+Historical alpha.10–20/neutral-source 32px receipts are not changed. This
+contract synchronization is not a reproduced or corrected VM-offset claim.
+
 ## Next alpha native capability checkpoint
 
 **Historical alpha.15 full-wave local receipt; production CI later failed Windows documentation.** The [historical local receipt](../../README.md#verification-and-limitations) records **1,120 passed tests/19 suites plus one ignored GL case**, strict Rust 1.92/1.99 Linux/MSVC all-target checks, warnings-denied docs, 35 notices, 101 runtime-only assertions and genuine Linux Mesa GL 1×/2× with **116 PPM exports** on a neutral-gray synthetic backdrop—not Windows compositor captures. Alpha.15 is frozen and failed without assets; alpha.16 production/package/publication gates passed with verified downloads; alpha.17 production/package/publication and independent downloaded-source gates passed; alpha.18 main remains separately unverified. Baseline alpha.11/.12/.13 and published alpha.14 retain first Lock only, excluding six-action Power/seven native layers/General V4/live display. [Alpha.16 is the latest available unsigned test prerelease](https://github.com/redstone-md/tessera/releases/tag/v0.1.0-alpha.16), after production CI 37889391783 passed; NativeDebug remains separate evidence. The full native goal and acceptance matrix remain outstanding.
@@ -130,6 +139,40 @@ Independent original Power glyph additions are [Ionicons logout (MIT)](../../cra
 **Alpha.20 is latest available and independently verified:** production CI, optimized runtime verification and all three actual downloaded-asset hash/package/source checks passed; see the [central published receipt](../distribution-and-trust.md#published-alpha20-receipt). Older releases and failed tags remain unchanged. Historical seek/audio source proofs are included in alpha.20, absent from frozen alpha.19; main alpha.21 metadata/display work is outside these receipts. Tagged guide/`START-HERE.txt`/release body retain their prepublication snapshot and intentionally differ from current maintained documentation. Native effects and full native parity remain uncertified.
 
 Automated recording/SDK-shape tests never certify actual Power, TSF, player transport, WLAN/radio effects or mouse-hook delivery. Native WinRT artwork decoder/filesystem fixtures are narrower evidence; the two-heartbeat packaging GUI is diagnostic and skips normal desktop attachment/focus/pointer watch. Software and genuine Linux Mesa GL1×/2× do not certify native Windows DPI/focus/accessibility/composition, resolve the user's VM toolbar offset or waive sign-in/recovery/security-product gates. See the [focused safe tester checklist](../alpha-testing.md#eight-focused-checks--ordinary-session-first) and [distribution requirements](../distribution-and-trust.md).
+
+### Material 3 appearance layer (development)
+
+The user's [Hyprland Material 3 video](https://www.youtube.com/watch?v=fcK0vem1RtI)
+changes the appearance target, not Seelen's retained functional contract.
+Actual source-credited footage and the primary
+[end4-pC configuration](https://github.com/pctrade/end4-pC/tree/09f0bc4f8a837226d9922db248ecea77fa69f6ba)
+inform the first layer; that October configuration is not the August video's
+exact revision, and its low-resolution footage is not a pixel/font/timing oracle.
+
+Product windows now use one complete static green light/dark semantic role
+table behind the existing captured-theme boundary. Explicit `seelen_reference`
+retains neutral fixture paint, not old geometry. Toolbar allocation is 40px
+with 32px islands; the floating dock uses 46px slots, 33px icons, 5px
+padding/margins, 3px gaps and a 23px body radius. Genuine actions, owned input
+slots, typed projections and independent external running indicators remain.
+Settings uses opaque surface/container levels and paired selected text/icons;
+its older RGB gradients paint only in the explicit neutral skin. Calendar
+selected dates also pair primary/onPrimary instead of stock accent foreground.
+No new framework, provider, dependency, borrowed font or wallpaper is added.
+
+Focused geometry/inspection checks passed (8/6); all 821 software UI cases
+passed with two explicitly ignored native GL scenarios. Both actual Mesa
+scenarios passed independently at 1×/2×: retained neutral matrix 9.24s/15.32s,
+Material toolbar/dock/Settings/Calendar 0.92s/1.78s. All 168 complete P6
+exports (84/scale, 329,058,654 bytes) were verified; the 32 Material frames
+have literal double dimensions, including 320×363/640×726 Calendar. Shader,
+source-vector, input/AX/focus and no-idle guards were not weakened.
+The full all-target workspace gate passed 1,446 tests/14 suites (two ignored);
+strict Rust 1.92 Linux/MSVC workspace/all-target Clippy and format/diff passed.
+Native Windows execution and documentation gates remain separate requirements.
+This is not HCT generation, wallpaper adaptation, blur, exact footage motion
+or completed native AppBar/PMv2/VM-offset certification. The neutral section
+below records the earlier source checkpoint, not the final appearance target.
 
 ### Alpha.21 source visual layer (development)
 

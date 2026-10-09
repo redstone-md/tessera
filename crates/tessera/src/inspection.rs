@@ -237,7 +237,7 @@ impl ToolbarMismatch {
 
 /// Pure contract check: the Tessera toolbar sits at the **monitor bounds top
 /// edge** (never the work-area top), spans the full monitor width, and is
-/// `round(32 logical * native DPI / 96)` physical pixels tall.
+/// `round(TOOLBAR_HEIGHT_LOGICAL * native DPI / 96)` physical pixels tall.
 ///
 /// Invalid input (DPI 0, or an extent unrepresentable as a `Rect`) is an
 /// error — never fabricated from a fallback or a panic.
@@ -246,7 +246,7 @@ pub fn expected_toolbar_rect(monitor_bounds: Rect, dpi: u32) -> Result<Rect, Con
         return Err(ContractError::InvalidDpi);
     }
     let scale = f64::from(dpi) / 96.0;
-    let height = (32.0 * scale).round() as u32;
+    let height = (f64::from(tessera_core::TOOLBAR_HEIGHT_LOGICAL) * scale).round() as u32;
     if height == 0 {
         return Err(ContractError::InvalidDpi);
     }
@@ -340,7 +340,8 @@ pub fn check_surfaces(mut output: impl Write) -> Result<(), CheckError> {
         None => {
             writeln!(
                 output,
-                "toolbar contract PASS: monitor-bounds top, full width, round(32 * dpi/96) height"
+                "toolbar contract PASS: monitor-bounds top, full width, round({} * dpi/96) height",
+                tessera_core::TOOLBAR_HEIGHT_LOGICAL
             )?;
             Ok(())
         }
@@ -439,7 +440,7 @@ impl std::fmt::Display for CheckError {
             ),
             Self::GeometryMismatch(mismatch) => write!(
                 f,
-                "toolbar geometry violates the monitor-origin/32-logical contract: {:?}",
+                "toolbar geometry violates the monitor-origin/logical-height contract: {:?}",
                 mismatch.divergences()
             ),
             Self::Observation(error) => write!(f, "desktop observation failed: {error}"),

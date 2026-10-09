@@ -27,20 +27,22 @@ fn toolbar_matches_contract_across_dpi_and_negative_origins() {
         assert_eq!(expected.width(), monitor.width(), "full monitor width");
         assert_eq!(
             expected.height(),
-            (32.0 * f64::from(dpi) / 96.0).round() as u32,
-            "round(32 logical * dpi/96)"
+            (f64::from(tessera_core::TOOLBAR_HEIGHT_LOGICAL) * f64::from(dpi) / 96.0).round()
+                as u32,
+            "round(shared logical toolbar height * dpi/96)"
         );
         assert_eq!(check_toolbar(expected, monitor, dpi), Ok(None));
     }
 }
 
 #[test]
-fn expected_toolbar_heights_round_the_seelen_token() {
+fn expected_toolbar_heights_round_the_shared_allocation() {
     let monitor = rect(0, 0, 1000, 1000);
-    assert_eq!(expected_toolbar_rect(monitor, 96).unwrap().height(), 32);
-    assert_eq!(expected_toolbar_rect(monitor, 120).unwrap().height(), 40);
-    assert_eq!(expected_toolbar_rect(monitor, 144).unwrap().height(), 48);
-    assert_eq!(expected_toolbar_rect(monitor, 192).unwrap().height(), 64);
+    assert_eq!(expected_toolbar_rect(monitor, 96).unwrap().height(), 40);
+    assert_eq!(expected_toolbar_rect(monitor, 99).unwrap().height(), 41);
+    assert_eq!(expected_toolbar_rect(monitor, 120).unwrap().height(), 50);
+    assert_eq!(expected_toolbar_rect(monitor, 144).unwrap().height(), 60);
+    assert_eq!(expected_toolbar_rect(monitor, 192).unwrap().height(), 80);
     // Zero DPI is invalid input: an error, never a fabricated fallback.
     assert!(expected_toolbar_rect(monitor, 0).is_err());
 }
@@ -49,7 +51,7 @@ fn expected_toolbar_heights_round_the_seelen_token() {
 fn mismatched_toolbar_reports_exact_deltas() {
     let monitor = rect(-1920, 0, 1920, 1040);
     // Synthetic case: actual sits 32px lower and is 4px too short.
-    let actual = rect(-1920, 32, 1920, 28);
+    let actual = rect(-1920, 32, 1920, 36);
     let mismatch = check_toolbar(actual, monitor, 96)
         .unwrap()
         .expect("must detect mismatch");
@@ -59,18 +61,18 @@ fn mismatched_toolbar_reports_exact_deltas() {
     );
 
     // Same monitor bounds, wrong width: work-area-width instead of full.
-    let narrow = rect(-1920, 0, 1888, 32);
+    let narrow = rect(-1920, 0, 1888, 40);
     let mismatch = check_toolbar(narrow, monitor, 96)
         .unwrap()
         .expect("must detect width mismatch");
     assert_eq!(mismatch.divergences(), vec![("width".to_owned(), -32)]);
 
     // 144 DPI bar built at 96 height.
-    let too_short = rect(-1920, 0, 1920, 32);
+    let too_short = rect(-1920, 0, 1920, 40);
     let mismatch = check_toolbar(too_short, monitor, 144)
         .unwrap()
         .expect("must detect height mismatch");
-    assert_eq!(mismatch.divergences(), vec![("height".to_owned(), -16)]);
+    assert_eq!(mismatch.divergences(), vec![("height".to_owned(), -20)]);
 }
 
 #[test]
@@ -141,7 +143,7 @@ fn passing_toolbar_requires_real_observed_row() {
             pid: 7,
             window_id: 0xABC,
             monitor_id: Some(1),
-            bounds: rect(0, 0, 1920, 32),
+            bounds: rect(0, 0, 1920, 40),
             title: "Tessera toolbar",
             class_name: "Static".into(),
             dpi: Some(96),

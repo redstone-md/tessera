@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Source-backed Seelen surface geometry.
+//! Native geometry for the chosen source-informed Material3 bar and dock.
 //!
 //! All functions take the primary **monitor bounds** (physical pixels, origins
 //! may be negative) — never the Explorer work area — plus the window DPI
 //! scale, and return the rectangle the presentation positions its window at.
 //!
-//! Logical tokens are the Seelen defaults (`SeelenWegSettings`: size 40,
-//! margin 8, padding 8, space_between_items 8; `FancyToolbarSettings`:
-//! item_size 16, padding 8, margin 0; default theme radius scale: bar radius
-//! 16, item radius 10, icon padding 6; launcher: 7 columns, side
-//! `min(0.55 * monitor side, 1200 px scaled)`). The dock is `MinContent`: its
-//! length comes from the actual tile count and is centered on the monitor
-//! bounds; an oversized strip is clamped into the bounds with the outer
-//! margin preserved, so overflow tiles scroll inside a bounded window.
+//! The native dock uses 46px slots, 5px padding/outer margin and 3px gaps;
+//! its 33px icons and 23px container radius are painted in `ui/dock.slint`.
+//! The toolbar allocates 40px with 32px visible islands at a 4px inset.
+//! These are chosen source-informed metrics, not certified video dimensions.
+//! Launcher geometry retains its existing centered Seelen contract:
+//! `min(0.55 * monitor side, 1200 px scaled)`.
 //!
-//! Compact density shrinks every token by the same [`COMPACT_FACTOR`]; the
-//! normal tokens stay exact.
+//! The dock is `MinContent`: actual tile count determines its centered length.
+//! Overflow is bounded with the outer margin preserved and scrolls inside.
+//! Compact density shrinks dock tokens by the same [`COMPACT_FACTOR`].
 
 use crate::{DockContext, DockEdge};
 
@@ -30,13 +29,13 @@ pub(crate) struct DockRect {
     pub(crate) height: u32,
 }
 
-// Logical design tokens (Seelen defaults; see module docs).
-pub(crate) const DOCK_ITEM: f32 = 40.0;
-pub(crate) const DOCK_PAD: f32 = 8.0;
-pub(crate) const DOCK_GAP: f32 = 8.0;
-pub(crate) const DOCK_MARGIN: f32 = 8.0;
-/// Toolbar: item 16 + padding 8 * 2 + margin 0 (Seelen default).
-pub(crate) const TOOLBAR_HEIGHT: f32 = 32.0;
+// Keep these logical metrics synchronized with ui/dock.slint and toolbar.slint.
+pub(crate) const DOCK_ITEM: f32 = 46.0;
+pub(crate) const DOCK_PAD: f32 = 5.0;
+pub(crate) const DOCK_GAP: f32 = 3.0;
+pub(crate) const DOCK_MARGIN: f32 = 5.0;
+/// Source-informed base allocation; visible toolbar islands are 32px tall.
+pub(crate) const TOOLBAR_HEIGHT: f32 = tessera_core::TOOLBAR_HEIGHT_LOGICAL as f32;
 /// Launcher: Seelen centered size cap and monitor fraction.
 pub(crate) const LAUNCHER_MAX_SIDE: f32 = 1200.0;
 pub(crate) const LAUNCHER_MONITOR_FRACTION: f32 = 0.55;
@@ -136,7 +135,7 @@ pub(crate) fn dock_rect(
 }
 
 /// Computes the toolbar window rectangle: the full monitor bounds width at the
-/// top edge (Seelen default `position: Top`, margin 0), height 32 logical.
+/// top edge, height 40 logical with 4px top/bottom island insets.
 pub(crate) fn toolbar_rect(bounds: DockContext, scale: f32) -> DockRect {
     let scale = scale_or_fallback(scale);
     let height = (physical(TOOLBAR_HEIGHT, scale) as u32).clamp(1, bounds.height());
@@ -180,7 +179,7 @@ mod tests {
 
     #[test]
     fn mincontent_dock_is_centered_and_sized_by_tile_count() {
-        // Five content tiles + three reserved: margins/padding + 8*40 + 7*8.
+        // Five content tiles + three reserved: 20 + 8*46 + 7*3 = 409.
         let rect = dock_rect(
             bounds(0, 0, 1920, 1040),
             DockEdge::Bottom,
@@ -188,21 +187,21 @@ mod tests {
             false,
             1.0,
         );
-        assert_eq!(rect.width, 408);
-        assert_eq!(rect.height, 72); // 2*8 margin + 2*8 pad + 40 item
+        assert_eq!(rect.width, 409);
+        assert_eq!(rect.height, 66); // 2*5 margin + 2*5 pad + 46 item
         // Centered on the monitor bounds, hugging the bottom edge.
-        assert_eq!(rect.x, (1920 - 408) / 2);
+        assert_eq!(rect.x, (1920 - 409) / 2);
         assert_eq!(rect.y + rect.height as i32, 1040);
 
-        // One content tile + three reserved: 16 + 16 + 4*40 + 3*8 = 216.
+        // One content tile + three reserved: 20 + 4*46 + 3*3 = 213.
         let one = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 1, false, 1.0);
-        assert_eq!(one.width, 216);
-        assert_eq!(one.x, (1920 - 216) / 2);
-        assert_eq!(one.height, 72);
+        assert_eq!(one.width, 213);
+        assert_eq!(one.x, (1920 - 213) / 2);
+        assert_eq!(one.height, 66);
 
         let empty = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 0, false, 1.0);
-        assert_eq!(empty.width, 168);
-        assert_eq!(empty.height, 72);
+        assert_eq!(empty.width, 164);
+        assert_eq!(empty.height, 66);
     }
 
     #[test]
@@ -214,7 +213,7 @@ mod tests {
             false,
             1.0,
         );
-        assert_eq!(rect.x, -1920 + (1920 - 408) / 2);
+        assert_eq!(rect.x, -1920 + (1920 - 409) / 2);
         assert_eq!(rect.y + rect.height as i32, -1080 + 2160);
         assert!(rect.x >= -1920);
         assert!(rect.width >= 1 && rect.height >= 1);
@@ -223,33 +222,33 @@ mod tests {
     #[test]
     fn dpi_scale_multiplies_tokens() {
         let rect = dock_rect(bounds(0, 0, 3840, 2160), DockEdge::Bottom, 1, false, 2.0);
-        assert_eq!(rect.height, 144); // 72 * 2
-        assert_eq!(rect.width, 432); // (three reserved + one content tile) * 2
+        assert_eq!(rect.height, 132); // 66 * 2
+        assert_eq!(rect.width, 426); // 213 * 2
         assert_eq!(rect.y + rect.height as i32, 2160);
     }
 
     #[test]
     fn compact_shrinks_proportionally_and_bad_scale_falls_back() {
         let compact = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 1, true, 1.0);
-        assert_eq!(compact.height, 58); // 72 * 0.8, rounded from 57.6
-        assert_eq!(compact.width, 173); // 216 * 0.8, rounded from 172.8
+        assert_eq!(compact.height, 53); // 66 * 0.8, rounded from 52.8
+        assert_eq!(compact.width, 170); // 213 * 0.8, rounded from 170.4
         let fallback = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Bottom, 1, false, 0.0);
-        assert_eq!(fallback.width, 216);
-        assert_eq!(fallback.height, 72);
+        assert_eq!(fallback.width, 213);
+        assert_eq!(fallback.height, 66);
     }
 
     #[test]
     fn oversized_dock_is_clamped_with_margin_preserved() {
         // 32+ tiles on a tiny monitor: clamped to bounds minus side margins.
         let rect = dock_rect(bounds(0, 0, 200, 100), DockEdge::Bottom, 40, false, 1.0);
-        assert_eq!(rect.width, 200 - 2 * 8);
-        assert_eq!(rect.x, 8);
+        assert_eq!(rect.width, 200 - 2 * 5);
+        assert_eq!(rect.x, 5);
         assert!(rect.y + rect.height as i32 <= 100);
         assert_eq!(
             dock_length(MAX_DOCK_TILES - RESERVED_DOCK_TILES, false),
-            1560.0
+            1585.0
         );
-        assert_eq!(dock_length(usize::MAX, false), 1560.0);
+        assert_eq!(dock_length(usize::MAX, false), 1585.0);
     }
 
     #[test]
@@ -257,18 +256,18 @@ mod tests {
         // Top: hugging the top, centered horizontally.
         let top = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Top, 1, false, 1.0);
         assert_eq!(top.y, 0);
-        assert_eq!(top.x, (1920 - 216) / 2);
-        assert_eq!(top.height, 72);
+        assert_eq!(top.x, (1920 - 213) / 2);
+        assert_eq!(top.height, 66);
         // Left: hugging the left edge, centered vertically.
         let left = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Left, 1, false, 1.0);
         assert_eq!(left.x, 0);
-        assert_eq!(left.width, 72);
-        assert_eq!(left.y, (1040 - 216) / 2);
-        assert_eq!(left.height, 216);
+        assert_eq!(left.width, 66);
+        assert_eq!(left.y, (1040 - 213) / 2);
+        assert_eq!(left.height, 213);
         // Right: hugging the right edge, centered vertically.
         let right = dock_rect(bounds(0, 0, 1920, 1040), DockEdge::Right, 1, false, 1.0);
         assert_eq!(right.x + right.width as i32, 1920);
-        assert_eq!(right.y, (1040 - 216) / 2);
+        assert_eq!(right.y, (1040 - 213) / 2);
         // Negative origin on a vertical edge stays inside the bounds.
         let off = dock_rect(
             bounds(-1920, -1080, 1920, 2160),
@@ -278,18 +277,18 @@ mod tests {
             1.0,
         );
         assert_eq!(off.x, -1920);
-        assert_eq!(off.y, -1080 + (2160 - 408) / 2);
+        assert_eq!(off.y, -1080 + (2160 - 409) / 2);
     }
 
     #[test]
-    fn toolbar_spans_bounds_at_top_with_32px_height() {
+    fn toolbar_spans_bounds_at_top_with_40px_height() {
         let rect = toolbar_rect(bounds(-1920, -1080, 1920, 2160), 1.0);
         assert_eq!(rect.x, -1920);
         assert_eq!(rect.y, -1080);
         assert_eq!(rect.width, 1920);
-        assert_eq!(rect.height, 32);
+        assert_eq!(rect.height, 40);
         let scaled = toolbar_rect(bounds(0, 0, 1920, 1040), 2.0);
-        assert_eq!(scaled.height, 64);
+        assert_eq!(scaled.height, 80);
     }
 
     #[test]

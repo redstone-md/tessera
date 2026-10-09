@@ -6,8 +6,8 @@
 //! No OS access, no I/O: plain value types with invariants enforced by
 //! constructors, and a deterministic tiling layout ([`MainStack`]).
 //!
-//! All coordinates are physical pixels. Negative origins are valid; extents
-//! must be nonzero and the rectangle edges must fit in `i32`.
+//! Rectangle coordinates are physical pixels. Negative origins are valid;
+//! extents must be nonzero and the rectangle edges must fit in `i32`.
 
 #![forbid(unsafe_code)]
 
@@ -20,3 +20,6 @@ pub use error::LayoutError;
 pub use layout::{MainStack, Placement};
 pub use primitive::Rect;
 pub use window::{Window, WindowId, WindowMode};
+
+/// Top-level toolbar allocation in 96-DPI logical pixels, including island gutters.
+pub const TOOLBAR_HEIGHT_LOGICAL: u32 = 40;

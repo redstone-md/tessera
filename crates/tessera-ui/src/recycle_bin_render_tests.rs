@@ -44,6 +44,8 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let dock = Dock::new().unwrap();
+        dock.global::<crate::generated::SeelenPalette>()
+            .set_reference_mode(true);
         let requests = Rc::new(RefCell::new(Vec::new()));
         let recorded = requests.clone();
         dock.on_recycle_action_requested(move |action| {
@@ -170,12 +172,12 @@ fn recycle_fixed_trailing_layout_all_edges_compact_themes_and_dpi() {
             ] {
                 fixture
                     .dock
-                    .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                    .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
                 for scale in [1.0, 2.0] {
                     let (width, height) = if edge < 2 {
-                        (216.0, 72.0)
+                        (213.0, 66.0)
                     } else {
-                        (72.0, 216.0)
+                        (66.0, 213.0)
                     };
                     let physical_width = (width * factor * scale).ceil() as u32;
                     let physical_height = (height * factor * scale).ceil() as u32;
@@ -193,12 +195,12 @@ fn recycle_fixed_trailing_layout_all_edges_compact_themes_and_dpi() {
                     for (tile, along, trailing) in [
                         (
                             fixture.element("Open applications and settings"),
-                            16.0,
+                            10.0,
                             false,
                         ),
-                        (fixture.element("Show desktop"), 64.0, false),
-                        (fixture.element("Launch App 0"), 112.0, false),
-                        (fixture.trash(), 160.0, true),
+                        (fixture.element("Show desktop"), 59.0, false),
+                        (fixture.element("Launch App 0"), 108.0, false),
+                        (fixture.trash(), 157.0, true),
                     ] {
                         // Native physical ceil adds a real fractional logical
                         // remainder only to the fixed end-anchored tile.
@@ -213,10 +215,10 @@ fn recycle_fixed_trailing_layout_all_edges_compact_themes_and_dpi() {
                             along * factor
                         };
                         let origin = tile.absolute_position();
-                        close(origin.x, if edge < 2 { along } else { 16.0 * factor });
-                        close(origin.y, if edge < 2 { 16.0 * factor } else { along });
-                        close(tile.size().width, 40.0 * factor);
-                        close(tile.size().height, 40.0 * factor);
+                        close(origin.x, if edge < 2 { along } else { 10.0 * factor });
+                        close(origin.y, if edge < 2 { 10.0 * factor } else { along });
+                        close(tile.size().width, 46.0 * factor);
+                        close(tile.size().height, 46.0 * factor);
                     }
                     assert!(fixture.take().is_empty());
                 }
@@ -448,6 +450,8 @@ fn recycle_context_real_empty_retry_inputs_enabled_repeat_and_other_scopes() {
     let fixture = Fixture::new();
     fixture.dock.hide().unwrap();
     let menu = ContextMenuSurface::new_with_metrics().unwrap();
+    menu.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     let actions = Rc::new(RefCell::new(Vec::new()));
     let recorded = actions.clone();
     menu.on_action_requested(move |action| recorded.borrow_mut().push(action));
@@ -657,13 +661,15 @@ fn recycle_context_real_empty_retry_inputs_enabled_repeat_and_other_scopes() {
 #[test]
 fn recycle_empty_and_capped_viewport_never_truncate_models() {
     let fixture = Fixture::new();
-    for (count, along) in [(0, 168), (1, 216), (29, 1560), (32, 1560), (64, 1560)] {
+    // Native empty allocation leaves no scroll viewport; capped allocations
+    // retain every application row independently of visible capacity.
+    for (count, along) in [(0, 164), (1, 213), (29, 1585), (32, 1585), (64, 1585)] {
         fixture.dock.set_recycle_empty_enabled(count % 2 == 0);
         fixture.dock.set_recycle_empty_busy(count % 2 != 0);
         fixture.apps(count);
         for edge in 0..4 {
             fixture.dock.set_edge(edge);
-            let (width, height) = if edge < 2 { (along, 72) } else { (72, along) };
+            let (width, height) = if edge < 2 { (along, 66) } else { (66, along) };
             fixture.render(width, height, 1.0);
             let origin = fixture.trash().absolute_position();
             close(
@@ -678,7 +684,7 @@ fn recycle_empty_and_capped_viewport_never_truncate_models() {
             let size = viewport.size();
             close(
                 if edge < 2 { size.width } else { size.height },
-                (along as f32 - 176.0).max(0.0),
+                (along as f32 - 167.0).max(0.0),
             );
             assert!(fixture.take().is_empty());
         }

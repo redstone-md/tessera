@@ -12,6 +12,7 @@ use crate::generated::{Palette, SeelenPalette};
 pub(crate) struct PresentationTheme {
     toolkit: ColorScheme,
     reference: ColorScheme,
+    reference_mode: bool,
 }
 
 impl PresentationTheme {
@@ -19,6 +20,16 @@ impl PresentationTheme {
         Self {
             toolkit: scheme,
             reference: scheme,
+            reference_mode: false,
+        }
+    }
+
+    /// Retained neutral source fixture, selected explicitly in all builds.
+    /// Product windows use `uniform`; children inherit the captured skin.
+    pub(crate) fn seelen_reference(scheme: ColorScheme) -> Self {
+        Self {
+            reference_mode: true,
+            ..Self::uniform(scheme)
         }
     }
 }
@@ -34,15 +45,21 @@ where
     for<'a> SeelenPalette<'a>: Global<'a, C>,
 {
     fn presentation_theme(&self) -> PresentationTheme {
-        PresentationTheme {
-            toolkit: self.global::<Palette>().get_color_scheme(),
-            reference: self.global::<SeelenPalette>().get_color_scheme(),
-        }
+        let palette = self.global::<SeelenPalette>();
+        let mut theme = if palette.get_reference_mode() {
+            PresentationTheme::seelen_reference(palette.get_color_scheme())
+        } else {
+            PresentationTheme::uniform(palette.get_color_scheme())
+        };
+        theme.toolkit = self.global::<Palette>().get_color_scheme();
+        theme
     }
 
     fn apply_presentation_theme(&self, theme: PresentationTheme) {
         self.global::<Palette>().set_color_scheme(theme.toolkit);
         self.global::<SeelenPalette>()
             .set_color_scheme(theme.reference);
+        self.global::<SeelenPalette>()
+            .set_reference_mode(theme.reference_mode);
     }
 }

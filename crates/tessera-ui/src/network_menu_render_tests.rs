@@ -77,7 +77,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let popup = NetworkMenu::new().unwrap();
-        popup.apply_presentation_theme(PresentationTheme::uniform(
+        popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         let requests = Rc::new(RefCell::new(Vec::new()));
@@ -229,7 +229,7 @@ fn network_popup_four_real_sections_have_source_spacing_and_pixels_at_light_dark
         slint::language::ColorScheme::Dark,
     ] {
         f.popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0_f32, 2.0] {
             let pixels = f.render_fit(scale);
             let size = f.window.window().size();
@@ -410,7 +410,7 @@ fn network_popup_unavailable_off_absent_empty_partial_watch_states_paint_and_kee
             slint::language::ColorScheme::Dark,
         ] {
             f.popup
-                .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
             for scale in [1.0_f32, 2.0] {
                 let pixels = f.render_fit(scale);
                 let size = f.window.window().size();

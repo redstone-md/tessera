@@ -85,7 +85,8 @@ component CalendarDayButton inherits TileButton {
         width: root.width;
         height: root.height;
         text: root.day.label;
-        color: root.day.selected ? Palette.accent-foreground
+        color: root.day.selected
+            ? (SeelenPalette.reference-mode ? Palette.accent-foreground : SeelenPalette.on-primary)
             : root.day.today ? SeelenPalette.accent
             : root.day.off-month ? SeelenPalette.muted : SeelenPalette.foreground;
         font-weight: root.day.selected ? 600 : root.day.today ? 700 : 400;

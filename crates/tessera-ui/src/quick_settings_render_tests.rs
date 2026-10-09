@@ -47,7 +47,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let popup = QuickSettings::new().unwrap();
-        popup.apply_presentation_theme(PresentationTheme::uniform(
+        popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         let requests = Rc::new(RefCell::new(Vec::new()));

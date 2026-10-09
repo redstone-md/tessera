@@ -60,7 +60,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let dock = Dock::new().unwrap();
-        dock.apply_presentation_theme(PresentationTheme::uniform(
+        dock.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         let requests = Rc::new(RefCell::new(Vec::new()));

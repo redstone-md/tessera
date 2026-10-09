@@ -107,7 +107,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let popup = UserMenu::new().unwrap();
-        popup.apply_presentation_theme(PresentationTheme::uniform(
+        popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         popup.set_user_name("Actual fixture account".into());
@@ -551,7 +551,7 @@ fn user_menu_seven_rows_and_seventy_pixel_profile_fit_reference_body_in_light_da
     ] {
         fixture
             .popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         fixture
             .window
             .window()
@@ -653,7 +653,7 @@ fn user_menu_seven_rows_and_seventy_pixel_profile_fit_reference_body_in_light_da
     }
     fixture
         .popup
-        .apply_presentation_theme(PresentationTheme::uniform(
+        .apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
     fixture
@@ -1532,7 +1532,7 @@ fn logout_border_box_source_geometry_photo_circle_and_outside_clip_hover_hold_li
     ] {
         fixture
             .popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         fixture
             .window
             .window()
@@ -1747,7 +1747,7 @@ fn user_source_fallback_gray_and_folder_accent_hover_hold_keep_native_admission(
     ] {
         fixture
             .popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         fixture
             .popup
             .global::<crate::generated::SeelenPalette>()

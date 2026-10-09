@@ -134,7 +134,7 @@ impl Fixture {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         slint::platform::set_platform(Box::new(TestPlatform(window.clone()))).unwrap();
         let popup = CalendarMenu::new().unwrap();
-        popup.apply_presentation_theme(PresentationTheme::uniform(
+        popup.apply_presentation_theme(PresentationTheme::seelen_reference(
             slint::language::ColorScheme::Light,
         ));
         let requests = Rc::new(RefCell::new(Vec::new()));
@@ -315,7 +315,7 @@ impl Fixture {
             (slint::language::ColorScheme::Dark, 255, 0, 255, 228),
         ] {
             self.popup
-                .apply_presentation_theme(PresentationTheme::uniform(scheme));
+                .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
             self.popup
                 .global::<SeelenPalette>()
                 .set_accent(slint::Color::from_rgb_u8(accent, accent, accent).into());
@@ -593,7 +593,7 @@ fn calendar_four_five_six_square_weeks_and_three_by_four_year_have_source_geomet
     ] {
         fixture
             .popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0_f32, 2.0] {
             fixture.scale(scale);
             for count in [4_usize, 5, 6] {
@@ -1050,7 +1050,7 @@ fn calendar_selected_today_and_off_month_priorities_are_real_pixels_not_shared_b
     ] {
         fixture
             .popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         fixture
             .popup
             .global::<SeelenPalette>()
@@ -1429,7 +1429,7 @@ fn calendar_original_navigation_vectors_keep_one_em_tint_and_native_hit_slots() 
     ] {
         fixture
             .popup
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0, 2.0] {
             fixture.scale(scale);
             fixture

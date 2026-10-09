@@ -257,6 +257,9 @@ impl NativeLauncherInventory {
 
     fn with_source_icon(count: usize, source_icon: bool) -> Self {
         let launcher = Launcher::new().unwrap();
+        launcher
+            .global::<crate::generated::SeelenPalette>()
+            .set_reference_mode(true);
         let applications = (0..count)
             .map(|index| crate::projection::AppProjection {
                 key: inventory_key(index),
@@ -1596,6 +1599,8 @@ mod native_reorder {
 fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     let mut icon_pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(48, 48);
     for pixel in icon_pixels
         .make_mut_bytes()
@@ -1633,9 +1638,9 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
     });
     dock.show().unwrap();
 
-    // 1x: the window holds margins(2x8) + bar(pad+item+pad=56) => 72 high;
-    // The length covers three reserved tiles and three content tiles.
-    for (scale, width, height) in [(1.0, 312u32, 72u32), (2.0, 624u32, 144u32)] {
+    // 1x: margins(2x5) + bar(pad+item+pad=56) => 66 high.
+    // Six fixed 46px slots, five 3px gaps and 20px total padding/margin.
+    for (scale, width, height) in [(1.0, 311u32, 66u32), (2.0, 622u32, 132u32)] {
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -1666,8 +1671,8 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
             .next()
             .unwrap();
         assert_eq!(launch.accessible_role(), Some(AccessibleRole::Button));
-        assert_eq!(launch.absolute_position().x, 112.0);
-        assert_eq!(launch.absolute_position().y, 16.0);
+        assert_eq!(launch.absolute_position().x, 108.0);
+        assert_eq!(launch.absolute_position().y, 10.0);
         let switch = ElementHandle::find_by_accessible_label(&dock, "Switch to Browser")
             .next()
             .unwrap();
@@ -1687,7 +1692,7 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
                 .unwrap();
             assert_eq!(image.absolute_position(), icon.absolute_position());
             assert_eq!(image.size(), icon.size());
-            assert_eq!(icon.size(), slint::LogicalSize::new(28.0, 28.0));
+            assert_eq!(icon.size(), slint::LogicalSize::new(33.0, 33.0));
             let origin = tile.absolute_position();
             let size = tile.size();
             let mut colored = Vec::new();
@@ -1700,7 +1705,9 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
                 }
             }
             let icon_origin = icon.absolute_position();
-            let edge = (28.0 * scale) as usize;
+            assert_eq!(icon_origin.x - origin.x, 6.5);
+            assert_eq!(icon_origin.y - origin.y, 6.5);
+            let edge = (33.0 * scale) as usize;
             assert_eq!(colored.len(), edge * edge);
             assert_eq!(
                 (
@@ -1710,10 +1717,10 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
                     colored.iter().map(|point| point.1).max().unwrap() + 1,
                 ),
                 (
-                    (icon_origin.x * scale) as usize,
-                    (icon_origin.y * scale) as usize,
-                    (icon_origin.x * scale) as usize + edge,
-                    (icon_origin.y * scale) as usize + edge,
+                    (icon_origin.x * scale).round() as usize,
+                    (icon_origin.y * scale).round() as usize,
+                    (icon_origin.x * scale).round() as usize + edge,
+                    (icon_origin.y * scale).round() as usize + edge,
                 ),
             );
         }
@@ -1725,6 +1732,8 @@ fn dock_renders_tiles_and_indicators_with_geometry_and_accessibility() {
 fn dock_click_keyboard_and_disabled_states_route_keys() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
         key: "editor".into(),
         label: "Editor".into(),
@@ -1829,6 +1838,8 @@ fn dock_click_keyboard_and_disabled_states_route_keys() {
 fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scales() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     let opens = Rc::new(Cell::new(0));
     let count = opens.clone();
     dock.on_open_applications_requested(move || count.set(count.get() + 1));
@@ -1841,7 +1852,7 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
         slint::language::ColorScheme::Light,
         slint::language::ColorScheme::Dark,
     ] {
-        dock.apply_presentation_theme(PresentationTheme::uniform(theme));
+        dock.apply_presentation_theme(PresentationTheme::seelen_reference(theme));
         for scale in [1.0_f32, 2.0] {
             window
                 .window()
@@ -1849,7 +1860,7 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
                     scale_factor: scale,
                 });
             let width = (248.0 * scale) as u32;
-            let height = (72.0 * scale) as u32;
+            let height = (66.0 * scale) as u32;
             window.set_size(slint::PhysicalSize::new(width, height));
             window.window().dispatch_event(WindowEvent::PointerExited);
             let baseline = draw(&window, width, height);
@@ -1870,7 +1881,8 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
                 let y = (center.y * scale) as usize;
                 pixels[y * width as usize + x]
             };
-            let bar_color = sample(&baseline, 5.5);
+            // The 5px bar margin lies between these sample coordinates:
+            // compare each to its own neutral baseline, not one flat color.
             let click = || {
                 window.window().dispatch_event(WindowEvent::PointerPressed {
                     position: center,
@@ -1890,7 +1902,7 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             for offset in [0.5, 1.5, 2.5, 3.5, 4.5] {
                 assert_eq!(
                     sample(&pointer, offset),
-                    bar_color,
+                    sample(&baseline, offset),
                     "pointer focus must not paint a keyboard outline ({theme:?}, {scale}x)",
                 );
             }
@@ -1921,13 +1933,13 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             for offset in [0.5, 1.5, 4.5] {
                 assert_eq!(
                     sample(&keyboard, offset),
-                    bar_color,
+                    sample(&baseline, offset),
                     "outline keeps a two-pixel gap and bounded outer edge",
                 );
             }
             assert_ne!(
                 sample(&keyboard, 2.5),
-                bar_color,
+                sample(&baseline, 2.5),
                 "keyboard outline starts two logical pixels outside the tile",
             );
             assert_eq!(
@@ -1960,7 +1972,7 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
                 .window()
                 .dispatch_event(WindowEvent::WindowActiveChanged(false));
             let inactive = draw(&window, width, height);
-            assert_eq!(sample(&inactive, 2.5), bar_color);
+            assert_eq!(sample(&inactive, 2.5), sample(&baseline, 2.5));
             window
                 .window()
                 .dispatch_event(WindowEvent::WindowActiveChanged(true));
@@ -1985,7 +1997,7 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             click();
             assert_eq!(opens.get(), before + 3);
             let pointer_again = draw(&window, width, height);
-            assert_eq!(sample(&pointer_again, 2.5), bar_color);
+            assert_eq!(sample(&pointer_again, 2.5), sample(&baseline, 2.5));
             window
                 .window()
                 .dispatch_event(WindowEvent::WindowActiveChanged(false));
@@ -1996,7 +2008,7 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
             window.draw_if_needed(|renderer| {
                 renderer.render(&mut pointer_restored, width as usize);
             });
-            assert_eq!(sample(&pointer_restored, 2.5), bar_color);
+            assert_eq!(sample(&pointer_restored, 2.5), sample(&baseline, 2.5));
             assert!(
                 !window.draw_if_needed(|_| panic!("unchanged focus must not redraw")),
                 "no idle repaint after focus presentation settles",
@@ -2009,6 +2021,8 @@ fn dock_pointer_and_keyboard_focus_have_reference_outline_geometry_at_both_scale
 fn dock_tab_navigation_activates_real_tiles_and_skips_disabled_items() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
         key: "editor".into(),
         label: "Editor".into(),
@@ -2145,6 +2159,9 @@ fn toolbar_renders_identity_and_settings_access() {
     use slint::language::ColorScheme;
     let window = software_window();
     let toolbar = Toolbar::new().unwrap();
+    toolbar
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     toolbar.set_user_name("alice".into());
     toolbar.set_focused_app("Editor — window".into());
     toolbar.set_clock("12:34".into());
@@ -2164,12 +2181,12 @@ fn toolbar_renders_identity_and_settings_access() {
     toolbar
         .on_tooltip_requested(move |content, bounds| records.borrow_mut().push((content, bounds)));
     for (scheme, scale, width, height) in [
-        (ColorScheme::Light, 1.0, 640u32, 32u32),
-        (ColorScheme::Light, 2.0, 1280, 64),
-        (ColorScheme::Dark, 1.0, 640, 32),
-        (ColorScheme::Dark, 2.0, 1280, 64),
+        (ColorScheme::Light, 1.0, 640u32, 40u32),
+        (ColorScheme::Light, 2.0, 1280, 80),
+        (ColorScheme::Dark, 1.0, 640, 40),
+        (ColorScheme::Dark, 2.0, 1280, 80),
     ] {
-        toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        toolbar.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -2186,17 +2203,17 @@ fn toolbar_renders_identity_and_settings_access() {
         let origin = settings.absolute_position();
         let size = settings.size();
         assert_eq!(origin.y, 4.0);
-        assert_eq!((size.width, size.height), (24.0, 24.0));
+        assert_eq!((size.width, size.height), (32.0, 32.0));
         let (x, y) = ((origin.x * scale) as usize, (origin.y * scale) as usize);
-        let inset = (7.0 * scale) as usize;
-        let end = (17.0 * scale) as usize;
+        let inset = (11.0 * scale) as usize;
+        let end = (21.0 * scale) as usize;
         assert!(
             (y + inset..y + end).any(|row| {
                 pixels[row * width as usize + x + inset..row * width as usize + x + end]
                     .iter()
                     .any(|pixel| *pixel != pixels[0])
             }),
-            "the 16px settings vector renders inside its padded 24px wrapper at each DPI"
+            "the 16px settings vector renders inside its padded 32px wrapper at each DPI"
         );
         let title = ElementHandle::find_by_accessible_label(&toolbar, "Editor — window")
             .next()
@@ -2210,7 +2227,7 @@ fn toolbar_renders_identity_and_settings_access() {
             title_size.width > 0.0,
             "the focused title gets the remaining left budget"
         );
-        assert_eq!((title_origin.y, title_size.height), (8.0, 16.0));
+        assert_eq!((title_origin.y, title_size.height), (12.0, 16.0));
         assert!(title_origin.x + title_size.width <= clock.absolute_position().x - 8.0);
         toolbar.set_focused_app("".into());
         let blank = draw(&window, width, height);
@@ -2243,7 +2260,7 @@ fn toolbar_renders_identity_and_settings_access() {
             glyph_pixels > 8,
             "actual focused-title glyphs must render at both DPIs/themes"
         );
-        let center = slint::LogicalPosition::new(origin.x + 12.0, origin.y + 12.0);
+        let center = slint::LogicalPosition::new(origin.x + 16.0, origin.y + 16.0);
         // Straight edge outside the independent SVG's stroke bounds.
         let index =
             (center.y * scale) as usize * width as usize + ((origin.x + 0.5) * scale) as usize;
@@ -2274,7 +2291,7 @@ fn toolbar_renders_identity_and_settings_access() {
             .expect("actual settings hover requests a hint");
         assert_eq!(content, "Quick settings");
         assert_eq!(bounds.origin, origin);
-        assert_eq!((bounds.width, bounds.height), (24.0, 24.0));
+        assert_eq!((bounds.width, bounds.height), (32.0, 32.0));
         drop(requested);
         let before = opened.get();
         window.window().dispatch_event(WindowEvent::PointerPressed {
@@ -2380,13 +2397,18 @@ fn toolbar_renders_identity_and_settings_access() {
                         );
                     }
                 }
+                // The right island shares the remaining half-window budget;
+                // narrow windows shrink only the control's along-axis size.
+                let right_budget =
+                    (logical_width as f32 / 2.0 - clock.size().width / 2.0 - 24.0).max(0.0);
+                let control_width = ((right_budget - 24.0).max(0.0) / 4.0).min(32.0);
                 assert_eq!(
                     (
                         settings.absolute_position().y,
                         settings.size().width,
                         settings.size().height
                     ),
-                    (4.0, 24.0, 24.0)
+                    (4.0, control_width, 32.0)
                 );
             }
         }
@@ -2406,6 +2428,9 @@ fn toolbar_renders_identity_and_settings_access() {
 fn launcher_renders_grid_search_and_escape_hides() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     set_launcher_tiles(
         &launcher,
         vec![
@@ -2458,6 +2483,9 @@ fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus()
 
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     assert_eq!(launcher.get_view(), LauncherView::Favorites);
     let views = Rc::new(RefCell::new(Vec::new()));
     let log = views.clone();
@@ -2663,6 +2691,9 @@ fn launcher_header_requests_real_views_and_reset_scroll_preserves_native_focus()
 fn launcher_empty_unavailable_and_no_match_states_are_distinct_and_keep_recovery() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     launcher.show().unwrap();
     let messages = [
         "Welcome to Tessera.",
@@ -2951,7 +2982,7 @@ fn launcher_native_wheel_scrollbar_partial_tail_outlines_and_resize_preserve_geo
     ] {
         fixture
             .launcher
-            .apply_presentation_theme(PresentationTheme::uniform(scheme));
+            .apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0_f32, 2.0] {
             window
                 .window()
@@ -3327,6 +3358,9 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
 
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     set_launcher_tiles(
         &launcher,
         (0..23)
@@ -3634,6 +3668,9 @@ fn launcher_keyboard_selection_routes_native_input_and_scrolls_nearest() {
 fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     let mut bitmap = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(32, 32);
     bitmap.make_mut_slice().fill(slint::Rgba8Pixel {
         r: 255,
@@ -3665,7 +3702,7 @@ fn launcher_grid_preserves_layout_and_renders_edge_tile_focus_outside_tiles() {
         (slint::language::ColorScheme::Light, Some(custom_accent)),
         (slint::language::ColorScheme::Dark, Some(custom_accent)),
     ] {
-        launcher.apply_presentation_theme(PresentationTheme::uniform(theme));
+        launcher.apply_presentation_theme(PresentationTheme::seelen_reference(theme));
         if let Some(accent) = accent_override {
             launcher
                 .global::<crate::generated::SeelenPalette>()
@@ -3904,6 +3941,9 @@ fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scale
 
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     set_launcher_tiles(&launcher, vec![app("editor", "Rust Editor")]);
     launcher.set_feedback_visible(true);
     launcher.show().unwrap();
@@ -3913,7 +3953,7 @@ fn launcher_opaque_frame_is_transparent_outside_and_bounds_content_at_both_scale
         (slint::language::ColorScheme::Light, 1.0, 242),
         (slint::language::ColorScheme::Light, 2.0, 242),
     ] {
-        launcher.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        launcher.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -3981,7 +4021,7 @@ fn launcher_fullscreen_pixels_fill_every_edge_and_windowed_frame_round_trips() {
         (ColorScheme::Light, 1.0, 242),
         (ColorScheme::Light, 2.0, 242),
     ] {
-        launcher.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        launcher.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -4069,6 +4109,8 @@ fn launcher_fullscreen_pixels_fill_every_edge_and_windowed_frame_round_trips() {
 fn no_idle_render_after_draining_unchanged_state() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
         key: "editor".into(),
         label: "Editor".into(),
@@ -4093,6 +4135,8 @@ fn no_idle_render_after_draining_unchanged_state() {
 fn dock_compact_and_stale_states_change_rendering_and_keep_rescue() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
         key: "editor".into(),
         label: "Editor".into(),
@@ -4146,6 +4190,9 @@ fn dock_compact_and_stale_states_change_rendering_and_keep_rescue() {
 fn launcher_favorite_toggle_routes_exact_desired_state_without_launching() {
     let window = software_window();
     let launcher = Launcher::new().unwrap();
+    launcher
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     set_launcher_tiles(&launcher, vec![app("app-editor", "Rust Editor")]);
     let favorites = Rc::new(Cell::new(0));
     let counter = favorites.clone();
@@ -4345,6 +4392,8 @@ fn dark_palette_renders_the_source_neutral_tile_color() {
     let window = software_window();
     let dock = Dock::new().unwrap();
     dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
+    dock.global::<crate::generated::SeelenPalette>()
         .set_color_scheme(slint::language::ColorScheme::Dark);
     dock.global::<crate::generated::Palette>()
         .set_color_scheme(slint::language::ColorScheme::Dark);
@@ -4366,6 +4415,8 @@ fn dark_palette_renders_the_source_neutral_tile_color() {
 fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
     let window = software_window();
     let menu = ContextMenuSurface::new_with_metrics().unwrap();
+    menu.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     menu.set_kind(DockMenuKind::Bar);
     let selected = Rc::new(Cell::new(None));
     let recorded = Rc::clone(&selected);
@@ -4410,7 +4461,7 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
             [242, 242, 242],
         ),
     ] {
-        menu.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        menu.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -4664,11 +4715,13 @@ fn context_menu_renders_all_actions_outside_bar_height_at_one_and_two_x() {
 fn context_menu_fits_native_label_metrics_and_returns_to_minimum_width() {
     let window = software_window();
     let menu = ContextMenuSurface::new_with_metrics().unwrap();
+    menu.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     for scheme in [
         slint::language::ColorScheme::Light,
         slint::language::ColorScheme::Dark,
     ] {
-        menu.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        menu.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0, 2.0] {
             window
                 .window()
@@ -4737,6 +4790,8 @@ fn context_menu_fits_native_label_metrics_and_returns_to_minimum_width() {
 fn dock_right_click_emits_actual_window_relative_anchor_without_launching() {
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     dock.set_pinned_apps(ModelRc::new(VecModel::from(vec![DockApp {
         key: "editor".into(),
         label: "Editor".into(),
@@ -4807,6 +4862,9 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
 
     let window = software_window();
     let tooltip = TooltipSurface::new().unwrap();
+    tooltip
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     let caption =
         "A genuine long application window title that wraps without adding actions. ".repeat(4);
     tooltip.set_content(caption.clone().into());
@@ -4837,7 +4895,7 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
             [242, 242, 242],
         ),
     ] {
-        tooltip.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        tooltip.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -5012,7 +5070,9 @@ fn passive_tooltip_renders_wrapped_text_outside_bar_at_one_and_two_x() {
 fn dock_hover_reports_bounds_and_dismisses_on_click_disable_and_scrolling() {
     let window = software_window();
     let dock = Dock::new().unwrap();
-    let label = "An editor label that is much longer than the forty-pixel tile";
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
+    let label = "An editor label that is much longer than the forty-six-pixel tile";
     let mut apps = vec![DockApp {
         key: "editor".into(),
         label: label.into(),
@@ -5051,7 +5111,7 @@ fn dock_hover_reports_bounds_and_dismisses_on_click_disable_and_scrolling() {
     assert_eq!(requested.len(), 1);
     assert_eq!(requested[0].0, label);
     assert_eq!(requested[0].1.origin, origin);
-    assert_eq!((requested[0].1.width, requested[0].1.height), (40.0, 40.0));
+    assert_eq!((requested[0].1.width, requested[0].1.height), (46.0, 46.0));
     drop(requested);
     window.window().dispatch_event(WindowEvent::PointerPressed {
         position: point,
@@ -5110,7 +5170,10 @@ fn popover_show_motion_settles_cancels_and_skips_when_not_permitted() {
     let clock = Rc::new(Cell::new(Duration::ZERO));
     let window = software_window_with_clock(clock.clone());
     let tooltip = TooltipSurface::new().unwrap();
-    tooltip.apply_presentation_theme(PresentationTheme::uniform(
+    tooltip
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
+    tooltip.apply_presentation_theme(PresentationTheme::seelen_reference(
         slint::language::ColorScheme::Dark,
     ));
     tooltip.set_content("Native hover".into());
@@ -5184,6 +5247,9 @@ fn settings_source_shell_routes_real_controls_without_saving_or_losing_drafts() 
     let clock = Rc::new(Cell::new(Duration::ZERO));
     let window = software_window_with_clock(clock.clone());
     let panel = Panel::new().unwrap();
+    panel
+        .global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     panel.set_version("0.1.0-alpha.21".into());
     panel.set_status("Ready".into());
     panel.set_start_of_week_index(2);
@@ -5202,7 +5268,7 @@ fn settings_source_shell_routes_real_controls_without_saving_or_losing_drafts() 
         (ColorScheme::Light, 2.0, 600, 400),
         (ColorScheme::Dark, 1.0, 600, 400),
     ] {
-        panel.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        panel.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         window
             .window()
             .dispatch_event(WindowEvent::ScaleFactorChanged {
@@ -5355,6 +5421,8 @@ fn dock_reference_indicators_paint_outside_fixed_tiles_on_all_edges() {
 
     let window = software_window();
     let dock = Dock::new().unwrap();
+    dock.global::<crate::generated::SeelenPalette>()
+        .set_reference_mode(true);
     dock.set_running_windows(ModelRc::new(VecModel::from(vec![DockWindow {
         key: "native-window".into(),
         caption: "Browser".into(),
@@ -5364,7 +5432,7 @@ fn dock_reference_indicators_paint_outside_fixed_tiles_on_all_edges() {
         .set_accent(slint::Color::from_rgb_u8(37, 171, 86).into());
     dock.show().unwrap();
     for scheme in [ColorScheme::Light, ColorScheme::Dark] {
-        dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        dock.apply_presentation_theme(PresentationTheme::seelen_reference(scheme));
         for scale in [1.0, 2.0] {
             window
                 .window()
@@ -5373,7 +5441,7 @@ fn dock_reference_indicators_paint_outside_fixed_tiles_on_all_edges() {
                 });
             for edge in 0..4 {
                 dock.set_edge(edge);
-                let (width, height) = if edge < 2 { (216, 72) } else { (72, 216) };
+                let (width, height) = if edge < 2 { (213, 66) } else { (66, 213) };
                 let width = (width as f32 * scale) as u32;
                 let height = (height as f32 * scale) as u32;
                 window.set_size(slint::PhysicalSize::new(width, height));
@@ -5385,12 +5453,12 @@ fn dock_reference_indicators_paint_outside_fixed_tiles_on_all_edges() {
                     .unwrap();
                 let origin = tile.absolute_position();
                 let size = tile.size();
-                assert_eq!(size, slint::LogicalSize::new(40.0, 40.0));
+                assert_eq!(size, slint::LogicalSize::new(46.0, 46.0));
                 let (x, y) = match edge {
-                    0 => (origin.x + 20.0, origin.y + 44.0),
-                    1 => (origin.x + 20.0, origin.y - 4.0),
-                    2 => (origin.x - 4.0, origin.y + 20.0),
-                    _ => (origin.x + 44.0, origin.y + 20.0),
+                    0 => (origin.x + 23.0, origin.y + 48.5),
+                    1 => (origin.x + 23.0, origin.y - 2.5),
+                    2 => (origin.x - 2.5, origin.y + 23.0),
+                    _ => (origin.x + 48.5, origin.y + 23.0),
                 };
                 let index = (y * scale) as usize * width as usize + (x * scale) as usize;
                 let color = pixels[index];
