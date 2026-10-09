@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[cfg(not(windows))]
 use tessera_system::media::MediaErrorKind;
 use tessera_system::media::{
-    MediaCommand, MediaCommandCompletion, MediaError, MediaEvent, MediaHost, MediaReadCompletion,
+    MediaCommandCompletion, MediaError, MediaEvent, MediaHost, MediaReadCompletion, MediaRequest,
 };
 
 #[cfg(any(windows, test))]
@@ -58,7 +58,7 @@ impl MediaHost for MediaService {
 
     fn execute(
         &self,
-        command: MediaCommand,
+        command: MediaRequest,
         completion: MediaCommandCompletion,
     ) -> Result<(), MediaError> {
         #[cfg(any(windows, test))]

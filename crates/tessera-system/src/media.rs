@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! OS-current media session facts and nonblocking transport requests.
+//! OS-current media session facts and nonblocking scoped media requests.
 //!
 //! Session keys are transient command authority, never application identities.
 //! A successful empty snapshot is distinct from an unavailable observation.
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_SESSION_KEY: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVATION_REVISION: AtomicU64 = AtomicU64::new(1);
 
 /// Opaque identity for one live native session incarnation. Never persist it.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -26,20 +27,47 @@ impl MediaSessionKey {
     }
 
     fn issue_from(counter: &AtomicU64) -> Result<Self, MediaError> {
-        let mut value = counter.load(Ordering::Relaxed);
-        let value = loop {
-            let next = value.checked_add(1).filter(|_| value != 0).ok_or_else(|| {
-                MediaError::new(MediaErrorKind::Other, "Media session keys exhausted")
-            })?;
-            match counter.compare_exchange_weak(value, next, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(previous) => break previous,
-                Err(observed) => value = observed,
-            }
-        };
-        NonZeroU64::new(value)
-            .map(Self)
-            .ok_or_else(|| MediaError::new(MediaErrorKind::Other, "Invalid media session key"))
+        issue_nonce(counter, "Media session keys exhausted").map(Self)
     }
+}
+
+/// Opaque native observation invalidation key; never derive it from metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaObservationRevision(NonZeroU64);
+
+impl MediaObservationRevision {
+    /// Allocates authority for native owners and recording adapters only.
+    /// Exhaustion is an error, never a wrap or a reused observation.
+    pub fn issue() -> Result<Self, MediaError> {
+        Self::issue_from(&NEXT_OBSERVATION_REVISION)
+    }
+
+    fn issue_from(counter: &AtomicU64) -> Result<Self, MediaError> {
+        issue_nonce(counter, "Media observation revisions exhausted").map(Self)
+    }
+}
+
+fn issue_nonce(counter: &AtomicU64, exhausted: &str) -> Result<NonZeroU64, MediaError> {
+    let mut value = counter.load(Ordering::Relaxed);
+    let value = loop {
+        let next = value
+            .checked_add(1)
+            .filter(|_| value != 0)
+            .ok_or_else(|| MediaError::new(MediaErrorKind::Other, exhausted))?;
+        match counter.compare_exchange_weak(value, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(previous) => break previous,
+            Err(observed) => value = observed,
+        }
+    };
+    NonZeroU64::new(value).ok_or_else(|| MediaError::new(MediaErrorKind::Other, exhausted))
+}
+
+/// Confirmed native seek capability and exact signed 100 ns range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaSeekObservation {
+    pub revision: MediaObservationRevision,
+    pub min_ticks: i64,
+    pub max_ticks: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,6 +192,8 @@ pub struct MediaSession {
     pub capabilities: MediaCapabilities,
     /// Independent timeline read failure; metadata/artwork/transports survive.
     pub timeline: Result<MediaTimeline, MediaError>,
+    /// Independent capability/range failure; other session facts survive.
+    pub seek: Result<MediaSeekObservation, MediaError>,
     pub artwork: Option<MediaArtwork>,
     /// Independent thumbnail failure; usable metadata/controls remain available.
     pub artwork_notice: Option<MediaError>,
@@ -198,6 +228,27 @@ pub struct MediaSnapshot {
 pub struct MediaCommand {
     pub expected_session: MediaSessionKey,
     pub action: MediaAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaSeekCommand {
+    pub expected_session: MediaSessionKey,
+    pub expected_revision: MediaObservationRevision,
+    pub observed_min_ticks: i64,
+    pub observed_max_ticks: i64,
+    pub position_ticks: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaRequest {
+    Transport(MediaCommand),
+    Seek(MediaSeekCommand),
+}
+
+impl From<MediaCommand> for MediaRequest {
+    fn from(command: MediaCommand) -> Self {
+        Self::Transport(command)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,6 +298,9 @@ impl std::error::Error for MediaError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MediaEvent {
     Changed,
+    /// Current-session/metadata authority was revoked before dirty coalescing.
+    /// Position-only timeline notifications do not emit this event.
+    SeekInvalidated,
     WatchReady,
     WatchUnavailable(MediaError),
 }
@@ -257,21 +311,23 @@ pub type MediaCommandCompletion = Box<dyn FnOnce(Result<(), MediaError>) + Send 
 /// Prompt, nonblocking seam for native media and recording adapters.
 ///
 /// `Ok` from read/execute transfers exactly one completion; immediate `Err`
-/// transfers none. Callbacks may run inline or on a worker. Transport intents
-/// must never be retried automatically, including after initialization failure.
+/// transfers none. Callbacks may run inline or on a worker. Media intents must
+/// never be retried automatically, including after initialization failure.
 pub trait MediaHost: Send + Sync + 'static {
     fn read(&self, completion: MediaReadCompletion) -> Result<(), MediaError>;
 
     /// Acknowledges OS acceptance, not a confirmed new playback/title snapshot.
-    /// Revalidate actual current identity and capabilities immediately before
-    /// dispatch, then explicitly reread after completion to observe any change.
+    /// Revalidate native identity/capability and (for seek) revision/exact range
+    /// immediately before dispatch. Explicitly reread after success; never
+    /// mutate confirmed observations optimistically or replay rejected work.
     fn execute(
         &self,
-        command: MediaCommand,
+        command: MediaRequest,
         completion: MediaCommandCompletion,
     ) -> Result<(), MediaError>;
 
-    /// `Changed` invalidates observations. Readiness follows native registration;
+    /// `Changed` invalidates facts; `SeekInvalidated` additionally revokes any
+    /// unsubmitted seek captured from them. Readiness follows native registration;
     /// a returned guard only accepts asynchronous setup, not live readiness.
     /// `None` means watching is unsupported. Immediate `Err` emits no events.
     /// Guard drop suppresses new delivery and queues cleanup without joining;

@@ -15,8 +15,8 @@ use tessera_system::audio::{
     AudioSnapshot, EndpointId, EndpointState, Volume,
 };
 
-use crate::dock_media::{DockMediaController, PopupMediaToken};
-use crate::generated::{AudioRoute, MediaAction, Panel, PopoverMotion, QuickSettings};
+use crate::dock_media::{CapturedMediaSeek, DockMediaController, PopupMediaToken};
+use crate::generated::{AudioRoute, MediaAction, Panel, PopoverMotion, QuickSettings, TileBounds};
 use crate::popup_placement::{self as placement, PopupRect};
 use crate::sanitize::bounded_text;
 use crate::theme::{PresentationTheme, ThemedComponent};
@@ -25,6 +25,62 @@ use crate::{DesktopHost, DockContext, SurfaceKind};
 
 #[cfg(test)]
 mod tests;
+
+mod seek;
+use seek::{InputScope, SeekInput};
+
+#[derive(Clone, PartialEq)]
+struct MediaInputFrame {
+    position: PhysicalPosition,
+    size: slint::PhysicalSize,
+    scale: f32,
+    slider: TileBounds,
+    clip: TileBounds,
+}
+
+impl MediaInputFrame {
+    fn capture(popup: &QuickSettings) -> Option<Self> {
+        let window = popup.window();
+        let scale = window.scale_factor();
+        let size = window.size();
+        let slider = popup.get_seek_bounds();
+        let clip = popup.get_seek_clip_bounds();
+        let valid_bounds = |bounds: &TileBounds| {
+            [
+                bounds.origin.x,
+                bounds.origin.y,
+                bounds.width,
+                bounds.height,
+            ]
+            .into_iter()
+            .all(f32::is_finite)
+                && bounds.width > 0.0
+                && bounds.height > 0.0
+        };
+        (window.is_visible()
+            && popup.get_seek_visible()
+            && scale.is_finite()
+            && scale > 0.0
+            && size.width > 0
+            && size.height > 0
+            && valid_bounds(&slider)
+            && valid_bounds(&clip))
+        .then(|| Self {
+            position: window.position(),
+            size,
+            scale,
+            slider,
+            clip,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct CapturedSeekInput {
+    presentation: Rc<()>,
+    authority: CapturedMediaSeek,
+    frame: MediaInputFrame,
+}
 
 impl TransientComponent for QuickSettings {
     fn motion(&self) -> PopoverMotion<'_> {
@@ -367,6 +423,16 @@ pub(crate) struct QuickSettingsController {
     media_attachment: Cell<Option<PopupMediaToken>>,
     media_attaching: Cell<bool>,
     presentation_epoch: RefCell<Rc<()>>,
+    // AX has no physical hold. Its latest frame still scopes trailing input
+    // after the leading command completes and clears the visual preview.
+    latest_seek_input: RefCell<Option<CapturedSeekInput>>,
+    #[cfg(any(windows, test))]
+    seek_input:
+        RefCell<SeekInput<CapturedSeekInput, (slint::winit_030::winit::event::DeviceId, u64)>>,
+    #[cfg(not(any(windows, test)))]
+    seek_input: RefCell<SeekInput<CapturedSeekInput>>,
+    #[cfg(any(windows, test))]
+    input_release_timer: slint::Timer,
     state: RefCell<AudioState>,
     mailbox: Arc<Mutex<Mailbox>>,
     watch: RefCell<Option<Box<dyn Send>>>,
@@ -392,6 +458,10 @@ impl QuickSettingsController {
             media_attachment: Cell::new(None),
             media_attaching: Cell::new(false),
             presentation_epoch: RefCell::new(Rc::new(())),
+            latest_seek_input: RefCell::default(),
+            seek_input: RefCell::default(),
+            #[cfg(any(windows, test))]
+            input_release_timer: slint::Timer::default(),
             state: RefCell::default(),
             mailbox: Arc::new(Mutex::default()),
             watch: RefCell::default(),
@@ -421,6 +491,48 @@ impl QuickSettingsController {
                 if controller.media_input_ready() && controller.presentation_is_current(&epoch) {
                     controller.fit();
                 }
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_seek_invalidated(move || {
+            if let Some(controller) = weak.upgrade() {
+                controller.cancel_seek_input();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_seek_geometry_changed(move || {
+            if let Some(controller) = weak.upgrade() {
+                controller.cancel_seek_if_geometry_changed(None, None);
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_seek_finished(move || {
+            if let Some(controller) = weak.upgrade() {
+                controller.clear_seek_preview();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_seek_released(move || {
+            if let Some(controller) = weak.upgrade() {
+                controller.clear_seek_preview();
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_seek_key_pressed(move |key| {
+            if let Some(controller) = weak.upgrade() {
+                let fresh = matches!(controller.seek_input.borrow().scope(), InputScope::Fresh);
+                let capture = fresh.then(|| controller.capture_seek_input()).flatten();
+                controller
+                    .seek_input
+                    .borrow_mut()
+                    .key_down(key.as_str(), capture);
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller.surface.on_media_seek_key_released(move |key| {
+            if let Some(controller) = weak.upgrade() {
+                controller.seek_input.borrow_mut().key_up(key.as_str());
+                controller.clear_seek_preview();
             }
         });
         let weak = Rc::downgrade(&controller);
@@ -474,6 +586,7 @@ impl QuickSettingsController {
             }
             slint::CloseRequestResponse::KeepWindowShown
         });
+        Self::install_media_input_observer(&controller);
         Ok(controller)
     }
 
@@ -559,7 +672,12 @@ impl QuickSettingsController {
 
     /// Root owns the source/visibility admission callback, not this constructor.
     pub(crate) fn request_media(&self, action: MediaAction, identity: &str) {
-        if self.media_input_ready()
+        let presentation = self.presentation_epoch.borrow().clone();
+        let attachment = self.media_attachment.get();
+        self.cancel_seek_input();
+        if self.presentation_is_current(&presentation)
+            && self.media_attachment.get() == attachment
+            && self.media_input_ready()
             && let Some(token) = self.media_attachment.get()
         {
             self.media.request_from_popup(token, action, identity);
@@ -571,6 +689,328 @@ impl QuickSettingsController {
             self.media.retry();
         }
     }
+
+    fn capture_seek_input(&self) -> Option<CapturedSeekInput> {
+        let frame = self.current_seek_frame()?;
+        let presentation = self.presentation_epoch.borrow().clone();
+        if !self.media_input_ready()
+            || !self.surface.get_seek_enabled()
+            || !self.surface.get_seek_visible()
+        {
+            return None;
+        }
+        let authority = self.media.capture_seek(self.media_attachment.get()?)?;
+        (self.presentation_is_current(&presentation)
+            && self.current_seek_frame().as_ref() == Some(&frame))
+        .then_some(CapturedSeekInput {
+            presentation,
+            authority,
+            frame,
+        })
+    }
+
+    fn seek_input_current(&self, scope: &CapturedSeekInput) -> bool {
+        self.presentation_is_current(&scope.presentation)
+            && self.current_seek_frame().as_ref() == Some(&scope.frame)
+            && self.media_input_ready()
+            && self.media.seek_scope_current(&scope.authority)
+            && self.presentation_is_current(&scope.presentation)
+            && self.current_seek_frame().as_ref() == Some(&scope.frame)
+    }
+
+    fn current_seek_frame(&self) -> Option<MediaInputFrame> {
+        self.is_open()
+            .then(|| MediaInputFrame::capture(&self.surface))
+            .flatten()
+    }
+
+    /// A reactive notification may describe a frame already read at capture.
+    /// Only differing actual facts retire input; this never mints a new scope.
+    fn cancel_seek_if_geometry_changed(
+        &self,
+        native_size: Option<slint::PhysicalSize>,
+        native_scale: Option<f32>,
+    ) {
+        let captured = match self.seek_input.borrow().scope() {
+            InputScope::Held(scope) => scope,
+            InputScope::Fresh => self.latest_seek_input.borrow().clone(),
+        };
+        let unchanged = captured.is_some_and(|scope| {
+            self.seek_input_current(&scope)
+                && native_size.is_none_or(|size| size == scope.frame.size)
+                && native_scale.is_none_or(|scale| scale == scope.frame.scale)
+        });
+        if !unchanged {
+            self.cancel_seek_input();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_media_geometry_changed(&self) {
+        self.cancel_seek_if_geometry_changed(None, None);
+    }
+
+    pub(crate) fn request_seek(&self, fraction: f32) {
+        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+            return;
+        }
+        let input = self.seek_input.borrow().scope();
+        let presentation = self.presentation_epoch.borrow().clone();
+        let scope = match input {
+            InputScope::Held(scope) => scope,
+            // Standard Slider changed is a genuine action, not a property
+            // observer. AX has no raw WindowEvent and needs no release.
+            InputScope::Fresh => self.capture_seek_input(),
+        };
+        let Some(scope) = scope.filter(|scope| self.seek_input_current(scope)) else {
+            if self.presentation_is_current(&presentation) {
+                self.cancel_seek_input();
+            }
+            return;
+        };
+        let Some(preview_time) = scope.authority.preview_time(fraction) else {
+            return;
+        };
+        self.latest_seek_input.replace(Some(scope.clone()));
+        self.surface.set_seek_preview_progress(fraction);
+        if !self.seek_input_current(&scope) {
+            if self.presentation_is_current(&scope.presentation) {
+                self.cancel_seek_input();
+            }
+            return;
+        }
+        self.surface.set_seek_preview_time(preview_time.into());
+        if !self.seek_input_current(&scope) {
+            if self.presentation_is_current(&scope.presentation) {
+                self.cancel_seek_input();
+            }
+            return;
+        }
+        self.surface.set_seek_preview_active(true);
+        if self.seek_input_current(&scope) {
+            self.surface.invoke_project_seek();
+        }
+        if self.seek_input_current(&scope) {
+            self.media.seek_from_popup(&scope.authority, fraction);
+        }
+        if !self.seek_input_current(&scope) && self.presentation_is_current(&scope.presentation) {
+            self.cancel_seek_input();
+        }
+    }
+
+    fn clear_seek_preview(&self) {
+        let presentation = self.presentation_epoch.borrow().clone();
+        self.surface.set_seek_preview_active(false);
+        if self.presentation_is_current(&presentation) {
+            self.surface.invoke_project_seek();
+        }
+    }
+
+    fn cancel_seek_input(&self) {
+        let presentation = self.presentation_epoch.borrow().clone();
+        self.seek_input.borrow_mut().cancel();
+        self.latest_seek_input.borrow_mut().take();
+        if let Some(token) = self.media_attachment.get() {
+            self.media.cancel_pending_seek(token);
+        }
+        if self.presentation_is_current(&presentation) {
+            self.clear_seek_preview();
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    fn media_pointer(&self, position: Option<slint::LogicalPosition>, pressed: bool) {
+        if !pressed {
+            self.seek_input.borrow_mut().pointer_up();
+            self.clear_seek_preview();
+            return;
+        }
+        let bounds = self.surface.get_seek_bounds();
+        let inside = self.seek_input.borrow().can_capture_pointer()
+            && self.surface.get_seek_visible()
+            && position.is_some_and(|position| {
+                position.x.is_finite()
+                    && position.y.is_finite()
+                    && bounds.origin.x.is_finite()
+                    && bounds.origin.y.is_finite()
+                    && bounds.width.is_finite()
+                    && bounds.height.is_finite()
+                    && bounds.width > 0.0
+                    && bounds.height > 0.0
+                    && position.x >= bounds.origin.x
+                    && position.x < bounds.origin.x + bounds.width
+                    && position.y >= bounds.origin.y
+                    && position.y < bounds.origin.y + bounds.height
+            });
+        let captured = inside.then(|| self.capture_seek_input()).flatten();
+        self.seek_input.borrow_mut().pointer_down(captured);
+    }
+
+    #[cfg(any(windows, test))]
+    fn media_touch(
+        &self,
+        device: slint::winit_030::winit::event::DeviceId,
+        id: u64,
+        phase: slint::winit_030::winit::event::TouchPhase,
+    ) -> bool {
+        use slint::winit_030::winit::event::TouchPhase;
+
+        let contact = (device, id);
+        let needs_finish = {
+            let mut input = self.seek_input.borrow_mut();
+            match phase {
+                TouchPhase::Started => {
+                    input.touch_start(contact);
+                    false
+                }
+                TouchPhase::Moved => {
+                    input.touch_move(contact);
+                    false
+                }
+                TouchPhase::Ended | TouchPhase::Cancelled => input.touch_end(contact),
+            }
+        };
+        self.cancel_seek_input();
+        needs_finish
+    }
+
+    #[cfg(any(windows, test))]
+    fn finish_input_release(&self) {
+        let finished = self.seek_input.borrow_mut().finish_releases();
+        if finished {
+            self.clear_seek_preview();
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    fn schedule_input_release(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        // Pinned winit processes its filter, buffered move and native release
+        // synchronously. Timers run at the following new_events boundary.
+        // Pending flags are revoked by fresh presses; an old timer cannot end
+        // their new hold. This timer performs no media observation or command.
+        self.input_release_timer
+            .start(slint::TimerMode::SingleShot, Duration::ZERO, move || {
+                if let Some(controller) = weak.upgrade() {
+                    controller.finish_input_release();
+                }
+            });
+    }
+
+    /// Software-backend fixture bridge: the same pre-dispatch classifier runs
+    /// immediately before a genuine native Slider pointer event.
+    #[cfg(test)]
+    pub(crate) fn observe_media_pointer(&self, position: slint::LogicalPosition, pressed: bool) {
+        self.media_pointer(Some(position), pressed);
+    }
+
+    /// Post-dispatch fixture marker for the production weak timer fallback.
+    #[cfg(test)]
+    pub(crate) fn finish_media_pointer_release(&self) {
+        self.finish_input_release();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_media_touch(
+        &self,
+        id: u64,
+        phase: slint::winit_030::winit::event::TouchPhase,
+    ) {
+        self.media_touch(slint::winit_030::winit::event::DeviceId::dummy(), id, phase);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn elapse_seek_throttle(&self, elapsed: Duration) {
+        self.media.elapse_seek_throttle(elapsed);
+    }
+
+    #[cfg(any(windows, test))]
+    fn install_media_input_observer(controller: &Rc<Self>) {
+        use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
+        use winit::event::{ElementState, MouseButton, WindowEvent};
+
+        let weak = Rc::downgrade(controller);
+        let mut cursor = None;
+        // This popup owns the backend's single filter slot. Always propagate:
+        // the standard widget remains the sole input/value implementation.
+        controller
+            .surface
+            .window()
+            .on_winit_window_event(move |window, event| {
+                if let Some(controller) = weak.upgrade() {
+                    match event {
+                        WindowEvent::CursorMoved { position, .. } => cursor = Some(*position),
+                        WindowEvent::MouseInput {
+                            state,
+                            button: MouseButton::Left,
+                            ..
+                        } => {
+                            let scale = f64::from(window.scale_factor());
+                            let logical = cursor.filter(|_| scale.is_finite() && scale > 0.0).map(
+                                |position| {
+                                    slint::LogicalPosition::new(
+                                        (position.x / scale) as f32,
+                                        (position.y / scale) as f32,
+                                    )
+                                },
+                            );
+                            controller.media_pointer(logical, *state == ElementState::Pressed);
+                            if *state == ElementState::Released {
+                                controller.schedule_input_release();
+                            }
+                        }
+                        WindowEvent::KeyboardInput { event, .. }
+                            if event.state == ElementState::Released =>
+                        {
+                            use slint::platform::Key;
+                            use winit::keyboard::{Key as NativeKey, NamedKey};
+                            let key = match &event.logical_key {
+                                NativeKey::Named(NamedKey::ArrowLeft) => Some(Key::LeftArrow),
+                                NativeKey::Named(NamedKey::ArrowRight) => Some(Key::RightArrow),
+                                NativeKey::Named(NamedKey::Home) => Some(Key::Home),
+                                NativeKey::Named(NamedKey::End) => Some(Key::End),
+                                _ => None,
+                            };
+                            if let Some(key) = key {
+                                let key = slint::SharedString::from(key);
+                                controller.seek_input.borrow_mut().key_up(key.as_str());
+                                controller.clear_seek_preview();
+                            }
+                        }
+                        WindowEvent::Focused(false) => controller.cancel_seek_input(),
+                        WindowEvent::Moved(_) => {
+                            // Position queries live native geometry, so an old
+                            // moved notification alone cannot revoke new input.
+                            controller.cancel_seek_if_geometry_changed(None, None);
+                        }
+                        WindowEvent::Resized(size) => {
+                            cursor = None;
+                            // Slint's cached size updates after this filter.
+                            controller.cancel_seek_if_geometry_changed(
+                                Some(slint::PhysicalSize::new(size.width, size.height)),
+                                None,
+                            );
+                        }
+                        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                            cursor = None;
+                            // Runtime scale also updates after this filter.
+                            controller
+                                .cancel_seek_if_geometry_changed(None, Some(*scale_factor as f32));
+                        }
+                        WindowEvent::Touch(touch)
+                            if controller.media_touch(touch.device_id, touch.id, touch.phase) =>
+                        {
+                            controller.schedule_input_release();
+                        }
+                        _ => {}
+                    }
+                }
+                EventResult::Propagate
+            });
+    }
+
+    #[cfg(not(any(windows, test)))]
+    fn install_media_input_observer(_controller: &Rc<Self>) {}
 
     #[cfg(test)]
     pub(crate) fn show(
@@ -670,6 +1110,10 @@ impl QuickSettingsController {
 
     fn hide_in(&self, epoch: Rc<()>) {
         self.presentation_epoch.replace(epoch.clone());
+        self.cancel_seek_input();
+        if !self.presentation_is_current(&epoch) {
+            return;
+        }
         self.media_attaching.set(false);
         if let Some(token) = self.media_attachment.take() {
             self.media.detach_popup(token);

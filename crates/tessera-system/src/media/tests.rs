@@ -26,6 +26,11 @@ fn session() -> MediaSession {
             max_seek_ticks: 900_000_000,
             last_updated_utc_ticks: Some(133_000_000_000_000_000),
         }),
+        seek: Ok(MediaSeekObservation {
+            revision: MediaObservationRevision::issue().unwrap(),
+            min_ticks: 0,
+            max_ticks: 900_000_000,
+        }),
         artwork: None,
         artwork_notice: None,
     }
@@ -48,6 +53,31 @@ fn issued_keys_are_distinct_and_counter_exhaustion_never_wraps() {
     assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
     let zero = AtomicU64::new(0);
     assert!(MediaSessionKey::issue_from(&zero).is_err());
+    assert_eq!(zero.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn observation_revisions_are_unique_and_exhaustion_never_reuses_authority() {
+    let revisions: Vec<_> = (0..256)
+        .map(|_| MediaObservationRevision::issue().unwrap())
+        .collect();
+    for (index, revision) in revisions.iter().enumerate() {
+        assert!(!revisions[..index].contains(revision));
+    }
+    let counter = AtomicU64::new(u64::MAX - 1);
+    let last = MediaObservationRevision::issue_from(&counter).unwrap();
+    assert_eq!(last.0.get(), u64::MAX - 1);
+    for _ in 0..2 {
+        assert_eq!(
+            MediaObservationRevision::issue_from(&counter)
+                .unwrap_err()
+                .kind,
+            MediaErrorKind::Other
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+    }
+    let zero = AtomicU64::new(0);
+    assert!(MediaObservationRevision::issue_from(&zero).is_err());
     assert_eq!(zero.load(Ordering::Relaxed), 0);
 }
 
@@ -159,6 +189,25 @@ fn timeline_failure_is_independent_of_metadata_artwork_and_transports() {
     original.timeline = Err(notice.clone());
     let bounded = original.bounded();
     assert_eq!(bounded.timeline, Err(notice));
+    assert_eq!(bounded.key, expected.key);
+    assert_eq!(bounded.title, expected.title);
+    assert_eq!(bounded.author, expected.author);
+    assert_eq!(bounded.playback, expected.playback);
+    assert_eq!(bounded.capabilities, expected.capabilities);
+    assert_eq!(bounded.seek, expected.seek);
+    assert_eq!(bounded.artwork, expected.artwork);
+    assert_eq!(bounded.artwork_notice, expected.artwork_notice);
+}
+
+#[test]
+fn seek_failure_is_independent_of_timeline_metadata_and_transport_capabilities() {
+    let mut original = session();
+    let expected = original.clone();
+    let notice = MediaError::new(MediaErrorKind::Unavailable, "Recorded seek failure");
+    original.seek = Err(notice.clone());
+    let bounded = original.bounded();
+    assert_eq!(bounded.seek, Err(notice));
+    assert_eq!(bounded.timeline, expected.timeline);
     assert_eq!(bounded.key, expected.key);
     assert_eq!(bounded.title, expected.title);
     assert_eq!(bounded.author, expected.author);

@@ -622,7 +622,7 @@ type ToolbarMediaObserver = Arc<dyn Fn(tessera_system::media::MediaEvent) + Send
 #[derive(Default)]
 struct ToolbarRecordingMedia {
     reads: AtomicUsize,
-    commands: Mutex<Vec<tessera_system::media::MediaCommand>>,
+    commands: Mutex<Vec<tessera_system::media::MediaRequest>>,
     pending_reads: Mutex<std::collections::VecDeque<tessera_system::media::MediaReadCompletion>>,
     pending_commands:
         Mutex<std::collections::VecDeque<tessera_system::media::MediaCommandCompletion>>,
@@ -650,7 +650,7 @@ impl tessera_system::media::MediaHost for ToolbarRecordingMedia {
 
     fn execute(
         &self,
-        command: tessera_system::media::MediaCommand,
+        command: tessera_system::media::MediaRequest,
         completion: tessera_system::media::MediaCommandCompletion,
     ) -> Result<(), tessera_system::media::MediaError> {
         self.commands.lock().push(command);
@@ -741,6 +741,10 @@ fn toolbar_media_snapshot() -> tessera_system::media::MediaSnapshot {
                 max_seek_ticks: 1_300_000_000,
                 last_updated_utc_ticks: Some(133_000_000_000_000_000),
             }),
+            seek: Err(tessera_system::media::MediaError::new(
+                tessera_system::media::MediaErrorKind::Unsupported,
+                "Seek not exposed by transport fixture",
+            )),
             artwork: None,
             artwork_notice: None,
         }),
@@ -846,18 +850,28 @@ fn toolbar_current_player_default_dock_off_observes_timeline_and_three_real_tran
                 MediaCommand {
                     expected_session: key,
                     action: MediaAction::Previous
-                },
+                }
+                .into(),
                 MediaCommand {
                     expected_session: key,
                     action: MediaAction::Toggle
-                },
+                }
+                .into(),
                 MediaCommand {
                     expected_session: key,
                     action: MediaAction::Next
-                },
+                }
+                .into(),
             ][..index + 1],
         );
-        assert_eq!(media.commands.lock()[index].action, action);
+        assert_eq!(
+            media.commands.lock()[index],
+            MediaCommand {
+                expected_session: key,
+                action
+            }
+            .into(),
+        );
         assert!(popup.get_media_view().busy);
         click_component(&popup, "Next track");
         assert_eq!(
@@ -1192,7 +1206,14 @@ fn toolbar_current_player_invalidation_session_switch_and_timeline_failure_keep_
         "watch failure is not a retry loop"
     );
     click_component(&popup, "Next track");
-    assert_eq!(media.commands.lock()[0].expected_session, replacement_key);
+    assert_eq!(
+        media.commands.lock()[0],
+        tessera_system::media::MediaCommand {
+            expected_session: replacement_key,
+            action: tessera_system::media::MediaAction::Next,
+        }
+        .into(),
+    );
     media.finish_command(&fixture);
     media.finish_read(&fixture, replacement);
     assert_eq!(media.commands.lock().len(), 1);
@@ -1359,7 +1380,14 @@ fn toolbar_current_player_media_factory_reentry_preserves_new_popup_without_old_
         let key = snapshot.current.as_ref().unwrap().key;
         media.finish_read(&fixture, snapshot.clone());
         click_component(&quick.component(), "Next track");
-        assert_eq!(media.commands.lock()[0].expected_session, key);
+        assert_eq!(
+            media.commands.lock()[0],
+            tessera_system::media::MediaCommand {
+                expected_session: key,
+                action: tessera_system::media::MediaAction::Next,
+            }
+            .into(),
+        );
         media.finish_command(&fixture);
         media.finish_read(&fixture, snapshot);
         assert!(quick.is_open() && quick.media_input_ready());
@@ -1489,4 +1517,743 @@ fn toolbar_current_player_retained_domain_does_not_retain_closed_root_caches_or_
         domain_weak.upgrade().is_none(),
         "cleanup does not leave a domain ownership cycle"
     );
+}
+
+fn toolbar_seek_snapshot() -> tessera_system::media::MediaSnapshot {
+    use tessera_system::media::{MediaObservationRevision, MediaSeekObservation};
+    let mut snapshot = toolbar_media_snapshot();
+    snapshot.current.as_mut().unwrap().seek = Ok(MediaSeekObservation {
+        revision: MediaObservationRevision::issue().unwrap(),
+        min_ticks: 100_000_000,
+        max_ticks: 1_300_000_000,
+    });
+    snapshot
+}
+
+fn toolbar_seek_midpoint_snapshot() -> tessera_system::media::MediaSnapshot {
+    let mut snapshot = toolbar_seek_snapshot();
+    snapshot
+        .current
+        .as_mut()
+        .unwrap()
+        .timeline
+        .as_mut()
+        .unwrap()
+        .position_ticks = 700_000_000;
+    snapshot
+}
+
+fn toolbar_seek_element(
+    popup: &crate::generated::QuickSettings,
+) -> i_slint_backend_testing::ElementHandle {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    ElementHandle::find_by_accessible_label(popup, "Media position")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Slider))
+        .expect("real current-player seek Slider")
+}
+
+// Only production raw observation and its post-dispatch fallback are adapted
+// for the software backend. Slider input uses the genuine Window event route.
+fn dispatch_toolbar_seek_pointer(
+    quick: &crate::quick_settings::QuickSettingsController,
+    position: slint::LogicalPosition,
+    pressed: bool,
+) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    quick.observe_media_pointer(position, pressed);
+    quick.component().window().dispatch_event(if pressed {
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        }
+    } else {
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        }
+    });
+    if !pressed {
+        quick.finish_media_pointer_release();
+    }
+}
+
+fn flush_toolbar_seek_timer(
+    fixture: &LauncherFixture,
+    quick: &crate::quick_settings::QuickSettingsController,
+) {
+    quick.elapse_seek_throttle(std::time::Duration::from_millis(200));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(250));
+    slint::platform::update_timers_and_animations();
+    fixture.dock.invoke_media_event_ready();
+}
+
+#[test]
+fn toolbar_current_player_genuine_ax_seek_captures_exact_raw_authority_and_waits_for_readback() {
+    use tessera_system::media::{MediaRequest, MediaSeekCommand};
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_seek_snapshot();
+    let session = snapshot.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    let expected = MediaRequest::Seek(MediaSeekCommand {
+        expected_session: session.key,
+        expected_revision: seek.revision,
+        observed_min_ticks: 100_000_000,
+        observed_max_ticks: 1_300_000_000,
+        position_ticks: 1_000_000_000,
+    });
+    media.finish_read(&fixture, snapshot.clone());
+    assert!(popup.get_seek_visible() && popup.get_seek_enabled());
+    toolbar_seek_element(&popup).set_accessible_value("0.75");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert_eq!(media.commands.lock().as_slice(), &[expected]);
+    assert_eq!(
+        popup.get_timeline_time().as_str(),
+        "0:30 / 2:00 · observed",
+        "requested position is not confirmed native progress",
+    );
+    media.finish_command(&fixture);
+    assert_eq!(media.pending_reads.lock().len(), 1);
+    media.finish_read(&fixture, snapshot);
+    assert_eq!(media.commands.lock().as_slice(), &[expected]);
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(!fixture.dock.get_media_view().enabled);
+}
+
+#[test]
+fn toolbar_current_player_held_seek_cannot_cross_same_key_revision_or_session_replacement() {
+    use tessera_system::media::{MediaEvent, MediaObservationRevision, MediaSessionKey};
+    for replace_session in [false, true] {
+        let (fixture, media) = toolbar_media_fixture(false);
+        click_component(&fixture.toolbar, "Open quick settings");
+        let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+        let popup = quick.component();
+        let snapshot = toolbar_seek_snapshot();
+        media.finish_read(&fixture, snapshot.clone());
+        let position = native_center(&toolbar_seek_element(&popup));
+        dispatch_toolbar_seek_pointer(&quick, position, true);
+        // A leading request is legitimate; its completion must not authorize
+        // the still-held gesture against a later native observation.
+        if !media.pending_commands.lock().is_empty() {
+            media.finish_command(&fixture);
+            media.finish_read(&fixture, snapshot.clone());
+        }
+        let accepted = media.commands.lock().len();
+        let mut replacement = snapshot;
+        let session = replacement.current.as_mut().unwrap();
+        if replace_session {
+            session.key = MediaSessionKey::issue().unwrap();
+        }
+        session.seek.as_mut().unwrap().revision = MediaObservationRevision::issue().unwrap();
+        // Keep title, range, timeline, and (in one case) session key identical:
+        // only opaque observation authority can distinguish this readback.
+        media.event(MediaEvent::SeekInvalidated);
+        fixture.dock.invoke_media_event_ready();
+        media.finish_read(&fixture, replacement.clone());
+        toolbar_seek_element(&popup).set_accessible_value("0.9");
+        dispatch_toolbar_seek_pointer(&quick, position, false);
+        flush_toolbar_seek_timer(&fixture, &quick);
+        assert_eq!(
+            media.commands.lock().len(),
+            accepted,
+            "held seek retargeted replacement authority; replace_session={replace_session}",
+        );
+        toolbar_seek_element(&popup).set_accessible_value("0.75");
+        flush_toolbar_seek_timer(&fixture, &quick);
+        let session = replacement.current.as_ref().unwrap();
+        let seek = session.seek.as_ref().unwrap();
+        assert_eq!(
+            media.commands.lock()[accepted],
+            tessera_system::media::MediaRequest::Seek(tessera_system::media::MediaSeekCommand {
+                expected_session: session.key,
+                expected_revision: seek.revision,
+                observed_min_ticks: 100_000_000,
+                observed_max_ticks: 1_300_000_000,
+                position_ticks: 1_000_000_000,
+            }),
+            "fresh AX input after release uses current native authority",
+        );
+        assert!(fixture.host.saves.lock().is_empty());
+    }
+}
+
+#[test]
+fn toolbar_current_player_held_seek_rejects_reopened_hidden_and_exclusive_root_sources() {
+    for retirement in ["reopen", "hidden toolbar", "exclusive popup"] {
+        let (fixture, media) = toolbar_media_fixture(false);
+        click_component(&fixture.toolbar, "Open quick settings");
+        let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+        let popup = quick.component();
+        let snapshot = toolbar_seek_snapshot();
+        media.finish_read(&fixture, snapshot.clone());
+        let position = native_center(&toolbar_seek_element(&popup));
+        dispatch_toolbar_seek_pointer(&quick, position, true);
+        if !media.pending_commands.lock().is_empty() {
+            media.finish_command(&fixture);
+            media.finish_read(&fixture, snapshot.clone());
+        }
+        let accepted = media.commands.lock().len();
+        match retirement {
+            "reopen" => {
+                quick.hide();
+                click_component(&fixture.toolbar, "Open quick settings");
+                media.finish_read(&fixture, snapshot);
+                assert!(quick.media_input_ready());
+                toolbar_seek_element(&popup).set_accessible_value("0.9");
+            }
+            "hidden toolbar" => {
+                fixture.toolbar.hide().unwrap();
+                assert!(quick.is_open(), "source retirement is not popup closure");
+                toolbar_seek_element(&popup).set_accessible_value("0.9");
+            }
+            "exclusive popup" => {
+                click_component(&fixture.toolbar, "Open network");
+                assert!(!quick.is_open());
+            }
+            _ => unreachable!(),
+        }
+        let reads = media.reads.load(Ordering::SeqCst);
+        dispatch_toolbar_seek_pointer(&quick, position, false);
+        flush_toolbar_seek_timer(&fixture, &quick);
+        assert_eq!(
+            media.commands.lock().len(),
+            accepted,
+            "held seek survived {retirement}",
+        );
+        assert_eq!(
+            media.reads.load(Ordering::SeqCst),
+            reads,
+            "stale seek release must not start a replacement observation",
+        );
+        assert!(fixture.host.saves.lock().is_empty());
+        assert!(!fixture.dock.get_media_view().enabled);
+    }
+}
+
+#[test]
+fn toolbar_current_player_genuine_ax_seek_coalesces_latest_on_200ms_timer_without_release() {
+    use tessera_system::media::{MediaRequest, MediaSeekCommand};
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_seek_snapshot();
+    let session = snapshot.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    let first = MediaSeekCommand {
+        expected_session: session.key,
+        expected_revision: seek.revision,
+        observed_min_ticks: 100_000_000,
+        observed_max_ticks: 1_300_000_000,
+        position_ticks: 700_000_000,
+    };
+    let latest = MediaSeekCommand {
+        position_ticks: 1_000_000_000,
+        ..first
+    };
+    media.finish_read(&fixture, snapshot.clone());
+    let slider = toolbar_seek_element(&popup);
+    slider.set_accessible_value("0.5");
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(first)]
+    );
+    slider.set_accessible_value("0.6");
+    slider.set_accessible_value("0.75");
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(first)],
+        "busy input records only one latest intent, not another native flight",
+    );
+    media.finish_command(&fixture);
+    assert_eq!(media.pending_reads.lock().len(), 1);
+    media.finish_read(&fixture, snapshot.clone());
+    quick.elapse_seek_throttle(std::time::Duration::from_millis(199));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(199));
+    slint::platform::update_timers_and_animations();
+    fixture.dock.invoke_media_event_ready();
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(first)],
+        "trailing intent must not issue before the source 200ms deadline",
+    );
+    quick.elapse_seek_throttle(std::time::Duration::from_millis(1));
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(1));
+    slint::platform::update_timers_and_animations();
+    fixture.dock.invoke_media_event_ready();
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(first), MediaRequest::Seek(latest)],
+        "timer dispatches only the latest intent without a pointer release",
+    );
+    media.finish_command(&fixture);
+    media.finish_read(&fixture, snapshot);
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert_eq!(
+        media.commands.lock().len(),
+        2,
+        "accepted requests never replay"
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_real_held_pointer_move_cannot_retarget_same_key_seek_revision() {
+    use slint::platform::WindowEvent;
+    use tessera_system::media::{
+        MediaEvent, MediaObservationRevision, MediaRequest, MediaSeekCommand,
+    };
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let mut snapshot = toolbar_seek_snapshot();
+    snapshot
+        .current
+        .as_mut()
+        .unwrap()
+        .timeline
+        .as_mut()
+        .unwrap()
+        .position_ticks = 700_000_000;
+    media.finish_read(&fixture, snapshot.clone());
+    assert!((popup.get_seek_progress() - 0.5).abs() < 0.0001);
+    let slider = toolbar_seek_element(&popup);
+    let position = native_center(&slider);
+    // At exactly half range, native Slider symmetry puts the actual thumb at
+    // its geometry center. Down captures authority without changing the value.
+    dispatch_toolbar_seek_pointer(&quick, position, true);
+    assert!(
+        media.commands.lock().is_empty(),
+        "pressing the unchanged native midpoint thumb must not seek",
+    );
+    let mut replacement = snapshot;
+    let session = replacement.current.as_mut().unwrap();
+    session.seek.as_mut().unwrap().revision = MediaObservationRevision::issue().unwrap();
+    media.event(MediaEvent::SeekInvalidated);
+    fixture.dock.invoke_media_event_ready();
+    media.finish_read(&fixture, replacement.clone());
+    let moved = slint::LogicalPosition::new(position.x + slider.size().width * 0.25, position.y);
+    popup
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: moved });
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "real old pointer movement cannot mint the refreshed same-key revision",
+    );
+    dispatch_toolbar_seek_pointer(&quick, moved, false);
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "real old pointer release cannot flush a seek against new authority",
+    );
+    toolbar_seek_element(&popup).set_accessible_value("0.75");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    let session = replacement.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(MediaSeekCommand {
+            expected_session: session.key,
+            expected_revision: seek.revision,
+            observed_min_ticks: 100_000_000,
+            observed_max_ticks: 1_300_000_000,
+            position_ticks: 1_000_000_000,
+        })],
+        "fresh AX input after the old hold ends uses refreshed authority",
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+}
+
+#[test]
+fn toolbar_current_player_buffered_pointer_move_at_release_cannot_refresh_seek_authority() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use tessera_system::media::{
+        MediaEvent, MediaObservationRevision, MediaRequest, MediaSeekCommand,
+    };
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_seek_midpoint_snapshot();
+    media.finish_read(&fixture, snapshot.clone());
+    assert!((popup.get_seek_progress() - 0.5).abs() < 0.0001);
+    let slider = toolbar_seek_element(&popup);
+    let position = native_center(&slider);
+    dispatch_toolbar_seek_pointer(&quick, position, true);
+    assert!(
+        media.commands.lock().is_empty(),
+        "pressing the unchanged native midpoint thumb must not seek",
+    );
+    let mut replacement = snapshot;
+    replacement
+        .current
+        .as_mut()
+        .unwrap()
+        .seek
+        .as_mut()
+        .unwrap()
+        .revision = MediaObservationRevision::issue().unwrap();
+    media.event(MediaEvent::SeekInvalidated);
+    fixture.dock.invoke_media_event_ready();
+    media.finish_read(&fixture, replacement.clone());
+    let reads = media.reads.load(Ordering::SeqCst);
+    let moved = slint::LogicalPosition::new(position.x + slider.size().width * 0.25, position.y);
+    // Winit runs the raw release filter before flushing its buffered move,
+    // then delivers native release. Do not finish the fence between them.
+    quick.observe_media_pointer(moved, false);
+    popup
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: moved });
+    assert!(
+        media.commands.lock().is_empty(),
+        "buffered movement after raw release must retain stale captured authority",
+    );
+    popup.window().dispatch_event(WindowEvent::PointerReleased {
+        position: moved,
+        button: PointerEventButton::Left,
+    });
+    quick.finish_media_pointer_release();
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "native release must not flush buffered movement against refreshed authority",
+    );
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        reads,
+        "buffered stale release must not start a replacement observation",
+    );
+    toolbar_seek_element(&popup).set_accessible_value("0.75");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    let session = replacement.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(MediaSeekCommand {
+            expected_session: session.key,
+            expected_revision: seek.revision,
+            observed_min_ticks: 100_000_000,
+            observed_max_ticks: 1_300_000_000,
+            position_ticks: 1_000_000_000,
+        })],
+        "fresh AX input only after native release uses refreshed authority",
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(!fixture.dock.get_media_view().enabled);
+}
+
+#[test]
+fn toolbar_current_player_touch_contact_promotion_cannot_admit_seek_while_another_contact_is_held()
+{
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use slint::winit_030::winit::event::TouchPhase;
+    use tessera_system::media::{
+        MediaEvent, MediaObservationRevision, MediaRequest, MediaSeekCommand,
+    };
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_seek_midpoint_snapshot();
+    media.finish_read(&fixture, snapshot.clone());
+    assert!((popup.get_seek_progress() - 0.5).abs() < 0.0001);
+    let slider = toolbar_seek_element(&popup);
+    let position = native_center(&slider);
+    // Adapt Slint's pinned touch-to-mouse synthesis, not a fresh mouse down:
+    // first contact presses; second contact releases the primary grab.
+    quick.observe_media_touch(11, TouchPhase::Started);
+    popup.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    assert!(
+        media.commands.lock().is_empty(),
+        "touching the unchanged native midpoint thumb must not seek",
+    );
+    quick.observe_media_touch(22, TouchPhase::Started);
+    popup.window().dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+    let mut replacement = snapshot;
+    replacement
+        .current
+        .as_mut()
+        .unwrap()
+        .seek
+        .as_mut()
+        .unwrap()
+        .revision = MediaObservationRevision::issue().unwrap();
+    media.event(MediaEvent::SeekInvalidated);
+    fixture.dock.invoke_media_event_ready();
+    media.finish_read(&fixture, replacement.clone());
+    let reads = media.reads.load(Ordering::SeqCst);
+    // Ending the second contact promotes the still-held first contact
+    // with a native press, not a new raw contact or mouse authority capture.
+    quick.observe_media_touch(22, TouchPhase::Ended);
+    popup.window().dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    quick.finish_media_pointer_release();
+    let moved = slint::LogicalPosition::new(position.x + slider.size().width * 0.25, position.y);
+    quick.observe_media_touch(11, TouchPhase::Moved);
+    popup
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: moved });
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "promoted contact movement must not mint refreshed seek authority",
+    );
+    toolbar_seek_element(&popup).set_accessible_value("0.9");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "AX input must not become fresh while the first contact remains held",
+    );
+    // Unknown/duplicate terminal IDs have no native synthesized event.
+    // Their post-dispatch fallback must not retire the real remaining ID.
+    for (id, phase) in [(999, TouchPhase::Cancelled), (22, TouchPhase::Ended)] {
+        quick.observe_media_touch(id, phase);
+        quick.finish_media_pointer_release();
+        toolbar_seek_element(&popup).set_accessible_value("0.8");
+        flush_toolbar_seek_timer(&fixture, &quick);
+        assert!(
+            media.commands.lock().is_empty(),
+            "unknown or duplicate touch end must not clear contact 11; id={id}",
+        );
+    }
+    quick.observe_media_touch(11, TouchPhase::Ended);
+    toolbar_seek_element(&popup).set_accessible_value("0.9");
+    assert!(
+        media.commands.lock().is_empty(),
+        "all contacts ended is not fresh authority before native terminal dispatch",
+    );
+    popup.window().dispatch_event(WindowEvent::PointerReleased {
+        position: moved,
+        button: PointerEventButton::Left,
+    });
+    quick.finish_media_pointer_release();
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "touch release must not flush a rejected seek intent",
+    );
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        reads,
+        "rejected touch input must not start a replacement observation",
+    );
+    toolbar_seek_element(&popup).set_accessible_value("0.75");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    let session = replacement.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(MediaSeekCommand {
+            expected_session: session.key,
+            expected_revision: seek.revision,
+            observed_min_ticks: 100_000_000,
+            observed_max_ticks: 1_300_000_000,
+            position_ticks: 1_000_000_000,
+        })],
+        "fresh AX input after all contacts and terminal dispatch uses current authority",
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(!fixture.dock.get_media_view().enabled);
+}
+
+#[test]
+fn toolbar_current_player_actual_seek_popup_resize_cancels_latest_ax_without_replaying_accepted_seek()
+ {
+    use tessera_system::media::{MediaRequest, MediaSeekCommand};
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_seek_snapshot();
+    let session = snapshot.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    let first = MediaRequest::Seek(MediaSeekCommand {
+        expected_session: session.key,
+        expected_revision: seek.revision,
+        observed_min_ticks: seek.min_ticks,
+        observed_max_ticks: seek.max_ticks,
+        position_ticks: 700_000_000,
+    });
+    media.finish_read(&fixture, snapshot.clone());
+    let slider = toolbar_seek_element(&popup);
+    let original_position = popup.window().position();
+    let original_size = popup.window().size();
+    let original_scale = popup.window().scale_factor();
+    let original_bounds = (slider.absolute_position(), slider.size());
+    slider.set_accessible_value("0.5");
+    slider.set_accessible_value("0.75");
+    assert_eq!(media.commands.lock().as_slice(), &[first]);
+    assert_eq!(media.pending_commands.lock().len(), 1);
+    let reads = media.reads.load(Ordering::SeqCst);
+
+    assert!(original_size.width > 40);
+    let resized_size = slint::PhysicalSize::new(original_size.width - 40, original_size.height);
+    // TestingWindow::set_size dispatches genuine WindowEvent::Resized to Slint
+    // and updates the backend's physical size; set_position is unsupported.
+    popup.window().set_size(resized_size);
+    assert_eq!(popup.window().size(), resized_size);
+    assert_ne!(popup.window().size(), original_size);
+    assert_eq!(popup.window().position(), original_position);
+    assert_eq!(popup.window().scale_factor(), original_scale);
+    assert_ne!(
+        (slider.absolute_position(), slider.size()),
+        original_bounds,
+        "the supported native resize must change measured Slider geometry before cancellation",
+    );
+    // Adapt native Resized classification only after the real frame changed.
+    quick.observe_media_geometry_changed();
+    assert!(quick.is_open() && quick.media_input_ready());
+    assert_eq!(media.pending_commands.lock().len(), 1);
+    assert_eq!(media.commands.lock().as_slice(), &[first]);
+    assert!(media.pending_reads.lock().is_empty());
+    assert_eq!(media.reads.load(Ordering::SeqCst), reads);
+
+    media.finish_command(&fixture);
+    assert_eq!(media.pending_reads.lock().len(), 1);
+    media.finish_read(&fixture, snapshot);
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[first],
+        "actual popup resize cancels only unsubmitted latest AX input",
+    );
+    assert!(media.pending_commands.lock().is_empty());
+    assert_eq!(popup.get_timeline_time().as_str(), "0:30 / 2:00 · observed");
+    let reads = media.reads.load(Ordering::SeqCst);
+    // A later fit may restore the old frame; cancellation must stay a tombstone.
+    popup.window().set_size(original_size);
+    assert_eq!(popup.window().size(), original_size);
+    assert_eq!(popup.window().position(), original_position);
+    assert_eq!(popup.window().scale_factor(), original_scale);
+    assert_eq!(
+        (slider.absolute_position(), slider.size()),
+        original_bounds,
+        "restore the actual captured Window and Slider frame before observing geometry",
+    );
+    quick.observe_media_geometry_changed();
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert_eq!(popup.window().position(), original_position);
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[first],
+        "returning to the captured frame cannot resurrect pending input or replay accepted work",
+    );
+    assert_eq!(media.reads.load(Ordering::SeqCst), reads);
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(!fixture.dock.get_media_view().enabled);
+}
+
+#[test]
+fn toolbar_current_player_actual_readback_layout_change_cancels_held_pointer_with_same_authority() {
+    use slint::platform::WindowEvent;
+    use tessera_system::media::{MediaEvent, MediaRequest, MediaSeekCommand};
+    let (fixture, media) = toolbar_media_fixture(false);
+    click_component(&fixture.toolbar, "Open quick settings");
+    let quick = fixture.controller.quick_settings.borrow().clone().unwrap();
+    let popup = quick.component();
+    let snapshot = toolbar_seek_midpoint_snapshot();
+    media.finish_read(&fixture, snapshot.clone());
+    assert!(popup.get_seek_visible() && popup.get_seek_enabled());
+    assert!((popup.get_seek_progress() - 0.5).abs() < 0.0001);
+    let slider = toolbar_seek_element(&popup);
+    let original_bounds = (slider.absolute_position(), slider.size());
+    let original_size = popup.window().size();
+    let position = native_center(&slider);
+    // The unchanged native midpoint thumb captures input without a leading seek.
+    dispatch_toolbar_seek_pointer(&quick, position, true);
+    assert!(
+        media.commands.lock().is_empty(),
+        "unchanged midpoint down must not submit a native seek",
+    );
+
+    let mut replacement = snapshot.clone();
+    replacement.current.as_mut().unwrap().title =
+        "Measured layout title ".repeat(6).trim_end().to_owned();
+    let original_session = snapshot.current.as_ref().unwrap();
+    let replacement_session = replacement.current.as_ref().unwrap();
+    assert_eq!(replacement_session.key, original_session.key);
+    assert_eq!(replacement_session.seek, original_session.seek);
+    assert_eq!(replacement_session.timeline, original_session.timeline);
+    let reads = media.reads.load(Ordering::SeqCst);
+    // Ordinary Changed/read feedback changes measured metadata, not authority.
+    media.event(MediaEvent::Changed);
+    fixture.dock.invoke_media_event_ready();
+    assert_eq!(media.reads.load(Ordering::SeqCst), reads + 1);
+    media.finish_read(&fixture, replacement.clone());
+    let current_slider = toolbar_seek_element(&popup);
+    assert_ne!(
+        (current_slider.absolute_position(), current_slider.size()),
+        original_bounds,
+        "actual native Slider bounds must move after measured metadata wraps",
+    );
+    assert_ne!(
+        popup.window().size().height,
+        original_size.height,
+        "production projection must refit the real popup height",
+    );
+    assert!(popup.get_media_view().current_present);
+    assert_eq!(
+        popup.get_media_view().title.as_str(),
+        replacement_session.title.as_str(),
+        "successful host read must project the metadata that changed actual layout",
+    );
+    assert!(quick.is_open() && quick.media_input_ready());
+    assert!(popup.get_seek_visible() && popup.get_seek_enabled());
+    assert!((popup.get_seek_progress() - 0.5).abs() < 0.0001);
+    let reads = media.reads.load(Ordering::SeqCst);
+    let moved = slint::LogicalPosition::new(position.x + slider.size().width * 0.25, position.y);
+    popup
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: moved });
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "genuine held movement cannot retarget a changed frame even with identical native authority",
+    );
+    current_slider.set_accessible_value("0.9");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "AX cannot mint fresh authority while the canceled pointer remains held",
+    );
+    dispatch_toolbar_seek_pointer(&quick, moved, false);
+    flush_toolbar_seek_timer(&fixture, &quick);
+    assert!(
+        media.commands.lock().is_empty(),
+        "native release cannot flush input canceled by an actual layout change",
+    );
+    assert_eq!(
+        media.reads.load(Ordering::SeqCst),
+        reads,
+        "rejected old-frame input must not start native replacement reads",
+    );
+    toolbar_seek_element(&popup).set_accessible_value("0.75");
+    flush_toolbar_seek_timer(&fixture, &quick);
+    let session = replacement.current.as_ref().unwrap();
+    let seek = session.seek.as_ref().unwrap();
+    assert_eq!(
+        media.commands.lock().as_slice(),
+        &[MediaRequest::Seek(MediaSeekCommand {
+            expected_session: session.key,
+            expected_revision: seek.revision,
+            observed_min_ticks: seek.min_ticks,
+            observed_max_ticks: seek.max_ticks,
+            position_ticks: 1_000_000_000,
+        })],
+        "fresh AX after release captures the valid current frame and unchanged typed authority",
+    );
+    assert!(fixture.host.saves.lock().is_empty());
+    assert!(!fixture.dock.get_media_view().enabled);
 }

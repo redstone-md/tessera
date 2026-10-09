@@ -22,8 +22,8 @@ use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::{DesktopHost, PanelPreferences, PanelSnapshot, SystemAction};
 use tessera_system::media::{
     MediaAction as HostAction, MediaCapabilities, MediaCommand, MediaCommandCompletion, MediaError,
-    MediaErrorKind, MediaEvent, MediaHost, MediaPlayback, MediaReadCompletion, MediaSession,
-    MediaSessionKey, MediaSnapshot,
+    MediaErrorKind, MediaEvent, MediaHost, MediaPlayback, MediaReadCompletion, MediaRequest,
+    MediaSession, MediaSessionKey, MediaSnapshot,
 };
 
 const PREVIOUS: &str = "Previous track";
@@ -754,7 +754,7 @@ type MediaChangedCallback = Arc<dyn Fn(MediaEvent) + Send + Sync>;
 // command busy until its mailbox is processed. No native provider is acquired.
 struct RecordingMedia {
     observation: Mutex<Result<MediaSnapshot, MediaError>>,
-    commands: Mutex<Vec<MediaCommand>>,
+    commands: Mutex<Vec<MediaRequest>>,
     reads: AtomicUsize,
     changed: Mutex<Option<MediaChangedCallback>>,
 }
@@ -769,7 +769,7 @@ impl MediaHost for RecordingMedia {
 
     fn execute(
         &self,
-        command: MediaCommand,
+        command: MediaRequest,
         completion: MediaCommandCompletion,
     ) -> Result<(), MediaError> {
         self.commands.lock().push(command);
@@ -838,6 +838,10 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
             MediaErrorKind::Unavailable,
             "Timeline not observed",
         )),
+        seek: Err(MediaError::new(
+            MediaErrorKind::Unsupported,
+            "Seek not exposed by transport fixture",
+        )),
     };
     let media = Arc::new(RecordingMedia {
         observation: Mutex::new(Ok(MediaSnapshot {
@@ -878,10 +882,13 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
     fixture.pointer(PREVIOUS, PointerEventButton::Left);
     assert_eq!(
         *media.commands.lock(),
-        vec![MediaCommand {
-            expected_session: key,
-            action: HostAction::Previous,
-        }]
+        vec![
+            MediaCommand {
+                expected_session: key,
+                action: HostAction::Previous,
+            }
+            .into()
+        ]
     );
     assert!(fixture.dock.get_media_view().busy);
     fixture.render(360, 72, 1.0);
@@ -918,15 +925,18 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
         MediaCommand {
             expected_session: key,
             action: HostAction::Previous,
-        },
+        }
+        .into(),
         MediaCommand {
             expected_session: key,
             action: HostAction::Toggle,
-        },
+        }
+        .into(),
         MediaCommand {
             expected_session: key,
             action: HostAction::Next,
-        },
+        }
+        .into(),
     ];
     assert_eq!(*media.commands.lock(), expected);
 
@@ -1020,10 +1030,13 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
     fixture.render(360, 72, 1.0);
     fixture.pointer("Play", PointerEventButton::Left);
     let mut commands = expected.clone();
-    commands.push(MediaCommand {
-        expected_session: key,
-        action: HostAction::Toggle,
-    });
+    commands.push(
+        MediaCommand {
+            expected_session: key,
+            action: HostAction::Toggle,
+        }
+        .into(),
+    );
     assert_eq!(*media.commands.lock(), commands);
     controller.process_events();
     controller.process_events();
@@ -1049,10 +1062,13 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
         "held Space never commands the replacement"
     );
     fixture.element("Play").invoke_accessible_default_action();
-    commands.push(MediaCommand {
-        expected_session: replacement_key,
-        action: HostAction::Toggle,
-    });
+    commands.push(
+        MediaCommand {
+            expected_session: replacement_key,
+            action: HostAction::Toggle,
+        }
+        .into(),
+    );
     assert_eq!(
         *media.commands.lock(),
         commands,
@@ -1117,10 +1133,13 @@ fn dock_media_native_inputs_record_exact_production_controller_session_commands(
         "held pointer cannot cross module generation"
     );
     fixture.element("Play").invoke_accessible_default_action();
-    commands.push(MediaCommand {
-        expected_session: replacement_key,
-        action: HostAction::Toggle,
-    });
+    commands.push(
+        MediaCommand {
+            expected_session: replacement_key,
+            action: HostAction::Toggle,
+        }
+        .into(),
+    );
     assert_eq!(
         *media.commands.lock(),
         commands,

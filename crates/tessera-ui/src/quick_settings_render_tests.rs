@@ -21,6 +21,10 @@ enum Request {
     Released(AudioRoute, f32),
     Mute(AudioRoute, bool),
     Media(MediaAction, String),
+    Seek(f32),
+    SeekReleased,
+    SeekKeyPressed(String),
+    SeekKeyReleased(String),
     Settings,
     Refresh,
     Dismiss,
@@ -71,7 +75,39 @@ impl Fixture {
                 .borrow_mut()
                 .push(Request::Media(action, identity.to_string()));
         });
+        let recorded = requests.clone();
+        let weak = popup.as_weak();
+        popup.on_media_seek_requested(move |progress| {
+            recorded.borrow_mut().push(Request::Seek(progress));
+            if let Some(popup) = weak.upgrade() {
+                popup.set_seek_preview_progress(progress);
+                popup.set_seek_preview_active(true);
+                popup.invoke_project_seek();
+            }
+        });
+        let recorded = requests.clone();
+        let weak = popup.as_weak();
+        popup.on_media_seek_released(move || {
+            recorded.borrow_mut().push(Request::SeekReleased);
+            if let Some(popup) = weak.upgrade() {
+                popup.set_seek_preview_active(false);
+                popup.invoke_project_seek();
+            }
+        });
+        let recorded = requests.clone();
+        popup.on_media_seek_key_pressed(move |key| {
+            recorded
+                .borrow_mut()
+                .push(Request::SeekKeyPressed(key.to_string()));
+        });
+        let recorded = requests.clone();
+        popup.on_media_seek_key_released(move |key| {
+            recorded
+                .borrow_mut()
+                .push(Request::SeekKeyReleased(key.to_string()));
+        });
         configure(&popup);
+        popup.invoke_project_seek();
         popup.show().unwrap();
         let fixture = Self {
             window,
@@ -115,6 +151,9 @@ impl Fixture {
     }
 
     fn render_fit(&self) -> Vec<Rgb8Pixel> {
+        // Mirror the production projection-batch boundary before measuring or
+        // reading AX. Native value assignments never update observed facts.
+        self.popup.invoke_project_seek();
         self.render(
             self.popup.get_preferred_popup_width().ceil() as u32,
             self.popup.get_preferred_popup_height().ceil() as u32,
@@ -832,4 +871,333 @@ fn quick_settings_media_observation_failure_exposes_existing_refresh_without_tra
     refresh.invoke_accessible_default_action();
     assert_eq!(fixture.take_requests(), [Request::Refresh]);
     assert_eq!(fixture.element("Play").accessible_enabled(), Some(false));
+}
+
+#[test]
+fn quick_settings_seek_projection_is_silent_and_unsupported_slider_stays_native() {
+    let fixture = Fixture::player();
+    let slider = fixture.element("Media position");
+    assert_eq!(slider.accessible_role(), Some(AccessibleRole::Slider));
+    assert_eq!(slider.accessible_enabled(), Some(false));
+    assert_eq!(slider.accessible_value_minimum(), Some(0.0));
+    assert_eq!(slider.accessible_value_maximum(), Some(1.0));
+    assert_eq!(slider.accessible_value_step(), Some(0.01));
+    fixture.popup.set_seek_progress(0.3);
+    fixture.popup.set_seek_notice("Seeking unsupported".into());
+    fixture.render_fit();
+    assert_eq!(slider.accessible_value().unwrap().as_str(), "0.3");
+    assert!(fixture.has_element("Seeking unsupported"));
+    assert!(fixture.has_element("Timeline unavailable"));
+    slider.set_accessible_value("0.7");
+    assert_eq!(
+        slider.accessible_value().unwrap().as_str(),
+        "0.7",
+        "standard Slider AX can update its local value even while disabled"
+    );
+    assert_eq!(
+        fixture.popup.get_seek_progress(),
+        0.3,
+        "native AX must not rewrite the observed position"
+    );
+    assert!(!fixture.popup.get_seek_preview_active());
+    fixture.click(&slider);
+    fixture.key_press(Key::End);
+    fixture.key_release(Key::End);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "unsupported seeks never emit requests"
+    );
+    for label in ["Previous track", "Play", "Next track"] {
+        assert_eq!(fixture.element(label).accessible_enabled(), Some(true));
+    }
+
+    fixture.popup.set_seek_enabled(true);
+    fixture.popup.set_seek_progress(0.4);
+    fixture.popup.set_seek_preview_progress(0.6);
+    fixture.popup.set_seek_preview_active(true);
+    fixture.render_fit();
+    assert_eq!(slider.accessible_enabled(), Some(true));
+    assert_eq!(slider.accessible_value().unwrap().as_str(), "0.6");
+    fixture.popup.set_seek_progress(0.5);
+    fixture.render_fit();
+    assert_eq!(
+        slider.accessible_value().unwrap().as_str(),
+        "0.6",
+        "observation does not overwrite local preview"
+    );
+    fixture.popup.set_seek_preview_active(false);
+    fixture.render_fit();
+    assert_eq!(slider.accessible_value().unwrap().as_str(), "0.5");
+    assert!(
+        fixture.take_requests().is_empty(),
+        "projection is not a native changed action"
+    );
+    let invalidations = Rc::new(RefCell::new(0));
+    let recorded = invalidations.clone();
+    fixture
+        .popup
+        .on_media_seek_invalidated(move || *recorded.borrow_mut() += 1);
+    let recorded = invalidations.clone();
+    fixture
+        .popup
+        .on_media_seek_geometry_changed(move || *recorded.borrow_mut() += 1);
+    let mut busy = current_player();
+    busy.busy = true;
+    fixture.popup.set_media_view(busy);
+    fixture.render_fit();
+    assert_eq!(
+        slider.accessible_enabled(),
+        Some(true),
+        "transport busy does not disable seeking"
+    );
+    assert_eq!(
+        *invalidations.borrow(),
+        0,
+        "busy-only projection must not invalidate the seek"
+    );
+    assert_eq!(fixture.element("Play").accessible_enabled(), Some(false));
+    assert!(fixture.take_requests().is_empty());
+}
+
+#[test]
+fn quick_settings_seek_genuine_ax_and_keys_capture_before_native_changed_without_release_command() {
+    let fixture = Fixture::player();
+    fixture.popup.set_seek_enabled(true);
+    fixture.popup.set_seek_progress(0.4);
+    fixture.render_fit();
+    let slider = fixture.element("Media position");
+    slider.set_accessible_value("0.7");
+    assert_eq!(fixture.take_requests(), [Request::Seek(0.7)]);
+    slider.set_accessible_value("0.7");
+    slider.set_accessible_value("not a number");
+    assert!(
+        fixture.take_requests().is_empty(),
+        "native AX ignores unchanged and invalid values"
+    );
+    slider.set_accessible_value("2");
+    assert_eq!(fixture.take_requests(), [Request::Seek(1.0)]);
+    slider.set_accessible_value("-1");
+    assert_eq!(fixture.take_requests(), [Request::Seek(0.0)]);
+
+    // Real pointer dispatch also exercises the unchanged native mechanics;
+    // command-scope capture belongs to the controller adapter's fixtures.
+    let start = Fixture::point(&slider, 0.7);
+    let end = Fixture::point(&slider, 0.85);
+    fixture.press(start);
+    fixture
+        .window
+        .window()
+        .dispatch_event(WindowEvent::PointerMoved { position: end });
+    let requests = fixture.take_requests();
+    assert!(!requests.is_empty());
+    assert!(
+        requests.iter().all(|request| matches!(request,
+        Request::Seek(progress) if (0.0..=1.0).contains(progress))),
+        "native pointer changed is normalized, with no premature release: {requests:?}"
+    );
+    fixture.release(end);
+    assert_eq!(
+        fixture.take_requests(),
+        [Request::SeekReleased],
+        "pointer release never duplicates the command"
+    );
+    fixture.popup.set_seek_preview_active(false);
+    fixture.popup.set_seek_progress(0.4);
+    fixture.popup.invoke_project_seek();
+    fixture.key_press(Key::RightArrow);
+    let requests = fixture.take_requests();
+    assert!(
+        matches!(&requests[..],
+        [Request::SeekKeyPressed(key), Request::Seek(progress)]
+            if key == &String::from(slint::SharedString::from(Key::RightArrow))
+                && (*progress - 0.41).abs() < 0.0001),
+        "capture must precede the native Slider changed callback: {requests:?}"
+    );
+    fixture.key_release(Key::RightArrow);
+    assert_eq!(
+        fixture.take_requests(),
+        [
+            Request::SeekKeyReleased(slint::SharedString::from(Key::RightArrow).to_string()),
+            Request::SeekReleased,
+        ],
+        "release is preview lifecycle, never an additional seek"
+    );
+    for (key, progress) in [(Key::Home, 0.0), (Key::End, 1.0)] {
+        fixture.key_press(key);
+        assert_eq!(
+            fixture.take_requests(),
+            [
+                Request::SeekKeyPressed(slint::SharedString::from(key).to_string()),
+                Request::Seek(progress),
+            ]
+        );
+        fixture.key_release(key);
+        assert_eq!(
+            fixture.take_requests(),
+            [
+                Request::SeekKeyReleased(slint::SharedString::from(key).to_string()),
+                Request::SeekReleased,
+            ]
+        );
+    }
+    fixture.click(&fixture.element("Output volume"));
+    fixture.take_requests();
+    fixture.key_press(Key::RightArrow);
+    assert!(
+        fixture
+            .take_requests()
+            .iter()
+            .all(|request| matches!(request, Request::Volume(..))),
+        "audio focus must never capture a media key"
+    );
+    fixture.key_release(Key::RightArrow);
+    fixture.take_requests();
+    fixture.key_press(Key::Escape);
+    fixture.key_release(Key::Escape);
+    assert_eq!(fixture.take_requests(), [Request::Dismiss]);
+}
+
+#[test]
+fn quick_settings_seek_bounds_match_actual_widget_and_real_scroll_clip() {
+    let fixture = Fixture::player();
+    fixture.popup.set_seek_enabled(true);
+    fixture
+        .popup
+        .set_seek_notice("Seek failed independently".into());
+    fixture.render_fit();
+    let slider = fixture.element("Media position");
+    let bounds = fixture.popup.get_seek_bounds();
+    assert_eq!(bounds.origin.x, slider.absolute_position().x);
+    assert_eq!(bounds.origin.y, slider.absolute_position().y);
+    assert_eq!(bounds.width, slider.size().width);
+    assert_eq!(bounds.height, slider.size().height);
+    assert!(bounds.width > 100.0 && bounds.height == 24.0);
+    assert!(fixture.popup.get_seek_visible());
+    let clip = fixture.popup.get_seek_clip_bounds();
+    assert!(clip.origin.x.is_finite() && clip.origin.y.is_finite());
+    assert!(clip.width.is_finite() && clip.width > 0.0);
+    assert!(clip.height.is_finite() && clip.height > 0.0);
+    assert!(bounds.origin.x >= clip.origin.x);
+    assert!(bounds.origin.y >= clip.origin.y);
+    assert!(bounds.origin.x + bounds.width <= clip.origin.x + clip.width);
+    assert!(bounds.origin.y + bounds.height <= clip.origin.y + clip.height);
+    assert!(fixture.has_element("Seek failed independently"));
+    assert!(fixture.has_element("Timeline unavailable"));
+    assert!(fixture.has_element("App Settings"));
+    assert_eq!(fixture.element("Play").accessible_enabled(), Some(true));
+    let geometry_changes = Rc::new(RefCell::new(0));
+    let recorded = geometry_changes.clone();
+    fixture
+        .popup
+        .on_media_seek_geometry_changed(move || *recorded.borrow_mut() += 1);
+    let native_invalidations = Rc::new(RefCell::new(0));
+    let recorded = native_invalidations.clone();
+    fixture
+        .popup
+        .on_media_seek_invalidated(move || *recorded.borrow_mut() += 1);
+    fixture.render(180, 80);
+    assert!(
+        !fixture.popup.get_seek_visible(),
+        "off-scroll-viewport widget cannot authorize pointer input"
+    );
+    fixture.render_fit();
+    assert!(fixture.popup.get_seek_visible());
+    assert!(
+        *geometry_changes.borrow() > 0,
+        "actual widget resizing/clipping emits a geometry frame recheck"
+    );
+    assert_eq!(
+        *native_invalidations.borrow(),
+        0,
+        "geometry notifications do not revoke native authority unconditionally"
+    );
+    let geometry_before_cancel = *geometry_changes.borrow();
+    fixture.popup.invoke_cancel_media_input();
+    assert_eq!(
+        *native_invalidations.borrow(),
+        1,
+        "explicit input cancellation still revokes native authority"
+    );
+    assert_eq!(*geometry_changes.borrow(), geometry_before_cancel);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "geometry and notices never seek"
+    );
+}
+
+#[test]
+fn quick_settings_seek_preview_time_is_separate_silent_and_geometry_stable() {
+    let fixture = Fixture::player();
+    fixture.popup.set_seek_enabled(true);
+    fixture.popup.set_timeline_available(true);
+    fixture.popup.set_timeline_time("0:30 / 3:00".into());
+    fixture.popup.set_timeline_progress(1.0 / 6.0);
+    fixture.popup.set_seek_progress(1.0 / 6.0);
+    fixture.render_fit();
+    let bounds = fixture.popup.get_seek_bounds();
+    let height = fixture.popup.get_preferred_popup_height();
+    let invalidations = Rc::new(RefCell::new(0));
+    let recorded = invalidations.clone();
+    fixture
+        .popup
+        .on_media_seek_invalidated(move || *recorded.borrow_mut() += 1);
+    let recorded = invalidations.clone();
+    fixture
+        .popup
+        .on_media_seek_geometry_changed(move || *recorded.borrow_mut() += 1);
+
+    fixture.popup.set_seek_preview_progress(0.75);
+    fixture.popup.set_seek_preview_time("2:15 / 3:00".into());
+    fixture.popup.set_seek_preview_active(true);
+    fixture.render_fit();
+    assert!(fixture.has_element("Preview position: 2:15 / 3:00"));
+    assert!(fixture.has_element("Observed position: 0:30 / 3:00"));
+    assert_eq!(fixture.popup.get_timeline_time().as_str(), "0:30 / 3:00");
+    assert_eq!(fixture.popup.get_timeline_progress(), 1.0 / 6.0);
+    assert_eq!(fixture.popup.get_seek_progress(), 1.0 / 6.0);
+    assert_eq!(
+        fixture
+            .element("Media position")
+            .accessible_value()
+            .unwrap()
+            .as_str(),
+        "0.75"
+    );
+
+    // Even a longer formatted time is one elided line, not a resize that
+    // invalidates the held native Slider's authority.
+    fixture
+        .popup
+        .set_seek_preview_time("123456:59 / 999999:59".into());
+    fixture.render_fit();
+    assert!(fixture.has_element("Preview position: 123456:59 / 999999:59"));
+    let preview_bounds = fixture.popup.get_seek_bounds();
+    assert_eq!(
+        (
+            preview_bounds.origin.x,
+            preview_bounds.origin.y,
+            preview_bounds.width,
+            preview_bounds.height
+        ),
+        (
+            bounds.origin.x,
+            bounds.origin.y,
+            bounds.width,
+            bounds.height
+        ),
+    );
+    assert_eq!(fixture.popup.get_preferred_popup_height(), height);
+    assert_eq!(*invalidations.borrow(), 0);
+
+    fixture.popup.set_seek_preview_active(false);
+    fixture.render_fit();
+    assert!(!fixture.has_element("Preview position: 123456:59 / 999999:59"));
+    assert!(fixture.has_element("Observed position: 0:30 / 3:00"));
+    assert_eq!(fixture.popup.get_seek_bounds().origin.y, bounds.origin.y);
+    assert_eq!(fixture.popup.get_preferred_popup_height(), height);
+    assert_eq!(*invalidations.borrow(), 0);
+    assert!(
+        fixture.take_requests().is_empty(),
+        "local time preview never emits changed IO"
+    );
 }

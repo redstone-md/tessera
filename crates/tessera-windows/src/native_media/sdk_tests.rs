@@ -14,6 +14,7 @@ use windows::{
     Foundation::{DateTime, TimeSpan},
     Media::Control::{
         GlobalSystemMediaTransportControlsSession as Session,
+        GlobalSystemMediaTransportControlsSessionPlaybackControls as Controls,
         GlobalSystemMediaTransportControlsSessionTimelineProperties as TimelineProperties,
         IGlobalSystemMediaTransportControlsSession_Vtbl as SessionVtable,
     },
@@ -49,6 +50,19 @@ fn sdk_timeline_method_shapes_match_the_pinned_sdk_without_invoking_a_player() {
             *mut core::ffi::c_void,
             *mut i64,
         ) -> HRESULT = vtable.TimelinePropertiesChanged;
+    };
+}
+
+#[test]
+fn sdk_seek_method_shapes_use_signed_ticks_and_native_capability_without_a_player() {
+    let _: fn(&Session, i64) -> _ = Session::TryChangePlaybackPositionAsync;
+    let _: fn(&Controls) -> windows::core::Result<bool> = Controls::IsPlaybackPositionEnabled;
+    let _seek_shape = |vtable: &SessionVtable| {
+        let _: unsafe extern "system" fn(
+            *mut core::ffi::c_void,
+            i64,
+            *mut *mut core::ffi::c_void,
+        ) -> HRESULT = vtable.TryChangePlaybackPositionAsync;
     };
 }
 

@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { Slider } from "std-widgets.slint";
+
+// Public Slint 1.18.1 widget: retain native pointer, keyboard, focus and AX
+// behavior. Projecting value does not emit its user-action changed callback.
+export component CommonSlider inherits Slider {
+    orientation: horizontal;
+    height: 24px;
+}

@@ -6,11 +6,15 @@ use crate::{PanelPreferences, PanelSnapshot, SystemAction};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tessera_system::media::{
-    MediaCapabilities, MediaCommandCompletion, MediaReadCompletion, MediaSession, MediaSessionKey,
+    MediaCapabilities, MediaCommandCompletion, MediaReadCompletion, MediaSeekObservation,
+    MediaSession, MediaSessionKey,
 };
 
 #[path = "retirement_tests.rs"]
 mod retirement;
+
+#[path = "seek_tests.rs"]
+mod seek;
 
 type Hook = RefCell<Option<Box<dyn FnOnce()>>>;
 thread_local! {
@@ -30,7 +34,7 @@ fn hook(slot: &'static std::thread::LocalKey<Hook>) {
 
 enum ReadReply {
     Pending,
-    Inline(Result<MediaSnapshot, MediaError>),
+    Inline(Result<Box<MediaSnapshot>, MediaError>),
     Reject(MediaError),
 }
 
@@ -45,7 +49,7 @@ type Changed = Arc<dyn Fn(MediaEvent) + Send + Sync>;
 #[derive(Default)]
 struct RecordingMedia {
     reads: AtomicUsize,
-    commands: Mutex<Vec<MediaCommand>>,
+    commands: Mutex<Vec<MediaRequest>>,
     pending_reads: Mutex<VecDeque<MediaReadCompletion>>,
     pending_commands: Mutex<VecDeque<MediaCommandCompletion>>,
     read_replies: Mutex<VecDeque<ReadReply>>,
@@ -98,7 +102,7 @@ impl MediaHost for RecordingMedia {
             .unwrap_or(ReadReply::Pending);
         match reply {
             ReadReply::Pending => self.pending_reads.lock().push_back(completion),
-            ReadReply::Inline(result) => completion(result),
+            ReadReply::Inline(result) => completion(result.map(|snapshot| *snapshot)),
             ReadReply::Reject(error) => {
                 hook(&READ_HOOK);
                 return Err(error);
@@ -109,7 +113,7 @@ impl MediaHost for RecordingMedia {
     }
     fn execute(
         &self,
-        command: MediaCommand,
+        command: MediaRequest,
         completion: MediaCommandCompletion,
     ) -> Result<(), MediaError> {
         self.commands.lock().push(command);
@@ -233,6 +237,7 @@ fn session(playback: MediaPlayback) -> MediaSession {
         artwork: None,
         artwork_notice: None,
         timeline: Err(error(MediaErrorKind::Unavailable)),
+        seek: Err(error(MediaErrorKind::Unavailable)),
     }
 }
 
@@ -281,10 +286,10 @@ fn dock_media_command_exact_incarnation_single_flight_and_authoritative_readback
     fixture.controller.request(MediaAction::Toggle);
     assert_eq!(
         &*fixture.media.commands.lock(),
-        &[MediaCommand {
+        &[MediaRequest::Transport(MediaCommand {
             expected_session: key,
             action: HostAction::Toggle
-        }]
+        })]
     );
     assert!(fixture.view().busy);
     let command_epoch = fixture.view().session_identity;
@@ -431,9 +436,9 @@ fn dock_media_inline_reentrant_hosts_do_not_borrow_state_across_calls() {
         .media
         .read_replies
         .lock()
-        .push_back(ReadReply::Inline(Ok(MediaSnapshot {
+        .push_back(ReadReply::Inline(Ok(Box::new(MediaSnapshot {
             current: Some(session(MediaPlayback::Paused)),
-        })));
+        }))));
     let weak = Rc::downgrade(&fixture.controller);
     FACTORY_HOOK.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move || {
@@ -672,8 +677,13 @@ fn popup_media_is_lazy_and_saved_dock_off_is_not_observation_off() {
     fixture
         .controller
         .request_from_popup(token, MediaAction::Toggle, identity.as_str());
-    assert_eq!(fixture.media.commands.lock()[0].expected_session, key);
-    assert_eq!(fixture.media.commands.lock()[0].action, HostAction::Toggle);
+    assert_eq!(
+        fixture.media.commands.lock()[0],
+        MediaRequest::Transport(MediaCommand {
+            expected_session: key,
+            action: HostAction::Toggle,
+        })
+    );
     fixture.controller.detach_popup(token);
     popup.hide().unwrap();
     fixture.media.finish_command(Ok(()));
@@ -818,7 +828,13 @@ fn popup_accepted_command_reopen_never_overlaps_or_replays_and_requires_new_iden
         MediaAction::Previous,
         popup.get_media_view().session_identity.as_str(),
     );
-    assert_eq!(fixture.media.commands.lock()[1].expected_session, key);
+    assert_eq!(
+        fixture.media.commands.lock()[1],
+        MediaRequest::Transport(MediaCommand {
+            expected_session: key,
+            action: HostAction::Previous,
+        })
+    );
     fixture.controller.detach_popup(new);
     popup.hide().unwrap();
     fixture

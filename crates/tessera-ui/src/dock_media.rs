@@ -8,12 +8,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use slint::ComponentHandle;
 use tessera_system::media::{
     MediaAction as HostAction, MediaArtwork, MediaCommand, MediaError, MediaErrorKind, MediaEvent,
-    MediaHost, MediaPlayback, MediaSnapshot, MediaTimeline,
+    MediaHost, MediaObservationRevision, MediaPlayback, MediaRequest, MediaSeekCommand,
+    MediaSeekObservation, MediaSessionKey, MediaSnapshot, MediaTimeline,
 };
 
 use crate::generated::{Dock, DockMediaView, MediaAction, QuickSettings};
@@ -34,6 +36,7 @@ struct Token {
 enum FlightKind {
     Read,
     Command,
+    Seek(PopupMediaToken),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +48,49 @@ struct Flight {
 /// Presentation authority, never a native session or a persisted preference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PopupMediaToken(u64);
+
+/// Immutable native authority for one admitted popup gesture; position is not authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CapturedMediaSeek {
+    popup: PopupMediaToken,
+    generation: u64,
+    invalidation: u64,
+    observation: u64,
+    session: MediaSessionKey,
+    revision: MediaObservationRevision,
+    min_ticks: i64,
+    max_ticks: i64,
+}
+
+impl CapturedMediaSeek {
+    fn target_ticks(&self, fraction: f32) -> Option<i64> {
+        if !fraction.is_finite() || self.min_ticks >= self.max_ticks {
+            return None;
+        }
+        let span = i128::from(self.max_ticks) - i128::from(self.min_ticks);
+        let offset = (span as f64 * f64::from(fraction.clamp(0.0, 1.0))).round() as i128;
+        let target = (i128::from(self.min_ticks) + offset)
+            .clamp(i128::from(self.min_ticks), i128::from(self.max_ticks));
+        i64::try_from(target).ok()
+    }
+
+    /// Local preview relative to the captured seek range, never an observed position.
+    pub(crate) fn preview_time(&self, fraction: f32) -> Option<String> {
+        let target = self.target_ticks(fraction)?;
+        Some(format!(
+            "{} / {} · seek preview",
+            ticks_label(i128::from(target) - i128::from(self.min_ticks)),
+            ticks_label(i128::from(self.max_ticks) - i128::from(self.min_ticks)),
+        ))
+    }
+}
+
+struct PendingSeek {
+    scope: CapturedMediaSeek,
+    position_ticks: i64,
+}
+
+const SEEK_INTERVAL: Duration = Duration::from_millis(200);
 
 struct PopupProjection {
     token: PopupMediaToken,
@@ -73,6 +119,13 @@ struct State {
     watch_error: Option<MediaError>,
     action_error: Option<MediaError>,
     action_accepted: bool,
+    seek_epoch: u64,
+    read_seek_epoch: u64,
+    seek_observation: u64,
+    seek_observation_exhausted: bool,
+    pending_seek: Option<PendingSeek>,
+    last_seek_accepted: Option<Instant>,
+    seek_error: Option<MediaError>,
 }
 
 impl State {
@@ -87,11 +140,27 @@ impl State {
             sequence: self.sequence,
         })
     }
+
+    fn invalidate_seek_observation(&mut self) {
+        if let Some(next) = self.seek_observation.checked_add(1) {
+            self.seek_observation = next;
+        } else {
+            self.seek_observation_exhausted = true;
+        }
+    }
+}
+
+fn seek_authority(
+    snapshot: Option<&MediaSnapshot>,
+) -> Option<(MediaSessionKey, MediaSeekObservation)> {
+    let session = snapshot?.current.as_ref()?;
+    Some((session.key, *session.seek.as_ref().ok()?))
 }
 
 enum Completion {
-    Read(Token, Result<MediaSnapshot, MediaError>),
+    Read(Token, Result<Box<MediaSnapshot>, MediaError>),
     Command(Token, Result<(), MediaError>),
+    Seek(Token, PopupMediaToken, Result<(), MediaError>),
 }
 
 impl Completion {
@@ -104,6 +173,10 @@ impl Completion {
             Self::Command(token, _) => Flight {
                 token: *token,
                 kind: FlightKind::Command,
+            },
+            Self::Seek(token, popup, _) => Flight {
+                token: *token,
+                kind: FlightKind::Seek(*popup),
             },
         }
     }
@@ -119,12 +192,18 @@ struct Mailbox {
     watch: Option<Token>,
     watch_health: Option<Result<(), MediaError>>,
     dirty: bool,
+    seek_epoch: u64,
+    seek_exhausted: bool,
+    seek_invalidated: bool,
     wake_queued: bool,
 }
 
 impl Mailbox {
     fn pending(&self) -> bool {
-        self.completion.is_some() || self.watch_health.is_some() || self.dirty
+        self.completion.is_some()
+            || self.watch_health.is_some()
+            || self.dirty
+            || self.seek_invalidated
     }
 }
 
@@ -203,6 +282,15 @@ fn watch_event(mailbox: &Arc<Mutex<Mailbox>>, wake: &MediaWake, token: Token, ev
         }
         match event {
             MediaEvent::Changed => mailbox.dirty = true,
+            MediaEvent::SeekInvalidated => {
+                mailbox.seek_invalidated = true;
+                mailbox.dirty = true;
+                if let Some(epoch) = mailbox.seek_epoch.checked_add(1) {
+                    mailbox.seek_epoch = epoch;
+                } else {
+                    mailbox.seek_exhausted = true;
+                }
+            }
             MediaEvent::WatchReady => mailbox.watch_health = Some(Ok(())),
             MediaEvent::WatchUnavailable(error) => mailbox.watch_health = Some(Err(error)),
         }
@@ -228,12 +316,17 @@ pub(crate) struct DockMediaController {
     projection: RefCell<Rc<()>>,
     popup_artwork: RefCell<Option<(MediaArtwork, slint::Image)>>,
     driving: Cell<bool>,
+    seek_timer: slint::Timer,
+    self_weak: std::rc::Weak<Self>,
+    projected_seek: RefCell<Option<CapturedMediaSeek>>,
+    #[cfg(test)]
+    seek_clock: Cell<Instant>,
     closed: Cell<bool>,
 }
 
 impl DockMediaController {
     pub(crate) fn new(host: Arc<dyn DesktopHost>, dock: &Dock) -> Rc<Self> {
-        Rc::new(Self {
+        Rc::new_cyclic(|weak| Self {
             host,
             dock: dock.as_weak(),
             wake: MediaWake {
@@ -245,6 +338,11 @@ impl DockMediaController {
             application_icons: RefCell::default(),
             projection: RefCell::default(),
             popup_artwork: RefCell::default(),
+            seek_timer: slint::Timer::default(),
+            self_weak: weak.clone(),
+            projected_seek: RefCell::default(),
+            #[cfg(test)]
+            seek_clock: Cell::new(Instant::now()),
             driving: Cell::new(false),
             closed: Cell::new(false),
         })
@@ -294,6 +392,8 @@ impl DockMediaController {
             let was_active = state.observation_active();
             let token = PopupMediaToken(sequence);
             state.popup_sequence = sequence;
+            state.pending_seek = None;
+            state.seek_error = None;
             let retired = state.popup.replace(PopupProjection {
                 token,
                 view: popup.as_weak(),
@@ -301,6 +401,7 @@ impl DockMediaController {
             });
             (was_active, token, retired)
         };
+        self.seek_timer.stop();
         drop(retired);
         if !installed(token)
             || self.closed.get()
@@ -325,9 +426,12 @@ impl DockMediaController {
             if state.popup.as_ref().map(|popup| popup.token) != Some(token) {
                 return;
             }
+            state.pending_seek = None;
+            state.seek_error = None;
             let was_active = state.observation_active();
             (was_active, state.popup.take())
         };
+        self.seek_timer.stop();
         if let Some(retired) = &retired {
             self.clear_retired_popup(retired);
         }
@@ -363,6 +467,193 @@ impl DockMediaController {
                 .popup
                 .as_ref()
                 .is_some_and(|popup| popup.token == token)
+    }
+
+    pub(crate) fn capture_seek(&self, token: PopupMediaToken) -> Option<CapturedMediaSeek> {
+        if !self.popup_input_ready(token) {
+            return None;
+        }
+        let state = self.state.borrow();
+        let mailbox = self.mailbox.lock();
+        if state.read_error.is_some()
+            || mailbox.seek_exhausted
+            || state.seek_observation_exhausted
+            || state.seek_epoch != mailbox.seek_epoch
+        {
+            return None;
+        }
+        let session = state.snapshot.as_ref()?.current.as_ref()?;
+        let observation = session.seek.as_ref().ok()?;
+        if observation.min_ticks >= observation.max_ticks {
+            return None;
+        }
+        Some(CapturedMediaSeek {
+            popup: token,
+            generation: state.generation,
+            invalidation: state.seek_epoch,
+            observation: state.seek_observation,
+            session: session.key,
+            revision: observation.revision,
+            min_ticks: observation.min_ticks,
+            max_ticks: observation.max_ticks,
+        })
+    }
+
+    pub(crate) fn seek_scope_current(&self, scope: &CapturedMediaSeek) -> bool {
+        self.capture_seek(scope.popup).as_ref() == Some(scope)
+    }
+
+    pub(crate) fn cancel_pending_seek(&self, token: PopupMediaToken) {
+        let mut state = self.state.borrow_mut();
+        if state
+            .pending_seek
+            .as_ref()
+            .is_some_and(|pending| pending.scope.popup == token)
+        {
+            state.pending_seek = None;
+            self.seek_timer.stop();
+        }
+    }
+
+    fn seek_now(&self) -> Instant {
+        #[cfg(test)]
+        {
+            self.seek_clock.get()
+        }
+        #[cfg(not(test))]
+        {
+            Instant::now()
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn elapse_seek_throttle(&self, elapsed: Duration) {
+        if let Some(now) = self.seek_clock.get().checked_add(elapsed) {
+            self.seek_clock.set(now);
+        }
+    }
+
+    pub(crate) fn seek_from_popup(&self, scope: &CapturedMediaSeek, fraction: f32) {
+        if !fraction.is_finite() || !self.seek_scope_current(scope) {
+            let same = self
+                .state
+                .borrow()
+                .pending_seek
+                .as_ref()
+                .is_some_and(|pending| pending.scope == *scope);
+            if same {
+                self.cancel_pending_seek(scope.popup);
+            }
+            return;
+        }
+        let Some(position_ticks) = scope.target_ticks(fraction) else {
+            return;
+        };
+        self.state.borrow_mut().pending_seek = Some(PendingSeek {
+            scope: scope.clone(),
+            position_ticks,
+        });
+        self.drive_reads();
+    }
+
+    /// One latest intention shares the observation/transport flight. A trailing
+    /// timer is armed only while idle; busy completion resumes the same scheduler.
+    fn drive_seek_at(&self, now: Instant) {
+        self.seek_timer.stop();
+        let scope = self
+            .state
+            .borrow()
+            .pending_seek
+            .as_ref()
+            .map(|pending| pending.scope.clone());
+        let Some(scope) = scope else {
+            return;
+        };
+        if !self.seek_scope_current(&scope) {
+            self.cancel_pending_seek(scope.popup);
+            return;
+        }
+        let delay = {
+            let state = self.state.borrow();
+            if state.flight.is_some() || state.read_needed {
+                return;
+            }
+            state
+                .last_seek_accepted
+                .and_then(|last| SEEK_INTERVAL.checked_sub(now.saturating_duration_since(last)))
+        };
+        if let Some(delay) = delay.filter(|delay| !delay.is_zero()) {
+            let weak = self.self_weak.clone();
+            self.seek_timer
+                .start(slint::TimerMode::SingleShot, delay, move || {
+                    if let Some(controller) = weak.upgrade() {
+                        controller.drive_reads();
+                    }
+                });
+            return;
+        }
+        let (flight, command, provider) = {
+            let mut state = self.state.borrow_mut();
+            let Some(provider) = state.provider.clone() else {
+                return;
+            };
+            let Some(token) = state.token() else {
+                state.pending_seek = None;
+                return;
+            };
+            let Some(pending) = state.pending_seek.take() else {
+                return;
+            };
+            let flight = Flight {
+                token,
+                kind: FlightKind::Seek(scope.popup),
+            };
+            state.flight = Some(flight);
+            state.seek_error = None;
+            let command = MediaSeekCommand {
+                expected_session: scope.session,
+                expected_revision: scope.revision,
+                observed_min_ticks: scope.min_ticks,
+                observed_max_ticks: scope.max_ticks,
+                position_ticks: pending.position_ticks,
+            };
+            (flight, command, provider)
+        };
+        {
+            let mut mailbox = self.mailbox.lock();
+            mailbox.expected = Some(flight);
+            mailbox.completion = None;
+        }
+        self.project();
+        if !self.current(flight) || !self.seek_scope_current(&scope) {
+            self.cancel_unsubmitted(flight);
+            return;
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            state.flight_accepted = true;
+        }
+        let mailbox = self.mailbox.clone();
+        let wake = self.wake.clone();
+        let popup = scope.popup;
+        let result = provider.execute(
+            MediaRequest::Seek(command),
+            Box::new(move |result| {
+                complete(
+                    &mailbox,
+                    &wake,
+                    Completion::Seek(flight.token, popup, result),
+                );
+            }),
+        );
+        match result {
+            Ok(()) => self.state.borrow_mut().last_seek_accepted = Some(self.seek_now()),
+            Err(error) => complete(
+                &self.mailbox,
+                &self.wake,
+                Completion::Seek(flight.token, popup, Err(error)),
+            ),
+        }
     }
 
     fn clear_retired_popup(&self, retired: &PopupProjection) {
@@ -401,6 +692,21 @@ impl DockMediaController {
             return;
         }
         view.set_timeline_progress(0.0);
+        if !current() {
+            return;
+        }
+        view.set_seek_enabled(false);
+        if !current() {
+            return;
+        }
+        view.set_seek_progress(0.0);
+        if !current() {
+            return;
+        }
+        view.set_seek_notice(Default::default());
+        if current() {
+            view.invoke_project_seek();
+        }
     }
 
     fn demand_changed(&self, was_active: bool) {
@@ -418,6 +724,8 @@ impl DockMediaController {
                 state.watch_error = None;
                 state.action_error = None;
                 state.action_accepted = false;
+                state.pending_seek = None;
+                state.seek_error = None;
                 state.watch = None;
                 state.watch_attempted = false;
                 state.watch_ready = false;
@@ -470,7 +778,11 @@ impl DockMediaController {
                 .and_then(|snapshot| snapshot.current.as_ref())
                 .is_some_and(|session| identity == session_identity(&state, session.key))
         };
-        if !admitted || self.closed.get() || self.driving.replace(true) {
+        if !admitted || self.closed.get() {
+            return;
+        }
+        self.cancel_pending_seek(token);
+        if self.driving.replace(true) {
             return;
         }
         {
@@ -507,6 +819,9 @@ impl DockMediaController {
 
     fn dispatch_transport(&self, action: MediaAction, popup: Option<PopupMediaToken>) {
         self.retire_invalid_popup();
+        // Transport intentions supersede unsubmitted seek input even while busy.
+        self.state.borrow_mut().pending_seek = None;
+        self.seek_timer.stop();
         // A native invalidation already in the mailbox also blocks stale GUI input.
         if self.mailbox.lock().dirty {
             return;
@@ -586,7 +901,7 @@ impl DockMediaController {
         let mailbox = self.mailbox.clone();
         let wake = self.wake.clone();
         if let Err(error) = provider.execute(
-            command,
+            MediaRequest::Transport(command),
             Box::new(move |result| {
                 complete(&mailbox, &wake, Completion::Command(flight.token, result));
             }),
@@ -649,13 +964,14 @@ impl DockMediaController {
         {
             let _driving = Driving(&self.driving);
             self.retire_invalid_popup();
-            let (completion, health, dirty) = {
+            let (completion, health, dirty, seek_invalidated) = {
                 let mut mailbox = self.mailbox.lock();
                 mailbox.wake_queued = false;
                 (
                     mailbox.completion.take(),
                     mailbox.watch_health.take(),
                     std::mem::take(&mut mailbox.dirty),
+                    std::mem::take(&mut mailbox.seek_invalidated),
                 )
             };
             let mut state = self.state.borrow_mut();
@@ -667,6 +983,10 @@ impl DockMediaController {
             if dirty {
                 state.dirty = true;
                 state.read_needed = true;
+            }
+            if seek_invalidated {
+                state.pending_seek = None;
+                self.seek_timer.stop();
             }
             if let Some(completion) = completion {
                 let flight = completion.flight();
@@ -690,14 +1010,23 @@ impl DockMediaController {
                     }
                     match completion {
                         Completion::Read(_, Ok(snapshot)) => {
-                            state.snapshot = Some(MediaSnapshot {
+                            let snapshot = *snapshot;
+                            let snapshot = MediaSnapshot {
                                 current: snapshot.current.map(|session| session.bounded()),
-                            });
+                            };
+                            if seek_authority(state.snapshot.as_ref())
+                                != seek_authority(Some(&snapshot))
+                            {
+                                state.invalidate_seek_observation();
+                            }
+                            state.snapshot = Some(snapshot);
                             state.read_error = None;
+                            state.seek_epoch = state.read_seek_epoch;
                             // Invalidations delivered during the read require one follow-up.
                             state.dirty = dirty || state.read_needed;
                         }
                         Completion::Read(_, Err(error)) => {
+                            state.invalidate_seek_observation();
                             state.read_error = Some(error);
                             state.dirty = true;
                             // Failure is not an automatic idle retry loop.
@@ -708,6 +1037,36 @@ impl DockMediaController {
                             state.action_error = result.err();
                             state.dirty = true;
                             state.read_needed = true;
+                        }
+                        Completion::Seek(_, popup, result) => {
+                            let accepted = result.is_ok();
+                            if state
+                                .popup
+                                .as_ref()
+                                .is_some_and(|active| active.token == popup)
+                            {
+                                state.seek_error = result.err();
+                            }
+                            if accepted {
+                                state.dirty = true;
+                                state.read_needed = true;
+                            }
+                            drop(state);
+                            if self.popup_input_ready(popup) {
+                                let view = self
+                                    .state
+                                    .borrow()
+                                    .popup
+                                    .as_ref()
+                                    .and_then(|popup| popup.view.upgrade());
+                                if let Some(view) = view {
+                                    view.invoke_media_seek_finished();
+                                }
+                            }
+                            self.project();
+                            drop(_driving);
+                            self.drive_reads();
+                            return;
                         }
                     }
                 }
@@ -743,12 +1102,14 @@ impl DockMediaController {
             state.enabled = false;
             // Take callback-owning presentation state outside the borrow.
             let popup = state.popup.take();
+            state.pending_seek = None;
             state.flight = None;
             state.watch = None;
             state.snapshot = None;
             (state.watch_guard.take(), state.provider.take(), popup)
         };
         *self.mailbox.lock() = Mailbox::default();
+        self.seek_timer.stop();
         self.project();
         drop(retired);
     }
@@ -791,6 +1152,7 @@ impl DockMediaController {
                 mailbox.completion = None;
                 // Earlier invalidation is covered by this read, not by a later completion.
                 mailbox.dirty = false;
+                self.state.borrow_mut().read_seek_epoch = mailbox.seek_epoch;
             }
             self.project();
             if !self.current(flight) {
@@ -837,7 +1199,11 @@ impl DockMediaController {
             self.state.borrow_mut().flight_accepted = true;
             let wake = self.wake.clone();
             if let Err(error) = provider.read(Box::new(move |result| {
-                complete(&mailbox, &wake, Completion::Read(flight.token, result));
+                complete(
+                    &mailbox,
+                    &wake,
+                    Completion::Read(flight.token, result.map(Box::new)),
+                );
             })) {
                 complete(
                     &self.mailbox,
@@ -849,6 +1215,7 @@ impl DockMediaController {
                 break;
             }
         }
+        self.drive_seek_at(self.seek_now());
     }
 
     fn ensure_watch(&self, flight: Flight, provider: &Arc<dyn MediaHost>) {
@@ -1012,6 +1379,44 @@ impl DockMediaController {
             .popup
             .as_ref()
             .map(|popup| (popup.token, popup.view.clone()));
+        let seek_scope = popup
+            .as_ref()
+            .and_then(|(token, _)| self.capture_seek(*token));
+        if !Rc::ptr_eq(&revision, &self.projection.borrow()) {
+            return;
+        }
+        let old_seek = self.projected_seek.replace(seek_scope.clone());
+        let seek_invalidated = old_seek.as_ref().is_some_and(|old| {
+            old_seek != seek_scope && seek_scope.as_ref().is_none_or(|new| new.popup == old.popup)
+        });
+        if seek_invalidated && let Some(old) = old_seek {
+            self.cancel_pending_seek(old.popup);
+        }
+        let (seek_progress, seek_notice) = {
+            let state = self.state.borrow();
+            let session = state
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.current.as_ref());
+            let progress = seek_scope
+                .as_ref()
+                .zip(session.and_then(|session| session.timeline.as_ref().ok()))
+                .map(|(scope, timeline)| {
+                    let span = i128::from(scope.max_ticks) - i128::from(scope.min_ticks);
+                    let elapsed = i128::from(timeline.position_ticks) - i128::from(scope.min_ticks);
+                    (elapsed as f64 / span as f64).clamp(0.0, 1.0) as f32
+                })
+                .unwrap_or(0.0);
+            let observed_error = session.and_then(|session| session.seek.as_ref().err());
+            let message = if let Some(error) = state.seek_error.as_ref().or(observed_error) {
+                notice(Some(error))
+            } else if session.is_some() && seek_scope.is_none() {
+                "Seeking unavailable for the observed range.".into()
+            } else {
+                String::new()
+            };
+            (progress, message)
+        };
         let timeline = self
             .state
             .borrow()
@@ -1049,10 +1454,42 @@ impl DockMediaController {
             {
                 let mut view = view;
                 view.enabled = true;
+                // Dirty marks an ordinary refresh, not revoked seek authority.
+                // Keep its transient notice from moving and cancelling valid input;
+                // raw Dock staleness and precomputed transport gates stay unchanged.
+                if seek_scope.is_some() {
+                    view.stale = false;
+                }
                 if let Some(artwork) = popup_artwork {
                     view.artwork = artwork;
                 }
                 popup.set_media_view(view);
+                if !current() {
+                    return;
+                }
+                if seek_invalidated {
+                    popup.invoke_media_seek_invalidated();
+                    if !current() {
+                        return;
+                    }
+                }
+                popup.set_seek_enabled(
+                    seek_scope
+                        .as_ref()
+                        .is_some_and(|scope| self.seek_scope_current(scope)),
+                );
+                if !current() {
+                    return;
+                }
+                popup.set_seek_progress(seek_progress);
+                if !current() {
+                    return;
+                }
+                popup.set_seek_notice(seek_notice.into());
+                if !current() {
+                    return;
+                }
+                popup.invoke_project_seek();
                 if !current() {
                     return;
                 }

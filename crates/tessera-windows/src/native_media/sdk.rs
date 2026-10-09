@@ -205,6 +205,10 @@ impl Calls for WindowsCalls {
             playback,
             capabilities,
             timeline,
+            seek: Err(MediaError::new(
+                MediaErrorKind::CommandUnavailable,
+                "Seek authority is assigned by the native observation owner",
+            )),
             artwork,
             artwork_notice,
         })
@@ -247,6 +251,42 @@ impl Calls for WindowsCalls {
                     e,
                 )
             })
+    }
+
+    fn seek_range(&mut self, session: &NativeSession) -> Result<(i64, i64), MediaError> {
+        let enabled = session
+            .object
+            .GetPlaybackInfo()
+            .and_then(|info| info.Controls())
+            .and_then(|controls| controls.IsPlaybackPositionEnabled())
+            .map_err(|e| error(MediaErrorKind::Unavailable, "Read media seek capability", e))?;
+        if !enabled {
+            return Err(MediaError::new(
+                MediaErrorKind::CommandUnavailable,
+                "The current session does not enable playback-position changes",
+            ));
+        }
+        // Do not require start/end/position/UTC reads to obtain the seek range,
+        // and never substitute duration or restrict native signed tick values.
+        let properties = session
+            .object
+            .GetTimelineProperties()
+            .map_err(|e| error(MediaErrorKind::Unavailable, "Read media seek range", e))?;
+        let min = properties
+            .MinSeekTime()
+            .map_err(|e| error(MediaErrorKind::Unavailable, "Read minimum seek time", e))?;
+        let max = properties
+            .MaxSeekTime()
+            .map_err(|e| error(MediaErrorKind::Unavailable, "Read maximum seek time", e))?;
+        Ok((min.Duration, max.Duration))
+    }
+
+    fn seek(&mut self, session: &NativeSession, position_ticks: i64) -> Result<bool, MediaError> {
+        session
+            .object
+            .TryChangePlaybackPositionAsync(position_ticks)
+            .and_then(|operation| operation.join())
+            .map_err(|e| error(MediaErrorKind::Rejected, "Request current media seek", e))
     }
 
     fn register(

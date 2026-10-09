@@ -8,8 +8,9 @@ use std::thread::ThreadId;
 use std::time::Duration;
 
 use tessera_system::media::{
-    MediaAction, MediaCapabilities, MediaHost, MediaPlayback, MediaSession, MediaSessionKey,
-    MediaTimeline,
+    MediaAction, MediaCapabilities, MediaCommand, MediaHost, MediaObservationRevision,
+    MediaPlayback, MediaRequest, MediaSeekCommand, MediaSeekObservation, MediaSession,
+    MediaSessionKey, MediaTimeline,
 };
 
 use super::*;
@@ -46,6 +47,7 @@ struct Recording {
     transport_result: Result<(), MediaError>,
     start_error: Option<MediaError>,
     refresh_error: Option<MediaError>,
+    read_watch_error: Option<MediaError>,
     fail_initializations: usize,
     initializations: usize,
     reads: usize,
@@ -53,10 +55,12 @@ struct Recording {
     refreshes: usize,
     stops: usize,
     commands: Vec<MediaCommand>,
+    seeks: Vec<MediaSeekCommand>,
     operations: Vec<(&'static str, ThreadId)>,
-    dirty: Option<Arc<dyn Fn() + Send + Sync>>,
-    old_callbacks: Vec<Arc<dyn Fn() + Send + Sync>>,
+    dirty: Option<Arc<dyn Fn(MediaEvent) + Send + Sync>>,
+    old_callbacks: Vec<Arc<dyn Fn(MediaEvent) + Send + Sync>>,
     pause_read: Option<Pause>,
+    pause_execute: Option<Pause>,
     pause_start: Option<Pause>,
     panic_read: bool,
     panic_transport: bool,
@@ -72,6 +76,7 @@ impl Recording {
             transport_result: Ok(()),
             start_error: None,
             refresh_error: None,
+            read_watch_error: None,
             fail_initializations: 0,
             initializations: 0,
             reads: 0,
@@ -80,9 +85,11 @@ impl Recording {
             stops: 0,
             commands: Vec::new(),
             operations: Vec::new(),
+            seeks: Vec::new(),
             dirty: None,
             old_callbacks: Vec::new(),
             pause_read: None,
+            pause_execute: None,
             pause_start: None,
             panic_read: false,
             panic_transport: false,
@@ -101,6 +108,7 @@ struct RecordingDriver {
     recording: Arc<Mutex<Recording>>,
     retired: Sender<ThreadId>,
     finished: Sender<ThreadId>,
+    watch_failure: Option<MediaError>,
     _owner_only: Rc<()>,
 }
 
@@ -111,6 +119,17 @@ impl Driver for RecordingDriver {
             recording.record("read");
             recording.reads += 1;
             let panic = std::mem::take(&mut recording.panic_read);
+            if let Some(error) = recording.read_watch_error.take() {
+                // A read can lose native registrations without losing media facts.
+                recording.record("read-retire");
+                recording.dirty = None;
+                if let Ok(snapshot) = &mut recording.snapshot
+                    && let Some(current) = &mut snapshot.current
+                {
+                    current.seek = Err(error.clone());
+                }
+                self.watch_failure = Some(error);
+            }
             (
                 recording.pause_read.take(),
                 panic,
@@ -124,8 +143,12 @@ impl Driver for RecordingDriver {
         result
     }
 
-    fn execute(&mut self, command: MediaCommand) -> Result<(), MediaError> {
-        let panic = {
+    fn take_watch_failure(&mut self) -> Option<MediaError> {
+        self.watch_failure.take()
+    }
+
+    fn execute(&mut self, request: MediaRequest) -> Result<(), MediaError> {
+        let (pause, panic) = {
             let mut recording = self.recording.lock();
             recording.record("execute");
             let current = recording
@@ -135,20 +158,51 @@ impl Driver for RecordingDriver {
                 .current
                 .as_ref()
                 .ok_or_else(|| error(MediaErrorKind::SessionChanged))?;
-            if current.key != command.expected_session {
-                return Err(error(MediaErrorKind::SessionChanged));
+            match request {
+                MediaRequest::Transport(command) => {
+                    if current.key != command.expected_session {
+                        return Err(error(MediaErrorKind::SessionChanged));
+                    }
+                    if !current.capabilities.allows(command.action) {
+                        return Err(error(MediaErrorKind::CommandUnavailable));
+                    }
+                    recording.commands.push(command);
+                }
+                MediaRequest::Seek(command) => {
+                    if current.key != command.expected_session {
+                        return Err(error(MediaErrorKind::SessionChanged));
+                    }
+                    let observation = current.seek.as_ref().map_err(Clone::clone)?;
+                    if observation.revision != command.expected_revision
+                        || observation.min_ticks != command.observed_min_ticks
+                        || observation.max_ticks != command.observed_max_ticks
+                    {
+                        return Err(error(MediaErrorKind::SessionChanged));
+                    }
+                    if !(observation.min_ticks..=observation.max_ticks)
+                        .contains(&command.position_ticks)
+                    {
+                        return Err(error(MediaErrorKind::CommandUnavailable));
+                    }
+                    recording.seeks.push(command);
+                }
             }
-            if !current.capabilities.allows(command.action) {
-                return Err(error(MediaErrorKind::CommandUnavailable));
-            }
-            recording.commands.push(command);
-            std::mem::take(&mut recording.panic_transport)
+            (
+                recording.pause_execute.take(),
+                std::mem::take(&mut recording.panic_transport),
+            )
         };
+        if let Some(pause) = pause {
+            pause.wait();
+        }
         assert!(!panic, "recorded transport panic after native effect");
         self.recording.lock().transport_result.clone()
     }
 
-    fn start_watch(&mut self, dirty: Arc<dyn Fn() + Send + Sync>) -> Result<(), MediaError> {
+    fn start_watch(
+        &mut self,
+        dirty: Arc<dyn Fn(MediaEvent) + Send + Sync>,
+    ) -> Result<(), MediaError> {
         let pause = {
             let mut recording = self.recording.lock();
             recording.record("start");
@@ -162,7 +216,11 @@ impl Driver for RecordingDriver {
         // Simulates acquiring one callback before a second registration fails.
         recording.old_callbacks.push(Arc::clone(&dirty));
         recording.dirty = Some(dirty);
-        recording.start_error.clone().map_or(Ok(()), Err)
+        let result = recording.start_error.clone().map_or(Ok(()), Err);
+        if result.is_ok() {
+            self.watch_failure = None;
+        }
+        result
     }
 
     fn refresh_watch(&mut self) -> Result<(), MediaError> {
@@ -218,6 +276,7 @@ fn start(recording: Recording) -> Harness {
             recording: Arc::clone(&driver_recording),
             retired: retired_sender.clone(),
             finished: finished_sender.clone(),
+            watch_failure: None,
             _owner_only: Rc::new(()),
         })
     })
@@ -269,6 +328,11 @@ fn session() -> MediaSession {
             max_seek_ticks: 900_000_000,
             last_updated_utc_ticks: None,
         }),
+        seek: Ok(MediaSeekObservation {
+            revision: MediaObservationRevision::issue().unwrap(),
+            min_ticks: 0,
+            max_ticks: 900_000_000,
+        }),
         artwork: None,
         artwork_notice: None,
     }
@@ -297,11 +361,23 @@ fn execute(
             MediaCommand {
                 expected_session: key,
                 action,
-            },
+            }
+            .into(),
             Box::new(move |result| sender.send(result).unwrap()),
         )
         .unwrap();
     receiver.recv_timeout(WAIT).unwrap()
+}
+
+fn seek_command(current: &MediaSession) -> MediaSeekCommand {
+    let observation = current.seek.as_ref().unwrap();
+    MediaSeekCommand {
+        expected_session: current.key,
+        expected_revision: observation.revision,
+        observed_min_ticks: observation.min_ticks,
+        observed_max_ticks: observation.max_ticks,
+        position_ticks: 450_000_000,
+    }
 }
 
 fn watch(service: &MediaService) -> (Box<dyn Send>, Receiver<MediaEvent>) {
@@ -349,10 +425,11 @@ fn production_driver_preserves_empty_error_playback_and_artwork_health() {
 }
 
 #[test]
-fn actor_preserves_independent_timeline_failure_and_existing_transport_completion() {
+fn actor_preserves_independent_timeline_and_seek_failures_and_transport_completion() {
     let harness = start(Recording::new());
     let mut expected = session();
     expected.timeline = Err(error(MediaErrorKind::Unavailable));
+    expected.seek = Err(error(MediaErrorKind::CommandUnavailable));
     expected.artwork_notice = Some(error(MediaErrorKind::Other));
     harness.recording.lock().snapshot = Ok(MediaSnapshot {
         current: Some(expected.clone()),
@@ -474,7 +551,8 @@ fn initialization_retries_only_on_reads_and_watch_readiness_recovers() {
 #[test]
 fn one_shared_flight_rejects_read_and_transport_without_callbacks() {
     let harness = start(Recording::new());
-    let key = read(&harness.service).unwrap().current.unwrap().key;
+    let current = read(&harness.service).unwrap().current.unwrap();
+    let key = current.key;
     let (pause, entered, release) = pause();
     harness.recording.lock().pause_read = Some(pause);
     let (result_sender, result_receiver) = mpsc::channel();
@@ -501,10 +579,23 @@ fn one_shared_flight_rejects_read_and_transport_without_callbacks() {
                 MediaCommand {
                     expected_session: key,
                     action: MediaAction::Toggle
-                },
+                }
+                .into(),
                 Box::new(move |_| {
                     command_calls.fetch_add(1, Ordering::AcqRel);
                 })
+            )
+            .is_err()
+    );
+    let seek_calls = Arc::clone(&calls);
+    assert!(
+        harness
+            .service
+            .execute(
+                MediaRequest::Seek(seek_command(&current)),
+                Box::new(move |_| {
+                    seek_calls.fetch_add(1, Ordering::AcqRel);
+                }),
             )
             .is_err()
     );
@@ -515,6 +606,90 @@ fn one_shared_flight_rejects_read_and_transport_without_callbacks() {
     assert!(execute(&harness.service, key, MediaAction::Toggle).is_ok());
     assert_eq!(calls.load(Ordering::Acquire), 0);
     assert_eq!(harness.recording.lock().commands.len(), 1);
+    finish(harness);
+}
+
+#[test]
+fn seek_owns_shared_flight_and_panic_never_replays_accepted_native_effect() {
+    let harness = start(Recording::new());
+    let current = read(&harness.service).unwrap().current.unwrap();
+    let command = seek_command(&current);
+    let (pause, entered, release) = pause();
+    {
+        let mut recording = harness.recording.lock();
+        recording.pause_execute = Some(pause);
+        recording.panic_transport = true;
+    }
+    let (sender, receiver) = mpsc::channel();
+    harness
+        .service
+        .execute(
+            MediaRequest::Seek(command),
+            Box::new(move |result| sender.send(result).unwrap()),
+        )
+        .unwrap();
+    entered.recv_timeout(WAIT).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let read_calls = Arc::clone(&calls);
+    assert!(
+        harness
+            .service
+            .read(Box::new(move |_| {
+                read_calls.fetch_add(1, Ordering::AcqRel);
+            }))
+            .is_err()
+    );
+    for request in [
+        MediaCommand {
+            expected_session: current.key,
+            action: MediaAction::Toggle,
+        }
+        .into(),
+        MediaRequest::Seek(command),
+    ] {
+        let command_calls = Arc::clone(&calls);
+        assert!(
+            harness
+                .service
+                .execute(
+                    request,
+                    Box::new(move |_| {
+                        command_calls.fetch_add(1, Ordering::AcqRel);
+                    })
+                )
+                .is_err()
+        );
+    }
+    assert_eq!(calls.load(Ordering::Acquire), 0);
+    release.send(()).unwrap();
+    assert_eq!(
+        receiver.recv_timeout(WAIT).unwrap().unwrap_err().kind,
+        MediaErrorKind::Other
+    );
+    assert!(receiver.try_recv().is_err());
+    harness.finished.recv_timeout(WAIT).unwrap();
+    // The flight is free and the facade remains live: queue admission succeeds,
+    // but the retired driver fails this accepted intent through its completion.
+    let (sender, receiver) = mpsc::channel();
+    harness
+        .service
+        .execute(
+            MediaRequest::Seek(command),
+            Box::new(move |result| sender.send(result).unwrap()),
+        )
+        .unwrap();
+    assert_eq!(
+        receiver.recv_timeout(WAIT).unwrap().unwrap_err().kind,
+        MediaErrorKind::Other
+    );
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(harness.recording.lock().initializations, 1);
+    assert_eq!(harness.recording.lock().seeks, [command]);
+    read(&harness.service).unwrap();
+    assert_eq!(harness.recording.lock().initializations, 2);
+    assert_eq!(harness.recording.lock().seeks, [command]);
+    assert!(harness.recording.lock().commands.is_empty());
+    assert_eq!(calls.load(Ordering::Acquire), 0);
     finish(harness);
 }
 
@@ -607,7 +782,7 @@ fn watch_consumer_panics_cannot_abandon_reads_or_native_retirement() {
     read(&harness.service).unwrap();
     assert_eq!(calls.load(Ordering::Acquire), 1);
     let dirty = harness.recording.lock().dirty.clone().unwrap();
-    dirty();
+    dirty(MediaEvent::Changed);
     read(&harness.service).unwrap();
     assert_eq!(calls.load(Ordering::Acquire), 2);
     drop(guard);
@@ -630,7 +805,7 @@ fn callback_storm_is_coalesced_and_rebind_precedes_changed() {
         .unwrap();
     entered.recv_timeout(WAIT).unwrap();
     for _ in 0..10_000 {
-        dirty();
+        dirty(MediaEvent::Changed);
     }
     assert_eq!(harness.recording.lock().refreshes, 0);
     release.send(()).unwrap();
@@ -641,7 +816,7 @@ fn callback_storm_is_coalesced_and_rebind_precedes_changed() {
     assert!(events.try_recv().is_err());
     drop(guard);
     harness.retired.recv_timeout(WAIT).unwrap();
-    dirty();
+    dirty(MediaEvent::Changed);
     read(&harness.service).unwrap();
     assert_eq!(harness.recording.lock().refreshes, 1);
     assert!(events.try_recv().is_err());
@@ -670,15 +845,55 @@ fn dirty_invalidation_survives_a_full_owner_queue_without_blocking_callbacks() {
             .try_send(Message::Wake)
             .unwrap_or_else(|_| panic!("expected queue capacity"));
     }
+    dirty(MediaEvent::Changed);
     for _ in 0..1_000 {
-        dirty();
+        dirty(MediaEvent::Changed);
+        dirty(MediaEvent::SeekInvalidated);
     }
     release.send(()).unwrap();
     receiver.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(
+        events.recv_timeout(WAIT).unwrap(),
+        MediaEvent::SeekInvalidated
+    );
     assert_eq!(events.recv_timeout(WAIT).unwrap(), MediaEvent::Changed);
     assert_eq!(harness.recording.lock().refreshes, 1);
+    // Invalidation is published before queued pressure Wakes are drained.
+    // A bounded, test-only Subscribe ACK checkpoints the same owner FIFO.
+    let (sender, checkpoint_events) = mpsc::channel();
+    let checkpoint = Arc::new(Subscription {
+        active: AtomicBool::new(true),
+        callback: Arc::new(move |event| sender.send(event).unwrap()),
+    });
+    harness
+        .service
+        .queue
+        .sender
+        .send(Message::Subscribe(Arc::clone(&checkpoint)))
+        .unwrap_or_else(|_| panic!("checkpoint admission failed"));
+    assert_eq!(
+        checkpoint_events.recv_timeout(WAIT).unwrap(),
+        MediaEvent::WatchReady
+    );
+    checkpoint.active.store(false, Ordering::Release);
+    read(&harness.service).unwrap();
+    assert_eq!(harness.recording.lock().refreshes, 1);
+    assert_eq!(
+        harness
+            .service
+            .queue
+            .state
+            .subscriptions
+            .load(Ordering::Acquire),
+        1
+    );
+    assert!(events.try_recv().is_err());
     drop(guard);
     harness.retired.recv_timeout(WAIT).unwrap();
+    dirty(MediaEvent::Changed);
+    dirty(MediaEvent::SeekInvalidated);
+    read(&harness.service).unwrap();
+    assert_eq!(harness.recording.lock().refreshes, 1);
     assert!(events.try_recv().is_err());
     finish(harness);
 }
@@ -696,7 +911,7 @@ fn partial_watch_start_rolls_back_and_late_callback_is_inert() {
     let owner = harness.retired.recv_timeout(WAIT).unwrap();
     let late = harness.recording.lock().old_callbacks[0].clone();
     assert!(harness.recording.lock().dirty.is_none());
-    late();
+    late(MediaEvent::Changed);
     assert!(events.try_recv().is_err());
     harness.recording.lock().start_error = None;
     read(&harness.service).unwrap();
@@ -715,7 +930,7 @@ fn failed_rebind_retires_tokens_reports_unavailable_and_still_invalidates() {
     assert_eq!(events.recv_timeout(WAIT).unwrap(), MediaEvent::WatchReady);
     let dirty = harness.recording.lock().dirty.clone().unwrap();
     harness.recording.lock().refresh_error = Some(error(MediaErrorKind::WatchUnavailable));
-    dirty();
+    dirty(MediaEvent::Changed);
     assert_eq!(
         events.recv_timeout(WAIT).unwrap(),
         MediaEvent::WatchUnavailable(error(MediaErrorKind::WatchUnavailable))
@@ -726,13 +941,146 @@ fn failed_rebind_retires_tokens_reports_unavailable_and_still_invalidates() {
     harness.recording.lock().refresh_error = None;
     read(&harness.service).unwrap();
     assert_eq!(events.recv_timeout(WAIT).unwrap(), MediaEvent::WatchReady);
-    dirty();
+    dirty(MediaEvent::Changed);
     read(&harness.service).unwrap();
     assert_eq!(harness.recording.lock().refreshes, 1);
     assert!(events.try_recv().is_err());
     drop(guard);
     harness.retired.recv_timeout(WAIT).unwrap();
     finish(harness);
+}
+
+#[test]
+fn read_time_watch_failure_retires_before_completion_and_next_read_recovers() {
+    for fail_metadata in [false, true] {
+        let harness = start(Recording::new());
+        let (guard, events) = watch(&harness.service);
+        assert_eq!(events.recv_timeout(WAIT).unwrap(), MediaEvent::WatchReady);
+        let (other_guard, other_events) = watch(&harness.service);
+        assert_eq!(
+            other_events.recv_timeout(WAIT).unwrap(),
+            MediaEvent::WatchReady
+        );
+        let current = read(&harness.service).unwrap().current.unwrap();
+        let old_dirty = harness.recording.lock().dirty.clone().unwrap();
+        let watch_error = error(MediaErrorKind::WatchUnavailable);
+        let metadata_error = error(MediaErrorKind::Unavailable);
+        let mut unavailable = current.clone();
+        unavailable.seek = Err(watch_error.clone());
+        {
+            let mut recording = harness.recording.lock();
+            recording.read_watch_error = Some(watch_error.clone());
+            if fail_metadata {
+                recording.snapshot = Err(metadata_error.clone());
+            }
+        }
+        let (sender, receiver) = mpsc::channel();
+        harness
+            .service
+            .read(Box::new(move |result| {
+                // Read completion must already observe the watch failure.
+                let event = events.try_recv();
+                sender.send((result, event, events)).unwrap();
+            }))
+            .unwrap();
+        let (result, event, events) = receiver.recv_timeout(WAIT).unwrap();
+        assert_eq!(
+            event.unwrap(),
+            MediaEvent::WatchUnavailable(watch_error.clone())
+        );
+        assert_eq!(
+            other_events.recv_timeout(WAIT).unwrap(),
+            MediaEvent::WatchUnavailable(watch_error.clone())
+        );
+        if fail_metadata {
+            assert_eq!(result, Err(metadata_error));
+        } else {
+            // Title, timeline, artwork and transport capabilities survive.
+            assert_eq!(result.unwrap().current, Some(unavailable.clone()));
+        }
+        let owner = harness.retired.recv_timeout(WAIT).unwrap();
+        {
+            let recording = harness.recording.lock();
+            assert!(recording.dirty.is_none());
+            assert_eq!(recording.starts, 1);
+            assert_eq!(recording.stops, 1);
+            assert!(recording.commands.is_empty());
+            assert!(recording.seeks.is_empty());
+        }
+
+        // Late callbacks and requests cannot retry watch registration.
+        old_dirty(MediaEvent::Changed);
+        old_dirty(MediaEvent::SeekInvalidated);
+        harness.recording.lock().snapshot = Ok(MediaSnapshot {
+            current: Some(unavailable),
+        });
+        execute(&harness.service, current.key, MediaAction::Toggle).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        harness
+            .service
+            .execute(
+                MediaRequest::Seek(seek_command(&current)),
+                Box::new(move |result| sender.send(result).unwrap()),
+            )
+            .unwrap();
+        assert_eq!(receiver.recv_timeout(WAIT).unwrap(), Err(watch_error));
+        assert_eq!(harness.recording.lock().starts, 1);
+        assert_eq!(harness.recording.lock().refreshes, 0);
+        assert!(events.try_recv().is_err());
+        assert!(other_events.try_recv().is_err());
+
+        let mut recovered = current.clone();
+        recovered.seek.as_mut().unwrap().revision = MediaObservationRevision::issue().unwrap();
+        harness.recording.lock().snapshot = Ok(MediaSnapshot {
+            current: Some(recovered.clone()),
+        });
+        assert_eq!(
+            read(&harness.service).unwrap().current,
+            Some(recovered.clone())
+        );
+        assert_eq!(events.recv_timeout(WAIT).unwrap(), MediaEvent::WatchReady);
+        assert_eq!(
+            other_events.recv_timeout(WAIT).unwrap(),
+            MediaEvent::WatchReady
+        );
+        assert_eq!(harness.recording.lock().starts, 2);
+        let command = seek_command(&recovered);
+        let (sender, receiver) = mpsc::channel();
+        harness
+            .service
+            .execute(
+                MediaRequest::Seek(command),
+                Box::new(move |result| sender.send(result).unwrap()),
+            )
+            .unwrap();
+        receiver.recv_timeout(WAIT).unwrap().unwrap();
+
+        // A later read cannot re-report a drained failure or replay commands.
+        old_dirty(MediaEvent::Changed);
+        old_dirty(MediaEvent::SeekInvalidated);
+        read(&harness.service).unwrap();
+        assert!(events.try_recv().is_err());
+        assert!(other_events.try_recv().is_err());
+        {
+            let recording = harness.recording.lock();
+            assert_eq!(recording.initializations, 1);
+            assert_eq!(recording.starts, 2);
+            assert_eq!(recording.stops, 1);
+            assert_eq!(recording.refreshes, 0);
+            assert_eq!(
+                recording.commands,
+                [MediaCommand {
+                    expected_session: current.key,
+                    action: MediaAction::Toggle,
+                }]
+            );
+            assert_eq!(recording.seeks, [command]);
+        }
+        drop(guard);
+        drop(other_guard);
+        assert_eq!(harness.retired.recv_timeout(WAIT).unwrap(), owner);
+        finish(harness);
+    }
 }
 
 #[test]
@@ -765,14 +1113,14 @@ fn last_subscription_keeps_owner_alive_then_retires_all_resources_on_owner() {
         finished,
     } = harness;
     drop(service);
-    dirty();
+    dirty(MediaEvent::Changed);
     assert_eq!(events.recv_timeout(WAIT).unwrap(), MediaEvent::Changed);
     assert!(finished.try_recv().is_err());
     drop(guard);
     let owner = retired.recv_timeout(WAIT).unwrap();
     assert_eq!(finished.recv_timeout(WAIT).unwrap(), owner);
     assert_ne!(owner, std::thread::current().id());
-    dirty();
+    dirty(MediaEvent::Changed);
     assert!(events.try_recv().is_err());
     assert!(
         recording
@@ -882,7 +1230,8 @@ fn full_or_disconnected_queue_rejects_without_callbacks_and_releases_flight() {
                 MediaCommand {
                     expected_session: MediaSessionKey::issue().unwrap(),
                     action: MediaAction::Toggle
-                },
+                }
+                .into(),
                 Box::new(move |_| {
                     disconnected_calls.fetch_add(1, Ordering::AcqRel);
                 })

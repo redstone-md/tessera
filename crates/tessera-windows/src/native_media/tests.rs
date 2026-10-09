@@ -15,8 +15,8 @@ use std::{
     thread::ThreadId,
 };
 use tessera_system::media::{
-    MediaAction, MediaCapabilities, MediaCommand, MediaError, MediaErrorKind, MediaPlayback,
-    MediaSession, MediaSessionKey, MediaTimeline,
+    MediaAction, MediaCapabilities, MediaCommand, MediaError, MediaErrorKind, MediaEvent,
+    MediaPlayback, MediaRequest, MediaSeekCommand, MediaSession, MediaSessionKey, MediaTimeline,
 };
 
 type Dirty = Arc<dyn Fn() + Send + Sync>;
@@ -32,6 +32,12 @@ struct Record {
     snapshot_replacement: Option<u64>,
     capability_replacement: Option<u64>,
     transport_result: Result<bool, MediaError>,
+    seek_range: Result<(i64, i64), MediaError>,
+    seek_result: Result<bool, MediaError>,
+    seek_effects: Vec<(u64, i64)>,
+    snapshot_callback: Option<Event>,
+    range_callback: Option<Event>,
+    range_replacement: Option<u64>,
     effects: Vec<(u64, MediaAction)>,
     registrations: Vec<(usize, Event, Option<u64>, Dirty)>,
     register_attempts: usize,
@@ -64,6 +70,12 @@ impl Record {
             snapshot_replacement: None,
             capability_replacement: None,
             transport_result: Ok(true),
+            seek_range: Ok((0, 900_000_000)),
+            seek_result: Ok(true),
+            seek_effects: Vec::new(),
+            snapshot_callback: None,
+            range_callback: None,
+            range_replacement: None,
             effects: Vec::new(),
             registrations: Vec::new(),
             register_attempts: 0,
@@ -117,12 +129,19 @@ impl Calls for RecordingCalls {
                 playback: MediaPlayback::Playing,
                 capabilities: record.capabilities,
                 timeline: record.timeline.clone(),
+                seek: Err(MediaError::new(
+                    MediaErrorKind::CommandUnavailable,
+                    "Unobserved",
+                )),
                 artwork: None,
                 artwork_notice: record.art_error.clone(),
             }),
         };
         if let Some(replacement) = record.snapshot_replacement.take() {
             record.replace(replacement);
+        }
+        if let Some(event) = record.snapshot_callback.take() {
+            fire(&record, event);
         }
         result
     }
@@ -144,6 +163,28 @@ impl Calls for RecordingCalls {
         record.log.push("transport");
         record.effects.push((*session, action));
         record.transport_result.clone()
+    }
+
+    fn seek_range(&mut self, _: &u64) -> Result<(i64, i64), MediaError> {
+        let mut record = self.0.borrow_mut();
+        record.assert_owner();
+        record.log.push("seek-range");
+        let result = record.seek_range.clone();
+        if let Some(event) = record.range_callback.take() {
+            fire(&record, event);
+        }
+        if let Some(replacement) = record.range_replacement.take() {
+            record.replace(replacement);
+        }
+        result
+    }
+
+    fn seek(&mut self, session: &u64, position_ticks: i64) -> Result<bool, MediaError> {
+        let mut record = self.0.borrow_mut();
+        record.assert_owner();
+        record.log.push("seek");
+        record.seek_effects.push((*session, position_ticks));
+        record.seek_result.clone()
     }
 
     fn register(
@@ -195,22 +236,51 @@ fn displayed(owner: &mut Owner<RecordingCalls>) -> MediaSession {
     owner.read().unwrap().current.unwrap()
 }
 
-fn command(key: MediaSessionKey, action: MediaAction) -> MediaCommand {
-    MediaCommand {
+fn command(key: MediaSessionKey, action: MediaAction) -> MediaRequest {
+    MediaRequest::Transport(MediaCommand {
         expected_session: key,
         action,
-    }
+    })
 }
 
-fn dirty_counter() -> (Dirty, Arc<AtomicUsize>) {
+fn dirty_counter() -> (Arc<dyn Fn(MediaEvent) + Send + Sync>, Arc<AtomicUsize>) {
     let counter = Arc::new(AtomicUsize::new(0));
     let captured = counter.clone();
     (
-        Arc::new(move || {
+        Arc::new(move |_| {
             captured.fetch_add(1, Ordering::Relaxed);
         }),
         counter,
     )
+}
+
+fn fire(record: &Record, event: Event) {
+    let callback = record
+        .registrations
+        .iter()
+        .rev()
+        .find(|(_, registered, _, _)| *registered == event)
+        .unwrap()
+        .3
+        .clone();
+    callback();
+}
+
+fn watched_fixture() -> (Owner<RecordingCalls>, Rc<RefCell<Record>>) {
+    let (mut owner, record) = fixture();
+    owner.start_watch(dirty_counter().0).unwrap();
+    (owner, record)
+}
+
+fn seek_command(session: &MediaSession, position_ticks: i64) -> MediaRequest {
+    let observation = session.seek.as_ref().unwrap();
+    MediaRequest::Seek(MediaSeekCommand {
+        expected_session: session.key,
+        expected_revision: observation.revision,
+        observed_min_ticks: observation.min_ticks,
+        observed_max_ticks: observation.max_ticks,
+        position_ticks,
+    })
 }
 
 #[test]
@@ -472,6 +542,7 @@ fn rebind_retires_old_callbacks_before_registering_replacement() {
     assert_eq!(record.borrow().registrations[5].2, Some(2));
     assert_eq!(record.borrow().registrations[7].1, Event::Timeline);
     assert_eq!(record.borrow().registrations[7].2, Some(2));
+    assert_eq!(count.swap(0, Ordering::Relaxed), 1);
     old_properties();
     old_timeline();
     assert_eq!(count.load(Ordering::Relaxed), 0);
@@ -521,6 +592,7 @@ fn rebind_failure_and_drop_cleanup_are_idempotent_and_owner_local() {
         let mut removed = record.borrow().removed.clone();
         removed.sort_unstable();
         assert_eq!(removed, (1..failed).collect::<Vec<_>>());
+        assert_eq!(count.swap(0, Ordering::Relaxed), 1);
         for (_, _, _, callback) in &record.borrow().registrations {
             callback();
         }
@@ -528,6 +600,131 @@ fn rebind_failure_and_drop_cleanup_are_idempotent_and_owner_local() {
         drop(owner);
         assert_eq!(record.borrow().log.last(), Some(&"drop-calls"));
         assert_eq!(record.borrow().removed.len(), failed - 1);
+    }
+}
+
+#[test]
+fn read_time_rebind_failure_preserves_facts_and_recovers_only_with_explicit_watch() {
+    let (mut owner, record) = fixture();
+    let (dirty, count) = dirty_counter();
+    owner.start_watch(dirty.clone()).unwrap();
+    let old = displayed(&mut owner);
+    let old_seek = seek_command(&old, 10);
+    assert!(owner.take_watch_failure().is_none());
+    let timeline = MediaTimeline {
+        start_ticks: -50,
+        end_ticks: 500,
+        position_ticks: 100,
+        min_seek_ticks: -50,
+        max_seek_ticks: 500,
+        last_updated_utc_ticks: None,
+    };
+    let capabilities = MediaCapabilities {
+        previous: false,
+        toggle: true,
+        next: false,
+    };
+    {
+        let mut record = record.borrow_mut();
+        // No manager callback: the explicit read must discover B itself.
+        record.replace(2);
+        record.timeline = Ok(timeline);
+        record.seek_range = Ok((-50, 500));
+        record.capabilities = capabilities;
+        // B acquires properties/playback tokens before timeline registration fails.
+        record.fail_registration = Some(8);
+    }
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    let failed = displayed(&mut owner);
+    assert_ne!(failed.key, old.key);
+    assert_eq!(failed.source_app_id, "same.player");
+    assert_eq!(failed.title, "Recorded title");
+    assert_eq!(failed.author, "Recorded artist");
+    assert_eq!(failed.playback, MediaPlayback::Playing);
+    assert_eq!(failed.timeline, Ok(timeline));
+    assert_eq!(failed.capabilities, capabilities);
+    let failure = failed.seek.as_ref().unwrap_err().clone();
+    assert_eq!(failure.kind, MediaErrorKind::WatchUnavailable);
+    assert_eq!(failure.hresult, Some(-99));
+    assert_eq!(owner.take_watch_failure(), Some(failure));
+    assert!(owner.take_watch_failure().is_none());
+    assert_eq!(record.borrow().removed, [5, 4, 3, 7, 6, 2, 1]);
+    assert_eq!(record.borrow().register_attempts, 8);
+    assert_eq!(count.swap(0, Ordering::Relaxed), 1);
+    for (_, _, _, callback) in &record.borrow().registrations {
+        callback();
+    }
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        owner.execute(old_seek).unwrap_err().kind,
+        MediaErrorKind::SessionChanged
+    );
+    assert!(record.borrow().effects.is_empty());
+    assert!(record.borrow().seek_effects.is_empty());
+
+    record.borrow_mut().fail_registration = None;
+    owner.start_watch(dirty).unwrap();
+    assert_eq!(record.borrow().register_attempts, 13);
+    assert_eq!(record.borrow().removed, [5, 4, 3, 7, 6, 2, 1]);
+    let recovered = displayed(&mut owner);
+    assert_eq!(recovered.key, failed.key);
+    assert_eq!(recovered.timeline, Ok(timeline));
+    assert_eq!(recovered.capabilities, capabilities);
+    let authority = recovered.seek.as_ref().unwrap();
+    assert_eq!((authority.min_ticks, authority.max_ticks), (-50, 500));
+    assert!(owner.take_watch_failure().is_none());
+    assert!(record.borrow().effects.is_empty());
+    assert!(record.borrow().seek_effects.is_empty());
+    fire(&record.borrow(), Event::Timeline);
+    assert_eq!(count.load(Ordering::Relaxed), 1);
+    owner.execute(seek_command(&recovered, 100)).unwrap();
+    assert_eq!(record.borrow().seek_effects, [(2, 100)]);
+    assert!(record.borrow().effects.is_empty());
+}
+
+#[test]
+fn read_time_rebind_failure_survives_snapshot_error_and_restart_clears_latch() {
+    for drain_before_restart in [true, false] {
+        let (mut owner, record) = fixture();
+        let (dirty, _) = dirty_counter();
+        owner.start_watch(dirty.clone()).unwrap();
+        let old = displayed(&mut owner);
+        let snapshot_error = MediaError::with_hresult(
+            MediaErrorKind::Unavailable,
+            "Recorded metadata failure",
+            -77,
+        );
+        {
+            let mut record = record.borrow_mut();
+            record.replace(2);
+            record.fail_registration = Some(8);
+            record.snapshot_error = Some(snapshot_error.clone());
+        }
+        assert_eq!(owner.read().err(), Some(snapshot_error));
+        assert_eq!(record.borrow().removed, [5, 4, 3, 7, 6, 2, 1]);
+        assert_eq!(record.borrow().register_attempts, 8);
+        if drain_before_restart {
+            let failure = owner.take_watch_failure().unwrap();
+            assert_eq!(failure.kind, MediaErrorKind::WatchUnavailable);
+            assert_eq!(failure.hresult, Some(-99));
+            assert_eq!(failure.message, "Recorded registration failure");
+            assert!(owner.take_watch_failure().is_none());
+        }
+        {
+            let mut record = record.borrow_mut();
+            record.fail_registration = None;
+            record.snapshot_error = None;
+        }
+        owner.start_watch(dirty).unwrap();
+        // Restart clears even an undrained failure before exposing new authority.
+        assert!(owner.take_watch_failure().is_none());
+        let recovered = displayed(&mut owner);
+        assert_ne!(recovered.key, old.key);
+        assert!(recovered.seek.is_ok());
+        assert!(owner.take_watch_failure().is_none());
+        assert_eq!(record.borrow().register_attempts, 13);
+        assert!(record.borrow().effects.is_empty());
+        assert!(record.borrow().seek_effects.is_empty());
     }
 }
 
@@ -667,4 +864,289 @@ fn replacement_after_independent_timeline_failure_is_still_revalidated() {
     );
     assert_ne!(displayed(&mut owner).key, old_key);
     assert!(record.borrow().effects.is_empty());
+}
+
+#[test]
+fn metadata_callbacks_revoke_same_key_seek_before_queue_refresh() {
+    for event in [Event::Properties, Event::Current] {
+        let (mut owner, record) = watched_fixture();
+        let old = displayed(&mut owner);
+        fire(&record.borrow(), event);
+        assert_eq!(
+            owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+            MediaErrorKind::SessionChanged
+        );
+        assert!(record.borrow().seek_effects.is_empty());
+        let fresh = displayed(&mut owner);
+        assert_eq!(fresh.key, old.key);
+        assert_ne!(fresh.seek.unwrap().revision, old.seek.unwrap().revision);
+    }
+}
+
+#[test]
+fn timeline_and_playback_callbacks_retain_seek_revision() {
+    let (mut owner, record) = watched_fixture();
+    let old = displayed(&mut owner);
+    for event in [Event::Timeline, Event::Playback] {
+        fire(&record.borrow(), event);
+        let fresh = displayed(&mut owner);
+        assert_eq!(fresh.seek, old.seek);
+        owner.execute(seek_command(&old, 10)).unwrap();
+    }
+    assert_eq!(record.borrow().seek_effects, [(1, 10), (1, 10)]);
+}
+
+#[test]
+fn fresh_native_range_failures_independently_reject_without_seek_effects() {
+    for (range, kind) in [
+        (Ok((1, 900_000_000)), MediaErrorKind::SessionChanged),
+        (Ok((0, 0)), MediaErrorKind::CommandUnavailable),
+        (Ok((20, 10)), MediaErrorKind::CommandUnavailable),
+        (
+            Err(MediaError::new(
+                MediaErrorKind::CommandUnavailable,
+                "Disabled native seek",
+            )),
+            MediaErrorKind::CommandUnavailable,
+        ),
+        (
+            Err(MediaError::with_hresult(
+                MediaErrorKind::Unavailable,
+                "Range failed",
+                -88,
+            )),
+            MediaErrorKind::Unavailable,
+        ),
+    ] {
+        let (mut owner, record) = watched_fixture();
+        let old = displayed(&mut owner);
+        record.borrow_mut().seek_range = range;
+        assert_eq!(
+            owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+            kind
+        );
+        assert!(record.borrow().seek_effects.is_empty());
+        assert!(record.borrow().effects.is_empty());
+    }
+}
+
+#[test]
+fn targets_outside_native_range_are_rejected_without_dispatch() {
+    let (mut owner, record) = watched_fixture();
+    let old = displayed(&mut owner);
+    for target in [-1, 900_000_001] {
+        assert_eq!(
+            owner.execute(seek_command(&old, target)).unwrap_err().kind,
+            MediaErrorKind::Rejected
+        );
+    }
+    assert!(record.borrow().seek_effects.is_empty());
+}
+
+#[test]
+fn native_seek_false_and_hresult_are_not_retried_or_read_back() {
+    for outcome in [
+        Ok(false),
+        Err(MediaError::with_hresult(
+            MediaErrorKind::Rejected,
+            "Native seek failure",
+            -89,
+        )),
+    ] {
+        let (mut owner, record) = watched_fixture();
+        let old = displayed(&mut owner);
+        record.borrow_mut().seek_result = outcome.clone();
+        record.borrow_mut().log.clear();
+        let error = owner.execute(seek_command(&old, 10)).unwrap_err();
+        match outcome {
+            Ok(false) => {
+                assert_eq!(error.kind, MediaErrorKind::Rejected);
+                assert_eq!(error.hresult, None);
+            }
+            Err(expected) => assert_eq!(error, expected),
+            Ok(true) => unreachable!(),
+        }
+        assert_eq!(record.borrow().seek_effects, [(1, 10)]);
+        assert!(!record.borrow().log.contains(&"snapshot"));
+    }
+}
+
+#[test]
+fn signed_exact_native_range_seek_requires_explicit_authoritative_readback() {
+    let (mut owner, record) = watched_fixture();
+    record.borrow_mut().seek_range = Ok((-90, 50));
+    let old = displayed(&mut owner);
+    assert_eq!(
+        (
+            old.seek.as_ref().unwrap().min_ticks,
+            old.seek.as_ref().unwrap().max_ticks
+        ),
+        (-90, 50)
+    );
+    record.borrow_mut().log.clear();
+    for target in [-90, -25, 50] {
+        owner.execute(seek_command(&old, target)).unwrap();
+    }
+    assert_eq!(record.borrow().seek_effects, [(1, -90), (1, -25), (1, 50)]);
+    assert!(!record.borrow().log.contains(&"snapshot"));
+    assert_eq!(old.timeline.as_ref().unwrap().position_ticks, 300_000_000);
+    record
+        .borrow_mut()
+        .timeline
+        .as_mut()
+        .unwrap()
+        .position_ticks = -25;
+    let readback = displayed(&mut owner);
+    assert_eq!(readback.timeline.unwrap().position_ticks, -25);
+    assert_eq!(readback.seek, old.seek);
+}
+
+#[test]
+fn metadata_callback_during_snapshot_rejects_stale_metadata_revision() {
+    for event in [Event::Properties, Event::Current] {
+        let (mut owner, record) = watched_fixture();
+        let old = displayed(&mut owner);
+        record.borrow_mut().snapshot_callback = Some(event);
+        assert_eq!(
+            owner.read().unwrap_err().kind,
+            MediaErrorKind::SessionChanged
+        );
+        assert_eq!(
+            owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+            MediaErrorKind::SessionChanged
+        );
+        assert!(record.borrow().seek_effects.is_empty());
+        assert_ne!(
+            displayed(&mut owner).seek.unwrap().revision,
+            old.seek.unwrap().revision
+        );
+    }
+}
+
+#[test]
+fn final_current_change_or_range_callback_rejects_before_native_seek() {
+    for event in [None, Some(Event::Properties), Some(Event::Current)] {
+        let (mut owner, record) = watched_fixture();
+        let old = displayed(&mut owner);
+        if let Some(event) = event {
+            record.borrow_mut().range_callback = Some(event);
+        } else {
+            record.borrow_mut().range_replacement = Some(2);
+        }
+        assert_eq!(
+            owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+            MediaErrorKind::SessionChanged
+        );
+        assert!(record.borrow().seek_effects.is_empty());
+    }
+}
+
+#[test]
+fn retired_metadata_callback_generation_cannot_revoke_rebound_seek() {
+    let (mut owner, record) = watched_fixture();
+    let late = record.borrow().registrations[2].3.clone();
+    record.borrow_mut().replace(2);
+    owner.refresh_watch().unwrap();
+    let rebound = displayed(&mut owner);
+    late();
+    assert_eq!(displayed(&mut owner).seek, rebound.seek);
+    owner.execute(seek_command(&rebound, 10)).unwrap();
+    assert_eq!(record.borrow().seek_effects, [(2, 10)]);
+    drop(owner);
+    late();
+    assert_eq!(record.borrow().seek_effects, [(2, 10)]);
+}
+
+#[test]
+fn exhausted_seek_revision_preserves_other_session_facts_and_transport() {
+    let (mut owner, record) = watched_fixture();
+    let old = displayed(&mut owner);
+    owner.exhaust_observation_revisions();
+    let fresh = displayed(&mut owner);
+    assert_eq!(fresh.key, old.key);
+    assert_eq!(fresh.title, old.title);
+    assert_eq!(fresh.author, old.author);
+    assert_eq!(fresh.playback, old.playback);
+    assert_eq!(fresh.capabilities, old.capabilities);
+    assert_eq!(fresh.timeline, old.timeline);
+    assert_eq!(fresh.artwork, old.artwork);
+    assert_eq!(fresh.artwork_notice, old.artwork_notice);
+    assert_eq!(fresh.seek.unwrap_err().kind, MediaErrorKind::Other);
+    assert_eq!(
+        owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+        MediaErrorKind::Other
+    );
+    assert!(record.borrow().seek_effects.is_empty());
+    owner
+        .execute(command(fresh.key, MediaAction::Toggle))
+        .unwrap();
+    assert_eq!(record.borrow().effects, [(1, MediaAction::Toggle)]);
+}
+
+#[test]
+fn seek_observation_requires_watch_and_independent_native_range() {
+    let (mut owner, record) = fixture();
+    let unwatched = displayed(&mut owner);
+    assert_eq!(
+        unwatched.seek.unwrap_err().kind,
+        MediaErrorKind::CommandUnavailable
+    );
+    owner.start_watch(dirty_counter().0).unwrap();
+    record.borrow_mut().timeline = Err(MediaError::new(
+        MediaErrorKind::Unavailable,
+        "Timeline unavailable",
+    ));
+    record.borrow_mut().seek_range = Ok((-50, 50));
+    let session = displayed(&mut owner);
+    assert!(session.timeline.is_err());
+    assert_eq!(
+        (
+            session.seek.as_ref().unwrap().min_ticks,
+            session.seek.as_ref().unwrap().max_ticks
+        ),
+        (-50, 50)
+    );
+    owner.execute(seek_command(&session, -10)).unwrap();
+    assert_eq!(record.borrow().seek_effects, [(1, -10)]);
+}
+
+#[test]
+fn metadata_callback_during_snapshot_range_rejects_publication() {
+    let (mut owner, record) = watched_fixture();
+    let old = displayed(&mut owner);
+    record.borrow_mut().range_callback = Some(Event::Properties);
+    assert_eq!(
+        owner.read().unwrap_err().kind,
+        MediaErrorKind::SessionChanged
+    );
+    assert_eq!(
+        owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+        MediaErrorKind::SessionChanged
+    );
+    assert!(record.borrow().seek_effects.is_empty());
+}
+
+#[test]
+fn detached_session_aba_rebind_rejects_old_seek_without_manager_callback() {
+    let (mut owner, record) = watched_fixture();
+    record.borrow_mut().live = vec![1, 2];
+    let old = displayed(&mut owner);
+    record.borrow_mut().current = Ok(Some(2));
+    owner.refresh_watch().unwrap();
+    record.borrow_mut().current = Ok(Some(1));
+    owner.refresh_watch().unwrap();
+    assert_eq!(
+        owner.execute(seek_command(&old, 10)).unwrap_err().kind,
+        MediaErrorKind::SessionChanged
+    );
+    assert!(record.borrow().seek_effects.is_empty());
+    let fresh = displayed(&mut owner);
+    assert_eq!(fresh.key, old.key);
+    let old_observation = old.seek.as_ref().unwrap();
+    let fresh_observation = fresh.seek.as_ref().unwrap();
+    assert_eq!(fresh_observation.min_ticks, old_observation.min_ticks);
+    assert_eq!(fresh_observation.max_ticks, old_observation.max_ticks);
+    assert_ne!(fresh_observation.revision, old_observation.revision);
+    owner.execute(seek_command(&fresh, 10)).unwrap();
+    assert_eq!(record.borrow().seek_effects, [(1, 10)]);
 }

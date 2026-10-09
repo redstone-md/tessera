@@ -203,6 +203,12 @@ impl PanelController {
                         quick.request_media(action, identity.as_str());
                     }
                 });
+            let seek_admission = Rc::clone(&admitted);
+            quick.component().on_media_seek_requested(move |fraction| {
+                if let Some(quick) = seek_admission() {
+                    quick.request_seek(fraction);
+                }
+            });
             quick.component().on_media_refresh_requested(move || {
                 if let Some(quick) = admitted() {
                     quick.retry_media();

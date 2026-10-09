@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 
 use tessera_system::media::{
-    MediaCommand, MediaCommandCompletion, MediaError, MediaErrorKind, MediaEvent,
-    MediaReadCompletion, MediaSnapshot,
+    MediaCommandCompletion, MediaError, MediaErrorKind, MediaEvent, MediaReadCompletion,
+    MediaRequest, MediaSnapshot,
 };
 
 use crate::single_flight::{Flight, FlightGate};
@@ -29,9 +29,14 @@ type Completion<T> = Box<dyn FnOnce(Result<T, MediaError>) + Send + 'static>;
 /// the actor additionally calls idempotent `stop_watch` on any failure.
 pub(crate) trait Driver: 'static {
     fn read(&mut self) -> Result<MediaSnapshot, MediaError>;
-    fn execute(&mut self, command: MediaCommand) -> Result<(), MediaError>;
-    fn start_watch(&mut self, dirty: Arc<dyn Fn() + Send + Sync>) -> Result<(), MediaError>;
+    fn execute(&mut self, command: MediaRequest) -> Result<(), MediaError>;
+    fn start_watch(&mut self, dirty: WatchCallback) -> Result<(), MediaError>;
     fn refresh_watch(&mut self) -> Result<(), MediaError>;
+    /// Drains independent watch retirement discovered during a read, including
+    /// when usable session facts were returned. Does not retry registration.
+    fn take_watch_failure(&mut self) -> Option<MediaError> {
+        None
+    }
     fn stop_watch(&mut self);
 }
 
@@ -54,7 +59,7 @@ impl QueueLifetime {
 
     pub(super) fn execute(
         &self,
-        command: MediaCommand,
+        command: MediaRequest,
         completion: MediaCommandCompletion,
     ) -> Result<(), MediaError> {
         let flight = self.flight.try_enter().ok_or_else(busy)?;
@@ -169,17 +174,21 @@ impl Subscription {
 struct DirtyState {
     enabled: AtomicBool,
     pending: AtomicBool,
+    seek_invalidated: AtomicBool,
 }
 
 impl DirtyState {
-    fn callback(self: &Arc<Self>, sender: SyncSender<Message>) -> Arc<dyn Fn() + Send + Sync> {
+    fn callback(self: &Arc<Self>, sender: SyncSender<Message>) -> WatchCallback {
         let state = Arc::clone(self);
-        Arc::new(move || {
-            if state.enabled.load(Ordering::Acquire) && !state.pending.swap(true, Ordering::AcqRel)
-            {
-                // No native access, decoding, user delivery, waits or unbounded
-                // messages occur on the event ABI. Full preserves pending work.
-                let _ = sender.try_send(Message::Wake);
+        Arc::new(move |event| {
+            if state.enabled.load(Ordering::Acquire) {
+                if event == MediaEvent::SeekInvalidated {
+                    state.seek_invalidated.store(true, Ordering::Release);
+                }
+                if !state.pending.swap(true, Ordering::AcqRel) {
+                    // The ABI only records invalidation and wakes the same owner.
+                    let _ = sender.try_send(Message::Wake);
+                }
             }
         })
     }
@@ -187,6 +196,7 @@ impl DirtyState {
     fn disable(&self) {
         self.enabled.store(false, Ordering::Release);
         self.pending.store(false, Ordering::Release);
+        self.seek_invalidated.store(false, Ordering::Release);
     }
 }
 
@@ -228,7 +238,7 @@ impl<T> Drop for Request<T> {
 
 enum Message {
     Read(Request<MediaSnapshot>),
-    Execute(MediaCommand, Request<()>),
+    Execute(MediaRequest, Request<()>),
     Subscribe(Arc<Subscription>),
     Wake,
 }
@@ -313,6 +323,8 @@ impl<D: Driver, F: FnMut() -> Result<D, MediaError>> Actor<D, F> {
                 drop(message);
                 break;
             }
+            // Revoke UI intent before handling a previously queued request.
+            self.publish_seek_invalidation();
             match message {
                 Message::Read(mut request) => {
                     self.retry_initialization();
@@ -321,11 +333,13 @@ impl<D: Driver, F: FnMut() -> Result<D, MediaError>> Actor<D, F> {
                         snapshot.current = snapshot.current.map(|session| session.bounded());
                         snapshot
                     });
+                    self.reconcile_read_watch();
                     request.finish(result);
                 }
                 Message::Execute(command, mut request) => {
-                    // Never initialize/retry/replay a transport intent.
-                    let result = self.call_driver("transport", |driver| driver.execute(command));
+                    // Never initialize/retry/replay an accepted media intent.
+                    let result =
+                        self.call_driver("media request", |driver| driver.execute(command));
                     request.finish(result);
                 }
                 Message::Subscribe(subscription) => self.subscribe(subscription),
@@ -403,6 +417,7 @@ impl<D: Driver, F: FnMut() -> Result<D, MediaError>> Actor<D, F> {
         let dirty = Arc::new(DirtyState {
             enabled: AtomicBool::new(true),
             pending: AtomicBool::new(false),
+            seek_invalidated: AtomicBool::new(false),
         });
         let callback = dirty.callback(self.sender.clone());
         self.dirty = Some(dirty);
@@ -415,14 +430,42 @@ impl<D: Driver, F: FnMut() -> Result<D, MediaError>> Actor<D, F> {
         self.set_watch_status(status);
     }
 
+    fn reconcile_read_watch(&mut self) {
+        if self.dirty.is_none() {
+            return;
+        }
+        let status = self.call_driver("read watch status", |driver| {
+            driver.take_watch_failure().map_or(Ok(()), Err)
+        });
+        if status.is_err() {
+            // Native read retirement must also release actor watch admission.
+            // Only a subsequent explicit read attempts fresh registration.
+            self.retire_watch();
+            self.set_watch_status(status);
+        }
+    }
+
+    fn publish_seek_invalidation(&self) {
+        let seek_invalidated = self.dirty.as_ref().is_some_and(|dirty| {
+            dirty.enabled.load(Ordering::Acquire)
+                && dirty.seek_invalidated.swap(false, Ordering::AcqRel)
+        });
+        if seek_invalidated {
+            self.deliver(MediaEvent::SeekInvalidated);
+        }
+    }
+
     fn refresh_dirty(&mut self) {
         let pending = self.dirty.as_ref().is_some_and(|dirty| {
             dirty.enabled.load(Ordering::Acquire) && dirty.pending.swap(false, Ordering::AcqRel)
         });
+        // Take pending before publishing the reason: a coalesced callback
+        // between these operations cannot strand its reason without a wake.
+        self.publish_seek_invalidation();
         if !pending || self.subscriptions.is_empty() {
             return;
         }
-        // Current-session rebinding always precedes invalidation publication.
+        // Current-session rebinding precedes publication of refreshed facts.
         let status = self.call_driver("watch refresh", Driver::refresh_watch);
         if status.is_err() {
             self.retire_watch();

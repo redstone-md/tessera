@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tessera_system::audio::AudioCompletion;
 use tessera_system::media::{
-    MediaCapabilities, MediaCommand, MediaCommandCompletion, MediaError, MediaEvent, MediaHost,
-    MediaPlayback, MediaReadCompletion, MediaSession, MediaSessionKey, MediaSnapshot,
+    MediaCapabilities, MediaCommandCompletion, MediaError, MediaErrorKind, MediaEvent, MediaHost,
+    MediaPlayback, MediaReadCompletion, MediaRequest, MediaSession, MediaSessionKey, MediaSnapshot,
     MediaTimeline,
 };
 
@@ -26,6 +26,7 @@ struct RecordingPopupMedia {
     reads: AtomicUsize,
     events: Arc<Mutex<Vec<&'static str>>>,
     observation: Mutex<MediaSnapshot>,
+    commands: Mutex<Vec<MediaRequest>>,
 }
 
 struct PopupMediaLease(Arc<Mutex<Vec<&'static str>>>);
@@ -49,8 +50,14 @@ impl MediaHost for RecordingPopupMedia {
         Ok(())
     }
 
-    fn execute(&self, _: MediaCommand, _: MediaCommandCompletion) -> Result<(), MediaError> {
-        panic!("Quick Settings lifecycle/fit fixtures must not dispatch transports")
+    fn execute(
+        &self,
+        request: MediaRequest,
+        completion: MediaCommandCompletion,
+    ) -> Result<(), MediaError> {
+        self.commands.lock().push(request);
+        completion(Ok(()));
+        Ok(())
     }
 
     fn subscribe(
@@ -328,6 +335,7 @@ fn setup() -> (
             reads: AtomicUsize::new(0),
             events: Arc::clone(&audio.events),
             observation: Mutex::default(),
+            commands: Mutex::default(),
         }),
         media_provider_calls: AtomicUsize::new(0),
     });
@@ -1505,6 +1513,10 @@ fn late_media_and_timeline_refit_preserves_audio_intent_attachment_and_native_le
                 max_seek_ticks: 1_800_000_000,
                 last_updated_utc_ticks: Some(123),
             }),
+            seek: Err(MediaError::new(
+                MediaErrorKind::Unsupported,
+                "Seek not exposed by lifecycle fixture",
+            )),
             artwork: None,
             artwork_notice: None,
         }),

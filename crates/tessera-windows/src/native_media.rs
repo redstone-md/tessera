@@ -33,20 +33,24 @@ impl crate::media::actor::Driver for NativeMediaDriver {
 
     fn execute(
         &mut self,
-        command: tessera_system::media::MediaCommand,
+        command: tessera_system::media::MediaRequest,
     ) -> Result<(), tessera_system::media::MediaError> {
         self.0.execute(command)
     }
 
     fn start_watch(
         &mut self,
-        dirty: std::sync::Arc<dyn Fn() + Send + Sync>,
+        dirty: std::sync::Arc<dyn Fn(tessera_system::media::MediaEvent) + Send + Sync>,
     ) -> Result<(), tessera_system::media::MediaError> {
         self.0.start_watch(dirty)
     }
 
     fn refresh_watch(&mut self) -> Result<(), tessera_system::media::MediaError> {
         self.0.refresh_watch()
+    }
+
+    fn take_watch_failure(&mut self) -> Option<tessera_system::media::MediaError> {
+        self.0.take_watch_failure()
     }
 
     fn stop_watch(&mut self) {

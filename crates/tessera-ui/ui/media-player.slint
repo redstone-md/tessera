@@ -3,8 +3,9 @@
 
 import { SeelenPalette } from "palette.slint";
 import { PopoverTokens } from "popover.slint";
-import { TileButton } from "tiles.slint";
+import { TileButton, TileBounds } from "tiles.slint";
 import { DockMediaView, MediaAction } from "dock-media.slint";
+import { CommonSlider } from "common-slider.slint";
 
 component PlayerText inherits Text {
     color: SeelenPalette.foreground;
@@ -42,14 +43,39 @@ component TransportButton inherits TileButton {
     }
 }
 
-// Current-only projection of the shared media domain. Timeline is an observed
-// fact, not a clock or a seek input. Unknown timeline never gates transports.
+// Current-only projection of the shared media domain. Observed timeline and
+// Rust-scoped seek preview remain separate; neither gates the transports.
 export component MediaPlayer inherits Rectangle {
     in property <DockMediaView> view;
     in property <bool> timeline-available;
     in property <string> timeline-notice;
     in property <string> timeline-time;
     in property <float> timeline-progress;
+    in property <bool> seek-enabled;
+    in property <float> seek-progress;
+    in property <string> seek-notice;
+    in property <bool> seek-preview-active;
+    in property <float> seek-preview-progress;
+    in property <string> seek-preview-time;
+    // Native Slider assignments must not overwrite the observed/preview
+    // projection. Keep its writable value local and reapply projection batches.
+    property <float> displayed-seek-progress;
+    public function project-seek() {
+        root.displayed-seek-progress = clamp(root.seek-preview-active
+            ? root.seek-preview-progress : root.seek-progress, 0, 1);
+    }
+    changed seek-progress => { root.project-seek(); }
+    changed seek-preview-progress => { root.project-seek(); }
+    changed seek-preview-active => { root.project-seek(); }
+    out property <TileBounds> seek-bounds: {
+        origin: seek-slider.absolute-position,
+        width: seek-slider.width,
+        height: seek-slider.height
+    };
+    callback seek-requested(float);
+    callback seek-released();
+    callback seek-key-pressed(string);
+    callback seek-key-released(string);
     in property <length> measure-width;
     callback action-requested(MediaAction, string);
     accessible-role: groupbox;
@@ -64,15 +90,20 @@ export component MediaPlayer inherits Rectangle {
         + (root.view.author == "" ? "" : "\n" + root.view.author)
         + (root.view.playback == "" ? "" : "\n" + root.view.playback);
     property <string> observed-time: root.timeline-time == "" ? "" : @tr("Observed position: ") + root.timeline-time;
-    property <int> block-count: 2 + (root.view.current-present ? 1 : 0)
+    property <bool> preview-row-present: root.seek-enabled || root.timeline-available;
+    property <string> preview-time: @tr("Preview position: ") + root.seek-preview-time;
+    property <int> block-count: 3 + (root.view.current-present ? 1 : 0)
         + (root.view.status != "" ? 1 : 0) + (root.notices != "" ? 1 : 0)
-        + (root.timeline-available ? 1 : 0) + (root.timeline-notice != "" ? 1 : 0);
+        + (root.timeline-available ? 1 : 0) + (root.timeline-notice != "" ? 1 : 0)
+        + (root.seek-notice != "" ? 1 : 0) + (root.preview-row-present ? 1 : 0);
     out property <length> natural-height: heading-metrics.preferred-height
         + (root.view.current-present ? max(40px, metadata-metrics.preferred-height) + 30px : 0px)
         + (root.view.status != "" ? status-metrics.preferred-height : 0px)
         + (root.notices != "" ? notice-metrics.preferred-height : 0px)
         + (root.timeline-available ? 4px + (root.observed-time != "" ? time-metrics.preferred-height + 4px : 0px) : 0px)
+        + 24px + (root.seek-notice != "" ? seek-metrics.preferred-height : 0px)
         + (root.timeline-notice != "" ? timeline-metrics.preferred-height : 0px)
+        + (root.preview-row-present ? preview-metrics.preferred-height : 0px)
         + max(0, root.block-count - 1) * 8px;
     height: root.natural-height;
 
@@ -83,6 +114,10 @@ export component MediaPlayer inherits Rectangle {
     notice-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.notices; accessible-role: none; accessible-label: ""; }
     time-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.observed-time; accessible-role: none; accessible-label: ""; }
     timeline-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.timeline-notice; accessible-role: none; accessible-label: ""; }
+    seek-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.seek-notice; accessible-role: none; accessible-label: ""; }
+    // A single reserved line never changes height with the tentative time,
+    // so preview projection cannot move the Slider and revoke its gesture.
+    preview-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: @tr("Preview position: ") + "0:00"; wrap: no-wrap; accessible-role: none; accessible-label: ""; }
 
     public function cancel-input() {
         previous.cancel-input();
@@ -137,6 +172,59 @@ export component MediaPlayer inherits Rectangle {
                 Rectangle { width: parent.width * clamp(root.timeline-progress, 0, 1); height: parent.height; background: SeelenPalette.foreground; border-radius: 2px; accessible-role: none; }
             }
         }
+        if root.preview-row-present: Rectangle {
+            height: preview-metrics.preferred-height;
+            accessible-role: none;
+            if root.seek-preview-active && root.seek-preview-time != "": PlayerText {
+                width: parent.width;
+                height: parent.height;
+                text: root.preview-time;
+                wrap: no-wrap;
+                overflow: elide;
+            }
+        }
+        // Keep the native Slider alive across unavailable/current projections.
+        // Rust captures authority before pointer input or native key changes;
+        // disabled/reenabled widget internals are never used as cancellation.
+        FocusScope {
+            height: 24px;
+            horizontal-stretch: 1;
+            focus-on-tab-navigation: false;
+            forward-focus: seek-slider;
+            capture-key-pressed(event) => {
+                if seek-slider.enabled && seek-slider.has-focus
+                    && (event.text == Key.LeftArrow || event.text == Key.RightArrow
+                        || event.text == Key.Home || event.text == Key.End) {
+                    root.seek-key-pressed(event.text);
+                }
+                return reject;
+            }
+            capture-key-released(event) => {
+                if seek-slider.has-focus
+                    && (event.text == Key.LeftArrow || event.text == Key.RightArrow
+                        || event.text == Key.Home || event.text == Key.End) {
+                    root.seek-key-released(event.text);
+                }
+                return reject;
+            }
+            seek-slider := CommonSlider {
+                width: parent.width;
+                minimum: 0;
+                maximum: 1;
+                step: 0.01;
+                enabled: root.seek-enabled && root.view.enabled && root.view.current-present;
+                value <=> root.displayed-seek-progress;
+                accessible-label: @tr("Media position");
+                accessible-description: root.seek-notice != "" ? root.seek-notice
+                    : root.seek-preview-active ? root.preview-time : root.observed-time;
+                changed(progress) => {
+                    if self.enabled { root.seek-requested(clamp(progress, 0, 1)); }
+                }
+                // Release ends local preview only. Native changed owns requests.
+                released(progress) => { root.seek-released(); }
+            }
+        }
+        if root.seek-notice != "": PlayerText { text: root.seek-notice; color: SeelenPalette.secondary; }
         if root.timeline-notice != "": PlayerText { text: root.timeline-notice; color: SeelenPalette.secondary; }
     }
 }

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-import { Slider, ScrollView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { TileButton, FocusTokens } from "tiles.slint";
+import { TileButton, FocusTokens, TileBounds } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { DockMediaView, MediaAction } from "dock-media.slint";
 import { MediaPlayer } from "media-player.slint";
+import { CommonSlider } from "common-slider.slint";
 
 export enum AudioRoute { output, input }
 
@@ -18,17 +19,10 @@ component AudioText inherits Text {
     accessible-label: "";
 }
 
-// The public 1.18.1 Slider exposes no track/thumb styling. Keep its native
-// appearance behind this seam rather than importing private SliderBase or
-// replacing its pointer, focus, keyboard and accessibility implementation.
-// Its changed/released callbacks are user actions, NOT property observers:
-// projecting `value` never calls SliderBase.set-value or emits a request.
-component AudioSlider inherits Slider {
+component AudioSlider inherits CommonSlider {
     minimum: 0;
     maximum: 100;
     step: 1;
-    orientation: horizontal;
-    height: 24px;
 }
 
 component AudioRow inherits Rectangle {
@@ -126,6 +120,40 @@ export component QuickSettings inherits Window {
     in property <string> timeline-notice;
     in property <string> timeline-time;
     in property <float> timeline-progress;
+    in property <bool> seek-enabled;
+    in property <float> seek-progress;
+    in property <string> seek-notice;
+    in property <bool> seek-preview-active;
+    in property <float> seek-preview-progress;
+    in property <string> seek-preview-time;
+    out property <TileBounds> seek-bounds: player.seek-bounds;
+    out property <TileBounds> seek-clip-bounds: {
+        origin: media-scroll.absolute-position,
+        width: media-scroll.visible-width,
+        height: media-scroll.visible-height
+    };
+    // Fail closed for a partially clipped control: pointer capture must never
+    // authorize an off-viewport part of the native slider.
+    out property <bool> seek-visible: root.media-view.enabled && root.media-view.current-present
+        && root.seek-bounds.width > 0px && root.seek-bounds.height > 0px
+        && root.seek-bounds.origin.x >= root.seek-clip-bounds.origin.x
+        && root.seek-bounds.origin.y >= root.seek-clip-bounds.origin.y
+        && root.seek-bounds.origin.x + root.seek-bounds.width
+            <= root.seek-clip-bounds.origin.x + root.seek-clip-bounds.width
+        && root.seek-bounds.origin.y + root.seek-bounds.height
+            <= root.seek-clip-bounds.origin.y + root.seek-clip-bounds.height;
+    callback media-seek-requested(float);
+    callback media-seek-released();
+    callback media-seek-key-pressed(string);
+    callback media-seek-key-released(string);
+    callback media-seek-invalidated();
+    // Geometry is a frame recheck, not unconditional native authority revocation.
+    callback media-seek-geometry-changed();
+    // Native command terminal notification; never a slider release command.
+    callback media-seek-finished();
+    changed seek-bounds => { root.media-seek-geometry-changed(); }
+    changed seek-clip-bounds => { root.media-seek-geometry-changed(); }
+    changed seek-visible => { if !root.seek-visible { root.media-seek-geometry-changed(); } }
     callback media-action-requested(MediaAction, string);
     // Root applies the same current popup/Toolbar admission as transports.
     callback media-refresh-requested();
@@ -218,7 +246,13 @@ export component QuickSettings inherits Window {
     public function focus-content() {
         escape-scope.focus();
     }
+    // Synchronous boundary after observed/preview setters; property change
+    // handlers also cover declarative updates on the next event-loop turn.
+    public function project-seek() {
+        player.project-seek();
+    }
     public function cancel-media-input() {
+        root.media-seek-invalidated();
         player.cancel-input();
     }
     forward-focus: escape-scope;
@@ -237,7 +271,7 @@ export component QuickSettings inherits Window {
             return reject;
         }
     body := PopoverBody {
-        ScrollView {
+        media-scroll := ScrollView {
             x: root.viewport-inset;
             y: root.viewport-inset;
             width: max(0px, body.content-width - 2 * root.viewport-inset);
@@ -307,6 +341,16 @@ export component QuickSettings inherits Window {
                     timeline-notice: root.timeline-notice;
                     timeline-time: root.timeline-time;
                     timeline-progress: root.timeline-progress;
+                    seek-enabled: root.seek-enabled;
+                    seek-progress: root.seek-progress;
+                    seek-notice: root.seek-notice;
+                    seek-preview-active: root.seek-preview-active;
+                    seek-preview-progress: root.seek-preview-progress;
+                    seek-preview-time: root.seek-preview-time;
+                    seek-requested(progress) => { root.media-seek-requested(progress); }
+                    seek-released => { root.media-seek-released(); }
+                    seek-key-pressed(key) => { root.media-seek-key-pressed(key); }
+                    seek-key-released(key) => { root.media-seek-key-released(key); }
                     action-requested(action, identity) => { root.media-action-requested(action, identity); }
                 }
                 HorizontalLayout {
