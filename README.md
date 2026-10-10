@@ -387,6 +387,9 @@ modes through the existing full-record Save/Cancel transaction. Defaults remain
 Dock On overlap and Toolbar Never; default schema-6 keys are omitted. The same
 native visibility actor handles pointer reveal and delays, preserving fullscreen
 protection and fail-visible behavior when native hints are unavailable.
+Material Appearance supports both the five presets and exact custom `#RRGGBB`.
+Custom text needs explicit Preview before Save; invalid text leaves paint intact.
+Both routes reuse the existing typed RGB/HCT and captured-theme boundary.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

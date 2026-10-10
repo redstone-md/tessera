@@ -146,6 +146,15 @@ export component Panel inherits Window {
     in-out property <int> source-rgb: 8168540; // #7ca45c
     in property <string> source-hex: "#7ca45c";
     in-out property <int> source-preset-index: 0;
+    in-out property <string> custom-source-hex: "#7ca45c";
+    in-out property <string> custom-source-notice;
+    out property <bool> source-custom-input-active;
+    out property <bool> source-custom-visible: root.selected-page == 1 && !SeelenPalette.reference-mode;
+    changed source-hex => { root.reset-source-color-input(root.source-hex); }
+    public function reset-source-color-input(value: string) {
+        root.custom-source-hex = value;
+        root.custom-source-notice = "";
+    }
     in-out property <int> dock-edge-index;
     in-out property <bool> compact;
     in-out property <int> start-of-week-index: 0;
@@ -221,6 +230,7 @@ export component Panel inherits Window {
     // A shared live appearance preview updates every surface without Save.
     callback appearance-changed();
     callback source-preset-requested(int);
+    callback source-custom-requested(string) -> bool;
     // The one-shot dock-mode readiness pulse: `run` wires this to the
     // supervisor heartbeat armer on the UI thread (the heartbeat is not
     // Send, so the Send observation route reaches it only through here).
@@ -625,6 +635,47 @@ export component Panel inherits Window {
                                 max-height: 24px;
                                 accessible-label: "Compact";
                                 checked <=> root.compact;
+                            }
+                        }
+                        if !SeelenPalette.reference-mode: SettingsRow {
+                            label: "Custom color";
+                            description: root.custom-source-notice == ""
+                                ? "Enter #RRGGBB, Preview to apply, then Save to keep."
+                                : root.custom-source-notice;
+                            LineEdit {
+                                width: 104px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Custom Material source color in #RRGGBB format";
+                                text <=> root.custom-source-hex;
+                            }
+                            TileButton {
+                                min-width: 68px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.custom-source-hex;
+                                accessible-text: "Preview custom Material source color";
+                                clicked => {
+                                    let origin = self.absolute-position;
+                                    let viewport = page-scroll.absolute-position;
+                                    root.source-custom-input-active = self.width > 0px && self.height > 0px
+                                        && origin.x >= viewport.x && origin.y >= viewport.y
+                                        && origin.x + self.width <= viewport.x + page-scroll.visible-width
+                                        && origin.y + self.height <= viewport.y + page-scroll.visible-height;
+                                    if root.source-custom-input-active {
+                                        let applied = root.source-custom-requested(root.custom-source-hex);
+                                        root.custom-source-notice = applied ? ""
+                                            : "Preview was not applied. Enter an exact #RRGGBB color in this Settings view.";
+                                    }
+                                    root.source-custom-input-active = false;
+                                }
+                                Text {
+                                    text: "Preview";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
                             }
                         }
                     }

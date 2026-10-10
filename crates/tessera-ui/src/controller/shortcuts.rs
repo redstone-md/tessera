@@ -382,6 +382,10 @@ impl PanelController {
         if !self.root_current() {
             return;
         }
+        panel.invoke_reset_source_color_input(format!("#{:06x}", saved.source_seed().rgb()).into());
+        if !self.root_current() {
+            return;
+        }
         self.project_bar_visibility_preferences(&panel);
         if !self.root_current() {
             return;

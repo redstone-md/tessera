@@ -38,6 +38,7 @@ mod power_menu;
 mod quick_settings;
 mod recycle_bin;
 mod shortcuts;
+mod source_color;
 mod startup;
 mod telemetry;
 mod tooltip;
@@ -442,6 +443,7 @@ impl PanelController {
                 panel.set_source_rgb(rgb as i32);
             }
         });
+        self.wire_custom_source_color(panel);
         self.wire_power(panel);
     }
 

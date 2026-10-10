@@ -202,6 +202,11 @@ shows its actual hex without falsely selecting Green. Strict schema 6 stores
 only source RGB, not preset indices or computed colors; exact schema 5 and older
 records migrate read-only with default Green. Independent collection/media
 writes preserve applied source intent rather than committing preview paint.
+Material Appearance also accepts an exact opaque `#RRGGBB` custom source through
+stock editing and the existing one-shot Preview control. Incomplete/invalid input
+never changes RGB or computes a palette. Preview uses the same typed seed,
+captured-theme and Save/Cancel path; no extra schema field/engine is introduced.
+The input/error draft is reset by a source change and explicit Cancel.
 **Source-color local proof:** parent-owned Rust 1.92 locked workspace tests passed
 1,454 cases across 19 suites (827 UI; two separately gated GL cases ignored).
 The original genuine pointer/keyboard/AX preset test reproduced a stale ComboBox
