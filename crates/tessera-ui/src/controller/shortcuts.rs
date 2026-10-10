@@ -378,6 +378,10 @@ impl PanelController {
         if !self.root_current() {
             return;
         }
+        panel.set_telemetry_enabled(saved.telemetry_enabled());
+        if !self.root_current() {
+            return;
+        }
         if self.dock.is_some() {
             let _ = panel.hide();
         }

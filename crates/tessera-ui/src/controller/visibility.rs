@@ -288,6 +288,7 @@ impl PanelController {
     /// frame is recovery placement only and must never count as fresh readiness.
     pub(super) fn retire_visibility_geometry(&self) -> Result<(), String> {
         self.stop_battery_root();
+        self.stop_telemetry_root();
         self.cancel_dock_reorder();
         let (retired, frame, revision) = {
             let mut root = self.visibility_geometry.borrow_mut();
@@ -388,6 +389,7 @@ impl PanelController {
             // Revoke affected popup input and drop attachment before native hide.
             if kind == SurfaceKind::Toolbar {
                 self.stop_battery_root();
+                self.stop_telemetry_root();
             }
             self.popup_operation.replace(Rc::new(()));
             self.dismiss_tooltip(false);
@@ -424,6 +426,12 @@ impl PanelController {
                     return Ok(());
                 }
             }
+            if kind == SurfaceKind::Toolbar {
+                self.stop_telemetry_root();
+                if !current() {
+                    return Ok(());
+                }
+            }
             self.detach_lease(kind);
             if !current() {
                 return Ok(());
@@ -451,6 +459,9 @@ impl PanelController {
             self.sync_dock_reorder();
         } else if kind == SurfaceKind::Toolbar && current() {
             self.sync_battery_root();
+            if current() {
+                self.sync_telemetry_root();
+            }
         }
         Ok(())
     }

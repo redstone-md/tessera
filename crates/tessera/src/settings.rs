@@ -12,9 +12,11 @@ use tessera_core::SourceSeed;
 mod dock;
 mod general;
 mod shortcuts;
+mod toolbar;
 
 use shortcuts::ShortcutPreferences;
 use tessera_system::shortcuts::ShortcutConfig;
+use toolbar::ToolbarPreferences;
 
 use dock::LegacyDockPreferences;
 pub(crate) use dock::{DockMiddleClickAction, DockPreferences};
@@ -103,6 +105,8 @@ pub(crate) struct Preferences {
     launcher: LauncherPreferences,
     general: GeneralPreferences,
     dock: DockPreferences,
+    #[serde(default, skip_serializing_if = "ToolbarPreferences::is_default")]
+    toolbar: ToolbarPreferences,
     shortcuts: ShortcutPreferences,
 }
 
@@ -220,6 +224,7 @@ impl Preferences {
             launcher: LauncherPreferences::default(),
             general: GeneralPreferences::default(),
             dock: DockPreferences::default(),
+            toolbar: ToolbarPreferences::default(),
             shortcuts: ShortcutPreferences::default(),
         }
     }
@@ -274,6 +279,15 @@ impl Preferences {
 
     pub(crate) fn with_dock_middle_click(mut self, action: DockMiddleClickAction) -> Self {
         self.dock = self.dock.with_middle_click(action);
+        self
+    }
+
+    pub(crate) fn telemetry_enabled(&self) -> bool {
+        self.toolbar.telemetry_enabled()
+    }
+
+    pub(crate) fn with_telemetry_enabled(mut self, enabled: bool) -> Self {
+        self.toolbar = self.toolbar.with_telemetry_enabled(enabled);
         self
     }
 

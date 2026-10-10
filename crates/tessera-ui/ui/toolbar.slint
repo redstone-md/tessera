@@ -5,6 +5,7 @@ import { SeelenPalette } from "palette.slint";
 import { DockStatus } from "dock.slint";
 import { TileButton, TileBounds } from "tiles.slint";
 import { BatteryIndicator } from "battery.slint";
+import { TelemetryIndicator } from "telemetry.slint";
 
 // Native TileButton remains the sole input/focus/tooltip owner.
 component ToolbarButton inherits TileButton {
@@ -50,6 +51,10 @@ export component Toolbar inherits Window {
     in property <int> battery-percent;
     in property <string> battery-activation-key;
     callback battery-requested(TileBounds);
+    in property <bool> telemetry-visible: false;
+    in property <string> telemetry-text;
+    in property <string> telemetry-label;
+    callback telemetry-event-ready();
     callback quick-settings-requested(TileBounds);
     callback calendar-requested(TileBounds);
     callback network-requested(TileBounds);
@@ -63,6 +68,7 @@ export component Toolbar inherits Window {
     property <length> side-pad: 16px;
     property <length> item: 16px;
     property <length> battery-item: 72px;
+    property <length> telemetry-item: 150px;
 
     Rectangle {
         background: SeelenPalette.reference-mode ? SeelenPalette.bar.with-alpha(0.9) : transparent;
@@ -156,19 +162,30 @@ export component Toolbar inherits Window {
             y: root.inset;
             width: min(max(root.item, language-label.preferred-width) + 2 * root.pad
                 + 3 * (root.item + 2 * root.pad) + 3 * root.pad
-                + (root.battery-visible ? root.battery-item + root.pad : 0px),
+                + (root.battery-visible ? root.battery-item + root.pad : 0px)
+                + (root.telemetry-visible ? root.telemetry-item + root.pad : 0px),
                 max(0px, parent.width / 2 - clock-text.width / 2 - root.side-pad - root.pad));
             height: root.item + 2 * root.pad;
             HorizontalLayout {
             spacing: root.pad;
             alignment: end;
-            property <length> gap-budget: (root.battery-visible ? 4 : 3) * root.pad;
+            property <length> gap-budget: ((root.battery-visible ? 4 : 3)
+                + (root.telemetry-visible ? 1 : 0)) * root.pad;
             property <length> battery-budget: root.battery-visible
                 ? min(root.battery-item, max(0px, (self.width - self.gap-budget) / 2)) : 0px;
+            property <length> telemetry-budget: root.telemetry-visible
+                ? min(root.telemetry-item, max(0px, self.width - self.gap-budget
+                    - self.battery-budget - 4 * (root.item + 2 * root.pad))) : 0px;
             property <length> control-budget: min(root.item + 2 * root.pad,
-                max(0px, (self.width - self.gap-budget - self.battery-budget) / 4));
+                max(0px, (self.width - self.gap-budget - self.battery-budget - self.telemetry-budget) / 4));
             property <length> text-budget: max(0px,
-                self.width - 3 * self.control-budget - self.gap-budget - self.battery-budget);
+                self.width - 3 * self.control-budget - self.gap-budget - self.battery-budget - self.telemetry-budget);
+            if root.telemetry-visible: TelemetryIndicator {
+                width: parent.telemetry-budget;
+                height: root.item + 2 * root.pad;
+                text: root.telemetry-text;
+                status-label: root.telemetry-label;
+            }
             ToolbarButton {
                 width: min(max(root.item, language-label.preferred-width) + 2 * root.pad, parent.text-budget);
                 height: root.item + 2 * root.pad;

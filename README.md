@@ -356,6 +356,15 @@ remaining-runtime and energy-saver facts through one event-driven native owner
 shared by Toolbar and popup. Unknown/error stays visible; only confirmed
 absence or unsupported capability hides the indicator. Refresh does not poll,
 and Power & battery Settings acknowledges SDK initiation, not a visible window.
+
+Development CPU/RAM is optional and saved off by default. One bounded native
+worker samples once per second only while its admitted Toolbar is shown.
+First, stale and invalid values are unknown, never zero; CPU uses actual counter
+deltas and physical RAM uses usable/available bytes. Above 64 processors CPU
+explicitly covers the worker's primary processor group, not the whole machine.
+Hide/detach/resume retires the sampling epoch and resets CPU baseline; no idle
+sampling, chart/history, second desktop observer or fake successful read.
+Its optional schema-6 Toolbar group is omitted at the default.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

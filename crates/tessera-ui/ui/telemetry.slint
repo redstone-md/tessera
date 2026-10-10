@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+
+// Readonly text: no input owner, chart, history, or implied native action.
+export component TelemetryIndicator inherits Rectangle {
+    in property <string> text: "CPU — · RAM —";
+    in property <string> status-label: "CPU and physical memory observations unavailable";
+    preferred-width: label.preferred-width + 16px;
+    background: transparent;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.status-label;
+
+    label := Text {
+        x: 8px;
+        width: max(0px, root.width - 16px);
+        height: root.height;
+        text: root.text;
+        color: SeelenPalette.bar-content;
+        font-family: SeelenPalette.font-family;
+        font-size: SeelenPalette.body-font-size;
+        font-weight: SeelenPalette.body-font-weight;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}

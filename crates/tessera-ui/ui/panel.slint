@@ -152,6 +152,8 @@ export component Panel inherits Window {
 
     in property <bool> dock-preferences-available: false;
     in-out property <int> dock-middle-click-index: 0;
+    in property <bool> telemetry-available: false;
+    in-out property <bool> telemetry-enabled: false;
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -481,6 +483,17 @@ export component Panel inherits Window {
                         GeneralPreferences {
                             start-of-week-index <=> root.start-of-week-index;
                             compact: root.compact;
+                        }
+                        if root.telemetry-available: SettingsRow {
+                            label: "CPU and RAM";
+                            description: "Sample once per second while the Toolbar is shown. Enable after Save.";
+                            CheckBox {
+                                text: "";
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Show native CPU and RAM statistics after Save";
+                                checked <=> root.telemetry-enabled;
+                            }
                         }
                     }
                     if root.selected-page == 1: SettingsGroup {

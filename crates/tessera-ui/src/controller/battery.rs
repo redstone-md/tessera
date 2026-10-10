@@ -5,7 +5,7 @@
 
 use slint::ComponentHandle;
 
-use super::{PanelController, Rc, SurfaceKind};
+use super::{PanelController, Rc};
 use crate::battery::BatteryController;
 use crate::transient_window::TransientCache;
 
@@ -17,43 +17,7 @@ impl PanelController {
             self.stop_battery_root();
             return;
         };
-        let source = toolbar.as_weak();
-        let root = Rc::downgrade(&self.admission);
-        let power = Rc::downgrade(&self.power_admission_closed);
-        let geometry = Rc::downgrade(&self.visibility_geometry);
-        let leases = Rc::downgrade(&self.leases);
-        let core = std::sync::Arc::downgrade(&self.core);
-        let admitted: Rc<dyn Fn() -> bool> = Rc::new(move || {
-            let Some(toolbar) = source.upgrade() else {
-                return false;
-            };
-            let Some(core) = core.upgrade() else {
-                return false;
-            };
-            let Some(leases) = leases.upgrade() else {
-                return false;
-            };
-            let position = toolbar.window().position();
-            let size = toolbar.window().size();
-            root.upgrade().is_some_and(|root| root.alive.get())
-                && power.upgrade().is_some_and(|closed| !closed.get())
-                && geometry
-                    .upgrade()
-                    .is_some_and(|geometry| geometry.borrow().desired_visible(SurfaceKind::Toolbar))
-                && core
-                    .dock_context()
-                    .is_some_and(|context| !context.fullscreen_active())
-                && toolbar.window().is_visible()
-                && size.width > 0
-                && size.height > 0
-                && leases
-                    .borrow()
-                    .attachments
-                    .get(&SurfaceKind::Toolbar)
-                    .is_some_and(|lease| {
-                        lease.rect == (position.x, position.y, size.width, size.height)
-                    })
-        });
+        let admitted = self.passive_toolbar_admission(&toolbar);
         if !admitted() {
             self.stop_battery_root();
             return;

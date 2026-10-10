@@ -29,12 +29,14 @@ mod dock_utilities;
 mod geometry;
 mod launcher;
 mod native_toolbar;
+mod passive_toolbar;
 mod popups;
 mod power_display;
 mod power_menu;
 mod quick_settings;
 mod recycle_bin;
 mod shortcuts;
+mod telemetry;
 mod tooltip;
 mod user_menu;
 mod visibility;
@@ -161,6 +163,7 @@ pub(crate) struct PanelController {
     recycle_bin: RecycleBins,
     tooltips: Tooltips,
     battery: BatteryPopups,
+    telemetry: telemetry::TelemetryRoots,
     network_menu: NetworkPopups,
     bluetooth: BluetoothPopups,
     input_language: InputLanguagePopups,
@@ -233,6 +236,7 @@ impl PanelController {
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             battery: Rc::default(),
+            telemetry: Rc::default(),
             network_menu: Rc::default(),
             bluetooth: Rc::default(),
             input_language: Rc::default(),
@@ -285,6 +289,7 @@ impl PanelController {
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             battery: Rc::default(),
+            telemetry: Rc::default(),
             network_menu: Rc::default(),
             bluetooth: Rc::default(),
             input_language: Rc::default(),
@@ -380,7 +385,10 @@ impl PanelController {
     fn wire_panel(&self, panel: &Panel) {
         let applied = self.core.applied_preferences();
         panel.set_dock_middle_click_index(applied.dock_middle_click().index());
+        panel.set_telemetry_enabled(applied.telemetry_enabled());
         panel.set_dock_preferences_available(self.dock.is_some());
+        let telemetry_available = self.core.host().telemetry_host().is_some();
+        panel.set_telemetry_available(telemetry_available);
         let weak = self.clone();
         panel.on_refresh_requested(move || {
             let _ = weak.refresh();
@@ -1176,6 +1184,7 @@ impl PanelController {
         }
         self.show_launcher_tiles();
         self.update_launcher_geometry();
+        self.sync_telemetry_root();
     }
 
     fn refresh_strip(&self, dock: &Dock) {
@@ -1631,6 +1640,7 @@ impl PanelController {
             .with_source_seed(seed)
             .with_general(crate::GeneralPreferences::default().with_start_of_week(start))
             .with_dock_middle_click(middle)
+            .with_telemetry_enabled(panel.get_telemetry_enabled())
             .with_shortcuts(self.shortcut_draft());
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {

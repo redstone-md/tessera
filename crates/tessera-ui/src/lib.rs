@@ -56,6 +56,7 @@ mod recycle_bin_render_tests;
 pub(crate) mod shortcuts;
 #[cfg(test)]
 mod shortcuts_render_tests;
+pub(crate) mod telemetry;
 pub(crate) mod user_menu;
 pub(crate) mod visibility;
 // Renderer-backed tests: test-only (they need the software renderer and the
@@ -253,6 +254,7 @@ pub struct PanelPreferences {
     media_enabled: bool,
     dock_locked: bool,
     dock_middle_click: DockMiddleClickAction,
+    telemetry_enabled: bool,
     shortcuts: tessera_system::shortcuts::ShortcutConfig,
 }
 
@@ -270,6 +272,7 @@ impl PanelPreferences {
             media_enabled: false,
             dock_locked: false,
             dock_middle_click: DockMiddleClickAction::default(),
+            telemetry_enabled: false,
             shortcuts: tessera_system::shortcuts::ShortcutConfig::default(),
         }
     }
@@ -341,6 +344,16 @@ impl PanelPreferences {
 
     pub fn with_dock_middle_click(mut self, action: DockMiddleClickAction) -> Self {
         self.dock_middle_click = action;
+        self
+    }
+
+    /// Optional native CPU/RAM sampling is disabled until explicitly saved.
+    pub fn telemetry_enabled(&self) -> bool {
+        self.telemetry_enabled
+    }
+
+    pub fn with_telemetry_enabled(mut self, enabled: bool) -> Self {
+        self.telemetry_enabled = enabled;
         self
     }
 
@@ -746,6 +759,13 @@ pub trait DesktopHost: Send + Sync + 'static {
     fn file_search_host(
         &self,
     ) -> Option<std::sync::Arc<dyn tessera_system::file_search::FileSearchHost>> {
+        None
+    }
+
+    /// Optional native CPU/RAM reader, dormant until its saved Toolbar module is enabled.
+    fn telemetry_host(
+        &self,
+    ) -> Option<std::sync::Arc<dyn tessera_system::telemetry::TelemetryHost>> {
         None
     }
 

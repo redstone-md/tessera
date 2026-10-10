@@ -12,6 +12,7 @@ use crate::bluetooth::BluetoothController;
 use crate::generated::TileBounds;
 use crate::input_language::InputLanguageController;
 use crate::network_menu::NetworkController;
+use crate::telemetry::TelemetryController;
 use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::{TransientCache, TransientScope};
 
@@ -185,6 +186,7 @@ impl PanelController {
 
 pub(super) struct ToolbarPopupScope {
     _battery: TransientScope<BatteryController>,
+    _telemetry: TransientScope<TelemetryController>,
     _network: TransientScope<NetworkController>,
     _bluetooth: TransientScope<BluetoothController>,
     _input: TransientScope<InputLanguageController>,
@@ -197,6 +199,10 @@ impl ToolbarPopupScope {
                 actor.stop_root();
                 actor.hide();
             }),
+            _telemetry: TransientScope::new(
+                Rc::clone(&controller.telemetry),
+                TelemetryController::stop_root,
+            ),
             _network: TransientScope::new(
                 Rc::clone(&controller.network_menu),
                 NetworkController::hide,

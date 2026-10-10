@@ -16,6 +16,7 @@ pub mod network;
 pub mod profile;
 pub mod search;
 pub mod shortcuts;
+pub mod telemetry;
 pub mod visibility;
 pub mod web_search;
 

@@ -79,6 +79,7 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         .with_media_enabled(preferences.media_enabled())
         .with_dock_locked(preferences.dock_locked())
         .with_dock_middle_click(middle)
+        .with_telemetry_enabled(preferences.telemetry_enabled())
         .with_shortcuts(preferences.shortcuts().clone())
 }
 
@@ -125,6 +126,7 @@ fn to_ui_preferences(
         .with_media_enabled(preferences.media_enabled())
         .with_dock_locked(preferences.dock_locked())
         .with_dock_middle_click(middle)
+        .with_telemetry_enabled(preferences.telemetry_enabled())
         .with_shortcuts(preferences.shortcuts().clone())
         .with_launcher_favorites(preferences.launcher_favorites().to_vec())
 }
@@ -153,6 +155,7 @@ mod desktop {
     use tessera_system::recycle_bin::RecycleBinHost;
     use tessera_system::recycle_bin_mutation::RecycleBinMutationHost;
     use tessera_system::shortcuts::{ShortcutError, ShortcutHost};
+    use tessera_system::telemetry::TelemetryHost;
     use tessera_system::visibility::{PointerHost, PointerWatchError};
     use tessera_system::web_search::WebSearchHost;
     use tessera_ui::{
@@ -205,6 +208,7 @@ mod desktop {
         media: LazyLock<Provider<dyn MediaHost>>,
         web_search: LazyLock<Option<Arc<dyn WebSearchHost>>>,
         file_search: LazyLock<Option<Arc<dyn FileSearchHost>>>,
+        telemetry: LazyLock<Option<Arc<dyn TelemetryHost>>>,
         pointer: LazyLock<Provider<dyn PointerHost>>,
         shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
         profile: LazyLock<Provider<dyn ProfileHost>>,
@@ -393,6 +397,13 @@ mod desktop {
                 return None;
             }
             self.file_search.as_ref().map(Arc::clone)
+        }
+
+        fn telemetry_host(&self) -> Option<Arc<dyn TelemetryHost>> {
+            if self.presentation != Presentation::Desktop {
+                return None;
+            }
+            self.telemetry.as_ref().map(Arc::clone)
         }
 
         fn pointer_host(&self) -> Result<Option<Arc<dyn PointerHost>>, PointerWatchError> {
@@ -719,6 +730,7 @@ mod desktop {
             media: LazyLock::new(Provider::default),
             web_search: LazyLock::new(tessera_windows::web_search::native_web_search_host),
             file_search: LazyLock::new(tessera_windows::file_search::native_file_search_host),
+            telemetry: LazyLock::new(tessera_windows::telemetry::native_telemetry_host),
             pointer: LazyLock::new(Provider::default),
             shortcuts: LazyLock::new(Provider::default),
             profile: LazyLock::new(Provider::default),
