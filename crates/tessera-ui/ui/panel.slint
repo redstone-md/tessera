@@ -72,7 +72,7 @@ component SettingsRow inherits HorizontalLayout {
         if root.description != "": Text {
             text: root.description;
             color: SeelenPalette.running-indicator;
-            font-size: 12.8px;
+            font-size: SeelenPalette.body-font-size;
             wrap: word-wrap;
         }
     }
@@ -117,8 +117,8 @@ component SettingsNavigation inherits TileButton {
         if !root.collapsed: Text {
             text: root.label;
             color: root.navigation-foreground;
-            font-size: 12.8px;
-            font-weight: 600;
+            font-size: SeelenPalette.body-font-size;
+            font-weight: SeelenPalette.title-font-weight;
             overflow: elide;
             vertical-alignment: center;
             accessible-role: none;
@@ -130,7 +130,7 @@ export component Panel inherits Window {
     default-font-family: SeelenPalette.font-family;
     title: "Tessera " + root.version + " — alpha";
     background: SeelenPalette.surface;
-    default-font-size: 16px;
+    default-font-size: SeelenPalette.reference-mode ? 16px : SeelenPalette.body-font-size;
     preferred-width: 800px;
     preferred-height: 500px;
     min-width: 600px;
@@ -298,8 +298,8 @@ export component Panel inherits Window {
                     if !root.sidebar-collapsed: Text {
                         text: "Tessera";
                         color: SeelenPalette.foreground;
-                        font-size: 19.2px;
-                        font-weight: 600;
+                        font-size: SeelenPalette.title-font-size;
+                        font-weight: SeelenPalette.title-font-weight;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
                         accessible-role: none;
@@ -378,7 +378,7 @@ export component Panel inherits Window {
             if !root.sidebar-collapsed: Text {
                 text: "Tessera " + root.version + " · alpha";
                 color: SeelenPalette.running-indicator;
-                font-size: 12.8px;
+                font-size: SeelenPalette.body-font-size;
                 height: self.preferred-height + 16px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -404,8 +404,8 @@ export component Panel inherits Window {
                     Text {
                         text: root.page-title;
                         color: SeelenPalette.foreground;
-                        font-size: 19.2px;
-                        font-weight: 600;
+                        font-size: SeelenPalette.title-font-size;
+                        font-weight: SeelenPalette.title-font-weight;
                         overflow: elide;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -455,13 +455,13 @@ export component Panel inherits Window {
                 Text {
                     text: root.status;
                     color: SeelenPalette.foreground;
-                    font-size: 12.8px;
+                    font-size: SeelenPalette.body-font-size;
                     wrap: word-wrap;
                 }
                 if root.startup-notice != "": Text {
                     text: root.startup-notice;
                     color: SeelenPalette.foreground;
-                    font-size: 12.8px;
+                    font-size: SeelenPalette.body-font-size;
                     wrap: word-wrap;
                 }
             }
@@ -626,7 +626,7 @@ export component Panel inherits Window {
                         Text {
                             text: "Explorer is unchanged unless you press the restore button. Restoring affects this session and future logins.";
                             color: SeelenPalette.running-indicator;
-                            font-size: 12.8px;
+                            font-size: SeelenPalette.body-font-size;
                             wrap: word-wrap;
                         }
                         Button {
@@ -640,7 +640,7 @@ export component Panel inherits Window {
             Text {
                 text: "Unsigned test alpha · Windows activate only on explicit input.";
                 color: SeelenPalette.running-indicator;
-                font-size: 12.8px;
+                font-size: SeelenPalette.body-font-size;
                 wrap: word-wrap;
                 height: self.preferred-height + 16px;
                 vertical-alignment: center;

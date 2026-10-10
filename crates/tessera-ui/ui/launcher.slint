@@ -38,7 +38,7 @@ component LauncherSearchField inherits Rectangle {
             width: parent.width;
             height: parent.height;
             text: root.text == "" && !root.has-focus ? @tr("Applications") : "";
-            font-size: 16px;
+            font-size: SeelenPalette.reference-mode ? 16px : SeelenPalette.body-font-size;
             font-family: PopoverTokens.font-family;
             color: SeelenPalette.secondary;
             vertical-alignment: center;
@@ -61,7 +61,7 @@ component LauncherSearchField inherits Rectangle {
                 width: max(viewport.width, self.preferred-width + self.text-cursor-width);
                 height: viewport.height;
                 single-line: true;
-                font-size: 16px;
+                font-size: SeelenPalette.reference-mode ? 16px : SeelenPalette.body-font-size;
                 font-family: PopoverTokens.font-family;
                 color: SeelenPalette.foreground;
                 vertical-alignment: center;
@@ -104,7 +104,7 @@ component LauncherCommandButton inherits TileButton {
         height: root.height;
         text: root.text;
         font-family: PopoverTokens.font-family;
-        font-size: 16px;
+        font-size: SeelenPalette.reference-mode ? 16px : SeelenPalette.body-font-size;
         color: !root.enabled ? SeelenPalette.muted :
             root.hovered ? SeelenPalette.accent : SeelenPalette.foreground;
         horizontal-alignment: center;
@@ -764,8 +764,8 @@ export component Launcher inherits Window {
                         height: parent.height;
                         text: root.user-name == "" ? @tr("User name unavailable") : root.user-name;
                         font-family: PopoverTokens.font-family;
-                        font-size: 16px;
-                        font-weight: 600;
+                        font-size: SeelenPalette.reference-mode ? 16px : SeelenPalette.body-font-size;
+                        font-weight: SeelenPalette.title-font-weight;
                         color: SeelenPalette.foreground;
                         vertical-alignment: center;
                         overflow: elide;

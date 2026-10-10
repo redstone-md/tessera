@@ -546,7 +546,8 @@ fn verify_material3_calendar_selection(
     assert!((size.width - day_size).abs() <= f32::EPSILON * 300.0);
     assert!((size.height - day_size).abs() <= f32::EPSILON * 300.0);
     let selected_x = 18.0 + 4.0 * (day_size + 4.0);
-    let selected_y = 18.0 + 25.92 + 16.0 + 33.92 + 8.0 + day_size + 4.0;
+    // Material 15px × 1.4: 21px text, plus literal 8px/16px row padding.
+    let selected_y = 18.0 + 29.0 + 16.0 + 37.0 + 8.0 + day_size + 4.0;
     assert!((origin.x - selected_x).abs() <= f32::EPSILON * 300.0);
     assert!((origin.y - selected_y).abs() <= f32::EPSILON * 300.0);
     assert!(origin.x + size.width <= 302.0);

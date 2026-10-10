@@ -78,8 +78,8 @@ export component Toolbar inherits Window {
                     height: root.item;
                     text: root.user-name;
                     color: SeelenPalette.bar-content;
-                    font-size: 12.8px;
-                    font-weight: 500;
+                    font-size: SeelenPalette.body-font-size;
+                    font-weight: SeelenPalette.body-font-weight;
                     vertical-alignment: center;
                     overflow: elide;
                     accessible-role: text;
@@ -102,8 +102,8 @@ export component Toolbar inherits Window {
                     height: root.item;
                     text: root.focused-app;
                     color: SeelenPalette.bar-secondary;
-                    font-size: 12.8px;
-                    font-weight: 500;
+                    font-size: SeelenPalette.body-font-size;
+                    font-weight: SeelenPalette.body-font-weight;
                     vertical-alignment: center;
                     overflow: elide;
                     accessible-role: text;
@@ -134,8 +134,8 @@ export component Toolbar inherits Window {
                 height: root.item;
                 text: root.clock;
                 color: SeelenPalette.bar-content;
-                font-size: 12.8px;
-                font-weight: 500;
+                font-size: SeelenPalette.body-font-size;
+                font-weight: SeelenPalette.body-font-weight;
                 vertical-alignment: center;
                 horizontal-alignment: center;
                 overflow: elide;
@@ -169,8 +169,8 @@ export component Toolbar inherits Window {
                     height: root.item;
                     text: root.language == "" ? @tr("Keyboard") : root.language;
                     color: SeelenPalette.bar-secondary;
-                    font-size: 12.8px;
-                    font-weight: 600;
+                    font-size: SeelenPalette.body-font-size;
+                    font-weight: SeelenPalette.title-font-weight;
                     vertical-alignment: center;
                     overflow: elide;
                 }

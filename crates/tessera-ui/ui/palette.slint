@@ -34,6 +34,10 @@ export global SeelenPalette {
     in-out property <bool> reference-mode: false;
     in-out property <int> source-rgb: 8168540; // #7ca45c
     in-out property <string> font-family: "";
+    in-out property <length> body-font-size: self.reference-mode ? 12.8px : 15px;
+    in-out property <length> title-font-size: self.reference-mode ? 19.2px : 22px;
+    in-out property <int> body-font-weight: self.reference-mode ? 500 : 450;
+    in-out property <int> title-font-weight: self.reference-mode ? 600 : 550;
     // Bootstrap paint for directly constructed surfaces, independently probed
     // from material-colors 0.4.2. Product capture/apply installs engine output.
     in-out property <MaterialRoles> light-roles: {

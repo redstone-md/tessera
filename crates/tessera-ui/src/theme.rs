@@ -102,6 +102,10 @@ pub(crate) struct PresentationTheme {
     light: Roles,
     dark: Roles,
     font_family: SharedString,
+    body_font_size: f32,
+    title_font_size: f32,
+    body_font_weight: i32,
+    title_font_weight: i32,
 }
 
 impl Default for PresentationTheme {
@@ -137,6 +141,10 @@ impl PresentationTheme {
             light: theme.schemes.light.into(),
             dark: theme.schemes.dark.into(),
             font_family: "Google Sans Flex".into(),
+            body_font_size: 15.0,
+            title_font_size: 22.0,
+            body_font_weight: 450,
+            title_font_weight: 550,
         }
     }
 
@@ -146,6 +154,10 @@ impl PresentationTheme {
         Self {
             reference_mode: true,
             font_family: SharedString::default(),
+            body_font_size: 12.8,
+            title_font_size: 19.2,
+            body_font_weight: 500,
+            title_font_weight: 600,
             ..Self::uniform(scheme)
         }
     }
@@ -177,6 +189,10 @@ where
             light: palette.get_light_roles().into(),
             dark: palette.get_dark_roles().into(),
             font_family: palette.get_font_family(),
+            body_font_size: palette.get_body_font_size(),
+            title_font_size: palette.get_title_font_size(),
+            body_font_weight: palette.get_body_font_weight(),
+            title_font_weight: palette.get_title_font_weight(),
         }
     }
 
@@ -210,6 +226,10 @@ where
         apply!(palette.set_color_scheme(theme.reference));
         apply!(palette.set_reference_mode(theme.reference_mode));
         apply!(palette.set_font_family(theme.font_family));
+        apply!(palette.set_body_font_size(theme.body_font_size));
+        apply!(palette.set_title_font_size(theme.title_font_size));
+        apply!(palette.set_body_font_weight(theme.body_font_weight));
+        apply!(palette.set_title_font_weight(theme.title_font_weight));
     }
 }
 
