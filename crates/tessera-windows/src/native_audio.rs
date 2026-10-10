@@ -25,9 +25,14 @@ use windows::core::{Error, HRESULT, PCWSTR, PWSTR, implement};
 
 use crate::audio::actor::{Driver, Signal, SignalSender};
 
+mod devices;
+use devices::DeviceInventory;
+
 /// Fields release in declaration order, so the apartment is always last.
 pub(crate) struct NativeAudio {
+    inventory: DeviceInventory,
     volumes: [Option<VolumeWatch>; 2],
+    volume_epochs: [u64; 2],
     device_callback: Option<IMMNotificationClient>,
     enumerator: IMMDeviceEnumerator,
     signals: Option<SignalSender>,
@@ -42,7 +47,9 @@ impl NativeAudio {
         let enumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
             .map_err(|error| native_error("Create audio device enumerator", error))?;
         Ok(Self {
+            inventory: DeviceInventory::new(),
             volumes: [None, None],
+            volume_epochs: [0; 2],
             device_callback: None,
             enumerator,
             signals: None,
@@ -68,7 +75,12 @@ impl NativeAudio {
             return Ok(());
         }
         let signals = self.signals.as_ref().ok_or_else(watch_stopped)?.clone();
-        let callback: IMMNotificationClient = DeviceNotification { signals }.into();
+        let callback: IMMNotificationClient = DeviceNotification {
+            signals,
+            epoch: self.inventory.epoch.clone(),
+            retirements: self.inventory.retirements.clone(),
+        }
+        .into();
         // SAFETY: the owner retains callback until after unregistration. Unlike
         // volume registration, this registration does NOT AddRef the callback.
         unsafe {
@@ -94,21 +106,45 @@ impl NativeAudio {
                 return Err(error);
             }
         };
+        let epoch = self
+            .inventory
+            .epoch
+            .load(std::sync::atomic::Ordering::Acquire);
         match endpoint {
             Some(endpoint) => {
+                self.inventory.default_watch(&endpoint.id);
                 if self.volumes[index]
                     .as_ref()
                     .is_some_and(|watch| watch.endpoint.id == endpoint.id)
+                    && self.volume_epochs[index] == epoch
                 {
                     return Ok(());
                 }
                 self.volumes[index] = None;
                 let signals = self.signals.as_ref().ok_or_else(watch_stopped)?.clone();
                 self.volumes[index] = Some(VolumeWatch::new(endpoint, signals)?);
+                self.volume_epochs[index] = epoch;
             }
             None => self.volumes[index] = None,
         }
         Ok(())
+    }
+
+    fn watched_endpoints(&self) -> Vec<EndpointId> {
+        let epoch = self
+            .inventory
+            .epoch
+            .load(std::sync::atomic::Ordering::Acquire);
+        self.volumes
+            .iter()
+            .zip(self.volume_epochs)
+            .filter_map(|(watch, watched_epoch)| {
+                watch
+                    .as_ref()
+                    .filter(|_| watched_epoch == epoch)
+                    .map(|watch| watch.endpoint.id.clone())
+            })
+            .collect()
     }
 }
 
@@ -169,6 +205,32 @@ impl Driver for NativeAudio {
             .map_err(|error| native_error("Set endpoint mute", error))
     }
 
+    fn read_devices(&mut self) -> Result<tessera_system::audio::AudioDevicesResult, AudioError> {
+        // Incarnation authority needs the existing device callback alive. Without
+        // it, same-ID unplug/replug cannot be distinguished reliably.
+        self.register_devices()?;
+        let watched_endpoints = self.watched_endpoints();
+        self.inventory.read(
+            &self.enumerator,
+            self.signals.as_ref().ok_or_else(watch_stopped)?,
+            &watched_endpoints,
+        )
+    }
+
+    fn execute_device(
+        &mut self,
+        command: tessera_system::audio::AudioDeviceCommand,
+    ) -> Result<tessera_system::audio::AudioDevicesResult, AudioError> {
+        self.register_devices()?;
+        let watched_endpoints = self.watched_endpoints();
+        self.inventory.execute(
+            &self.enumerator,
+            self.signals.as_ref().ok_or_else(watch_stopped)?,
+            command,
+            &watched_endpoints,
+        )
+    }
+
     fn start_watch(&mut self, signals: SignalSender) -> Result<(), AudioError> {
         self.signals = Some(signals);
         self.rebind_watch()
@@ -186,6 +248,7 @@ impl Driver for NativeAudio {
     fn stop_watch(&mut self) {
         // All unregister calls run on the owner, never on the callback stack.
         self.volumes = [None, None];
+        self.inventory.retire();
         if let Some(callback) = self.device_callback.take() {
             // SAFETY: exactly the live callback retained after registration.
             // Hold the owned reference through the unregister call.
@@ -261,8 +324,8 @@ struct TaskString(PWSTR);
 
 impl Drop for TaskString {
     fn drop(&mut self) {
-        // SAFETY: one allocation returned by successful IMMDevice::GetId;
-        // this guard is its unique owner even on UTF-16 validation failure.
+        // SAFETY: one CoTaskMem string returned by MMDevice, session control or
+        // propsys; uniquely owned even on bounded UTF-16 validation failure.
         unsafe { CoTaskMemFree(Some(self.0.0.cast())) };
     }
 }
@@ -341,24 +404,30 @@ fn watch_stopped() -> AudioError {
 #[implement(IMMNotificationClient)]
 struct DeviceNotification {
     signals: SignalSender,
+    epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    retirements: devices::EndpointRetirements,
 }
 
 impl IMMNotificationClient_Impl for DeviceNotification_Impl {
-    fn OnDeviceStateChanged(
-        &self,
-        _id: &PCWSTR,
-        _state: DEVICE_STATE,
-    ) -> windows::core::Result<()> {
+    fn OnDeviceStateChanged(&self, id: &PCWSTR, state: DEVICE_STATE) -> windows::core::Result<()> {
+        if state != windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE {
+            self.retirements.retire_id(id);
+        }
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.signals.notify(Signal::Devices);
         Ok(())
     }
 
-    fn OnDeviceAdded(&self, _id: &PCWSTR) -> windows::core::Result<()> {
+    fn OnDeviceAdded(&self, id: &PCWSTR) -> windows::core::Result<()> {
+        self.retirements.retire_id(id);
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.signals.notify(Signal::Devices);
         Ok(())
     }
 
-    fn OnDeviceRemoved(&self, _id: &PCWSTR) -> windows::core::Result<()> {
+    fn OnDeviceRemoved(&self, id: &PCWSTR) -> windows::core::Result<()> {
+        self.retirements.retire_id(id);
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.signals.notify(Signal::Devices);
         Ok(())
     }
@@ -366,10 +435,10 @@ impl IMMNotificationClient_Impl for DeviceNotification_Impl {
     fn OnDefaultDeviceChanged(
         &self,
         flow: EDataFlow,
-        role: ERole,
+        _role: ERole,
         _id: &PCWSTR,
     ) -> windows::core::Result<()> {
-        if role == eMultimedia && (flow == eRender || flow == eCapture) {
+        if flow == eRender || flow == eCapture {
             self.signals.notify(Signal::Devices);
         }
         Ok(())

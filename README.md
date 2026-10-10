@@ -266,6 +266,27 @@ Missing Cyrillic/Arabic/Hebrew glyphs rely on the SDK's platform fallback, not
 a claim of font coverage. This family choice does not certify the video's
 exact font binary, custom variable axes or Windows rendering.
 
+Material Suspend uses the unmodified Apache-2.0 Google Material `bedtime` SVG
+from the existing pinned icon family, with its original source hash and license.
+This is an independent Material glyph, not the rights-blocked Seelen BiMoon;
+neutral reference mode still keeps its own supplied or empty decoration.
+
+Development Dock groups only OS-observed application identities, keeps full
+member counters and an owned selectable window menu, and matches running pins
+only by exact AUMID. Executable paths group windows but never become launch
+commands. Missing identity keeps separate windows. The selected member has a
+real, scoped DWM thumbnail; protected/unavailable previews remain honest and
+do not disable window actions.
+
+Development Quick Settings adds active input/output devices, selected-device
+volume/mute, each output's app/System Sounds mixer and independent default-role
+observations. All mutations capture complete endpoint/session incarnations and
+return native readback through the existing audio owner. Multimedia→Console
+results stay independent; Communications is separate. Default-role writes use
+an isolated undocumented Windows PolicyConfig adapter and can be unavailable.
+Sound Settings dispatch is fixed and source-scoped. This is not an all-GSMTC
+media-session layer, a native Windows outcome receipt or a published release.
+
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 
 Home and Pro are targets, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. The selected isolated per-user Winlogon integration is experimental, not an edition-independent Microsoft support guarantee; machine shell configuration and security policies remain untouched.

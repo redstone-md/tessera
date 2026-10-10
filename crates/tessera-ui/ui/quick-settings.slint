@@ -8,6 +8,7 @@ import { PopoverBody, PopoverTokens } from "popover.slint";
 import { DockMediaView, MediaAction } from "dock-media.slint";
 import { MediaPlayer } from "media-player.slint";
 import { CommonSlider } from "common-slider.slint";
+import { AudioDevices, AudioDevicesMetrics, AudioDeviceView, AudioSessionView } from "audio-devices.slint";
 
 export enum AudioRoute { output, input }
 
@@ -111,6 +112,28 @@ export component QuickSettings inherits Window {
     in-out property <float> input-percent;
     in property <string> output-status;
     in property <string> input-status;
+    in property <[AudioDeviceView]> devices;
+    in property <AudioDeviceView> selected-device;
+    in property <[AudioSessionView]> audio-sessions;
+    in property <bool> devices-supported;
+    in property <bool> devices-enabled;
+    in property <bool> devices-loading;
+    in property <string> devices-status;
+    in property <string> mixer-status;
+    in property <int> device-input-epoch;
+    in property <bool> device-physical-input;
+    in property <int> device-readback-epoch;
+    callback device-selected(string);
+    callback device-volume-requested(string, float) -> bool;
+    callback device-volume-released(string, float) -> bool;
+    callback device-mute-requested(string, bool);
+    callback device-focus-frame(string, bool, TileBounds);
+    callback device-value-accessible-requested(string, float) -> bool;
+    callback session-volume-requested(string, float) -> bool;
+    callback session-volume-released(string, float) -> bool;
+    callback session-mute-requested(string, bool);
+    callback device-default-requested(string, bool);
+    callback device-settings-requested(string);
     in property <image> output-icon: @image-url("../assets/icons/ionicons-5.5.4/volume-high-outline.svg");
     in property <image> output-muted-icon: @image-url("../assets/icons/ionicons-5.5.4/volume-mute-outline.svg");
     in property <image> input-icon: @image-url("../assets/icons/ionicons-5.5.4/mic-outline.svg");
@@ -188,7 +211,7 @@ export component QuickSettings inherits Window {
     property <bool> media-needs-refresh: root.media-view.enabled
         && (!root.media-view.current-present || root.media-view.stale
             || root.media-view.read-notice != "" || root.media-view.watch-notice != "");
-    property <bool> can-refresh: !root.watch-live || root.audio-needs-retry || root.media-needs-refresh;
+    property <bool> can-refresh: root.devices-supported || !root.watch-live || root.audio-needs-retry || root.media-needs-refresh;
     property <string> output-feedback: root.output-status != ""
         ? @tr("Output: ") + root.output-status
         : !root.output-ready && !root.loading && root.input-ready ? @tr("Output: Unavailable") : "";
@@ -212,6 +235,7 @@ export component QuickSettings inherits Window {
         + (root.output-feedback != "" ? output-metrics.preferred-height : 0px)
         + (root.input-feedback != "" ? input-metrics.preferred-height : 0px)
         + (root.media-view.enabled ? player.natural-height : 0px)
+        + (root.devices-supported ? devices-metrics.natural-height + 8px : 0px)
         + 30px + max(0, root.block-count - 1) * 8px;
     heading-metrics := AudioText {
         width: root.measure-width;
@@ -219,6 +243,11 @@ export component QuickSettings inherits Window {
         opacity: 0;
         text: @tr("Volume");
         font-weight: 600;
+    }
+    devices-metrics := AudioDevicesMetrics {
+        devices: root.devices; selected: root.selected-device; sessions: root.audio-sessions;
+        loading: root.devices-loading; status: root.devices-status; mixer-status: root.mixer-status;
+        measure-width: root.measure-width;
     }
     feedback-metrics := AudioText {
         width: root.measure-width;
@@ -332,6 +361,30 @@ export component QuickSettings inherits Window {
                     accessible-label: self.text;
                     wrap: word-wrap;
                     color: SeelenPalette.secondary;
+                }
+                if root.devices-supported: device-controls := AudioDevices {
+                    measure-width: root.measure-width;
+                    devices: root.devices;
+                    selected: root.selected-device;
+                    sessions: root.audio-sessions;
+                    enabled: root.devices-enabled;
+                    loading: root.devices-loading;
+                    status: root.devices-status;
+                    mixer-status: root.mixer-status;
+                    input-epoch: root.device-input-epoch;
+                    physical-input: root.device-physical-input;
+                    readback-epoch: root.device-readback-epoch;
+                    volume-accessible-requested(key, value) => { return root.device-value-accessible-requested(key, value); }
+                    selected-requested(key) => { root.device-selected(key); }
+                    volume-requested(key, value) => { return root.device-volume-requested(key, value); }
+                    volume-released(key, value) => { return root.device-volume-released(key, value); }
+                    mute-requested(key, value) => { root.device-mute-requested(key, value); }
+                    focus-frame(key, focused, bounds) => { root.device-focus-frame(key, focused, bounds); }
+                    session-volume-requested(key, value) => { return root.session-volume-requested(key, value); }
+                    session-volume-released(key, value) => { return root.session-volume-released(key, value); }
+                    session-mute-requested(key, value) => { root.session-mute-requested(key, value); }
+                    default-requested(key, communications) => { root.device-default-requested(key, communications); }
+                    settings-requested(key) => { root.device-settings-requested(key); }
                 }
                 player := MediaPlayer {
                     visible: root.media-view.enabled;

@@ -11,8 +11,9 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use slint::{ComponentHandle, PhysicalPosition};
 use tessera_system::audio::{
-    AudioCommand, AudioEndpoint, AudioError, AudioErrorKind, AudioEvent, AudioFlow, AudioHost,
-    AudioSnapshot, EndpointId, EndpointState, Volume,
+    AudioCommand, AudioDefaultTarget, AudioDeviceCommand, AudioDevicesResult, AudioEndpoint,
+    AudioError, AudioErrorKind, AudioEvent, AudioFlow, AudioHost, AudioSnapshot, EndpointId,
+    EndpointState, Volume,
 };
 
 use crate::dock_media::{CapturedMediaSeek, DockMediaController, PopupMediaToken};
@@ -34,6 +35,9 @@ pub(crate) use tests::{
 
 mod seek;
 use seek::{InputScope, SeekInput};
+
+mod devices;
+use devices::DevicesState;
 
 #[derive(Clone, PartialEq)]
 struct MediaInputFrame {
@@ -108,6 +112,8 @@ struct RequestToken {
 enum Request {
     Read,
     Command(AudioCommand),
+    ReadDevices,
+    DeviceCommand(AudioDeviceCommand),
 }
 
 struct Flight {
@@ -115,9 +121,14 @@ struct Flight {
     request: Request,
 }
 
+enum AudioResult {
+    Default(AudioSnapshot),
+    Devices(Box<AudioDevicesResult>),
+}
+
 struct Completion {
     token: RequestToken,
-    result: Result<AudioSnapshot, AudioError>,
+    result: Result<AudioResult, AudioError>,
 }
 
 /// Only owned Send data crosses the host seam. One slot per event kind bounds
@@ -153,7 +164,7 @@ fn complete(
     mailbox: &Arc<Mutex<Mailbox>>,
     root: &slint::Weak<QuickSettings>,
     token: RequestToken,
-    result: Result<AudioSnapshot, AudioError>,
+    result: Result<AudioResult, AudioError>,
 ) {
     {
         let mut mailbox = mailbox.lock();
@@ -196,6 +207,7 @@ struct AudioState {
     status: String,
     watch_status: String,
     next_flow: usize,
+    devices: DevicesState,
 }
 
 fn flow_index(flow: AudioFlow) -> usize {
@@ -451,6 +463,8 @@ pub(crate) struct QuickSettingsController {
     #[cfg(any(windows, test))]
     input_release_timer: slint::Timer,
     state: RefCell<AudioState>,
+    device_input: RefCell<devices::PhysicalAudioInput>,
+    audio_focus: RefCell<Option<devices::AudioFocusFrame>>,
     mailbox: Arc<Mutex<Mailbox>>,
     watch: RefCell<Option<Box<dyn Send>>>,
     volume_timer: slint::Timer,
@@ -481,6 +495,8 @@ impl QuickSettingsController {
             #[cfg(any(windows, test))]
             input_release_timer: slint::Timer::default(),
             state: RefCell::default(),
+            device_input: RefCell::default(),
+            audio_focus: RefCell::default(),
             mailbox: Arc::new(Mutex::default()),
             watch: RefCell::default(),
             volume_timer: slint::Timer::default(),
@@ -605,6 +621,7 @@ impl QuickSettingsController {
             slint::CloseRequestResponse::KeepWindowShown
         });
         Self::install_media_input_observer(&controller);
+        controller.install_devices_callbacks();
         Ok(controller)
     }
 
@@ -677,12 +694,14 @@ impl QuickSettingsController {
 
     fn retire_source(&self, epoch: &Rc<()>) {
         self.source.replace(PopupSource::Retired);
+        self.cancel_device_input();
         self.volume_timer.stop();
         self.fit_timer.stop();
         {
             let mut state = self.state.borrow_mut();
             state.generation = state.generation.wrapping_add(1);
             state.confirmed = None;
+            state.devices.retire();
             state.pending = Default::default();
             state.read_requested = false;
             state.watch_live = false;
@@ -995,6 +1014,7 @@ impl QuickSettingsController {
         if finished {
             self.clear_seek_preview();
         }
+        self.finish_device_releases();
     }
 
     #[cfg(any(windows, test))]
@@ -1003,7 +1023,7 @@ impl QuickSettingsController {
         // Pinned winit processes its filter, buffered move and native release
         // synchronously. Timers run at the following new_events boundary.
         // Pending flags are revoked by fresh presses; an old timer cannot end
-        // their new hold. This timer performs no media observation or command.
+        // their new hold. This timer only retires media/audio input, never observes or commands.
         self.input_release_timer
             .start(slint::TimerMode::SingleShot, Duration::ZERO, move || {
                 if let Some(controller) = weak.upgrade() {
@@ -1069,30 +1089,52 @@ impl QuickSettingsController {
                                     )
                                 },
                             );
+                            controller.device_pointer(logical, *state == ElementState::Pressed);
                             controller.media_pointer(logical, *state == ElementState::Pressed);
                             if *state == ElementState::Released {
                                 controller.schedule_input_release();
                             }
                         }
-                        WindowEvent::KeyboardInput { event, .. }
-                            if event.state == ElementState::Released =>
-                        {
+                        WindowEvent::KeyboardInput { event, .. } => {
                             use slint::platform::Key;
                             use winit::keyboard::{Key as NativeKey, NamedKey};
-                            let key = match &event.logical_key {
-                                NativeKey::Named(NamedKey::ArrowLeft) => Some(Key::LeftArrow),
-                                NativeKey::Named(NamedKey::ArrowRight) => Some(Key::RightArrow),
-                                NativeKey::Named(NamedKey::Home) => Some(Key::Home),
-                                NativeKey::Named(NamedKey::End) => Some(Key::End),
+                            let audio_key = match &event.logical_key {
+                                NativeKey::Named(NamedKey::ArrowLeft) => Some("Left"),
+                                NativeKey::Named(NamedKey::ArrowRight) => Some("Right"),
+                                NativeKey::Named(NamedKey::ArrowUp) => Some("Up"),
+                                NativeKey::Named(NamedKey::ArrowDown) => Some("Down"),
+                                NativeKey::Named(NamedKey::Home) => Some("Home"),
+                                NativeKey::Named(NamedKey::End) => Some("End"),
+                                NativeKey::Named(NamedKey::PageUp) => Some("PageUp"),
+                                NativeKey::Named(NamedKey::PageDown) => Some("PageDown"),
                                 _ => None,
                             };
-                            if let Some(key) = key {
-                                let key = slint::SharedString::from(key);
-                                controller.seek_input.borrow_mut().key_up(key.as_str());
-                                controller.clear_seek_preview();
+                            if let Some(key) = audio_key {
+                                controller.device_key(
+                                    key,
+                                    event.state == ElementState::Pressed,
+                                    event.repeat,
+                                );
+                            }
+                            if event.state == ElementState::Released {
+                                let key = match &event.logical_key {
+                                    NativeKey::Named(NamedKey::ArrowLeft) => Some(Key::LeftArrow),
+                                    NativeKey::Named(NamedKey::ArrowRight) => Some(Key::RightArrow),
+                                    NativeKey::Named(NamedKey::Home) => Some(Key::Home),
+                                    NativeKey::Named(NamedKey::End) => Some(Key::End),
+                                    _ => None,
+                                };
+                                if let Some(key) = key {
+                                    let key = slint::SharedString::from(key);
+                                    controller.seek_input.borrow_mut().key_up(key.as_str());
+                                    controller.clear_seek_preview();
+                                }
                             }
                         }
-                        WindowEvent::Focused(false) => controller.cancel_seek_input(),
+                        WindowEvent::Focused(false) => {
+                            controller.cancel_device_input();
+                            controller.cancel_seek_input();
+                        }
                         WindowEvent::Moved(_) => {
                             // Position queries live native geometry, so an old
                             // moved notification alone cannot revoke new input.
@@ -1112,10 +1154,25 @@ impl QuickSettingsController {
                             controller
                                 .cancel_seek_if_geometry_changed(None, Some(*scale_factor as f32));
                         }
-                        WindowEvent::Touch(touch)
-                            if controller.media_touch(touch.device_id, touch.id, touch.phase) =>
-                        {
-                            controller.schedule_input_release();
+                        WindowEvent::Touch(touch) => {
+                            let scale = f64::from(window.scale_factor());
+                            let position = (scale.is_finite() && scale > 0.0).then(|| {
+                                slint::LogicalPosition::new(
+                                    (touch.location.x / scale) as f32,
+                                    (touch.location.y / scale) as f32,
+                                )
+                            });
+                            let audio_released = controller.device_touch(
+                                touch.device_id,
+                                touch.id,
+                                touch.phase,
+                                position,
+                            );
+                            let media_released =
+                                controller.media_touch(touch.device_id, touch.id, touch.phase);
+                            if audio_released || media_released {
+                                controller.schedule_input_release();
+                            }
                         }
                         _ => {}
                     }
@@ -1257,6 +1314,7 @@ impl QuickSettingsController {
     fn hide_in(&self, epoch: Rc<()>) {
         self.presentation_epoch.replace(epoch.clone());
         self.source.replace(PopupSource::Retired);
+        self.cancel_device_input();
         self.cancel_seek_input();
         if !self.presentation_is_current(&epoch) {
             return;
@@ -1302,6 +1360,7 @@ impl QuickSettingsController {
             let mut state = self.state.borrow_mut();
             state.generation = state.generation.wrapping_add(1);
             state.confirmed = None;
+            state.devices.retire();
             state.pending = Default::default();
             state.read_requested = false;
             state.watch_live = false;
@@ -1383,6 +1442,14 @@ impl QuickSettingsController {
                 }
             }
         }
+        let audio = self.state.borrow().audio.clone();
+        if let Some(audio) = audio {
+            let supported = audio.supports_devices();
+            if !self.source_is_current(&epoch) {
+                return;
+            }
+            self.state.borrow_mut().devices.supported = supported;
+        }
         self.subscribe(&epoch);
         if !self.source_is_current(&epoch) {
             return;
@@ -1391,6 +1458,9 @@ impl QuickSettingsController {
             let mut state = self.state.borrow_mut();
             state.status.clear();
             state.read_requested = true;
+            if state.devices.supported {
+                state.devices.read_requested = true;
+            }
         }
         self.project_and_fit();
         if self.source_is_current(&epoch) {
@@ -1564,6 +1634,11 @@ impl QuickSettingsController {
                 Request::Read
             } else if let Some(command) = state.next_command() {
                 Request::Command(command)
+            } else if let Some(command) = state.devices.next_command() {
+                Request::DeviceCommand(command)
+            } else if state.devices.supported && state.devices.read_requested {
+                state.devices.read_requested = false;
+                Request::ReadDevices
             } else {
                 return;
             };
@@ -1602,10 +1677,24 @@ impl QuickSettingsController {
         }
         let mailbox = Arc::clone(&self.mailbox);
         let root = self.surface.as_weak();
-        let completion = Box::new(move |result| complete(&mailbox, &root, token, result));
+        let completion = move |result| complete(&mailbox, &root, token, result);
         let accepted = match request {
-            Request::Read => audio.read(completion),
-            Request::Command(command) => audio.execute(command, completion),
+            Request::Read => audio.read(Box::new(move |result| {
+                completion(result.map(AudioResult::Default))
+            })),
+            Request::Command(command) => audio.execute(
+                command,
+                Box::new(move |result| completion(result.map(AudioResult::Default))),
+            ),
+            Request::ReadDevices => audio.read_devices(Box::new(move |result| {
+                completion(result.map(|result| AudioResult::Devices(Box::new(result))))
+            })),
+            Request::DeviceCommand(command) => audio.execute_device(
+                command,
+                Box::new(move |result| {
+                    completion(result.map(|result| AudioResult::Devices(Box::new(result))))
+                }),
+            ),
         };
         if let Err(error) = accepted {
             complete(&self.mailbox, &self.surface.as_weak(), token, Err(error));
@@ -1637,6 +1726,11 @@ impl QuickSettingsController {
             if visible && generation == Some(state.generation) {
                 if changed {
                     state.read_requested = true;
+                    if state.devices.supported {
+                        state.devices.read_requested = true;
+                        // A dirty read is not identity retirement. Native writes
+                        // still freshly validate the captured incarnation.
+                    }
                 }
                 match watch {
                     Some(AudioEvent::WatchReady) if self.watch.borrow().is_some() => {
@@ -1647,7 +1741,11 @@ impl QuickSettingsController {
                         state.watch_live = false;
                         state.watch_status =
                             failure("Live audio updates unavailable; use Refresh", &error);
-                        drop_watch = true;
+                        // Keep the same native device callback lease when only
+                        // default volume watching failed. Inventory/session
+                        // controls remain independently available; legacy hosts
+                        // retain their existing failed-watch retirement.
+                        drop_watch = !state.devices.supported;
                     }
                     _ => {}
                 }
@@ -1661,7 +1759,14 @@ impl QuickSettingsController {
                 let flight = state.flight.take().expect("matching flight exists");
                 if visible && completion.token.generation == state.generation {
                     match completion.result {
-                        Ok(snapshot) => state.accept_snapshot(snapshot),
+                        Ok(AudioResult::Default(snapshot)) => state.accept_snapshot(snapshot),
+                        Ok(AudioResult::Devices(result)) => {
+                            let command = match &flight.request {
+                                Request::DeviceCommand(command) => Some(command),
+                                _ => None,
+                            };
+                            state.devices.accept(*result, command);
+                        }
                         Err(error) => {
                             let context = match &flight.request {
                                 Request::Read => {
@@ -1672,6 +1777,15 @@ impl QuickSettingsController {
                                     state.pending[flow_index(command_flow(command))] =
                                         PendingFlow::default();
                                     "Could not change audio"
+                                }
+                                Request::ReadDevices | Request::DeviceCommand(_) => {
+                                    state.devices.failed(&error);
+                                    if error.kind == AudioErrorKind::DeviceChanged
+                                        && matches!(flight.request, Request::DeviceCommand(_))
+                                    {
+                                        state.devices.read_requested = true;
+                                    }
+                                    "Could not read or change audio devices"
                                 }
                             };
                             state.status = failure(context, &error);
@@ -1732,6 +1846,7 @@ impl QuickSettingsController {
         self.surface.set_input_muted(input.muted);
         self.surface.set_input_percent(input.percent);
         self.surface.set_input_status(input.status.into());
+        self.project_devices();
     }
 
     fn preferred_rect(&self) -> Result<PopupRect, String> {

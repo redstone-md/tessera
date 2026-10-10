@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 #[cfg(not(windows))]
 use tessera_system::audio::AudioErrorKind;
-use tessera_system::audio::{AudioCommand, AudioCompletion, AudioError, AudioEvent, AudioHost};
+use tessera_system::audio::{
+    AudioCommand, AudioCompletion, AudioDeviceCommand, AudioDevicesCompletion, AudioError,
+    AudioEvent, AudioHost,
+};
 
 #[cfg(any(windows, test))]
 use actor::QueueLifetime;
@@ -72,6 +75,39 @@ impl AudioHost for AudioService {
         }
     }
 
+    fn supports_devices(&self) -> bool {
+        cfg!(windows)
+    }
+
+    fn read_devices(&self, completion: AudioDevicesCompletion) -> Result<(), AudioError> {
+        #[cfg(any(windows, test))]
+        {
+            self.queue.send(actor::Message::ReadDevices(completion))
+        }
+        #[cfg(not(any(windows, test)))]
+        {
+            let _ = completion;
+            Err(unsupported())
+        }
+    }
+
+    fn execute_device(
+        &self,
+        command: AudioDeviceCommand,
+        completion: AudioDevicesCompletion,
+    ) -> Result<(), AudioError> {
+        #[cfg(any(windows, test))]
+        {
+            self.queue
+                .send(actor::Message::ExecuteDevice(command, completion))
+        }
+        #[cfg(not(any(windows, test)))]
+        {
+            let _ = (command, completion);
+            Err(unsupported())
+        }
+    }
+
     fn subscribe(
         &self,
         changed: Arc<dyn Fn(AudioEvent) + Send + Sync>,
@@ -96,8 +132,9 @@ pub(crate) mod actor {
     use std::sync::mpsc::{self, Receiver, Sender};
 
     use tessera_system::audio::{
-        AudioCommand, AudioCompletion, AudioEndpoint, AudioError, AudioErrorKind, AudioEvent,
-        AudioFlow, AudioSnapshot, EndpointId, EndpointState, Volume,
+        AudioCommand, AudioCompletion, AudioDeviceCommand, AudioDevicesCompletion,
+        AudioDevicesResult, AudioEndpoint, AudioError, AudioErrorKind, AudioEvent, AudioFlow,
+        AudioSnapshot, EndpointId, EndpointState, Volume,
     };
 
     use super::AudioService;
@@ -121,6 +158,21 @@ pub(crate) mod actor {
             volume: Volume,
         ) -> Result<(), AudioError>;
         fn set_muted(&mut self, endpoint: &Self::Endpoint, muted: bool) -> Result<(), AudioError>;
+        fn read_devices(&mut self) -> Result<AudioDevicesResult, AudioError> {
+            Err(AudioError::new(
+                AudioErrorKind::Unsupported,
+                "Audio devices unavailable",
+            ))
+        }
+        fn execute_device(
+            &mut self,
+            _command: AudioDeviceCommand,
+        ) -> Result<AudioDevicesResult, AudioError> {
+            Err(AudioError::new(
+                AudioErrorKind::Unsupported,
+                "Audio device controls unavailable",
+            ))
+        }
         fn start_watch(&mut self, signals: SignalSender) -> Result<(), AudioError>;
         fn rebind_watch(&mut self) -> Result<(), AudioError>;
         fn stop_watch(&mut self);
@@ -250,6 +302,8 @@ pub(crate) mod actor {
     pub(super) enum Message {
         Read(AudioCompletion),
         Execute(AudioCommand, AudioCompletion),
+        ReadDevices(AudioDevicesCompletion),
+        ExecuteDevice(AudioDeviceCommand, AudioDevicesCompletion),
         Subscribe(Arc<Subscription>),
         Unsubscribe(Arc<Subscription>),
         Signal(Signal, SignalSender),
@@ -284,6 +338,7 @@ pub(crate) mod actor {
         signals: Option<SignalSender>,
         watch_status: Option<Result<(), AudioError>>,
         last_snapshot: Option<AudioSnapshot>,
+        inventory_active: bool,
     }
 
     impl<D: Driver> Actor<D> {
@@ -295,6 +350,7 @@ pub(crate) mod actor {
                 signals: None,
                 watch_status: None,
                 last_snapshot: None,
+                inventory_active: false,
             }
         }
 
@@ -320,6 +376,26 @@ pub(crate) mod actor {
                         }
                         complete(completion, result);
                     }
+                    Message::ReadDevices(completion) => {
+                        self.inventory_active = true;
+                        let result = self
+                            .driver
+                            .as_mut()
+                            .map_err(|error| error.clone())
+                            .and_then(Driver::read_devices);
+                        let _ = catch_unwind(AssertUnwindSafe(|| completion(result)));
+                    }
+                    Message::ExecuteDevice(command, completion) => {
+                        let result = self
+                            .driver
+                            .as_mut()
+                            .map_err(|error| error.clone())
+                            .and_then(|driver| driver.execute_device(command));
+                        // The same watch invalidates both default routes and the
+                        // inventory, including commands with partial role results.
+                        self.deliver(AudioEvent::Changed);
+                        let _ = catch_unwind(AssertUnwindSafe(|| completion(result)));
+                    }
                     Message::Subscribe(subscription) => self.subscribe(subscription),
                     Message::Unsubscribe(subscription) => {
                         self.subscriptions
@@ -339,6 +415,9 @@ pub(crate) mod actor {
                 match message {
                     Message::Read(completion) | Message::Execute(_, completion) => {
                         complete(completion, Err(stopped()));
+                    }
+                    Message::ReadDevices(completion) | Message::ExecuteDevice(_, completion) => {
+                        let _ = catch_unwind(AssertUnwindSafe(|| completion(Err(stopped()))));
                     }
                     _ => {}
                 }
@@ -388,7 +467,14 @@ pub(crate) mod actor {
             }
             if let Ok(driver) = &mut self.driver {
                 let snapshot = snapshot(driver);
+                let inventory_changed =
+                    self.inventory_active && self.last_snapshot.as_ref() == Some(&snapshot);
                 self.changed(snapshot);
+                // Session/selected-device notifications may leave the legacy
+                // default-route snapshot unchanged but still invalidate inventory.
+                if inventory_changed {
+                    self.deliver(AudioEvent::Changed);
+                }
             }
         }
 

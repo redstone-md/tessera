@@ -1,0 +1,340 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { SeelenPalette } from "palette.slint";
+import { PopoverTokens } from "popover.slint";
+import { TileButton, TileBounds } from "tiles.slint";
+import { CommonSlider } from "common-slider.slint";
+
+export struct AudioDeviceView {
+    key: string,
+    name: string,
+    roles: string,
+    input: bool,
+    selected: bool,
+    ready: bool,
+    muted: bool,
+    percent: float,
+    status: string,
+    default-enabled: bool,
+    communications-enabled: bool,
+    settings-enabled: bool,
+}
+
+export struct AudioSessionView {
+    key: string,
+    name: string,
+    ready: bool,
+    muted: bool,
+    percent: float,
+    status: string,
+}
+
+component DeviceText inherits Text {
+    color: SeelenPalette.foreground;
+    font-family: PopoverTokens.font-family;
+    font-size: PopoverTokens.font-size;
+    accessible-role: text;
+    accessible-label: self.text;
+    overflow: elide;
+}
+
+component DeviceButton inherits TileButton {
+    in property <string> text;
+    height: 30px;
+    radius: 6px;
+    accessible-text: root.text;
+    allow-return-repeat: false;
+    DeviceText {
+        text: root.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+        accessible-label: "";
+    }
+}
+
+// A held slider keeps its first handle. A replacement projection cannot redirect
+// trailing pointer/key input to a different endpoint/session. Native release uses
+// the popup's existing input observer, not an additional window observer.
+component DeviceLevel inherits Rectangle {
+    in property <string> key;
+    in property <string> name;
+    in property <bool> enabled;
+    in property <bool> muted;
+    in property <float> percent;
+    in property <int> input-epoch;
+    in property <bool> physical-input;
+    in property <int> readback-epoch;
+    callback volume-requested(string, float) -> bool;
+    callback volume-released(string, float) -> bool;
+    callback mute-requested(string, bool);
+    callback focus-frame(string, bool, TileBounds);
+    callback volume-accessible-requested(string, float) -> bool;
+    property <bool> native-focus: slider.has-focus;
+    property <TileBounds> native-bounds: {
+        origin: slider.absolute-position, width: slider.width, height: slider.height,
+    };
+    changed native-focus => { root.focus-frame(root.key, root.native-focus, root.native-bounds); }
+    changed native-bounds => { root.focus-frame(root.key, root.native-focus, root.native-bounds); }
+    changed key => {
+        slider.value = root.percent;
+        root.focus-frame(root.key, root.native-focus, root.native-bounds);
+    }
+    property <string> held-key;
+    changed input-epoch => { root.held-key = ""; }
+    // Restore rejected native input without emitting a new user callback; later
+    // confirmed readback still replaces the control's observed value.
+    changed percent => { slider.value = root.percent; }
+    // Even an unchanged/quantized readback must replace tentative native value.
+    changed readback-epoch => { slider.value = root.percent; }
+    height: 30px;
+    HorizontalLayout {
+        spacing: 8px;
+        DeviceButton {
+            width: 68px;
+            enabled: root.enabled;
+            activation-key: root.key + (root.muted ? ":unmute" : ":mute");
+            text: root.muted ? @tr("Unmute") : @tr("Mute");
+            accessible-text: (root.muted ? @tr("Unmute ") : @tr("Mute ")) + root.name;
+            accessible-checkable: true;
+            accessible-checked: root.muted;
+            clicked => { root.mute-requested(root.key, !root.muted); }
+        }
+        slider := CommonSlider {
+            horizontal-stretch: 1;
+            minimum: 0;
+            maximum: 100;
+            step: 1;
+            enabled: root.enabled && (root.held-key == "" || root.held-key == root.key);
+            value: root.percent;
+            accessible-label: root.name + @tr(" volume");
+            accessible-description: (root.muted ? @tr("Muted; ") : "") + round(root.percent) + @tr(" percent");
+            accessible-action-set-value(value) => {
+                if root.enabled && value.is-float() {
+                    let percent = value.to-float();
+                    if percent >= 0 && percent <= 100 {
+                        root.volume-accessible-requested(root.key, percent);
+                    }
+                }
+                slider.value = root.percent;
+            }
+            changed(value) => {
+                if root.enabled {
+                    if !root.physical-input {
+                        // AX SetValue has no native hold/release sequence.
+                        if !root.volume-requested(root.key, value) { slider.value = root.percent; }
+                    } else {
+                        if root.held-key == "" { root.held-key = root.key; }
+                        if root.held-key == root.key {
+                            if !root.volume-requested(root.held-key, value) { slider.value = root.percent; }
+                        } else { slider.value = root.percent; }
+                    }
+                }
+                else { slider.value = root.percent; }
+            }
+            released(value) => {
+                if root.enabled && root.held-key == root.key {
+                    if !root.volume-released(root.held-key, value) { slider.value = root.percent; }
+                } else { slider.value = root.percent; }
+                if !root.physical-input { root.held-key = ""; }
+            }
+        }
+        DeviceText {
+            width: 38px;
+            text: round(clamp(root.percent, 0, 100)) + "%";
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            accessible-role: none;
+            accessible-label: "";
+        }
+    }
+}
+
+// Static, noninteractive metrics exist before conditional controls instantiate.
+// QuickSettings and the device surface share this one height-for-width formula.
+export component AudioDevicesMetrics inherits Rectangle {
+    in property <[AudioDeviceView]> devices;
+    in property <AudioDeviceView> selected;
+    in property <[AudioSessionView]> sessions;
+    in property <bool> loading;
+    in property <string> status;
+    in property <string> mixer-status;
+    in property <length> measure-width;
+    out property <length> selected-status-height: selected-metrics.preferred-height;
+    out property <length> mixer-status-height: mixer-metrics.preferred-height;
+    out property <length> natural-height: 28px + root.devices.length * 58px
+        + (root.status != "" || root.loading ? status-metrics.preferred-height + 8px : 0px)
+        + (root.selected.key != "" ? 142px
+            + (root.selected.status != "" ? selected-metrics.preferred-height + 8px : 0px)
+            + (!root.selected.input ? 28px + root.sessions.length * 86px
+                + (root.mixer-status != "" ? mixer-metrics.preferred-height + 8px : 0px) : 0px) : 0px);
+    height: 0px;
+    accessible-role: none;
+    status-metrics := DeviceText {
+        width: root.measure-width; height: 0px; opacity: 0;
+        text: root.loading ? @tr("Loading devices and mixer…") : root.status;
+        wrap: word-wrap; accessible-role: none; accessible-label: "";
+    }
+    selected-metrics := DeviceText {
+        width: root.measure-width; height: 0px; opacity: 0;
+        text: root.selected.status; wrap: word-wrap;
+        accessible-role: none; accessible-label: "";
+    }
+    mixer-metrics := DeviceText {
+        width: root.measure-width; height: 0px; opacity: 0;
+        text: root.mixer-status; wrap: word-wrap;
+        accessible-role: none; accessible-label: "";
+    }
+}
+
+export component AudioDevices inherits Rectangle {
+    in property <[AudioDeviceView]> devices;
+    in property <AudioDeviceView> selected;
+    in property <[AudioSessionView]> sessions;
+    in property <bool> enabled;
+    in property <bool> loading;
+    in property <string> status;
+    in property <string> mixer-status;
+    in property <int> input-epoch;
+    in property <bool> physical-input;
+    in property <int> readback-epoch;
+    in property <length> measure-width;
+    callback selected-requested(string);
+    callback volume-requested(string, float) -> bool;
+    callback volume-released(string, float) -> bool;
+    callback mute-requested(string, bool);
+    callback session-volume-requested(string, float) -> bool;
+    callback session-volume-released(string, float) -> bool;
+    callback session-mute-requested(string, bool);
+    callback default-requested(string, bool);
+    callback settings-requested(string);
+    callback focus-frame(string, bool, TileBounds);
+    callback volume-accessible-requested(string, float) -> bool;
+    out property <length> natural-height: metrics.natural-height;
+    height: root.natural-height;
+    metrics := AudioDevicesMetrics {
+        devices: root.devices; selected: root.selected; sessions: root.sessions;
+        loading: root.loading; status: root.status; mixer-status: root.mixer-status;
+        measure-width: root.measure-width;
+    }
+    VerticalLayout {
+        spacing: 8px;
+        DeviceText { height: 20px; text: @tr("Devices"); font-weight: 600; }
+        if root.status != "" || root.loading: DeviceText {
+            text: root.loading ? @tr("Loading devices and mixer…") : root.status;
+            wrap: word-wrap; color: SeelenPalette.secondary;
+        }
+        for device in root.devices: TileButton {
+            height: 50px;
+            radius: 6px;
+            filled: device.selected;
+            enabled: root.enabled;
+            activation-key: device.key;
+            allow-return-repeat: false;
+            accessible-text: (device.input ? @tr("Input: ") : @tr("Output: ")) + device.name;
+            accessible-description: device.roles;
+            accessible-checkable: true;
+            accessible-checked: device.selected;
+            clicked => { root.selected-requested(device.key); }
+            VerticalLayout {
+                padding-left: 8px; padding-right: 8px; spacing: 2px;
+                DeviceText {
+                    text: (device.input ? @tr("Input: ") : @tr("Output: ")) + device.name;
+                    vertical-alignment: center;
+                    accessible-role: none; accessible-label: "";
+                }
+                DeviceText {
+                    text: device.roles; color: SeelenPalette.secondary;
+                    accessible-role: none; accessible-label: "";
+                }
+            }
+        }
+        if root.selected.key != "": Rectangle {
+            height: 134px + (root.selected.status != "" ? metrics.selected-status-height + 8px : 0px);
+            VerticalLayout {
+                spacing: 8px;
+                DeviceText { height: 20px; text: root.selected.name; font-weight: 600; }
+                if root.selected.ready: DeviceLevel {
+                    key: root.selected.key; name: root.selected.name;
+                    enabled: root.enabled && root.selected.ready;
+                    muted: root.selected.muted; percent: root.selected.percent;
+                    input-epoch: root.input-epoch;
+                    physical-input: root.physical-input;
+                    readback-epoch: root.readback-epoch;
+                    volume-accessible-requested(key, value) => { return root.volume-accessible-requested(key, value); }
+                    volume-requested(key, value) => { return root.volume-requested(key, value); }
+                    volume-released(key, value) => { return root.volume-released(key, value); }
+                    mute-requested(key, value) => { root.mute-requested(key, value); }
+                    focus-frame(key, focused, bounds) => { root.focus-frame(key, focused, bounds); }
+                }
+                if !root.selected.ready: DeviceText {
+                    height: 30px; text: @tr("Master controls unavailable");
+                    color: SeelenPalette.secondary; vertical-alignment: center;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    DeviceButton {
+                        horizontal-stretch: 1; text: @tr("Default");
+                        accessible-text: @tr("Set Multimedia and Console default");
+                        enabled: root.enabled && root.selected.default-enabled;
+                        activation-key: root.selected.key + ":default";
+                        clicked => { root.default-requested(root.selected.key, false); }
+                    }
+                    DeviceButton {
+                        horizontal-stretch: 1; text: @tr("Communications");
+                        accessible-text: @tr("Set Communications default independently");
+                        enabled: root.enabled && root.selected.communications-enabled;
+                        activation-key: root.selected.key + ":communications";
+                        clicked => { root.default-requested(root.selected.key, true); }
+                    }
+                }
+                DeviceButton {
+                    text: @tr("Sound Settings");
+                    enabled: root.enabled && root.selected.settings-enabled;
+                    activation-key: root.selected.key + ":settings";
+                    clicked => { root.settings-requested(root.selected.key); }
+                }
+                if root.selected.status != "": DeviceText {
+                    text: root.selected.status; wrap: word-wrap; color: SeelenPalette.secondary;
+                }
+            }
+        }
+        if root.selected.key != "" && !root.selected.input: Rectangle {
+            height: 20px + root.sessions.length * 86px
+                + (root.mixer-status != "" ? metrics.mixer-status-height + 8px : 0px);
+            VerticalLayout {
+                spacing: 8px;
+                DeviceText { height: 20px; text: @tr("Application mixer"); font-weight: 600; }
+                if root.mixer-status != "": DeviceText {
+                    text: root.mixer-status; wrap: word-wrap; color: SeelenPalette.secondary;
+                }
+                for session in root.sessions: Rectangle {
+                    height: 78px;
+                    VerticalLayout {
+                        spacing: 6px;
+                        DeviceText { height: 20px; text: session.name; }
+                        if session.ready: DeviceLevel {
+                            key: session.key; name: session.name;
+                            enabled: root.enabled && session.ready;
+                            muted: session.muted; percent: session.percent;
+                            input-epoch: root.input-epoch;
+                            physical-input: root.physical-input;
+                            readback-epoch: root.readback-epoch;
+                            volume-accessible-requested(key, value) => { return root.volume-accessible-requested(key, value); }
+                            volume-requested(key, value) => { return root.session-volume-requested(key, value); }
+                            volume-released(key, value) => { return root.session-volume-released(key, value); }
+                            mute-requested(key, value) => { root.session-mute-requested(key, value); }
+                            focus-frame(key, focused, bounds) => { root.focus-frame(key, focused, bounds); }
+                        }
+                        if !session.ready: DeviceText {
+                            height: 30px; text: @tr("Session controls unavailable");
+                            color: SeelenPalette.secondary; vertical-alignment: center;
+                        }
+                        DeviceText { height: 16px; text: session.status; color: SeelenPalette.secondary; }
+                    }
+                }
+            }
+        }
+    }
+}

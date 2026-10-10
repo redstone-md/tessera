@@ -5,6 +5,8 @@
 
 #![forbid(unsafe_code)]
 
+mod audio_devices;
+
 pub mod bluetooth;
 pub mod input_language;
 pub mod media;
@@ -39,6 +41,7 @@ pub mod recycle_bin_mutation;
 
 /// Default-multimedia audio endpoints and their asynchronous host interface.
 pub mod audio {
+    pub use crate::audio_devices::*;
     use std::fmt;
     use std::sync::Arc;
 
@@ -190,6 +193,31 @@ pub mod audio {
             command: AudioCommand,
             completion: AudioCompletion,
         ) -> Result<(), AudioError>;
+
+        /// Opts into device/session inventory without changing legacy default-route reads.
+        fn supports_devices(&self) -> bool {
+            false
+        }
+
+        /// Complete device/session inventory, independent of the default-route snapshot.
+        fn read_devices(&self, _completion: AudioDevicesCompletion) -> Result<(), AudioError> {
+            Err(AudioError::new(
+                AudioErrorKind::Unsupported,
+                "Audio device inventory is unavailable",
+            ))
+        }
+
+        /// Scoped native mutation; completion carries actual readback, including partial roles.
+        fn execute_device(
+            &self,
+            _command: AudioDeviceCommand,
+            _completion: AudioDevicesCompletion,
+        ) -> Result<(), AudioError> {
+            Err(AudioError::new(
+                AudioErrorKind::Unsupported,
+                "Audio device controls are unavailable",
+            ))
+        }
 
         /// `Changed` invalidates the snapshot; callers request a fresh read.
         ///
