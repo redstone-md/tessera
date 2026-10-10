@@ -159,6 +159,12 @@ export component Dock inherits Window {
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
     in-out property <bool> reorder-enabled;
+    // Only the native order controller grants this capability; legacy docks
+    // retain their original menus even when ordinary pin callbacks are wired.
+    in-out property <bool> reorder-lock-available: false;
+    in-out property <bool> reorder-lock-enabled: false;
+    in-out property <bool> reorder-locked: false;
+    callback reorder-lock-requested(bool);
     in-out property <data-transfer> reorder-data;
     in-out property <DockDragVisual> reorder-visual;
     in-out property <string> reorder-target-key;

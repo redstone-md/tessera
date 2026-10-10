@@ -164,6 +164,11 @@ impl PanelController {
         let Some(dock) = self.dock_and_upgrade() else {
             return;
         };
+        let locked = self.core.applied_preferences().dock_locked();
+        dock.set_reorder_locked(locked);
+        dock.set_reorder_lock_enabled(
+            self.dock_order_ready(&dock) && !self.preference_saving.get(),
+        );
         let token = self
             .dock_order
             .gesture
@@ -181,6 +186,7 @@ impl PanelController {
             i32::try_from(self.dock_order.projection.get()).unwrap_or(i32::MAX),
         );
         let enabled = self.dock_order_ready(&dock)
+            && !locked
             && !self.preference_saving.get()
             && self.dock_order.pending_exit.get().is_none()
             && !self.dock_order.exit_dispatching.get()
@@ -266,7 +272,10 @@ impl PanelController {
     }
 
     fn dock_token_current(&self, dock: &Dock, token: &Rc<Token>) -> bool {
-        if !self.dock_order_ready(dock) || self.preference_saving.get() {
+        if self.core.applied_preferences().dock_locked()
+            || !self.dock_order_ready(dock)
+            || self.preference_saving.get()
+        {
             return false;
         }
         let catalog: Vec<_> = self
@@ -328,6 +337,7 @@ impl PanelController {
             || self.dock_order.pending_exit.get().is_some()
             || !self.dock_order_ready(&dock)
             || self.preference_saving.get()
+            || self.core.applied_preferences().dock_locked()
         {
             return;
         }
@@ -492,6 +502,7 @@ impl PanelController {
             return DragAction::None;
         };
         if !self.dock_order_ready(&dock)
+            || self.core.applied_preferences().dock_locked()
             || self.dock_order.projection.get() != projection
             || self.core.pins() != saved
             || self.dock_order_resolved(&dock).as_ref() != Some(&resolved)
@@ -564,7 +575,10 @@ impl PanelController {
         let Some(dock) = self.dock_and_upgrade() else {
             return;
         };
-        if !self.dock_order_ready(&dock) || self.preference_saving.get() {
+        if self.core.applied_preferences().dock_locked()
+            || !self.dock_order_ready(&dock)
+            || self.preference_saving.get()
+        {
             return;
         }
         let Some(resolved) = self.dock_order_resolved(&dock) else {
@@ -596,7 +610,61 @@ impl PanelController {
         );
     }
 
+    fn set_dock_locked(&self, locked: bool) {
+        let Some(dock) = self.dock_and_upgrade() else {
+            return;
+        };
+        if !dock.get_reorder_lock_available()
+            || !self.dock_order_ready(&dock)
+            || self.preference_saving.get()
+        {
+            return;
+        }
+        let Some(_save) = self.begin_preference_save() else {
+            return;
+        };
+        // Native popup retirement can replace the source/root during admission.
+        let Some(dock) = self.dock_and_upgrade() else {
+            return;
+        };
+        if !dock.get_reorder_lock_available() || !self.dock_order_ready(&dock) {
+            return;
+        }
+        let applied = self.core.applied_preferences();
+        if applied.dock_locked() == locked {
+            return;
+        }
+        let preferences = applied.with_dock_locked(locked);
+        match self.core.host().save_preferences(&preferences) {
+            Ok(()) => {
+                self.core.record_applied(&preferences);
+                self.cancel_dock_reorder();
+                if self.root_current() {
+                    self.report_message(if locked {
+                        "Dock locked"
+                    } else {
+                        "Dock unlocked"
+                    });
+                    if self.root_current() {
+                        self.render();
+                    }
+                }
+            }
+            Err(error) => {
+                if self.root_current() {
+                    self.report_message(&format!(
+                        "Could not save Dock lock: {}",
+                        crate::sanitize::bounded_text(&error, 200)
+                    ));
+                }
+            }
+        }
+    }
+
     pub(super) fn wire_dock_reorder(&self, dock: &Dock) {
+        dock.set_reorder_lock_available(true);
+        let controller = self.clone();
+        dock.on_reorder_lock_requested(move |locked| controller.set_dock_locked(locked));
         let controller = self.clone();
         dock.on_reorder_origin(move |visual, event, bounds, press| {
             let _callback = controller.dock_callback();

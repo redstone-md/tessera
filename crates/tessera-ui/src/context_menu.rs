@@ -49,6 +49,7 @@ pub(crate) struct ContextMenuController {
     key: RefCell<SharedString>,
     scope_generation: Cell<Option<u64>>,
     pin_order: RefCell<Vec<String>>,
+    lock_desired: Cell<Option<bool>>,
     focus_seen: Cell<bool>,
     focus_watch: slint::Timer,
     host: Arc<dyn DesktopHost>,
@@ -100,6 +101,7 @@ impl ContextMenuController {
             key: RefCell::default(),
             scope_generation: Cell::new(Some(0)),
             pin_order: RefCell::default(),
+            lock_desired: Cell::new(None),
             focus_seen: Cell::new(false),
             focus_watch: slint::Timer::default(),
             host,
@@ -213,6 +215,14 @@ impl ContextMenuController {
         self.surface.set_kind(kind);
         self.surface.set_launcher_favorite_scope(false);
         self.surface.set_media_scope(media_scope);
+        let lock_available =
+            kind == DockMenuKind::Bar && !media_scope && dock.get_reorder_lock_available();
+        self.surface.set_dock_lock_available(lock_available);
+        self.surface
+            .set_dock_lock_enabled(dock.get_reorder_lock_enabled());
+        self.surface.set_dock_locked(dock.get_reorder_locked());
+        self.lock_desired
+            .set(lock_available.then_some(!dock.get_reorder_locked()));
         let pin_order: Vec<_> = dock
             .get_pinned_apps()
             .iter()
@@ -581,6 +591,9 @@ impl ContextMenuController {
             return;
         }
         let pin_order = self.pin_order.borrow().clone();
+        // Capture the presented desired value before hide can reenter and
+        // publish another scope. Never toggle whichever state is current later.
+        let lock_desired = self.lock_desired.get();
         // Releasing our foreground/native role precedes any parent callback.
         self.hide();
         let Some(dock) = dock else { return };
@@ -616,6 +629,24 @@ impl ContextMenuController {
                     && current_order == pin_order
                 {
                     dock.invoke_reorder_move_requested(key, action == DockMenuAction::MoveLater);
+                }
+            }
+            DockMenuAction::DockSetLocked => {
+                let same_scope = scope_generation
+                    .and_then(|generation| generation.checked_add(1))
+                    .is_some_and(|generation| self.scope_generation.get() == Some(generation))
+                    && !self.is_open()
+                    && self.surface.get_kind() == DockMenuKind::Bar
+                    && !self.surface.get_media_scope()
+                    && key.is_empty()
+                    && self.key.borrow().is_empty();
+                if let Some(locked) = lock_desired.filter(|_| {
+                    same_scope
+                        && dock.window().is_visible()
+                        && dock.get_reorder_lock_available()
+                        && dock.get_reorder_lock_enabled()
+                }) {
+                    dock.invoke_reorder_lock_requested(locked);
                 }
             }
             DockMenuAction::Settings => dock.invoke_open_settings_requested(),
@@ -724,6 +755,7 @@ fn allowed(kind: DockMenuKind, action: DockMenuAction) -> bool {
                 | DockMenuAction::TaskManager
                 | DockMenuAction::Restore
                 | DockMenuAction::Exit
+                | DockMenuAction::DockSetLocked
         ),
         DockMenuKind::Pinned => matches!(
             action,

@@ -223,6 +223,7 @@ pub struct PanelPreferences {
     launcher: LauncherPreferences,
     general: GeneralPreferences,
     media_enabled: bool,
+    dock_locked: bool,
     shortcuts: tessera_system::shortcuts::ShortcutConfig,
 }
 
@@ -238,6 +239,7 @@ impl PanelPreferences {
             launcher: LauncherPreferences::default(),
             general: GeneralPreferences::default(),
             media_enabled: false,
+            dock_locked: false,
             shortcuts: tessera_system::shortcuts::ShortcutConfig::default(),
         }
     }
@@ -289,6 +291,17 @@ impl PanelPreferences {
 
     pub fn with_media_enabled(mut self, enabled: bool) -> Self {
         self.media_enabled = enabled;
+        self
+    }
+
+    /// Applied Dock reorder policy; launching and pin membership remain independent.
+    pub fn dock_locked(&self) -> bool {
+        self.dock_locked
+    }
+
+    /// Changes only the saved Dock reorder policy.
+    pub fn with_dock_locked(mut self, locked: bool) -> Self {
+        self.dock_locked = locked;
         self
     }
 

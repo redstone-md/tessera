@@ -68,6 +68,7 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         .with_launcher_display_mode(mode)
         .with_general(crate::settings::GeneralPreferences::default().with_start_of_week(start))
         .with_media_enabled(preferences.media_enabled())
+        .with_dock_locked(preferences.dock_locked())
         .with_shortcuts(preferences.shortcuts().clone())
 }
 
@@ -103,6 +104,7 @@ fn to_ui_preferences(
         .with_launcher_display_mode(mode)
         .with_general(tessera_ui::GeneralPreferences::default().with_start_of_week(start))
         .with_media_enabled(preferences.media_enabled())
+        .with_dock_locked(preferences.dock_locked())
         .with_shortcuts(preferences.shortcuts().clone())
         .with_launcher_favorites(preferences.launcher_favorites().to_vec())
 }

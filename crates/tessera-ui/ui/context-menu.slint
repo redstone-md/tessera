@@ -72,6 +72,9 @@ export component ContextMenuSurface inherits Window {
     in property <bool> launcher-favorite: false;
     in property <bool> pin-move-earlier-enabled: false;
     in property <bool> pin-move-later-enabled: false;
+    in property <bool> dock-lock-available: false;
+    in property <bool> dock-lock-enabled: false;
+    in property <bool> dock-locked: false;
     // Optional module membership is applied preference state, not playback.
     in property <bool> media-scope: false;
     in property <bool> media-enabled: false;
@@ -131,20 +134,39 @@ export component ContextMenuSurface inherits Window {
     property <MenuEntry> pinned-unpin-entry: {
         label: @tr("Unpin"), action: DockMenuAction.unpin
     };
+    property <MenuEntry> bar-settings-entry: {
+        label: @tr("Settings"), action: DockMenuAction.settings,
+        icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg")
+    };
+    property <MenuEntry> bar-files-entry: {
+        label: @tr("File Explorer"), action: DockMenuAction.file-manager
+    };
+    property <MenuEntry> bar-tasks-entry: {
+        label: @tr("Task Manager"), action: DockMenuAction.task-manager
+    };
+    property <MenuEntry> bar-restore-entry: {
+        label: @tr("Restore Explorer"), action: DockMenuAction.restore
+    };
+    property <MenuEntry> bar-exit-entry: {
+        label: @tr("Exit Tessera"), action: DockMenuAction.exit
+    };
+    property <MenuEntry> bar-media-entry: {
+        label: root.media-enabled ? @tr("Remove media module") : @tr("Add media module"),
+        action: root.media-enabled ? DockMenuAction.media-remove : DockMenuAction.media-bar-add
+    };
     property <[MenuEntry]> entries: root.window-entries.length > 0 ? root.window-entries : root.launcher-favorite-scope ? [
         { label: root.launcher-favorite ? @tr("Unpin") : @tr("Pin"),
             action: root.launcher-favorite ? DockMenuAction.favorite-remove : DockMenuAction.favorite-add }
     ] : root.media-scope ? [
         { label: @tr("Remove media module"), action: DockMenuAction.media-remove }
+    ] : root.kind == DockMenuKind.bar && root.dock-lock-available ? [
+        { label: root.dock-locked ? @tr("Unlock Dock") : @tr("Lock Dock"),
+            action: DockMenuAction.dock-set-locked },
+        root.bar-settings-entry, root.bar-files-entry, root.bar-tasks-entry,
+        root.bar-restore-entry, root.bar-exit-entry, root.bar-media-entry
     ] : root.kind == DockMenuKind.bar ? [
-        { label: @tr("Settings"), action: DockMenuAction.settings,
-            icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg") },
-        { label: @tr("File Explorer"), action: DockMenuAction.file-manager },
-        { label: @tr("Task Manager"), action: DockMenuAction.task-manager },
-        { label: @tr("Restore Explorer"), action: DockMenuAction.restore },
-        { label: @tr("Exit Tessera"), action: DockMenuAction.exit },
-        { label: root.media-enabled ? @tr("Remove media module") : @tr("Add media module"),
-            action: root.media-enabled ? DockMenuAction.media-remove : DockMenuAction.media-bar-add }
+        root.bar-settings-entry, root.bar-files-entry, root.bar-tasks-entry,
+        root.bar-restore-entry, root.bar-exit-entry, root.bar-media-entry
     ] : root.kind == DockMenuKind.pinned
         ? (root.pin-move-earlier-enabled || root.pin-move-later-enabled
             ? [root.pinned-open-entry, root.pinned-unpin-entry,
@@ -171,13 +193,16 @@ export component ContextMenuSurface inherits Window {
             && (root.entries[index].action != DockMenuAction.media-bar-add || !root.media-enabled)
             && (root.entries[index].action != DockMenuAction.media-remove || root.media-enabled)
             && (root.entries[index].action != DockMenuAction.move-earlier || root.pin-move-earlier-enabled)
+            && (root.entries[index].action != DockMenuAction.dock-set-locked
+                || (root.dock-lock-available && root.dock-lock-enabled))
             && (root.entries[index].action != DockMenuAction.move-later || root.pin-move-later-enabled);
     }
     pure function non-repeating-action(action: DockMenuAction) -> bool {
         return action == DockMenuAction.recycle-empty
             || action == DockMenuAction.favorite-add || action == DockMenuAction.favorite-remove
             || action == DockMenuAction.media-bar-add || action == DockMenuAction.media-remove
-            || action == DockMenuAction.move-earlier || action == DockMenuAction.move-later;
+            || action == DockMenuAction.move-earlier || action == DockMenuAction.move-later
+            || action == DockMenuAction.dock-set-locked;
     }
     pure function adjacent-index(index: int, direction: int) -> int {
         return direction > 0

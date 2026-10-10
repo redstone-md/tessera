@@ -17,6 +17,7 @@ use shortcuts::ShortcutPreferences;
 use tessera_system::shortcuts::ShortcutConfig;
 
 pub(crate) use dock::DockPreferences;
+use dock::LegacyDockPreferences;
 pub(crate) use general::{GeneralPreferences, StartOfWeek};
 
 const MAX_SETTINGS_BYTES: u64 = 16 * 1024;
@@ -166,7 +167,7 @@ struct LegacyPreferencesV4 {
     #[serde(deserialize_with = "deserialize_launcher_preferences")]
     launcher: LauncherPreferences,
     general: GeneralPreferences,
-    dock: DockPreferences,
+    dock: LegacyDockPreferences,
 }
 
 /// Exact V5 record: source intent is introduced only in V6.
@@ -182,7 +183,7 @@ struct LegacyPreferencesV5 {
     #[serde(deserialize_with = "deserialize_launcher_preferences")]
     launcher: LauncherPreferences,
     general: GeneralPreferences,
-    dock: DockPreferences,
+    dock: LegacyDockPreferences,
     shortcuts: ShortcutPreferences,
 }
 
@@ -255,6 +256,15 @@ impl Preferences {
 
     pub(crate) fn with_media_enabled(mut self, enabled: bool) -> Self {
         self.dock = self.dock.with_media_enabled(enabled);
+        self
+    }
+
+    pub(crate) fn dock_locked(&self) -> bool {
+        self.dock.locked()
+    }
+
+    pub(crate) fn with_dock_locked(mut self, locked: bool) -> Self {
+        self.dock = self.dock.with_locked(locked);
         self
     }
 

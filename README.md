@@ -321,6 +321,13 @@ Forget requires current inline confirmation and fresh exact GUID/native-profile
 identity, descriptor and policy checks; readback distinguishes absent, present,
 replaced and unavailable. No plaintext keys or fake successful removal.
 
+Development Dock adds saved Lock/Unlock for pinned reordering only; launch,
+window actions and pin membership remain independent. Lock adoption cancels
+native drag and rejects discrete moves only after the complete-record Save
+succeeds. Schema 6 admits optional `dock.locked`, default false and omitted when
+unlocked; exact older-schema groups still reject it. Failed saves retain the
+applied lock and order rather than showing an optimistic result.
+
 Development Bluetooth adds explicit On/Off for each available Bluetooth
 radio, with exact native device IDs, retained COM incarnations and source/state
 invalidation. Consent begins only from deliberate GUI input; native acceptance
