@@ -3,7 +3,7 @@
 
 import { SeelenPalette } from "palette.slint";
 import { PopoverTokens } from "popover.slint";
-import { TileButton, TileBounds } from "tiles.slint";
+import { TileButton, ViewportTileButton, TileBounds } from "tiles.slint";
 import { DockMediaView, MediaAction, MediaSessionChoice } from "dock-media.slint";
 import { CommonSlider } from "common-slider.slint";
 
@@ -43,14 +43,9 @@ component TransportButton inherits TileButton {
     }
 }
 
-component PlayerChoice inherits TileButton {
+component PlayerChoice inherits ViewportTileButton {
     in property <MediaSessionChoice> choice;
-    in property <TileBounds> clip-bounds;
-    property <TileBounds> frame: { origin: root.absolute-position, width: root.width, height: root.height };
-    changed frame => { root.cancel-input(); }
-    changed clip-bounds => { root.cancel-input(); }
     callback requested(string);
-    callback reveal-requested(TileBounds);
     height: 42px;
     radius: 6px;
     activation-key: root.choice.identity;
@@ -59,20 +54,8 @@ component PlayerChoice inherits TileButton {
     // Offscreen rows remain in native Tab/AX traversal. Only a revealed frame
     // may select; focus or an offscreen AX action first reveals this exact row.
     enabled: root.choice.available;
-    property <bool> frame-visible: root.frame.width > 0px && root.frame.height > 0px
-        && root.frame.origin.x >= root.clip-bounds.origin.x
-        && root.frame.origin.y >= root.clip-bounds.origin.y
-        && root.frame.origin.x + root.frame.width <= root.clip-bounds.origin.x + root.clip-bounds.width
-        && root.frame.origin.y + root.frame.height <= root.clip-bounds.origin.y + root.clip-bounds.height;
     accessible-text: (root.choice.selected ? @tr("Selected: ") : @tr("Select player: ")) + root.choice.label;
-    focus-acquired => { root.reveal-requested(root.frame); }
-    clicked => {
-        if root.frame-visible {
-            root.requested(root.choice.identity);
-        } else {
-            root.reveal-requested(root.frame);
-        }
-    }
+    scoped-clicked => { root.requested(root.choice.identity); }
     PlayerText {
         x: 8px;
         width: max(1px, parent.width - 16px);

@@ -346,3 +346,27 @@ export component ApplicationIcon inherits Rectangle {
         }
     }
 }
+
+// Viewport commands keep native Tab/AX traversal, but a clipped invocation
+// only reveals the exact row. Geometry changes retire held native input.
+export component ViewportTileButton inherits TileButton {
+    in property <TileBounds> clip-bounds;
+    property <TileBounds> frame: { origin: root.absolute-position, width: root.width, height: root.height };
+    property <bool> frame-visible: root.frame.width > 0px && root.frame.height > 0px
+        && root.frame.origin.x >= root.clip-bounds.origin.x
+        && root.frame.origin.y >= root.clip-bounds.origin.y
+        && root.frame.origin.x + root.frame.width <= root.clip-bounds.origin.x + root.clip-bounds.width
+        && root.frame.origin.y + root.frame.height <= root.clip-bounds.origin.y + root.clip-bounds.height;
+    callback scoped-clicked;
+    callback reveal-requested(TileBounds);
+    changed frame => { root.cancel-input(); }
+    changed clip-bounds => { root.cancel-input(); }
+    focus-acquired => { root.reveal-requested(root.frame); }
+    clicked => {
+        if root.frame-visible {
+            root.scoped-clicked();
+        } else {
+            root.reveal-requested(root.frame);
+        }
+    }
+}
