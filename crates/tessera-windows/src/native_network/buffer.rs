@@ -92,6 +92,16 @@ impl<'a, C: NativeCalls> Buffer<'a, C> {
             .map(|index| self.read(offset + index * size_of::<T>()))
             .collect()
     }
+
+    /// Erase a validated transient profile payload before returning its native
+    /// allocation. This never extends the SDK allocator's declared span.
+    pub(super) fn erase(&self, bytes: usize) -> Result<(), NetworkError> {
+        self.span(0, bytes, 1)?;
+        for index in 0..bytes {
+            unsafe { self.data.as_ptr().cast::<u8>().add(index).write_volatile(0) };
+        }
+        Ok(())
+    }
 }
 
 impl<C: NativeCalls> Drop for Buffer<'_, C> {

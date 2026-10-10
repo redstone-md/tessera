@@ -9,6 +9,7 @@ pub(super) struct Mailbox {
     pub read: Option<(Token, Result<NetworkSnapshot, NetworkError>)>,
     pub controls: Option<(Token, Option<Observation<NetworkControlInventory>>)>,
     pub radios: Option<(Token, Option<Observation<NetworkRadioInventory>>)>,
+    pub profiles: Option<(Token, Option<Observation<NetworkProfileInventory>>)>,
     pub expected_command: Option<Token>,
     pub command: Option<(Token, Result<NetworkCommandOutcome, NetworkError>)>,
     pub accepted: Option<Token>,
@@ -67,6 +68,7 @@ pub(super) fn control_view_complete(
         let result = result.map(|view| {
             slot.controls = Some((token, view.controls));
             slot.radios = Some((token, view.radios));
+            slot.profiles = Some((token, view.profiles));
             view.snapshot
         });
         slot.read = Some((token, result));
@@ -145,6 +147,7 @@ pub(super) struct Delivery {
     pub read: Option<(Token, Result<NetworkSnapshot, NetworkError>)>,
     pub controls: Option<(Token, Option<Observation<NetworkControlInventory>>)>,
     pub radios: Option<(Token, Option<Observation<NetworkRadioInventory>>)>,
+    pub profiles: Option<(Token, Option<Observation<NetworkProfileInventory>>)>,
     pub command: Option<(Token, Result<NetworkCommandOutcome, NetworkError>)>,
     pub accepted: Option<Token>,
     pub settings: Option<(Token, Result<(), NetworkError>)>,
@@ -172,6 +175,7 @@ impl Mailbox {
             read,
             controls: self.controls.take(),
             radios: self.radios.take(),
+            profiles: self.profiles.take(),
             command,
             accepted: self.accepted.take(),
             settings,

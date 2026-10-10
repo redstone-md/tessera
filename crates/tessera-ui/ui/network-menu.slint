@@ -218,6 +218,12 @@ export component NetworkMenu inherits Window {
     in property <[NetworkControlRow]> radio-rows;
     in property <bool> radio-controls-supported;
     callback radio-requested(string);
+    in property <[NetworkControlRow]> profile-rows;
+    in property <bool> profile-controls-supported;
+    in property <string> profile-confirmation;
+    in property <string> profile-confirm-key;
+    callback profile-selected(string);
+    callback profile-confirmed(string, bool);
     in property <string> selected-network;
     in property <string> command-label;
     in property <string> command-key;
@@ -262,6 +268,7 @@ export component NetworkMenu inherits Window {
         + (root.watch-status != "" ? NetworkMetrics.xs + watch-metrics.preferred-height : 0px)
         + connected-section.natural-height + saved-section.natural-height
         + available-section.natural-height + hidden-section.natural-height
+        + profile-section.height
         + root.control-rows.length * 2 * root.action-height
         + root.radio-rows.length * 3 * root.action-height
         + (root.selected-network != "" ? 2 * root.action-height + NetworkMetrics.xs : 0px)
@@ -395,11 +402,81 @@ export component NetworkMenu inherits Window {
                         rows: root.connected;
                         text-line-height-factor: body.text-line-height-factor;
                     }
-                    saved-section := NetworkSection {
+                    profile-section := Rectangle {
                         y: connected-section.y + connected-section.height;
                         width: parent.width;
+                        height: root.profile-controls-supported
+                            ? NetworkMetrics.text-height + 2 * NetworkMetrics.xs
+                                + root.profile-rows.length * 3 * root.action-height
+                                + 3 * root.action-height : 0px;
+                        visible: root.profile-controls-supported;
+                        accessible-role: none;
+                        Rectangle { width: parent.width; height: 1px; background: SeelenPalette.muted; }
+                        NetworkText {
+                            x: NetworkMetrics.xs; y: NetworkMetrics.xs;
+                            width: max(0px, parent.width - 2 * NetworkMetrics.xs);
+                            height: NetworkMetrics.text-height;
+                            text: @tr("SAVED NETWORKS");
+                            font-weight: 600; color: SeelenPalette.secondary;
+                            letter-spacing: 0.5px;
+                            line-height-factor: body.text-line-height-factor;
+                        }
+                        profile-choices := Rectangle {
+                            y: NetworkMetrics.text-height + 2 * NetworkMetrics.xs;
+                            width: parent.width;
+                            height: root.profile-rows.length * 3 * root.action-height;
+                            accessible-role: none;
+                            for row[index] in root.profile-rows: NetworkControlChoice {
+                                y: index * 3 * root.action-height;
+                                width: parent.width; height: 3 * root.action-height;
+                                net-row: row; details-lines: 3;
+                                clip-bounds: root.command-clip;
+                                text-line-height-factor: body.text-line-height-factor;
+                                scoped-clicked => { root.password = ""; root.profile-selected(row.key); }
+                                reveal-requested(frame) => { root.reveal-command(frame); }
+                            }
+                        }
+                        // Reserved inline confirmation geometry keeps the exact
+                        // current input frame stable when a profile is selected.
+                        confirmation := NetworkText {
+                            y: profile-choices.y + profile-choices.height;
+                            width: parent.width; height: 2 * root.action-height;
+                            text: root.profile-confirmation != ""
+                                ? root.profile-confirmation + "\n" + @tr("Removes saved credentials and automatic connection settings on this adapter.")
+                                : @tr("Select a saved profile to review Forget. Saved credentials and automatic connection settings are removed only after confirmation.");
+                            color: SeelenPalette.secondary;
+                            wrap: word-wrap; overflow: elide;
+                            accessible-role: text; accessible-label: self.text;
+                            line-height-factor: body.text-line-height-factor;
+                        }
+                        confirm-forget := NetworkAction {
+                            y: confirmation.y + confirmation.height;
+                            width: max(0px, (parent.width - NetworkMetrics.xs) / 2);
+                            height: root.action-height;
+                            label: @tr("Confirm Forget");
+                            enabled: root.profile-confirm-key != "";
+                            activation-key: root.profile-confirm-key;
+                            clip-bounds: root.command-clip;
+                            scoped-clicked => { root.profile-confirmed(root.profile-confirm-key, true); }
+                            reveal-requested(frame) => { root.reveal-command(frame); }
+                        }
+                        NetworkAction {
+                            x: confirm-forget.width + NetworkMetrics.xs;
+                            y: confirm-forget.y;
+                            width: confirm-forget.width; height: root.action-height;
+                            label: @tr("Cancel");
+                            enabled: root.profile-confirm-key != "";
+                            activation-key: root.profile-confirm-key;
+                            clip-bounds: root.command-clip;
+                            scoped-clicked => { root.profile-confirmed(root.profile-confirm-key, false); }
+                            reveal-requested(frame) => { root.reveal-command(frame); }
+                        }
+                    }
+                    saved-section := NetworkSection {
+                        y: profile-section.y + profile-section.height;
+                        width: parent.width;
                         caption: @tr("SAVED NETWORKS");
-                        rows: root.saved;
+                        rows: root.profile-controls-supported ? [] : root.saved;
                         text-line-height-factor: body.text-line-height-factor;
                     }
                     available-section := NetworkSection {

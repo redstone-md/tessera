@@ -115,6 +115,11 @@ impl<C: NativeCalls> Owner<C> {
         ));
         let mut result = NetworkControlView::from(view);
         result.radios = Some(radios);
+        result.profiles = Some(observation(self.controls.profile_inventory(
+            &self.calls,
+            handle,
+            self.context.as_deref(),
+        )));
         Ok(result)
     }
 

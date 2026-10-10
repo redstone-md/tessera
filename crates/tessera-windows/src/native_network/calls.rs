@@ -33,6 +33,7 @@ pub(super) struct ConnectRequest<'a> {
 /// # Safety
 /// Returned non-null buffers must be readable, correctly initialized SDK records
 /// of the requested kind, remain live until `free`, and be independently owned.
+/// Profile XML allocations must also be writable so transient bytes can be erased.
 /// A successful NONE registration must quiesce all earlier callbacks. No callback
 /// may use its context after that barrier; close alone is not assumed a barrier.
 pub(super) unsafe trait NativeCalls: Send + 'static {
@@ -42,6 +43,19 @@ pub(super) unsafe trait NativeCalls: Send + 'static {
     fn query(&self, handle: usize, id: &GUID, opcode: WLAN_INTF_OPCODE) -> Reply;
     fn available(&self, handle: usize, id: &GUID, flags: u32) -> Reply;
     fn bss(&self, handle: usize, id: &GUID) -> Reply;
+    fn profiles(&self, _handle: usize, _id: &GUID) -> Reply {
+        Reply {
+            status: 50,
+            data: std::ptr::null_mut(),
+            size: None,
+        }
+    }
+    fn delete_profile(&self, _handle: usize, _id: &GUID, _name: &[u16]) -> u32 {
+        50
+    }
+    fn profile_digest(&self, _bytes: &[u8]) -> Result<[u8; 32], NetworkError> {
+        Err(native_error("WLAN profile descriptor hashing", 50))
+    }
     fn profile(&self, _handle: usize, _id: &GUID, _name: &[u16]) -> ProfileReply {
         ProfileReply {
             allocation: Reply {

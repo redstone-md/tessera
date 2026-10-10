@@ -253,6 +253,73 @@ pub struct NetworkRadioInventory {
     pub unavailable: Vec<NetworkError>,
 }
 
+/// Saved-profile inventory is independent of BSS/location permission. Names are
+/// presentation metadata only; commands carry exclusively owner-issued targets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkProfileScope {
+    AllUsers,
+    CurrentUser,
+    GroupPolicy,
+    Unsupported,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct NetworkProfileControl {
+    pub target: Option<NetworkTarget>,
+    pub interface: InterfaceId,
+    pub interface_name: String,
+    pub name: String,
+    pub scope: NetworkProfileScope,
+    pub forget: Observation<()>,
+}
+
+impl fmt::Debug for NetworkProfileControl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NetworkProfileControl")
+            .field("target", &self.target)
+            .field("scope", &self.scope)
+            .field("forget", &self.forget)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkProfileInventory {
+    pub profiles: Vec<NetworkProfileControl>,
+    pub unavailable: Vec<NetworkError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NetworkProfileInitiation {
+    /// Admission/rights/source validation failed; no deletion call was made.
+    NotSubmitted(NetworkError),
+    Accepted,
+    /// The SDK was called but rejected initiation. Never an acceptance ACK.
+    NativeError {
+        code: u32,
+        error: NetworkError,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkProfilePresence {
+    Absent,
+    Present,
+    /// The native name now identifies a different descriptor or policy.
+    Replaced,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkProfileResult {
+    pub target: NetworkTarget,
+    pub interface: InterfaceId,
+    pub initiation: NetworkProfileInitiation,
+    pub readback: Observation<NetworkProfilePresence>,
+    /// Exact-name presence survives independently failed descriptor/rights readback.
+    pub descriptor_error: Option<NetworkError>,
+}
+
 /// Optional expansion keeps legacy snapshot/view providers source-compatible.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkControlView {
@@ -260,6 +327,8 @@ pub struct NetworkControlView {
     pub controls: Option<Observation<NetworkControlInventory>>,
     /// Radio facts are independent of BSS discovery/location permission.
     pub radios: Option<Observation<NetworkRadioInventory>>,
+    /// None preserves legacy providers without additional requests.
+    pub profiles: Option<Observation<NetworkProfileInventory>>,
 }
 
 impl From<NetworkView> for NetworkControlView {
@@ -268,6 +337,7 @@ impl From<NetworkView> for NetworkControlView {
             snapshot: view.snapshot,
             controls: view.controls,
             radios: None,
+            profiles: None,
         }
     }
 }
@@ -350,6 +420,11 @@ pub enum NetworkCommand {
         target: NetworkTarget,
         enabled: bool,
     },
+    /// Permanently removes the exact saved profile, credentials and autoconnect
+    /// configuration. Requires explicit current destructive confirmation.
+    ForgetProfile {
+        target: NetworkTarget,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -358,6 +433,8 @@ pub enum NetworkCommandOutcome {
     Disconnected,
     /// Independent native per-PHY outcomes, never an assertion of effective On.
     RadioObserved(NetworkRadioResult),
+    /// SDK initiation and actual exact-source readback are independent facts.
+    ProfileObserved(NetworkProfileResult),
     /// Documented numeric WLAN reason only; no native profile/name diagnostics.
     Failed {
         reason: u32,

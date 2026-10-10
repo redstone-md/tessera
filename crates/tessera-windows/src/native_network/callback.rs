@@ -18,6 +18,7 @@ pub(super) struct Context {
     wake: Arc<dyn Fn() + Send + Sync>,
     revision: AtomicU64,
     source_revision: AtomicU64,
+    interface_revision: AtomicU64,
     incarnation: u64,
     effect: Mutex<Option<EffectNotice>>,
 }
@@ -35,6 +36,7 @@ impl Context {
             wake,
             revision: AtomicU64::new(1),
             source_revision: AtomicU64::new(1),
+            interface_revision: AtomicU64::new(1),
             // MAX is a permanent global exhaustion sentinel, never an identity.
             incarnation: NEXT_CONTEXT
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
@@ -57,6 +59,10 @@ impl Context {
         self.source_revision.load(Ordering::Acquire)
     }
 
+    pub(super) fn interface_revision(&self) -> u64 {
+        self.interface_revision.load(Ordering::Acquire)
+    }
+
     pub(super) fn incarnation(&self) -> u64 {
         self.incarnation
     }
@@ -73,6 +79,7 @@ impl Context {
             && revision != 0
             && revision != u64::MAX
             && self.source_revision() != u64::MAX
+            && self.interface_revision() != u64::MAX
     }
 
     pub(super) fn observe_effect(&self, interface: GUID, ssid: &[u8]) {
@@ -169,6 +176,15 @@ impl Context {
             )
             && self.admitted.load(Ordering::Acquire)
         {
+            // Profile-change notifications include our own accepted deletion.
+            // Adapter/policy loss is tracked separately for exact-source readback.
+            if matches!(code, 1 | 2 | 5 | 12 | 13 | 14 | 23 | 25) {
+                let _ = self.interface_revision.fetch_update(
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                    |revision| Some(revision.saturating_add(1)),
+                );
+            }
             // Removal/replacement and policy changes are never attributed to
             // our own software-radio writes. This independent epoch survives
             // ordinary connection/linked-PHY notifications during a batch.

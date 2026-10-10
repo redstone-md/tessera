@@ -10,9 +10,9 @@ use std::mem::offset_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tessera_system::network::{
     InterfaceId, NetworkCommand, NetworkCommandOutcome, NetworkConnectCapability, NetworkControl,
-    NetworkControlInventory, NetworkError, NetworkErrorKind, NetworkRadioControl,
-    NetworkRadioInitiation, NetworkRadioInventory, NetworkRadioResult, NetworkSnapshot,
-    NetworkTarget, Observation, Ssid,
+    NetworkControlInventory, NetworkError, NetworkErrorKind, NetworkProfileInitiation,
+    NetworkProfileInventory, NetworkProfileResult, NetworkRadioControl, NetworkRadioInitiation,
+    NetworkRadioInventory, NetworkRadioResult, NetworkSnapshot, NetworkTarget, Observation, Ssid,
 };
 use windows::Win32::NetworkManagement::WiFi::*;
 use windows::Win32::Storage::FileSystem::{
@@ -52,6 +52,8 @@ pub(super) struct Controls {
     pending: Option<(Record, bool)>,
     radios: Vec<super::radio::Record>,
     radio_result: Option<NetworkRadioResult>,
+    profiles: Vec<super::profiles::Record>,
+    profile_result: Option<NetworkProfileResult>,
 }
 
 impl Controls {
@@ -69,12 +71,15 @@ impl Controls {
             pending: None,
             radios: Vec::new(),
             radio_result: None,
+            profiles: Vec::new(),
+            profile_result: None,
         }
     }
 
     pub(super) fn retire(&mut self) {
         self.pending = None;
         self.radio_result = None;
+        self.profile_result = None;
     }
 
     fn has_authority(&self) -> bool {
@@ -82,10 +87,14 @@ impl Controls {
     }
 
     fn target(&mut self, revision: u64) -> Result<NetworkTarget, NetworkError> {
+        if !self.has_authority() {
+            return Err(watch_unavailable());
+        }
         let Some(sequence) = self.sequence.checked_add(1).filter(|next| *next < u64::MAX) else {
             self.sequence = u64::MAX;
             self.records.clear();
             self.radios.clear();
+            self.profiles.clear();
             return Err(watch_unavailable());
         };
         self.sequence = sequence;
@@ -168,8 +177,32 @@ impl Controls {
         })
     }
 
+    pub(super) fn profile_inventory<C: NativeCalls>(
+        &mut self,
+        calls: &C,
+        handle: usize,
+        context: Option<&Context>,
+    ) -> Result<NetworkProfileInventory, NetworkError> {
+        self.profiles.clear();
+        let (mut inventory, records) =
+            super::profiles::inventory(calls, handle, context, |revision| self.target(revision))?;
+        if self.has_authority() {
+            self.profiles = records;
+        } else {
+            for profile in &mut inventory.profiles {
+                profile.target = None;
+                profile.forget = Observation::Unavailable(watch_unavailable());
+            }
+            inventory.unavailable.push(watch_unavailable());
+        }
+        Ok(inventory)
+    }
+
     pub(super) fn accepted(&self) -> bool {
-        self.pending.is_some()
+        self.profile_result
+            .as_ref()
+            .is_some_and(|result| result.initiation == NetworkProfileInitiation::Accepted)
+            || self.pending.is_some()
             || self.radio_result.as_ref().is_some_and(|result| {
                 result
                     .phys
@@ -277,6 +310,19 @@ impl Controls {
         if !self.has_authority() || self.sequence == 0 {
             return Err(watch_unavailable());
         }
+        if let NetworkCommand::ForgetProfile { target } = &command {
+            let record = self
+                .profiles
+                .iter()
+                .find(|record| record.target == *target)
+                .cloned()
+                .ok_or_else(changed)?;
+            self.profile_result = Some(super::profiles::execute(calls, handle, context, record));
+            self.records.clear();
+            self.radios.clear();
+            self.profiles.clear();
+            return Ok(());
+        }
         let context = context
             .filter(|context| context.has_authority())
             .ok_or_else(watch_unavailable)?;
@@ -304,7 +350,9 @@ impl Controls {
         let (target, disconnect, password) = match command {
             NetworkCommand::Connect { target, password } => (target, false, password),
             NetworkCommand::Disconnect { target } => (target, true, None),
-            NetworkCommand::SetRadio { .. } => unreachable!("radio handled above"),
+            NetworkCommand::SetRadio { .. } | NetworkCommand::ForgetProfile { .. } => {
+                unreachable!("independent native controls handled above")
+            }
         };
         let previous = self
             .records
@@ -394,6 +442,9 @@ impl Controls {
         handle: usize,
         context: Option<&Context>,
     ) -> Result<Option<NetworkCommandOutcome>, NetworkError> {
+        if let Some(result) = self.profile_result.take() {
+            return Ok(Some(NetworkCommandOutcome::ProfileObserved(result)));
+        }
         if let Some(result) = self.radio_result.take() {
             return Ok(Some(NetworkCommandOutcome::RadioObserved(result)));
         }

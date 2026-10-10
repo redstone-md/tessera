@@ -9,9 +9,10 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::Ndis::{NDIS_OBJECT_HEADER, NDIS_OBJECT_TYPE_DEFAULT};
 use windows::Win32::NetworkManagement::WiFi::{
     DOT11_BSSID_LIST, DOT11_BSSID_LIST_REVISION_1, DOT11_SSID, WLAN_CONNECTION_PARAMETERS,
-    WLAN_PHY_RADIO_STATE, WlanConnect, WlanDisconnect, WlanGetProfile, WlanSetInterface,
-    dot11_BSS_type_infrastructure, wlan_connection_mode_profile,
-    wlan_connection_mode_temporary_profile, wlan_intf_opcode_radio_state,
+    WLAN_PHY_RADIO_STATE, WlanConnect, WlanDeleteProfile, WlanDisconnect, WlanGetProfile,
+    WlanGetProfileList, WlanSetInterface, dot11_BSS_type_infrastructure,
+    wlan_connection_mode_profile, wlan_connection_mode_temporary_profile,
+    wlan_intf_opcode_radio_state,
 };
 use windows::Win32::NetworkManagement::WiFi::{
     WLAN_INTF_OPCODE, WLAN_NOTIFICATION_CALLBACK, WLAN_NOTIFICATION_SOURCES, WlanCloseHandle,
@@ -159,6 +160,59 @@ unsafe impl NativeCalls for WindowsCalls {
             flags,
             granted_access,
         }
+    }
+
+    fn profiles(&self, handle: usize, id: &GUID) -> Reply {
+        let mut data = ptr::null_mut();
+        let status =
+            unsafe { WlanGetProfileList(HANDLE(handle as *mut c_void), id, None, &mut data) };
+        Reply {
+            status,
+            data: data.cast(),
+            size: None,
+        }
+    }
+
+    fn delete_profile(&self, handle: usize, id: &GUID, name: &[u16]) -> u32 {
+        unsafe {
+            WlanDeleteProfile(
+                HANDLE(handle as *mut c_void),
+                id,
+                PCWSTR(name.as_ptr()),
+                None,
+            )
+        }
+    }
+
+    fn profile_digest(&self, bytes: &[u8]) -> Result<[u8; 32], NetworkError> {
+        use windows_sys::Win32::Security::Cryptography::CryptHashCertificate2;
+        let mut digest = [0; 32];
+        let mut length = 32;
+        let size = u32::try_from(bytes.len())
+            .map_err(|_| super::calls::invalid("WLAN profile descriptor is too large."))?;
+        // Documented general byte-buffer hashing; no certificate/key store access.
+        let success = unsafe {
+            CryptHashCertificate2(
+                windows_sys::core::w!("SHA256"),
+                0,
+                ptr::null(),
+                bytes.as_ptr(),
+                size,
+                digest.as_mut_ptr(),
+                &mut length,
+            )
+        };
+        if success == 0 {
+            return Err(native_error("WLAN profile descriptor hashing", unsafe {
+                windows_sys::Win32::Foundation::GetLastError()
+            }));
+        }
+        if length != 32 {
+            return Err(super::calls::invalid(
+                "WLAN profile descriptor digest is invalid.",
+            ));
+        }
+        Ok(digest)
     }
 
     fn connect(&self, handle: usize, id: &GUID, request: ConnectRequest<'_>) -> u32 {

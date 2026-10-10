@@ -5,7 +5,7 @@ use super::*;
 use crate::generated::NetworkControlRow;
 
 impl NetworkController {
-    fn control_frame_valid(&self) -> bool {
+    pub(super) fn control_frame_valid(&self) -> bool {
         let Some(placement) = self.placement.get() else {
             return false;
         };
@@ -28,6 +28,7 @@ impl NetworkController {
             state.row_keys.clear();
             state.radio_keys.clear();
             state.command_key = SharedString::default();
+            state.retire_profile_confirmation();
         }
         self.component().set_command_key(SharedString::default());
         self.component().set_password(SharedString::default());
@@ -58,6 +59,7 @@ impl NetworkController {
                 return;
             }
             state.selected = Some(control);
+            state.retire_profile_confirmation();
             state.control_notice.clear();
         }
         // External replacement clears the pinned native TextInput's undo/offset
@@ -103,6 +105,8 @@ impl NetworkController {
             };
             state.command_flight = Some(token);
             state.command_radio = false;
+            state.command_profile = false;
+            state.retire_profile_confirmation();
             state.command_key = SharedString::default();
             state.row_keys.clear();
             state.radio_keys.clear();
@@ -147,6 +151,8 @@ impl NetworkController {
             let token = state.token();
             state.command_flight = Some(token);
             state.command_radio = true;
+            state.command_profile = false;
+            state.retire_profile_confirmation();
             state.selected = None;
             state.row_keys.clear();
             state.radio_keys.clear();
@@ -162,7 +168,7 @@ impl NetworkController {
         self.dispatch_control(provider, token, command);
     }
 
-    fn dispatch_control(
+    pub(super) fn dispatch_control(
         self: &Rc<Self>,
         provider: Arc<dyn NetworkHost>,
         token: Token,
@@ -186,6 +192,10 @@ impl NetworkController {
                         .radios
                         .iter()
                         .any(|radio| radio.target == Some(*target)),
+                    NetworkCommand::ForgetProfile { target } => state
+                        .profiles
+                        .iter()
+                        .any(|profile| profile.target == Some(*target)),
                     NetworkCommand::Connect { target, .. }
                     | NetworkCommand::Disconnect { target } => state
                         .controls
@@ -327,6 +337,7 @@ impl NetworkController {
             root.set_command_key(command_key);
         }
         self.project_radios();
+        self.project_profiles();
     }
 
     fn project_radios(&self) {

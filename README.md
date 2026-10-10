@@ -310,12 +310,16 @@ WPA2-Personal AES temporary profiles. Credentials are scoped, cleared and never
 saved by Tessera; WPA/WPA3/enterprise/hidden or ambiguous sources remain
 unavailable. Native acceptance is separate from association/readback; after
 20 seconds without a conclusive result it stays unconfirmed, never replayed.
-No scan, hotspot or Forget is added. Windows cached queries may prompt for
+No scan or hotspot is added. Windows cached queries may prompt for
 location consent or deny access under Privacy & security > Location.
 Software radio On/Off targets exact enumerated interfaces and native PHY IDs,
 independently of location-denied network discovery. Hardware switches remain
 read-only; each PHY records actual acceptance/error and software/hardware
 readback. Partial results never trigger rollback, replay or fake all-success.
+Saved profiles remain observable independently of denied discovery. Explicit
+Forget requires current inline confirmation and fresh exact GUID/native-profile
+identity, descriptor and policy checks; readback distinguishes absent, present,
+replaced and unavailable. No plaintext keys or fake successful removal.
 
 Development Bluetooth adds explicit On/Off for each available Bluetooth
 radio, with exact native device IDs, retained COM incarnations and source/state

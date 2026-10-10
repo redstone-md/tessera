@@ -13,9 +13,10 @@ use slint::{ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize, SharedStri
 use tessera_system::network::{
     NetworkCommand, NetworkCommandOutcome, NetworkConnectCapability, NetworkControl,
     NetworkControlInventory, NetworkControlView, NetworkError, NetworkErrorKind, NetworkEvent,
-    NetworkHost, NetworkPassword, NetworkRadioControl, NetworkRadioInitiation,
-    NetworkRadioInventory, NetworkRadioResult, NetworkSnapshot, NetworkTarget, Observation,
-    RadioState,
+    NetworkHost, NetworkPassword, NetworkProfileControl, NetworkProfileInitiation,
+    NetworkProfileInventory, NetworkProfilePresence, NetworkProfileResult, NetworkProfileScope,
+    NetworkRadioControl, NetworkRadioInitiation, NetworkRadioInventory, NetworkRadioResult,
+    NetworkSnapshot, NetworkTarget, Observation, RadioState,
 };
 
 use crate::generated::{NetworkMenu, PopoverMotion, TileBounds};
@@ -29,6 +30,7 @@ mod controls;
 mod lifecycle;
 mod mailbox;
 mod presentation;
+mod profiles;
 #[cfg(test)]
 mod tests;
 
@@ -68,6 +70,14 @@ struct State {
     radio_keys: Vec<(SharedString, NetworkTarget, bool)>,
     radio_notice: String,
     command_radio: bool,
+    profiles: Vec<NetworkProfileControl>,
+    profiles_supported: bool,
+    profile_model: Option<Token>,
+    profile_keys: Vec<(SharedString, NetworkTarget)>,
+    profile_confirmation: Option<profiles::Confirmation>,
+    profile_confirm_key: SharedString,
+    profile_notice: String,
+    command_profile: bool,
     selected: Option<NetworkControl>,
     row_keys: Vec<(SharedString, NetworkTarget)>,
     command_key: SharedString,
@@ -107,6 +117,14 @@ impl State {
             session: self.session,
             sequence: self.sequence,
         }
+    }
+}
+
+impl State {
+    fn retire_profile_confirmation(&mut self) {
+        self.profile_confirmation = None;
+        self.profile_confirm_key = SharedString::default();
+        self.profile_keys.clear();
     }
 }
 
@@ -173,9 +191,16 @@ impl NetworkController {
             state.radios.clear();
             state.radio_keys.clear();
             state.command_key = SharedString::default();
+            state.profiles.clear();
+            state.profile_model = None;
+            state.retire_profile_confirmation();
             state.settings_notice.clear();
             state.read_requested = true;
         }
+        self.component().set_credentials_active(false);
+        self.component().set_password(SharedString::default());
+        self.component()
+            .set_profile_confirm_key(SharedString::default());
         self.pump();
     }
 
@@ -383,6 +408,38 @@ impl NetworkController {
                     state.radios.clear();
                     state.radio_keys.clear();
                     state.radios_supported = false;
+                    state.profiles.clear();
+                    state.profiles_supported = false;
+                    state.profile_model = Some(token);
+                    state.retire_profile_confirmation();
+                    state.profile_notice.clear();
+                    if let Some((inventory_token, inventory)) = delivery.profiles
+                        && inventory_token == token
+                    {
+                        state.profiles_supported = inventory.is_some();
+                        match inventory {
+                            Some(Observation::Ready(profiles)) => {
+                                state.profiles = profiles.profiles;
+                                state.profile_notice = profiles
+                                    .unavailable
+                                    .first()
+                                    .map(|error| {
+                                        format!(
+                                            "Some saved-profile observations are unavailable. {}",
+                                            failure(error.kind)
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                            }
+                            Some(Observation::Unavailable(error)) => {
+                                state.profile_notice = format!(
+                                    "Saved-profile inventory unavailable. {}",
+                                    failure(error.kind)
+                                );
+                            }
+                            None => {}
+                        }
+                    }
                     state.radio_notice.clear();
                     if let Some((inventory_token, inventory)) = delivery.radios
                         && inventory_token == token
@@ -480,7 +537,9 @@ impl NetworkController {
                 && visible
                 && state.session == token.session
             {
-                state.control_notice = if state.command_radio {
+                state.control_notice = if state.command_profile {
+                    "Windows accepted the exact saved-profile deletion; removal still requires actual readback."
+                } else if state.command_radio {
                     "Windows accepted at least one software-radio write; each PHY still requires actual readback."
                 } else {
                     "Windows accepted the connection request; connecting/disconnecting is pending actual native readback."
@@ -498,6 +557,10 @@ impl NetworkController {
                             controls::apply_radio_result(&mut state, &result);
                             controls::radio_result_notice(&result)
                         },
+                        Ok(NetworkCommandOutcome::ProfileObserved(result)) => {
+                            profiles::apply_result(&mut state, &result);
+                            profiles::result_notice(&result)
+                        },
                         Ok(NetworkCommandOutcome::Failed { reason }) => {
                             state.automatic_blocked = true;
                             format!("Windows could not complete the Wi-Fi connection (WLAN reason {reason}). No retry was issued.")
@@ -509,6 +572,7 @@ impl NetworkController {
                         },
                     };
                     state.selected = None;
+                    state.retire_profile_confirmation();
                     if state.command_radio {
                         state.controls.clear();
                         state.row_keys.clear();
@@ -533,6 +597,12 @@ impl NetworkController {
                         state.radios.clear();
                         state.radio_keys.clear();
                         state.command_key = SharedString::default();
+                        state.profile_model = None;
+                        state.retire_profile_confirmation();
+                        for profile in &mut state.profiles {
+                            profile.target = None;
+                            profile.forget = Observation::Unavailable(error.clone());
+                        }
                         state.watch_status = format!(
                             "Change notifications unavailable. {} Use Refresh.",
                             failure(error.kind)
@@ -551,6 +621,15 @@ impl NetworkController {
                     state.radios.clear();
                     state.radio_keys.clear();
                     state.command_key = SharedString::default();
+                    state.profile_model = None;
+                    state.retire_profile_confirmation();
+                    for profile in &mut state.profiles {
+                        profile.target = None;
+                        profile.forget = Observation::Unavailable(NetworkError::new(
+                            NetworkErrorKind::DeviceChanged,
+                            "Saved-profile facts changed; Refresh before Forget.",
+                        ));
+                    }
                     if !state.automatic_blocked {
                         state.read_requested = true;
                     }
@@ -604,6 +683,7 @@ impl NetworkController {
                 &state.control_notice,
                 &state.inventory_notice,
                 &state.radio_notice,
+                &state.profile_notice,
             ]
             .into_iter()
             .filter(|notice| !notice.is_empty())

@@ -27,6 +27,8 @@ mod controls;
 mod observations;
 #[path = "native_network/owner.rs"]
 mod owner;
+#[path = "native_network/profiles.rs"]
+mod profiles;
 #[path = "native_network/radio.rs"]
 mod radio;
 #[path = "native_network/sdk.rs"]

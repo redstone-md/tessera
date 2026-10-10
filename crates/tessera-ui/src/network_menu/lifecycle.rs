@@ -85,6 +85,20 @@ impl NetworkController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        controller.surface.on_profile_selected(move |key| {
+            if let Some(controller) = weak.upgrade() {
+                controller.select_profile(key);
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller
+            .surface
+            .on_profile_confirmed(move |key, confirm| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.confirm_profile(key, confirm);
+                }
+            });
+        let weak = Rc::downgrade(&controller);
         controller.surface.on_hide_requested(move || {
             if let Some(controller) = weak.upgrade() {
                 controller.hide();
@@ -197,6 +211,11 @@ impl NetworkController {
             state.radios_supported = false;
             state.radio_notice.clear();
             state.command_key = SharedString::default();
+            state.profiles.clear();
+            state.profiles_supported = false;
+            state.profile_model = None;
+            state.retire_profile_confirmation();
+            state.profile_notice.clear();
             state.control_notice.clear();
             state.inventory_notice.clear();
             state.notice.clear();
@@ -225,6 +244,12 @@ impl NetworkController {
         self.surface.set_connection_controls_supported(false);
         self.surface.set_radio_controls_supported(false);
         self.surface.set_radio_rows(ModelRc::default());
+        self.surface.set_profile_controls_supported(false);
+        self.surface.set_profile_rows(ModelRc::default());
+        self.surface
+            .set_profile_confirmation(SharedString::default());
+        self.surface
+            .set_profile_confirm_key(SharedString::default());
         self.surface.set_command_key(SharedString::default());
         self.surface.set_selected_network(SharedString::default());
         self.surface.set_credentials_active(false);
