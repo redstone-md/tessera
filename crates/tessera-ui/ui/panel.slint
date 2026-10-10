@@ -42,6 +42,13 @@ export struct AppRow {
     pinned: bool,
 }
 
+// Readonly native collection facts, never per-member mutation capabilities.
+export struct WallpaperCollectionItem {
+    caption: string,
+    preview: image,
+    available: bool,
+}
+
 // Derived geometry lives in this component, including in conditional pages.
 component ViewportTileButton inherits TileButton {
     in property <length> viewport-x;
@@ -237,6 +244,28 @@ export component Panel inherits Window {
     callback wallpaper-event-ready();
     callback wallpaper-view-changed();
     changed wallpaper-page-visible => { root.wallpaper-view-changed(); }
+    // Explicit global slideshow command. Proposed values are not native observations.
+    in property <bool> wallpaper-collection-controls-enabled;
+    in property <bool> wallpaper-collection-apply-enabled;
+    in property <bool> wallpaper-collection-command-available: false;
+    in property <[WallpaperCollectionItem]> wallpaper-collection-items;
+    in-out property <int> wallpaper-collection-interval-index: -1;
+    in-out property <bool> wallpaper-collection-shuffle: false;
+    in property <string> wallpaper-collection-status: "No current collection. Native slideshow policy has not been read.";
+    out property <bool> wallpaper-collection-choose-input-active;
+    out property <bool> wallpaper-collection-apply-input-active;
+    property <bool> wallpaper-collection-choose-clip;
+    property <bool> wallpaper-collection-apply-clip;
+    out property <bool> wallpaper-collection-choose-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-collection-choose-clip;
+    out property <bool> wallpaper-collection-apply-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-collection-apply-clip;
+    callback wallpaper-collection-choose-requested();
+    callback wallpaper-collection-apply-requested();
+    callback wallpaper-collection-interval-changed(int);
+    callback wallpaper-collection-shuffle-changed();
     // Global Windows policy: explicit observation and immediate effect, never a saved draft.
     in property <bool> wallpaper-position-available: false;
     in property <bool> wallpaper-position-busy;
@@ -955,6 +984,109 @@ export component Panel inherits Window {
                                 model: ["Center", "Tile", "Stretch", "Fit", "Fill", "Span"];
                                 current-index <=> root.wallpaper-position-desired-index;
                                 selected(value) => { root.wallpaper-position-desired-changed(self.current-index); }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
+                            label: "Global Windows slideshow";
+                            description: "Start enables the desktop background and changes Windows slideshow policy globally for system monitors, including future monitors—not the image's captured display subset. Windows owns scheduling and persistence. Save and Cancel do not apply or undo it.\n"
+                                + root.wallpaper-collection-status;
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-collection-choose-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 132px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-collection-controls-enabled && !root.wallpaper-busy;
+                                accessible-text: "Choose a native Windows wallpaper collection";
+                                accessible-description: "Select 2 to 32 actual image files in the same folder. This retires the previous file selection but does not start a slideshow.";
+                                clicked => {
+                                    root.wallpaper-collection-choose-input-active =
+                                        root.wallpaper-collection-choose-control-visible
+                                        && root.wallpaper-collection-controls-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-collection-choose-input-active { root.wallpaper-collection-choose-requested(); }
+                                    root.wallpaper-collection-choose-input-active = false;
+                                }
+                                Text {
+                                    text: "Choose collection";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-collection-apply-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 114px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-collection-controls-enabled
+                                    && root.wallpaper-collection-apply-enabled && !root.wallpaper-busy;
+                                accessible-text: "Start Windows slideshow globally now";
+                                accessible-description: "Enables the desktop background and sets the selected collection and proposed options globally, including future monitors. The two SDK writes may partially succeed. " + root.wallpaper-collection-status;
+                                clicked => {
+                                    root.wallpaper-collection-apply-input-active =
+                                        root.wallpaper-collection-apply-control-visible
+                                        && root.wallpaper-collection-controls-enabled
+                                        && root.wallpaper-collection-apply-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-collection-apply-input-active { root.wallpaper-collection-apply-requested(); }
+                                    root.wallpaper-collection-apply-input-active = false;
+                                }
+                                Text {
+                                    text: "Start slideshow";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-collection-command-available: SettingsRow {
+                            label: "Proposed slideshow options";
+                            description: "A new command only, not the current Windows interval or shuffle state. Editing these proposals has no SDK effect. Start submits them after the collection write.";
+                            ComboBox {
+                                width: 120px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                enabled: root.wallpaper-collection-apply-enabled && !root.wallpaper-busy;
+                                accessible-label: "Proposed Windows slideshow interval";
+                                model: ["1 minute", "10 minutes", "30 minutes", "1 hour", "6 hours", "1 day"];
+                                current-index <=> root.wallpaper-collection-interval-index;
+                                selected(value) => { root.wallpaper-collection-interval-changed(self.current-index); }
+                            }
+                            CheckBox {
+                                enabled: root.wallpaper-collection-apply-enabled && !root.wallpaper-busy;
+                                text: "Shuffle";
+                                checked <=> root.wallpaper-collection-shuffle;
+                                toggled => { root.wallpaper-collection-shuffle-changed(); }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-collection-command-available: VerticalLayout {
+                            spacing: 8px;
+                            for item in root.wallpaper-collection-items: SettingsRow {
+                                label: item.caption;
+                                description: item.available
+                                    ? "Native Shell thumbnail of this selected file; not desktop-rendered pixels."
+                                    : "Native thumbnail unavailable for this selected file.";
+                                controls-height: item.available ? 96px : 24px;
+                                if item.available: Image {
+                                    width: 128px;
+                                    height: 96px;
+                                    horizontal-stretch: 0;
+                                    source: item.preview;
+                                    image-fit: contain;
+                                    accessible-label: item.caption + " — native Windows Shell thumbnail";
+                                }
                             }
                         }
                     }

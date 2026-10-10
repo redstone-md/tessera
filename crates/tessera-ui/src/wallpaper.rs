@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! One native image selection and immediate wallpaper effect, outside preference drafts.
+//! Scoped native file selections and immediate Windows effects, outside preference drafts.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -12,12 +12,14 @@ use slint::ComponentHandle;
 use tessera_system::wallpaper::{
     WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
     WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
+    collection as native_collection,
 };
 
 use crate::DesktopHost;
 use crate::application_menu::WindowFrame;
 use crate::generated::Panel;
 
+mod collection;
 mod colors;
 mod image;
 mod position;
@@ -36,6 +38,8 @@ struct Session {
 enum Operation {
     Choose,
     Apply,
+    ChooseCollection,
+    ApplyCollection,
 }
 
 enum Request {
@@ -45,6 +49,12 @@ enum Request {
         scope: WallpaperApplyScope,
         index: i32,
         requested: u32,
+    },
+    ChooseCollection,
+    ApplyCollection {
+        target: native_collection::Target,
+        options: native_collection::Options,
+        index: i32,
     },
 }
 
@@ -56,11 +66,16 @@ struct Flight {
     scope: Option<WallpaperApplyScope>,
     monitor_index: Option<i32>,
     requested: u32,
+    collection_target: Option<native_collection::TargetWeak>,
+    collection_options: Option<native_collection::Options>,
+    collection_index: Option<i32>,
 }
 
 enum Reply {
     Chosen(Result<Option<PreparedSelection>, WallpaperError>),
     Applied(Result<WallpaperApplyOutcome, WallpaperError>),
+    CollectionChosen(Result<Option<native_collection::Selection>, WallpaperError>),
+    CollectionApplied(Result<native_collection::ApplyOutcome, WallpaperError>),
 }
 
 struct Receipt {
@@ -76,6 +91,8 @@ struct State {
     provider: Option<Arc<dyn WallpaperHost>>,
     session: Option<Session>,
     selection: Option<SelectedImage>,
+    collection: Option<collection::SelectedCollection>,
+    collection_notice: String,
     monitor_captions: Vec<slint::SharedString>,
     monitor_index: i32,
     notice: String,
@@ -87,6 +104,18 @@ impl State {
         self.monitor_captions.clear();
         self.monitor_index = -1;
         self.selection.take()
+    }
+
+    fn clear_files(
+        &mut self,
+    ) -> (
+        Option<SelectedImage>,
+        Option<collection::SelectedCollection>,
+    ) {
+        let image = self.clear_selection();
+        let collection = self.collection.take();
+        self.collection_notice.clear();
+        (image, collection)
     }
 
     fn next(&mut self) -> Option<u64> {
@@ -168,6 +197,30 @@ impl WallpaperController {
                     actor.receive();
                 }
             });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_collection_choose_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::ChooseCollection);
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_collection_apply_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::ApplyCollection);
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_collection_interval_changed(move |index| {
+                if let Some(actor) = weak.upgrade() {
+                    actor.collection_options_changed(Some(index));
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_collection_shuffle_changed(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.collection_options_changed(None);
+                }
+            });
         }
         actor
     }
@@ -234,14 +287,14 @@ impl WallpaperController {
         let (session, retired) = {
             let mut state = self.state.borrow_mut();
             if state.exhausted {
-                (None, state.clear_selection())
+                (None, state.clear_files())
             } else if state.session.is_none_or(|session| session.frame != frame) {
-                let retired = state.clear_selection();
+                let retired = state.clear_files();
                 state.notice.clear();
                 state.session = state.next().map(|id| Session { id, frame });
                 (state.session, retired)
             } else {
-                (state.session, None)
+                (state.session, (None, None))
             }
         };
         // Native selection retirement can enqueue work; no state borrow survives it.
@@ -266,7 +319,7 @@ impl WallpaperController {
             if state.session.take().is_some() || self.acquiring.get() {
                 let _ = state.next();
             }
-            let retired = state.clear_selection();
+            let retired = state.clear_files();
             state.notice.clear();
             (state.sequence, retired)
         };
@@ -309,6 +362,16 @@ impl WallpaperController {
         clear!(set_wallpaper_monitors, slint::ModelRc::default());
         clear!(set_wallpaper_monitor_index, -1);
         clear!(set_wallpaper_input_key, slint::SharedString::default());
+        clear!(set_wallpaper_collection_controls_enabled, false);
+        clear!(set_wallpaper_collection_apply_enabled, false);
+        clear!(set_wallpaper_collection_command_available, false);
+        clear!(set_wallpaper_collection_items, slint::ModelRc::default());
+        clear!(set_wallpaper_collection_interval_index, -1);
+        clear!(set_wallpaper_collection_shuffle, false);
+        clear!(
+            set_wallpaper_collection_status,
+            "No current collection. Native slideshow policy has not been read.".into()
+        );
         clear!(set_wallpaper_available, false);
         clear!(set_wallpaper_busy, busy);
         clear!(
@@ -342,6 +405,15 @@ impl WallpaperController {
                     panel.get_wallpaper_apply_input_active()
                         && panel.get_wallpaper_apply_control_visible()
                         && self.scope_current(&panel)
+                }
+                Operation::ChooseCollection => {
+                    panel.get_wallpaper_collection_choose_input_active()
+                        && panel.get_wallpaper_collection_choose_control_visible()
+                }
+                Operation::ApplyCollection => {
+                    panel.get_wallpaper_collection_apply_input_active()
+                        && panel.get_wallpaper_collection_apply_control_visible()
+                        && self.collection_options_current(&panel)
                 }
             }
     }
@@ -451,7 +523,8 @@ impl WallpaperController {
             // Both a new picker and an apply retire the old selection. Even
             // rejection cannot restore it or turn a held gesture into a retry.
             let (request, retired) = match operation {
-                Operation::Choose => (Request::Choose, state.clear_selection()),
+                Operation::Choose => (Request::Choose, state.clear_files()),
+                Operation::ChooseCollection => (Request::ChooseCollection, state.clear_files()),
                 Operation::Apply => {
                     let Some(selection) = state.selection.as_ref() else {
                         return;
@@ -470,7 +543,23 @@ impl WallpaperController {
                     };
                     // Keep only readonly display projection until the flight
                     // completes; no image authority remains in actor state.
-                    (request, state.selection.take())
+                    (request, (state.selection.take(), None))
+                }
+                Operation::ApplyCollection => {
+                    let Some(collection) = state.collection.as_mut() else {
+                        return;
+                    };
+                    let Some(target) = collection.target.take() else {
+                        return;
+                    };
+                    let request = Request::ApplyCollection {
+                        target,
+                        options: collection.options,
+                        index: collection.index,
+                    };
+                    // Gallery and proposals remain readonly during submission so
+                    // the final live geometry/input check still has its subject.
+                    (request, (None, None))
                 }
             };
             let Some(ticket) = state.next() else {
@@ -481,13 +570,23 @@ impl WallpaperController {
                 return;
             };
             let (scope, monitor_index, requested) = match &request {
-                Request::Choose => (None, None, 0),
+                Request::Choose | Request::ChooseCollection | Request::ApplyCollection { .. } => {
+                    (None, None, 0)
+                }
                 Request::Apply {
                     scope,
                     index,
                     requested,
                     ..
                 } => (Some(scope.clone()), Some(*index), *requested),
+            };
+            let (collection_target, collection_options, collection_index) = match &request {
+                Request::ApplyCollection {
+                    target,
+                    options,
+                    index,
+                } => (Some(target.downgrade()), Some(*options), Some(*index)),
+                _ => (None, None, None),
             };
             let flight = Flight {
                 ticket,
@@ -496,9 +595,13 @@ impl WallpaperController {
                 scope,
                 monitor_index,
                 requested,
+                collection_target,
+                collection_options,
+                collection_index,
             };
             state.flight = Some(flight.clone());
             state.notice.clear();
+            state.collection_notice.clear();
             (provider, flight, request, retired)
         };
         drop(retired);
@@ -513,8 +616,19 @@ impl WallpaperController {
                 .as_ref()
                 .is_none_or(|current| current.ticket != flight.ticket)
         {
-            self.state.borrow_mut().flight = None;
-            self.stop_root();
+            let retired = {
+                let mut state = self.state.borrow_mut();
+                state.flight = None;
+                let retired = state.clear_files();
+                state.notice = "The file request lost its live admission before submission. No SDK work was requested; choose fresh files.".into();
+                let _ = state.next();
+                retired
+            };
+            drop(retired);
+            drop(request);
+            // A clipped file gesture is not retirement of the orthogonal
+            // global-position observation. Only actual Root loss stops it.
+            self.refresh_root();
             return;
         }
         let mailbox = self.mailbox.clone();
@@ -540,6 +654,32 @@ impl WallpaperController {
                     });
                     provider.apply(target, scope, completion)
                 }
+                Request::ChooseCollection => {
+                    let completion: native_collection::ChooseCompletion = Box::new(move |result| {
+                        let _owner = owner;
+                        deliver(
+                            &mailbox,
+                            &panel,
+                            flight.ticket,
+                            Reply::CollectionChosen(result),
+                        );
+                    });
+                    provider.choose_collection(completion)
+                }
+                Request::ApplyCollection {
+                    target, options, ..
+                } => {
+                    let completion: native_collection::ApplyCompletion = Box::new(move |result| {
+                        let _owner = owner;
+                        deliver(
+                            &mailbox,
+                            &panel,
+                            flight.ticket,
+                            Reply::CollectionApplied(result),
+                        );
+                    });
+                    provider.apply_collection(target, options, completion)
+                }
             }
         };
         if let Err(error) = admitted {
@@ -547,11 +687,14 @@ impl WallpaperController {
             let reply = match operation {
                 Operation::Choose => Reply::Chosen(Err(error)),
                 Operation::Apply => Reply::Applied(Err(error)),
+                Operation::ChooseCollection => Reply::CollectionChosen(Err(error)),
+                Operation::ApplyCollection => Reply::CollectionApplied(Err(error)),
             };
-            *self.mailbox.lock() = Some(Receipt {
+            let retired = self.mailbox.lock().replace(Receipt {
                 ticket: flight.ticket,
                 reply,
             });
+            drop(retired);
         }
         // Synchronous/reentrant providers cannot recursively start another flight.
         self.receive();
@@ -578,6 +721,28 @@ impl WallpaperController {
                     && flight.monitor_index == Some(*index)
                     && state.monitor_index == *index
                     && flight.requested == *requested
+            }
+            Request::ChooseCollection => {
+                flight.operation == Operation::ChooseCollection
+                    && flight.collection_target.is_none()
+            }
+            Request::ApplyCollection {
+                target,
+                options,
+                index,
+            } => {
+                flight.operation == Operation::ApplyCollection
+                    && flight
+                        .collection_target
+                        .as_ref()
+                        .is_some_and(|weak| weak.is_alive() && weak.matches(target))
+                    && flight.collection_options == Some(*options)
+                    && flight.collection_index == Some(*index)
+                    && state.collection.as_ref().is_some_and(|collection| {
+                        collection.target.is_none()
+                            && collection.options == *options
+                            && collection.index == *index
+                    })
             }
         }
     }
@@ -606,6 +771,13 @@ impl WallpaperController {
             // current availability. Releasing a flight does not revive its scope.
             drop(receipt);
             self.refresh_root();
+            return;
+        }
+        if matches!(
+            flight.operation,
+            Operation::ChooseCollection | Operation::ApplyCollection
+        ) {
+            self.receive_collection(flight, receipt.reply);
             return;
         }
         // Validation and rejected target destruction happen outside RefCell borrows.
@@ -666,7 +838,8 @@ fn deliver(
     ticket: u64,
     reply: Reply,
 ) {
-    *mailbox.lock() = Some(Receipt { ticket, reply });
+    let retired = mailbox.lock().replace(Receipt { ticket, reply });
+    drop(retired);
     let _ = panel.upgrade_in_event_loop(|panel| panel.invoke_wallpaper_event_ready());
 }
 
@@ -699,7 +872,7 @@ fn outcome_notice(outcome: WallpaperApplyOutcome, requested: u32) -> String {
 fn error_notice(operation: Operation, error: WallpaperError) -> &'static str {
     match (operation, error) {
         (_, WallpaperError::Busy) => {
-            "The wallpaper provider is busy. Nothing is confirmed; choose a fresh image before trying again."
+            "The shared Windows wallpaper provider is busy. No retry is queued. Choose fresh files before trying again."
         }
         (Operation::Choose, WallpaperError::Unavailable) => {
             "The Windows image picker or file validation failed. No image is selected. Choose again to try another image."
@@ -707,8 +880,14 @@ fn error_notice(operation: Operation, error: WallpaperError) -> &'static str {
         (Operation::Apply, WallpaperError::Unavailable) => {
             "The wallpaper request failed. Actual Windows wallpaper is unknown; choose a fresh image before trying again."
         }
+        (Operation::ChooseCollection, WallpaperError::Unavailable) => {
+            "The native collection picker or validation is unavailable. No group is selected; choose 2–32 images in one folder again."
+        }
+        (Operation::ApplyCollection, WallpaperError::Unavailable) => {
+            "The native slideshow request is unavailable. Some SDK effects may already have occurred; actual Windows policy is unknown. No rollback or retry was performed."
+        }
         (_, WallpaperError::InvalidTarget) => {
-            "The selected file, captured monitors, or target is no longer valid. Nothing is confirmed; choose a fresh image."
+            "The native file selection, captured monitors, or target is no longer valid. Nothing is confirmed; choose fresh files."
         }
     }
 }

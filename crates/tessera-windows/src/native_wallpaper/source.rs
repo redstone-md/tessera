@@ -17,9 +17,9 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
-    FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NOCHANGEDIR,
-    FOS_PATHMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem, SIGDN_FILESYSPATH,
-    SIGDN_NORMALDISPLAY,
+    FOS_ALLOWMULTISELECT, FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
+    FOS_NOCHANGEDIR, FOS_PATHMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem,
+    SICHINT_CANONICAL, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
 use windows::core::{HRESULT, PCWSTR, PWSTR, w};
 
@@ -38,37 +38,14 @@ pub(super) struct Image {
 
 impl Image {
     pub(super) fn choose(owner: HWND) -> Result<Option<Self>, WallpaperError> {
-        // SAFETY: the caller owns an initialized STA and its own native HWND.
-        let dialog: IFileOpenDialog =
-            unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }
-                .map_err(|_| WallpaperError::Unavailable)?;
-        (|| unsafe {
-            dialog.SetOptions(
-                FOS_FORCEFILESYSTEM
-                    | FOS_FILEMUSTEXIST
-                    | FOS_PATHMUSTEXIST
-                    | FOS_NOCHANGEDIR
-                    | FOS_DONTADDTORECENT,
-            )?;
-            dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
-                pszName: w!("Static images (BMP, JPEG, PNG, TIFF)"),
-                pszSpec: w!("*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff"),
-            }])?;
-            dialog.SetTitle(w!("Choose a static wallpaper image"))?;
-            dialog.SetOkButtonLabel(w!("Choose image"))?;
-            Ok::<_, windows::core::Error>(())
-        })()
-        .map_err(|_| WallpaperError::Unavailable)?;
-        // Show is the actual SDK dialog, not suppressed or owned by another
-        // application's window. Only its documented cancellation maps to None.
-        if let Err(error) = unsafe { dialog.Show(Some(owner)) } {
-            return if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
-                Ok(None)
-            } else {
-                Err(WallpaperError::Unavailable)
-            };
-        }
+        let Some(dialog) = choose_dialog(owner, false)? else {
+            return Ok(None);
+        };
         let item = unsafe { dialog.GetResult() }.map_err(|_| WallpaperError::Unavailable)?;
+        Self::from_item(item).map(Some)
+    }
+
+    pub(super) fn from_item(item: IShellItem) -> Result<Self, WallpaperError> {
         let path = NativeName::take(
             unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }
                 .map_err(|_| WallpaperError::Unavailable)?,
@@ -93,13 +70,13 @@ impl Image {
         if caption.trim().is_empty() {
             return Err(WallpaperError::Unavailable);
         }
-        Ok(Some(Self {
+        Ok(Self {
             item,
             path,
             lease,
             identity,
             caption,
-        }))
+        })
     }
 
     pub(super) fn path(&self) -> PCWSTR {
@@ -130,6 +107,41 @@ impl Image {
         Ok(file)
     }
 
+    pub(super) fn parent(&self) -> Result<IShellItem, WallpaperError> {
+        unsafe { self.item.GetParent() }.map_err(|_| WallpaperError::Unavailable)
+    }
+
+    pub(super) fn is_in_container(&self, parent: &IShellItem) -> Result<bool, WallpaperError> {
+        same_container(&self.item, parent)
+    }
+
+    pub(super) fn same_file(&self, other: &Self) -> bool {
+        self.identity.volume == other.identity.volume && self.identity.file == other.identity.file
+    }
+
+    /// Compare actual file IDs only, not captions, pixels or image usability.
+    /// An inaccessible native item is an unavailable observation, not a mismatch.
+    pub(super) fn matches_item(&self, item: &IShellItem) -> Result<bool, WallpaperError> {
+        Self::find_file(std::slice::from_ref(self), item).map(|index| index.is_some())
+    }
+
+    pub(super) fn find_file(
+        images: &[Self],
+        item: &IShellItem,
+    ) -> Result<Option<usize>, WallpaperError> {
+        let name = NativeName::take(
+            unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }
+                .map_err(|_| WallpaperError::Unavailable)?,
+            MAX_PATH_UNITS,
+        )?;
+        let file = FileLease::open(&name)?;
+        let id = file.file_id()?;
+        Ok(images.iter().position(|image| {
+            id.VolumeSerialNumber == image.identity.volume
+                && id.FileId.Identifier == image.identity.file
+        }))
+    }
+
     /// An SDK-returned path must open the actual selected file, not merely look
     /// like its caption/path. Cached or transcoded copies remain unconfirmed.
     pub(super) fn confirms(&self, wallpaper: PWSTR) -> bool {
@@ -138,6 +150,63 @@ impl Image {
             .and_then(|file| file.identity())
             .is_ok_and(|identity| identity == self.identity)
     }
+}
+
+/// Shared real dialog setup; callers retain either GetResult or exact GetResults.
+pub(super) fn choose_dialog(
+    owner: HWND,
+    multiple: bool,
+) -> Result<Option<IFileOpenDialog>, WallpaperError> {
+    // SAFETY: the caller owns an initialized STA and its own native HWND.
+    let dialog: IFileOpenDialog =
+        unsafe { CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|_| WallpaperError::Unavailable)?;
+    (|| unsafe {
+        let mut options = FOS_FORCEFILESYSTEM
+            | FOS_FILEMUSTEXIST
+            | FOS_PATHMUSTEXIST
+            | FOS_NOCHANGEDIR
+            | FOS_DONTADDTORECENT;
+        if multiple {
+            options |= FOS_ALLOWMULTISELECT;
+        }
+        dialog.SetOptions(options)?;
+        dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
+            pszName: w!("Images (BMP, JPEG, PNG, TIFF)"),
+            pszSpec: w!("*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff"),
+        }])?;
+        dialog.SetTitle(if multiple {
+            w!("Choose 2–32 slideshow images from the same folder")
+        } else {
+            w!("Choose a static wallpaper image")
+        })?;
+        dialog.SetOkButtonLabel(if multiple {
+            w!("Choose collection")
+        } else {
+            w!("Choose image")
+        })?;
+        Ok::<_, windows::core::Error>(())
+    })()
+    .map_err(|_| WallpaperError::Unavailable)?;
+    // Only documented cancellation is a successful empty selection.
+    if let Err(error) = unsafe { dialog.Show(Some(owner)) } {
+        return if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
+            Ok(None)
+        } else {
+            Err(WallpaperError::Unavailable)
+        };
+    }
+    Ok(Some(dialog))
+}
+
+pub(super) fn same_container(
+    item: &IShellItem,
+    parent: &IShellItem,
+) -> Result<bool, WallpaperError> {
+    let actual = unsafe { item.GetParent() }.map_err(|_| WallpaperError::Unavailable)?;
+    unsafe { actual.Compare(parent, SICHINT_CANONICAL.0 as u32) }
+        .map(|order| order == 0)
+        .map_err(|_| WallpaperError::Unavailable)
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -272,7 +341,7 @@ impl FileLease {
         {
             return Err(WallpaperError::Unavailable);
         }
-        let id: FILE_ID_INFO = self.information(FileIdInfo)?;
+        let id = self.file_id()?;
         if id.FileId.Identifier == [0; 16] {
             return Err(WallpaperError::Unavailable);
         }
@@ -284,6 +353,10 @@ impl FileLease {
             modified: basic.LastWriteTime,
             changed: basic.ChangeTime,
         })
+    }
+
+    fn file_id(&self) -> Result<FILE_ID_INFO, WallpaperError> {
+        self.information(FileIdInfo)
     }
 
     fn information<T: Default>(

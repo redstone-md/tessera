@@ -404,8 +404,14 @@ actual global Windows Center/Tile/Stretch/Fit/Fill/Span policy. This affects the
 system's monitors, not the image selector's captured subset, and is immediate OS
 state outside Save/Cancel. Writes consume an exact native observation, check its
 original position, and report setter acceptance separately from fresh readback.
-Video, collections, collection thumbnails, per-workspace selection and automatic
-live accent adaptation remain open.
+Collections use a real multi-select of 2–32 protected images in one native folder,
+with actual optional thumbnails. Start slideshow consumes the group's exact
+ticket and requests global Windows image collection, interval and shuffle
+settings, enabling the desktop background. Windows owns persistence/transitions;
+there is no local timer or JSON mirror. Collection/options SDK receipts and fresh
+file-identity/settings readback remain separate; partial effects are not rolled
+back. Video, next/previous, collection editing/import, per-workspace selection,
+automatic live accent and media policies remain open.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

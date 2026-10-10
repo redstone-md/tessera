@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Optional immediate native image and global position operations, not saved preferences.
+//! Optional immediate native images, collections and global policy, not saved preferences.
 
 use std::sync::{Arc, Weak};
 
+pub mod collection;
 pub mod position;
 
 /// An opaque selection identity, never a filesystem path or monitor identifier.
@@ -276,6 +277,29 @@ pub trait WallpaperHost: Send + Sync {
         _target: position::Target,
         _position: position::Position,
         _completion: position::WriteCompletion,
+    ) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
+
+    /// Native multi-select of 2..32 protected same-container image files.
+    /// A newly accepted static/collection choose revokes the previous file
+    /// selection of either kind, but not the global position observation.
+    fn choose_collection(
+        &self,
+        _completion: collection::ChooseCompletion,
+    ) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
+
+    /// Consume the native group's exact target and request a GLOBAL Windows
+    /// slideshow, then its proposed interval/shuffle, with independent readback.
+    /// This does not use the static-image monitor selector. Windows owns future
+    /// persistence/transitions; SDK steps can partially succeed, without rollback.
+    fn apply_collection(
+        &self,
+        _target: collection::Target,
+        _options: collection::Options,
+        _completion: collection::ApplyCompletion,
     ) -> Result<(), WallpaperError> {
         Err(WallpaperError::Unavailable)
     }

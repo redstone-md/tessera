@@ -186,7 +186,7 @@ impl Default for SelectionPresentation {
     }
 }
 
-fn bounded_caption(value: &str, limit: usize) -> Option<String> {
+pub(super) fn bounded_caption(value: &str, limit: usize) -> Option<String> {
     let caption: String = value
         .chars()
         .take(limit)

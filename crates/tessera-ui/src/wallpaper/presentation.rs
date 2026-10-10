@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tessera_system::wallpaper::WallpaperHost;
 
 use super::selection::SelectionPresentation;
-use super::{Operation, ResetFlag, SelectedImage, Session, State, WallpaperController};
+use super::{Operation, ResetFlag, SelectedImage, Session, State, WallpaperController, collection};
 
 struct Projection {
     provider: Option<Arc<dyn WallpaperHost>>,
@@ -19,6 +19,9 @@ struct Projection {
     key: slint::SharedString,
     status: slint::SharedString,
     selected: SelectionPresentation,
+    collection: collection::Projection,
+    revision: u64,
+    ticket: Option<u64>,
 }
 
 impl Projection {
@@ -29,6 +32,9 @@ impl Projection {
             }
             Some(flight) if flight.operation == Operation::Choose => {
                 "Waiting for the Windows image picker… Choosing does not apply the image.".into()
+            }
+            Some(flight) if matches!(flight.operation, Operation::ChooseCollection | Operation::ApplyCollection) => {
+                "A native collection request is pending. See global slideshow receipts below.".into()
             }
             Some(flight) => format!(
                 "Requesting wallpaper on {} selected captured display(s)… Awaiting native path/file readback; rendered pixels are not checked.",
@@ -56,6 +62,9 @@ impl Projection {
                 .as_ref()
                 .map(SelectedImage::presentation)
                 .unwrap_or_default(),
+            collection: collection::Projection::capture(state, session),
+            revision: state.sequence,
+            ticket: state.flight.as_ref().map(|flight| flight.ticket),
         }
     }
 }
@@ -76,6 +85,11 @@ impl WallpaperController {
         let current = || {
             self.current(session)
                 && self.provider_current(projection.provider.as_ref())
+                && {
+                    let state = self.state.borrow();
+                    state.sequence == projection.revision
+                        && state.flight.as_ref().map(|flight| flight.ticket) == projection.ticket
+                }
                 && intent.is_none_or(|operation| self.intent_current(session, operation))
         };
         // Every setter may reenter. Check the full scope after even same-state writes.
@@ -93,6 +107,8 @@ impl WallpaperController {
         publish!(set_wallpaper_controls_enabled, false);
         publish!(set_wallpaper_apply_enabled, false);
         publish!(set_wallpaper_colors_enabled, false);
+        publish!(set_wallpaper_collection_controls_enabled, false);
+        publish!(set_wallpaper_collection_apply_enabled, false);
         // Consuming the image hides all selection-only presentation immediately.
         // Pending readonly monitor captions/index preserve final scope agreement only.
         publish!(
@@ -123,6 +139,31 @@ impl WallpaperController {
         publish!(set_wallpaper_busy, projection.busy);
         publish!(set_wallpaper_input_key, projection.key);
         publish!(set_wallpaper_status, projection.status);
+        publish!(set_wallpaper_collection_items, projection.collection.items);
+        publish!(
+            set_wallpaper_collection_interval_index,
+            projection.collection.index
+        );
+        publish!(
+            set_wallpaper_collection_shuffle,
+            projection.collection.shuffle
+        );
+        publish!(
+            set_wallpaper_collection_command_available,
+            projection.collection.command_available
+        );
+        publish!(
+            set_wallpaper_collection_status,
+            projection.collection.status
+        );
+        publish!(
+            set_wallpaper_collection_apply_enabled,
+            projection.collection.apply_enabled
+        );
+        publish!(
+            set_wallpaper_collection_controls_enabled,
+            projection.provider.is_some() && !projection.busy
+        );
         publish!(
             set_wallpaper_apply_enabled,
             projection.provider.is_some() && !projection.busy && projection.has_selection

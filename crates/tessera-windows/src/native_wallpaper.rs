@@ -11,7 +11,7 @@ use tessera_system::wallpaper::{
     WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
     WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
     WallpaperImageTargetWeak, WallpaperMonitorSelection, WallpaperMonitorTarget,
-    WallpaperSelection, position as position_contract,
+    WallpaperSelection, collection as collection_contract, position as position_contract,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_FAILED, WAIT_OBJECT_0};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
@@ -25,6 +25,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::single_flight::{Flight, FlightGate};
 
+mod collection;
 mod displays;
 mod position;
 mod source;
@@ -53,6 +54,14 @@ impl NativeWallpaperHost {
                 .is_some_and(|issued| issued.accepts(target, scope))
         {
             // A forged/retired token cannot start an owner or reach the SDK.
+            return Err(WallpaperError::InvalidTarget);
+        }
+        if let Work::ApplyCollection { target, .. } = &work
+            && !inbox
+                .issued
+                .as_ref()
+                .is_some_and(|issued| issued.accepts_collection(target))
+        {
             return Err(WallpaperError::InvalidTarget);
         }
         if let Work::SetPosition { target, .. } = &work
@@ -87,7 +96,10 @@ impl NativeWallpaperHost {
             return Err(WallpaperError::Unavailable);
         }
         match &work {
-            Work::Choose { .. } | Work::Apply { .. } => inbox.issued = None,
+            Work::Choose { .. }
+            | Work::Apply { .. }
+            | Work::ChooseCollection { .. }
+            | Work::ApplyCollection { .. } => inbox.issued = None,
             Work::ReadPosition { .. } | Work::SetPosition { .. } => {
                 inbox.position_issued = None;
             }
@@ -111,6 +123,26 @@ impl WallpaperHost for NativeWallpaperHost {
         self.submit(Work::Apply {
             target,
             scope,
+            completion,
+        })
+    }
+
+    fn choose_collection(
+        &self,
+        completion: collection_contract::ChooseCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::ChooseCollection { completion })
+    }
+
+    fn apply_collection(
+        &self,
+        target: collection_contract::Target,
+        options: collection_contract::Options,
+        completion: collection_contract::ApplyCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::ApplyCollection {
+            target,
+            options,
             completion,
         })
     }
@@ -165,12 +197,27 @@ struct Inbox {
     retire_pending: bool,
 }
 
-struct Issuer {
+enum Issuer {
+    Image(ImageIssuer),
+    Collection(collection_contract::TargetWeak),
+}
+
+struct ImageIssuer {
     image: WallpaperImageTargetWeak,
     monitors: Vec<WallpaperMonitorTarget>,
 }
 
 impl Issuer {
+    fn accepts(&self, image: &WallpaperImageTarget, scope: &WallpaperApplyScope) -> bool {
+        matches!(self, Self::Image(issuer) if issuer.accepts(image, scope))
+    }
+
+    fn accepts_collection(&self, target: &collection_contract::Target) -> bool {
+        matches!(self, Self::Collection(issuer) if issuer.matches(target))
+    }
+}
+
+impl ImageIssuer {
     fn from_selection(selection: &WallpaperSelection) -> Self {
         Self {
             image: selection.target.downgrade(),
@@ -200,6 +247,14 @@ enum Work {
         scope: WallpaperApplyScope,
         completion: WallpaperApplyCompletion,
     },
+    ChooseCollection {
+        completion: collection_contract::ChooseCompletion,
+    },
+    ApplyCollection {
+        target: collection_contract::Target,
+        options: collection_contract::Options,
+        completion: collection_contract::ApplyCompletion,
+    },
     ReadPosition {
         completion: position_contract::ReadCompletion,
     },
@@ -223,6 +278,12 @@ impl Job {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
             Work::Apply { completion, .. } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::ChooseCollection { completion } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::ApplyCollection { completion, .. } => {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
             Work::ReadPosition { completion } => {
@@ -331,7 +392,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .wake = Some(event);
-    let mut current: Option<Selection> = None;
+    let mut current: Option<FileSelection> = None;
     let mut current_position = position::Ledger::default();
     loop {
         let (job, closed, retired) = {
@@ -350,7 +411,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
         if retired
             && current
                 .as_ref()
-                .is_some_and(|selection| !selection.target.is_alive())
+                .is_some_and(|selection| !selection.is_alive())
         {
             current = None;
             publish_issuer(&mailbox, None);
@@ -363,7 +424,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         Selection::choose(window.0, &mailbox).map(|selection| {
                             selection.map(|(selection, snapshot)| {
-                                current = Some(selection);
+                                current = Some(FileSelection::Image(selection));
                                 snapshot
                             })
                         })
@@ -374,10 +435,11 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     });
                     publish_issuer(
                         &mailbox,
-                        result
-                            .as_ref()
-                            .ok()
-                            .and_then(|value| value.as_ref().map(Issuer::from_selection)),
+                        result.as_ref().ok().and_then(|value| {
+                            value.as_ref().map(|snapshot| {
+                                Issuer::Image(ImageIssuer::from_selection(snapshot))
+                            })
+                        }),
                     );
                     drop(flight);
                     finish(move || completion(result));
@@ -389,11 +451,70 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                 } => {
                     let result = current
                         .take()
-                        .filter(|selection| selection.target.matches(&target))
+                        .and_then(|selection| match selection {
+                            FileSelection::Image(selection)
+                                if selection.target.matches(&target) =>
+                            {
+                                Some(selection)
+                            }
+                            _ => None,
+                        })
                         .ok_or(WallpaperError::InvalidTarget)
                         .and_then(|selection| selection.apply(scope));
                     // Accepted apply owns its public ticket through every SDK
                     // write/readback, even if all UI tickets were retired.
+                    drop(target);
+                    publish_issuer(&mailbox, None);
+                    drop(flight);
+                    finish(move || completion(result));
+                }
+                Work::ChooseCollection { completion } => {
+                    current = None;
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        collection::Collection::choose(window.0, &mailbox).map(|selection| {
+                            selection.map(|(selection, snapshot)| {
+                                current = Some(FileSelection::Collection(selection));
+                                snapshot
+                            })
+                        })
+                    }))
+                    .unwrap_or_else(|_| {
+                        current = None;
+                        Err(WallpaperError::Unavailable)
+                    });
+                    publish_issuer(
+                        &mailbox,
+                        result.as_ref().ok().and_then(|value| {
+                            value
+                                .as_ref()
+                                .map(|snapshot| Issuer::Collection(snapshot.target.downgrade()))
+                        }),
+                    );
+                    drop(flight);
+                    finish(move || completion(result));
+                }
+                Work::ApplyCollection {
+                    target,
+                    options,
+                    completion,
+                } => {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        current
+                            .take()
+                            .and_then(|selection| match selection {
+                                FileSelection::Collection(selection)
+                                    if selection.target.matches(&target) =>
+                                {
+                                    Some(selection)
+                                }
+                                _ => None,
+                            })
+                            .ok_or(WallpaperError::InvalidTarget)
+                            .and_then(|selection| selection.apply(options))
+                    }))
+                    .unwrap_or(Err(WallpaperError::Unavailable));
+                    // Strong exact group ticket spans every SDK step/readback.
+                    // A panic is unavailable with unknown effects, not rollback.
                     drop(target);
                     publish_issuer(&mailbox, None);
                     drop(flight);
@@ -489,8 +610,16 @@ fn publish_position_issuer(mailbox: &Mailbox, target: Option<position_contract::
 }
 
 fn retirement_target(mailbox: &Arc<Mailbox>) -> WallpaperImageTarget {
+    WallpaperImageTarget::with_retirement(retirement_callback(mailbox))
+}
+
+fn retirement_collection_target(mailbox: &Arc<Mailbox>) -> collection_contract::Target {
+    collection_contract::Target::with_retirement(retirement_callback(mailbox))
+}
+
+fn retirement_callback(mailbox: &Arc<Mailbox>) -> impl FnOnce() + Send + Sync + 'static {
     let mailbox = Arc::downgrade(mailbox);
-    WallpaperImageTarget::with_retirement(move || {
+    move || {
         let Some(mailbox) = mailbox.upgrade() else {
             return;
         };
@@ -504,7 +633,7 @@ fn retirement_target(mailbox: &Arc<Mailbox>) -> WallpaperImageTarget {
         if let Some(wake) = &inbox.wake {
             let _ = wake.signal();
         }
-    })
+    }
 }
 
 fn fail_mailbox(mailbox: &Mailbox) {
@@ -527,6 +656,21 @@ fn fail_mailbox(mailbox: &Mailbox) {
 fn finish(callback: impl FnOnce()) {
     // Callback reentry holds no issuer/mailbox lock; panic cannot strand work.
     let _ = catch_unwind(AssertUnwindSafe(callback));
+}
+
+/// One typed file slot: either choice replaces the other, never position state.
+enum FileSelection {
+    Image(Selection),
+    Collection(collection::Collection),
+}
+
+impl FileSelection {
+    fn is_alive(&self) -> bool {
+        match self {
+            Self::Image(selection) => selection.target.is_alive(),
+            Self::Collection(selection) => selection.target.is_alive(),
+        }
+    }
 }
 
 struct Selection {
