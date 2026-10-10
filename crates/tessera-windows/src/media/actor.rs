@@ -9,8 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 
 use tessera_system::media::{
-    MediaCommandCompletion, MediaError, MediaErrorKind, MediaEvent, MediaReadCompletion,
-    MediaRequest, MediaSnapshot,
+    MediaCommandCompletion, MediaError, MediaErrorKind, MediaEvent, MediaInventory,
+    MediaInventoryCompletion, MediaReadCompletion, MediaRequest, MediaSelectionCommand,
+    MediaSnapshot,
 };
 
 use crate::single_flight::{Flight, FlightGate};
@@ -29,6 +30,18 @@ type Completion<T> = Box<dyn FnOnce(Result<T, MediaError>) + Send + 'static>;
 /// the actor additionally calls idempotent `stop_watch` on any failure.
 pub(crate) trait Driver: 'static {
     fn read(&mut self) -> Result<MediaSnapshot, MediaError>;
+    fn read_inventory(&mut self) -> Result<MediaInventory, MediaError> {
+        Err(MediaError::new(
+            MediaErrorKind::Unsupported,
+            "Media inventory unsupported",
+        ))
+    }
+    fn select(&mut self, _command: MediaSelectionCommand) -> Result<(), MediaError> {
+        Err(MediaError::new(
+            MediaErrorKind::Unsupported,
+            "Media selection unsupported",
+        ))
+    }
     fn execute(&mut self, command: MediaRequest) -> Result<(), MediaError>;
     fn start_watch(&mut self, dirty: WatchCallback) -> Result<(), MediaError>;
     fn refresh_watch(&mut self) -> Result<(), MediaError>;
@@ -55,6 +68,23 @@ impl QueueLifetime {
     pub(super) fn read(&self, completion: MediaReadCompletion) -> Result<(), MediaError> {
         let flight = self.flight.try_enter().ok_or_else(busy)?;
         self.send(Message::Read(Request::new(completion, flight)))
+    }
+
+    pub(super) fn read_inventory(
+        &self,
+        completion: MediaInventoryCompletion,
+    ) -> Result<(), MediaError> {
+        let flight = self.flight.try_enter().ok_or_else(busy)?;
+        self.send(Message::Inventory(Request::new(completion, flight)))
+    }
+
+    pub(super) fn select(
+        &self,
+        command: MediaSelectionCommand,
+        completion: MediaCommandCompletion,
+    ) -> Result<(), MediaError> {
+        let flight = self.flight.try_enter().ok_or_else(busy)?;
+        self.send(Message::Select(command, Request::new(completion, flight)))
     }
 
     pub(super) fn execute(
@@ -238,6 +268,8 @@ impl<T> Drop for Request<T> {
 
 enum Message {
     Read(Request<MediaSnapshot>),
+    Inventory(Request<MediaInventory>),
+    Select(MediaSelectionCommand, Request<()>),
     Execute(MediaRequest, Request<()>),
     Subscribe(Arc<Subscription>),
     Wake,
@@ -247,6 +279,8 @@ impl Message {
     fn reject(mut self) {
         match &mut self {
             Self::Read(request) => request.reject(),
+            Self::Inventory(request) => request.reject(),
+            Self::Select(_, request) => request.reject(),
             Self::Execute(_, request) => request.reject(),
             Self::Subscribe(_) | Self::Wake => {}
         }
@@ -334,6 +368,17 @@ impl<D: Driver, F: FnMut() -> Result<D, MediaError>> Actor<D, F> {
                         snapshot
                     });
                     self.reconcile_read_watch();
+                    request.finish(result);
+                }
+                Message::Inventory(mut request) => {
+                    self.retry_initialization();
+                    self.ensure_watch();
+                    let result = self.call_driver("inventory", Driver::read_inventory);
+                    self.reconcile_read_watch();
+                    request.finish(result);
+                }
+                Message::Select(command, mut request) => {
+                    let result = self.call_driver("selection", |driver| driver.select(command));
                     request.finish(result);
                 }
                 Message::Execute(command, mut request) => {

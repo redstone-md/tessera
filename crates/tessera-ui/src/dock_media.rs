@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Shared OS-current media observation and single transport flight for two views.
+//! Shared media inventory, chosen-player observation and one flight for two views.
 //! Construction is inert; saved Dock enablement or an admitted visible popup starts observation.
 
 use std::cell::{Cell, RefCell};
@@ -14,11 +14,12 @@ use parking_lot::Mutex;
 use slint::ComponentHandle;
 use tessera_system::media::{
     MediaAction as HostAction, MediaArtwork, MediaCommand, MediaError, MediaErrorKind, MediaEvent,
-    MediaHost, MediaObservationRevision, MediaPlayback, MediaRequest, MediaSeekCommand,
-    MediaSeekObservation, MediaSessionKey, MediaSnapshot, MediaTimeline,
+    MediaHost, MediaInventory, MediaObservationRevision, MediaPlayback, MediaRequest,
+    MediaSeekCommand, MediaSeekObservation, MediaSelection, MediaSelectionCommand, MediaSessionKey,
+    MediaSnapshot, MediaTimeline,
 };
 
-use crate::generated::{Dock, DockMediaView, MediaAction, QuickSettings};
+use crate::generated::{Dock, DockMediaView, MediaAction, MediaSessionChoice, QuickSettings};
 use crate::icons::IconCache;
 use crate::image_mask::{Mask, cover_pixels};
 use crate::{DesktopHost, PanelApplication, PixelIcon, sanitize};
@@ -36,6 +37,7 @@ struct Token {
 enum FlightKind {
     Read,
     Command,
+    Selection(PopupMediaToken),
     Seek(PopupMediaToken),
 }
 
@@ -115,6 +117,8 @@ struct State {
     read_needed: bool,
     dirty: bool,
     snapshot: Option<MediaSnapshot>,
+    inventory: Option<MediaInventory>,
+    inventory_supported: Option<bool>,
     read_error: Option<MediaError>,
     watch_error: Option<MediaError>,
     action_error: Option<MediaError>,
@@ -131,6 +135,20 @@ struct State {
 impl State {
     fn observation_active(&self) -> bool {
         self.enabled || self.popup.is_some()
+    }
+
+    fn transport_source_ready(&self, key: MediaSessionKey) -> bool {
+        // Current-only providers retain their existing admission. Inventory
+        // controls require both manager delivery and this exact source watch.
+        self.inventory.as_ref().is_none_or(|inventory| {
+            self.watch_ready
+                && self.watch_error.is_none()
+                && inventory
+                    .sessions
+                    .iter()
+                    .find(|entry| entry.key == key)
+                    .is_some_and(|entry| entry.watch.is_ok())
+        })
     }
 
     fn token(&mut self) -> Option<Token> {
@@ -159,6 +177,8 @@ fn seek_authority(
 
 enum Completion {
     Read(Token, Result<Box<MediaSnapshot>, MediaError>),
+    Inventory(Token, Result<Box<MediaInventory>, MediaError>),
+    Selection(Token, PopupMediaToken, Result<(), MediaError>),
     Command(Token, Result<(), MediaError>),
     Seek(Token, PopupMediaToken, Result<(), MediaError>),
 }
@@ -166,13 +186,17 @@ enum Completion {
 impl Completion {
     fn flight(&self) -> Flight {
         match self {
-            Self::Read(token, _) => Flight {
+            Self::Read(token, _) | Self::Inventory(token, _) => Flight {
                 token: *token,
                 kind: FlightKind::Read,
             },
             Self::Command(token, _) => Flight {
                 token: *token,
                 kind: FlightKind::Command,
+            },
+            Self::Selection(token, popup, _) => Flight {
+                token: *token,
+                kind: FlightKind::Selection(*popup),
             },
             Self::Seek(token, popup, _) => Flight {
                 token: *token,
@@ -469,6 +493,92 @@ impl DockMediaController {
                 .is_some_and(|popup| popup.token == token)
     }
 
+    /// Selections share the existing flight; busy intents are never queued or replayed.
+    pub(crate) fn select_from_popup(&self, token: PopupMediaToken, identity: &str) {
+        if !self.popup_input_ready(token) || self.closed.get() || self.driving.replace(true) {
+            return;
+        }
+        let _driving = Driving(&self.driving);
+        if self.mailbox.lock().dirty {
+            return;
+        }
+        let (flight, command, provider) = {
+            let mut state = self.state.borrow_mut();
+            if state.flight.is_some() || state.dirty {
+                return;
+            }
+            let Some(inventory) = &state.inventory else {
+                return;
+            };
+            let selection = if identity
+                == selection_identity(&state, inventory, MediaSelection::FollowCurrent)
+            {
+                MediaSelection::FollowCurrent
+            } else {
+                let Some(entry) = inventory.sessions.iter().find(|entry| {
+                    identity
+                        == selection_identity(&state, inventory, MediaSelection::Session(entry.key))
+                }) else {
+                    return;
+                };
+                MediaSelection::Session(entry.key)
+            };
+            if selection == inventory.selection {
+                return;
+            }
+            let command = MediaSelectionCommand {
+                expected_inventory: inventory.revision,
+                selection,
+            };
+            let Some(provider) = state.provider.clone() else {
+                return;
+            };
+            let Some(request_token) = state.token() else {
+                return;
+            };
+            let flight = Flight {
+                token: request_token,
+                kind: FlightKind::Selection(token),
+            };
+            state.pending_seek = None;
+            state.invalidate_seek_observation();
+            state.flight = Some(flight);
+            state.action_error = None;
+            state.action_accepted = false;
+            (flight, command, provider)
+        };
+        self.seek_timer.stop();
+        {
+            let mut mailbox = self.mailbox.lock();
+            mailbox.expected = Some(flight);
+            mailbox.completion = None;
+        }
+        self.project();
+        if !self.current(flight) || !self.popup_input_ready(token) || self.mailbox.lock().dirty {
+            self.cancel_unsubmitted(flight);
+            return;
+        }
+        self.state.borrow_mut().flight_accepted = true;
+        let mailbox = self.mailbox.clone();
+        let wake = self.wake.clone();
+        if let Err(error) = provider.select(
+            command,
+            Box::new(move |result| {
+                complete(
+                    &mailbox,
+                    &wake,
+                    Completion::Selection(flight.token, token, result),
+                );
+            }),
+        ) {
+            complete(
+                &self.mailbox,
+                &self.wake,
+                Completion::Selection(flight.token, token, Err(error)),
+            );
+        }
+    }
+
     pub(crate) fn capture_seek(&self, token: PopupMediaToken) -> Option<CapturedMediaSeek> {
         if !self.popup_input_ready(token) {
             return None;
@@ -479,6 +589,13 @@ impl DockMediaController {
             || mailbox.seek_exhausted
             || state.seek_observation_exhausted
             || state.seek_epoch != mailbox.seek_epoch
+            || matches!(
+                state.flight,
+                Some(Flight {
+                    kind: FlightKind::Selection(_),
+                    ..
+                })
+            )
         {
             return None;
         }
@@ -679,6 +796,10 @@ impl DockMediaController {
         if !current() {
             return;
         }
+        view.set_media_choices(Default::default());
+        if !current() {
+            return;
+        }
         view.set_timeline_available(false);
         if !current() {
             return;
@@ -720,6 +841,7 @@ impl DockMediaController {
                 let generation = state.generation.checked_add(1).unwrap_or(state.generation);
                 state.generation = generation;
                 state.snapshot = None;
+                state.inventory = None;
                 state.read_error = None;
                 state.watch_error = None;
                 state.action_error = None;
@@ -847,7 +969,7 @@ impl DockMediaController {
             else {
                 return;
             };
-            if !session.capabilities.allows(action) {
+            if !session.capabilities.allows(action) || !state.transport_source_ready(session.key) {
                 return;
             }
             let key = session.key;
@@ -1009,6 +1131,49 @@ impl DockMediaController {
                         return;
                     }
                     match completion {
+                        Completion::Inventory(_, result) => match result {
+                            Ok(inventory) => {
+                                let inventory = *inventory;
+                                state.inventory_supported = Some(true);
+                                match &inventory.selected {
+                                    Ok(snapshot) => {
+                                        if seek_authority(state.snapshot.as_ref())
+                                            != seek_authority(Some(snapshot))
+                                        {
+                                            state.invalidate_seek_observation();
+                                        }
+                                        state.snapshot = Some(snapshot.clone());
+                                        state.read_error = None;
+                                    }
+                                    Err(error) => {
+                                        state.invalidate_seek_observation();
+                                        state.snapshot = None;
+                                        state.read_error = Some(error.clone());
+                                    }
+                                }
+                                state.inventory = Some(inventory);
+                                state.seek_epoch = state.read_seek_epoch;
+                                state.dirty = dirty || state.read_needed;
+                            }
+                            Err(error) => {
+                                state.invalidate_seek_observation();
+                                state.read_error = Some(error);
+                                state.dirty = true;
+                                state.read_needed = false;
+                            }
+                        },
+                        Completion::Selection(_, popup, result) => {
+                            if state
+                                .popup
+                                .as_ref()
+                                .is_some_and(|active| active.token == popup)
+                            {
+                                state.action_error = result.err();
+                                state.action_accepted = false;
+                            }
+                            state.dirty = true;
+                            state.read_needed = true;
+                        }
                         Completion::Read(_, Ok(snapshot)) => {
                             let snapshot = *snapshot;
                             let snapshot = MediaSnapshot {
@@ -1106,6 +1271,7 @@ impl DockMediaController {
             state.flight = None;
             state.watch = None;
             state.snapshot = None;
+            state.inventory = None;
             (state.watch_guard.take(), state.provider.take(), popup)
         };
         *self.mailbox.lock() = Mailbox::default();
@@ -1198,18 +1364,57 @@ impl DockMediaController {
             let mailbox = self.mailbox.clone();
             self.state.borrow_mut().flight_accepted = true;
             let wake = self.wake.clone();
-            if let Err(error) = provider.read(Box::new(move |result| {
-                complete(
-                    &mailbox,
-                    &wake,
-                    Completion::Read(flight.token, result.map(Box::new)),
-                );
-            })) {
-                complete(
-                    &self.mailbox,
-                    &self.wake,
-                    Completion::Read(flight.token, Err(error)),
-                );
+            let inventory = self.state.borrow().inventory_supported != Some(false);
+            let result = if inventory {
+                provider.read_inventory(Box::new(move |result| {
+                    complete(
+                        &mailbox,
+                        &wake,
+                        Completion::Inventory(flight.token, result.map(Box::new)),
+                    );
+                }))
+            } else {
+                provider.read(Box::new(move |result| {
+                    complete(
+                        &mailbox,
+                        &wake,
+                        Completion::Read(flight.token, result.map(Box::new)),
+                    );
+                }))
+            };
+            if let Err(error) = result {
+                if inventory && error.kind == MediaErrorKind::Unsupported && self.current(flight) {
+                    // Optional inventory admission transferred no callback.
+                    // Legacy providers keep exactly their original current read.
+                    self.state.borrow_mut().inventory_supported = Some(false);
+                    let mailbox = self.mailbox.clone();
+                    let wake = self.wake.clone();
+                    if let Err(error) = provider.read(Box::new(move |result| {
+                        complete(
+                            &mailbox,
+                            &wake,
+                            Completion::Read(flight.token, result.map(Box::new)),
+                        );
+                    })) {
+                        complete(
+                            &self.mailbox,
+                            &self.wake,
+                            Completion::Read(flight.token, Err(error)),
+                        );
+                    }
+                } else if inventory {
+                    complete(
+                        &self.mailbox,
+                        &self.wake,
+                        Completion::Inventory(flight.token, Err(error)),
+                    );
+                } else {
+                    complete(
+                        &self.mailbox,
+                        &self.wake,
+                        Completion::Read(flight.token, Err(error)),
+                    );
+                }
             }
             if self.current(flight) {
                 break;
@@ -1300,7 +1505,9 @@ impl DockMediaController {
                 .and_then(|snapshot| snapshot.current.as_ref());
             let busy = state.flight.is_some();
             let stale = state.dirty || state.read_error.is_some();
-            let controls = !busy && !stale;
+            let source_ready =
+                current.is_none_or(|session| state.transport_source_ready(session.key));
+            let controls = !busy && !stale && source_ready;
             let status = if !state.observation_active() {
                 ""
             } else if state.read_error.is_some() {
@@ -1314,6 +1521,21 @@ impl DockMediaController {
             } else {
                 "Media not yet observed"
             };
+            let source_watch_error = state.inventory.as_ref().and_then(|inventory| {
+                let key = match inventory.selection {
+                    MediaSelection::FollowCurrent => {
+                        inventory.native_current.as_ref().ok().copied().flatten()
+                    }
+                    MediaSelection::Session(key) => Some(key),
+                }?;
+                inventory
+                    .sessions
+                    .iter()
+                    .find(|entry| entry.key == key)?
+                    .watch
+                    .as_ref()
+                    .err()
+            });
             let mut view = DockMediaView {
                 enabled: state.enabled,
                 current_present: current.is_some(),
@@ -1327,9 +1549,17 @@ impl DockMediaController {
                 {
                     "Live media updates are starting.".into()
                 } else {
-                    notice(state.watch_error.as_ref()).into()
+                    notice(state.watch_error.as_ref().or(source_watch_error)).into()
                 },
                 action_notice: if matches!(
+                    state.flight,
+                    Some(Flight {
+                        kind: FlightKind::Selection(_),
+                        ..
+                    })
+                ) {
+                    "Player selection pending.".into()
+                } else if matches!(
                     state.flight,
                     Some(Flight {
                         kind: FlightKind::Command,
@@ -1467,6 +1697,83 @@ impl DockMediaController {
                 if !current() {
                     return;
                 }
+                let choices = {
+                    let state = self.state.borrow();
+                    state
+                        .inventory
+                        .as_ref()
+                        .map(|inventory| {
+                            let enabled = !state.dirty && state.flight.is_none();
+                            let mut choices = vec![MediaSessionChoice {
+                                identity: selection_identity(
+                                    &state,
+                                    inventory,
+                                    MediaSelection::FollowCurrent,
+                                )
+                                .into(),
+                                label: inventory
+                                    .native_current
+                                    .as_ref()
+                                    .err()
+                                    .map(|error| {
+                                        format!(
+                                            "Follow Windows current player · {}",
+                                            notice(Some(error))
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "Follow Windows current player".to_owned())
+                                    .into(),
+                                selected: inventory.selection == MediaSelection::FollowCurrent,
+                                available: enabled,
+                            }];
+                            choices.extend(inventory.sessions.iter().map(|entry| {
+                                let label = match &entry.observation {
+                                    Ok(session) => {
+                                        let title = sanitize::bounded_text(&session.title, 512);
+                                        let app =
+                                            sanitize::bounded_text(&session.source_app_id, 256);
+                                        let title = if title.is_empty() {
+                                            "Untitled media".to_owned()
+                                        } else {
+                                            title
+                                        };
+                                        let watch = entry
+                                            .watch
+                                            .as_ref()
+                                            .err()
+                                            .map(|error| format!(" · {}", notice(Some(error))))
+                                            .unwrap_or_default();
+                                        if app.is_empty() {
+                                            format!("{title}{watch}")
+                                        } else {
+                                            format!("{title}\n{app}{watch}")
+                                        }
+                                    }
+                                    Err(error) => {
+                                        format!("Player unavailable · {}", notice(Some(error)))
+                                    }
+                                };
+                                MediaSessionChoice {
+                                    identity: selection_identity(
+                                        &state,
+                                        inventory,
+                                        MediaSelection::Session(entry.key),
+                                    )
+                                    .into(),
+                                    label: label.into(),
+                                    selected: inventory.selection
+                                        == MediaSelection::Session(entry.key),
+                                    available: enabled,
+                                }
+                            }));
+                            choices
+                        })
+                        .unwrap_or_default()
+                };
+                popup.set_media_choices(slint::ModelRc::new(slint::VecModel::from(choices)));
+                if !current() {
+                    return;
+                }
                 if seek_invalidated {
                     popup.invoke_media_seek_invalidated();
                     if !current() {
@@ -1525,6 +1832,17 @@ impl Drop for DockMediaController {
 
 fn session_identity(state: &State, key: tessera_system::media::MediaSessionKey) -> String {
     format!("{}:{}:{key:?}", state.generation, state.sequence)
+}
+
+fn selection_identity(
+    state: &State,
+    inventory: &MediaInventory,
+    selection: MediaSelection,
+) -> String {
+    format!(
+        "{}:{}:{:?}:{selection:?}",
+        state.generation, state.sequence, inventory.revision
+    )
 }
 
 struct TimelineProjection {

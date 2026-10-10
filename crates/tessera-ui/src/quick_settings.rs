@@ -534,6 +534,28 @@ impl QuickSettingsController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        controller
+            .surface
+            .on_media_selection_requested(move |identity| {
+                if let Some(controller) = weak.upgrade() {
+                    let epoch = controller.presentation_epoch.borrow().clone();
+                    if !controller.media_input_ready()
+                        || !controller.presentation_is_current(&epoch)
+                    {
+                        return;
+                    }
+                    controller.cancel_seek_input();
+                    if !controller.media_input_ready()
+                        || !controller.presentation_is_current(&epoch)
+                    {
+                        return;
+                    }
+                    if let Some(token) = controller.media_attachment.get() {
+                        controller.media.select_from_popup(token, identity.as_str());
+                    }
+                }
+            });
+        let weak = Rc::downgrade(&controller);
         controller.surface.on_media_seek_geometry_changed(move || {
             if let Some(controller) = weak.upgrade() {
                 controller.cancel_seek_if_geometry_changed(None, None);

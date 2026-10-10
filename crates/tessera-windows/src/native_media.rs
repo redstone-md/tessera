@@ -31,6 +31,19 @@ impl crate::media::actor::Driver for NativeMediaDriver {
         self.0.read()
     }
 
+    fn read_inventory(
+        &mut self,
+    ) -> Result<tessera_system::media::MediaInventory, tessera_system::media::MediaError> {
+        self.0.read_inventory()
+    }
+
+    fn select(
+        &mut self,
+        command: tessera_system::media::MediaSelectionCommand,
+    ) -> Result<(), tessera_system::media::MediaError> {
+        self.0.select(command)
+    }
+
     fn execute(
         &mut self,
         command: tessera_system::media::MediaRequest,

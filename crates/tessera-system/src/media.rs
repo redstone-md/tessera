@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! OS-current media session facts and nonblocking scoped media requests.
+//! Legacy current-session facts plus optional all-session inventory and selection.
 //!
 //! Session keys are transient command authority, never application identities.
 //! A successful empty snapshot is distinct from an unavailable observation.
@@ -224,6 +224,42 @@ pub struct MediaSnapshot {
     pub current: Option<MediaSession>,
 }
 
+/// Tessera's target only. Following Windows current does not change its default.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MediaSelection {
+    #[default]
+    FollowCurrent,
+    Session(MediaSessionKey),
+}
+
+/// Each enumerated incarnation survives independent metadata/playback failures.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaInventoryEntry {
+    pub key: MediaSessionKey,
+    pub observation: Result<MediaSession, MediaError>,
+    /// Readiness of this source's metadata, playback and timeline registrations.
+    /// Inventory hosts report manager delivery readiness through `MediaEvent`;
+    /// a healthy manager never implies that every source registered successfully.
+    pub watch: Result<(), MediaError>,
+}
+
+/// A complete bounded enumeration, never a silently truncated session list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaInventory {
+    pub revision: MediaObservationRevision,
+    pub sessions: Vec<MediaInventoryEntry>,
+    pub native_current: Result<Option<MediaSessionKey>, MediaError>,
+    pub selection: MediaSelection,
+    /// Missing explicit selection is an error, never a redirect to OS current.
+    pub selected: Result<MediaSnapshot, MediaError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaSelectionCommand {
+    pub expected_inventory: MediaObservationRevision,
+    pub selection: MediaSelection,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MediaCommand {
     pub expected_session: MediaSessionKey,
@@ -307,6 +343,8 @@ pub enum MediaEvent {
 
 pub type MediaReadCompletion = Box<dyn FnOnce(Result<MediaSnapshot, MediaError>) + Send + 'static>;
 pub type MediaCommandCompletion = Box<dyn FnOnce(Result<(), MediaError>) + Send + 'static>;
+pub type MediaInventoryCompletion =
+    Box<dyn FnOnce(Result<MediaInventory, MediaError>) + Send + 'static>;
 
 /// Prompt, nonblocking seam for native media and recording adapters.
 ///
@@ -315,6 +353,27 @@ pub type MediaCommandCompletion = Box<dyn FnOnce(Result<(), MediaError>) + Send 
 /// never be retried automatically, including after initialization failure.
 pub trait MediaHost: Send + Sync + 'static {
     fn read(&self, completion: MediaReadCompletion) -> Result<(), MediaError>;
+
+    /// Separate optional capability preserves current-only hosts and literals.
+    fn read_inventory(&self, _completion: MediaInventoryCompletion) -> Result<(), MediaError> {
+        Err(MediaError::new(
+            MediaErrorKind::Unsupported,
+            "Media session inventory is not supported by this host",
+        ))
+    }
+
+    /// Selects Tessera's session, not the read-only GSMTC manager's current one.
+    /// Shares read/transport admission; rejected selections are never replayed.
+    fn select(
+        &self,
+        _command: MediaSelectionCommand,
+        _completion: MediaCommandCompletion,
+    ) -> Result<(), MediaError> {
+        Err(MediaError::new(
+            MediaErrorKind::Unsupported,
+            "Media session selection is not supported by this host",
+        ))
+    }
 
     /// Acknowledges OS acceptance, not a confirmed new playback/title snapshot.
     /// Revalidate native identity/capability and (for seek) revision/exact range

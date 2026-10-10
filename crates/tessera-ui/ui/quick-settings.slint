@@ -5,7 +5,7 @@ import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { TileButton, FocusTokens, TileBounds } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
-import { DockMediaView, MediaAction } from "dock-media.slint";
+import { DockMediaView, MediaAction, MediaSessionChoice } from "dock-media.slint";
 import { MediaPlayer } from "media-player.slint";
 import { CommonSlider } from "common-slider.slint";
 import { AudioDevices, AudioDevicesMetrics, AudioDeviceView, AudioSessionView } from "audio-devices.slint";
@@ -140,6 +140,8 @@ export component QuickSettings inherits Window {
     in property <image> input-muted-icon: @image-url("../assets/icons/ionicons-5.5.4/mic-off-outline.svg");
     in property <image> settings-icon: @image-url("../assets/icons/remix-6da3244/settings-4-fill.svg");
     in property <DockMediaView> media-view;
+    in property <[MediaSessionChoice]> media-choices;
+    callback media-selection-requested(string);
     in property <bool> timeline-available;
     in property <string> timeline-notice;
     in property <string> timeline-time;
@@ -156,6 +158,18 @@ export component QuickSettings inherits Window {
         width: media-scroll.visible-width,
         height: media-scroll.visible-height
     };
+    // Native focus traversal reaches every player. Reveal with the smallest
+    // bounded ScrollView offset; scrolling cancels the row's held activation.
+    function reveal-media-choice(bounds: TileBounds) {
+        if !root.media-view.enabled || bounds.width <= 0px || bounds.height <= 0px
+            || root.seek-clip-bounds.height <= 0px { return; }
+        let top = bounds.origin.y - root.seek-clip-bounds.origin.y - FocusTokens.outer-margin;
+        let bottom = bounds.origin.y + bounds.height - root.seek-clip-bounds.origin.y + FocusTokens.outer-margin;
+        let offset = top < 0px ? -top
+            : bottom > root.seek-clip-bounds.height ? root.seek-clip-bounds.height - bottom : 0px;
+        media-scroll.content-y = clamp(media-scroll.content-y + offset,
+            min(0px, media-scroll.visible-height - media-scroll.content-height), 0px);
+    }
     // Fail closed for a partially clipped control: pointer capture must never
     // authorize an off-viewport part of the native slider.
     out property <bool> seek-visible: root.media-view.enabled && root.media-view.current-present
@@ -406,6 +420,10 @@ export component QuickSettings inherits Window {
                     seek-key-pressed(key) => { root.media-seek-key-pressed(key); }
                     seek-key-released(key) => { root.media-seek-key-released(key); }
                     action-requested(action, identity) => { root.media-action-requested(action, identity); }
+                    choices: root.media-choices;
+                    clip-bounds: root.seek-clip-bounds;
+                    selection-requested(identity) => { root.media-selection-requested(identity); }
+                    choice-reveal-requested(bounds) => { root.reveal-media-choice(bounds); }
                 }
                 HorizontalLayout {
                     spacing: 8px;

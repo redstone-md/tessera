@@ -285,8 +285,17 @@ observations. All mutations capture complete endpoint/session incarnations and
 return native readback through the existing audio owner. Multimedia→Console
 results stay independent; Communications is separate. Default-role writes use
 an isolated undocumented Windows PolicyConfig adapter and can be unavailable.
-Sound Settings dispatch is fixed and source-scoped. This is not an all-GSMTC
-media-session layer, a native Windows outcome receipt or a published release.
+Sound Settings dispatch is fixed and source-scoped. These development controls
+are not native Windows outcome certification or a published release.
+
+Development media enumerates all GSMTC sessions through the existing owner and
+shared card. Follow-current tracks Windows; choosing a player changes only
+Tessera's target, not the OS default. Removed players stay unavailable instead
+of redirecting commands. Canonical COM incarnations, per-source readiness and
+fresh native checks protect transport/seek; selector input remains scoped to
+the current popup and visible frame. Toolbar observation still works with
+saved Dock media off, without an implicit Save. Native effects and the separate
+parked timeline-interpolation work are not certified by this source layer.
 
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 

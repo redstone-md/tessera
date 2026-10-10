@@ -4,7 +4,7 @@
 import { SeelenPalette } from "palette.slint";
 import { PopoverTokens } from "popover.slint";
 import { TileButton, TileBounds } from "tiles.slint";
-import { DockMediaView, MediaAction } from "dock-media.slint";
+import { DockMediaView, MediaAction, MediaSessionChoice } from "dock-media.slint";
 import { CommonSlider } from "common-slider.slint";
 
 component PlayerText inherits Text {
@@ -43,10 +43,57 @@ component TransportButton inherits TileButton {
     }
 }
 
-// Current-only projection of the shared media domain. Observed timeline and
-// Rust-scoped seek preview remain separate; neither gates the transports.
+component PlayerChoice inherits TileButton {
+    in property <MediaSessionChoice> choice;
+    in property <TileBounds> clip-bounds;
+    property <TileBounds> frame: { origin: root.absolute-position, width: root.width, height: root.height };
+    changed frame => { root.cancel-input(); }
+    changed clip-bounds => { root.cancel-input(); }
+    callback requested(string);
+    callback reveal-requested(TileBounds);
+    height: 42px;
+    radius: 6px;
+    activation-key: root.choice.identity;
+    allow-return-repeat: false;
+    selected: root.choice.selected;
+    // Offscreen rows remain in native Tab/AX traversal. Only a revealed frame
+    // may select; focus or an offscreen AX action first reveals this exact row.
+    enabled: root.choice.available;
+    property <bool> frame-visible: root.frame.width > 0px && root.frame.height > 0px
+        && root.frame.origin.x >= root.clip-bounds.origin.x
+        && root.frame.origin.y >= root.clip-bounds.origin.y
+        && root.frame.origin.x + root.frame.width <= root.clip-bounds.origin.x + root.clip-bounds.width
+        && root.frame.origin.y + root.frame.height <= root.clip-bounds.origin.y + root.clip-bounds.height;
+    accessible-text: (root.choice.selected ? @tr("Selected: ") : @tr("Select player: ")) + root.choice.label;
+    focus-acquired => { root.reveal-requested(root.frame); }
+    clicked => {
+        if root.frame-visible {
+            root.requested(root.choice.identity);
+        } else {
+            root.reveal-requested(root.frame);
+        }
+    }
+    PlayerText {
+        x: 8px;
+        width: max(1px, parent.width - 16px);
+        height: parent.height;
+        text: (root.choice.selected ? @tr("Selected: ") : "") + root.choice.label;
+        vertical-alignment: center;
+        overflow: elide;
+        font-weight: root.choice.selected ? 600 : 400;
+        accessible-role: none;
+        accessible-label: "";
+    }
+}
+
+// One selected-player projection of the shared media domain.
+// Observed timeline and Rust-scoped seek preview remain separate.
 export component MediaPlayer inherits Rectangle {
     in property <DockMediaView> view;
+    in property <[MediaSessionChoice]> choices;
+    in property <TileBounds> clip-bounds;
+    callback selection-requested(string);
+    callback choice-reveal-requested(TileBounds);
     in property <bool> timeline-available;
     in property <string> timeline-notice;
     in property <string> timeline-time;
@@ -95,8 +142,10 @@ export component MediaPlayer inherits Rectangle {
     property <int> block-count: 3 + (root.view.current-present ? 1 : 0)
         + (root.view.status != "" ? 1 : 0) + (root.notices != "" ? 1 : 0)
         + (root.timeline-available ? 1 : 0) + (root.timeline-notice != "" ? 1 : 0)
-        + (root.seek-notice != "" ? 1 : 0) + (root.preview-row-present ? 1 : 0);
+        + (root.seek-notice != "" ? 1 : 0) + (root.preview-row-present ? 1 : 0)
+        + (root.choices.length > 0 ? 1 : 0);
     out property <length> natural-height: heading-metrics.preferred-height
+        + root.choices.length * 42px + max(0, root.choices.length - 1) * 4px
         + (root.view.current-present ? max(40px, metadata-metrics.preferred-height) + 30px : 0px)
         + (root.view.status != "" ? status-metrics.preferred-height : 0px)
         + (root.notices != "" ? notice-metrics.preferred-height : 0px)
@@ -108,7 +157,7 @@ export component MediaPlayer inherits Rectangle {
     height: root.natural-height;
 
     // Static probes settle directly from the new projection, before layout.
-    heading-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: @tr("Current player"); font-weight: 600; accessible-role: none; accessible-label: ""; }
+    heading-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.choices.length > 0 ? @tr("Media players") : @tr("Current player"); font-weight: 600; accessible-role: none; accessible-label: ""; }
     metadata-metrics := PlayerText { width: max(1px, root.measure-width - (root.view.has-artwork ? 48px : 0px) - (root.view.has-app-icon ? 24px : 0px)); height: 0px; opacity: 0; text: root.metadata; accessible-role: none; accessible-label: ""; }
     status-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.view.status; accessible-role: none; accessible-label: ""; }
     notice-metrics := PlayerText { width: root.measure-width; height: 0px; opacity: 0; text: root.notices; accessible-role: none; accessible-label: ""; }
@@ -126,7 +175,16 @@ export component MediaPlayer inherits Rectangle {
     }
     VerticalLayout {
         spacing: 8px;
-        PlayerText { text: @tr("Current player"); font-weight: 600; }
+        PlayerText { text: root.choices.length > 0 ? @tr("Media players") : @tr("Current player"); font-weight: 600; }
+        if root.choices.length > 0: VerticalLayout {
+            spacing: 4px;
+            for option in root.choices: PlayerChoice {
+                choice: option;
+                clip-bounds: root.clip-bounds;
+                requested(identity) => { root.selection-requested(identity); }
+                reveal-requested(bounds) => { root.choice-reveal-requested(bounds); }
+            }
+        }
         if root.view.current-present: HorizontalLayout {
             spacing: 8px;
             height: max(40px, metadata-metrics.preferred-height);

@@ -6,6 +6,13 @@ import { TileButton, TileBounds } from "tiles.slint";
 
 export enum MediaAction { previous, toggle, next }
 
+export struct MediaSessionChoice {
+    identity: string,
+    label: string,
+    selected: bool,
+    available: bool,
+}
+
 export struct DockMediaView {
     enabled: bool,
     current-present: bool,

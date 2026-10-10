@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! OS-current media facade. Only its owner worker touches native sessions.
+//! Media session facade. Only its existing owner worker touches native sessions.
 
 use std::sync::Arc;
 
 #[cfg(not(windows))]
 use tessera_system::media::MediaErrorKind;
 use tessera_system::media::{
-    MediaCommandCompletion, MediaError, MediaEvent, MediaHost, MediaReadCompletion, MediaRequest,
+    MediaCommandCompletion, MediaError, MediaEvent, MediaHost, MediaInventoryCompletion,
+    MediaReadCompletion, MediaRequest, MediaSelectionCommand,
 };
 
 #[cfg(any(windows, test))]
@@ -52,6 +53,34 @@ impl MediaHost for MediaService {
         #[cfg(not(any(windows, test)))]
         {
             let _ = completion;
+            Err(unsupported())
+        }
+    }
+
+    fn read_inventory(&self, completion: MediaInventoryCompletion) -> Result<(), MediaError> {
+        #[cfg(any(windows, test))]
+        {
+            self.queue.read_inventory(completion)
+        }
+        #[cfg(not(any(windows, test)))]
+        {
+            let _ = completion;
+            Err(unsupported())
+        }
+    }
+
+    fn select(
+        &self,
+        command: MediaSelectionCommand,
+        completion: MediaCommandCompletion,
+    ) -> Result<(), MediaError> {
+        #[cfg(any(windows, test))]
+        {
+            self.queue.select(command, completion)
+        }
+        #[cfg(not(any(windows, test)))]
+        {
+            let _ = (command, completion);
             Err(unsupported())
         }
     }
