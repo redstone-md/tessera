@@ -39,6 +39,7 @@ impl WallpaperController {
             let (request, retired) = match operation {
                 Operation::Choose => (Request::Choose, state.clear_files()),
                 Operation::ChooseCollection => (Request::ChooseCollection, state.clear_files()),
+                Operation::ChooseFolder => (Request::ChooseFolder, state.clear_files()),
                 Operation::Apply => {
                     let Some(selection) = state.selection.as_ref() else {
                         return;
@@ -111,6 +112,7 @@ impl WallpaperController {
             let (scope, monitor_index, requested) = match &request {
                 Request::Choose
                 | Request::ChooseCollection
+                | Request::ChooseFolder
                 | Request::ApplyCollection { .. }
                 | Request::ReadSlideshow
                 | Request::AdvanceSlideshow { .. } => (None, None, 0),
@@ -246,6 +248,13 @@ impl WallpaperController {
                     });
                     provider.choose_collection(completion)
                 }
+                Request::ChooseFolder => {
+                    let completion: native_collection::ChooseCompletion = Box::new(move |result| {
+                        let _owner = owner;
+                        deliver(&mailbox, &panel, flight.ticket, Reply::FolderChosen(result));
+                    });
+                    provider.choose_folder(completion)
+                }
                 Request::ApplyCollection {
                     target, options, ..
                 } => {
@@ -297,6 +306,7 @@ impl WallpaperController {
                 Operation::Choose => Reply::Chosen(Err(error)),
                 Operation::Apply => Reply::Applied(Err(error)),
                 Operation::ChooseCollection => Reply::CollectionChosen(Err(error)),
+                Operation::ChooseFolder => Reply::FolderChosen(Err(error)),
                 Operation::ApplyCollection => Reply::CollectionApplied(Err(error)),
                 Operation::ReadSlideshow => Reply::SlideshowRead(Err(error)),
                 Operation::AdvanceSlideshow(_) => Reply::SlideshowAdvanced(Err(error)),
@@ -336,6 +346,9 @@ impl WallpaperController {
             Request::ChooseCollection => {
                 flight.operation == Operation::ChooseCollection
                     && flight.collection_target.is_none()
+            }
+            Request::ChooseFolder => {
+                flight.operation == Operation::ChooseFolder && flight.collection_target.is_none()
             }
             Request::ApplyCollection {
                 target,
@@ -411,7 +424,7 @@ impl WallpaperController {
         }
         if matches!(
             flight.operation,
-            Operation::ChooseCollection | Operation::ApplyCollection
+            Operation::ChooseCollection | Operation::ChooseFolder | Operation::ApplyCollection
         ) {
             self.receive_collection(flight, receipt.reply);
             return;

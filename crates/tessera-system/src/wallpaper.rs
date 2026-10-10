@@ -305,6 +305,15 @@ pub trait WallpaperHost: Send + Sync {
         Err(WallpaperError::Unavailable)
     }
 
+    /// Explicit native filesystem-folder picker for one Windows slideshow source.
+    /// No local child enumeration, synthetic image inventory or UI path authority.
+    fn choose_folder(
+        &self,
+        _completion: collection::ChooseCompletion,
+    ) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
+
     /// Explicit SDK read of current slideshow policy/status and actual monitors.
     /// This observes OS state, not the user's unsubmitted file-selection draft.
     /// Readable but disabled/unsupported policy grants no advancement target.

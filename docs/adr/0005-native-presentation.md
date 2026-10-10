@@ -67,7 +67,7 @@ The target is the complete user-facing Seelen reference, not just three similarl
 | System popups | Calendar navigation and week start; user folders; keyboard/IME selection; real audio devices/media sessions; network/hotspot; Bluetooth; battery/power; quick settings; notifications/DND/actions; tray; flyouts; window previews; icon editor; dialogs, nested context menus and tooltips. | Partial; saved three-choice week start, TSF profiles, cached WLAN/Settings, paired Bluetooth and six-action Power/status/update hint exist. Published alpha.20 keeps current-only media/native timeline, scoped seek and repaired audio admission. Development adds all-GSMTC inventory with local chosen-player controls and independent source readiness, active input/output inventories, selected masters, per-output app/System Sounds mixers, independent default-role readback, fixed Sound Settings dispatch and selected-window DWM previews. Explicit exact-source WLAN Connect/Disconnect supports saved/open/WPA2-Personal AES profiles with temporary credentials and accepted-versus-native-result separation; software radio On/Off uses exact native PHYs and independent partial acceptance/readback, never changing or fabricating hardware state. Saved-profile observations remain independent of discovery and destructive Forget requires inline confirmation, fresh native identity/descriptor/policy and actual absent/present/replaced/unavailable readback. Bluetooth radio On/Off retains exact native IDs/COM incarnations, GUI consent and actual state readback. Legacy radio reads remain compatible. Battery adds shared event-driven actual cached facts, explicit Refresh and fixed Settings initiation without policy mutation. Default-role writes use an isolated undocumented PolicyConfig adapter and can be unavailable. Parked interpolation/absolute labels, Wi-Fi hotspot, WPA3/enterprise/hidden networks, Bluetooth discovery/Pair/device-connect, full IME, tray/notifications and visual/native certification remain open. |
 | Settings | Home, General, Resources, Shortcuts, Monitors, By Application, Developer and Extras, including header/update/welcome states. Every enabled control must change real behavior and persist; no decorative tabs or fake success. | Partial; native appearance/dock settings, General week start, optional media and native Shortcuts controls use strict schema 5 in published alpha.17. Shortcut drafts/capture/reset and explicit Save are implemented; full pages, profiles, inheritance, resources and native Windows certification remain pending. |
 | Shortcuts and workspaces | Global enable/pause, capture, conflict handling, reset and readonly overrides; settings `Win+K`, dock launch shortcuts, task switcher, workspace viewer and switch/create/remove/move/send actions, respecting Windows input and focus policy. | Partial; published alpha.17 implements global enable/pause, eligible bare-Win and Win+K registration with typed conflict/unavailable states, capture pause, cancel/reset and explicit Save. Dock launch shortcuts, task switcher, workspace viewer/actions and remaining override parity are missing; actual Windows Start/key balance/focus behavior remains uncertified. |
-| Wallpaper | Images/video, collections, thumbnails, next/previous, monitor/workspace selection, interval/randomization, accent extraction, media volume and coverage-based pause. | Partial development static-image picker, exact captured-display selection/application/readback, native thumbnails and explicit Material image-color Preview; separate global Windows display-position Read/Apply, bounded same-container collection/slideshow with native interval/shuffle, and explicit current-policy per-native-monitor Previous/Next. Video, collection editing/import, workspace controls, automatic live accent and media policies remain missing. |
+| Wallpaper | Images/video, collections, thumbnails, next/previous, monitor/workspace selection, interval/randomization, accent extraction, media volume and coverage-based pause. | Partial development static-image picker, exact captured-display selection/application/readback, native thumbnails and explicit Material image-color Preview; separate global Windows display-position Read/Apply, bounded same-container images or a native-picked folder source with native interval/shuffle, and explicit current-policy per-native-monitor Previous/Next. Video, collection editing/import, workspace controls, automatic live accent and media policies remain missing. |
 | Optional window management | Native layout runtime and selectable layouts, floating/stacking/monocle, categories, border/stack-bar overlays, spacing and inherited monitor/workspace rules, drag behavior, animations and reference shortcuts. Disabled by default, as in the reference. | Layout primitives only; runtime/UI missing. |
 | Resources and extensions | Theme variables/skins, icon packs, wallpapers, widgets and plugins; install/update/remove states; declared settings, permissions, popup triggers, and single/multiple/per-monitor instances. Sound packs remain disabled where the reference disables them. | Missing; arbitrary upstream JS/HTML/CSS execution is not the equivalent implementation. |
 | Product and service UI | Language/date/week/accent preferences, autostart, hardware/performance/game-mode choices, per-app identity rules, developer sub-tabs, streaming/privacy, account/backup status, update channels, cache clearing, relaunch/exit, welcome and review states. External-service behavior requires a real supported adapter, not fabricated data. | Mostly missing; saved Monday/Sunday/Saturday week start and a limited read-only Power update hint do not complete language/date/update/service UI. |
@@ -149,19 +149,24 @@ non-atomic SDK read/set pair;
 neither native acceptance nor a matching position readback certifies desktop
 pixels. No default position, idle read, automatic retry or JSON mirror is added.
 
-Collections come from the actual native multi-select result, bounded to 2–32
-protected individual images in one canonical native Shell container, as required
-by [SetSlideshow](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-idesktopwallpaper-setslideshow).
-Actual native thumbnails are optional; no icon or fabricated gallery is used.
-Static and collection selection replace each other without retiring position
-observations. Applying consumes the exact group target and sequentially requests
-the global Windows collection and proposed interval/shuffle. SetSlideshow also
-enables the desktop background. The OS owns persistence and transitions; no
-Tessera timer or second stored policy is introduced. Collection/options receipts,
-native file-identity multiset confirmation, options and status readback are
-independent, not rendered-pixel proof. Partial effects are retained without
-rollback/retry. Protected files are released after accepted work completes;
-future edits or missing source files can affect the OS-owned slideshow.
+Collection sources come from actual native dialog results: 2–32 protected images
+in one canonical native Shell container, or one existing filesystem folder from
+[FOS_PICKFOLDERS](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/ne-shobjidl_core-_fileopendialogoptions),
+as supported by
+[SetSlideshow](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-idesktopwallpaper-setslideshow).
+The original one-folder SDK array and native directory identity are revalidated;
+folder metadata is observed transiently, not held under a persistent file lease.
+Windows enumerates its contents; Tessera invents no image count, thumbnail or
+gallery. Individual image thumbnails remain optional. Static and either
+collection selection replace each other without retiring position or current
+slideshow observations. Applying consumes the exact source target and
+sequentially requests the global Windows source and proposed interval/shuffle.
+SetSlideshow also enables the desktop background. The OS owns persistence and
+transitions; no Tessera timer or second stored policy is introduced. Source/options
+receipts, native file-identity multiset or folder-identity confirmation, options
+and status readback are independent, not rendered-pixel or folder-content proof.
+Partial effects are retained without rollback/retry. Protected files are released
+after accepted work completes; future source edits can affect the OS slideshow.
 
 Explicit current-slideshow Read observes actual SDK status/options, bounded file
 policy entries or one native folder, and the complete native monitor cohort.

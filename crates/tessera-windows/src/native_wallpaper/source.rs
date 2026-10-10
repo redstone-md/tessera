@@ -20,8 +20,8 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTask
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
     FOS_ALLOWMULTISELECT, FOS_DONTADDTORECENT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
-    FOS_NOCHANGEDIR, FOS_PATHMUSTEXIST, FileOpenDialog, IFileOpenDialog, IShellItem,
-    SICHINT_CANONICAL, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
+    FOS_NOCHANGEDIR, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
+    IShellItem, SICHINT_CANONICAL, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
 use windows::core::{HRESULT, PCWSTR, PWSTR, w};
 
@@ -40,7 +40,7 @@ pub(super) struct Image {
 
 impl Image {
     pub(super) fn choose(owner: HWND) -> Result<Option<Self>, WallpaperError> {
-        let Some(dialog) = choose_dialog(owner, false)? else {
+        let Some(dialog) = choose_dialog(owner, Pick::Image)? else {
             return Ok(None);
         };
         let item = unsafe { dialog.GetResult() }.map_err(|_| WallpaperError::Unavailable)?;
@@ -58,20 +58,7 @@ impl Image {
         }
         let lease = FileLease::open(&path)?;
         let identity = lease.identity()?;
-        let display = NativeName::take(
-            unsafe { item.GetDisplayName(SIGDN_NORMALDISPLAY) }
-                .map_err(|_| WallpaperError::Unavailable)?,
-            MAX_CAPTION_UNITS,
-        )?;
-        let caption: String = String::from_utf16(display.units())
-            .map_err(|_| WallpaperError::Unavailable)?
-            .chars()
-            .filter(|character| !character.is_control())
-            .take(MAX_CAPTION_CHARS)
-            .collect();
-        if caption.trim().is_empty() {
-            return Err(WallpaperError::Unavailable);
-        }
+        let caption = item_caption(&item)?;
         Ok(Self {
             item,
             path,
@@ -195,6 +182,10 @@ impl PolicyEntry {
         self.identity.directory
     }
 
+    pub(super) fn caption(&self) -> Result<String, WallpaperError> {
+        item_caption(&self.item)
+    }
+
     pub(super) fn same_identity(&self, other: &Self) -> bool {
         self.identity == other.identity
     }
@@ -231,10 +222,17 @@ pub(super) struct PolicyIdentity {
     created: i64,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum Pick {
+    Image,
+    Images,
+    Folder,
+}
+
 /// Shared real dialog setup; callers retain either GetResult or exact GetResults.
 pub(super) fn choose_dialog(
     owner: HWND,
-    multiple: bool,
+    pick: Pick,
 ) -> Result<Option<IFileOpenDialog>, WallpaperError> {
     // SAFETY: the caller owns an initialized STA and its own native HWND.
     let dialog: IFileOpenDialog =
@@ -246,24 +244,28 @@ pub(super) fn choose_dialog(
             | FOS_PATHMUSTEXIST
             | FOS_NOCHANGEDIR
             | FOS_DONTADDTORECENT;
-        if multiple {
-            options |= FOS_ALLOWMULTISELECT;
+        match pick {
+            Pick::Images => options |= FOS_ALLOWMULTISELECT,
+            Pick::Folder => options |= FOS_PICKFOLDERS,
+            Pick::Image => {}
         }
         dialog.SetOptions(options)?;
-        dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
-            pszName: w!("Images (BMP, JPEG, PNG, TIFF)"),
-            pszSpec: w!("*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff"),
-        }])?;
-        dialog.SetTitle(if multiple {
-            w!("Choose 2–32 slideshow images from the same folder")
-        } else {
-            w!("Choose a static wallpaper image")
-        })?;
-        dialog.SetOkButtonLabel(if multiple {
-            w!("Choose collection")
-        } else {
-            w!("Choose image")
-        })?;
+        if !matches!(pick, Pick::Folder) {
+            dialog.SetFileTypes(&[COMDLG_FILTERSPEC {
+                pszName: w!("Images (BMP, JPEG, PNG, TIFF)"),
+                pszSpec: w!("*.bmp;*.jpg;*.jpeg;*.png;*.tif;*.tiff"),
+            }])?;
+        }
+        let (title, button) = match pick {
+            Pick::Image => (w!("Choose a static wallpaper image"), w!("Choose image")),
+            Pick::Images => (
+                w!("Choose 2–32 slideshow images from the same folder"),
+                w!("Choose collection"),
+            ),
+            Pick::Folder => (w!("Choose a slideshow folder"), w!("Choose folder")),
+        };
+        dialog.SetTitle(title)?;
+        dialog.SetOkButtonLabel(button)?;
         Ok::<_, windows::core::Error>(())
     })()
     .map_err(|_| WallpaperError::Unavailable)?;
@@ -276,6 +278,24 @@ pub(super) fn choose_dialog(
         };
     }
     Ok(Some(dialog))
+}
+
+fn item_caption(item: &IShellItem) -> Result<String, WallpaperError> {
+    let display = NativeName::take(
+        unsafe { item.GetDisplayName(SIGDN_NORMALDISPLAY) }
+            .map_err(|_| WallpaperError::Unavailable)?,
+        MAX_CAPTION_UNITS,
+    )?;
+    let caption: String = String::from_utf16(display.units())
+        .map_err(|_| WallpaperError::Unavailable)?
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_CAPTION_CHARS)
+        .collect();
+    if caption.trim().is_empty() {
+        return Err(WallpaperError::Unavailable);
+    }
+    Ok(caption)
 }
 
 pub(super) fn same_container(

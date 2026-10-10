@@ -152,7 +152,20 @@ impl WallpaperHost for NativeWallpaperHost {
         &self,
         completion: collection_contract::ChooseCompletion,
     ) -> Result<(), WallpaperError> {
-        self.submit(Work::ChooseCollection { completion })
+        self.submit(Work::ChooseCollection {
+            pick: source::Pick::Images,
+            completion,
+        })
+    }
+
+    fn choose_folder(
+        &self,
+        completion: collection_contract::ChooseCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::ChooseCollection {
+            pick: source::Pick::Folder,
+            completion,
+        })
     }
 
     fn apply_collection(
@@ -292,6 +305,7 @@ enum Work {
         completion: WallpaperApplyCompletion,
     },
     ChooseCollection {
+        pick: source::Pick,
         completion: collection_contract::ChooseCompletion,
     },
     ApplyCollection {
@@ -333,7 +347,7 @@ impl Job {
             Work::Apply { completion, .. } => {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
-            Work::ChooseCollection { completion } => {
+            Work::ChooseCollection { completion, .. } => {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
             Work::ApplyCollection { completion, .. } => {
@@ -532,10 +546,10 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     drop(flight);
                     finish(move || completion(result));
                 }
-                Work::ChooseCollection { completion } => {
+                Work::ChooseCollection { pick, completion } => {
                     current = None;
                     let result = catch_unwind(AssertUnwindSafe(|| {
-                        collection::Collection::choose(window.0, &mailbox).map(|selection| {
+                        collection::Collection::choose(window.0, pick, &mailbox).map(|selection| {
                             selection.map(|(selection, snapshot)| {
                                 current = Some(FileSelection::Collection(selection));
                                 snapshot

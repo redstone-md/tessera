@@ -36,7 +36,7 @@ impl Projection {
             Some(flight) if flight.operation == Operation::Choose => {
                 "Waiting for the Windows image picker… Choosing does not apply the image.".into()
             }
-            Some(flight) if matches!(flight.operation, Operation::ChooseCollection | Operation::ApplyCollection) => {
+            Some(flight) if matches!(flight.operation, Operation::ChooseCollection | Operation::ChooseFolder | Operation::ApplyCollection) => {
                 "A native collection request is pending. See global slideshow receipts below.".into()
             }
             Some(flight) if matches!(flight.operation, Operation::ReadSlideshow | Operation::AdvanceSlideshow(_)) => {
@@ -164,6 +164,10 @@ impl WallpaperController {
         publish!(
             set_wallpaper_collection_status,
             projection.collection.status
+        );
+        publish!(
+            set_wallpaper_collection_folder_caption,
+            projection.collection.folder_caption
         );
         publish!(
             set_wallpaper_slideshow_monitors,

@@ -60,12 +60,20 @@ pub struct Item {
     pub preview: Option<WallpaperPreview>,
 }
 
-/// An explicitly selected bounded group of 2..32 same-container native files.
-/// Applying consumes the whole group. No monitor selector is implied.
+/// A native source, never a UI path or locally enumerated folder inventory.
+/// Images contain 2..32 same-container files; a folder has no image count/preview.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    Images(Vec<Item>),
+    Folder { caption: String },
+}
+
+/// One explicitly selected source. Applying consumes its whole authority.
+/// Windows enumerates folder contents; no monitor selector is implied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selection {
     pub target: Target,
-    pub items: Vec<Item>,
+    pub source: Source,
 }
 
 /// Supported proposed transition intervals, not a fabricated native observation.
@@ -132,8 +140,9 @@ pub struct StateFacts {
 /// Global SetSlideshow and SetSlideshowOptions are separate, non-atomic effects.
 /// A rejected first step leaves options unsubmitted. After any native setter,
 /// partial receipts are preserved rather than collapsed to an error or rollback.
-/// Collection confirmation compares the native file-identity multiset, not order,
-/// image usability, current desktop pixels, or durable future file identity.
+/// Confirmation compares the native file-identity multiset or exact native folder
+/// identity, never order, folder contents, image usability, current desktop pixels,
+/// or durable future file identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApplyOutcome {
     pub collection: NativeStep,

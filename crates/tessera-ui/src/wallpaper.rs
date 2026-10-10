@@ -41,6 +41,7 @@ enum Operation {
     Choose,
     Apply,
     ChooseCollection,
+    ChooseFolder,
     ApplyCollection,
     ReadSlideshow,
     AdvanceSlideshow(native_slideshow::Direction),
@@ -55,6 +56,7 @@ enum Request {
         requested: u32,
     },
     ChooseCollection,
+    ChooseFolder,
     ApplyCollection {
         target: native_collection::Target,
         options: native_collection::Options,
@@ -87,6 +89,7 @@ enum Reply {
     Chosen(Result<Option<PreparedSelection>, WallpaperError>),
     Applied(Result<WallpaperApplyOutcome, WallpaperError>),
     CollectionChosen(Result<Option<native_collection::Selection>, WallpaperError>),
+    FolderChosen(Result<Option<native_collection::Selection>, WallpaperError>),
     CollectionApplied(Result<native_collection::ApplyOutcome, WallpaperError>),
     SlideshowRead(Result<native_slideshow::Observation, WallpaperError>),
     SlideshowAdvanced(Result<native_slideshow::AdvanceOutcome, WallpaperError>),
@@ -229,6 +232,12 @@ impl WallpaperController {
             panel.on_wallpaper_collection_choose_requested(move || {
                 if let Some(actor) = weak.upgrade() {
                     actor.request(Operation::ChooseCollection);
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_collection_folder_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::ChooseFolder);
                 }
             });
             let weak = Rc::downgrade(&actor);
@@ -422,6 +431,10 @@ impl WallpaperController {
         clear!(set_wallpaper_collection_apply_enabled, false);
         clear!(set_wallpaper_collection_command_available, false);
         clear!(set_wallpaper_collection_items, slint::ModelRc::default());
+        clear!(
+            set_wallpaper_collection_folder_caption,
+            slint::SharedString::default()
+        );
         clear!(set_wallpaper_collection_interval_index, -1);
         clear!(set_wallpaper_collection_shuffle, false);
         clear!(
@@ -478,6 +491,10 @@ impl WallpaperController {
                 Operation::ChooseCollection => {
                     panel.get_wallpaper_collection_choose_input_active()
                         && panel.get_wallpaper_collection_choose_control_visible()
+                }
+                Operation::ChooseFolder => {
+                    panel.get_wallpaper_collection_folder_input_active()
+                        && panel.get_wallpaper_collection_folder_control_visible()
                 }
                 Operation::ApplyCollection => {
                     panel.get_wallpaper_collection_apply_input_active()
@@ -640,6 +657,9 @@ fn error_notice(operation: Operation, error: WallpaperError) -> &'static str {
         }
         (Operation::ChooseCollection, WallpaperError::Unavailable) => {
             "The native collection picker or validation is unavailable. No group is selected; choose 2–32 images in one folder again."
+        }
+        (Operation::ChooseFolder, WallpaperError::Unavailable) => {
+            "The native folder picker or validation is unavailable. No folder is selected; choose a fresh actual filesystem folder."
         }
         (Operation::ApplyCollection, WallpaperError::Unavailable) => {
             "The native slideshow request is unavailable. Some SDK effects may already have occurred; actual Windows policy is unknown. No rollback or retry was performed."

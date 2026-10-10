@@ -249,20 +249,27 @@ export component Panel inherits Window {
     in property <bool> wallpaper-collection-apply-enabled;
     in property <bool> wallpaper-collection-command-available: false;
     in property <[WallpaperCollectionItem]> wallpaper-collection-items;
+    in property <string> wallpaper-collection-folder-caption;
     in-out property <int> wallpaper-collection-interval-index: -1;
     in-out property <bool> wallpaper-collection-shuffle: false;
     in property <string> wallpaper-collection-status: "No current collection. Native slideshow policy has not been read.";
     out property <bool> wallpaper-collection-choose-input-active;
     out property <bool> wallpaper-collection-apply-input-active;
+    out property <bool> wallpaper-collection-folder-input-active;
     property <bool> wallpaper-collection-choose-clip;
     property <bool> wallpaper-collection-apply-clip;
+    property <bool> wallpaper-collection-folder-clip;
     out property <bool> wallpaper-collection-choose-control-visible:
         root.wallpaper-page-visible && root.wallpaper-available
         && root.wallpaper-collection-choose-clip;
     out property <bool> wallpaper-collection-apply-control-visible:
         root.wallpaper-page-visible && root.wallpaper-available
         && root.wallpaper-collection-apply-clip;
+    out property <bool> wallpaper-collection-folder-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-collection-folder-clip;
     callback wallpaper-collection-choose-requested();
+    callback wallpaper-collection-folder-requested();
     callback wallpaper-collection-apply-requested();
     callback wallpaper-collection-interval-changed(int);
     callback wallpaper-collection-shuffle-changed();
@@ -1137,6 +1144,45 @@ export component Panel inherits Window {
                             }
                         }
                         if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
+                            label: "Folder slideshow source";
+                            description: "Choose one actual filesystem folder in the native Windows picker. This replaces the file draft, not the separate current-policy observation. Choosing does not start a slideshow or enumerate images.";
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-collection-folder-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 100px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-collection-controls-enabled && !root.wallpaper-busy;
+                                accessible-text: "Choose a native Windows slideshow folder";
+                                accessible-description: "Select one filesystem folder. Windows manages its contents; no image count or folder thumbnail is assumed.";
+                                clicked => {
+                                    root.wallpaper-collection-folder-input-active =
+                                        root.wallpaper-collection-folder-control-visible
+                                        && root.wallpaper-collection-controls-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-collection-folder-input-active { root.wallpaper-collection-folder-requested(); }
+                                    root.wallpaper-collection-folder-input-active = false;
+                                }
+                                Text {
+                                    text: "Choose folder";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-collection-command-available
+                            && root.wallpaper-collection-folder-caption != "": SettingsRow {
+                            label: "Selected native folder";
+                            description: root.wallpaper-collection-folder-caption
+                                + "\nWindows manages/enumerates folder contents; image count unavailable. This is a readonly native caption, not a path or image inventory.";
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
                             label: "Global Windows slideshow";
                             description: "Start enables the desktop background and changes Windows slideshow policy globally for system monitors, including future monitors—not the image's captured display subset. Windows owns scheduling and persistence. Save and Cancel do not apply or undo it.\n"
                                 + root.wallpaper-collection-status;
@@ -1181,7 +1227,7 @@ export component Panel inherits Window {
                                 enabled: root.wallpaper-collection-controls-enabled
                                     && root.wallpaper-collection-apply-enabled && !root.wallpaper-busy;
                                 accessible-text: "Start Windows slideshow globally now";
-                                accessible-description: "Enables the desktop background and sets the selected collection and proposed options globally, including future monitors. The two SDK writes may partially succeed. " + root.wallpaper-collection-status;
+                                accessible-description: "Enables the desktop background and sets the selected native images or folder and proposed options globally, including future monitors. The two SDK writes may partially succeed. " + root.wallpaper-collection-status;
                                 clicked => {
                                     root.wallpaper-collection-apply-input-active =
                                         root.wallpaper-collection-apply-control-visible
@@ -1221,7 +1267,8 @@ export component Panel inherits Window {
                             }
                         }
                         if root.wallpaper-available && !SeelenPalette.reference-mode
-                            && root.wallpaper-collection-command-available: VerticalLayout {
+                            && root.wallpaper-collection-command-available
+                            && root.wallpaper-collection-folder-caption == "": VerticalLayout {
                             spacing: 8px;
                             for item in root.wallpaper-collection-items: SettingsRow {
                                 label: item.caption;
