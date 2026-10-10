@@ -12,12 +12,18 @@ use slint::ComponentHandle;
 use tessera_system::wallpaper::{
     WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
     WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
-    WallpaperSelection,
 };
 
 use crate::DesktopHost;
 use crate::application_menu::WindowFrame;
 use crate::generated::Panel;
+
+mod colors;
+mod image;
+mod presentation;
+mod selection;
+
+use selection::{PreparedSelection, SelectedImage};
 
 #[derive(Clone, Copy, PartialEq)]
 struct Session {
@@ -52,100 +58,13 @@ struct Flight {
 }
 
 enum Reply {
-    Chosen(Result<Option<WallpaperSelection>, WallpaperError>),
+    Chosen(Result<Option<PreparedSelection>, WallpaperError>),
     Applied(Result<WallpaperApplyOutcome, WallpaperError>),
 }
 
 struct Receipt {
     ticket: u64,
     reply: Reply,
-}
-
-/// Display indices resolve only inside this validated, native-issued selection.
-struct SelectedImage {
-    image: WallpaperSelection,
-    scope: WallpaperApplyScope,
-}
-
-impl SelectedImage {
-    fn new(mut image: WallpaperSelection) -> Option<Self> {
-        if !(1..=32).contains(&image.monitors.len())
-            || image.monitors.iter().enumerate().any(|(index, monitor)| {
-                image.monitors[..index]
-                    .iter()
-                    .any(|previous| previous.target == monitor.target)
-            })
-        {
-            return None;
-        }
-        image.caption = bounded_caption(&image.caption, 96)?;
-        for monitor in &mut image.monitors {
-            // Native ID plus RECT metadata is bounded; never invent a label
-            // for an empty or malformed descriptor.
-            if monitor.caption.chars().count() > 256 {
-                return None;
-            }
-            monitor.caption = bounded_caption(&monitor.caption, 256)?;
-        }
-        Some(Self {
-            image,
-            scope: WallpaperApplyScope::AllCaptured,
-        })
-    }
-
-    fn scope_at(&self, index: i32) -> Option<WallpaperApplyScope> {
-        if index == 0 {
-            return Some(WallpaperApplyScope::AllCaptured);
-        }
-        let index = usize::try_from(index).ok()?.checked_sub(1)?;
-        self.image
-            .monitors
-            .get(index)
-            .map(|monitor| WallpaperApplyScope::Monitor(monitor.target.clone()))
-    }
-
-    fn captions(&self) -> Vec<slint::SharedString> {
-        std::iter::once("All captured displays".into())
-            .chain(
-                self.image
-                    .monitors
-                    .iter()
-                    .map(|monitor| monitor.caption.as_str().into()),
-            )
-            .collect()
-    }
-
-    fn requested(&self) -> Option<u32> {
-        match &self.scope {
-            WallpaperApplyScope::AllCaptured => u32::try_from(self.image.monitors.len()).ok(),
-            WallpaperApplyScope::Monitor(target) => self
-                .image
-                .monitors
-                .iter()
-                .any(|monitor| &monitor.target == target)
-                .then_some(1),
-        }
-    }
-
-    fn notice(&self, scope: &WallpaperApplyScope) -> Option<String> {
-        let scope = match scope {
-            WallpaperApplyScope::AllCaptured => {
-                format!("all {} captured displays", self.image.monitors.len())
-            }
-            WallpaperApplyScope::Monitor(target) => {
-                let monitor = self
-                    .image
-                    .monitors
-                    .iter()
-                    .find(|monitor| &monitor.target == target)?;
-                format!("captured display {}", monitor.caption)
-            }
-        };
-        Some(format!(
-            "Selected: {}. Scope: {}. Image usability is checked by Windows.",
-            self.image.caption, scope
-        ))
-    }
 }
 
 #[derive(Default)]
@@ -231,6 +150,12 @@ impl WallpaperController {
             panel.on_wallpaper_monitor_changed(move |index| {
                 if let Some(actor) = weak.upgrade() {
                     actor.monitor_changed(index);
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_colors_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.preview_colors();
                 }
             });
             let weak = Rc::downgrade(&actor);
@@ -360,7 +285,19 @@ impl WallpaperController {
         }
         clear!(set_wallpaper_controls_enabled, false);
         clear!(set_wallpaper_apply_enabled, false);
+        clear!(set_wallpaper_colors_enabled, false);
         clear!(set_wallpaper_monitor_selection_available, false);
+        clear!(set_wallpaper_preview_available, false);
+        clear!(set_wallpaper_preview, slint::Image::default());
+        clear!(
+            set_wallpaper_preview_status,
+            "No current image selection.".into()
+        );
+        clear!(set_wallpaper_color_rgb, -1);
+        clear!(
+            set_wallpaper_colors_status,
+            "Choose a fresh image to preview its native thumbnail colors.".into()
+        );
         clear!(set_wallpaper_monitors, slint::ModelRc::default());
         clear!(set_wallpaper_monitor_index, -1);
         clear!(set_wallpaper_input_key, slint::SharedString::default());
@@ -583,6 +520,7 @@ impl WallpaperController {
                 Request::Choose => {
                     let completion: WallpaperChooseCompletion = Box::new(move |result| {
                         let _owner = owner;
+                        let result = result.map(|image| image.map(PreparedSelection::new));
                         deliver(&mailbox, &panel, flight.ticket, Reply::Chosen(result));
                     });
                     provider.choose(completion)
@@ -712,85 +650,6 @@ impl WallpaperController {
             self.stop_root();
         }
     }
-
-    fn project(&self, session: Session, intent: Option<Operation>) -> bool {
-        if self.projecting.replace(true) {
-            return false;
-        }
-        let _guard = ResetFlag(&self.projecting);
-        let (provider, busy, apply_enabled, captions, index, key, status) = {
-            let state = self.state.borrow();
-            let status = match state.flight.as_ref() {
-                Some(flight) if flight.session != session => {
-                    "A previous wallpaper request is pending. Its result will not be shown in this view.".into()
-                }
-                Some(flight) if flight.operation == Operation::Choose => {
-                    "Waiting for the Windows image picker… Choosing does not apply the image.".into()
-                }
-                Some(flight) => format!(
-                    "Requesting wallpaper on {} selected captured display(s)… Awaiting native path/file readback; rendered pixels are not checked.",
-                    flight.requested
-                ),
-                None if state.notice.is_empty() => {
-                    "Current Windows wallpaper has not been read. Choose an image to begin.".into()
-                }
-                None => state.notice.clone(),
-            };
-            (
-                state.provider.clone(),
-                state.flight.is_some(),
-                state.selection.is_some(),
-                state.monitor_captions.clone(),
-                if state.monitor_captions.is_empty() {
-                    -1
-                } else {
-                    state.monitor_index
-                },
-                state.sequence.to_string(),
-                status,
-            )
-        };
-        let Some(panel) = self.panel.upgrade() else {
-            return false;
-        };
-        let current = || {
-            self.current(session)
-                && self.provider_current(provider.as_ref())
-                && intent.is_none_or(|operation| self.intent_current(session, operation))
-        };
-        // No borrow crosses a setter; every setter is a possible reentry point.
-        macro_rules! publish {
-            ($setter:ident, $value:expr) => {
-                if !current() {
-                    return false;
-                }
-                panel.$setter($value);
-                if !current() {
-                    return false;
-                }
-            };
-        }
-        publish!(set_wallpaper_controls_enabled, false);
-        publish!(set_wallpaper_apply_enabled, false);
-        // Hide the stock selector as soon as its image authority is consumed.
-        // Pending readonly captions/index preserve final scope agreement only.
-        publish!(set_wallpaper_monitor_selection_available, apply_enabled);
-        publish!(
-            set_wallpaper_monitors,
-            slint::ModelRc::new(slint::VecModel::from(captions))
-        );
-        publish!(set_wallpaper_monitor_index, index);
-        publish!(set_wallpaper_available, provider.is_some());
-        publish!(set_wallpaper_busy, busy);
-        publish!(set_wallpaper_input_key, key.into());
-        publish!(set_wallpaper_status, status.into());
-        publish!(
-            set_wallpaper_apply_enabled,
-            provider.is_some() && !busy && apply_enabled
-        );
-        publish!(set_wallpaper_controls_enabled, provider.is_some() && !busy);
-        true
-    }
 }
 
 fn deliver(
@@ -827,19 +686,6 @@ fn outcome_notice(outcome: WallpaperApplyOutcome, requested: u32) -> String {
         outcome.failed,
         outcome.not_submitted,
     )
-}
-
-fn bounded_caption(value: &str, limit: usize) -> Option<String> {
-    let caption: String = value
-        .chars()
-        .filter(|character| {
-            !character.is_control()
-                && !matches!(*character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        })
-        .take(limit)
-        .collect();
-    let caption = caption.trim();
-    (!caption.is_empty()).then(|| caption.to_owned())
 }
 
 fn error_notice(operation: Operation, error: WallpaperError) -> &'static str {

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Native file authority stays on the STA; only bounded display text escapes.
+//! Native file authority stays on the STA; only bounded display metadata escapes.
 
 use std::mem::size_of;
 
-use tessera_system::wallpaper::WallpaperError;
+use tessera_system::wallpaper::{WallpaperError, WallpaperPreview};
 use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, GENERIC_READ, HANDLE, HWND};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -104,6 +104,13 @@ impl Image {
 
     pub(super) fn path(&self) -> PCWSTR {
         self.path.as_pcwstr()
+    }
+
+    pub(super) fn preview(&self) -> Result<Option<WallpaperPreview>, WallpaperError> {
+        // Keep this fresh exact-file lease across native handler acquisition,
+        // decoding and bitmap copy, in addition to the selection's own lease.
+        let _fresh_file = self.validate()?;
+        super::thumbnail::capture(&self.item, || self.validate().map(|_| ()))
     }
 
     /// Retain the fresh exact-file lease across the SDK write and readback.

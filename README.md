@@ -395,8 +395,12 @@ its opaque file selection to the exact captured display cohort or one selected
 native-issued member. The selector shows actual SDK device/rectangle metadata.
 This changes OS state immediately, not through Save/Cancel or a JSON mirror.
 Native acceptance, path/file readback, failures and unsubmitted monitors are
-reported separately; readback does not certify rendered pixels. Video,
-collections, thumbnails, per-workspace selection and accent extraction remain open.
+reported separately; readback does not certify rendered pixels. The selected
+file can supply a real bounded native Shell thumbnail. Explicit image-color
+Preview uses the maintained Material quantizer/scorer and existing HCT Save/Cancel;
+missing thumbnails/colors stay unavailable rather than using invented artwork
+or an unrelated default seed. Video, collections, collection thumbnails,
+per-workspace selection and automatic live accent adaptation remain open.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

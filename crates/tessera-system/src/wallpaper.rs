@@ -127,14 +127,80 @@ pub enum WallpaperApplyScope {
     Monitor(WallpaperMonitorTarget),
 }
 
+/// Bounded, read-only native thumbnail pixels, not file or effect authority.
+/// This does not establish what Windows rendered as the desktop wallpaper.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WallpaperPreview {
+    width: u32,
+    height: u32,
+    rgba: Arc<[u8]>,
+}
+
+impl WallpaperPreview {
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, WallpaperError> {
+        if !(1..=128).contains(&width) || !(1..=128).contains(&height) {
+            return Err(WallpaperError::Unavailable);
+        }
+        let bytes = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or(WallpaperError::Unavailable)?;
+        if rgba.len() != bytes {
+            return Err(WallpaperError::Unavailable);
+        }
+        let mut visible = false;
+        for pixel in rgba.chunks_exact(4) {
+            let alpha = pixel[3];
+            if pixel[..3].iter().any(|channel| *channel > alpha) {
+                return Err(WallpaperError::Unavailable);
+            }
+            visible |= alpha != 0;
+        }
+        if !visible {
+            return Err(WallpaperError::Unavailable);
+        }
+        Ok(Self {
+            width,
+            height,
+            rgba: rgba.into(),
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Canonical premultiplied RGBA, exactly `width * height * 4` bytes.
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+}
+
+impl std::fmt::Debug for WallpaperPreview {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WallpaperPreview")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("rgba_len", &self.rgba.len())
+            .finish()
+    }
+}
+
 /// Read-only native display metadata; `caption` grants no file authority.
-/// Selection does not promise a decoded image or a rendered thumbnail.
+/// The optional actual native thumbnail is not rendered-wallpaper proof.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WallpaperSelection {
     pub target: WallpaperImageTarget,
     pub caption: String,
     /// Between one and 32 actual native displays captured with this image.
     pub monitors: Vec<WallpaperMonitorSelection>,
+    pub preview: Option<WallpaperPreview>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

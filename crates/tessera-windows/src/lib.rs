@@ -56,6 +56,9 @@ mod native_audio;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_battery;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_bitmap;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_bluetooth;

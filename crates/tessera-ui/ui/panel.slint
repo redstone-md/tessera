@@ -74,6 +74,7 @@ component SettingsGroup inherits Rectangle {
 component SettingsRow inherits HorizontalLayout {
     in property <string> label;
     in property <string> description;
+    in property <length> controls-height: 24px;
     spacing: 12px;
     vertical-stretch: 0;
     VerticalLayout {
@@ -95,8 +96,8 @@ component SettingsRow inherits HorizontalLayout {
     HorizontalLayout {
         min-width: 150px;
         horizontal-stretch: 0;
-        min-height: 24px;
-        max-height: 24px;
+        min-height: root.controls-height;
+        max-height: root.controls-height;
         vertical-stretch: 0;
         spacing: 8px;
         alignment: end;
@@ -207,20 +208,32 @@ export component Panel inherits Window {
     in property <bool> wallpaper-monitor-selection-available: false;
     in property <[string]> wallpaper-monitors;
     in-out property <int> wallpaper-monitor-index: -1;
+    in property <bool> wallpaper-preview-available: false;
+    in property <image> wallpaper-preview;
+    in property <string> wallpaper-preview-status: "No current image selection.";
+    in property <bool> wallpaper-colors-enabled: false;
+    in property <int> wallpaper-color-rgb: -1;
+    in property <string> wallpaper-colors-status: "Choose a fresh image to preview its native thumbnail colors.";
     out property <bool> wallpaper-page-visible: root.selected-page == 1 && !SeelenPalette.reference-mode;
     out property <bool> wallpaper-choose-input-active;
     out property <bool> wallpaper-apply-input-active;
+    out property <bool> wallpaper-colors-input-active;
     // Live geometry stays independent of busy/enabled: admitted callbacks
     // temporarily disable controls before rechecking their actual clipping.
     property <bool> wallpaper-choose-clip;
     property <bool> wallpaper-apply-clip;
+    property <bool> wallpaper-colors-clip;
     out property <bool> wallpaper-choose-control-visible:
         root.wallpaper-page-visible && root.wallpaper-available && root.wallpaper-choose-clip;
     out property <bool> wallpaper-apply-control-visible:
         root.wallpaper-page-visible && root.wallpaper-available && root.wallpaper-apply-clip;
+    out property <bool> wallpaper-colors-control-visible: root.wallpaper-page-visible
+        && root.wallpaper-available && root.wallpaper-monitor-selection-available
+        && root.wallpaper-colors-clip;
     callback wallpaper-choose-requested();
     callback wallpaper-apply-requested();
     callback wallpaper-monitor-changed(int);
+    callback wallpaper-colors-requested();
     callback wallpaper-event-ready();
     callback wallpaper-view-changed();
     changed wallpaper-page-visible => { root.wallpaper-view-changed(); }
@@ -792,6 +805,54 @@ export component Panel inherits Window {
                                 model: root.wallpaper-monitors;
                                 current-index <=> root.wallpaper-monitor-index;
                                 selected(value) => { root.wallpaper-monitor-changed(self.current-index); }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-monitor-selection-available: SettingsRow {
+                            label: "Selected image preview";
+                            description: root.wallpaper-preview-status;
+                            controls-height: root.wallpaper-preview-available ? 96px : 24px;
+                            if root.wallpaper-preview-available: Image {
+                                width: 128px;
+                                height: 96px;
+                                horizontal-stretch: 0;
+                                source: root.wallpaper-preview;
+                                image-fit: contain;
+                                accessible-label: "Selected native Windows Shell thumbnail, not desktop-rendered wallpaper";
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-monitor-selection-available: SettingsRow {
+                            label: "Image colors";
+                            description: root.wallpaper-colors-status;
+                            wallpaper-colors := ViewportTileButton {
+                                fully-visible <=> root.wallpaper-colors-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 150px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-controls-enabled && root.wallpaper-colors-enabled
+                                    && !root.wallpaper-busy;
+                                accessible-text: "Preview selected image colors in Material only";
+                                accessible-description: root.wallpaper-colors-status;
+                                clicked => {
+                                    root.wallpaper-colors-input-active = root.wallpaper-colors-control-visible
+                                        && root.wallpaper-controls-enabled && root.wallpaper-colors-enabled
+                                        && !root.wallpaper-busy;
+                                    if root.wallpaper-colors-input-active { root.wallpaper-colors-requested(); }
+                                    root.wallpaper-colors-input-active = false;
+                                }
+                                Text {
+                                    text: "Preview image colors";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
                             }
                         }
                     }

@@ -27,6 +27,7 @@ use crate::single_flight::{Flight, FlightGate};
 
 mod displays;
 mod source;
+mod thumbnail;
 
 #[derive(Default)]
 pub(crate) struct NativeWallpaperHost {
@@ -463,6 +464,7 @@ impl Selection {
         };
         let desktop = displays::desktop()?;
         let topology = displays::Topology::capture(&desktop)?;
+        let preview = image.preview()?;
         let _fresh_file = image.validate()?;
         // Tokens bind only to these original descriptors. Fresh topology
         // equality remains descriptor-only, never newly minted ticket equality.
@@ -488,6 +490,7 @@ impl Selection {
             target: target.clone(),
             caption: image.caption.clone(),
             monitors,
+            preview,
         };
         Ok(Some((
             Self {
