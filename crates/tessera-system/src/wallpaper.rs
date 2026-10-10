@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Optional, immediate static-image wallpaper operations, not saved preferences.
+//! Optional immediate native image and global position operations, not saved preferences.
 
 use std::sync::{Arc, Weak};
+
+pub mod position;
 
 /// An opaque selection identity, never a filesystem path or monitor identifier.
 #[derive(Clone)]
@@ -258,4 +260,23 @@ pub trait WallpaperHost: Send + Sync {
         scope: WallpaperApplyScope,
         completion: WallpaperApplyCompletion,
     ) -> Result<(), WallpaperError>;
+
+    /// Explicit native read of the global Windows position policy. No idle read.
+    /// This does not consume or replace a selected image.
+    fn read_position(&self, _completion: position::ReadCompletion) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
+
+    /// Consume an exact issued position observation, revalidate its original
+    /// native state, and request a global policy change with fresh SDK readback.
+    /// Changes outside this provider can race the non-atomic SDK read/set pair.
+    /// This never uses a monitor selector or consumes an image selection.
+    fn set_position(
+        &self,
+        _target: position::Target,
+        _position: position::Position,
+        _completion: position::WriteCompletion,
+    ) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
 }

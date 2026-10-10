@@ -399,8 +399,13 @@ reported separately; readback does not certify rendered pixels. The selected
 file can supply a real bounded native Shell thumbnail. Explicit image-color
 Preview uses the maintained Material quantizer/scorer and existing HCT Save/Cancel;
 missing thumbnails/colors stay unavailable rather than using invented artwork
-or an unrelated default seed. Video, collections, collection thumbnails,
-per-workspace selection and automatic live accent adaptation remain open.
+or an unrelated default seed. Separate explicit Read/Apply controls manage the
+actual global Windows Center/Tile/Stretch/Fit/Fill/Span policy. This affects the
+system's monitors, not the image selector's captured subset, and is immediate OS
+state outside Save/Cancel. Writes consume an exact native observation, check its
+original position, and report setter acceptance separately from fresh readback.
+Video, collections, collection thumbnails, per-workspace selection and automatic
+live accent adaptation remain open.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

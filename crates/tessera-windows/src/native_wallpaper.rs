@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! One lazy STA owns the dialog, one protected selection and all wallpaper SDK
-//! effects. Its one-slot mailbox is event-backed; idle means infinite wait.
+//! One lazy STA owns the dialog, one protected selection and a separate global
+//! position observation. Its one-slot mailbox is event-backed; idle means wait.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -11,7 +11,7 @@ use tessera_system::wallpaper::{
     WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
     WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
     WallpaperImageTargetWeak, WallpaperMonitorSelection, WallpaperMonitorTarget,
-    WallpaperSelection,
+    WallpaperSelection, position as position_contract,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_FAILED, WAIT_OBJECT_0};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
@@ -26,6 +26,7 @@ use windows::core::{PCWSTR, w};
 use crate::single_flight::{Flight, FlightGate};
 
 mod displays;
+mod position;
 mod source;
 mod thumbnail;
 
@@ -54,6 +55,12 @@ impl NativeWallpaperHost {
             // A forged/retired token cannot start an owner or reach the SDK.
             return Err(WallpaperError::InvalidTarget);
         }
+        if let Work::SetPosition { target, .. } = &work
+            && inbox.position_issued.as_ref() != Some(target)
+        {
+            // Position tickets are independent of image/monitor authority.
+            return Err(WallpaperError::InvalidTarget);
+        }
         if inbox.job.is_some() {
             return Err(WallpaperError::Busy);
         }
@@ -76,9 +83,15 @@ impl NativeWallpaperHost {
         {
             inbox.failed = true;
             inbox.issued = None;
+            inbox.position_issued = None;
             return Err(WallpaperError::Unavailable);
         }
-        inbox.issued = None;
+        match &work {
+            Work::Choose { .. } | Work::Apply { .. } => inbox.issued = None,
+            Work::ReadPosition { .. } | Work::SetPosition { .. } => {
+                inbox.position_issued = None;
+            }
+        }
         inbox.job = Some(Job { work, flight });
         Ok(())
     }
@@ -98,6 +111,26 @@ impl WallpaperHost for NativeWallpaperHost {
         self.submit(Work::Apply {
             target,
             scope,
+            completion,
+        })
+    }
+
+    fn read_position(
+        &self,
+        completion: position_contract::ReadCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::ReadPosition { completion })
+    }
+
+    fn set_position(
+        &self,
+        target: position_contract::Target,
+        desired: position_contract::Position,
+        completion: position_contract::WriteCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::SetPosition {
+            target,
+            desired,
             completion,
         })
     }
@@ -128,6 +161,7 @@ struct Inbox {
     job: Option<Job>,
     wake: Option<WakeEvent>,
     issued: Option<Issuer>,
+    position_issued: Option<position_contract::Target>,
     retire_pending: bool,
 }
 
@@ -166,6 +200,14 @@ enum Work {
         scope: WallpaperApplyScope,
         completion: WallpaperApplyCompletion,
     },
+    ReadPosition {
+        completion: position_contract::ReadCompletion,
+    },
+    SetPosition {
+        target: position_contract::Target,
+        desired: position_contract::Position,
+        completion: position_contract::WriteCompletion,
+    },
 }
 
 struct Job {
@@ -181,6 +223,12 @@ impl Job {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
             Work::Apply { completion, .. } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::ReadPosition { completion } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::SetPosition { completion, .. } => {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
         }
@@ -284,6 +332,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .wake = Some(event);
     let mut current: Option<Selection> = None;
+    let mut current_position = position::Ledger::default();
     loop {
         let (job, closed, retired) = {
             let mut inbox = mailbox
@@ -350,6 +399,31 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     drop(flight);
                     finish(move || completion(result));
                 }
+                Work::ReadPosition { completion } => {
+                    let result = catch_unwind(AssertUnwindSafe(|| current_position.read()))
+                        .unwrap_or_else(|_| {
+                            current_position.clear();
+                            Err(WallpaperError::Unavailable)
+                        });
+                    publish_position_issuer(&mailbox, current_position.issuer());
+                    drop(flight);
+                    finish(move || completion(result));
+                }
+                Work::SetPosition {
+                    target,
+                    desired,
+                    completion,
+                } => {
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| current_position.set(target, desired)))
+                            .unwrap_or_else(|_| {
+                                current_position.clear();
+                                Err(WallpaperError::Unavailable)
+                            });
+                    publish_position_issuer(&mailbox, current_position.issuer());
+                    drop(flight);
+                    finish(move || completion(result));
+                }
             }
             continue;
         }
@@ -402,6 +476,18 @@ fn publish_issuer(mailbox: &Mailbox, target: Option<Issuer>) {
     };
 }
 
+fn publish_position_issuer(mailbox: &Mailbox, target: Option<position_contract::Target>) {
+    let mut inbox = mailbox
+        .inbox
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    inbox.position_issued = if inbox.closed || inbox.failed {
+        None
+    } else {
+        target
+    };
+}
+
 fn retirement_target(mailbox: &Arc<Mailbox>) -> WallpaperImageTarget {
     let mailbox = Arc::downgrade(mailbox);
     WallpaperImageTarget::with_retirement(move || {
@@ -429,6 +515,7 @@ fn fail_mailbox(mailbox: &Mailbox) {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         inbox.failed = true;
         inbox.issued = None;
+        inbox.position_issued = None;
         inbox.wake = None;
         inbox.job.take()
     };

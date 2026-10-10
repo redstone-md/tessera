@@ -237,6 +237,31 @@ export component Panel inherits Window {
     callback wallpaper-event-ready();
     callback wallpaper-view-changed();
     changed wallpaper-page-visible => { root.wallpaper-view-changed(); }
+    // Global Windows policy: explicit observation and immediate effect, never a saved draft.
+    in property <bool> wallpaper-position-available: false;
+    in property <bool> wallpaper-position-busy;
+    in property <bool> wallpaper-position-read-enabled;
+    in property <bool> wallpaper-position-apply-enabled;
+    in property <bool> wallpaper-position-desired-enabled;
+    in property <bool> wallpaper-position-command-available: false;
+    in-out property <int> wallpaper-position-desired-index: -1;
+    in property <string> wallpaper-position-observed: "Native current position has not been read.";
+    in property <string> wallpaper-position-status: "Read current explicitly; no default is assumed.";
+    in property <string> wallpaper-position-input-key;
+    out property <bool> wallpaper-position-read-input-active;
+    out property <bool> wallpaper-position-apply-input-active;
+    property <bool> wallpaper-position-read-clip;
+    property <bool> wallpaper-position-apply-clip;
+    out property <bool> wallpaper-position-read-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-position-available
+        && root.wallpaper-position-read-clip;
+    out property <bool> wallpaper-position-apply-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-position-available
+        && root.wallpaper-position-apply-clip;
+    callback wallpaper-position-read-requested();
+    callback wallpaper-position-apply-requested();
+    callback wallpaper-position-desired-changed(int);
+    callback wallpaper-position-event-ready();
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -853,6 +878,83 @@ export component Panel inherits Window {
                                     vertical-alignment: center;
                                     accessible-role: none;
                                 }
+                            }
+                        }
+                        if root.wallpaper-position-available && !SeelenPalette.reference-mode: SettingsRow {
+                            label: "Global Windows position";
+                            description: "Apply changes the global wallpaper position immediately on the system's monitors, including future monitors. It does not use the image's captured display selector. Save and Cancel do not apply or undo it.\n"
+                                + root.wallpaper-position-observed + "\n" + root.wallpaper-position-status;
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-position-read-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 100px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-position-input-key;
+                                enabled: root.wallpaper-position-available
+                                    && root.wallpaper-position-read-enabled && !root.wallpaper-position-busy;
+                                accessible-text: "Read current global Windows wallpaper position";
+                                accessible-description: root.wallpaper-position-status;
+                                clicked => {
+                                    root.wallpaper-position-read-input-active = root.wallpaper-position-read-control-visible
+                                        && root.wallpaper-position-available
+                                        && root.wallpaper-position-read-enabled && !root.wallpaper-position-busy;
+                                    if root.wallpaper-position-read-input-active { root.wallpaper-position-read-requested(); }
+                                    root.wallpaper-position-read-input-active = false;
+                                }
+                                Text {
+                                    text: "Read current";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-position-apply-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 104px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-position-input-key;
+                                enabled: root.wallpaper-position-available
+                                    && root.wallpaper-position-apply-enabled && !root.wallpaper-position-busy;
+                                accessible-text: "Apply proposed Windows wallpaper position globally now";
+                                accessible-description: "Immediate global Windows effect, independent of Save, Cancel, and the image display selector. " + root.wallpaper-position-status;
+                                clicked => {
+                                    root.wallpaper-position-apply-input-active = root.wallpaper-position-apply-control-visible
+                                        && root.wallpaper-position-available
+                                        && root.wallpaper-position-apply-enabled && !root.wallpaper-position-busy;
+                                    if root.wallpaper-position-apply-input-active { root.wallpaper-position-apply-requested(); }
+                                    root.wallpaper-position-apply-input-active = false;
+                                }
+                                Text {
+                                    text: "Apply globally";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                        }
+                        if !SeelenPalette.reference-mode && root.wallpaper-position-command-available: SettingsRow {
+                            label: "Proposed global position";
+                            description: "This is only the proposed command. The separate native observation above is not changed until Apply and fresh native readback.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                enabled: root.wallpaper-position-desired-enabled && !root.wallpaper-position-busy;
+                                accessible-label: "Proposed global Windows wallpaper position";
+                                model: ["Center", "Tile", "Stretch", "Fit", "Fill", "Span"];
+                                current-index <=> root.wallpaper-position-desired-index;
+                                selected(value) => { root.wallpaper-position-desired-changed(self.current-index); }
                             }
                         }
                     }

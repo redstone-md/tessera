@@ -20,6 +20,7 @@ use crate::generated::Panel;
 
 mod colors;
 mod image;
+mod position;
 mod presentation;
 mod selection;
 
@@ -115,6 +116,7 @@ pub(crate) struct WallpaperController {
     projecting: Cell<bool>,
     acquiring: Cell<bool>,
     submitting: Cell<bool>,
+    position: Rc<position::PositionController>,
 }
 
 impl WallpaperController {
@@ -123,6 +125,7 @@ impl WallpaperController {
         panel: slint::Weak<Panel>,
         admission: Rc<dyn Fn() -> bool>,
     ) -> Rc<Self> {
+        let position = position::PositionController::new(panel.clone(), admission.clone());
         let actor = Rc::new(Self {
             host,
             panel,
@@ -132,6 +135,7 @@ impl WallpaperController {
             projecting: Cell::new(false),
             acquiring: Cell::new(false),
             submitting: Cell::new(false),
+            position,
         });
         if let Some(panel) = actor.panel.upgrade() {
             let weak = Rc::downgrade(&actor);
@@ -248,11 +252,15 @@ impl WallpaperController {
         };
         if !self.project(session, None) {
             self.stop_root();
+        } else {
+            let provider = self.state.borrow().provider.clone();
+            self.position.refresh_root(provider);
         }
     }
 
     /// Retire selection and input, but never cancel or replay an accepted native effect.
     pub(crate) fn stop_root(&self) {
+        self.position.stop_root();
         let (revision, retired) = {
             let mut state = self.state.borrow_mut();
             if state.session.take().is_some() || self.acquiring.get() {
