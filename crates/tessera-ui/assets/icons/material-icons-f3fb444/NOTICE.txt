@@ -1,4 +1,4 @@
-Google Material Icons — classic normal filled restart_alt
+Google Material Icons — classic normal filled restart_alt and bedtime
 
 Upstream: https://github.com/google/material-design-icons
 Immutable revision: f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d
@@ -10,6 +10,18 @@ Git blob: b764af7f5a906d6c176895343a2fbf7c32d7fa24
 SHA-256: 4e4163974c5b4182d4e20bbe6b3c55f5e7a88754175ecb6b8931c18443e5a84d
 The Git blob was matched against the immutable upstream Git tree member.
 Original 24x24 viewBox, transparent background path and two filled artwork paths are retained without SVG optimization, rewriting, title insertion or serialization.
+
+Additional unmodified original: src/image/bedtime/materialicons/24px.svg
+https://raw.githubusercontent.com/google/material-design-icons/f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d/src/image/bedtime/materialicons/24px.svg
+Local artwork: bedtime.svg
+Bytes: 311
+Git blob: e71c025377c25d79572a655a1560f133cf076789
+SHA-256: cc00f1c15e0015e4320ba9d660a82fa7306bd934a2751206a564b2f0e7695d82
+The bytes and Git blob were matched against the immutable upstream tree member.
+The original transparent 24x24 SVG is retained without optimization or rewriting.
+Material presentation uses this Apache-2.0 glyph for Suspend; it is not the Seelen
+BiMoon artwork or a claim of source-pixel equivalence. Neutral reference mode
+keeps its separately supplied (otherwise empty) icon and rights boundary.
 
 Full original Apache License Version 2.0 is retained in adjacent LICENSE:
 https://raw.githubusercontent.com/google/material-design-icons/f3fb4442b2a9afbedfe68bfa1ed80f178ca4f10d/LICENSE

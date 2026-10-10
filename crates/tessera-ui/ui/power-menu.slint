@@ -115,7 +115,7 @@ export component PowerMenuSurface inherits Window {
     in property <bool> updates-known-pending: false;
     in-out property <bool> install-updates: true;
     in property <string> updates-status: "";
-    // Canonical moon remains license-blocked; never substitute an approximation.
+    // Neutral BiMoon remains rights-blocked; Material uses independent Apache artwork.
     in property <image> suspend-icon;
     callback updates-choice-changed(bool);
     callback action-requested(PowerMenuAction);
@@ -440,7 +440,9 @@ export component PowerMenuSurface inherits Window {
                         text-line-height-factor: root.text-line-height-factor;
                         enabled: root.controls-enabled;
                         accessible-text: @tr("Suspend");
-                        icon-source: root.suspend-icon;
+                        icon-source: SeelenPalette.reference-mode || root.suspend-icon.width > 0
+                            ? root.suspend-icon
+                            : @image-url("../assets/icons/material-icons-f3fb444/bedtime.svg");
                         clicked => { root.action-requested(PowerMenuAction.Suspend); }
                         focus-acquired => { root.reveal-control(self.x, self.base-y, self.width, self.height); }
                     }
