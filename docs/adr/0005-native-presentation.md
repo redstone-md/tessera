@@ -104,6 +104,15 @@ enablement or next-sign-in execution. One bounded lazy owner does no idle work.
 External registry editors can race compare/write; uncertain readback is reported,
 never retried or silently rolled back.
 
+Development Dock/Toolbar auto-hide controls are applied-only native policy:
+Never, Always and OnOverlap reuse the existing visibility actor and one pointer
+watch. Drafts enter the single complete-record transaction only on explicit Save;
+Cancel restores applied modes and independent collection writes retain them.
+Current schema-6 `auto_hide` strings default to Dock OnOverlap/Toolbar Never and
+are omitted at those defaults; historical parsers retain their exact fields.
+Fullscreen suppression, unknown fail-visible policy and existing reveal/hide
+delays remain unchanged; saved intent does not certify hook delivery.
+
 `inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the shared DPI-scaled toolbar token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
 
 The immutable [alpha.10 CI run](https://github.com/redstone-md/tessera/actions/runs/37675695227) passed on Windows stable and Rust 1.92.0, including actual execution of the controlled toolbar green/offset-red/restored-green CLI fixture, and published only after native packaging/runtime preflight passed. This verifies the diagnostic feedback loop, not the cause or correction of the user's VM toolbar offset.

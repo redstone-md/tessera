@@ -381,6 +381,12 @@ through Settings Save/Cancel or a duplicate JSON flag. Registration does not pro
 Task Manager enablement, policy permission or next-sign-in execution.
 One lazy bounded owner reads only admitted General sessions/explicit Refresh;
 there is no idle polling, automatic retry or overwrite of another installation.
+
+Development Settings saves independent Dock/Toolbar Never, Always or On overlap
+modes through the existing full-record Save/Cancel transaction. Defaults remain
+Dock On overlap and Toolbar Never; default schema-6 keys are omitted. The same
+native visibility actor handles pointer reveal and delays, preserving fullscreen
+protection and fail-visible behavior when native hints are unavailable.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

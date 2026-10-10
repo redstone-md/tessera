@@ -382,6 +382,10 @@ impl PanelController {
         if !self.root_current() {
             return;
         }
+        self.project_bar_visibility_preferences(&panel);
+        if !self.root_current() {
+            return;
+        }
         if self.dock.is_some() {
             self.stop_startup_root();
             if !self.root_current() {

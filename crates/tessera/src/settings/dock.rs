@@ -3,6 +3,9 @@
 
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use tessera_system::visibility::AutoHideMode;
+
+use super::visibility::AutoHidePreference;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,13 +50,26 @@ impl<'de> Deserialize<'de> for DockMiddleClickAction {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct DockPreferences {
     media_enabled: bool,
     #[serde(skip_serializing_if = "is_unlocked")]
     locked: bool,
     #[serde(skip_serializing_if = "is_new_instance")]
     middle_click: DockMiddleClickAction,
+    #[serde(skip_serializing_if = "is_on_overlap")]
+    auto_hide: AutoHidePreference,
+}
+
+impl Default for DockPreferences {
+    fn default() -> Self {
+        Self {
+            media_enabled: false,
+            locked: false,
+            middle_click: DockMiddleClickAction::default(),
+            auto_hide: default_auto_hide(),
+        }
+    }
 }
 
 impl DockPreferences {
@@ -86,6 +102,17 @@ impl DockPreferences {
             ..self
         }
     }
+
+    pub(crate) fn auto_hide(&self) -> AutoHideMode {
+        self.auto_hide.mode()
+    }
+
+    pub(crate) fn with_auto_hide(self, mode: AutoHideMode) -> Self {
+        Self {
+            auto_hide: AutoHidePreference::new(mode),
+            ..self
+        }
+    }
 }
 
 fn is_unlocked(locked: &bool) -> bool {
@@ -94,6 +121,14 @@ fn is_unlocked(locked: &bool) -> bool {
 
 fn is_new_instance(action: &DockMiddleClickAction) -> bool {
     *action == DockMiddleClickAction::NewInstance
+}
+
+fn default_auto_hide() -> AutoHidePreference {
+    AutoHidePreference::new(AutoHideMode::OnOverlap)
+}
+
+fn is_on_overlap(preference: &AutoHidePreference) -> bool {
+    preference.mode() == AutoHideMode::OnOverlap
 }
 
 /// Older records admit only their original required media preference.
@@ -162,6 +197,8 @@ impl<'de> Deserialize<'de> for DockPreferences {
             locked: bool,
             #[serde(default)]
             middle_click: DockMiddleClickAction,
+            #[serde(default = "default_auto_hide")]
+            auto_hide: AutoHidePreference,
         }
 
         struct DockObject;
@@ -182,6 +219,7 @@ impl<'de> Deserialize<'de> for DockPreferences {
                     media_enabled: fields.media_enabled,
                     locked: fields.locked,
                     middle_click: fields.middle_click,
+                    auto_hide: fields.auto_hide,
                 })
             }
         }

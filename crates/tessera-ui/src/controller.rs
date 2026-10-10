@@ -21,6 +21,7 @@ use crate::{
 
 mod actions;
 mod application_menu;
+mod bar_visibility;
 mod battery;
 mod calendar;
 mod context_menu;
@@ -395,6 +396,9 @@ impl PanelController {
         let applied = self.core.applied_preferences();
         panel.set_dock_middle_click_index(applied.dock_middle_click().index());
         panel.set_telemetry_enabled(applied.telemetry_enabled());
+        self.project_bar_visibility_preferences(panel);
+        let visibility_available = self.visibility.borrow().is_some();
+        panel.set_bar_visibility_available(visibility_available);
         panel.set_dock_preferences_available(self.dock.is_some());
         let telemetry_available = self.core.host().telemetry_host().is_some();
         panel.set_telemetry_available(telemetry_available);
@@ -1648,6 +1652,10 @@ impl PanelController {
             self.report_message("Could not save preferences: invalid middle-click choice.");
             return;
         };
+        let Some(visibility) = self.draft_bar_visibility_preferences(&panel) else {
+            self.report_message("Could not save preferences: invalid auto-hide choice.");
+            return;
+        };
         let preferences = self
             .core
             .applied_preferences()
@@ -1660,6 +1668,7 @@ impl PanelController {
             .with_general(crate::GeneralPreferences::default().with_start_of_week(start))
             .with_dock_middle_click(middle)
             .with_telemetry_enabled(panel.get_telemetry_enabled())
+            .with_bar_visibility(visibility)
             .with_shortcuts(self.shortcut_draft());
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {

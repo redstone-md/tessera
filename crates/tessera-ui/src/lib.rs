@@ -237,6 +237,37 @@ impl DockMiddleClickAction {
     }
 }
 
+/// Applied native bar visibility policy, independent of the Settings draft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BarVisibilityPreferences {
+    dock: tessera_system::visibility::AutoHideMode,
+    toolbar: tessera_system::visibility::AutoHideMode,
+}
+
+impl Default for BarVisibilityPreferences {
+    fn default() -> Self {
+        use tessera_system::visibility::AutoHideMode;
+        Self::new(AutoHideMode::OnOverlap, AutoHideMode::Never)
+    }
+}
+
+impl BarVisibilityPreferences {
+    pub fn new(
+        dock: tessera_system::visibility::AutoHideMode,
+        toolbar: tessera_system::visibility::AutoHideMode,
+    ) -> Self {
+        Self { dock, toolbar }
+    }
+
+    pub fn dock(self) -> tessera_system::visibility::AutoHideMode {
+        self.dock
+    }
+
+    pub fn toolbar(self) -> tessera_system::visibility::AutoHideMode {
+        self.toolbar
+    }
+}
+
 /// Complete panel preferences, persisted by the host on explicit user actions.
 ///
 /// Dock pins and ordered launcher favorites are independent collections.
@@ -257,6 +288,7 @@ pub struct PanelPreferences {
     dock_locked: bool,
     dock_middle_click: DockMiddleClickAction,
     telemetry_enabled: bool,
+    bar_visibility: BarVisibilityPreferences,
     shortcuts: tessera_system::shortcuts::ShortcutConfig,
 }
 
@@ -275,6 +307,7 @@ impl PanelPreferences {
             dock_locked: false,
             dock_middle_click: DockMiddleClickAction::default(),
             telemetry_enabled: false,
+            bar_visibility: BarVisibilityPreferences::default(),
             shortcuts: tessera_system::shortcuts::ShortcutConfig::default(),
         }
     }
@@ -356,6 +389,15 @@ impl PanelPreferences {
 
     pub fn with_telemetry_enabled(mut self, enabled: bool) -> Self {
         self.telemetry_enabled = enabled;
+        self
+    }
+
+    pub fn bar_visibility(&self) -> BarVisibilityPreferences {
+        self.bar_visibility
+    }
+
+    pub fn with_bar_visibility(mut self, visibility: BarVisibilityPreferences) -> Self {
+        self.bar_visibility = visibility;
         self
     }
 

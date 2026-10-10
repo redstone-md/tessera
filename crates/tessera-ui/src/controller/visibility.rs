@@ -166,6 +166,17 @@ impl PanelController {
         if !published {
             actor.close();
         }
+        if published && let Some(panel) = self.panel.upgrade() {
+            panel.set_bar_visibility_available(true);
+        }
+    }
+
+    fn applied_visibility_config(&self) -> VisibilityConfig {
+        let preferences = self.core.applied_preferences().bar_visibility();
+        let mut config = VisibilityConfig::default();
+        config.dock.mode = preferences.dock();
+        config.toolbar.mode = preferences.toolbar();
+        config
     }
 
     pub(super) fn visibility_for_geometry(
@@ -249,7 +260,7 @@ impl PanelController {
                 ..BarFacts::default()
             };
             actor.update(
-                VisibilityConfig::default(),
+                self.applied_visibility_config(),
                 Some(VisibilityGeometry {
                     revision,
                     monitor: placement.monitor,
@@ -305,7 +316,7 @@ impl PanelController {
         let actor = self.visibility.borrow().clone();
         if let Some(actor) = actor {
             actor.update(
-                VisibilityConfig::default(),
+                self.applied_visibility_config(),
                 None,
                 VisibilityObservations::default(),
             );

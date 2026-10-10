@@ -13,6 +13,7 @@ mod dock;
 mod general;
 mod shortcuts;
 mod toolbar;
+mod visibility;
 
 use shortcuts::ShortcutPreferences;
 use tessera_system::shortcuts::ShortcutConfig;
@@ -288,6 +289,30 @@ impl Preferences {
 
     pub(crate) fn with_telemetry_enabled(mut self, enabled: bool) -> Self {
         self.toolbar = self.toolbar.with_telemetry_enabled(enabled);
+        self
+    }
+
+    pub(crate) fn dock_auto_hide(&self) -> tessera_system::visibility::AutoHideMode {
+        self.dock.auto_hide()
+    }
+
+    pub(crate) fn with_dock_auto_hide(
+        mut self,
+        mode: tessera_system::visibility::AutoHideMode,
+    ) -> Self {
+        self.dock = self.dock.with_auto_hide(mode);
+        self
+    }
+
+    pub(crate) fn toolbar_auto_hide(&self) -> tessera_system::visibility::AutoHideMode {
+        self.toolbar.auto_hide()
+    }
+
+    pub(crate) fn with_toolbar_auto_hide(
+        mut self,
+        mode: tessera_system::visibility::AutoHideMode,
+    ) -> Self {
+        self.toolbar = self.toolbar.with_auto_hide(mode);
         self
     }
 

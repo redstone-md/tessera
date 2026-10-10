@@ -154,6 +154,9 @@ export component Panel inherits Window {
     in-out property <int> dock-middle-click-index: 0;
     in property <bool> telemetry-available: false;
     in-out property <bool> telemetry-enabled: false;
+    in property <bool> bar-visibility-available: false;
+    in-out property <int> dock-auto-hide-index: 2;
+    in-out property <int> toolbar-auto-hide-index: 0;
     // OS registration is immediate and deliberately separate from Save/Cancel.
     in property <bool> startup-available: false;
     in property <bool> startup-busy;
@@ -501,6 +504,18 @@ export component Panel inherits Window {
                             start-of-week-index <=> root.start-of-week-index;
                             compact: root.compact;
                         }
+                        if root.bar-visibility-available: SettingsRow {
+                            label: "Toolbar auto-hide";
+                            description: "Apply after Save; fullscreen protection remains; unavailable native hints keep bars visible.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Toolbar auto-hide after Save";
+                                model: ["Never", "Always", "On overlap"];
+                                current-index <=> root.toolbar-auto-hide-index;
+                            }
+                        }
                         if root.telemetry-available: SettingsRow {
                             label: "CPU and RAM";
                             description: "Sample once per second while the Toolbar is shown. Enable after Save.";
@@ -624,6 +639,18 @@ export component Panel inherits Window {
                                 accessible-label: "Dock edge (saved with preferences)";
                                 model: ["Bottom", "Top", "Left", "Right"];
                                 current-index <=> root.dock-edge-index;
+                            }
+                        }
+                        if root.bar-visibility-available: SettingsRow {
+                            label: "Dock auto-hide";
+                            description: "Apply after Save; fullscreen protection remains; unavailable native hints keep bars visible.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Dock auto-hide after Save";
+                                model: ["Never", "Always", "On overlap"];
+                                current-index <=> root.dock-auto-hide-index;
                             }
                         }
                         if root.dock-preferences-available: SettingsRow {

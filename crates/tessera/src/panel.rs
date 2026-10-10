@@ -80,6 +80,8 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         .with_dock_locked(preferences.dock_locked())
         .with_dock_middle_click(middle)
         .with_telemetry_enabled(preferences.telemetry_enabled())
+        .with_dock_auto_hide(preferences.bar_visibility().dock())
+        .with_toolbar_auto_hide(preferences.bar_visibility().toolbar())
         .with_shortcuts(preferences.shortcuts().clone())
 }
 
@@ -127,6 +129,10 @@ fn to_ui_preferences(
         .with_dock_locked(preferences.dock_locked())
         .with_dock_middle_click(middle)
         .with_telemetry_enabled(preferences.telemetry_enabled())
+        .with_bar_visibility(tessera_ui::BarVisibilityPreferences::new(
+            preferences.dock_auto_hide(),
+            preferences.toolbar_auto_hide(),
+        ))
         .with_shortcuts(preferences.shortcuts().clone())
         .with_launcher_favorites(preferences.launcher_favorites().to_vec())
 }

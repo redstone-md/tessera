@@ -3,10 +3,24 @@
 
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use tessera_system::visibility::AutoHideMode;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+use super::visibility::AutoHidePreference;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) struct ToolbarPreferences {
     telemetry_enabled: bool,
+    #[serde(skip_serializing_if = "is_never")]
+    auto_hide: AutoHidePreference,
+}
+
+impl Default for ToolbarPreferences {
+    fn default() -> Self {
+        Self {
+            telemetry_enabled: false,
+            auto_hide: default_auto_hide(),
+        }
+    }
 }
 
 impl ToolbarPreferences {
@@ -19,9 +33,28 @@ impl ToolbarPreferences {
         self
     }
 
-    pub(crate) fn is_default(&self) -> bool {
-        !self.telemetry_enabled
+    pub(crate) fn auto_hide(&self) -> AutoHideMode {
+        self.auto_hide.mode()
     }
+
+    pub(crate) fn with_auto_hide(self, mode: AutoHideMode) -> Self {
+        Self {
+            auto_hide: AutoHidePreference::new(mode),
+            ..self
+        }
+    }
+
+    pub(crate) fn is_default(&self) -> bool {
+        !self.telemetry_enabled && self.auto_hide() == AutoHideMode::Never
+    }
+}
+
+fn default_auto_hide() -> AutoHidePreference {
+    AutoHidePreference::new(AutoHideMode::Never)
+}
+
+fn is_never(preference: &AutoHidePreference) -> bool {
+    preference.mode() == AutoHideMode::Never
 }
 
 impl<'de> Deserialize<'de> for ToolbarPreferences {
@@ -33,6 +66,8 @@ impl<'de> Deserialize<'de> for ToolbarPreferences {
         #[serde(deny_unknown_fields)]
         struct Fields {
             telemetry_enabled: bool,
+            #[serde(default = "default_auto_hide")]
+            auto_hide: AutoHidePreference,
         }
 
         struct ToolbarObject;
@@ -51,6 +86,7 @@ impl<'de> Deserialize<'de> for ToolbarPreferences {
                 let fields = Fields::deserialize(MapAccessDeserializer::new(map))?;
                 Ok(ToolbarPreferences {
                     telemetry_enabled: fields.telemetry_enabled,
+                    auto_hide: fields.auto_hide,
                 })
             }
         }
