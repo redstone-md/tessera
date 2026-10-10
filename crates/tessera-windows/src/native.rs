@@ -38,10 +38,12 @@ use crate::snapshot::{DesktopSnapshot, MonitorId, ObservedMonitor, ObservedWindo
 
 pub(crate) fn observe() -> Result<DesktopSnapshot, ObservationError> {
     let _dpi = DpiGuard::enter()?;
+    let properties = crate::native_properties::PropertyApartment::acquire();
     // SAFETY: this query has no pointer parameters or failure case.
     let process_id = unsafe { GetCurrentProcessId() };
     let mut observer = Observer {
         process_id,
+        window_properties_ready: properties.is_some(),
         ..Default::default()
     };
     let context = &mut observer as *mut Observer as LPARAM;
@@ -161,6 +163,7 @@ impl Drop for DpiGuard {
 #[derive(Default)]
 struct Observer {
     process_id: u32,
+    window_properties_ready: bool,
     monitors: Vec<ObservedMonitor>,
     windows: Vec<ObservedWindow>,
     warnings: Vec<ObservationWarning>,
@@ -308,12 +311,19 @@ impl Observer {
             .find(|monitor| monitor.id().value() == monitor_handle as usize as u64);
         let covers =
             monitor.is_some_and(|monitor| covers_monitor(bounds, minimized, monitor.bounds()));
-        let identity = self
+        // Retain the process object through collection, even when a window has
+        // its own explicit AppID. Metadata never authorizes a native effect.
+        let process_identity = self
             .process_identities
             .entry(process_id)
             .or_insert_with(|| process_application_identity(process_id))
             .as_ref()
             .and_then(|process| process.identity.clone());
+        let identity = if self.window_properties_ready {
+            window_application_identity(hwnd).or(process_identity)
+        } else {
+            process_identity
+        };
         // Do not associate metadata with a recycled HWND during collection.
         let mut current_process = 0;
         if unsafe { GetWindowThreadProcessId(hwnd, &mut current_process) } != 0
@@ -338,6 +348,33 @@ impl Observer {
         });
         Ok(())
     }
+}
+
+/// Explicit per-window AppIDs distinguish hosted apps sharing one executable.
+fn window_application_identity(hwnd: HWND) -> Option<String> {
+    use windows::Win32::Foundation::{HWND as PropertyWindow, PROPERTYKEY};
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        IPropertyStore, SHGetPropertyStoreForWindow,
+    };
+    use windows::core::GUID;
+
+    const APP_ID: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+        pid: 5,
+    };
+    // SAFETY: synchronous read of documented Shell metadata; the final PID
+    // check in collection rejects a window recycled during these reads.
+    let store =
+        unsafe { SHGetPropertyStoreForWindow::<IPropertyStore>(PropertyWindow(hwnd)) }.ok()?;
+    let identity = crate::native_properties::string_property(&store, &APP_ID, 128).ok()?;
+    if identity.is_empty()
+        || identity
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return None;
+    }
+    Some(format!("aumid:{identity}"))
 }
 
 /// The handle pins the process object for the entire request-local cache,

@@ -271,11 +271,12 @@ from the existing pinned icon family, with its original source hash and license.
 This is an independent Material glyph, not the rights-blocked Seelen BiMoon;
 neutral reference mode still keeps its own supplied or empty decoration.
 
-Development Dock groups only OS-observed application identities, keeps full
-member counters and an owned selectable window menu, and matches running pins
-only by exact AUMID. Executable paths group windows but never become launch
-commands. Missing identity keeps separate windows. The selected member has a
-real, scoped DWM thumbnail; protected/unavailable previews remain honest and
+Development Dock groups only OS-observed application identities: an explicit
+per-window AppID takes precedence over process AppID/executable, including apps
+sharing a host process. Full member counters and an owned selectable window
+menu remain. Running pins match only exact AUMID; executable grouping never
+becomes a launch command. Missing identity keeps separate windows. The selected
+member has a real, scoped DWM thumbnail; protected/unavailable previews remain honest and
 do not disable window actions.
 
 Development Quick Settings adds active input/output devices, selected-device

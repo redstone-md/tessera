@@ -23,9 +23,6 @@ use windows::Win32::Media::Audio::{
     IAudioSessionNotification, IAudioSessionNotification_Impl, IMMDevice, IMMDeviceEnumerator,
     ISimpleAudioVolume, eCommunications, eConsole, eMultimedia,
 };
-use windows::Win32::System::Com::StructuredStorage::{
-    PROPVARIANT, PropVariantClear, PropVariantToStringAlloc,
-};
 use windows::Win32::System::Com::{CLSCTX_ALL, STGM_READ};
 use windows::Win32::UI::Shell::{
     SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
@@ -769,15 +766,6 @@ fn display_name(control: &IAudioSessionControl2) -> Option<String> {
         .and_then(|value| task_text(TaskString(value)).ok())
 }
 
-struct PropertyValue(PROPVARIANT);
-
-impl Drop for PropertyValue {
-    fn drop(&mut self) {
-        // Exactly one clear for every successful GetValue, including conversion failure.
-        let _ = unsafe { PropVariantClear(&mut self.0) };
-    }
-}
-
 fn friendly_name(device: &IMMDevice) -> Result<String, AudioError> {
     const FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
         fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
@@ -785,14 +773,8 @@ fn friendly_name(device: &IMMDevice) -> Result<String, AudioError> {
     };
     let store = unsafe { device.OpenPropertyStore(STGM_READ) }
         .map_err(|error| native_error("Open audio endpoint properties", error))?;
-    let value = PropertyValue(
-        unsafe { store.GetValue(&FRIENDLY_NAME) }
-            .map_err(|error| native_error("Read audio endpoint name", error))?,
-    );
-    let converted = unsafe { PropVariantToStringAlloc(&value.0) };
-    let allocation =
-        converted.map_err(|error| native_error("Decode audio endpoint name", error))?;
-    task_text(TaskString(allocation))
+    crate::native_properties::string_property(&store, &FRIENDLY_NAME, 32768)
+        .map_err(|error| native_error("Read audio endpoint name", error))
 }
 
 fn roles(enumerator: &IMMDeviceEnumerator, flow: AudioFlow) -> AudioDefaultRoles {

@@ -86,6 +86,9 @@ mod native_power_updates;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_profile;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_properties;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_recycle_bin;
