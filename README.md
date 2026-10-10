@@ -333,6 +333,13 @@ accepted/failed/not-submitted requests, not guaranteed visible completion.
 The optional schema-6 `dock.middle_click` string is omitted at its default;
 older-schema groups still reject it. Draft choices apply only after Save.
 
+Development pinned-app menus asynchronously discover native Run as administrator
+and Open file location support through the actual AppsFolder handler. Unsupported
+actions are absent, not invented; location is not a universal shell verb. One
+bounded STA owner validates the exact trusted item and fresh command descriptor
+before dispatch. UI source retirement does not cancel accepted work; receipts
+acknowledge handler acceptance, not visible Explorer/UAC/elevation completion.
+
 Development Bluetooth adds explicit On/Off for each available Bluetooth
 radio, with exact native device IDs, retained COM incarnations and source/state
 invalidation. Consent begins only from deliberate GUI input; native acceptance

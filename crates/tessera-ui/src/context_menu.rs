@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use slint::{ComponentHandle, Model, ModelExt, SharedString};
 
+use crate::application_menu::ApplicationMenus;
 use crate::generated::{
     ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockRecycleAction, DockSystemCommand,
     DockWindowCommand, MenuEntry,
@@ -17,6 +18,9 @@ use crate::generated::{
 use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind};
+
+#[path = "application_menu/popup.rs"]
+mod application_popup;
 
 use crate::popup_placement as placement;
 #[cfg(test)]
@@ -39,6 +43,18 @@ impl ContextMenuSurface {
             }
             labels.into()
         });
+        surface.on_merge_application_entries(|base, application| {
+            base.model_tracker().track_row_count_changes();
+            application.model_tracker().track_row_count_changes();
+            let entries: Vec<_> = (0..base.row_count())
+                .filter_map(|row| base.row_data_tracked(row))
+                .chain(
+                    (0..application.row_count())
+                        .filter_map(|row| application.row_data_tracked(row)),
+                )
+                .collect();
+            slint::ModelRc::new(slint::VecModel::from(entries))
+        });
         Ok(surface)
     }
 }
@@ -57,6 +73,10 @@ pub(crate) struct ContextMenuController {
     preview_key: RefCell<SharedString>,
     preview_bounds: Cell<Option<tessera_core::Rect>>,
     preview_generation: Cell<Option<u64>>,
+    application: ApplicationMenus,
+    application_admission: RefCell<Option<Rc<dyn Fn() -> bool>>>,
+    application_source_generation: Cell<Option<u64>>,
+    application_projection: Cell<Option<u64>>,
 }
 
 impl ContextMenuController {
@@ -91,12 +111,10 @@ impl ContextMenuController {
         host: Arc<dyn DesktopHost>,
         dock: &Dock,
     ) -> Result<Rc<Self>, slint::PlatformError> {
+        let surface = ContextMenuSurface::new_with_metrics()?;
+        let application = ApplicationMenus::new(&surface);
         let menu = Rc::new(Self {
-            surface: TransientWindow::new(
-                Arc::clone(&host),
-                ContextMenuSurface::new_with_metrics()?,
-                SurfaceKind::Popup,
-            ),
+            surface: TransientWindow::new(Arc::clone(&host), surface, SurfaceKind::Popup),
             dock: dock.as_weak(),
             key: RefCell::default(),
             scope_generation: Cell::new(Some(0)),
@@ -109,6 +127,10 @@ impl ContextMenuController {
             preview_key: RefCell::default(),
             preview_bounds: Cell::new(None),
             preview_generation: Cell::new(Some(0)),
+            application,
+            application_admission: RefCell::default(),
+            application_source_generation: Cell::new(Some(0)),
+            application_projection: Cell::new(None),
         });
         let weak = Rc::downgrade(&menu);
         menu.surface.on_action_requested(move |action| {
@@ -140,6 +162,25 @@ impl ContextMenuController {
                 menu.hide();
             }
             slint::CloseRequestResponse::KeepWindowShown
+        });
+        let weak = Rc::downgrade(&menu);
+        menu.surface.on_application_event_ready(move || {
+            if let Some(menu) = weak.upgrade() {
+                menu.application_event_ready();
+            }
+        });
+        let weak = Rc::downgrade(&menu);
+        menu.surface
+            .on_application_action_requested(move |scope, action, bounds| {
+                if let Some(menu) = weak.upgrade() {
+                    menu.execute_application(&scope, action, bounds);
+                }
+            });
+        let weak = Rc::downgrade(&menu);
+        dock.on_application_menu_frame_changed(move || {
+            if let Some(menu) = weak.upgrade() {
+                menu.invalidate_application_source();
+            }
         });
         Ok(menu)
     }
@@ -214,6 +255,15 @@ impl ContextMenuController {
         };
         self.surface.set_kind(kind);
         self.surface.set_launcher_favorite_scope(false);
+        self.surface
+            .set_application_entries(slint::ModelRc::default());
+        if self.scope_generation.get() != retired_generation {
+            return Ok(());
+        }
+        self.surface.set_application_notice(SharedString::default());
+        if self.scope_generation.get() != retired_generation {
+            return Ok(());
+        }
         self.surface.set_media_scope(media_scope);
         let lock_available =
             kind == DockMenuKind::Bar && !media_scope && dock.get_reorder_lock_available();
@@ -274,6 +324,7 @@ impl ContextMenuController {
                         application_image: true,
                         danger: action == DockMenuAction::Close,
                         window_key: member.key.clone(),
+                        application_scope: SharedString::default(),
                     });
                 }
             }
@@ -373,6 +424,9 @@ impl ContextMenuController {
                 },
             );
         }
+        if self.scope_generation.get() == generation && self.is_open() {
+            self.inspect_application(anchor, context);
+        }
         focus.map_err(|error| format!("Menu opened, but keyboard focus was not granted: {error}"))
     }
 
@@ -383,6 +437,10 @@ impl ContextMenuController {
                 .and_then(|generation| generation.checked_add(1)),
         );
         let generation = self.scope_generation.get();
+        self.application.retire();
+        if self.scope_generation.get() != generation {
+            return;
+        }
         self.clear_preview();
         if self.scope_generation.get() != generation {
             return;
@@ -678,6 +736,7 @@ impl ContextMenuController {
             DockMenuAction::MediaBarAdd | DockMenuAction::MediaRemove => {}
             // These belong exclusively to the launcher's favorite scope.
             DockMenuAction::FavoriteAdd | DockMenuAction::FavoriteRemove => {}
+            DockMenuAction::RunAsAdministrator | DockMenuAction::OpenFileLocation => {}
         }
     }
 

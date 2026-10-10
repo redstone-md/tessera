@@ -7,6 +7,7 @@
 
 mod audio_devices;
 
+pub mod application_menu;
 pub mod battery;
 pub mod bluetooth;
 pub mod file_search;

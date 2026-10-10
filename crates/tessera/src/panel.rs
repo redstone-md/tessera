@@ -134,10 +134,11 @@ fn to_ui_preferences(
 #[cfg(windows)]
 mod desktop {
     use std::collections::HashMap;
-    use std::sync::{Arc, LazyLock};
+    use std::sync::{Arc, LazyLock, OnceLock};
     use std::time::{Duration, Instant};
 
     use parking_lot::Mutex;
+    use tessera_system::application_menu::ApplicationMenuHost;
     use tessera_system::audio::{AudioError, AudioHost};
     use tessera_system::battery::{BatteryError, BatteryHost};
     use tessera_system::bluetooth::{BluetoothError, BluetoothHost};
@@ -188,7 +189,7 @@ mod desktop {
 
     struct AppHost {
         targets: Mutex<HashMap<String, ActivationTarget>>,
-        catalog: Mutex<Option<CatalogCache>>,
+        catalog: Arc<Mutex<Option<CatalogCache>>>,
         settings: Option<SettingsStore>,
         presentation: Presentation,
         window_icons: Mutex<HashMap<String, CachedWindowIcon>>,
@@ -209,6 +210,7 @@ mod desktop {
         web_search: LazyLock<Option<Arc<dyn WebSearchHost>>>,
         file_search: LazyLock<Option<Arc<dyn FileSearchHost>>>,
         telemetry: LazyLock<Option<Arc<dyn TelemetryHost>>>,
+        application_menu: OnceLock<Option<Arc<dyn ApplicationMenuHost>>>,
         pointer: LazyLock<Provider<dyn PointerHost>>,
         shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
         profile: LazyLock<Provider<dyn ProfileHost>>,
@@ -397,6 +399,27 @@ mod desktop {
                 return None;
             }
             self.file_search.as_ref().map(Arc::clone)
+        }
+
+        fn application_menu_host(&self) -> Option<Arc<dyn ApplicationMenuHost>> {
+            if self.presentation != Presentation::Desktop {
+                return None;
+            }
+            self.application_menu
+                .get_or_init(|| {
+                    let catalog = Arc::clone(&self.catalog);
+                    let lookup = Arc::new(move |key: &str| {
+                        let cache = catalog.lock();
+                        let cache = cache.as_ref()?;
+                        if cache.failed {
+                            return None;
+                        }
+                        cache.entries.iter().find(|app| app.id() == key).cloned()
+                    });
+                    tessera_windows::application_menu::native_application_menu_host(lookup)
+                })
+                .as_ref()
+                .map(Arc::clone)
         }
 
         fn telemetry_host(&self) -> Option<Arc<dyn TelemetryHost>> {
@@ -710,7 +733,7 @@ mod desktop {
             super::load_preferences(SettingsStore::for_current_user());
         let host = AppHost {
             targets: Mutex::new(HashMap::new()),
-            catalog: Mutex::new(None),
+            catalog: Arc::new(Mutex::new(None)),
             settings,
             presentation,
             window_icons: Mutex::new(HashMap::new()),
@@ -731,6 +754,7 @@ mod desktop {
             web_search: LazyLock::new(tessera_windows::web_search::native_web_search_host),
             file_search: LazyLock::new(tessera_windows::file_search::native_file_search_host),
             telemetry: LazyLock::new(tessera_windows::telemetry::native_telemetry_host),
+            application_menu: OnceLock::new(),
             pointer: LazyLock::new(Provider::default),
             shortcuts: LazyLock::new(Provider::default),
             profile: LazyLock::new(Provider::default),

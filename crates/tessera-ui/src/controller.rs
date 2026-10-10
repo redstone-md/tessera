@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod actions;
+mod application_menu;
 mod battery;
 mod calendar;
 mod context_menu;
@@ -150,6 +151,7 @@ pub(crate) struct PanelController {
     launcher_state: Rc<RefCell<launcher::LauncherState>>,
     dock_order: Rc<dock_order::DockOrder>,
     dock_middle_click: Rc<dock_middle_click::DockMiddleClick>,
+    application_menu_source: Rc<application_menu::ApplicationMenuSource>,
     preference_saving: Rc<Cell<bool>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     popup_operation: Rc<RefCell<Rc<()>>>,
@@ -223,6 +225,7 @@ impl PanelController {
             launcher_state: Rc::default(),
             dock_order: Rc::default(),
             dock_middle_click: Rc::default(),
+            application_menu_source: Rc::default(),
             preference_saving: Rc::default(),
             surface_failure: Rc::default(),
             popup_operation: Rc::default(),
@@ -286,6 +289,7 @@ impl PanelController {
             dock_utilities: Rc::default(),
             dock_order: Rc::default(),
             dock_middle_click: Rc::default(),
+            application_menu_source: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             battery: Rc::default(),
@@ -840,6 +844,9 @@ impl PanelController {
 
     /// Native calls and lease destruction never retain a registry borrow.
     fn detach_lease(&self, kind: SurfaceKind) {
+        if kind == SurfaceKind::Dock {
+            self.application_menu_source.retire();
+        }
         let attachment = self.leases.borrow_mut().take(kind);
         drop(attachment);
     }
@@ -1188,6 +1195,7 @@ impl PanelController {
     }
 
     fn refresh_strip(&self, dock: &Dock) {
+        let _application_projection = self.application_menu_source.begin_projection();
         let _middle_projection = self.begin_dock_middle_click_projection();
         self.invalidate_dock_projection();
         let menu = self.menus.borrow().clone();

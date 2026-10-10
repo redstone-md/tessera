@@ -36,6 +36,15 @@ impl PanelController {
 }
 
 impl Dock {
+    /// Only a unique catalog-backed pin admits application capability inspection.
+    /// Running groups, captions and process metadata are never launch authority.
+    pub(crate) fn catalog_pinned_key(&self, key: &str) -> Option<String> {
+        let pins = self.get_pinned_apps();
+        let mut matches = pins.iter().filter(|pin| pin.key == key);
+        let pin = matches.next()?;
+        (pin.pinned && matches.next().is_none()).then(|| pin.key.to_string())
+    }
+
     /// Complete admitted membership, never the visible representative slice.
     pub(crate) fn displayed_group_window_keys(
         &self,

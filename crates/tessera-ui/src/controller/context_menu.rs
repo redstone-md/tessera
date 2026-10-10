@@ -75,6 +75,7 @@ impl PanelController {
                 }
             },
         };
+        menu.set_application_admission(self.dock_application_menu_admission(&dock));
         let result = menu.show(kind, key.into(), anchor, context);
         self.popup_presentation_finished(PopupKind::DockMenu, menu.is_open(), result);
     }

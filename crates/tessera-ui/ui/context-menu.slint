@@ -14,6 +14,8 @@ export struct MenuEntry {
     application-image: bool,
     danger: bool,
     window-key: string,
+    // Captured presentation token; native effects still require an opaque target.
+    application-scope: string,
 }
 
 component MenuLabel inherits Text {
@@ -80,6 +82,14 @@ export component ContextMenuSurface inherits Window {
     in property <bool> media-enabled: false;
     in-out property <int> selected-index;
     in property <[MenuEntry]> window-entries;
+    in property <[MenuEntry]> application-entries;
+    in property <string> application-notice;
+    out property <TileBounds> application-viewport: {
+        origin: rows.absolute-position, width: rows.visible-width, height: rows.visible-height
+    };
+    callback application-action-requested(string, DockMenuAction, TileBounds);
+    callback application-event-ready();
+    pure callback merge-application-entries([MenuEntry], [MenuEntry]) -> [MenuEntry];
     in property <string> preview-notice;
     out property <TileBounds> preview-bounds: {
         origin: preview.absolute-position, width: preview.width, height: preview.height
@@ -92,22 +102,49 @@ export component ContextMenuSurface inherits Window {
         icon-label-metrics.preferred-width + 32px + 16px + 8px)
         + 2 * PopoverTokens.shadow-margin;
     out property <length> menu-height: 2 * PopoverTokens.shadow-margin + 16px + root.rows-height
-        + (root.window-entries.length > 0 ? 152px : 0px);
+        + root.application-notice-height + (root.window-entries.length > 0 ? 152px : 0px);
     preferred-width: root.menu-width;
     preferred-height: root.menu-height;
     property <length> row-height: PopoverTokens.font-size * PopoverTokens.line-height + 16px;
     property <length> row-gap: 8px;
+    property <length> application-notice-height: root.application-notice != "" ? 48px : 0px;
     property <length> rows-height: root.entries.length * root.row-height
         + max(0, root.entries.length - 1) * root.row-gap;
     property <bool> keyboard-navigation;
     property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
     callback action-requested(DockMenuAction);
     callback window-action-requested(string, DockMenuAction);
+    pure function application-action(action: DockMenuAction) -> bool {
+        return action == DockMenuAction.run-as-administrator || action == DockMenuAction.open-file-location;
+    }
+    pure function entry-bounds(index: int) -> TileBounds {
+        return { origin: { x: rows.absolute-position.x + FocusTokens.outer-margin,
+            y: rows.absolute-position.y + rows.content-y + FocusTokens.outer-margin
+                + index * (root.row-height + root.row-gap) },
+            width: max(0px, rows.visible-width - 2 * FocusTokens.outer-margin),
+            height: root.row-height };
+    }
+    pure function application-row-visible(bounds: TileBounds) -> bool {
+        return bounds.width > 0px && bounds.height > 0px
+            && bounds.origin.x >= root.application-viewport.origin.x
+            && bounds.origin.y >= root.application-viewport.origin.y
+            && bounds.origin.x + bounds.width <= root.application-viewport.origin.x + root.application-viewport.width
+            && bounds.origin.y + bounds.height <= root.application-viewport.origin.y + root.application-viewport.height;
+    }
+    function request-application-entry(entry: MenuEntry, bounds: TileBounds) {
+        if root.application-action(entry.action) && entry.application-scope != ""
+            && root.application-row-visible(bounds) {
+            root.application-action-requested(entry.application-scope, entry.action, bounds);
+        }
+    }
     function request-entry(index: int) {
         if root.entry-enabled(index) {
-            if root.entries[index].window-key != "" {
-                root.window-action-requested(root.entries[index].window-key, root.entries[index].action);
-            } else { root.action-requested(root.entries[index].action); }
+            let entry = root.entries[index];
+            if root.application-action(entry.action) {
+                root.request-application-entry(entry, root.entry-bounds(index));
+            } else if entry.window-key != "" {
+                root.window-action-requested(entry.window-key, entry.action);
+            } else { root.action-requested(entry.action); }
         }
     }
     callback dismiss-requested();
@@ -154,7 +191,7 @@ export component ContextMenuSurface inherits Window {
         label: root.media-enabled ? @tr("Remove media module") : @tr("Add media module"),
         action: root.media-enabled ? DockMenuAction.media-remove : DockMenuAction.media-bar-add
     };
-    property <[MenuEntry]> entries: root.window-entries.length > 0 ? root.window-entries : root.launcher-favorite-scope ? [
+    property <[MenuEntry]> base-entries: root.window-entries.length > 0 ? root.window-entries : root.launcher-favorite-scope ? [
         { label: root.launcher-favorite ? @tr("Unpin") : @tr("Pin"),
             action: root.launcher-favorite ? DockMenuAction.favorite-remove : DockMenuAction.favorite-add }
     ] : root.media-scope ? [
@@ -185,9 +222,13 @@ export component ContextMenuSurface inherits Window {
         { label: @tr("Close"), action: DockMenuAction.close,
             icon: @image-url("../assets/icons/boxicons-font-9ffa913/window-close.svg"), danger: true }
     ];
+    property <[MenuEntry]> entries: root.application-entries.length > 0
+        ? root.merge-application-entries(root.base-entries, root.application-entries) : root.base-entries;
 
     pure function entry-enabled(index: int) -> bool {
         return index >= 0 && index < root.entries.length
+            && (!root.application-action(root.entries[index].action)
+                || root.entries[index].application-scope != "")
             && (root.entries[index].action != DockMenuAction.recycle-empty
                 || root.recycle-empty-enabled)
             && (root.entries[index].action != DockMenuAction.media-bar-add || !root.media-enabled)
@@ -202,7 +243,7 @@ export component ContextMenuSurface inherits Window {
             || action == DockMenuAction.favorite-add || action == DockMenuAction.favorite-remove
             || action == DockMenuAction.media-bar-add || action == DockMenuAction.media-remove
             || action == DockMenuAction.move-earlier || action == DockMenuAction.move-later
-            || action == DockMenuAction.dock-set-locked;
+            || action == DockMenuAction.dock-set-locked || root.application-action(action);
     }
     pure function adjacent-index(index: int, direction: int) -> int {
         return direction > 0
@@ -290,11 +331,27 @@ export component ContextMenuSurface inherits Window {
                     visible: root.preview-notice != "";
                 }
             }
-            ScrollView {
-                x: root.viewport-inset;
+            Text {
+                x: root.viewport-inset + 8px;
                 y: root.viewport-inset + (preview.height > 0px ? preview.height + 8px : 0px);
+                width: max(0px, body.content-width - 2 * root.viewport-inset - 16px);
+                height: root.application-notice-height;
+                text: root.application-notice;
+                color: SeelenPalette.muted;
+                font-size: PopoverTokens.font-size;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                visible: root.application-notice != "";
+                accessible-role: text;
+                accessible-label: root.application-notice;
+            }
+            rows := ScrollView {
+                x: root.viewport-inset;
+                y: root.viewport-inset + (preview.height > 0px ? preview.height + 8px : 0px)
+                    + root.application-notice-height;
                 width: max(0px, body.content-width - 2 * root.viewport-inset);
                 height: max(0px, body.content-height - 2 * root.viewport-inset
+                    - root.application-notice-height
                     - (preview.height > 0px ? preview.height + 8px : 0px));
                 content-width: self.visible-width;
                 content-height: root.rows-height + 2 * FocusTokens.outer-margin;
@@ -302,11 +359,14 @@ export component ContextMenuSurface inherits Window {
                     self.content-height - self.visible-height));
                 horizontal-scrollbar-policy: always-off;
                 vertical-scrollbar-policy: as-needed;
-                for entry[index] in root.entries: Rectangle {
+                for entry[index] in root.entries: row := Rectangle {
                     x: FocusTokens.outer-margin;
                     y: FocusTokens.outer-margin + index * (root.row-height + root.row-gap);
                     width: max(0px, parent.width - 2 * FocusTokens.outer-margin);
                     height: root.row-height;
+                    property <TileBounds> row-bounds: {
+                        origin: self.absolute-position, width: self.width, height: self.height
+                    };
                     TileButton {
                         width: parent.width;
                         height: parent.height;
@@ -314,7 +374,8 @@ export component ContextMenuSurface inherits Window {
                         transform-scale: self.pressed ? 0.98 : 1;
                         radius: 6px;
                         filled: false;
-                        enabled: root.entry-enabled(index);
+                        enabled: root.entry-enabled(index) && (!root.application-action(entry.action)
+                            || root.application-row-visible(row.row-bounds));
                         allow-return-repeat: !root.non-repeating-action(entry.action);
                         property <bool> has-icon: entry.icon.width > 0;
                         property <bool> keyboard-selected: root.keyboard-navigation
@@ -335,7 +396,9 @@ export component ContextMenuSurface inherits Window {
                             if self.pressed { root.keyboard-navigation = false; }
                         }
                         clicked => {
-                            root.request-entry(index);
+                            if root.application-action(entry.action) {
+                                root.request-application-entry(entry, row.row-bounds);
+                            } else { root.request-entry(index); }
                         }
                         if entry.icon.width > 0: MenuIcon {
                             x: 8px;

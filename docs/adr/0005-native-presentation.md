@@ -84,6 +84,16 @@ Dock context menus use one lazily created, separately owned Slint `Window`, shar
 
 Window menus activate without toggling, request asynchronous minimize, and post ordinary close requests; they do not terminate applications or claim that a queued request completed. Pin/recovery commands reuse existing persistence and host boundaries. Native identity and application eligibility are revalidated at each platform effect. Popup leases drop before hide, parent callbacks and component teardown. Synchronous Slint appearance callbacks during `show()` coalesce geometry requests so leases are not borrowed recursively and the final UI geometry is applied before readiness.
 
+Development pinned-application menus add asynchronous discovery of actual native
+Run as administrator and Open file location commands. Only canonical commands
+advertised and enabled by that exact AppsFolder handler become rows; location
+support is not universal. One bounded message-pumping STA owner retains the
+original item and compares fresh native identity/command support before invoking
+the fresh command offset, never a UI path or arbitrary verb. Root model replacement,
+native Dock lease retirement and popup/frame epochs revoke unsubmitted input;
+accepted work survives presentation retirement. SDK acceptance is not visible
+Explorer/UAC/elevation completion, and actual Windows outcomes remain uncertified.
+
 `inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the shared DPI-scaled toolbar token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
 
 The immutable [alpha.10 CI run](https://github.com/redstone-md/tessera/actions/runs/37675695227) passed on Windows stable and Rust 1.92.0, including actual execution of the controlled toolbar green/offset-red/restored-green CLI fixture, and published only after native packaging/runtime preflight passed. This verifies the diagnostic feedback loop, not the cause or correction of the user's VM toolbar offset.

@@ -11,6 +11,7 @@ export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
 export struct DockGroup { key: string, identity: string, count: int, representative: string }
 export struct DockStatus { notice: string, status: string, refreshing: bool, stale: bool }
+export struct DockApplicationNotice { key: string, text: string }
 export struct DockTileAppearance {
     reference-mode: bool, tile-color: color, hover-color: color,
     pressed-color: color, foreground: color, icon-pad: length, radius: length
@@ -146,6 +147,12 @@ export component Dock inherits Window {
     out property <Point> middle-click-scroll: { x: scroll.content-x, y: scroll.content-y };
     callback middle-click-frame-changed();
     changed middle-click-scroll => { root.middle-click-frame-changed(); }
+    in-out property <DockApplicationNotice> application-menu-notice;
+    callback application-menu-frame-changed();
+    changed pinned-apps => { root.application-menu-frame-changed(); }
+    changed surface-status => { root.application-menu-frame-changed(); }
+    out property <DockOrderMetrics> application-menu-frame: root.reorder-metrics;
+    changed application-menu-frame => { root.application-menu-frame-changed(); }
     callback window-command-requested(string, DockWindowCommand);
     callback open-applications-requested();
     callback exit-requested();
@@ -400,9 +407,13 @@ export component Dock inherits Window {
                     }
                     opacity: root.reorder-visual.visible && root.reorder-visual.source.key == tile.key ? 0.35 : 1;
                     activation-key: tile.key;
-                    accessible-text: (root.group-count(root.group-metadata, tile.key) > 0 ? "Switch to " : "Launch ") + tile.label;
+                    accessible-text: (root.group-count(root.group-metadata, tile.key) > 0 ? "Switch to " : "Launch ") + tile.label
+                        + (root.application-menu-notice.key == tile.key && root.application-menu-notice.text != ""
+                            ? "\n" + root.application-menu-notice.text : "");
                     tooltip-text: tile.label + root.group-tooltip(root.observed-windows, root.group-metadata, tile.key)
-                        + (root.middle-click-available ? "\n" + @tr("Middle click") + ": " + root.middle-click-label : "");
+                        + (root.middle-click-available ? "\n" + @tr("Middle click") + ": " + root.middle-click-label : "")
+                        + (root.application-menu-notice.key == tile.key && root.application-menu-notice.text != ""
+                            ? "\n" + root.application-menu-notice.text : "");
                     tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                     tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                     clicked => {

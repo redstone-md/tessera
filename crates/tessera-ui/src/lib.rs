@@ -15,6 +15,7 @@
 
 #![deny(unsafe_code)]
 
+pub(crate) mod application_menu;
 pub(crate) mod battery;
 pub(crate) mod bluetooth;
 #[cfg(test)]
@@ -759,6 +760,13 @@ pub trait DesktopHost: Send + Sync + 'static {
     fn file_search_host(
         &self,
     ) -> Option<std::sync::Arc<dyn tessera_system::file_search::FileSearchHost>> {
+        None
+    }
+
+    /// Explicit supported shell actions for exact current catalog applications.
+    fn application_menu_host(
+        &self,
+    ) -> Option<std::sync::Arc<dyn tessera_system::application_menu::ApplicationMenuHost>> {
         None
     }
 

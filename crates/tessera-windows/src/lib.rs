@@ -19,6 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod activation;
+pub mod application_menu;
 mod apps;
 mod audio;
 pub mod battery;
@@ -43,6 +44,9 @@ mod native;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_activation;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_application_menu;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_apps;

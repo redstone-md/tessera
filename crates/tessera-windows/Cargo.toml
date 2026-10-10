@@ -58,6 +58,7 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # The implement macro emits ::windows_core paths for our native COM callbacks.
 windows-core = "=0.62.2"
