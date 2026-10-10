@@ -8,6 +8,7 @@ use crate::settings::{
 };
 use std::fs;
 use std::io;
+use tessera_core::SourceSeed;
 use tessera_system::shortcuts::ShortcutAction;
 
 fn record(shortcuts: &str) -> String {
@@ -37,7 +38,7 @@ fn complete(config: ShortcutConfig) -> Preferences {
 }
 
 #[test]
-fn exact_v4_migrates_defaults_read_only_then_explicitly_saves_complete_v5() {
+fn exact_v4_migrates_defaults_read_only_then_explicitly_saves_complete_v6() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
     let store = SettingsStore::new(path.clone());
@@ -58,7 +59,8 @@ fn exact_v4_migrates_defaults_read_only_then_explicitly_saves_complete_v5() {
     assert_eq!(bytes.last(), Some(&b'\n'));
     assert_eq!(store.load().unwrap(), saved);
     let persisted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(persisted["schema_version"], 5);
+    assert_eq!(persisted["schema_version"], 6);
+    assert_eq!(persisted["source_seed"], 0x7ca45c);
     assert_eq!(
         persisted["shortcuts"],
         serde_json::json!({"enabled":false,"settings_override":null})
@@ -302,6 +304,8 @@ fn invalid_v5_and_future_bytes_are_preserved_without_startup_migration_writes() 
         record(r#"{"enabled":true,"settings_override":"bare_win"}"#),
         record(r#"{"enabled":true,"settings_override":null}"#)
             .replace(r#""schema_version":5"#, r#""schema_version":6"#),
+        record(r#"{"enabled":true,"settings_override":null}"#)
+            .replace(r#""schema_version":5"#, r#""schema_version":7"#),
     ] {
         fs::write(&path, &original).unwrap();
         assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
@@ -315,7 +319,8 @@ fn saved_config_has_no_profile_or_runtime_fields_and_default_override_is_explici
     let preferences = complete(ShortcutConfig::default());
     let value = serde_json::to_value(&preferences).unwrap();
     let fields = value.as_object().unwrap();
-    assert_eq!(fields.len(), 9);
+    assert_eq!(fields.len(), 10);
+    assert_eq!(fields["source_seed"], SourceSeed::GREEN.rgb());
     let shortcuts = fields["shortcuts"].as_object().unwrap();
     assert_eq!(shortcuts.len(), 2);
     assert_eq!(shortcuts["enabled"], true);

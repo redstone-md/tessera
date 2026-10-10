@@ -47,6 +47,9 @@ use user_menu::UserPopups;
 
 type Host = dyn DesktopHost;
 
+// Presentation choices, not persisted indices; valid non-preset RGB stays intact.
+const SOURCE_PRESETS: [u32; 5] = [0x7ca45c, 0xffbd59, 0x4d90fe, 0xff7849, 0xe78cba];
+
 /// Native leases, keyed by [`SurfaceKind`], retained by the controller.
 ///
 /// A lease is the `Box<dyn Any>` returned by
@@ -382,6 +385,22 @@ impl PanelController {
         // All surfaces preview one appearance without writing preferences.
         let weak = self.clone();
         panel.on_appearance_changed(move || weak.sync_appearance());
+        let weak = self.clone();
+        panel.on_source_preset_requested(move |index| {
+            if !weak.root_current() {
+                return;
+            }
+            let Some(rgb) = usize::try_from(index)
+                .ok()
+                .and_then(|index| SOURCE_PRESETS.get(index))
+                .copied()
+            else {
+                return;
+            };
+            if let Some(panel) = weak.panel.upgrade() {
+                panel.set_source_rgb(rgb as i32);
+            }
+        });
         self.wire_power(panel);
     }
 
@@ -1194,6 +1213,9 @@ impl PanelController {
 
     /// Apply the shared live color/density/edge preview without saving it.
     fn sync_appearance(&self) {
+        if !self.root_current() {
+            return;
+        }
         let current_theme = crate::theme_from_index(
             self.panel
                 .upgrade()
@@ -1205,39 +1227,85 @@ impl PanelController {
             crate::Theme::Dark => slint::language::ColorScheme::Dark,
             crate::Theme::System => slint::language::ColorScheme::Unknown,
         };
-        let theme = PresentationTheme::uniform(scheme);
+        let seed = self
+            .panel
+            .upgrade()
+            .and_then(|panel| u32::try_from(panel.get_source_rgb()).ok())
+            .and_then(crate::SourceSeed::from_rgb);
+        let Some(seed) = seed else {
+            return;
+        };
+        let current = || {
+            self.root_current()
+                && self.panel.upgrade().is_some_and(|panel| {
+                    panel.get_source_rgb() == seed.rgb() as i32
+                        && crate::theme_from_index(panel.get_theme_index()) == current_theme
+                })
+        };
+        macro_rules! apply {
+            ($effect:expr) => {
+                if !current() {
+                    return;
+                }
+                $effect;
+                if !current() {
+                    return;
+                }
+            };
+        }
+        let theme = PresentationTheme::from_source(scheme, seed);
+        if let Some(panel) = self.panel.upgrade() {
+            apply!(panel.set_source_hex(format!("#{:06x}", seed.rgb()).into()));
+            apply!(
+                panel.set_source_preset_index(
+                    SOURCE_PRESETS
+                        .iter()
+                        .position(|rgb| *rgb == seed.rgb())
+                        .map_or(-1, |index| index as i32)
+                )
+            );
+            panel.apply_presentation_theme_scoped(theme, current);
+        }
         if let Some(dock) = self.dock_and_upgrade() {
-            dock.apply_presentation_theme(theme);
+            dock.apply_presentation_theme_scoped(theme, current);
             if let Some(panel) = self.panel.upgrade() {
-                dock.set_compact(panel.get_compact());
+                apply!(dock.set_compact(panel.get_compact()));
             }
         }
         if let Some(toolbar) = self.toolbar_and_upgrade() {
-            toolbar.apply_presentation_theme(theme);
+            toolbar.apply_presentation_theme_scoped(theme, current);
         }
         if let Some(launcher) = self.launcher_and_upgrade() {
-            launcher.apply_presentation_theme(theme);
+            launcher.apply_presentation_theme_scoped(theme, current);
         }
         let quick = self.quick_settings.borrow().clone();
         if let Some(quick) = quick {
-            quick.apply_theme(theme);
+            apply!(quick.apply_theme(theme));
         }
         let user = self.user_menu.borrow().clone();
         if let Some(user) = user {
-            user.apply_theme(theme);
+            apply!(user.apply_theme(theme));
         }
         let calendar = self.calendar.borrow().clone();
         if let Some(calendar) = calendar {
-            calendar.apply_theme(theme);
+            apply!(calendar.apply_theme(theme));
         }
         let power = self.power_menu.borrow().clone();
         if let Some(power) = power {
-            power.set_theme(current_theme);
-            power.update_motion();
+            apply!(power.set_theme(theme));
+            apply!(power.update_motion());
         }
-        self.toolbar_popup_theme(theme);
-        self.hide_launcher_app_menu();
-        self.update_geometry();
+        let menu = self.menus.borrow().clone();
+        if let Some(menu) = menu {
+            apply!(menu.apply_theme(theme));
+        }
+        let tooltip = self.tooltips.borrow().clone();
+        if let Some(tooltip) = tooltip {
+            apply!(tooltip.apply_theme(theme));
+        }
+        apply!(self.toolbar_popup_theme(theme));
+        apply!(self.hide_launcher_app_menu());
+        apply!(self.update_geometry());
     }
 
     /// Activates a window through the host. Guarded twice: the panel refresh
@@ -1364,6 +1432,13 @@ impl PanelController {
         let Some(panel) = self.panel.upgrade() else {
             return;
         };
+        let Some(seed) = u32::try_from(panel.get_source_rgb())
+            .ok()
+            .and_then(crate::SourceSeed::from_rgb)
+        else {
+            self.report_message("Could not save preferences: invalid RGB source.");
+            return;
+        };
         let Some(start) = crate::StartOfWeek::from_index(panel.get_start_of_week_index()) else {
             self.report_message("Could not save preferences: invalid start-of-week choice.");
             return;
@@ -1376,6 +1451,7 @@ impl PanelController {
                 panel.get_compact(),
                 crate::dock_edge_from_index(panel.get_dock_edge_index()),
             )
+            .with_source_seed(seed)
             .with_general(crate::GeneralPreferences::default().with_start_of_week(start))
             .with_shortcuts(self.shortcut_draft());
         match self.core.host().save_preferences(&preferences) {
@@ -1609,6 +1685,8 @@ pub(crate) fn run(
 ) -> Result<(), slint::PlatformError> {
     let panel = Panel::new()?;
     panel.set_theme_index(crate::theme_to_index(preferences.theme()));
+    panel.set_source_rgb(preferences.source_seed().rgb() as i32);
+    panel.set_source_hex(format!("#{:06x}", preferences.source_seed().rgb()).into());
     panel.set_compact(preferences.compact());
     panel.set_dock_edge_index(crate::dock_edge_to_index(preferences.dock_edge()));
     panel.set_start_of_week_index(preferences.general().start_of_week().index());
@@ -1653,6 +1731,7 @@ pub(crate) fn run(
     match run_options.surface {
         crate::SurfaceMode::Panel => {
             let controller = PanelController::new(&panel, Arc::clone(&core));
+            controller.sync_appearance();
             core.install_routes(controller.routes());
             controller.apply_filter();
             let _capability_scope = shortcuts::RootCapabilityScope::new(&controller);

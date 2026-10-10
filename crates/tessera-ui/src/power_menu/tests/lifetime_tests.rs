@@ -69,6 +69,18 @@ fn lifetime_actual_thirty_seconds_retires_ownership_and_recreation_resets_choice
     let fixture = Fixture::new();
     pending(&fixture);
     fixture.loaded();
+    let green = fixture.component().presentation_theme();
+    let seed = crate::SourceSeed::from_rgb(0x4d90fe).unwrap();
+    let blue = PresentationTheme::from_source(slint::language::ColorScheme::Dark, seed);
+    let events = fixture.events();
+    fixture.popup.set_theme(blue);
+    assert_eq!(fixture.component().presentation_theme(), blue);
+    assert_ne!(fixture.component().presentation_theme(), green);
+    assert_eq!(
+        fixture.events(),
+        events,
+        "same-scheme seed preview has no native effects"
+    );
     choose(&fixture, false);
     fixture.popup.set_user_name("Genuine Account");
     let old = fixture.component();
@@ -91,7 +103,9 @@ fn lifetime_actual_thirty_seconds_retires_ownership_and_recreation_resets_choice
         .lock()
         .replies
         .push_back(Reply::Delayed);
-    assert!(fixture.popup.show(Theme::Light).unwrap());
+    let blue_light = PresentationTheme::from_source(slint::language::ColorScheme::Light, seed);
+    assert!(fixture.popup.show(blue_light).unwrap());
+    assert_eq!(fixture.component().presentation_theme(), blue_light);
     trace_current(&fixture);
     assert!(fixture.component().get_install_updates());
     assert_eq!(fixture.component().get_user_name(), "Genuine Account");
@@ -105,6 +119,7 @@ fn lifetime_actual_thirty_seconds_retires_ownership_and_recreation_resets_choice
     finish(&fixture.updates.state, Ok(PowerUpdateHint::Pending));
     fixture.drain();
     assert!(fixture.popup.is_visible());
+    assert_eq!(fixture.component().presentation_theme(), blue_light);
     assert!(fixture.component().get_install_updates());
     assert_eq!(fixture.opened.get(), 2);
 }
@@ -517,7 +532,10 @@ fn lifetime_outer_constructor_never_overwrites_inner_published_replacement() {
         prior_epoch + 2,
         "unpublished outer and published inner candidates cannot share input epoch"
     );
-    assert_eq!(fixture.popup.state.borrow().theme, Theme::Light);
+    assert_eq!(
+        fixture.popup.state.borrow().theme,
+        PresentationTheme::from(Theme::Light)
+    );
     finish(&fixture.display.state, Ok(Some(layout())));
     fixture.drain();
     assert!(fixture.popup.is_visible());

@@ -739,6 +739,121 @@ fn preferences_save_only_on_explicit_callback_and_errors_are_visible() {
 }
 
 #[test]
+fn genuine_source_control_previews_saves_cancels_and_preserves_nonpreset_intent() {
+    use crate::render_tests::{draw, native_click, native_key, software_window};
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use slint::platform::Key;
+
+    let window = software_window();
+    let panel = Panel::new().unwrap();
+    panel.window().set_size(slint::PhysicalSize::new(640, 620));
+    let host = FixtureHost::returning(snapshot());
+    let controller = controller_for(&panel, host.clone());
+    controller.sync_appearance();
+    panel.show().unwrap();
+    let _ = draw(&window, 640, 620);
+    let navigation = ElementHandle::find_by_accessible_label(&panel, "Appearance")
+        .next()
+        .unwrap();
+    native_click(&window, &navigation);
+    let _ = draw(&window, 640, 620);
+    let source = ElementHandle::find_by_accessible_label(&panel, "Appearance color source")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+        .unwrap();
+    assert_eq!(source.accessible_value().unwrap(), "Green");
+    assert_eq!(source.accessible_enabled(), Some(true));
+    assert_eq!(source.accessible_expandable(), Some(true));
+    let green = panel
+        .global::<crate::generated::SeelenPalette>()
+        .get_primary();
+    native_click(&window, &source);
+    let _ = draw(&window, 640, 620);
+    assert_eq!(source.accessible_expanded(), Some(true));
+    native_key(&window, Key::DownArrow.into());
+    native_key(&window, Key::Return.into());
+    let _ = draw(&window, 640, 620);
+    assert_eq!(panel.get_source_rgb(), 0xffbd59);
+    assert_eq!(source.accessible_value().unwrap(), "Amber");
+    assert_eq!(panel.get_source_hex(), "#ffbd59");
+    assert_ne!(
+        panel
+            .global::<crate::generated::SeelenPalette>()
+            .get_primary(),
+        green
+    );
+    assert!(host.saves.lock().is_empty());
+    let save = ElementHandle::find_by_accessible_label(&panel, "Save preferences")
+        .next()
+        .unwrap();
+    native_click(&window, &save);
+    let _ = draw(&window, 640, 620);
+    assert_eq!(
+        controller.core.applied_preferences().source_seed().rgb(),
+        0xffbd59
+    );
+    assert_eq!(host.saves.lock().len(), 1);
+
+    native_click(&window, &source);
+    let _ = draw(&window, 640, 620);
+    native_key(&window, Key::DownArrow.into());
+    native_key(&window, Key::Return.into());
+    let _ = draw(&window, 640, 620);
+    assert_eq!(panel.get_source_rgb(), 0x4d90fe);
+    let cancel = ElementHandle::find_by_accessible_label(&panel, "Cancel changes")
+        .next()
+        .unwrap();
+    native_click(&window, &cancel);
+    let _ = draw(&window, 640, 620);
+    assert_eq!(panel.get_source_rgb(), 0xffbd59);
+    assert_eq!(source.accessible_value().unwrap(), "Amber");
+    assert_eq!(host.saves.lock().len(), 1);
+
+    panel.invoke_source_preset_requested(4);
+    // Direct host-property writes need one real event-loop iteration before paint.
+    slint::platform::update_timers_and_animations();
+    let _ = draw(&window, 640, 620);
+    *host.save_result.lock() = Err("disk full".into());
+    native_click(&window, &save);
+    let _ = draw(&window, 640, 620);
+    assert!(panel.get_status().contains("Could not save preferences"));
+    assert_eq!(
+        controller.core.applied_preferences().source_seed().rgb(),
+        0xffbd59
+    );
+    assert_eq!(panel.get_source_rgb(), 0xe78cba);
+    let attempts = host.saves.lock().len();
+    for index in [-1, 5, i32::MAX] {
+        panel.invoke_source_preset_requested(index);
+        assert_eq!(panel.get_source_rgb(), 0xe78cba);
+        assert_eq!(host.saves.lock().len(), attempts);
+    }
+    native_click(&window, &cancel);
+    let _ = draw(&window, 640, 620);
+    assert_eq!(panel.get_source_rgb(), 0xffbd59);
+    *host.save_result.lock() = Ok(());
+    // The same startup projection can present valid storage intent without
+    // inventing a selected preset; a Save retains its actual RGB.
+    panel.set_source_rgb(0x123456);
+    slint::platform::update_timers_and_animations();
+    let _ = draw(&window, 640, 620);
+    assert_eq!(panel.get_source_preset_index(), -1);
+    assert_eq!(source.accessible_value().unwrap(), "");
+    assert_eq!(panel.get_source_hex(), "#123456");
+    native_click(&window, &save);
+    let _ = draw(&window, 640, 620);
+    assert_eq!(
+        controller.core.applied_preferences().source_seed().rgb(),
+        0x123456
+    );
+    let attempts = host.saves.lock().len();
+    panel.set_source_rgb(-1);
+    panel.invoke_save_preferences_requested();
+    assert_eq!(host.saves.lock().len(), attempts);
+    assert!(panel.get_status().contains("invalid RGB source"));
+    panel.hide().unwrap();
+}
+
+#[test]
 fn initial_failure_is_not_stale_data_and_visible_rows_are_bounded() {
     i_slint_backend_testing::init_no_event_loop();
     let panel = Panel::new().unwrap();
@@ -798,11 +913,13 @@ fn launch_only_known_displayed_apps_and_pin_toggle_persists_saved_appearance() {
     // Pin click persists immediately, using the SEEDED appearance values,
     // not any live preview: change preview first, then pin.
     panel.set_theme_index(2);
+    panel.set_source_rgb(0x4d90fe);
     panel.set_compact(true);
     panel.invoke_pin_toggle_requested("app-editor".into(), true);
     let saved = host.saves.lock();
     let last = saved.last().unwrap();
     assert_eq!(last.theme(), Theme::System);
+    assert_eq!(last.source_seed(), crate::SourceSeed::GREEN);
     assert!(!last.compact());
     assert_eq!(last.pinned_apps(), ["app-editor".to_owned()]);
     drop(saved);
@@ -1218,6 +1335,24 @@ fn live_density_edge_and_pin_changes_resize_without_observing_or_saving_preview(
     apply_result(&controller, &panel, Ok(launcher_snapshot()));
     controller.render();
     controller.sync_appearance();
+    let green_primary = dock
+        .global::<crate::generated::SeelenPalette>()
+        .get_primary();
+    panel.set_source_rgb(0x4d90fe);
+    panel.invoke_appearance_changed();
+    let blue = panel.presentation_theme();
+    assert_eq!(dock.presentation_theme(), blue);
+    assert_eq!(toolbar.presentation_theme(), blue);
+    assert_eq!(launcher.presentation_theme(), blue);
+    assert_ne!(
+        dock.global::<crate::generated::SeelenPalette>()
+            .get_primary(),
+        green_primary
+    );
+    assert_eq!(
+        core.applied_preferences().source_seed(),
+        crate::SourceSeed::GREEN
+    );
     panel.set_compact(true);
     panel.set_dock_edge_index(crate::dock_edge_to_index(crate::DockEdge::Left));
     panel.invoke_appearance_changed();
@@ -1232,6 +1367,7 @@ fn live_density_edge_and_pin_changes_resize_without_observing_or_saving_preview(
     let saved = host.saves.lock();
     assert_eq!(saved.len(), 1);
     assert!(!saved[0].compact());
+    assert_eq!(saved[0].source_seed(), crate::SourceSeed::GREEN);
     assert_eq!(saved[0].dock_edge(), crate::DockEdge::Bottom);
     drop(saved);
     let rect = crate::dock::dock_rect(
@@ -1480,6 +1616,7 @@ impl LauncherFixture {
         });
         let panel = Panel::new().unwrap();
         panel.set_start_of_week_index(preferences.general().start_of_week().index());
+        panel.set_source_rgb(preferences.source_seed().rgb() as i32);
         let host = FixtureHost::returning(snapshot.clone());
         configure_host(&host);
         let mut subscription_error = None;
@@ -3809,6 +3946,7 @@ fn launcher_native_views_search_and_reopen_use_independent_favorites() {
 #[test]
 fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_selection() {
     let preferences = PanelPreferences::new(Theme::Light, false)
+        .with_source_seed(crate::SourceSeed::from_rgb(0xffbd59).unwrap())
         .with_dock(crate::DockEdge::Left, vec!["app-browser".into()])
         .with_launcher_display_mode(crate::LauncherDisplayMode::Fullscreen)
         .with_launcher_favorites(vec!["uninstalled".into()])
@@ -3817,12 +3955,14 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
     fixture.controller.open_launcher();
     fixture.click_launcher("All Apps");
     fixture.panel.set_theme_index(2);
+    fixture.panel.set_source_rgb(0xe78cba);
     fixture.panel.set_compact(true);
     fixture.panel.set_dock_edge_index(3);
     let focus_calls = fixture.host.ui_focus_calls.load(Ordering::SeqCst);
     fixture.click_launcher("Add to favorites: Rust Editor");
     let applied = fixture.controller.core.applied_preferences();
     assert_eq!(applied.theme(), Theme::Light);
+    assert_eq!(applied.source_seed().rgb(), 0xffbd59);
     assert!(!applied.compact());
     assert_eq!(applied.dock_edge(), crate::DockEdge::Left);
     assert_eq!(applied.pinned_apps(), preferences.pinned_apps());
@@ -3848,6 +3988,7 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
     let with_pin = fixture.controller.core.applied_preferences();
     assert_eq!(with_pin.launcher_favorites(), applied.launcher_favorites());
     assert_eq!(with_pin.theme(), Theme::Light);
+    assert_eq!(with_pin.source_seed().rgb(), 0xffbd59);
     assert_eq!(with_pin.pinned_apps(), ["app-browser", "app-editor"]);
     assert_eq!(
         with_pin.launcher().display_mode(),
@@ -3856,6 +3997,7 @@ fn launcher_favorite_transaction_preserves_complete_saved_record_and_failure_sel
     fixture.panel.invoke_save_preferences_requested();
     let appearance = fixture.controller.core.applied_preferences();
     assert_eq!(appearance.theme(), Theme::Dark);
+    assert_eq!(appearance.source_seed().rgb(), 0xe78cba);
     assert!(appearance.compact());
     assert_eq!(appearance.dock_edge(), crate::dock_edge_from_index(3));
     assert_eq!(

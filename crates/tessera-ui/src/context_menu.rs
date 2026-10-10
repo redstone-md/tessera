@@ -14,7 +14,7 @@ use crate::generated::{
     ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockRecycleAction, DockSystemCommand,
     DockWindowCommand,
 };
-use crate::theme::ThemedComponent;
+use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
@@ -55,6 +55,15 @@ pub(crate) struct ContextMenuController {
 impl ContextMenuController {
     pub(crate) fn is_open(&self) -> bool {
         self.surface.is_visible()
+    }
+
+    pub(crate) fn apply_theme(&self, theme: PresentationTheme) {
+        let generation = self.scope_generation.get();
+        self.surface.apply_presentation_theme_scoped(theme, || {
+            generation.is_some()
+                && self.scope_generation.get() == generation
+                && self.dock.upgrade().is_some()
+        });
     }
     #[cfg(test)]
     pub(crate) fn component(&self) -> &ContextMenuSurface {

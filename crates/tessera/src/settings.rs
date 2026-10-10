@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use tessera_core::SourceSeed;
 
 mod dock;
 mod general;
@@ -89,6 +90,11 @@ where
 pub(crate) struct Preferences {
     schema_version: u32,
     theme: Theme,
+    #[serde(
+        serialize_with = "serialize_source_seed",
+        deserialize_with = "deserialize_source_seed"
+    )]
+    source_seed: SourceSeed,
     compact: bool,
     dock_edge: DockEdge,
     pinned_apps: Vec<String>,
@@ -163,6 +169,38 @@ struct LegacyPreferencesV4 {
     dock: DockPreferences,
 }
 
+/// Exact V5 record: source intent is introduced only in V6.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPreferencesV5 {
+    #[serde(rename = "schema_version")]
+    _schema_version: u32,
+    theme: Theme,
+    compact: bool,
+    dock_edge: DockEdge,
+    pinned_apps: Vec<String>,
+    #[serde(deserialize_with = "deserialize_launcher_preferences")]
+    launcher: LauncherPreferences,
+    general: GeneralPreferences,
+    dock: DockPreferences,
+    shortcuts: ShortcutPreferences,
+}
+
+fn serialize_source_seed<S: serde::Serializer>(
+    seed: &SourceSeed,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u32(seed.rgb())
+}
+
+fn deserialize_source_seed<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<SourceSeed, D::Error> {
+    let rgb = u32::deserialize(deserializer)?;
+    SourceSeed::from_rgb(rgb)
+        .ok_or_else(|| serde::de::Error::custom("source_seed must be 24-bit RGB"))
+}
+
 impl Default for Preferences {
     fn default() -> Self {
         Self::new(Theme::System, false)
@@ -172,8 +210,9 @@ impl Default for Preferences {
 impl Preferences {
     pub(crate) fn new(theme: Theme, compact: bool) -> Self {
         Self {
-            schema_version: 5,
+            schema_version: 6,
             theme,
+            source_seed: SourceSeed::default(),
             compact,
             dock_edge: DockEdge::default(),
             pinned_apps: Vec::new(),
@@ -186,6 +225,15 @@ impl Preferences {
 
     pub(crate) fn theme(&self) -> Theme {
         self.theme
+    }
+
+    pub(crate) fn source_seed(&self) -> SourceSeed {
+        self.source_seed
+    }
+
+    pub(crate) fn with_source_seed(mut self, seed: SourceSeed) -> Self {
+        self.source_seed = seed;
+        self
     }
 
     pub(crate) fn compact(&self) -> bool {
@@ -288,7 +336,18 @@ impl Preferences {
                     .with_general(legacy.general)
                     .with_media_enabled(legacy.dock.media_enabled())
             }
-            5 => serde_json::from_slice(contents)
+            5 => {
+                let legacy: LegacyPreferencesV5 = serde_json::from_slice(contents)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                Self::new(legacy.theme, legacy.compact)
+                    .with_dock(legacy.dock_edge, legacy.pinned_apps)
+                    .with_launcher_favorites(legacy.launcher.favorites)
+                    .with_launcher_display_mode(legacy.launcher.display_mode)
+                    .with_general(legacy.general)
+                    .with_media_enabled(legacy.dock.media_enabled())
+                    .with_shortcuts(legacy.shortcuts.config().clone())
+            }
+            6 => serde_json::from_slice(contents)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
             _ => {
                 return Err(io::Error::new(
@@ -302,7 +361,7 @@ impl Preferences {
     }
 
     fn validate(&self) -> io::Result<()> {
-        if self.schema_version != 5 {
+        if self.schema_version != 6 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Unsupported settings schema version",
@@ -427,11 +486,63 @@ mod tests {
     }
 
     fn assert_source_groups(preferences: &Preferences) {
-        assert_eq!(preferences.schema_version, 5);
+        assert_eq!(preferences.schema_version, 6);
+        assert_eq!(preferences.source_seed(), SourceSeed::GREEN);
         assert_eq!(preferences.general().start_of_week(), StartOfWeek::Monday);
         assert!(!preferences.media_enabled());
         assert_eq!(preferences.general(), GeneralPreferences::default());
         assert_eq!(preferences.shortcuts(), &ShortcutConfig::default());
+    }
+
+    #[test]
+    fn v6_source_bounds_nonpreset_and_strict_v5_read_only_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let store = SettingsStore::new(path.clone());
+        let complete = Preferences::new(Theme::Dark, true)
+            .with_dock(DockEdge::Right, vec!["pin".into()])
+            .with_launcher_favorites(vec!["favorite".into()])
+            .with_launcher_display_mode(LauncherDisplayMode::Fullscreen)
+            .with_general(GeneralPreferences::default().with_start_of_week(StartOfWeek::Sunday))
+            .with_media_enabled(true)
+            .with_shortcuts(custom_shortcuts());
+        let mut v5 = serde_json::to_value(&complete).unwrap();
+        v5["schema_version"] = 5.into();
+        v5.as_object_mut().unwrap().remove("source_seed");
+        let original = serde_json::to_vec(&v5).unwrap();
+        fs::write(&path, &original).unwrap();
+        assert_eq!(store.load().unwrap(), complete);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        // V5 cannot smuggle V6's new field through migration.
+        v5["source_seed"] = 0x123456.into();
+        assert!(Preferences::decode(&serde_json::to_vec(&v5).unwrap()).is_err());
+        for rgb in [0, 0x123456, 0xffffff] {
+            let preferences = complete
+                .clone()
+                .with_source_seed(SourceSeed::from_rgb(rgb).unwrap());
+            store.save(&preferences).unwrap();
+            assert_eq!(store.load().unwrap(), preferences);
+            assert_eq!(store.load().unwrap().source_seed().rgb(), rgb);
+        }
+        let valid = serde_json::to_string(&complete).unwrap();
+        for invalid in [
+            valid.replace("\"schema_version\":6", "\"schema_version\":7"),
+            valid.replace("\"source_seed\":8168540", "\"source_seed\":16777216"),
+            valid.replace("\"source_seed\":8168540", "\"source_seed\":-1"),
+            valid.replace("\"source_seed\":8168540", "\"source_seed\":1.5"),
+            valid.replace("\"source_seed\":8168540", "\"source_seed\":\"7ca45c\""),
+            valid.replace("\"source_seed\":8168540,", ""),
+            valid.replace(
+                "\"source_seed\":8168540",
+                "\"source_seed\":1,\"source_seed\":2",
+            ),
+        ] {
+            assert_ne!(invalid, valid);
+            fs::write(&path, &invalid).unwrap();
+            assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
     }
 
     #[test]
@@ -493,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v1_migration_is_read_only_until_complete_v5_explicit_save() {
+    fn legacy_v1_migration_is_read_only_until_complete_v6_explicit_save() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -529,7 +640,7 @@ mod tests {
                 .with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
             store.save(&complete).unwrap();
             let persisted = fs::read_to_string(&path).unwrap();
-            assert!(persisted.contains("\"schema_version\": 5"));
+            assert!(persisted.contains("\"schema_version\": 6"));
             assert!(persisted.contains("\"launcher\""));
             assert!(persisted.contains("\"display_mode\": \"fullscreen\""));
             assert!(persisted.contains("\"favorites\""));
@@ -541,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v2_migration_retains_exact_favorites_and_only_explicit_save_writes_v5() {
+    fn legacy_v2_migration_retains_exact_favorites_and_only_explicit_save_writes_v6() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -568,7 +679,7 @@ mod tests {
         let complete = migrated.with_launcher_display_mode(LauncherDisplayMode::Fullscreen);
         store.save(&complete).unwrap();
         let persisted = fs::read_to_string(&path).unwrap();
-        assert!(persisted.contains("\"schema_version\": 5"));
+        assert!(persisted.contains("\"schema_version\": 6"));
         assert!(!persisted.contains("\"launcher_favorites\""));
         assert_eq!(store.load().unwrap(), complete);
 
@@ -619,7 +730,7 @@ mod tests {
                 .with_media_enabled(true);
             store.save(&complete).unwrap();
             let persisted = fs::read_to_string(&path).unwrap();
-            assert!(persisted.contains("\"schema_version\": 5"));
+            assert!(persisted.contains("\"schema_version\": 6"));
             assert!(persisted.contains("\"start_of_week\": \"sunday\""));
             assert!(persisted.contains("\"media_enabled\": true"));
             assert_eq!(store.load().unwrap(), complete);
@@ -630,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_v5_records_round_trip_every_general_and_dock_choice() {
+    fn complete_v6_records_round_trip_every_general_and_dock_choice() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let store = SettingsStore::new(path.clone());
@@ -649,7 +760,8 @@ mod tests {
                 assert_eq!(
                     serde_json::to_value(&preferences).unwrap(),
                     serde_json::json!({
-                        "schema_version": 5,
+                        "schema_version": 6,
+                        "source_seed": 0x7ca45c,
                         "theme": "light",
                         "compact": true,
                         "dock_edge": "left",

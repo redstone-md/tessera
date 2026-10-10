@@ -354,6 +354,10 @@ impl PanelController {
         if !self.root_current() {
             return;
         }
+        panel.set_source_rgb(saved.source_seed().rgb() as i32);
+        if !self.root_current() {
+            return;
+        }
         panel.set_compact(saved.compact());
         if !self.root_current() {
             return;

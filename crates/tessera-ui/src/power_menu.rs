@@ -17,11 +17,12 @@ use tessera_system::power::{
 };
 use tessera_system::power_updates::{PowerUpdateHint, PowerUpdatesError, PowerUpdatesHost};
 
-use crate::generated::{
-    FocusTokens, Palette, PopoverMotion, PowerMenuAction, PowerMenuSurface, SeelenPalette,
-};
+#[cfg(test)]
+use crate::Theme;
+use crate::generated::{FocusTokens, PopoverMotion, PowerMenuAction, PowerMenuSurface};
+use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::{TransientComponent, TransientWindow};
-use crate::{DesktopHost, SurfaceKind, Theme};
+use crate::{DesktopHost, SurfaceKind};
 
 mod mailbox;
 mod presentation;
@@ -73,7 +74,7 @@ struct State {
     desired: bool,
     opening: bool,
     authorized: Option<u64>,
-    theme: Theme,
+    theme: PresentationTheme,
     layout: Option<DisplayLayout>,
     display: Option<Arc<dyn DisplayContextHost>>,
     power: Option<Arc<dyn PowerHost>>,
@@ -422,7 +423,8 @@ impl PowerMenuController {
 
     /// True means a fresh context request was scheduled, not that a popup is
     /// already visible. The root validates genuine Launcher trigger authority.
-    pub(crate) fn show(&self, theme: Theme) -> Result<bool, String> {
+    pub(crate) fn show(&self, theme: impl Into<PresentationTheme>) -> Result<bool, String> {
+        let theme = theme.into();
         // Cancel before constructors, provider factories or generated effects.
         self.retirement_timer.stop();
         let generation = {
@@ -597,7 +599,8 @@ impl PowerMenuController {
         drop((display, power, updates));
     }
 
-    pub(crate) fn set_theme(&self, theme: Theme) {
+    pub(crate) fn set_theme(&self, theme: impl Into<PresentationTheme>) {
+        let theme = theme.into();
         let generation = {
             let mut state = self.state.borrow_mut();
             if state.closed {
@@ -779,19 +782,9 @@ impl PowerMenuController {
             return;
         };
         let theme = self.state.borrow().theme;
-        let scheme = match theme {
-            Theme::System => slint::language::ColorScheme::Unknown,
-            Theme::Light => slint::language::ColorScheme::Light,
-            Theme::Dark => slint::language::ColorScheme::Dark,
-        };
-        if !self.scope_is(generation, epoch) || self.state.borrow().theme != theme {
-            return;
-        }
-        surface.global::<Palette>().set_color_scheme(scheme);
-        if !self.scope_is(generation, epoch) || self.state.borrow().theme != theme {
-            return;
-        }
-        surface.global::<SeelenPalette>().set_color_scheme(scheme);
+        surface.apply_presentation_theme_scoped(theme, || {
+            self.scope_is(generation, epoch) && self.state.borrow().theme == theme
+        });
     }
 
     fn pump_read(&self) {

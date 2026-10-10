@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 use super::*;
-use crate::generated::Panel;
+use crate::generated::{Palette, Panel, SeelenPalette};
 use crate::{PanelPreferences, PanelSnapshot, SystemAction};
 use i_slint_backend_testing::ElementHandle;
 use slint::LogicalPosition;

@@ -15,6 +15,15 @@ Runtime details below describe **published alpha.20**, retaining alpha.19's curr
 
 Future integrations must justify any additional rights and stay separate from appearance settings. Prefer scoped documented commands and events over techniques that alter other processes. A theme must not silently enable a system integration.
 
+Development source-color settings use strict **schema 6**, persisting validated
+opaque 24-bit source RGB (default `#7ca45c`) rather than a preset index or generated
+paint. Exact schemas 1–5 migrate only in memory; schema 5 receives default Green
+while retaining every existing group. The existing atomic 16-KiB budget includes
+the newline. Settings Save commits the source draft; independent collection,
+launcher-mode and media writes retain the applied source. Invalid/future bytes
+still disable ordinary saves and remain untouched. This is not an alpha.20
+storage change or a new test/native certification.
+
 **Native effects are not cosmetic settings.** The six Power actions directly initiate actual OS operations without an extra app confirmation, matching the source policy; save work and select each only deliberately in a safe session. Privileged power requests use only the fixed shutdown privilege on a private child thread's impersonation token, never elevate or modify the process token. Checked retirement precedes completion; if child termination cannot be proven, the owner remains quarantined/busy without a false completion. Native failure can follow initiation, so never automatically replay. Accepted requests and two-key update hints prove neither final OS state nor update completion.
 
 Published alpha.18's User-popup/avatar-corner **Log Out** also requests immediate session logoff with **no extra Tessera confirmation**, sharing command admission without creating a Power window. Save work and verify sign-in/recovery first; do not activate it during ordinary read-only checks. Publication and accepted-command receipts do not certify the eventual native outcome.

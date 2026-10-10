@@ -313,6 +313,7 @@ mod tests {
 
     fn preferences() -> PanelPreferences {
         PanelPreferences::new(Theme::Dark, true)
+            .with_source_seed(crate::SourceSeed::from_rgb(0x123456).unwrap())
             .with_dock(crate::DockEdge::Left, vec!["known-key".into()])
             .with_launcher_favorites(vec!["favorite-only".into(), "known-key".into()])
             .unwrap()
@@ -357,6 +358,7 @@ mod tests {
             .applied_preferences()
             .with_dock(core.applied_dock_edge(), vec!["new-pin".into()]);
         assert_eq!(persisted.theme(), Theme::Dark);
+        assert_eq!(persisted.source_seed().rgb(), 0x123456);
         assert!(persisted.compact());
         assert_eq!(persisted.dock_edge(), crate::DockEdge::Left);
         assert_eq!(

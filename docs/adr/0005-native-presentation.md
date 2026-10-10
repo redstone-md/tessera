@@ -149,16 +149,54 @@ Actual source-credited footage and the primary
 inform the first layer; that October configuration is not the August video's
 exact revision, and its low-resolution footage is not a pixel/font/timing oracle.
 
-Product windows now use one complete static green light/dark semantic role
-table behind the existing captured-theme boundary. Explicit `seelen_reference`
-retains neutral fixture paint, not old geometry. Toolbar allocation is 40px
+Development product windows derive paired TonalSpot light/dark roles from a
+validated opaque 24-bit `SourceSeed` (default `#7ca45c`) through pinned
+`material-colors` 0.4.2. The engine computes the standard 49-role schemes;
+17 consumed semantic roles and four 8%/12% opaque sRGB interaction paints cross
+the existing per-window captured-theme boundary. Capture preserves source
+intent and the exact role pair, including lazy children and Power recreation.
+Explicit `seelen_reference` retains independent literal neutral fixture paint,
+not old geometry. Toolbar allocation is 40px
 with 32px islands; the floating dock uses 46px slots, 33px icons, 5px
 padding/margins, 3px gaps and a 23px body radius. Genuine actions, owned input
 slots, typed projections and independent external running indicators remain.
 Settings uses opaque surface/container levels and paired selected text/icons;
 its older RGB gradients paint only in the explicit neutral skin. Calendar
 selected dates also pair primary/onPrimary instead of stock accent foreground.
-No new framework, provider, dependency, borrowed font or wallpaper is added.
+No new framework, provider, borrowed font or wallpaper is added. The maintained
+color engine is the sole new direct dependency; no handwritten HCT is introduced.
+
+The existing Appearance page offers Green, Amber, Blue, Coral and Pink source
+choices. Preview reaches retained product surfaces; Save commits the complete
+settings draft and Cancel restores applied source intent. Valid non-preset RGB
+shows its actual hex without falsely selecting Green. Strict schema 6 stores
+only source RGB, not preset indices or computed colors; exact schema 5 and older
+records migrate read-only with default Green. Independent collection/media
+writes preserve applied source intent rather than committing preview paint.
+**Source-color local proof:** parent-owned Rust 1.92 locked workspace tests passed
+1,454 cases across 19 suites (827 UI; two separately gated GL cases ignored).
+The original genuine pointer/keyboard/AX preset test reproduced a stale ComboBox
+selection after Cancel; a two-way index binding fixed it without weakening its
+RGB, Save/Cancel, failed-write or accessibility assertions. Direct host-property
+fixtures drain one SDK event-loop iteration before the existing strict draw;
+no sleep, retry or forced redraw was added. Independent Green role/state literals,
+five deterministic contrasting source pairs, non-preset RGB, strict migration,
+complete-record preservation and child/Power theme retention passed.
+
+Strict Rust 1.92 Linux/MSVC workspace/all-target Clippy and warnings-denied
+rustdoc, format/diff and 35 notice assertions passed. The lock adds only
+`material-colors` 0.4.2: all 546 existing registry records are unchanged.
+A bounded collector fixture retained 25 complete byte-verified original
+grant/notice texts, including the engine's MIT/Apache grants; this is not a full
+vendored release inventory. All 11 parked media files remain byte-identical.
+Both actual owned Mesa scenarios passed separately at 1×/2×: Material
+1.07s/1.84s and neutral/source 9.99s/16.29s. All 180 P6 frames
+(90/scale; 338,365,734 bytes) have complete payloads and matching families;
+all 32 Material frames retain literal doubled dimensions. Default Green
+light/dark frames were visually inspected; this is not a five-preset native
+desktop capture. Fresh native Windows execution remains required. The receipts
+below certify earlier static-green checkpoints only, not this HCT/schema-6 layer,
+optimized release assets, ordinary effects or the VM toolbar offset.
 
 **First tracer (`dd52da5`) local proof:** focused geometry/inspection checks passed (8/6); all 821 software UI cases
 passed with two explicitly ignored native GL scenarios. Both actual Mesa
@@ -170,8 +208,8 @@ source-vector, input/AX/focus and no-idle guards were not weakened.
 The full all-target workspace gate passed 1,446 tests/14 suites (two ignored);
 strict Rust 1.92 Linux/MSVC workspace/all-target Clippy and format/diff passed.
 Native Windows execution and documentation gates remain separate requirements.
-This is not HCT generation, wallpaper adaptation, blur, exact footage motion
-or completed native AppBar/PMv2/VM-offset certification. The neutral section
+That first tracer did not include HCT generation, wallpaper adaptation, blur,
+exact footage motion or completed native AppBar/PMv2/VM-offset certification. The neutral section
 below records the earlier source checkpoint, not the final appearance target.
 
 **Merged Material/selector local proof:** the isolated candidate combines
@@ -186,9 +224,22 @@ double dimensions. Source selectors explicitly request neutral fixture paint
 before first show; Calendar reuses the existing genuine fixture.
 All 35 notice assertions, full original three-family grants/attribution and
 exact CC BY keyboard/grant hashes passed. The 11 separately parked media
-files remain byte-identical. This merged candidate still requires its own
-native Windows execution; earlier native receipts do not certify Material,
-new release assets, ordinary effects or the reported VM offset.
+files remain byte-identical. Earlier native receipts do not certify this
+merged Material layer; its exact-source native receipt follows.
+
+**Actual native merged checkpoint (`8f7844b`):**
+[CI 38005383181](https://github.com/redstone-md/tessera/actions/runs/38005383181)
+passed Linux stable (1,448 tests/19 suites, two ignored) and Windows
+1.92/stable (each 1,537/19 suites, zero failed/ignored), including strict
+Clippy/rustdoc, the controlled inspection and isolated deployment checks.
+Complete root-job logs and exact-source metadata were independently
+authenticated/recounted; packaging was skipped with zero steps.
+[Native Debug 38005383217](https://github.com/redstone-md/tessera/actions/runs/38005383217)
+passed at that same source in 11m58s: 1,537/19 suites, static-CRT production
+GUI, two actual UI-thread pulses and owned cleanup. This hosted diagnostic
+startup excludes ordinary providers/preferences/hooks. It does not certify
+subsequent seed/HCT/schema-6 work, optimized release assets, ordinary effects,
+interactive Windows composition/DPI/focus or the reported VM toolbar offset.
 
 
 ### Alpha.21 source visual layer (development)

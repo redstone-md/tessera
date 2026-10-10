@@ -62,6 +62,7 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         tessera_ui::StartOfWeek::Saturday => crate::settings::StartOfWeek::Saturday,
     };
     Preferences::new(theme, preferences.compact())
+        .with_source_seed(preferences.source_seed())
         .with_dock(edge, preferences.pinned_apps().to_vec())
         .with_launcher_favorites(preferences.launcher().favorites().to_vec())
         .with_launcher_display_mode(mode)
@@ -97,6 +98,7 @@ fn to_ui_preferences(
         crate::settings::StartOfWeek::Saturday => tessera_ui::StartOfWeek::Saturday,
     };
     tessera_ui::PanelPreferences::new(theme, preferences.compact())
+        .with_source_seed(preferences.source_seed())
         .with_dock(edge, preferences.pinned_apps().to_vec())
         .with_launcher_display_mode(mode)
         .with_general(tessera_ui::GeneralPreferences::default().with_start_of_week(start))
@@ -834,6 +836,7 @@ mod preference_tests {
         let store = SettingsStore::new(directory.path().join("settings.json"));
         let favorites: Vec<_> = (0..80).map(|index| format!("favorite-{index}")).collect();
         let applied = tessera_ui::PanelPreferences::new(tessera_ui::Theme::Dark, true)
+            .with_source_seed(tessera_core::SourceSeed::from_rgb(0x123456).unwrap())
             .with_dock(tessera_ui::DockEdge::Left, vec!["dock-only".into()])
             .with_launcher_favorites(favorites.clone())
             .unwrap()
@@ -864,6 +867,7 @@ mod preference_tests {
             store.save(&from_ui_preferences(&edited)).unwrap();
             let reloaded = to_ui_preferences(&store.load().unwrap()).unwrap();
             assert_eq!(reloaded, edited);
+            assert_eq!(reloaded.source_seed().rgb(), 0x123456);
             assert_eq!(
                 reloaded.launcher().display_mode(),
                 tessera_ui::LauncherDisplayMode::Fullscreen
@@ -891,6 +895,7 @@ mod preference_tests {
                         .with_settings_override(chord)
                         .unwrap();
                     let stored = Preferences::new(crate::settings::Theme::Dark, true)
+                        .with_source_seed(tessera_core::SourceSeed::from_rgb(0x123456).unwrap())
                         .with_dock(crate::settings::DockEdge::Right, vec!["dock-only".into()])
                         .with_launcher_favorites(vec!["exact".into(), "EXACT".into()])
                         .with_launcher_display_mode(
@@ -912,7 +917,7 @@ mod preference_tests {
     }
 
     #[test]
-    fn invalid_v5_shortcuts_disable_saves_without_replacing_private_or_future_bytes() {
+    fn invalid_v6_shortcuts_disable_saves_without_replacing_private_or_future_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
         let valid = serde_json::to_string(&Preferences::default()).unwrap();
@@ -929,7 +934,9 @@ mod preference_tests {
                 r#""settings_override":null"#,
                 r#""settings_override":null,"personal_email":"private@example.invalid""#,
             ),
-            valid.replace(r#""schema_version":5"#, r#""schema_version":6"#),
+            valid.replace(r#""schema_version":6"#, r#""schema_version":7"#),
+            valid.replace(r#""source_seed":8168540"#, r#""source_seed":16777216"#),
+            valid.replace(r#""source_seed":8168540,"#, ""),
         ] {
             assert_ne!(original, valid);
             std::fs::write(&path, &original).unwrap();

@@ -14,6 +14,7 @@ tessera-core.workspace = true
 tessera-system.workspace = true
 slint.workspace = true
 parking_lot.workspace = true
+material-colors = "=0.4.2"
 
 [target.'cfg(windows)'.dependencies]
 slint = { workspace = true, features = ["unstable-winit-030"] }

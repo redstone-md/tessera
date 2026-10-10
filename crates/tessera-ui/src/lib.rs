@@ -88,6 +88,7 @@ pub use dto::{
     SurfaceKind, SurfaceMode, SystemAction, WindowAction,
 };
 pub use launcher::{LauncherDisplayMode, LauncherPreferences};
+pub use tessera_core::SourceSeed;
 
 /// Preferred color scheme for the panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -214,6 +215,7 @@ pub(crate) fn start_clock_timer(
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PanelPreferences {
     theme: Theme,
+    source_seed: SourceSeed,
     compact: bool,
     dock_edge: DockEdge,
     pins: Vec<String>,
@@ -228,6 +230,7 @@ impl PanelPreferences {
     pub fn new(theme: Theme, compact: bool) -> Self {
         Self {
             theme,
+            source_seed: SourceSeed::default(),
             compact,
             dock_edge: DockEdge::default(),
             pins: Vec::new(),
@@ -243,6 +246,17 @@ impl PanelPreferences {
         self.theme = theme;
         self.compact = compact;
         self.dock_edge = edge;
+        self
+    }
+
+    /// Applied source intent, independent of generated light/dark presentation paint.
+    pub fn source_seed(&self) -> SourceSeed {
+        self.source_seed
+    }
+
+    /// Changes source intent without persisting generated color roles.
+    pub fn with_source_seed(mut self, seed: SourceSeed) -> Self {
+        self.source_seed = seed;
         self
     }
 

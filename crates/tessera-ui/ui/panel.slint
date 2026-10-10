@@ -12,7 +12,7 @@ export { DockWindowCommand, DockSystemCommand, DockMenuKind, DockMenuAction, Doc
 export { ContextMenuSurface } from "context-menu.slint";
 export { TooltipSurface } from "tooltip.slint";
 export { TileBounds, FocusTokens } from "tiles.slint";
-export { SeelenPalette } from "palette.slint";
+export { SeelenPalette, MaterialRoles } from "palette.slint";
 export { PopoverTokens, PopoverMotion } from "popover.slint";
 export { Toolbar } from "toolbar.slint";
 export { Launcher, LaunchTile, LaunchRow, LauncherNavigation, LauncherView, LauncherDisplayMode, LauncherGridMetrics, LauncherDragVisual } from "launcher.slint";
@@ -140,6 +140,9 @@ export component Panel inherits Window {
     in-out property <[AppRow]> apps;
     in-out property <string> search;
     in-out property <int> theme-index;
+    in-out property <int> source-rgb: 8168540; // #7ca45c
+    in property <string> source-hex: "#7ca45c";
+    in-out property <int> source-preset-index: 0;
     in-out property <int> dock-edge-index;
     in-out property <bool> compact;
     in-out property <int> start-of-week-index: 0;
@@ -190,6 +193,7 @@ export component Panel inherits Window {
     public function cancel-shortcut-input() { shortcut-preferences.cancel-input(); }
     // A shared live appearance preview updates every surface without Save.
     callback appearance-changed();
+    callback source-preset-requested(int);
     // The one-shot dock-mode readiness pulse: `run` wires this to the
     // supervisor heartbeat armer on the UI thread (the heartbeat is not
     // Send, so the Send observation route reaches it only through here).
@@ -216,6 +220,7 @@ export component Panel inherits Window {
     }
     changed compact => { root.appearance-changed(); }
     changed dock-edge-index => { root.appearance-changed(); }
+    changed source-rgb => { root.appearance-changed(); }
 
     property <length> row-height: root.compact ? 24px : 32px;
     property <int> selected-page: 0;
@@ -484,6 +489,19 @@ export component Panel inherits Window {
                                 accessible-label: "Appearance theme";
                                 model: ["System", "Light", "Dark"];
                                 current-index <=> root.theme-index;
+                            }
+                        }
+                        SettingsRow {
+                            label: "Color source";
+                            description: "Current source: " + root.source-hex + ". Preview now; Save to keep.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Appearance color source";
+                                model: ["Green", "Amber", "Blue", "Coral", "Pink"];
+                                current-index <=> root.source-preset-index;
+                                selected(value) => { root.source-preset-requested(self.current-index); }
                             }
                         }
                         SettingsRow {

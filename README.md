@@ -79,7 +79,7 @@ Linux workspace builds (including headless UI tests and cross-target builds) req
 
 | Crate | Responsibility |
 | --- | --- |
-| `tessera-core` | Pure geometry, window identity and modes, and the `MainStack` layout engine. |
+| `tessera-core` | Pure geometry, window identity/modes, the `MainStack` layout engine, and shared validated source-color intent; no OS/UI dependencies. |
 | `tessera-system` | Portable typed system-capability contracts and pure calendar/visibility state; no OS/UI dependencies. |
 | `tessera-windows` | Desktop observation, explicit native effects, worker-owned system providers/events, application icons, and isolated shell supervision/recovery. |
 | `tessera-ui` | Native Slint desktop/popups, scoped input, portable presenters, asynchronous state and preference drafts; no Windows-adapter dependency. |
@@ -238,9 +238,15 @@ The user's [Material 3 / end4-pC video reference](https://www.youtube.com/watch?
 sets the appearance direction; Seelen remains the functional contract.
 The isolated merged Material/selector candidate passed 1,448 tests/19 suites,
 strict Linux/MSVC checks, rustdoc, 35 notices and both actual GL scenarios at
-1×/2× (180 complete frames). Its own native Windows execution remains required;
-older native receipts do not certify the new tinted layer.
-Providers, persisted preferences and explicit Save remain unchanged. See the
+1×/2× (180 complete frames). Its exact merged checkpoint `8f7844b` then passed
+[native CI](https://github.com/redstone-md/tessera/actions/runs/38005383181)
+(Windows 1.92/stable: 1,537 tests each) and
+[Debug GUI](https://github.com/redstone-md/tessera/actions/runs/38005383217)
+(two actual UI pulses and owned cleanup). Complete logs were authenticated/
+recounted; packaging was skipped. Those gates cover the earlier static-green
+layer, not later RGB/HCT/schema-6 work or ordinary-session effects. The new
+source presets reuse explicit preview/Save/Cancel and complete-record storage.
+See the
 [exact source/gate boundaries and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
 this is not a published release, complete 1:1 parity or a fix claim for the VM toolbar offset.
 

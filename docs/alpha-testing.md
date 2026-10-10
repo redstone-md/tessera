@@ -68,6 +68,15 @@ The update label is only a diagnostic existence hint from two HKLM keys: `SOFTWA
 
 All explicit writes use one atomic complete-record save with a **16-KiB budget including the newline**. Explicit **Settings Save commits the current settings draft, including shortcuts**. Independent Pin/Favorite/reorder/mode/media saves preserve applied General/appearance/shortcuts and do not commit an unsaved settings draft; previews do not save. Failed writes preserve applied state. Invalid/future/damaged startup files stay untouched and disable ordinary saves for that session. Back up and rename the file manually, then restart to recover. **Alpha.16 treats schema 5 as future, leaves its bytes unchanged and disables ordinary Save**; there is no automatic downgrade conversion. Earlier readers may discard unsupported fields through their own Save paths. No automatic backup or multi-instance merge is provided; no captions, HWNDs, PIDs or shell commands are stored.
 
+**Development source-color layer:** schema 6 adds required 24-bit RGB source
+intent, default `#7ca45c`, with exact read-only schema-5 migration. Appearance's
+Green/Amber/Blue/Coral/Pink choices preview real retained surfaces; Save persists
+the source and Cancel restores the applied value. Valid non-preset RGB remains
+visible as its actual hex with no falsely selected preset. Independent
+Pin/Favorite/order/mode/media writes preserve applied source, not an unsaved
+preview. Fresh source-color/storage/render/native checks remain required;
+the shipped alpha.20 facts above and older immutable receipts are unchanged.
+
 ## Eight focused checks — ordinary session first
 
 1. **Launch/recovery:** confirm version/commit, normal-user startup, native toolbar/dock/menu, no initial focus steal, and exact taskbar restoration after Exit. Check GUI-crash/heartbeat recovery only in a disposable VM with the supervisor still alive.

@@ -3,40 +3,86 @@
 
 import { Palette } from "std-widgets.slint";
 
-// Presentation roles shared by independently owned native windows. The product
-// uses a chosen deterministic green preset informed by the Material3 reference;
-// this is neither an HCT/generated scheme nor an exact video-sampled table.
-// Explicit reference mode retains the published Seelen neutral fixture colors.
-// System follows the stock toolkit's resolved brightness; stock Palette colors
-// remain native and are never replaced with our presentation roles.
+// Per-window adapter for source-derived TonalSpot roles. Stock Palette remains
+// native. Explicit reference mode retains independent literal neutral fixtures.
+export struct MaterialRoles {
+    surface: color,
+    surface-container-low: color,
+    surface-container: color,
+    surface-container-high: color,
+    surface-container-highest: color,
+    on-surface: color,
+    on-surface-variant: color,
+    primary: color,
+    on-primary: color,
+    primary-container: color,
+    on-primary-container: color,
+    outline: color,
+    outline-variant: color,
+    surface-hover: color,
+    surface-pressed: color,
+    primary-container-hover: color,
+    primary-container-pressed: color,
+    error: color,
+    on-error: color,
+    error-container: color,
+    on-error-container: color,
+}
 export global SeelenPalette {
     in-out property <ColorScheme> color-scheme;
     in-out property <bool> reference-mode: false;
+    in-out property <int> source-rgb: 8168540; // #7ca45c
+    // Bootstrap paint for directly constructed surfaces, independently probed
+    // from material-colors 0.4.2. Product capture/apply installs engine output.
+    in-out property <MaterialRoles> light-roles: {
+        surface: #f9faef, surface-container-low: #f3f5ea,
+        surface-container: #edefe4, surface-container-high: #e7e9de,
+        surface-container-highest: #e2e3d9, on-surface: #1a1d16,
+        on-surface-variant: #44483e, primary: #48672f, on-primary: #ffffff,
+        primary-container: #c8eea8, on-primary-container: #0b2000,
+        outline: #74796d, outline-variant: #c4c8ba,
+        surface-hover: #e7e8de, surface-pressed: #dedfd5,
+        primary-container-hover: #b9de9b, primary-container-pressed: #b1d594,
+        error: #ba1a1a, on-error: #ffffff,
+        error-container: #ffdad6, on-error-container: #410002,
+    };
+    in-out property <MaterialRoles> dark-roles: {
+        surface: #11140e, surface-container-low: #1a1d16,
+        surface-container: #1e211a, surface-container-high: #282b24,
+        surface-container-highest: #33362f, on-surface: #e2e3d9,
+        on-surface-variant: #c4c8ba, primary: #add28e, on-primary: #1b3704,
+        primary-container: #314f19, on-primary-container: #c8eea8,
+        outline: #8e9286, outline-variant: #44483e,
+        surface-hover: #22251e, surface-pressed: #2a2d26,
+        primary-container-hover: #3d5c24, primary-container-pressed: #43622a,
+        error: #ffb4ab, on-error: #690005,
+        error-container: #93000a, on-error-container: #ffdad6,
+    };
     out property <bool> dark: self.color-scheme == ColorScheme.dark
         || (self.color-scheme == ColorScheme.unknown
             && Palette.background.to-oklch().lightness < 0.5);
-    // Complete green light/dark role table, independent of the toolkit accent.
-    out property <color> green-surface: self.dark ? #10150d : #f6faf0;
-    out property <color> surface-container-low: self.dark ? #191e15 : #eef3e8;
-    out property <color> surface-container: self.dark ? #1d2319 : #e8eddf;
-    out property <color> surface-container-high: self.dark ? #272d23 : #e2e7d9;
-    out property <color> surface-container-highest: self.dark ? #32382d : #dce1d3;
-    out property <color> on-surface: self.dark ? #e0e5d6 : #191d16;
-    out property <color> on-surface-variant: self.dark ? #c4ccba : #444b3d;
-    out property <color> primary: self.dark ? #aad38e : #45682b;
-    out property <color> on-primary: self.dark ? #1c370a : #ffffff;
-    out property <color> primary-container: self.dark ? #304f18 : #c6edaa;
-    out property <color> on-primary-container: self.dark ? #c6edaa : #102004;
-    out property <color> outline: self.dark ? #8e9784 : #747d6b;
-    out property <color> outline-variant: self.dark ? #444c3c : #c4ccba;
-    out property <color> surface-hover: self.dark ? #2a3026 : #dcded2;
-    out property <color> surface-pressed: self.dark ? #363d30 : #cfd2c5;
-    out property <color> primary-container-hover: self.dark ? #3f5f27 : #b4d899;
-    out property <color> primary-container-pressed: self.dark ? #4e6f35 : #a2c289;
-    out property <color> error: self.dark ? #ffb4ab : #ba1a1a;
-    out property <color> on-error: self.dark ? #690005 : #ffffff;
-    out property <color> error-container: self.dark ? #93000a : #ffdad6;
-    out property <color> on-error-container: self.dark ? #ffdad6 : #410002;
+    property <MaterialRoles> roles: self.dark ? self.dark-roles : self.light-roles;
+    out property <color> green-surface: self.roles.surface;
+    out property <color> surface-container-low: self.roles.surface-container-low;
+    out property <color> surface-container: self.roles.surface-container;
+    out property <color> surface-container-high: self.roles.surface-container-high;
+    out property <color> surface-container-highest: self.roles.surface-container-highest;
+    out property <color> on-surface: self.roles.on-surface;
+    out property <color> on-surface-variant: self.roles.on-surface-variant;
+    out property <color> primary: self.roles.primary;
+    out property <color> on-primary: self.roles.on-primary;
+    out property <color> primary-container: self.roles.primary-container;
+    out property <color> on-primary-container: self.roles.on-primary-container;
+    out property <color> outline: self.roles.outline;
+    out property <color> outline-variant: self.roles.outline-variant;
+    out property <color> surface-hover: self.roles.surface-hover;
+    out property <color> surface-pressed: self.roles.surface-pressed;
+    out property <color> primary-container-hover: self.roles.primary-container-hover;
+    out property <color> primary-container-pressed: self.roles.primary-container-pressed;
+    out property <color> error: self.roles.error;
+    out property <color> on-error: self.roles.on-error;
+    out property <color> error-container: self.roles.error-container;
+    out property <color> on-error-container: self.roles.on-error-container;
 
     // Compatibility names keep existing surfaces on consistent paired roles
     // without rewriting their input/state modules or native stock controls.
@@ -54,7 +100,7 @@ export global SeelenPalette {
     out property <color> secondary: self.reference-mode
         ? (self.dark ? #bababa : #3d3d3d) : self.on-surface-variant;
     out property <color> muted: self.reference-mode
-        ? (self.dark ? #898989 : #6f6f6f) : (self.dark ? #abb59e : #58634e);
+        ? (self.dark ? #898989 : #6f6f6f) : self.on-surface-variant;
     out property <color> running-indicator: self.reference-mode
         ? (self.dark ? oklch(0.72, 0, 0) : oklch(0.45, 0, 0)) : self.primary;
     out property <color> danger: self.reference-mode

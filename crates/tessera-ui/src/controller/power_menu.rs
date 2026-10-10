@@ -9,6 +9,7 @@ use std::cell::Cell;
 use super::popups::PopupKind;
 use super::{Panel, PanelController, Rc};
 use crate::power_menu::PowerMenuController;
+use crate::theme::ThemedComponent;
 use crate::transient_window::{TransientCache, TransientScope};
 
 pub(super) type PowerPopups = TransientCache<PowerMenuController>;
@@ -209,11 +210,7 @@ impl PanelController {
         let Some(power) = self.ensure_power_controller(current) else {
             return;
         };
-        let theme = self
-            .panel
-            .upgrade()
-            .map(|panel| crate::theme_from_index(panel.get_theme_index()))
-            .unwrap_or_default();
+        let theme = launcher.presentation_theme();
         if !current() {
             return;
         }

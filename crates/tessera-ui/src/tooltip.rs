@@ -11,7 +11,7 @@ use std::time::Duration;
 use slint::ComponentHandle;
 
 use crate::generated::{PopoverTokens, TileBounds, TooltipSurface};
-use crate::theme::ThemedComponent;
+use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientWindow;
 use crate::{DesktopHost, DockContext, SurfaceKind, sanitize};
 
@@ -160,6 +160,12 @@ impl TooltipController {
     }
     pub(crate) fn disable_motion(&self) {
         self.surface.disable_motion();
+    }
+
+    pub(crate) fn apply_theme(&self, theme: PresentationTheme) {
+        let source = self.source.get();
+        self.surface
+            .apply_presentation_theme_scoped(theme, || self.source.get() == source);
     }
 
     fn window(&self) -> &slint::Window {

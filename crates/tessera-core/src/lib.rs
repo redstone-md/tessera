@@ -14,11 +14,13 @@
 mod error;
 mod layout;
 mod primitive;
+mod source_seed;
 mod window;
 
 pub use error::LayoutError;
 pub use layout::{MainStack, Placement};
 pub use primitive::Rect;
+pub use source_seed::SourceSeed;
 pub use window::{Window, WindowId, WindowMode};
 
 /// Top-level toolbar allocation in 96-DPI logical pixels, including island gutters.

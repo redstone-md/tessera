@@ -86,6 +86,7 @@ fn root_preferences_keep_all_groups_and_ordinary_options_enable_global_input() {
     assert!(crate::RunOptions::default().global_shortcuts_enabled);
     let shortcuts = ShortcutConfig::default().with_enabled(false);
     let saved = seeded_preferences()
+        .with_source_seed(crate::SourceSeed::from_rgb(0x123456).unwrap())
         .with_general(
             crate::GeneralPreferences::default().with_start_of_week(crate::StartOfWeek::Sunday),
         )
@@ -108,9 +109,11 @@ fn root_preferences_keep_all_groups_and_ordinary_options_enable_global_input() {
             .with_general(crate::GeneralPreferences::default()),
     ] {
         assert_eq!(changed.shortcuts(), &shortcuts);
+        assert_eq!(changed.source_seed().rgb(), 0x123456);
     }
     let replaced = saved.clone().with_shortcuts(ShortcutConfig::default());
     assert_eq!(replaced.general(), saved.general());
+    assert_eq!(replaced.source_seed(), saved.source_seed());
     assert_eq!(replaced.media_enabled(), saved.media_enabled());
     assert_eq!(replaced.launcher(), saved.launcher());
     assert_eq!(replaced.theme(), saved.theme());

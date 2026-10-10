@@ -136,18 +136,18 @@ fn native_gl_material3_toolbar_and_dock_frames() {
             (
                 "dark",
                 ColorScheme::Dark,
-                [0x30, 0x4f, 0x18],
-                [0xc6, 0xed, 0xaa],
-                [0x1d, 0x23, 0x19],
-                [0x44, 0x4c, 0x3c],
+                [0x31, 0x4f, 0x19],
+                [0xc8, 0xee, 0xa8],
+                [0x1e, 0x21, 0x1a],
+                [0x44, 0x48, 0x3e],
             ),
             (
                 "light",
                 ColorScheme::Light,
-                [0xc6, 0xed, 0xaa],
-                [0x10, 0x20, 0x04],
-                [0xe8, 0xed, 0xdf],
-                [0xc4, 0xcc, 0xba],
+                [0xc8, 0xee, 0xa8],
+                [0x0b, 0x20, 0x00],
+                [0xed, 0xef, 0xe4],
+                [0xc4, 0xc8, 0xba],
             ),
         ] {
             toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
@@ -188,13 +188,13 @@ fn native_gl_material3_toolbar_and_dock_frames() {
             (
                 "dark",
                 ColorScheme::Dark,
-                [0xaa, 0xd3, 0x8e],
-                [0x1c, 0x37, 0x0a],
+                [0xad, 0xd2, 0x8e],
+                [0x1b, 0x37, 0x04],
             ),
             (
                 "light",
                 ColorScheme::Light,
-                [0x45, 0x68, 0x2b],
+                [0x48, 0x67, 0x2f],
                 [0xff, 0xff, 0xff],
             ),
         ] {
@@ -296,16 +296,16 @@ fn verify_material3_settings_navigation(
     use i_slint_backend_testing::ElementHandle;
     let (surface, low, container, outline) = match scheme {
         ColorScheme::Dark => (
-            [0x10, 0x15, 0x0d],
-            [0x19, 0x1e, 0x15],
-            [0x1d, 0x23, 0x19],
-            [0x44, 0x4c, 0x3c],
+            [0x11, 0x14, 0x0e],
+            [0x1a, 0x1d, 0x16],
+            [0x1e, 0x21, 0x1a],
+            [0x44, 0x48, 0x3e],
         ),
         ColorScheme::Light => (
-            [0xf6, 0xfa, 0xf0],
-            [0xee, 0xf3, 0xe8],
-            [0xe8, 0xed, 0xdf],
-            [0xc4, 0xcc, 0xba],
+            [0xf9, 0xfa, 0xef],
+            [0xf3, 0xf5, 0xea],
+            [0xed, 0xef, 0xe4],
+            [0xc4, 0xc8, 0xba],
         ),
         _ => panic!("the native Material fixture requires an explicit theme"),
     };
