@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 import { Palette } from "std-widgets.slint";
+import "../assets/fonts/google-sans-flex/GoogleSansFlex[ROND,opsz,slnt,wdth,wght].ttf";
 
 // Per-window adapter for source-derived TonalSpot roles. Stock Palette remains
 // native. Explicit reference mode retains independent literal neutral fixtures.
@@ -32,6 +33,7 @@ export global SeelenPalette {
     in-out property <ColorScheme> color-scheme;
     in-out property <bool> reference-mode: false;
     in-out property <int> source-rgb: 8168540; // #7ca45c
+    in-out property <string> font-family: "";
     // Bootstrap paint for directly constructed surfaces, independently probed
     // from material-colors 0.4.2. Product capture/apply installs engine output.
     in-out property <MaterialRoles> light-roles: {

@@ -73,7 +73,7 @@ fn lifetime_actual_thirty_seconds_retires_ownership_and_recreation_resets_choice
     let seed = crate::SourceSeed::from_rgb(0x4d90fe).unwrap();
     let blue = PresentationTheme::from_source(slint::language::ColorScheme::Dark, seed);
     let events = fixture.events();
-    fixture.popup.set_theme(blue);
+    fixture.popup.set_theme(blue.clone());
     assert_eq!(fixture.component().presentation_theme(), blue);
     assert_ne!(fixture.component().presentation_theme(), green);
     assert_eq!(
@@ -104,7 +104,7 @@ fn lifetime_actual_thirty_seconds_retires_ownership_and_recreation_resets_choice
         .replies
         .push_back(Reply::Delayed);
     let blue_light = PresentationTheme::from_source(slint::language::ColorScheme::Light, seed);
-    assert!(fixture.popup.show(blue_light).unwrap());
+    assert!(fixture.popup.show(blue_light.clone()).unwrap());
     assert_eq!(fixture.component().presentation_theme(), blue_light);
     trace_current(&fixture);
     assert!(fixture.component().get_install_updates());

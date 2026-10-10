@@ -161,6 +161,7 @@ export enum LauncherDisplayMode { Windowed, Fullscreen }
 // icon and a 0.8rem name, radius 10. Escape hides the window (FocusScope at
 // the window level). No fake media, tray, or workspace data is rendered.
 export component Launcher inherits Window {
+    default-font-family: SeelenPalette.font-family;
     no-frame: true;
     background: transparent;
     title: "Tessera applications";

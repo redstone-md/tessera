@@ -256,6 +256,15 @@ effects remain uncertified. See the
 [exact source/gate boundaries and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
 this is not a published release, complete 1:1 parity or a fix claim for the VM toolbar offset.
 
+Material windows embed the unmodified OFL-1.1 Google Sans Flex 5.000 font and
+share its family through the existing captured theme, including lazy popups
+and Power recreation. Original licenses, trademark text and immutable hashes
+are retained in `crates/tessera-ui/assets/fonts/google-sans-flex`.
+Neutral reference fixtures retain the system font. Sizes/layout remain unchanged;
+missing Cyrillic/Arabic/Hebrew glyphs rely on the SDK's platform fallback, not a
+claim of font coverage. This family choice does not certify the video's exact
+font binary, custom variable axes or Windows rendering.
+
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 
 Home and Pro are targets, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. The selected isolated per-user Winlogon integration is experimental, not an edition-independent Microsoft support guarantee; machine shell configuration and security policies remain untouched.

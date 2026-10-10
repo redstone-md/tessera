@@ -128,10 +128,10 @@ impl PanelController {
         let bluetooth = self.bluetooth.borrow().clone();
         let input = self.input_language.borrow().clone();
         if let Some(actor) = network {
-            actor.apply_theme(theme);
+            actor.apply_theme(theme.clone());
         }
         if let Some(actor) = bluetooth {
-            actor.apply_theme(theme);
+            actor.apply_theme(theme.clone());
         }
         if let Some(actor) = input {
             actor.apply_theme(theme);

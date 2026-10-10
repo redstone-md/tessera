@@ -1264,44 +1264,44 @@ impl PanelController {
                         .map_or(-1, |index| index as i32)
                 )
             );
-            panel.apply_presentation_theme_scoped(theme, current);
+            panel.apply_presentation_theme_scoped(theme.clone(), current);
         }
         if let Some(dock) = self.dock_and_upgrade() {
-            dock.apply_presentation_theme_scoped(theme, current);
+            dock.apply_presentation_theme_scoped(theme.clone(), current);
             if let Some(panel) = self.panel.upgrade() {
                 apply!(dock.set_compact(panel.get_compact()));
             }
         }
         if let Some(toolbar) = self.toolbar_and_upgrade() {
-            toolbar.apply_presentation_theme_scoped(theme, current);
+            toolbar.apply_presentation_theme_scoped(theme.clone(), current);
         }
         if let Some(launcher) = self.launcher_and_upgrade() {
-            launcher.apply_presentation_theme_scoped(theme, current);
+            launcher.apply_presentation_theme_scoped(theme.clone(), current);
         }
         let quick = self.quick_settings.borrow().clone();
         if let Some(quick) = quick {
-            apply!(quick.apply_theme(theme));
+            apply!(quick.apply_theme(theme.clone()));
         }
         let user = self.user_menu.borrow().clone();
         if let Some(user) = user {
-            apply!(user.apply_theme(theme));
+            apply!(user.apply_theme(theme.clone()));
         }
         let calendar = self.calendar.borrow().clone();
         if let Some(calendar) = calendar {
-            apply!(calendar.apply_theme(theme));
+            apply!(calendar.apply_theme(theme.clone()));
         }
         let power = self.power_menu.borrow().clone();
         if let Some(power) = power {
-            apply!(power.set_theme(theme));
+            apply!(power.set_theme(theme.clone()));
             apply!(power.update_motion());
         }
         let menu = self.menus.borrow().clone();
         if let Some(menu) = menu {
-            apply!(menu.apply_theme(theme));
+            apply!(menu.apply_theme(theme.clone()));
         }
         let tooltip = self.tooltips.borrow().clone();
         if let Some(tooltip) = tooltip {
-            apply!(tooltip.apply_theme(theme));
+            apply!(tooltip.apply_theme(theme.clone()));
         }
         apply!(self.toolbar_popup_theme(theme));
         apply!(self.hide_launcher_app_menu());

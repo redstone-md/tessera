@@ -56,6 +56,7 @@ component MenuIcon inherits Rectangle {
 // A separate native Window: winit's built-in popups are clipped inside the
 // parent bar, and its platform menu blocks the UI event loop.
 export component ContextMenuSurface inherits Window {
+    default-font-family: SeelenPalette.font-family;
     no-frame: true;
     always-on-top: true;
     background: transparent;

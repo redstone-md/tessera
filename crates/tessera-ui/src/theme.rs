@@ -5,7 +5,7 @@
 
 use material_colors::{color::Argb, scheme::Scheme, theme::ThemeBuilder};
 use slint::language::ColorScheme;
-use slint::{Color, ComponentHandle, Global};
+use slint::{Color, ComponentHandle, Global, SharedString};
 
 use crate::SourceSeed;
 use crate::generated::{MaterialRoles, Palette, SeelenPalette};
@@ -93,7 +93,7 @@ impl From<Scheme> for Roles {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PresentationTheme {
     toolkit: ColorScheme,
     reference: ColorScheme,
@@ -101,6 +101,7 @@ pub(crate) struct PresentationTheme {
     seed: SourceSeed,
     light: Roles,
     dark: Roles,
+    font_family: SharedString,
 }
 
 impl Default for PresentationTheme {
@@ -135,6 +136,7 @@ impl PresentationTheme {
             seed,
             light: theme.schemes.light.into(),
             dark: theme.schemes.dark.into(),
+            font_family: "Google Sans Flex".into(),
         }
     }
 
@@ -143,6 +145,7 @@ impl PresentationTheme {
     pub(crate) fn seelen_reference(scheme: ColorScheme) -> Self {
         Self {
             reference_mode: true,
+            font_family: SharedString::default(),
             ..Self::uniform(scheme)
         }
     }
@@ -173,6 +176,7 @@ where
                 .expect("presentation source is validated RGB"),
             light: palette.get_light_roles().into(),
             dark: palette.get_dark_roles().into(),
+            font_family: palette.get_font_family(),
         }
     }
 
@@ -205,6 +209,7 @@ where
         apply!(palette.set_source_rgb(theme.seed.rgb() as i32));
         apply!(palette.set_color_scheme(theme.reference));
         apply!(palette.set_reference_mode(theme.reference_mode));
+        apply!(palette.set_font_family(theme.font_family));
     }
 }
 
@@ -285,27 +290,27 @@ mod tests {
         let captured = panel.presentation_theme();
         assert_eq!(captured.seed.rgb(), 0x123456);
         let context = ContextMenuSurface::new().unwrap();
-        context.apply_presentation_theme(captured);
+        context.apply_presentation_theme(captured.clone());
         assert_eq!(context.presentation_theme(), captured);
         let tooltip = TooltipSurface::new().unwrap();
-        tooltip.apply_presentation_theme(captured);
+        tooltip.apply_presentation_theme(captured.clone());
         assert_eq!(tooltip.presentation_theme(), captured);
         let power = PowerMenuSurface::new().unwrap();
-        power.apply_presentation_theme(captured);
+        power.apply_presentation_theme(captured.clone());
         assert_eq!(power.presentation_theme(), captured);
         panel.apply_presentation_theme(PresentationTheme::from_source(
             ColorScheme::Dark,
             SourceSeed::from_rgb(0xffbd59).unwrap(),
         ));
         assert_ne!(panel.presentation_theme(), captured);
-        panel.apply_presentation_theme(captured);
+        panel.apply_presentation_theme(captured.clone());
         assert_eq!(panel.presentation_theme(), captured);
         assert_eq!(
             panel.global::<Palette>().get_color_scheme(),
             ColorScheme::Dark
         );
         let neutral = PresentationTheme::seelen_reference(ColorScheme::Light);
-        panel.apply_presentation_theme(neutral);
+        panel.apply_presentation_theme(neutral.clone());
         tooltip.apply_presentation_theme(panel.presentation_theme());
         assert_eq!(tooltip.presentation_theme(), neutral);
         assert_eq!(

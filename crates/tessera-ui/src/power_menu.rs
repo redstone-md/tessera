@@ -781,8 +781,8 @@ impl PowerMenuController {
         let Some((epoch, surface)) = self.surface_snapshot() else {
             return;
         };
-        let theme = self.state.borrow().theme;
-        surface.apply_presentation_theme_scoped(theme, || {
+        let theme = self.state.borrow().theme.clone();
+        surface.apply_presentation_theme_scoped(theme.clone(), || {
             self.scope_is(generation, epoch) && self.state.borrow().theme == theme
         });
     }

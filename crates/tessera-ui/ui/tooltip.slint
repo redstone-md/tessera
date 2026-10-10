@@ -7,6 +7,7 @@ import { PopoverBody, PopoverTokens } from "popover.slint";
 // A native top-level surface. The host supplies NOACTIVATE and documented
 // cursor pass-through; no FocusScope, TouchArea, or actions live here.
 export component TooltipSurface inherits Window {
+    default-font-family: SeelenPalette.font-family;
     no-frame: true;
     always-on-top: true;
     background: transparent;

@@ -1,0 +1,40 @@
+{
+  "family": "Google Sans Flex",
+  "version": "5.000;[cedf1e9]",
+  "license": "OFL-1.1",
+  "source": "https://github.com/google/fonts",
+  "revision": "bd8f81ddb5c74d5c8897b36ad88b440266245103",
+  "source_directory": "ofl/googlesansflex",
+  "modified": false,
+  "files": [
+    {
+      "name": "GoogleSansFlex[ROND,opsz,slnt,wdth,wght].ttf",
+      "git_blob": "1d8d8ae5a7c6d0e48312d2a0a478bad92caee73a",
+      "bytes": 3910784,
+      "sha256": "a9ac770798857d5e8ac593ced42b22e40a7c08cec98319f92b0eccc2783a77ba",
+      "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/googlesansflex/GoogleSansFlex%5BROND%2Copsz%2Cslnt%2Cwdth%2Cwght%5D.ttf"
+    },
+    {
+      "name": "METADATA.pb",
+      "git_blob": "7a102caf2e5e0f12e4f089f3f7dc10eebb036b0f",
+      "bytes": 1007,
+      "sha256": "6c401501d217f0ed38425ba5a9e6a99d0786c53c36a6d0df6b8870ed9d0fa2b6",
+      "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/googlesansflex/METADATA.pb"
+    },
+    {
+      "name": "OFL.txt",
+      "git_blob": "3e50f6cb72e58f01997d1e608195e8fdbc0eb8b4",
+      "bytes": 4488,
+      "sha256": "fc13d69f63e36d284b6e383d4d1463d8ad404f0aa065e57cf961252d51063137",
+      "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/googlesansflex/OFL.txt"
+    },
+    {
+      "name": "TRADEMARKS.md",
+      "git_blob": "f914a7eba3e7a550c415625d396a72749106e926",
+      "bytes": 1585,
+      "sha256": "5cad381c0828db656f32a787a1eff76db3303c74ec4f94668ae9fc2873ffe42f",
+      "url": "https://raw.githubusercontent.com/google/fonts/bd8f81ddb5c74d5c8897b36ad88b440266245103/ofl/googlesansflex/TRADEMARKS.md"
+    }
+  ],
+  "reference_scope": "Independently licensed family named by pinned October end4 configuration; not exact video font binary or custom-axis rendering certification"
+}

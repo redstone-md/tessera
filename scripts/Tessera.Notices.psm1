@@ -76,7 +76,7 @@ function Write-TesseraThirdPartyNotices {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
         Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object {
             $relative = [IO.Path]::GetRelativePath($source, $_.FullName).Replace('\', '/')
-            if ($_.Name -match '^(LICENSE|LICENCE|COPYING|COPYRIGHT|NOTICE)([._-].*)?$' -or
+            if ($_.Name -match '^(LICENSE|LICENCE|COPYING|COPYRIGHT|NOTICE|TRADEMARKS)([._-].*)?$' -or
                 $_.Name -match '^(OFL|Apache-2\.0|MIT)\.txt$' -or
                 $_.Name -match '\.license$' -or $relative -match '(^|/)LICENSES/') {
                 $files[$relative] = $_.FullName

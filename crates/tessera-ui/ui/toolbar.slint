@@ -29,6 +29,7 @@ component BarIsland inherits Rectangle {
 // Left: user and foreground app. Center: native clock. Right: language and
 // quick settings. Only genuine host values appear; absent slots stay empty.
 export component Toolbar inherits Window {
+    default-font-family: SeelenPalette.font-family;
     no-frame: true;
     always-on-top: true;
     background: transparent;
