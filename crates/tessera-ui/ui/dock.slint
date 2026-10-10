@@ -9,6 +9,7 @@ import { DockMediaTile, DockMediaView, MediaAction } from "dock-media.slint";
 
 export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
+export struct DockGroup { key: string, identity: string, count: int, representative: string }
 export struct DockStatus { notice: string, status: string, refreshing: bool, stale: bool }
 
 // Keep the action/input slot fixed while only ordinary tile paint moves.
@@ -33,6 +34,29 @@ component DockButton inherits TileButton {
         @children
     }
 }
+component DockIndicator inherits Rectangle {
+    in property <bool> focused;
+    in property <int> edge;
+    in property <length> item;
+    in property <length> pad;
+    in property <length> offset;
+    in property <length> content-x;
+    in property <length> content-y;
+    property <bool> vertical: root.edge >= 2;
+    property <length> indicator: root.focused ? root.item / 2 : 3px;
+    width: root.vertical ? 3px : root.indicator;
+    height: root.vertical ? root.indicator : 3px;
+    border-radius: 999px;
+    background: root.focused ? SeelenPalette.accent : SeelenPalette.running-indicator;
+    x: root.vertical
+        ? (root.edge == 2 ? root.pad / 2 : root.pad + root.item + root.pad / 2) - self.width / 2
+        : root.offset + root.content-x + (root.item - self.width) / 2;
+    y: root.vertical
+        ? root.offset + root.content-y + (root.item - self.height) / 2
+        : (root.edge == 1 ? root.pad / 2 : root.pad + root.item + root.pad / 2) - self.height / 2;
+    accessible-role: none;
+}
+
 
 
 // One bounded floating dock bar, centered on the primary monitor bounds by
@@ -50,6 +74,10 @@ export component Dock inherits Window {
 
     in property <[DockApp]> pinned-apps;
     in property <[DockWindow]> running-windows;
+    in property <[DockWindow]> observed-windows;
+    in property <[DockGroup]> group-metadata;
+    pure callback group-count([DockGroup], string) -> int;
+    pure callback group-tooltip([DockWindow], [DockGroup], string) -> string;
     in property <DockStatus> surface-status;
     in property <string> focused-key;
     in property <bool> compact;
@@ -70,6 +98,7 @@ export component Dock inherits Window {
     in-out property <DockMediaView> media-view;
     property <bool> vertical: root.edge >= 2;
     callback launch-requested(string);
+    callback activate-app-requested(string);
     callback window-command-requested(string, DockWindowCommand);
     callback open-applications-requested();
     callback exit-requested();
@@ -232,11 +261,17 @@ export component Dock inherits Window {
                     height: parent.height;
                     radius: root.tile-radius;
                     enabled: !root.blocked;
-                    accessible-text: "Launch " + tile.label;
-                    tooltip-text: tile.label;
+                    activation-key: tile.key;
+                    accessible-text: (root.group-count(root.group-metadata, tile.key) > 0 ? "Switch to " : "Launch ") + tile.label;
+                    tooltip-text: tile.label + root.group-tooltip(root.observed-windows, root.group-metadata, tile.key);
                     tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                     tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
-                    clicked => { root.launch-requested(tile.key); }
+                    clicked => {
+                        if root.group-count(root.group-metadata, tile.key) > 1 {
+                            root.context-menu-requested(DockMenuKind.pinned, tile.key, self.absolute-position);
+                        } else if root.group-count(root.group-metadata, tile.key) == 1 { root.activate-app-requested(tile.key); }
+                        else { root.launch-requested(tile.key); }
+                    }
                     middle-clicked => { root.launch-requested(tile.key); }
                     context-requested(position) => {
                         root.context-menu-requested(DockMenuKind.pinned, tile.key, position);
@@ -248,6 +283,14 @@ export component Dock inherits Window {
                         width: parent.width - 2 * root.icon-pad;
                         height: parent.height - 2 * root.icon-pad;
                         source: tile.icon;
+                        accessible-role: none;
+                    }
+                    if root.group-count(root.group-metadata, tile.key) > 0: Text {
+                        x: parent.width - self.width - 2px;
+                        y: parent.height - self.height;
+                        text: root.group-count(root.group-metadata, tile.key);
+                        font-size: 11px;
+                        color: SeelenPalette.foreground;
                         accessible-role: none;
                     }
                 }
@@ -266,11 +309,16 @@ export component Dock inherits Window {
                     height: parent.height;
                     radius: root.tile-radius;
                     enabled: !root.blocked;
+                    activation-key: tile.key;
                     accessible-text: "Switch to " + tile.caption;
                     tooltip-text: tile.caption;
                     tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                     tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
-                    clicked => { root.window-command-requested(tile.key, DockWindowCommand.toggle); }
+                    clicked => {
+                        if root.group-count(root.group-metadata, tile.key) > 1 {
+                            root.context-menu-requested(DockMenuKind.window, tile.key, self.absolute-position);
+                        } else { root.window-command-requested(tile.key, DockWindowCommand.toggle); }
+                    }
                     context-requested(position) => {
                         root.context-menu-requested(DockMenuKind.window, tile.key, position);
                     }
@@ -281,6 +329,14 @@ export component Dock inherits Window {
                         width: parent.width - 2 * root.icon-pad;
                         height: parent.height - 2 * root.icon-pad;
                         source: tile.icon;
+                        accessible-role: none;
+                    }
+                    if root.group-count(root.group-metadata, tile.key) > 1: Text {
+                        x: parent.width - self.width - 2px;
+                        y: parent.height - self.height;
+                        text: root.group-count(root.group-metadata, tile.key);
+                        font-size: 11px;
+                        color: SeelenPalette.foreground;
                         accessible-role: none;
                     }
                 }
@@ -297,23 +353,25 @@ export component Dock inherits Window {
             height: root.vertical ? scroll.visible-height : parent.height;
             clip: true;
             accessible-role: none;
-            for tile[i] in root.running-windows: Rectangle {
-                property <bool> focused: tile.key == root.focused-key;
-                property <length> offset: root.media-length
-                    + (root.pinned-apps.length + i) * (root.item + root.gap);
-                property <length> indicator: self.focused ? root.item / 2 : 3px;
-                width: root.vertical ? 3px : self.indicator;
-                height: root.vertical ? self.indicator : 3px;
-                border-radius: 999px;
-                background: self.focused ? SeelenPalette.accent : SeelenPalette.running-indicator;
-                x: root.vertical
-                    ? (root.edge == 2 ? root.pad / 2 : root.pad + root.item + root.pad / 2) - self.width / 2
-                    : self.offset + scroll.content-x + (root.item - self.width) / 2;
-                y: root.vertical
-                    ? self.offset + scroll.content-y + (root.item - self.height) / 2
-                    : (root.edge == 1 ? root.pad / 2 : root.pad + root.item + root.pad / 2) - self.height / 2;
+            for tile[i] in root.pinned-apps: DockIndicator {
+                focused: tile.key == root.focused-key;
+                edge: root.edge;
+                item: root.item;
+                pad: root.pad;
+                offset: root.media-length + i * (root.item + root.gap);
+                content-x: scroll.content-x;
+                content-y: scroll.content-y;
+                visible: !root.surface-status.refreshing && root.group-count(root.group-metadata, tile.key) > 0;
+            }
+            for tile[i] in root.running-windows: DockIndicator {
+                focused: tile.key == root.focused-key;
+                edge: root.edge;
+                item: root.item;
+                pad: root.pad;
+                offset: root.media-length + (root.pinned-apps.length + i) * (root.item + root.gap);
+                content-x: scroll.content-x;
+                content-y: scroll.content-y;
                 visible: !root.surface-status.refreshing;
-                accessible-role: none;
             }
         }
 

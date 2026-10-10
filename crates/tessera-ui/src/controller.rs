@@ -8,8 +8,8 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::generated::{
-    AppRow, Dock, DockApp, DockStatus, DockSystemCommand, DockWindow, DockWindowCommand, Launcher,
-    Row, Toolbar,
+    AppRow, Dock, DockApp, DockGroup, DockStatus, DockSystemCommand, DockWindow, DockWindowCommand,
+    Launcher, Row, Toolbar,
 };
 use crate::projection::{AppProjection, PanelProjection, RowProjection};
 use crate::state::{Routes, SurfaceCore};
@@ -405,10 +405,60 @@ impl PanelController {
     }
 
     fn wire_dock(&self, dock: &Dock) {
+        dock.on_group_count(|metadata, key| {
+            metadata
+                .iter()
+                .find(|group| group.key == key)
+                .map(|group| group.count)
+                .unwrap_or(0)
+        });
+        dock.on_group_tooltip(|windows, metadata, key| {
+            let Some(group) = metadata.iter().find(|group| group.key == key) else {
+                return slint::SharedString::default();
+            };
+            let titles: Vec<_> = windows
+                .iter()
+                .filter(|window| {
+                    metadata
+                        .iter()
+                        .any(|member| member.key == window.key && member.identity == group.identity)
+                })
+                .map(|window| window.caption.to_string())
+                .collect();
+            format!("\n{} windows\n{}", titles.len(), titles.join("\n")).into()
+        });
         let weak = self.clone();
         dock.on_launch_requested(move |key| {
             if weak.bar_input_ready(SurfaceKind::Dock) {
                 weak.launch(&key);
+            }
+        });
+        let controller = self.clone();
+        dock.on_activate_app_requested(move |key| {
+            if !controller.bar_input_ready(SurfaceKind::Dock) || controller.guarded() {
+                return;
+            }
+            let Some(dock) = controller.dock_and_upgrade() else {
+                return;
+            };
+            if model_key(&dock.get_pinned_apps(), &key, |app| app.key.to_string()).is_none() {
+                return;
+            }
+            let identity = format!("aumid:{}", crate::projection::catalog_aumid(&key));
+            let metadata = dock.get_group_metadata();
+            let matching: Vec<_> = dock
+                .get_observed_windows()
+                .iter()
+                .filter(|window| {
+                    metadata
+                        .iter()
+                        .any(|group| group.key == window.key && group.identity == identity.as_str())
+                })
+                .collect();
+            if matching.len() == 1 {
+                controller.window_action(&matching[0].key, WindowAction::ActivateOrMinimize);
+            } else if matching.is_empty() {
+                controller.launch(&key);
             }
         });
         let weak = self.clone();
@@ -1096,8 +1146,27 @@ impl PanelController {
     }
 
     fn refresh_strip(&self, dock: &Dock) {
+        let menu = self.menus.borrow().clone();
+        if let Some(menu) = menu {
+            menu.retire_window_scope();
+        }
         let pins = self.core.pins();
         let catalog = self.core.catalog();
+        let snapshot = self.core.retained_snapshot();
+        let observed: Vec<DockWindow> = snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .windows()
+                    .iter()
+                    .map(|window| DockWindow {
+                        key: window.key().into(),
+                        caption: sanitize::caption(window.title()).into(),
+                        icon: dock_icon(self, window.icon()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let pinned_apps: Vec<DockApp> = pins
             .iter()
             // Unknown stored keys are skipped for display and can never be
@@ -1112,21 +1181,86 @@ impl PanelController {
             .collect();
         dock.set_pinned_apps(ModelRc::new(VecModel::from(pinned_apps)));
 
-        let windows = self
-            .core
-            .retained_snapshot()
-            .map(|snapshot| {
-                snapshot
-                    .windows()
-                    .iter()
-                    .map(|window| DockWindow {
-                        key: window.key().into(),
-                        caption: sanitize::caption(window.title()).into(),
-                        icon: dock_icon(self, window.icon()),
-                    })
-                    .collect::<Vec<_>>()
-            })
+        let groups = snapshot
+            .as_ref()
+            .map(crate::projection::dock_groups)
             .unwrap_or_default();
+        let mut metadata: Vec<DockGroup> = Vec::new();
+        for members in &groups {
+            let first = members[0];
+            for member in members {
+                metadata.push(DockGroup {
+                    key: member.key().into(),
+                    identity: member.application_identity().unwrap_or_default().into(),
+                    count: members.len().try_into().unwrap_or(i32::MAX),
+                    representative: first.key().into(),
+                });
+            }
+        }
+        for pin in &pins {
+            let identity = format!("aumid:{}", crate::projection::catalog_aumid(pin));
+            let matching: Vec<_> = metadata
+                .iter()
+                .filter(|group| group.identity == identity.as_str())
+                .collect();
+            if let Some(first) = matching.first() {
+                let entry = DockGroup {
+                    key: pin.as_str().into(),
+                    identity: identity.into(),
+                    count: matching.len().try_into().unwrap_or(i32::MAX),
+                    representative: first.representative.clone(),
+                };
+                metadata.push(entry);
+            }
+        }
+        dock.set_group_metadata(ModelRc::new(VecModel::from(metadata)));
+        let focused = self.core.identity().focused_window_key;
+        let windows: Vec<DockWindow> = groups
+            .into_iter()
+            .filter_map(|members| {
+                let first = members[0];
+                let pinned = first.application_identity().and_then(|identity| {
+                    pins.iter().find(|pin| {
+                        identity == format!("aumid:{}", crate::projection::catalog_aumid(pin))
+                            && catalog.iter().any(|app| app.key() == pin.as_str())
+                    })
+                });
+                if let Some(pin) = pinned {
+                    if focused
+                        .as_deref()
+                        .is_some_and(|key| members.iter().any(|window| window.key() == key))
+                    {
+                        dock.set_focused_key(pin.as_str().into());
+                    }
+                    return None;
+                }
+                let mut tile = observed
+                    .iter()
+                    .find(|window| window.key == first.key())?
+                    .clone();
+                if members.len() > 1 {
+                    tile.caption = format!(
+                        "{} windows\n{}",
+                        members.len(),
+                        members
+                            .iter()
+                            .map(|window| sanitize::caption(window.title()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    )
+                    .into();
+                }
+                if focused
+                    .as_deref()
+                    .is_some_and(|key| members.iter().any(|window| window.key() == key))
+                {
+                    dock.set_focused_key(first.key().into());
+                }
+                Some(tile)
+            })
+            .collect();
+        // Every member stays in the retained model used for action admission.
+        dock.set_observed_windows(ModelRc::new(VecModel::from(observed)));
         dock.set_running_windows(ModelRc::new(VecModel::from(windows)));
     }
 

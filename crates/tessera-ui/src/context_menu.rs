@@ -12,7 +12,7 @@ use slint::{ComponentHandle, Model, ModelExt, SharedString};
 
 use crate::generated::{
     ContextMenuSurface, Dock, DockMenuAction, DockMenuKind, DockRecycleAction, DockSystemCommand,
-    DockWindowCommand,
+    DockWindowCommand, MenuEntry,
 };
 use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::TransientWindow;
@@ -50,11 +50,27 @@ pub(crate) struct ContextMenuController {
     scope_generation: Cell<Option<u64>>,
     focus_seen: Cell<bool>,
     focus_watch: slint::Timer,
+    host: Arc<dyn DesktopHost>,
+    preview: RefCell<Option<Box<dyn std::any::Any>>>,
+    preview_key: RefCell<SharedString>,
+    preview_bounds: Cell<Option<tessera_core::Rect>>,
+    preview_generation: Cell<Option<u64>>,
 }
 
 impl ContextMenuController {
     pub(crate) fn is_open(&self) -> bool {
         self.surface.is_visible()
+    }
+
+    pub(crate) fn retire_window_scope(&self) {
+        if self.is_open()
+            && matches!(
+                self.surface.get_kind(),
+                DockMenuKind::Window | DockMenuKind::Pinned
+            )
+        {
+            self.hide();
+        }
     }
 
     pub(crate) fn apply_theme(&self, theme: PresentationTheme) {
@@ -75,7 +91,7 @@ impl ContextMenuController {
     ) -> Result<Rc<Self>, slint::PlatformError> {
         let menu = Rc::new(Self {
             surface: TransientWindow::new(
-                host,
+                Arc::clone(&host),
                 ContextMenuSurface::new_with_metrics()?,
                 SurfaceKind::Popup,
             ),
@@ -84,11 +100,28 @@ impl ContextMenuController {
             scope_generation: Cell::new(Some(0)),
             focus_seen: Cell::new(false),
             focus_watch: slint::Timer::default(),
+            host,
+            preview: RefCell::default(),
+            preview_key: RefCell::default(),
+            preview_bounds: Cell::new(None),
+            preview_generation: Cell::new(Some(0)),
         });
         let weak = Rc::downgrade(&menu);
         menu.surface.on_action_requested(move |action| {
             if let Some(menu) = weak.upgrade() {
                 menu.execute(action);
+            }
+        });
+        let weak = Rc::downgrade(&menu);
+        menu.surface.on_window_action_requested(move |key, action| {
+            if let Some(menu) = weak.upgrade() {
+                menu.execute_member(&key, action);
+            }
+        });
+        let weak = Rc::downgrade(&menu);
+        menu.surface.on_preview_changed(move || {
+            if let Some(menu) = weak.upgrade() {
+                menu.update_preview();
             }
         });
         let weak = Rc::downgrade(&menu);
@@ -178,6 +211,58 @@ impl ContextMenuController {
         self.surface.set_kind(kind);
         self.surface.set_launcher_favorite_scope(false);
         self.surface.set_media_scope(media_scope);
+        let metadata = dock.get_group_metadata();
+        let group = metadata.iter().find(|group| group.key == key);
+        let members: Vec<_> = if matches!(kind, DockMenuKind::Pinned | DockMenuKind::Window) {
+            dock.get_observed_windows()
+                .iter()
+                .filter(|window| {
+                    group.as_ref().is_some_and(|group| {
+                        metadata.iter().any(|member| {
+                            member.key == window.key
+                                && (member.key == group.key
+                                    || (!group.identity.is_empty()
+                                        && member.identity == group.identity))
+                        })
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut entries = Vec::new();
+        if !members.is_empty() {
+            for member in members {
+                for (action, prefix) in [
+                    (DockMenuAction::Activate, ""),
+                    (DockMenuAction::Minimize, "Minimize: "),
+                    (DockMenuAction::Close, "Close: "),
+                ] {
+                    entries.push(MenuEntry {
+                        label: format!("{prefix}{}", member.caption).into(),
+                        action,
+                        icon: member.icon.clone(),
+                        application_image: true,
+                        danger: action == DockMenuAction::Close,
+                        window_key: member.key.clone(),
+                    });
+                }
+            }
+            if kind == DockMenuKind::Pinned {
+                for (action, label) in [
+                    (DockMenuAction::Launch, "Open new instance"),
+                    (DockMenuAction::Unpin, "Unpin"),
+                ] {
+                    entries.push(MenuEntry {
+                        action,
+                        label: label.into(),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        self.surface
+            .set_window_entries(slint::ModelRc::new(slint::VecModel::from(entries)));
         self.surface
             .set_media_enabled(kind == DockMenuKind::Bar && dock.get_media_view().enabled);
         // Reuse only already-resolved typed dock images; no host extraction.
@@ -224,6 +309,10 @@ impl ContextMenuController {
             return Ok(());
         }
         self.refresh_recycle_actions();
+        self.update_preview();
+        if self.scope_generation.get() != generation || !self.is_open() {
+            return Ok(());
+        }
         self.surface.invoke_focus_menu();
         let focus = self.surface.request_focus();
         self.focus_seen.set(self.is_focused() == Some(true));
@@ -254,9 +343,130 @@ impl ContextMenuController {
                 .get()
                 .and_then(|generation| generation.checked_add(1)),
         );
+        let generation = self.scope_generation.get();
+        self.clear_preview();
+        if self.scope_generation.get() != generation {
+            return;
+        }
         self.surface.set_recycle_empty_enabled(false);
         self.focus_watch.stop();
         self.surface.hide();
+    }
+
+    fn clear_preview(&self) {
+        self.preview_generation.set(
+            self.preview_generation
+                .get()
+                .and_then(|generation| generation.checked_add(1)),
+        );
+        self.preview_key.replace(SharedString::default());
+        self.preview_bounds.set(None);
+        // No RefCell borrow survives an arbitrary host lease's Drop.
+        let lease = self.preview.borrow_mut().take();
+        drop(lease);
+    }
+
+    fn selected_preview_key(&self) -> Option<SharedString> {
+        let index = usize::try_from(self.surface.get_selected_index()).ok()?;
+        self.surface
+            .get_window_entries()
+            .row_data(index)
+            .map(|entry| entry.window_key)
+            .filter(|key| !key.is_empty())
+    }
+
+    fn preview_current(
+        &self,
+        scope: u64,
+        operation: u64,
+        key: &str,
+        bounds: tessera_core::Rect,
+    ) -> bool {
+        self.scope_generation.get() == Some(scope)
+            && self.preview_generation.get() == Some(operation)
+            && self.is_open()
+            && self.surface.window().is_visible()
+            && self.selected_preview_key().as_deref() == Some(key)
+            && preview_rect(self.surface.window(), self.surface.get_preview_bounds()).ok()
+                == Some(bounds)
+            && self.dock.upgrade().is_some_and(|dock| {
+                let status = dock.get_surface_status();
+                dock.window().is_visible()
+                    && !status.refreshing
+                    && !status.stale
+                    && dock.displayed_window_key(key).is_some()
+            })
+    }
+
+    fn update_preview(&self) {
+        let Some(scope) = self.scope_generation.get() else {
+            return;
+        };
+        if !self.is_open() || !self.surface.window().is_visible() {
+            return;
+        }
+        let key = self.selected_preview_key();
+        let bounds = preview_rect(self.surface.window(), self.surface.get_preview_bounds());
+        if key
+            .as_ref()
+            .is_some_and(|key| *self.preview_key.borrow() == *key)
+            && bounds.as_ref().ok().copied() == self.preview_bounds.get()
+            && self.preview.borrow().is_some()
+        {
+            return;
+        }
+        let operation = self
+            .preview_generation
+            .get()
+            .and_then(|generation| generation.checked_add(1));
+        self.clear_preview();
+        if self.scope_generation.get() != Some(scope)
+            || self.preview_generation.get() != operation
+            || !self.is_open()
+        {
+            return;
+        }
+        let Some(key) = key else {
+            self.surface
+                .set_preview_notice("Select a window to preview.".into());
+            return;
+        };
+        let bounds = match bounds {
+            Ok(bounds) => bounds,
+            Err(error) => {
+                self.surface.set_preview_notice(error.into());
+                return;
+            }
+        };
+        let Some(operation) = operation else { return };
+        if !self.preview_current(scope, operation, &key, bounds) {
+            return;
+        }
+        let result = self
+            .host
+            .window_preview(&key, self.surface.window(), bounds);
+        if !self.preview_current(scope, operation, &key, bounds) {
+            drop(result);
+            return;
+        }
+        match result {
+            Ok(Some(lease)) => {
+                self.preview_key.replace(key);
+                self.preview_bounds.set(Some(bounds));
+                self.preview.replace(Some(lease));
+                self.surface.set_preview_notice(SharedString::default());
+            }
+            Ok(None) => self
+                .surface
+                .set_preview_notice("Window previews are unavailable.".into()),
+            Err(error) => self.surface.set_preview_notice(
+                format!(
+                    "Preview unavailable: {}",
+                    crate::sanitize::bounded_text(&error, 160)
+                )
+                .into(),
+            ),
+        }
     }
 
     /// Refresh retained recycle presentation without granting or presenting a scope.
@@ -272,6 +482,47 @@ impl ContextMenuController {
     }
     pub(crate) fn disable_motion(&self) {
         self.surface.disable_motion();
+    }
+
+    fn execute_member(&self, key: &str, action: DockMenuAction) {
+        let command = match action {
+            DockMenuAction::Activate => DockWindowCommand::Activate,
+            DockMenuAction::Minimize => DockWindowCommand::Minimize,
+            DockMenuAction::Close => DockWindowCommand::Close,
+            _ => return,
+        };
+        let Some(generation) = self.scope_generation.get() else {
+            return;
+        };
+        if !self.is_open()
+            || !self.surface.window().is_visible()
+            || !matches!(
+                self.surface.get_kind(),
+                DockMenuKind::Window | DockMenuKind::Pinned
+            )
+            || !self
+                .surface
+                .get_window_entries()
+                .iter()
+                .any(|entry| entry.window_key == key && entry.action == action)
+        {
+            return;
+        }
+        let key = SharedString::from(key);
+        // Release focus/lease before routing; reentrant scope replacement cancels.
+        self.hide();
+        if generation.checked_add(1) != self.scope_generation.get() || self.is_open() {
+            return;
+        }
+        if let Some(dock) = self.dock.upgrade().filter(|dock| {
+            let status = dock.get_surface_status();
+            dock.window().is_visible()
+                && !status.refreshing
+                && !status.stale
+                && dock.displayed_window_key(&key).is_some()
+        }) {
+            dock.invoke_window_command_requested(key, command);
+        }
     }
 
     fn execute(&self, action: DockMenuAction) {
@@ -432,4 +683,50 @@ fn allowed(kind: DockMenuKind, action: DockMenuAction) -> bool {
             DockMenuAction::RecycleEmpty | DockMenuAction::RecycleRetry
         ),
     }
+}
+
+/// Convert the current measured client viewport inward at its actual scale.
+/// Reject clipped/zero/invalid layouts instead of inventing a 96-DPI rectangle.
+fn preview_rect(
+    window: &slint::Window,
+    bounds: crate::generated::TileBounds,
+) -> Result<tessera_core::Rect, String> {
+    let scale = f64::from(window.scale_factor());
+    let values = [
+        f64::from(bounds.origin.x),
+        f64::from(bounds.origin.y),
+        f64::from(bounds.width),
+        f64::from(bounds.height),
+    ];
+    if !scale.is_finite()
+        || scale <= 0.0
+        || values.iter().any(|value| !value.is_finite())
+        || values[0] < 0.0
+        || values[1] < 0.0
+        || values[2] <= 0.0
+        || values[3] <= 0.0
+    {
+        return Err("The window preview viewport is unavailable.".into());
+    }
+    let left = (values[0] * scale).ceil();
+    let top = (values[1] * scale).ceil();
+    let right = ((values[0] + values[2]) * scale).floor();
+    let bottom = ((values[1] + values[3]) * scale).floor();
+    let size = window.size();
+    if left >= right
+        || top >= bottom
+        || right > f64::from(i32::MAX)
+        || bottom > f64::from(i32::MAX)
+        || right > f64::from(size.width)
+        || bottom > f64::from(size.height)
+    {
+        return Err("The window preview viewport is clipped or unavailable.".into());
+    }
+    tessera_core::Rect::new(
+        left as i32,
+        top as i32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    )
+    .map_err(|_| "The window preview viewport is unavailable.".into())
 }

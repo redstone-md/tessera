@@ -402,6 +402,11 @@ mod desktop {
                     let pixels = self.window_icon(&key, target);
                     PanelWindow::new(key, window.title().to_owned(), window.minimized())
                         .with_icon(pixels)
+                        .with_application_identity(
+                            snapshot
+                                .window_application_identity(window.id())
+                                .map(str::to_owned),
+                        )
                 })
                 .collect();
             *self.targets.lock() = targets;
@@ -534,6 +539,22 @@ mod desktop {
                 tessera_ui::WindowAction::Close => tessera_windows::WindowAction::Close,
             };
             tessera_windows::window_action(target, action).map_err(|error| error.to_string())
+        }
+
+        fn window_preview(
+            &self,
+            key: &str,
+            destination: &slint::Window,
+            bounds: tessera_core::Rect,
+        ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+            let target = self.window_target(key)?;
+            let handle = native_window_handle(destination)?;
+            let preview = tessera_windows::window_preview::OwnedWindowPreview::attach(
+                handle.get(),
+                target,
+                bounds,
+            )?;
+            Ok(Some(Box::new(preview)))
         }
 
         fn launch(&self, key: &str) -> Result<(), String> {

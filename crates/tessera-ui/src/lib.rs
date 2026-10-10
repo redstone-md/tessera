@@ -324,6 +324,7 @@ pub struct PanelWindow {
     title: String,
     minimized: bool,
     icon: Option<PixelIcon>,
+    application_identity: Option<String>,
 }
 
 impl PanelWindow {
@@ -334,6 +335,7 @@ impl PanelWindow {
             title,
             minimized,
             icon: None,
+            application_identity: None,
         }
     }
 
@@ -342,6 +344,16 @@ impl PanelWindow {
     pub fn with_icon(mut self, icon: Option<PixelIcon>) -> Self {
         self.icon = icon;
         self
+    }
+
+    /// Proven host-observed grouping metadata, never a launch/effect target.
+    pub fn with_application_identity(mut self, identity: Option<String>) -> Self {
+        self.application_identity = identity.filter(|value| !value.is_empty());
+        self
+    }
+
+    pub fn application_identity(&self) -> Option<&str> {
+        self.application_identity.as_deref()
     }
 
     /// Opaque activation key; stable within one snapshot, never persisted.
@@ -710,6 +722,22 @@ pub trait DesktopHost: Send + Sync + 'static {
         &self,
         _kind: SurfaceKind,
         _window: &slint::Window,
+    ) -> Result<Option<Box<dyn std::any::Any>>, String> {
+        Ok(None)
+    }
+
+    /// Optional live preview of one currently admitted opaque window key.
+    ///
+    /// `bounds` are checked physical pixels in the shown destination's client
+    /// area, not screen coordinates. The native adapter validates the current
+    /// source identity and owned destination. The UI-thread-affine lease must
+    /// be dropped before scope replacement, destination hide or HWND destruction.
+    /// `None` means unsupported; errors remain visible without fake preview art.
+    fn window_preview(
+        &self,
+        _key: &str,
+        _destination: &slint::Window,
+        _bounds: tessera_core::Rect,
     ) -> Result<Option<Box<dyn std::any::Any>>, String> {
         Ok(None)
     }

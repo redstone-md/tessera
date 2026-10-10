@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{null, null_mut};
 
 use tessera_core::WindowId;
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::{
     ERROR_INVALID_DATA, GetLastError, HWND, LPARAM, RECT, SetLastError,
 };
@@ -16,7 +17,11 @@ use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW,
     MonitorFromWindow,
 };
+use windows_sys::Win32::Storage::Packaging::Appx::GetApplicationUserModelId;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
@@ -54,6 +59,7 @@ pub(crate) fn observe() -> Result<DesktopSnapshot, ObservationError> {
     observer.check_enumeration(ok, "EnumWindows")?;
     Ok(
         DesktopSnapshot::new(observer.monitors, observer.windows, observer.warnings)
+            .with_application_identities(observer.application_identities)
             .with_visibility_facts(foreground),
     )
 }
@@ -159,6 +165,8 @@ struct Observer {
     windows: Vec<ObservedWindow>,
     warnings: Vec<ObservationWarning>,
     callback_error: Option<ObservationError>,
+    process_identities: std::collections::HashMap<u32, Option<ProcessIdentity>>,
+    application_identities: std::collections::HashMap<WindowId, String>,
 }
 
 impl Observer {
@@ -300,6 +308,20 @@ impl Observer {
             .find(|monitor| monitor.id().value() == monitor_handle as usize as u64);
         let covers =
             monitor.is_some_and(|monitor| covers_monitor(bounds, minimized, monitor.bounds()));
+        let identity = self
+            .process_identities
+            .entry(process_id)
+            .or_insert_with(|| process_application_identity(process_id))
+            .as_ref()
+            .and_then(|process| process.identity.clone());
+        // Do not associate metadata with a recycled HWND during collection.
+        let mut current_process = 0;
+        if unsafe { GetWindowThreadProcessId(hwnd, &mut current_process) } != 0
+            && current_process == process_id
+            && let Some(identity) = identity
+        {
+            self.application_identities.insert(id, identity);
+        }
         self.windows.push(ObservedWindow {
             id,
             process_id,
@@ -316,6 +338,77 @@ impl Observer {
         });
         Ok(())
     }
+}
+
+/// The handle pins the process object for the entire request-local cache,
+/// preventing PID reuse from attributing a later process to an earlier app.
+struct ProcessIdentity {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    identity: Option<String>,
+}
+
+impl Drop for ProcessIdentity {
+    fn drop(&mut self) {
+        // SAFETY: exclusively owned successful OpenProcess handle.
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+
+/// Limited query only; protected/missing processes remain ungrouped.
+fn process_application_identity(process_id: u32) -> Option<ProcessIdentity> {
+    // SAFETY: only documented read access; no elevation or debug privileges.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut process = ProcessIdentity {
+        handle,
+        identity: None,
+    };
+    process.identity = read_process_application_identity(handle);
+    Some(process)
+}
+
+fn read_process_application_identity(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<String> {
+    let mut aumid = [0u16; 1025];
+    let mut length = aumid.len() as u32;
+    // SAFETY: writable bounded buffer, request-local owned process handle.
+    if unsafe { GetApplicationUserModelId(process, &mut length, aumid.as_mut_ptr()) } == 0
+        && length > 1
+        && length <= aumid.len() as u32
+    {
+        let identity = String::from_utf16(&aumid[..length as usize - 1]).ok()?;
+        if !identity.is_empty() && !identity.contains('\0') {
+            return Some(format!("aumid:{identity}"));
+        }
+    }
+    let mut executable = vec![0u16; 32768];
+    let mut length = executable.len() as u32;
+    // SAFETY: same read-only handle; Windows reports the actual path length.
+    if unsafe { QueryFullProcessImageNameW(process, 0, executable.as_mut_ptr(), &mut length) } == 0
+        || length == 0
+        || length as usize >= executable.len()
+    {
+        return None;
+    }
+    let identity = String::from_utf16(&executable[..length as usize]).ok()?;
+    let basename = identity.rsplit('\\').next()?;
+    // Generic host executable identity is not the hosted application's identity.
+    if [
+        "ApplicationFrameHost.exe",
+        "RuntimeBroker.exe",
+        "dllhost.exe",
+        "rundll32.exe",
+        "svchost.exe",
+    ]
+    .iter()
+    .any(|host| basename.eq_ignore_ascii_case(host))
+    {
+        return None;
+    }
+    (!identity.is_empty() && !identity.contains('\0')).then(|| format!("exe:{identity}"))
 }
 
 /// Callback failures are stored before returning FALSE; neither ordinary

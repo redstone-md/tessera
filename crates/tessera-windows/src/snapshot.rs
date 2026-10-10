@@ -151,6 +151,7 @@ pub struct DesktopSnapshot {
     visibility_windows: Option<Vec<ObservedWindow>>,
     foreground_window_id: Option<WindowId>,
     foreground_interactable: Option<bool>,
+    application_identities: std::collections::HashMap<WindowId, String>,
 }
 
 impl DesktopSnapshot {
@@ -167,7 +168,23 @@ impl DesktopSnapshot {
             visibility_windows: None,
             foreground_window_id: None,
             foreground_interactable: None,
+            application_identities: Default::default(),
         }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn with_application_identities(
+        mut self,
+        identities: std::collections::HashMap<WindowId, String>,
+    ) -> Self {
+        self.application_identities = identities;
+        self
+    }
+
+    /// Proven application identity for grouping only, never effect authority.
+    /// AUMIDs use `aumid:`, executable identities use `exe:`; absence is honest.
+    pub fn window_application_identity(&self, id: WindowId) -> Option<&str> {
+        self.application_identities.get(&id).map(String::as_str)
     }
 
     /// Derives uncapped visibility facts from the same observation pass.

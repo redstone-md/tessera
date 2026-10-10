@@ -3,16 +3,17 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { TileButton, FocusTokens } from "tiles.slint";
+import { TileButton, TileBounds, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { DockMenuKind, DockMenuAction } from "shell-commands.slint";
 
-struct MenuEntry {
+export struct MenuEntry {
     label: string,
     action: DockMenuAction,
     icon: image,
     application-image: bool,
     danger: bool,
+    window-key: string,
 }
 
 component MenuLabel inherits Text {
@@ -73,11 +74,20 @@ export component ContextMenuSurface inherits Window {
     in property <bool> media-scope: false;
     in property <bool> media-enabled: false;
     in-out property <int> selected-index;
+    in property <[MenuEntry]> window-entries;
+    in property <string> preview-notice;
+    out property <TileBounds> preview-bounds: {
+        origin: preview.absolute-position, width: preview.width, height: preview.height
+    };
+    callback preview-changed();
+    changed selected-index => { root.preview-changed(); }
+    changed preview-bounds => { root.preview-changed(); }
     out property <length> menu-width: max(200px,
         plain-label-metrics.preferred-width + 32px,
         icon-label-metrics.preferred-width + 32px + 16px + 8px)
         + 2 * PopoverTokens.shadow-margin;
-    out property <length> menu-height: 2 * PopoverTokens.shadow-margin + 16px + root.rows-height;
+    out property <length> menu-height: 2 * PopoverTokens.shadow-margin + 16px + root.rows-height
+        + (root.window-entries.length > 0 ? 152px : 0px);
     preferred-width: root.menu-width;
     preferred-height: root.menu-height;
     property <length> row-height: PopoverTokens.font-size * PopoverTokens.line-height + 16px;
@@ -87,6 +97,14 @@ export component ContextMenuSurface inherits Window {
     property <bool> keyboard-navigation;
     property <length> viewport-inset: max(0px, 8px - FocusTokens.outer-margin);
     callback action-requested(DockMenuAction);
+    callback window-action-requested(string, DockMenuAction);
+    function request-entry(index: int) {
+        if root.entry-enabled(index) {
+            if root.entries[index].window-key != "" {
+                root.window-action-requested(root.entries[index].window-key, root.entries[index].action);
+            } else { root.action-requested(root.entries[index].action); }
+        }
+    }
     callback dismiss-requested();
     pure callback metric-labels([MenuEntry], bool) -> string;
     // Direct shared-font probes avoid deferred repeater layout before show.
@@ -102,7 +120,7 @@ export component ContextMenuSurface inherits Window {
         opacity: 0;
         text: root.metric-labels(root.entries, true);
     }
-    property <[MenuEntry]> entries: root.launcher-favorite-scope ? [
+    property <[MenuEntry]> entries: root.window-entries.length > 0 ? root.window-entries : root.launcher-favorite-scope ? [
         { label: root.launcher-favorite ? @tr("Unpin") : @tr("Pin"),
             action: root.launcher-favorite ? DockMenuAction.favorite-remove : DockMenuAction.favorite-add }
     ] : root.media-scope ? [
@@ -200,7 +218,7 @@ export component ContextMenuSurface inherits Window {
                 if root.entry-enabled(root.selected-index)
                     && !(event.repeat
                         && root.non-repeating-action(root.entries[root.selected-index].action)) {
-                    root.action-requested(root.entries[root.selected-index].action);
+                    root.request-entry(root.selected-index);
                 }
                 return accept;
             }
@@ -208,11 +226,37 @@ export component ContextMenuSurface inherits Window {
         }
 
         body := PopoverBody {
-            ScrollView {
+            // DWM paints only inside this measured client viewport; no fake bitmap.
+            preview := Rectangle {
                 x: root.viewport-inset;
                 y: root.viewport-inset;
                 width: max(0px, body.content-width - 2 * root.viewport-inset);
-                height: max(0px, body.content-height - 2 * root.viewport-inset);
+                height: root.window-entries.length > 0 ? min(144px, max(0px,
+                    body.content-height - 2 * root.viewport-inset - root.row-height
+                        - 2 * FocusTokens.outer-margin - 8px)) : 0px;
+                background: SeelenPalette.tile;
+                visible: self.height > 0px;
+                accessible-role: none;
+                Text {
+                    x: 8px;
+                    y: 8px;
+                    width: max(0px, parent.width - 16px);
+                    height: max(0px, parent.height - 16px);
+                    text: root.preview-notice;
+                    color: SeelenPalette.muted;
+                    font-size: PopoverTokens.font-size;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                    visible: root.preview-notice != "";
+                }
+            }
+            ScrollView {
+                x: root.viewport-inset;
+                y: root.viewport-inset + (preview.height > 0px ? preview.height + 8px : 0px);
+                width: max(0px, body.content-width - 2 * root.viewport-inset);
+                height: max(0px, body.content-height - 2 * root.viewport-inset
+                    - (preview.height > 0px ? preview.height + 8px : 0px));
                 content-width: self.visible-width;
                 content-height: root.rows-height + 2 * FocusTokens.outer-margin;
                 content-y: -max(0px, min(root.selected-index * (root.row-height + root.row-gap),
@@ -252,7 +296,7 @@ export component ContextMenuSurface inherits Window {
                             if self.pressed { root.keyboard-navigation = false; }
                         }
                         clicked => {
-                            if root.entry-enabled(index) { root.action-requested(entry.action); }
+                            root.request-entry(index);
                         }
                         if entry.icon.width > 0: MenuIcon {
                             x: 8px;

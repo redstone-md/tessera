@@ -163,6 +163,39 @@ fn caption_with_state(window: &PanelWindow) -> String {
     }
 }
 
+/// Group only proven identities, retaining complete snapshot membership.
+/// The representative remains an individual opaque window key.
+pub(crate) fn dock_groups(snapshot: &PanelSnapshot) -> Vec<Vec<&PanelWindow>> {
+    let mut groups: Vec<Vec<&PanelWindow>> = Vec::new();
+    for window in snapshot.windows() {
+        let group = window.application_identity().and_then(|identity| {
+            groups
+                .iter_mut()
+                .find(|members| members[0].application_identity() == Some(identity))
+        });
+        if let Some(group) = group {
+            group.push(window);
+        } else {
+            groups.push(vec![window]);
+        }
+    }
+    groups
+}
+
+/// AppsFolder may return either its relative AUMID or the canonical namespace
+/// parsing name. Strip only that exact known namespace; never infer from names.
+pub(crate) fn catalog_aumid(key: &str) -> &str {
+    const APPS_FOLDER: &str = "::{4234d49b-0245-4df3-b780-3893943456e1}\\";
+    if key
+        .get(..APPS_FOLDER.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(APPS_FOLDER))
+    {
+        &key[APPS_FOLDER.len()..]
+    } else {
+        key
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

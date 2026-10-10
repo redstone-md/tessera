@@ -117,6 +117,9 @@ mod snapshot;
 mod ui_preferences;
 pub mod visibility;
 mod window_actions;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub mod window_preview;
 
 pub use activation::{ActivationError, ActivationTarget, activate, show_startup_error};
 pub use audio::AudioService;
