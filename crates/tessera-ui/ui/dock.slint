@@ -138,6 +138,14 @@ export component Dock inherits Window {
     property <bool> vertical: root.edge >= 2;
     callback launch-requested(string);
     callback activate-app-requested(string);
+    // Native Root-owned action admission; legacy docks retain new-instance launch.
+    in-out property <bool> middle-click-available: false;
+    in-out property <string> middle-click-label: "New instance";
+    callback middle-click-pointer(string, bool, PointerEvent, TileBounds, Point);
+    callback middle-click-requested(string, bool);
+    out property <Point> middle-click-scroll: { x: scroll.content-x, y: scroll.content-y };
+    callback middle-click-frame-changed();
+    changed middle-click-scroll => { root.middle-click-frame-changed(); }
     callback window-command-requested(string, DockWindowCommand);
     callback open-applications-requested();
     callback exit-requested();
@@ -380,15 +388,21 @@ export component Dock inherits Window {
                     };
                     report-pointer-metadata: true;
                     pointer-metadata(event, bounds, point) => {
-                        root.reorder-origin({
-                            visible: false, source: tile, count: self.count,
-                            pressed: self.pressed, appearance: self.appearance, bounds: bounds
-                        }, event, bounds, point);
+                        if root.middle-click-available {
+                            root.middle-click-pointer(tile.key, true, event, bounds, point);
+                        }
+                        if event.button != PointerEventButton.middle {
+                            root.reorder-origin({
+                                visible: false, source: tile, count: self.count,
+                                pressed: self.pressed, appearance: self.appearance, bounds: bounds
+                            }, event, bounds, point);
+                        }
                     }
                     opacity: root.reorder-visual.visible && root.reorder-visual.source.key == tile.key ? 0.35 : 1;
                     activation-key: tile.key;
                     accessible-text: (root.group-count(root.group-metadata, tile.key) > 0 ? "Switch to " : "Launch ") + tile.label;
-                    tooltip-text: tile.label + root.group-tooltip(root.observed-windows, root.group-metadata, tile.key);
+                    tooltip-text: tile.label + root.group-tooltip(root.observed-windows, root.group-metadata, tile.key)
+                        + (root.middle-click-available ? "\n" + @tr("Middle click") + ": " + root.middle-click-label : "");
                     tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                     tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                     clicked => {
@@ -397,7 +411,10 @@ export component Dock inherits Window {
                         } else if root.group-count(root.group-metadata, tile.key) == 1 { root.activate-app-requested(tile.key); }
                         else { root.launch-requested(tile.key); }
                     }
-                    middle-clicked => { root.launch-requested(tile.key); }
+                    middle-clicked => {
+                        if root.middle-click-available { root.middle-click-requested(tile.key, true); }
+                        else { root.launch-requested(tile.key); }
+                    }
                     context-requested(position) => {
                         root.context-menu-requested(DockMenuKind.pinned, tile.key, position);
                     }
@@ -420,14 +437,22 @@ export component Dock inherits Window {
                     radius: root.tile-radius;
                     enabled: !root.blocked;
                     activation-key: tile.key;
+                    report-pointer-metadata: root.middle-click-available;
+                    pointer-metadata(event, bounds, point) => {
+                        root.middle-click-pointer(tile.key, false, event, bounds, point);
+                    }
                     accessible-text: "Switch to " + tile.caption;
-                    tooltip-text: tile.caption;
+                    tooltip-text: tile.caption
+                        + (root.middle-click-available ? "\n" + @tr("Middle click") + ": " + root.middle-click-label : "");
                     tooltip-requested(text, bounds) => { root.tooltip-requested(text, bounds); }
                     tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
                     clicked => {
                         if root.group-count(root.group-metadata, tile.key) > 1 {
                             root.context-menu-requested(DockMenuKind.window, tile.key, self.absolute-position);
                         } else { root.window-command-requested(tile.key, DockWindowCommand.toggle); }
+                    }
+                    middle-clicked => {
+                        if root.middle-click-available { root.middle-click-requested(tile.key, false); }
                     }
                     context-requested(position) => {
                         root.context-menu-requested(DockMenuKind.window, tile.key, position);

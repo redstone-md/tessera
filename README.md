@@ -327,6 +327,11 @@ native drag and rejects discrete moves only after the complete-record Save
 succeeds. Schema 6 admits optional `dock.locked`, default false and omitted when
 unlocked; exact older-schema groups still reject it. Failed saves retain the
 applied lock and order rather than showing an optimistic result.
+The saved middle-click choice is New instance (default), Minimize windows or
+Close windows. Commands use current exact admitted group members and report
+accepted/failed/not-submitted requests, not guaranteed visible completion.
+The optional schema-6 `dock.middle_click` string is omitted at its default;
+older-schema groups still reject it. Draft choices apply only after Save.
 
 Development Bluetooth adds explicit On/Off for each available Bluetooth
 radio, with exact native device IDs, retained COM incarnations and source/state

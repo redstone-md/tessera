@@ -150,6 +150,8 @@ export component Panel inherits Window {
     in-out property <bool> compact;
     in-out property <int> start-of-week-index: 0;
 
+    in property <bool> dock-preferences-available: false;
+    in-out property <int> dock-middle-click-index: 0;
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -530,6 +532,18 @@ export component Panel inherits Window {
                                 accessible-label: "Dock edge (saved with preferences)";
                                 model: ["Bottom", "Top", "Left", "Right"];
                                 current-index <=> root.dock-edge-index;
+                            }
+                        }
+                        if root.dock-preferences-available: SettingsRow {
+                            label: "Middle click";
+                            description: "Apply after Save. Window commands are requests, not guaranteed completion.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                accessible-label: "Dock middle-click action after Save";
+                                model: ["New instance", "Minimize windows", "Close windows"];
+                                current-index <=> root.dock-middle-click-index;
                             }
                         }
                     }

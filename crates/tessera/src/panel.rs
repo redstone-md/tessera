@@ -61,6 +61,15 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         tessera_ui::StartOfWeek::Sunday => crate::settings::StartOfWeek::Sunday,
         tessera_ui::StartOfWeek::Saturday => crate::settings::StartOfWeek::Saturday,
     };
+    let middle = match preferences.dock_middle_click() {
+        tessera_ui::DockMiddleClickAction::NewInstance => {
+            crate::settings::DockMiddleClickAction::NewInstance
+        }
+        tessera_ui::DockMiddleClickAction::Minimize => {
+            crate::settings::DockMiddleClickAction::Minimize
+        }
+        tessera_ui::DockMiddleClickAction::Close => crate::settings::DockMiddleClickAction::Close,
+    };
     Preferences::new(theme, preferences.compact())
         .with_source_seed(preferences.source_seed())
         .with_dock(edge, preferences.pinned_apps().to_vec())
@@ -69,6 +78,7 @@ fn from_ui_preferences(preferences: &tessera_ui::PanelPreferences) -> crate::set
         .with_general(crate::settings::GeneralPreferences::default().with_start_of_week(start))
         .with_media_enabled(preferences.media_enabled())
         .with_dock_locked(preferences.dock_locked())
+        .with_dock_middle_click(middle)
         .with_shortcuts(preferences.shortcuts().clone())
 }
 
@@ -98,6 +108,15 @@ fn to_ui_preferences(
         crate::settings::StartOfWeek::Sunday => tessera_ui::StartOfWeek::Sunday,
         crate::settings::StartOfWeek::Saturday => tessera_ui::StartOfWeek::Saturday,
     };
+    let middle = match preferences.dock_middle_click() {
+        crate::settings::DockMiddleClickAction::NewInstance => {
+            tessera_ui::DockMiddleClickAction::NewInstance
+        }
+        crate::settings::DockMiddleClickAction::Minimize => {
+            tessera_ui::DockMiddleClickAction::Minimize
+        }
+        crate::settings::DockMiddleClickAction::Close => tessera_ui::DockMiddleClickAction::Close,
+    };
     tessera_ui::PanelPreferences::new(theme, preferences.compact())
         .with_source_seed(preferences.source_seed())
         .with_dock(edge, preferences.pinned_apps().to_vec())
@@ -105,6 +124,7 @@ fn to_ui_preferences(
         .with_general(tessera_ui::GeneralPreferences::default().with_start_of_week(start))
         .with_media_enabled(preferences.media_enabled())
         .with_dock_locked(preferences.dock_locked())
+        .with_dock_middle_click(middle)
         .with_shortcuts(preferences.shortcuts().clone())
         .with_launcher_favorites(preferences.launcher_favorites().to_vec())
 }

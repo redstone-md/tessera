@@ -213,6 +213,7 @@ impl PanelController {
     }
 
     pub(super) fn cancel_dock_reorder(&self) {
+        self.cancel_dock_middle_click();
         self.end_dock_reorder(true);
     }
 

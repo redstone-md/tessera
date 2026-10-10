@@ -36,6 +36,51 @@ impl PanelController {
 }
 
 impl Dock {
+    /// Complete admitted membership, never the visible representative slice.
+    pub(crate) fn displayed_group_window_keys(
+        &self,
+        key: &str,
+        pinned: bool,
+    ) -> Option<Vec<String>> {
+        let displayed = if pinned {
+            model_key(&self.get_pinned_apps(), key, |app| app.key.to_string())
+        } else {
+            model_key(&self.get_running_windows(), key, |window| {
+                window.key.to_string()
+            })
+        }?;
+        let metadata = self.get_group_metadata();
+        let mut anchors = metadata.iter().filter(|group| group.key == displayed);
+        let Some(anchor) = anchors.next() else {
+            return pinned.then(Vec::new);
+        };
+        if anchors.next().is_some() || (pinned && anchor.identity.is_empty()) {
+            return None;
+        }
+        let mut keys = Vec::new();
+        for window in self.get_observed_windows().iter() {
+            let mut entries = metadata.iter().filter(|member| member.key == window.key);
+            let Some(member) = entries.next() else {
+                continue;
+            };
+            if entries.next().is_some() {
+                return None;
+            }
+            let belongs = member.representative == anchor.representative
+                && (member.key == anchor.key
+                    || (!anchor.identity.is_empty() && member.identity == anchor.identity));
+            if !belongs {
+                continue;
+            }
+            let exact = self.displayed_window_key(&window.key)?;
+            if keys.contains(&exact) {
+                return None;
+            }
+            keys.push(exact);
+        }
+        (usize::try_from(anchor.count).ok() == Some(keys.len())).then_some(keys)
+    }
+
     /// One source rule for direct actions, grouped members and live previews.
     pub(crate) fn displayed_window_key(&self, key: &str) -> Option<String> {
         let observed = model_key(&self.get_observed_windows(), key, |window| {

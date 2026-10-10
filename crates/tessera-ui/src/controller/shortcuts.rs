@@ -371,6 +371,13 @@ impl PanelController {
             return;
         }
         panel.set_start_of_week_index(saved.general().start_of_week().index());
+        if !self.root_current() {
+            return;
+        }
+        panel.set_dock_middle_click_index(saved.dock_middle_click().index());
+        if !self.root_current() {
+            return;
+        }
         if self.dock.is_some() {
             let _ = panel.hide();
         }

@@ -23,6 +23,7 @@ mod actions;
 mod battery;
 mod calendar;
 mod context_menu;
+mod dock_middle_click;
 mod dock_order;
 mod dock_utilities;
 mod geometry;
@@ -146,6 +147,7 @@ pub(crate) struct PanelController {
     leases: Rc<RefCell<SurfaceLeases>>,
     launcher_state: Rc<RefCell<launcher::LauncherState>>,
     dock_order: Rc<dock_order::DockOrder>,
+    dock_middle_click: Rc<dock_middle_click::DockMiddleClick>,
     preference_saving: Rc<Cell<bool>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     popup_operation: Rc<RefCell<Rc<()>>>,
@@ -181,6 +183,7 @@ impl Drop for PreferenceSave<'_> {
         self.0.preference_saving.set(false);
         self.0.sync_launcher_reorder();
         self.0.sync_dock_reorder();
+        self.0.sync_dock_middle_click();
     }
 }
 
@@ -216,6 +219,7 @@ impl PanelController {
             leases: Rc::default(),
             launcher_state: Rc::default(),
             dock_order: Rc::default(),
+            dock_middle_click: Rc::default(),
             preference_saving: Rc::default(),
             surface_failure: Rc::default(),
             popup_operation: Rc::default(),
@@ -277,6 +281,7 @@ impl PanelController {
             power_menu: Rc::default(),
             dock_utilities: Rc::default(),
             dock_order: Rc::default(),
+            dock_middle_click: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             battery: Rc::default(),
@@ -373,6 +378,9 @@ impl PanelController {
     }
 
     fn wire_panel(&self, panel: &Panel) {
+        let applied = self.core.applied_preferences();
+        panel.set_dock_middle_click_index(applied.dock_middle_click().index());
+        panel.set_dock_preferences_available(self.dock.is_some());
         let weak = self.clone();
         panel.on_refresh_requested(move || {
             let _ = weak.refresh();
@@ -417,6 +425,7 @@ impl PanelController {
 
     fn wire_dock(&self, dock: &Dock) {
         self.wire_dock_reorder(dock);
+        self.wire_dock_middle_click(dock);
         dock.on_group_count(|metadata, key| {
             metadata
                 .iter()
@@ -1170,6 +1179,7 @@ impl PanelController {
     }
 
     fn refresh_strip(&self, dock: &Dock) {
+        let _middle_projection = self.begin_dock_middle_click_projection();
         self.invalidate_dock_projection();
         let menu = self.menus.borrow().clone();
         if let Some(menu) = menu {
@@ -1288,6 +1298,7 @@ impl PanelController {
         dock.set_observed_windows(ModelRc::new(VecModel::from(observed)));
         dock.set_running_windows(ModelRc::new(VecModel::from(windows)));
         self.invalidate_dock_projection();
+        self.sync_dock_middle_click();
     }
 
     /// Places the dock and toolbar windows inside the monitor bounds and
@@ -1583,8 +1594,8 @@ impl PanelController {
         });
     }
 
-    /// Saves previewed appearance/edge and General policy as one complete
-    /// applied record. Calendar policy changes only after storage succeeds.
+    /// Saves appearance, General policy and module drafts as one complete
+    /// applied record. Native modules adopt changes only after storage succeeds.
     pub(crate) fn save_preferences(&self) {
         let Some(_save) = self.begin_preference_save() else {
             return;
@@ -1603,6 +1614,12 @@ impl PanelController {
             self.report_message("Could not save preferences: invalid start-of-week choice.");
             return;
         };
+        let Some(middle) =
+            crate::DockMiddleClickAction::from_index(panel.get_dock_middle_click_index())
+        else {
+            self.report_message("Could not save preferences: invalid middle-click choice.");
+            return;
+        };
         let preferences = self
             .core
             .applied_preferences()
@@ -1613,6 +1630,7 @@ impl PanelController {
             )
             .with_source_seed(seed)
             .with_general(crate::GeneralPreferences::default().with_start_of_week(start))
+            .with_dock_middle_click(middle)
             .with_shortcuts(self.shortcut_draft());
         match self.core.host().save_preferences(&preferences) {
             Ok(()) => {

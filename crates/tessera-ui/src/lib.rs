@@ -206,6 +206,34 @@ pub(crate) fn start_clock_timer(
     timer
 }
 
+/// Saved middle-click intent; each window request retains its native identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DockMiddleClickAction {
+    #[default]
+    NewInstance,
+    Minimize,
+    Close,
+}
+
+impl DockMiddleClickAction {
+    pub(crate) fn index(self) -> i32 {
+        match self {
+            Self::NewInstance => 0,
+            Self::Minimize => 1,
+            Self::Close => 2,
+        }
+    }
+
+    pub(crate) fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::NewInstance),
+            1 => Some(Self::Minimize),
+            2 => Some(Self::Close),
+            _ => None,
+        }
+    }
+}
+
 /// Complete panel preferences, persisted by the host on explicit user actions.
 ///
 /// Dock pins and ordered launcher favorites are independent collections.
@@ -224,6 +252,7 @@ pub struct PanelPreferences {
     general: GeneralPreferences,
     media_enabled: bool,
     dock_locked: bool,
+    dock_middle_click: DockMiddleClickAction,
     shortcuts: tessera_system::shortcuts::ShortcutConfig,
 }
 
@@ -240,6 +269,7 @@ impl PanelPreferences {
             general: GeneralPreferences::default(),
             media_enabled: false,
             dock_locked: false,
+            dock_middle_click: DockMiddleClickAction::default(),
             shortcuts: tessera_system::shortcuts::ShortcutConfig::default(),
         }
     }
@@ -302,6 +332,15 @@ impl PanelPreferences {
     /// Changes only the saved Dock reorder policy.
     pub fn with_dock_locked(mut self, locked: bool) -> Self {
         self.dock_locked = locked;
+        self
+    }
+
+    pub fn dock_middle_click(&self) -> DockMiddleClickAction {
+        self.dock_middle_click
+    }
+
+    pub fn with_dock_middle_click(mut self, action: DockMiddleClickAction) -> Self {
+        self.dock_middle_click = action;
         self
     }
 

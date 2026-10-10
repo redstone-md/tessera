@@ -16,8 +16,8 @@ mod shortcuts;
 use shortcuts::ShortcutPreferences;
 use tessera_system::shortcuts::ShortcutConfig;
 
-pub(crate) use dock::DockPreferences;
 use dock::LegacyDockPreferences;
+pub(crate) use dock::{DockMiddleClickAction, DockPreferences};
 pub(crate) use general::{GeneralPreferences, StartOfWeek};
 
 const MAX_SETTINGS_BYTES: u64 = 16 * 1024;
@@ -265,6 +265,15 @@ impl Preferences {
 
     pub(crate) fn with_dock_locked(mut self, locked: bool) -> Self {
         self.dock = self.dock.with_locked(locked);
+        self
+    }
+
+    pub(crate) fn dock_middle_click(&self) -> DockMiddleClickAction {
+        self.dock.middle_click()
+    }
+
+    pub(crate) fn with_dock_middle_click(mut self, action: DockMiddleClickAction) -> Self {
+        self.dock = self.dock.with_middle_click(action);
         self
     }
 
