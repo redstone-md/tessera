@@ -45,6 +45,7 @@ enum Operation {
     ApplyCollection,
     ReadSlideshow,
     AdvanceSlideshow(native_slideshow::Direction),
+    SetSlideshowOptions,
 }
 
 enum Request {
@@ -69,6 +70,10 @@ enum Request {
         direction: native_slideshow::Direction,
         index: i32,
     },
+    SetSlideshowOptions {
+        target: native_slideshow::Target,
+        proposal: slideshow::OptionsProposal,
+    },
 }
 
 #[derive(Clone)]
@@ -83,6 +88,7 @@ struct Flight {
     collection_options: Option<native_collection::Options>,
     collection_index: Option<i32>,
     slideshow: Option<slideshow::Issued>,
+    slideshow_options: Option<slideshow::OptionsProposal>,
 }
 
 enum Reply {
@@ -93,6 +99,7 @@ enum Reply {
     CollectionApplied(Result<native_collection::ApplyOutcome, WallpaperError>),
     SlideshowRead(Result<native_slideshow::Observation, WallpaperError>),
     SlideshowAdvanced(Result<native_slideshow::AdvanceOutcome, WallpaperError>),
+    SlideshowOptionsSet(Result<native_slideshow::OptionsOutcome, WallpaperError>),
 }
 
 struct Receipt {
@@ -286,6 +293,24 @@ impl WallpaperController {
                     actor.slideshow_monitor_changed(index);
                 }
             });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_options_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::SetSlideshowOptions);
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_interval_changed(move |index| {
+                if let Some(actor) = weak.upgrade() {
+                    actor.slideshow_options_changed(Some(index));
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_shuffle_changed(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.slideshow_options_changed(None);
+                }
+            });
         }
         actor
     }
@@ -446,6 +471,11 @@ impl WallpaperController {
         clear!(set_wallpaper_slideshow_selector_available, false);
         clear!(set_wallpaper_slideshow_monitors, slint::ModelRc::default());
         clear!(set_wallpaper_slideshow_monitor_index, -1);
+        clear!(set_wallpaper_slideshow_options_available, false);
+        clear!(set_wallpaper_slideshow_options_editable, false);
+        clear!(set_wallpaper_slideshow_options_apply_enabled, false);
+        clear!(set_wallpaper_slideshow_interval_index, -1);
+        clear!(set_wallpaper_slideshow_shuffle, false);
         clear!(
             set_wallpaper_slideshow_facts,
             "Native current slideshow policy has not been read.".into()
@@ -517,6 +547,11 @@ impl WallpaperController {
                         }
                     };
                     input && self.slideshow_choice_current(&panel, direction)
+                }
+                Operation::SetSlideshowOptions => {
+                    panel.get_wallpaper_slideshow_options_input_active()
+                        && panel.get_wallpaper_slideshow_options_control_visible()
+                        && self.slideshow_options_current(&panel)
                 }
             }
     }
@@ -665,7 +700,9 @@ fn error_notice(operation: Operation, error: WallpaperError) -> &'static str {
             "The native slideshow request is unavailable. Some SDK effects may already have occurred; actual Windows policy is unknown. No rollback or retry was performed."
         }
         (
-            Operation::ReadSlideshow | Operation::AdvanceSlideshow(_),
+            Operation::ReadSlideshow
+            | Operation::AdvanceSlideshow(_)
+            | Operation::SetSlideshowOptions,
             WallpaperError::Unavailable,
         ) => {
             "The native slideshow request is unavailable. Effects may already have occurred; current facts are unknown. No rollback or retry was performed."

@@ -62,7 +62,8 @@ pub enum Direction {
 }
 
 /// Actual SDK facts can be readable without a safe actionable policy snapshot.
-/// Only Some(target) plus that observation's exact member permits advancement.
+/// Some(target) permits global options editing; advancement also requires that
+/// observation's exact monitor member. Construction alone grants no authority.
 /// Native entry count is array members: a single folder is not an image count.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Observation {
@@ -85,6 +86,26 @@ pub struct AdvanceOutcome {
     pub selected_monitor: Option<WallpaperMonitorTarget>,
 }
 
+/// AlreadyCurrent means the revalidated native options matched the proposal and
+/// no setter was called. Accepted/Rejected are SDK receipts, not persistent state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionsDisposition {
+    AlreadyCurrent,
+    Accepted,
+    Rejected,
+}
+
+/// One global options request without replacing/restarting the slideshow source.
+/// Independent fresh observation mints new targets; monitor choice resets because
+/// this global command does not carry a selected native monitor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OptionsOutcome {
+    pub disposition: OptionsDisposition,
+    pub observation: Option<Observation>,
+}
+
 pub type ReadCompletion = Box<dyn FnOnce(Result<Observation, WallpaperError>) + Send + 'static>;
 pub type AdvanceCompletion =
     Box<dyn FnOnce(Result<AdvanceOutcome, WallpaperError>) + Send + 'static>;
+pub type OptionsCompletion =
+    Box<dyn FnOnce(Result<OptionsOutcome, WallpaperError>) + Send + 'static>;

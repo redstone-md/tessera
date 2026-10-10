@@ -8,10 +8,14 @@ use native_collection::NativeStep;
 use native_slideshow::{AdvanceOutcome, Direction, Observation, TargetWeak};
 use slint::Model;
 
+mod options;
+pub(super) use options::Proposal as OptionsProposal;
+
 #[derive(Clone)]
 pub(super) struct Current {
     pub(super) observation: Observation,
     pub(super) index: i32,
+    pub(super) proposal: Option<OptionsProposal>,
 }
 
 impl Current {
@@ -48,6 +52,7 @@ impl Current {
             monitor.caption = selection::bounded_caption(&monitor.caption, 256)?;
         }
         Some(Self {
+            proposal: observation.options.map(OptionsProposal::from_readback),
             observation,
             index: -1,
         })
@@ -102,6 +107,7 @@ pub(super) struct Projection {
     pub(super) advance_enabled: bool,
     pub(super) facts: slint::SharedString,
     pub(super) status: slint::SharedString,
+    pub(super) options: options::Projection,
 }
 
 impl Projection {
@@ -122,6 +128,7 @@ impl Projection {
             Some(flight) if flight.session != session => "A previous native request is pending; its old facts will not be restored here.".into(),
             Some(flight) if flight.operation == Operation::ReadSlideshow => "Reading actual native policy, options and captured displays…".into(),
             Some(flight) if matches!(flight.operation, Operation::AdvanceSlideshow(_)) => "Requesting one exact captured SDK monitor; awaiting setter receipt and independent fresh native readback…".into(),
+            Some(flight) if flight.operation == Operation::SetSlideshowOptions => "Requesting global current-policy options only; the slideshow source is not replaced or restarted. Awaiting independent native receipt/readback…".into(),
             _ if !state.slideshow_notice.is_empty() => state.slideshow_notice.clone(),
             _ if current.is_some_and(|current| current.observation.target.is_some()) => "Choose a genuine captured display before Previous or Next. SDK flags do not prove rendered advancement.".into(),
             _ if current.is_some() => "Actual native facts are read-only: no safe active policy authority was issued. Read current again explicitly when ready.".into(),
@@ -150,6 +157,7 @@ impl Projection {
                 }),
             facts: facts.into(),
             status: status.into(),
+            options: options::Projection::capture(state),
         }
     }
 }
@@ -224,7 +232,9 @@ impl WallpaperController {
             || state.session != Some(session)
             || state.flight.as_ref().map(|flight| flight.ticket) != ticket
             || state.slideshow.as_ref().is_none_or(|current| {
-                current.index != snapshot.index || current.observation != snapshot.observation
+                current.index != snapshot.index
+                    || current.observation != snapshot.observation
+                    || current.proposal != snapshot.proposal
             })
         {
             return false;
@@ -320,14 +330,18 @@ impl WallpaperController {
             (Operation::AdvanceSlideshow(_), Reply::SlideshowAdvanced(Ok(outcome))) => {
                 outcome_projection(flight.slideshow.as_ref(), outcome)
             }
+            (Operation::SetSlideshowOptions, Reply::SlideshowOptionsSet(Ok(outcome))) => {
+                options::outcome_projection(flight.slideshow.as_ref(), outcome)
+            }
             (Operation::ReadSlideshow, Reply::SlideshowRead(Err(error)))
-            | (Operation::AdvanceSlideshow(_), Reply::SlideshowAdvanced(Err(error))) => {
+            | (Operation::AdvanceSlideshow(_), Reply::SlideshowAdvanced(Err(error)))
+            | (Operation::SetSlideshowOptions, Reply::SlideshowOptionsSet(Err(error))) => {
                 let notice = match error {
                     WallpaperError::Busy => {
                         "The shared native wallpaper provider is busy. No retry is queued; Read current again explicitly."
                     }
                     WallpaperError::InvalidTarget => {
-                        "The exact current policy/display observation is no longer valid. No advance was submitted; Read current again."
+                        "The exact current policy/display observation is no longer valid. No setter was submitted; Read current again."
                     }
                     WallpaperError::Unavailable => {
                         "Native slideshow facts are unavailable. Effects may already have occurred; no rollback or retry was performed. Read current again explicitly."

@@ -334,4 +334,16 @@ pub trait WallpaperHost: Send + Sync {
     ) -> Result<(), WallpaperError> {
         Err(WallpaperError::Unavailable)
     }
+
+    /// Consume the exact current-policy target, revalidate original source,
+    /// status/options and complete native cohort, then change only global timing
+    /// and shuffle. This never invokes SetSlideshow or replaces file drafts.
+    fn set_slideshow_options(
+        &self,
+        _target: slideshow::Target,
+        _options: collection::Options,
+        _completion: slideshow::OptionsCompletion,
+    ) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
 }

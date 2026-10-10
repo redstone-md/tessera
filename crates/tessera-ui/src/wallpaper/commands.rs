@@ -26,7 +26,7 @@ impl WallpaperController {
             // Capture only weak policy identity and authority-free member tokens.
             // Read/advance never consume the independent image or collection drafts.
             let slideshow = match operation {
-                Operation::ReadSlideshow => {
+                Operation::ReadSlideshow | Operation::SetSlideshowOptions => {
                     state.slideshow.as_ref().map(|current| current.issued(None))
                 }
                 Operation::AdvanceSlideshow(direction) => state
@@ -80,6 +80,25 @@ impl WallpaperController {
                     retired_current = state.slideshow.take();
                     (Request::ReadSlideshow, (None, None))
                 }
+                Operation::SetSlideshowOptions => {
+                    let Some(current) = state.slideshow.as_mut() else {
+                        return;
+                    };
+                    let Some(proposal) = current
+                        .proposal
+                        .filter(|proposal| proposal.options().is_some())
+                    else {
+                        return;
+                    };
+                    let Some(target) = current.observation.target.take() else {
+                        return;
+                    };
+                    // Retain only readonly policy/proposal geometry while this request owns authority.
+                    (
+                        Request::SetSlideshowOptions { target, proposal },
+                        (None, None),
+                    )
+                }
                 Operation::AdvanceSlideshow(direction) => {
                     let Some(current) = state.slideshow.as_mut() else {
                         return;
@@ -115,6 +134,7 @@ impl WallpaperController {
                 | Request::ChooseFolder
                 | Request::ApplyCollection { .. }
                 | Request::ReadSlideshow
+                | Request::SetSlideshowOptions { .. }
                 | Request::AdvanceSlideshow { .. } => (None, None, 0),
                 Request::Apply {
                     scope,
@@ -131,6 +151,10 @@ impl WallpaperController {
                 } => (Some(target.downgrade()), Some(*options), Some(*index)),
                 _ => (None, None, None),
             };
+            let slideshow_options = match &request {
+                Request::SetSlideshowOptions { proposal, .. } => Some(*proposal),
+                _ => None,
+            };
             let flight = Flight {
                 ticket,
                 session,
@@ -142,11 +166,14 @@ impl WallpaperController {
                 collection_options,
                 collection_index,
                 slideshow,
+                slideshow_options,
             };
             state.flight = Some(flight.clone());
             if !matches!(
                 operation,
-                Operation::ReadSlideshow | Operation::AdvanceSlideshow(_)
+                Operation::ReadSlideshow
+                    | Operation::AdvanceSlideshow(_)
+                    | Operation::SetSlideshowOptions
             ) {
                 state.notice.clear();
                 state.collection_notice.clear();
@@ -194,7 +221,9 @@ impl WallpaperController {
                 state.flight = None;
                 let retired = if matches!(
                     operation,
-                    Operation::ReadSlideshow | Operation::AdvanceSlideshow(_)
+                    Operation::ReadSlideshow
+                        | Operation::AdvanceSlideshow(_)
+                        | Operation::SetSlideshowOptions
                 ) {
                     state.slideshow_notice = "The slideshow request lost live admission before submission. No SDK work was requested; Read current again explicitly.".into();
                     (None, None, state.slideshow.take())
@@ -298,6 +327,23 @@ impl WallpaperController {
                     });
                     provider.advance_slideshow(target, monitor, direction, completion)
                 }
+                Request::SetSlideshowOptions { target, proposal } => {
+                    let completion: native_slideshow::OptionsCompletion = Box::new(move |result| {
+                        let _owner = owner;
+                        deliver(
+                            &mailbox,
+                            &panel,
+                            flight.ticket,
+                            Reply::SlideshowOptionsSet(result),
+                        );
+                    });
+                    match proposal.options() {
+                        Some(options) => {
+                            provider.set_slideshow_options(target, options, completion)
+                        }
+                        None => Err(WallpaperError::InvalidTarget),
+                    }
+                }
             }
         };
         if let Err(error) = admitted {
@@ -310,6 +356,7 @@ impl WallpaperController {
                 Operation::ApplyCollection => Reply::CollectionApplied(Err(error)),
                 Operation::ReadSlideshow => Reply::SlideshowRead(Err(error)),
                 Operation::AdvanceSlideshow(_) => Reply::SlideshowAdvanced(Err(error)),
+                Operation::SetSlideshowOptions => Reply::SlideshowOptionsSet(Err(error)),
             };
             let retired = self.mailbox.lock().replace(Receipt {
                 ticket: flight.ticket,
@@ -393,6 +440,20 @@ impl WallpaperController {
                             && current.member(*index).as_ref() == Some(monitor)
                     })
             }
+            Request::SetSlideshowOptions { target, proposal } => {
+                flight.operation == Operation::SetSlideshowOptions
+                    && flight.slideshow_options == Some(*proposal)
+                    && proposal.options().is_some()
+                    && flight.slideshow.as_ref().is_some_and(|issued| {
+                        issued
+                            .target
+                            .as_ref()
+                            .is_some_and(|weak| weak.is_alive() && weak.matches(target))
+                    })
+                    && state.slideshow.as_ref().is_some_and(|current| {
+                        current.observation.target.is_none() && current.proposal == Some(*proposal)
+                    })
+            }
         }
     }
 
@@ -431,7 +492,9 @@ impl WallpaperController {
         }
         if matches!(
             flight.operation,
-            Operation::ReadSlideshow | Operation::AdvanceSlideshow(_)
+            Operation::ReadSlideshow
+                | Operation::AdvanceSlideshow(_)
+                | Operation::SetSlideshowOptions
         ) {
             self.receive_slideshow(flight, receipt.reply);
             return;

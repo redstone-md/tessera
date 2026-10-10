@@ -415,6 +415,10 @@ actual Windows policy and require a genuine choice of a native-issued monitor.
 Advancement consumes that exact policy/member observation and revalidates it;
 there is no null/primary/index fallback. Fresh native wallpaper-file change and
 policy readback remain distinct from SDK acceptance and rendered pixels.
+Current-policy interval/shuffle editing consumes the exact native observation
+without replacing/restarting its source or touching unsubmitted file drafts.
+Unknown native intervals have no guessed proposal. Already-current/no-setter,
+SDK acceptance/rejection and fresh readback remain independent.
 A separate native folder picker can start a one-folder Windows slideshow without
 local enumeration or a fabricated gallery/image count. Folder policies are
 observed by native folder identity; their array-member count is not an image

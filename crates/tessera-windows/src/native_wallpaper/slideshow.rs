@@ -22,12 +22,16 @@ pub(super) struct Issuer {
 }
 
 impl Issuer {
+    pub(super) fn accepts_policy(&self, target: &contract::Target) -> bool {
+        self.target.matches(target)
+    }
+
     pub(super) fn accepts(
         &self,
         target: &contract::Target,
         monitor: &WallpaperMonitorTarget,
     ) -> bool {
-        self.target.matches(target) && self.monitors.contains(monitor)
+        self.accepts_policy(target) && self.monitors.contains(monitor)
     }
 }
 
@@ -127,6 +131,49 @@ impl Ledger {
         Ok(observation)
     }
 
+    fn take_snapshot(&mut self, target: &contract::Target) -> Result<Snapshot, WallpaperError> {
+        let snapshot = self.snapshot.take().ok_or(WallpaperError::InvalidTarget)?;
+        if !snapshot.target.matches(target) {
+            return Err(WallpaperError::InvalidTarget);
+        }
+        Ok(snapshot)
+    }
+
+    pub(super) fn set_options(
+        &mut self,
+        target: contract::Target,
+        options: collection_contract::Options,
+        mailbox: &Arc<Mailbox>,
+    ) -> Result<contract::OptionsOutcome, WallpaperError> {
+        // Exact original policy authority is consumed before the COM factory.
+        // This global operation neither needs nor carries a monitor member.
+        let snapshot = self.take_snapshot(&target)?;
+        let desktop = displays::desktop()?;
+        if !snapshot.is_current(&desktop) {
+            return Err(WallpaperError::InvalidTarget);
+        }
+        let disposition = if snapshot.options.interval_ms == options.interval.milliseconds()
+            && snapshot.options.shuffle == options.shuffle
+        {
+            contract::OptionsDisposition::AlreadyCurrent
+        } else if collection::set_options(&desktop, options).is_ok() {
+            contract::OptionsDisposition::Accepted
+        } else {
+            contract::OptionsDisposition::Rejected
+        };
+        // Also read after rejection/no-op. Readback loss cannot erase a receipt;
+        // fresh authority uses the actual new policy/cohort, never old UI choice.
+        let observation = self.capture(&desktop, mailbox).ok();
+        let outcome = contract::OptionsOutcome {
+            disposition,
+            observation,
+        };
+        drop(desktop);
+        drop(snapshot);
+        drop(target);
+        Ok(outcome)
+    }
+
     pub(super) fn advance(
         &mut self,
         target: contract::Target,
@@ -134,10 +181,7 @@ impl Ledger {
         direction: contract::Direction,
         mailbox: &Arc<Mailbox>,
     ) -> Result<contract::AdvanceOutcome, WallpaperError> {
-        let snapshot = self.snapshot.take().ok_or(WallpaperError::InvalidTarget)?;
-        if !snapshot.target.matches(&target) {
-            return Err(WallpaperError::InvalidTarget);
-        }
+        let snapshot = self.take_snapshot(&target)?;
         // Exact original member resolution precedes desktop factory/SDK work.
         let selected = snapshot
             .bindings

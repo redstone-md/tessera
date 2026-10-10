@@ -39,7 +39,7 @@ impl Projection {
             Some(flight) if matches!(flight.operation, Operation::ChooseCollection | Operation::ChooseFolder | Operation::ApplyCollection) => {
                 "A native collection request is pending. See global slideshow receipts below.".into()
             }
-            Some(flight) if matches!(flight.operation, Operation::ReadSlideshow | Operation::AdvanceSlideshow(_)) => {
+            Some(flight) if matches!(flight.operation, Operation::ReadSlideshow | Operation::AdvanceSlideshow(_) | Operation::SetSlideshowOptions) => {
                 state.notice.clone()
             }
             Some(flight) => format!(
@@ -118,6 +118,8 @@ impl WallpaperController {
         publish!(set_wallpaper_collection_apply_enabled, false);
         publish!(set_wallpaper_slideshow_read_enabled, false);
         publish!(set_wallpaper_slideshow_advance_enabled, false);
+        publish!(set_wallpaper_slideshow_options_editable, false);
+        publish!(set_wallpaper_slideshow_options_apply_enabled, false);
         // Consuming the image hides all selection-only presentation immediately.
         // Pending readonly monitor captions/index preserve final scope agreement only.
         publish!(
@@ -183,6 +185,26 @@ impl WallpaperController {
         );
         publish!(set_wallpaper_slideshow_facts, projection.slideshow.facts);
         publish!(set_wallpaper_slideshow_status, projection.slideshow.status);
+        publish!(
+            set_wallpaper_slideshow_options_available,
+            projection.slideshow.options.available
+        );
+        publish!(
+            set_wallpaper_slideshow_interval_index,
+            projection.slideshow.options.index
+        );
+        publish!(
+            set_wallpaper_slideshow_shuffle,
+            projection.slideshow.options.shuffle
+        );
+        publish!(
+            set_wallpaper_slideshow_options_editable,
+            projection.slideshow.options.editable
+        );
+        publish!(
+            set_wallpaper_slideshow_options_apply_enabled,
+            projection.slideshow.options.apply_enabled
+        );
         publish!(
             set_wallpaper_slideshow_advance_enabled,
             projection.slideshow.advance_enabled

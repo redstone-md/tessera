@@ -63,6 +63,24 @@ component ViewportTileButton inherits TileButton {
         && self.absolute-position.y + self.height <= root.viewport-y + root.viewport-height;
 }
 
+// Readonly clipping for stock proposal widgets, independent of their enabled state.
+component ViewportControl inherits Rectangle {
+    in property <length> viewport-x;
+    in property <length> viewport-y;
+    in property <length> viewport-width;
+    in property <length> viewport-height;
+    in-out property <bool> fully-visible: self.width > 0px && self.height > 0px
+        && root.viewport-width > 0px && root.viewport-height > 0px
+        && self.absolute-position.x >= root.viewport-x
+        && self.absolute-position.y >= root.viewport-y
+        && self.absolute-position.x + self.width <= root.viewport-x + root.viewport-width
+        && self.absolute-position.y + self.height <= root.viewport-y + root.viewport-height;
+    background: transparent;
+    min-height: 24px;
+    max-height: 24px;
+    @children
+}
+
 // Settings use flat translucent groups, not the shared shell's raised tiles.
 component SettingsGroup inherits Rectangle {
     border-radius: 10px;
@@ -245,6 +263,9 @@ export component Panel inherits Window {
     callback wallpaper-view-changed();
     changed wallpaper-page-visible => { root.wallpaper-view-changed(); }
     // Explicit global slideshow command. Proposed values are not native observations.
+    // One closed interval model shared by collection drafts and current-policy proposals.
+    property <[string]> wallpaper-interval-options:
+        ["1 minute", "10 minutes", "30 minutes", "1 hour", "6 hours", "1 day"];
     in property <bool> wallpaper-collection-controls-enabled;
     in property <bool> wallpaper-collection-apply-enabled;
     in property <bool> wallpaper-collection-command-available: false;
@@ -325,6 +346,30 @@ export component Panel inherits Window {
     callback wallpaper-slideshow-previous-requested();
     callback wallpaper-slideshow-next-requested();
     callback wallpaper-slideshow-monitor-changed(int);
+    // Proposed options for the observed source, not the collection draft or saved settings.
+    in property <bool> wallpaper-slideshow-options-available;
+    in property <bool> wallpaper-slideshow-options-editable;
+    in property <bool> wallpaper-slideshow-options-apply-enabled;
+    in-out property <int> wallpaper-slideshow-interval-index: -1;
+    in-out property <bool> wallpaper-slideshow-shuffle;
+    out property <bool> wallpaper-slideshow-options-input-active;
+    out property <bool> wallpaper-slideshow-interval-input-active;
+    out property <bool> wallpaper-slideshow-shuffle-input-active;
+    property <bool> wallpaper-slideshow-options-clip;
+    property <bool> wallpaper-slideshow-interval-clip;
+    property <bool> wallpaper-slideshow-shuffle-clip;
+    out property <bool> wallpaper-slideshow-options-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-slideshow-options-available && root.wallpaper-slideshow-options-clip;
+    out property <bool> wallpaper-slideshow-interval-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-slideshow-options-available && root.wallpaper-slideshow-interval-clip;
+    out property <bool> wallpaper-slideshow-shuffle-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-slideshow-options-available && root.wallpaper-slideshow-shuffle-clip;
+    callback wallpaper-slideshow-options-requested();
+    callback wallpaper-slideshow-interval-changed(int);
+    callback wallpaper-slideshow-shuffle-changed();
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -1053,6 +1098,98 @@ export component Panel inherits Window {
                             }
                         }
                         if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-slideshow-options-available: SettingsRow {
+                            label: "Proposed current-policy options";
+                            description: "Local proposals for the actual observed source, separate from the raw native milliseconds/flags above and the collection draft below. Unsupported native intervals leave the selector empty; choose explicitly. Edits have no SDK effect.";
+                            ViewportControl {
+                                fully-visible <=> root.wallpaper-slideshow-interval-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 120px;
+                                max-width: 120px;
+                                ComboBox {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    enabled: root.wallpaper-slideshow-options-editable && !root.wallpaper-busy;
+                                    accessible-label: "Proposed interval for the actual current Windows slideshow source";
+                                    model: root.wallpaper-interval-options;
+                                    current-index <=> root.wallpaper-slideshow-interval-index;
+                                    selected(value) => {
+                                        root.wallpaper-slideshow-interval-input-active =
+                                            root.wallpaper-slideshow-interval-control-visible
+                                            && root.wallpaper-slideshow-options-editable && !root.wallpaper-busy;
+                                        if root.wallpaper-slideshow-interval-input-active {
+                                            root.wallpaper-slideshow-interval-changed(self.current-index);
+                                        }
+                                        root.wallpaper-slideshow-interval-input-active = false;
+                                    }
+                                }
+                            }
+                            ViewportControl {
+                                fully-visible <=> root.wallpaper-slideshow-shuffle-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 90px;
+                                max-width: 90px;
+                                CheckBox {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    enabled: root.wallpaper-slideshow-options-editable && !root.wallpaper-busy;
+                                    accessible-label: "Proposed shuffle for the actual current Windows slideshow source";
+                                    text: "Shuffle";
+                                    checked <=> root.wallpaper-slideshow-shuffle;
+                                    toggled => {
+                                        root.wallpaper-slideshow-shuffle-input-active =
+                                            root.wallpaper-slideshow-shuffle-control-visible
+                                            && root.wallpaper-slideshow-options-editable && !root.wallpaper-busy;
+                                        if root.wallpaper-slideshow-shuffle-input-active {
+                                            root.wallpaper-slideshow-shuffle-changed();
+                                        }
+                                        root.wallpaper-slideshow-shuffle-input-active = false;
+                                    }
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-slideshow-options-available: SettingsRow {
+                            label: "Current-source global options";
+                            description: "One immediate global options command for the observed slideshow source. No display choice is required. It does not replace or restart the source, enable the desktop background, or save a preference. Save and Cancel do not apply or undo it.";
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-slideshow-options-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 140px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-slideshow-options-apply-enabled && !root.wallpaper-busy;
+                                accessible-text: "Apply global options to the exact observed native slideshow source";
+                                accessible-description: root.wallpaper-slideshow-status;
+                                clicked => {
+                                    root.wallpaper-slideshow-options-input-active =
+                                        root.wallpaper-slideshow-options-control-visible
+                                        && root.wallpaper-slideshow-options-apply-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-slideshow-options-input-active {
+                                        root.wallpaper-slideshow-options-requested();
+                                    }
+                                    root.wallpaper-slideshow-options-input-active = false;
+                                }
+                                Text {
+                                    text: "Apply global options";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
                             && root.wallpaper-slideshow-selector-available: SettingsRow {
                             label: "Current-policy display";
                             description: "Choose one actual SDK-captured monitor. No primary, first display, or next-scheduled monitor is assumed.";
@@ -1255,7 +1392,7 @@ export component Panel inherits Window {
                                 max-height: 24px;
                                 enabled: root.wallpaper-collection-apply-enabled && !root.wallpaper-busy;
                                 accessible-label: "Proposed Windows slideshow interval";
-                                model: ["1 minute", "10 minutes", "30 minutes", "1 hour", "6 hours", "1 day"];
+                                model: root.wallpaper-interval-options;
                                 current-index <=> root.wallpaper-collection-interval-index;
                                 selected(value) => { root.wallpaper-collection-interval-changed(self.current-index); }
                             }

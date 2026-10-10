@@ -84,6 +84,16 @@ impl NativeWallpaperHost {
             // required before starting/signaling an owner or touching the SDK.
             return Err(WallpaperError::InvalidTarget);
         }
+        if let Work::SetSlideshowOptions { target, .. } = &work
+            && !inbox
+                .slideshow_issued
+                .as_ref()
+                .is_some_and(|issued| issued.accepts_policy(target))
+        {
+            // Global options require exact policy authority, not a UI choice
+            // or a monitor member. Reject before owner startup/signaling/SDK.
+            return Err(WallpaperError::InvalidTarget);
+        }
         if inbox.job.is_some() {
             return Err(WallpaperError::Busy);
         }
@@ -121,7 +131,9 @@ impl NativeWallpaperHost {
             Work::ReadPosition { .. } | Work::SetPosition { .. } => {
                 inbox.position_issued = None;
             }
-            Work::ReadSlideshow { .. } | Work::AdvanceSlideshow { .. } => {
+            Work::ReadSlideshow { .. }
+            | Work::AdvanceSlideshow { .. }
+            | Work::SetSlideshowOptions { .. } => {
                 inbox.slideshow_issued = None;
             }
         }
@@ -219,6 +231,19 @@ impl WallpaperHost for NativeWallpaperHost {
             target,
             monitor,
             direction,
+            completion,
+        })
+    }
+
+    fn set_slideshow_options(
+        &self,
+        target: slideshow_contract::Target,
+        options: collection_contract::Options,
+        completion: slideshow_contract::OptionsCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::SetSlideshowOptions {
+            target,
+            options,
             completion,
         })
     }
@@ -330,6 +355,11 @@ enum Work {
         direction: slideshow_contract::Direction,
         completion: slideshow_contract::AdvanceCompletion,
     },
+    SetSlideshowOptions {
+        target: slideshow_contract::Target,
+        options: collection_contract::Options,
+        completion: slideshow_contract::OptionsCompletion,
+    },
 }
 
 struct Job {
@@ -363,6 +393,9 @@ impl Job {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
             Work::AdvanceSlideshow { completion, .. } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::SetSlideshowOptions { completion, .. } => {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
         }
@@ -647,6 +680,24 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     .unwrap_or_else(|_| {
                         // A panic may follow a native effect. Unavailable never
                         // promises that no effect occurred or that it rolled back.
+                        current_slideshow.clear();
+                        Err(WallpaperError::Unavailable)
+                    });
+                    publish_slideshow_issuer(&mailbox, current_slideshow.issuer());
+                    drop(flight);
+                    finish(move || completion(result));
+                }
+                Work::SetSlideshowOptions {
+                    target,
+                    options,
+                    completion,
+                } => {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        current_slideshow.set_options(target, options, &mailbox)
+                    }))
+                    .unwrap_or_else(|_| {
+                        // Panic may follow an effect; Unavailable is unknown,
+                        // never a no-effect/rollback claim.
                         current_slideshow.clear();
                         Err(WallpaperError::Unavailable)
                     });

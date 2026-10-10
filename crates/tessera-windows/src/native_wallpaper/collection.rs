@@ -170,14 +170,7 @@ impl Collection {
         if collection == contract::NativeStep::Accepted
             && let Ok(_fresh_files) = self.validate()
         {
-            let flags = if options.shuffle {
-                DSO_SHUFFLEIMAGES
-            } else {
-                DESKTOP_SLIDESHOW_OPTIONS(0)
-            };
-            options_receipt = receipt(unsafe {
-                desktop.SetSlideshowOptions(flags, options.interval.milliseconds())
-            });
+            options_receipt = receipt(set_options(&desktop, options));
         }
         // Every readback is independent, even if a setter rejected its request.
         // A later loss of source authority cannot erase an earlier SDK receipt.
@@ -241,6 +234,19 @@ fn receipt(result: windows::core::Result<()>) -> contract::NativeStep {
     } else {
         contract::NativeStep::Rejected
     }
+}
+
+/// One options-only SDK step; callers own source validation and native receipts.
+pub(super) fn set_options(
+    desktop: &IDesktopWallpaper,
+    options: contract::Options,
+) -> windows::core::Result<()> {
+    let flags = if options.shuffle {
+        DSO_SHUFFLEIMAGES
+    } else {
+        DESKTOP_SLIDESHOW_OPTIONS(0)
+    };
+    unsafe { desktop.SetSlideshowOptions(flags, options.interval.milliseconds()) }
 }
 
 pub(super) fn read_options(desktop: &IDesktopWallpaper) -> Option<contract::OptionsReadback> {

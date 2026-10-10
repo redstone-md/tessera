@@ -170,8 +170,8 @@ after accepted work completes; future source edits can affect the OS slideshow.
 
 Explicit current-slideshow Read observes actual SDK status/options, bounded file
 policy entries or one native folder, and the complete native monitor cohort.
-Only a supported enabled policy grants an opaque advancement target; its exact
-issued monitor member is also required. Folder identity is observed without
+Only a supported enabled policy grants an opaque control target; advancement
+also requires its exact issued monitor member. Folder identity is observed without
 enumerating its contents, so array-member count is not an image count. Native
 snapshot identities and COM resources remain on the same STA without retaining
 file leases across UI observation lifetimes. Previous/Next consume and freshly
@@ -183,6 +183,19 @@ and fresh policy readback are independent; they establish neither rendered
 advancement nor sole causality. Disabled, remote-session, unknown or unsupported
 states remain read-only. No idle observation, retry, primary/index/name fallback
 or unsubmitted-file-draft replacement is introduced.
+
+Current-policy timing/shuffle proposals use the existing closed intervals, but
+only exact actual interval matches initialize a selected proposal; other native
+milliseconds, including zero, are readable without an invented default/minimum.
+Explicit global Apply consumes the exact policy target and revalidates original
+source, options/status and full cohort before
+[SetSlideshowOptions](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-idesktopwallpaper-setslideshowoptions).
+It never calls SetSlideshow, replaces the source or consumes file-selection drafts.
+A matching revalidated proposal returns AlreadyCurrent without a setter; otherwise
+Accepted/Rejected report the SDK call, independently of fresh policy/readback.
+Fresh controls mint new targets and reset monitor choice, never reuse a UI index.
+Source loss and concurrent writers can race the non-atomic SDK check/write pair;
+no retries, rollback, JSON mirror or rendered-pixel guarantee are introduced.
 
 `inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the shared DPI-scaled toolbar token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
 
