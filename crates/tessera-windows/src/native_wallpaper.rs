@@ -8,8 +8,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, TryLockError};
 
 use tessera_system::wallpaper::{
-    WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperChooseCompletion, WallpaperError,
-    WallpaperHost, WallpaperImageTarget, WallpaperImageTargetWeak, WallpaperSelection,
+    WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
+    WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
+    WallpaperImageTargetWeak, WallpaperMonitorSelection, WallpaperMonitorTarget,
+    WallpaperSelection,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_FAILED, WAIT_OBJECT_0};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
@@ -42,11 +44,11 @@ impl NativeWallpaperHost {
         if inbox.closed || inbox.failed {
             return Err(WallpaperError::Unavailable);
         }
-        if let Work::Apply { target, .. } = &work
+        if let Work::Apply { target, scope, .. } = &work
             && !inbox
                 .issued
                 .as_ref()
-                .is_some_and(|issued| issued.matches(target))
+                .is_some_and(|issued| issued.accepts(target, scope))
         {
             // A forged/retired token cannot start an owner or reach the SDK.
             return Err(WallpaperError::InvalidTarget);
@@ -89,9 +91,14 @@ impl WallpaperHost for NativeWallpaperHost {
     fn apply(
         &self,
         target: WallpaperImageTarget,
+        scope: WallpaperApplyScope,
         completion: WallpaperApplyCompletion,
     ) -> Result<(), WallpaperError> {
-        self.submit(Work::Apply { target, completion })
+        self.submit(Work::Apply {
+            target,
+            scope,
+            completion,
+        })
     }
 }
 
@@ -119,8 +126,34 @@ struct Inbox {
     failed: bool,
     job: Option<Job>,
     wake: Option<WakeEvent>,
-    issued: Option<WallpaperImageTargetWeak>,
+    issued: Option<Issuer>,
     retire_pending: bool,
+}
+
+struct Issuer {
+    image: WallpaperImageTargetWeak,
+    monitors: Vec<WallpaperMonitorTarget>,
+}
+
+impl Issuer {
+    fn from_selection(selection: &WallpaperSelection) -> Self {
+        Self {
+            image: selection.target.downgrade(),
+            monitors: selection
+                .monitors
+                .iter()
+                .map(|monitor| monitor.target.clone())
+                .collect(),
+        }
+    }
+
+    fn accepts(&self, image: &WallpaperImageTarget, scope: &WallpaperApplyScope) -> bool {
+        self.image.matches(image)
+            && match scope {
+                WallpaperApplyScope::AllCaptured => true,
+                WallpaperApplyScope::Monitor(target) => self.monitors.contains(target),
+            }
+    }
 }
 
 enum Work {
@@ -129,6 +162,7 @@ enum Work {
     },
     Apply {
         target: WallpaperImageTarget,
+        scope: WallpaperApplyScope,
         completion: WallpaperApplyCompletion,
     },
 }
@@ -290,19 +324,24 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     });
                     publish_issuer(
                         &mailbox,
-                        result.as_ref().ok().and_then(|value| {
-                            value.as_ref().map(|selection| selection.target.downgrade())
-                        }),
+                        result
+                            .as_ref()
+                            .ok()
+                            .and_then(|value| value.as_ref().map(Issuer::from_selection)),
                     );
                     drop(flight);
                     finish(move || completion(result));
                 }
-                Work::Apply { target, completion } => {
+                Work::Apply {
+                    target,
+                    scope,
+                    completion,
+                } => {
                     let result = current
                         .take()
                         .filter(|selection| selection.target.matches(&target))
                         .ok_or(WallpaperError::InvalidTarget)
-                        .map(Selection::apply);
+                        .and_then(|selection| selection.apply(scope));
                     // Accepted apply owns its public ticket through every SDK
                     // write/readback, even if all UI tickets were retired.
                     drop(target);
@@ -350,7 +389,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
     fail_mailbox(&mailbox);
 }
 
-fn publish_issuer(mailbox: &Mailbox, target: Option<WallpaperImageTargetWeak>) {
+fn publish_issuer(mailbox: &Mailbox, target: Option<Issuer>) {
     let mut inbox = mailbox
         .inbox
         .lock()
@@ -406,6 +445,12 @@ struct Selection {
     target: WallpaperImageTargetWeak,
     image: source::Image,
     topology: displays::Topology,
+    bindings: Vec<MonitorBinding>,
+}
+
+struct MonitorBinding {
+    target: WallpaperMonitorTarget,
+    monitor: displays::Monitor,
 }
 
 impl Selection {
@@ -419,23 +464,55 @@ impl Selection {
         let desktop = displays::desktop()?;
         let topology = displays::Topology::capture(&desktop)?;
         let _fresh_file = image.validate()?;
+        // Tokens bind only to these original descriptors. Fresh topology
+        // equality remains descriptor-only, never newly minted ticket equality.
+        let (bindings, monitors): (Vec<_>, Vec<_>) = topology
+            .monitors
+            .iter()
+            .map(|monitor| {
+                let caption = monitor.caption()?;
+                let target = WallpaperMonitorTarget::new();
+                Ok((
+                    MonitorBinding {
+                        target: target.clone(),
+                        monitor: monitor.clone(),
+                    },
+                    WallpaperMonitorSelection { target, caption },
+                ))
+            })
+            .collect::<Result<Vec<_>, WallpaperError>>()?
+            .into_iter()
+            .unzip();
         let target = retirement_target(mailbox);
         let snapshot = WallpaperSelection {
             target: target.clone(),
             caption: image.caption.clone(),
+            monitors,
         };
         Ok(Some((
             Self {
                 target: target.downgrade(),
                 image,
                 topology,
+                bindings,
             },
             snapshot,
         )))
     }
 
-    fn apply(self) -> WallpaperApplyOutcome {
-        let requested = self.topology.monitors.len() as u32;
+    fn apply(self, scope: WallpaperApplyScope) -> Result<WallpaperApplyOutcome, WallpaperError> {
+        // Resolve exact issued authority before even creating a fresh SDK
+        // object. Scope never supplies a path, enumeration index or fallback.
+        let bindings: Vec<_> = match scope {
+            WallpaperApplyScope::AllCaptured => self.bindings.iter().collect(),
+            WallpaperApplyScope::Monitor(target) => vec![
+                self.bindings
+                    .iter()
+                    .find(|binding| binding.target == target)
+                    .ok_or(WallpaperError::InvalidTarget)?,
+            ],
+        };
+        let requested = bindings.len() as u32;
         let mut outcome = WallpaperApplyOutcome {
             requested,
             accepted: 0,
@@ -449,7 +526,8 @@ impl Selection {
             let Ok(desktop) = displays::desktop() else {
                 return;
             };
-            for monitor in &self.topology.monitors {
+            for binding in bindings {
+                let monitor = &binding.monitor;
                 let Ok(_fresh_file) = self.image.validate() else {
                     break;
                 };
@@ -472,6 +550,6 @@ impl Selection {
                 }
             }
         }));
-        outcome
+        Ok(outcome)
     }
 }

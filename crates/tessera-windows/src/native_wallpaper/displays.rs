@@ -24,7 +24,7 @@ pub(super) struct Topology {
     pub(super) monitors: Vec<Monitor>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct Monitor {
     id: NativeName,
     rect: [i32; 4],
@@ -33,6 +33,25 @@ pub(super) struct Monitor {
 impl Monitor {
     pub(super) fn id(&self) -> PCWSTR {
         self.id.as_pcwstr()
+    }
+
+    pub(super) fn caption(&self) -> Result<String, WallpaperError> {
+        let device =
+            String::from_utf16(self.id.units()).map_err(|_| WallpaperError::Unavailable)?;
+        let device: String = device
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(192)
+            .collect();
+        if device.trim().is_empty() {
+            return Err(WallpaperError::Unavailable);
+        }
+        let [left, top, right, bottom] = self.rect;
+        let width = i64::from(right) - i64::from(left);
+        let height = i64::from(bottom) - i64::from(top);
+        // Bounded display metadata only. No invented ordinal, primary status
+        // or friendly name substitutes for the actual SDK ID and rectangle.
+        Ok(format!("{width}×{height} at ({left}, {top}) · {device}"))
     }
 }
 

@@ -391,7 +391,8 @@ Material Appearance supports both the five presets and exact custom `#RRGGBB`.
 Custom text needs explicit Preview before Save; invalid text leaves paint intact.
 Both routes reuse the existing typed RGB/HCT and captured-theme boundary.
 Material Appearance also opens the native Windows static-image picker and applies
-its opaque file selection to the exact monitors captured when choosing it.
+its opaque file selection to the exact captured display cohort or one selected
+native-issued member. The selector shows actual SDK device/rectangle metadata.
 This changes OS state immediately, not through Save/Cancel or a JSON mirror.
 Native acceptance, path/file readback, failures and unsubmitted monitors are
 reported separately; readback does not certify rendered pixels. Video,

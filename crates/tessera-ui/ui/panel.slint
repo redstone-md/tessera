@@ -204,6 +204,9 @@ export component Panel inherits Window {
     in property <bool> wallpaper-apply-enabled;
     in property <string> wallpaper-status: "Current Windows wallpaper has not been read.";
     in property <string> wallpaper-input-key;
+    in property <bool> wallpaper-monitor-selection-available: false;
+    in property <[string]> wallpaper-monitors;
+    in-out property <int> wallpaper-monitor-index: -1;
     out property <bool> wallpaper-page-visible: root.selected-page == 1 && !SeelenPalette.reference-mode;
     out property <bool> wallpaper-choose-input-active;
     out property <bool> wallpaper-apply-input-active;
@@ -217,6 +220,7 @@ export component Panel inherits Window {
         root.wallpaper-page-visible && root.wallpaper-available && root.wallpaper-apply-clip;
     callback wallpaper-choose-requested();
     callback wallpaper-apply-requested();
+    callback wallpaper-monitor-changed(int);
     callback wallpaper-event-ready();
     callback wallpaper-view-changed();
     changed wallpaper-page-visible => { root.wallpaper-view-changed(); }
@@ -717,7 +721,7 @@ export component Panel inherits Window {
                         }
                         if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
                             label: "Windows wallpaper";
-                            description: "Apply changes Windows immediately on the monitors captured when choosing the image. Save and Cancel do not apply or undo it.\n" + root.wallpaper-status;
+                            description: "Apply changes Windows immediately on the chosen captured display or all captured displays. Save and Cancel do not apply or undo it.\n" + root.wallpaper-status;
                             wallpaper-choose := ViewportTileButton {
                                 fully-visible <=> root.wallpaper-choose-clip;
                                 viewport-x: page-scroll.absolute-position.x;
@@ -773,6 +777,21 @@ export component Panel inherits Window {
                                     vertical-alignment: center;
                                     accessible-role: none;
                                 }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-monitor-selection-available: SettingsRow {
+                            label: "Wallpaper displays";
+                            description: "Actual Windows displays captured when choosing this image. This scope is not saved with preferences.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                enabled: root.wallpaper-controls-enabled && !root.wallpaper-busy;
+                                accessible-label: "Captured Windows wallpaper display scope";
+                                model: root.wallpaper-monitors;
+                                current-index <=> root.wallpaper-monitor-index;
+                                selected(value) => { root.wallpaper-monitor-changed(self.current-index); }
                             }
                         }
                     }

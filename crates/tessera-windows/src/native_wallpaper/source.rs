@@ -133,7 +133,7 @@ impl Image {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct NativeName(Vec<u16>);
 
 impl NativeName {

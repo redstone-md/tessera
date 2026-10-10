@@ -87,12 +87,54 @@ impl Drop for TargetRetirement {
     }
 }
 
+/// One opaque captured-monitor identity, never a device path or UI index.
+/// Construction alone grants no authority; providers recognize only tickets
+/// issued for their exact current image selection.
+#[derive(Clone, Debug)]
+pub struct WallpaperMonitorTarget(Arc<()>);
+
+impl WallpaperMonitorTarget {
+    pub fn new() -> Self {
+        Self(Arc::new(()))
+    }
+}
+
+impl Default for WallpaperMonitorTarget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialEq for WallpaperMonitorTarget {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for WallpaperMonitorTarget {}
+
+/// Read-only native descriptor metadata, not monitor mutation authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WallpaperMonitorSelection {
+    pub target: WallpaperMonitorTarget,
+    pub caption: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WallpaperApplyScope {
+    /// Exactly the original captured cohort, never a native global shortcut.
+    AllCaptured,
+    Monitor(WallpaperMonitorTarget),
+}
+
 /// Read-only native display metadata; `caption` grants no file authority.
 /// Selection does not promise a decoded image or a rendered thumbnail.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WallpaperSelection {
     pub target: WallpaperImageTarget,
     pub caption: String,
+    /// Between one and 32 actual native displays captured with this image.
+    pub monitors: Vec<WallpaperMonitorSelection>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,7 +156,7 @@ impl std::fmt::Display for WallpaperError {
 
 impl std::error::Error for WallpaperError {}
 
-/// Results for the originally selected group of at most 32 native monitors.
+/// Results for the requested subset of the originally captured native monitors.
 /// `requested = accepted + failed + not_submitted`; `confirmed <= accepted`.
 /// Accepted counts successful native writes. Confirmed counts fresh native
 /// wallpaper paths identifying the selected file, never rendered pixels.
@@ -138,6 +180,8 @@ pub type WallpaperApplyCompletion =
 /// calls it exactly once, independently of UI lifetime. Callbacks may be
 /// synchronous and reenter the host. `Ok(None)` means actual user cancellation.
 /// A subsequent accepted choose revokes the old selection; apply consumes it.
+/// Either scope consumes the image; a monitor ticket cannot replay that image
+/// or keep its protected file lease alive independently.
 /// Wallpaper changes take effect immediately, outside Settings Save/Cancel.
 pub trait WallpaperHost: Send + Sync {
     fn choose(&self, completion: WallpaperChooseCompletion) -> Result<(), WallpaperError>;
@@ -145,6 +189,7 @@ pub trait WallpaperHost: Send + Sync {
     fn apply(
         &self,
         target: WallpaperImageTarget,
+        scope: WallpaperApplyScope,
         completion: WallpaperApplyCompletion,
     ) -> Result<(), WallpaperError>;
 }
