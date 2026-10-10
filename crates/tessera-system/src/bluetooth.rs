@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Passive radio observations and paired-device inventory, without native handles.
+//! Passive paired-device inventory and opt-in, exact-incarnation radio control.
 //!
 //! An inventory entry is cached pairing information, not evidence of presence,
 //! service availability, or permission to connect. Reads neither discover devices
@@ -151,6 +151,94 @@ impl std::error::Error for BluetoothError {}
 pub type BluetoothReadCompletion =
     Box<dyn FnOnce(Result<BluetoothSnapshot, BluetoothError>) + Send + 'static>;
 
+/// An owner-issued incarnation. Equality is token identity, not display text,
+/// a native address, or an enumeration index. Clones do not extend native life.
+#[derive(Clone)]
+pub struct BluetoothRadioKey(std::sync::Arc<()>);
+
+impl BluetoothRadioKey {
+    pub fn issue() -> Self {
+        Self(std::sync::Arc::new(()))
+    }
+}
+
+impl PartialEq for BluetoothRadioKey {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for BluetoothRadioKey {}
+impl fmt::Debug for BluetoothRadioKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BluetoothRadioKey(redacted)")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BluetoothControlledRadio {
+    pub key: BluetoothRadioKey,
+    pub revision: u64,
+    pub observation: BluetoothRadioObservation,
+}
+
+/// Additional inventory without changing any legacy snapshot literal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BluetoothControlSnapshot {
+    pub snapshot: BluetoothSnapshot,
+    pub radios: Result<Vec<BluetoothControlledRadio>, BluetoothError>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BluetoothRadioPower {
+    On,
+    Off,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BluetoothRadioCommand {
+    pub radio: BluetoothControlledRadio,
+    pub power: BluetoothRadioPower,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BluetoothRadioAccess {
+    Allowed,
+    DeniedByUser,
+    DeniedBySystem,
+    Unspecified,
+}
+
+/// Allowed is native acceptance, not confirmation of the requested power.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BluetoothRadioOutcome {
+    pub access: BluetoothRadioAccess,
+    pub observed: Result<BluetoothRadioObservation, BluetoothError>,
+}
+
+pub type BluetoothControlReadCompletion =
+    Box<dyn FnOnce(Result<BluetoothControlSnapshot, BluetoothError>) + Send + 'static>;
+pub type BluetoothRadioCompletion =
+    Box<dyn FnOnce(Result<BluetoothRadioOutcome, BluetoothError>) + Send + 'static>;
+
+/// Opt-in owned inventory. Admission/completion rules match `BluetoothHost`.
+/// Unlike legacy reads, native radios/events/apartment stay on the command
+/// owner until retirement. No native handles cross this interface.
+pub trait BluetoothRadioControlHost: Send + Sync {
+    fn read_controls(
+        &self,
+        completion: BluetoothControlReadCompletion,
+    ) -> Result<(), BluetoothError>;
+    /// Invoke only from the current user's GUI/valid consent context. Admission
+    /// may start nonblocking consent there; the owned worker awaits it. Never
+    /// retry/replay automatically. State events, a new inventory, or retirement
+    /// revoke captured revisions before submission. Accepted work outlives UI.
+    fn set_radio(
+        &self,
+        command: BluetoothRadioCommand,
+        completion: BluetoothRadioCompletion,
+    ) -> Result<(), BluetoothError>;
+}
+
 /// Prompt admission of one independent read, without a queued request backlog.
 ///
 /// Immediate `Ok` accepts exactly one completion, possibly inline; immediate
@@ -169,6 +257,11 @@ pub type BluetoothReadCompletion =
 /// unwind containment cannot recover from aborts or double cleanup panics.
 pub trait BluetoothHost: Send + Sync + 'static {
     fn read(&self, completion: BluetoothReadCompletion) -> Result<(), BluetoothError>;
+
+    /// Cheap optional lookup; old read-only adapters incur no extra requests.
+    fn radio_controls(&self) -> Option<&dyn BluetoothRadioControlHost> {
+        None
+    }
 }
 
 #[cfg(test)]

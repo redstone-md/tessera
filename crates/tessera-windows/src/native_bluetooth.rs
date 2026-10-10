@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! One passive snapshot per accepted flight. No retained native driver or queue.
+//! Legacy scoped read flights; opt-in control retains one native owner separately.
 use crate::single_flight::FlightGate;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -9,11 +9,20 @@ use tessera_system::bluetooth::{
     BluetoothError, BluetoothErrorKind, BluetoothHost, BluetoothReadCompletion, BluetoothSnapshot,
 };
 
+#[cfg(windows)]
+mod control;
 mod owner;
+#[cfg(windows)]
+mod radio_control;
+#[cfg(windows)]
+mod radio_source;
 #[cfg(test)]
 mod tests;
 #[cfg(windows)]
 mod winrt;
+
+#[cfg(windows)]
+pub(crate) use control::ControlledBluetoothHost;
 
 type ReadResult = Result<BluetoothSnapshot, BluetoothError>;
 type Job = Box<dyn FnOnce() + Send + 'static>;

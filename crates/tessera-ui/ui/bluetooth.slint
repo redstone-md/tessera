@@ -3,13 +3,16 @@
 
 import { ScrollView as NativeScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { TileButton, FocusTokens } from "tiles.slint";
+import { TileButton, ViewportTileButton, TileBounds, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 
 export enum BluetoothRadioStatus { On, Off, Disabled, Unknown }
 export enum BluetoothTransportKind { Classic, LowEnergy }
 export struct BluetoothRadioRow { name: string, state: BluetoothRadioStatus }
 export struct BluetoothDeviceRow { name: string, transport: BluetoothTransportKind }
+export struct BluetoothRadioControlRow {
+    name: string, state: BluetoothRadioStatus, frame: string, index: int, enabled: bool
+}
 
 component BluetoothText inherits Text {
     color: SeelenPalette.foreground;
@@ -65,8 +68,8 @@ component DeviceSection inherits VerticalLayout {
     }
 }
 
-// This surface observes paired entries only. No discovery, selection or effect
-// authority is implied by a row, radio state, or the Refresh button.
+// Paired-device presence remains passive. Only owner-issued radio rows expose
+// explicit On/Off; names, pairing and connection are never effect authority.
 export component BluetoothMenu inherits Window {
     default-font-family: SeelenPalette.font-family;
     no-frame: true;
@@ -76,6 +79,9 @@ export component BluetoothMenu inherits Window {
     min-width: 1px;
     min-height: 1px;
     in property <[BluetoothRadioRow]> radios;
+    in property <[BluetoothRadioControlRow]> radio-controls;
+    in property <bool> radio-command-pending;
+    callback radio-power-requested(string, int, bool);
     in property <[BluetoothDeviceRow]> connected;
     in property <[BluetoothDeviceRow]> paired;
     in property <[BluetoothDeviceRow]> unknown;
@@ -107,18 +113,20 @@ export component BluetoothMenu inherits Window {
     property <int> device-count: root.connected.length + root.paired.length + root.unknown.length;
     property <string> empty-label: root.partial-inventory
         ? @tr("No paired devices in the inventories read.") : @tr("No paired Bluetooth devices.");
-    property <string> feedback: root.loading ? (root.has-snapshot
+    property <string> feedback: root.radio-command-pending ? @tr("Requesting Bluetooth radio power…")
+        : root.loading ? (root.has-snapshot
         ? @tr("Refreshing Bluetooth observations…") : @tr("Reading paired Bluetooth observations…")) : "";
     property <length> measure-width: max(1px,
         min(root.width > 0px ? root.width : root.popup-content-width,
             400px + 2 * PopoverTokens.shadow-margin)
         - 2 * PopoverTokens.shadow-margin - 2 * root.viewport-inset - 2 * FocusTokens.outer-margin);
-    property <int> block-count: 2 + root.radios.length + root.section-count
+    property <int> block-count: 2 + (root.radio-controls.length > 0 ? root.radio-controls.length : root.radios.length) + root.section-count
         + (root.no-radios ? 1 : 0) + (root.empty-inventory ? 1 : 0)
         + (root.feedback != "" ? 1 : 0) + (root.notice != "" ? 1 : 0);
     property <length> natural-content-height: 2 * FocusTokens.outer-margin
         + 2 * root.text-height + 4px + 16px + root.text-height
-        + root.radios.length * root.row-height
+        + (root.radio-controls.length == 0 ? root.radios.length * root.row-height : 0px)
+        + root.radio-controls.length * (root.row-height + 16px + root.text-height + 4px)
         + root.section-count * root.text-height
         + root.device-count * (root.row-height + 4px)
         + (root.no-radios ? root.text-height : 0px)
@@ -136,6 +144,20 @@ export component BluetoothMenu inherits Window {
         return state == BluetoothRadioStatus.On ? @tr("On")
             : state == BluetoothRadioStatus.Off ? @tr("Off")
             : state == BluetoothRadioStatus.Disabled ? @tr("Disabled") : @tr("Unknown");
+    }
+    property <TileBounds> radio-clip-bounds: {
+        origin: scroll.absolute-position,
+        width: scroll.visible-width,
+        height: scroll.visible-height
+    };
+    function reveal-radio(bounds: TileBounds) {
+        if bounds.width <= 0px || bounds.height <= 0px || root.radio-clip-bounds.height <= 0px { return; }
+        let top = bounds.origin.y - root.radio-clip-bounds.origin.y - FocusTokens.outer-margin;
+        let bottom = bounds.origin.y + bounds.height - root.radio-clip-bounds.origin.y + FocusTokens.outer-margin;
+        let offset = top < 0px ? -top
+            : bottom > root.radio-clip-bounds.height ? root.radio-clip-bounds.height - bottom : 0px;
+        scroll.content-y = clamp(scroll.content-y + offset,
+            min(0px, scroll.visible-height - scroll.content-height), 0px);
     }
     public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
     public function focus-content() { scroll.content-y = 0px; escape-scope.focus(); }
@@ -191,16 +213,63 @@ export component BluetoothMenu inherits Window {
                         height: feedback-metrics.preferred-height; color: SeelenPalette.secondary;
                         line-height-factor: body.text-line-height-factor;
                         accessible-role: text; accessible-label: self.text; }
-                    for radio in root.radios: Rectangle {
-                        height: root.row-height;
-                        accessible-role: text;
-                        accessible-label: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio");
-                        accessible-description: @tr("Bluetooth radio") + ", " + root.radio-status(radio.state);
-                        BluetoothText { x: 4px; y: 4px; width: max(0px, parent.width - 8px); height: root.text-height;
-                            text: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio"); overflow: elide; }
-                        BluetoothText { x: 4px; y: 6px + root.text-height; width: max(0px, parent.width - 8px);
-                            height: root.text-height; text: root.radio-status(radio.state);
-                            color: SeelenPalette.secondary; overflow: elide; }
+                    if root.radio-controls.length == 0 && root.radios.length > 0: VerticalLayout {
+                        spacing: 8px;
+                        for radio in root.radios: Rectangle {
+                            height: root.row-height;
+                            accessible-role: text;
+                            accessible-label: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio");
+                            accessible-description: @tr("Bluetooth radio") + ", " + root.radio-status(radio.state);
+                            BluetoothText { x: 4px; y: 4px; width: max(0px, parent.width - 8px); height: root.text-height;
+                                text: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio"); overflow: elide; }
+                            BluetoothText { x: 4px; y: 6px + root.text-height; width: max(0px, parent.width - 8px);
+                                height: root.text-height; text: root.radio-status(radio.state);
+                                color: SeelenPalette.secondary; overflow: elide; }
+                        }
+                    }
+                    for radio in root.radio-controls: VerticalLayout {
+                        spacing: 4px;
+                        Rectangle {
+                            height: root.row-height;
+                            accessible-role: text;
+                            accessible-label: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio");
+                            accessible-description: @tr("Bluetooth radio") + ", " + root.radio-status(radio.state);
+                            BluetoothText { x: 4px; y: 4px; width: max(0px, parent.width - 8px); height: root.text-height;
+                                text: radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio"); overflow: elide; }
+                            BluetoothText { x: 4px; y: 6px + root.text-height; width: max(0px, parent.width - 8px);
+                                height: root.text-height; text: root.radio-status(radio.state);
+                                color: SeelenPalette.secondary; overflow: elide; }
+                        }
+                        HorizontalLayout {
+                            height: 16px + root.text-height;
+                            spacing: 4px;
+                            ViewportTileButton {
+                                filled: false; radius: 6px;
+                                enabled: radio.enabled && radio.state != BluetoothRadioStatus.On;
+                                activation-key: radio.frame;
+                                allow-return-repeat: false;
+                                clip-bounds: root.radio-clip-bounds;
+                                accessible-text: @tr("Turn Bluetooth radio on") + ", "
+                                    + (radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio"));
+                                reveal-requested(bounds) => { root.reveal-radio(bounds); }
+                                scoped-clicked => { root.radio-power-requested(radio.frame, radio.index, true); }
+                                BluetoothText { x: 8px; width: max(0px, parent.width - 16px); height: parent.height;
+                                    text: @tr("On"); vertical-alignment: center; overflow: elide; }
+                            }
+                            ViewportTileButton {
+                                filled: false; radius: 6px;
+                                enabled: radio.enabled && radio.state != BluetoothRadioStatus.Off;
+                                activation-key: radio.frame;
+                                allow-return-repeat: false;
+                                clip-bounds: root.radio-clip-bounds;
+                                accessible-text: @tr("Turn Bluetooth radio off") + ", "
+                                    + (radio.name != "" ? radio.name : @tr("Unnamed Bluetooth radio"));
+                                reveal-requested(bounds) => { root.reveal-radio(bounds); }
+                                scoped-clicked => { root.radio-power-requested(radio.frame, radio.index, false); }
+                                BluetoothText { x: 8px; width: max(0px, parent.width - 16px); height: parent.height;
+                                    text: @tr("Off"); vertical-alignment: center; overflow: elide; }
+                            }
+                        }
                     }
                     if root.no-radios: BluetoothText { height: root.text-height;
                         text: @tr("No Bluetooth radios exposed"); overflow: elide;

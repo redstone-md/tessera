@@ -313,6 +313,15 @@ unavailable. Native acceptance is separate from association/readback; after
 No scan, hotspot or Forget is added. Windows cached queries may prompt for
 location consent or deny access under Privacy & security > Location.
 
+Development Bluetooth adds explicit On/Off for each available Bluetooth
+radio, with exact native device IDs, retained COM incarnations and source/state
+invalidation. Consent begins only from deliberate GUI input; native acceptance
+does not fabricate the requested state. Refresh reads a later transition.
+Legacy paired-device reads keep their scoped resource lifetime; opt-in controls
+retain one owned radio/event apartment without idle polling. Discovery, pairing
+and device connection are not implemented. Both layers require actual Windows
+outcome verification and are outside the published release.
+
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 
 Home and Pro are targets, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. The selected isolated per-user Winlogon integration is experimental, not an edition-independent Microsoft support guarantee; machine shell configuration and security policies remain untouched.

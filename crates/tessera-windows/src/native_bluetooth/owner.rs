@@ -68,6 +68,17 @@ pub(super) trait Calls {
     ) -> Result<Option<Self::Value>, BluetoothError>;
     /// A supplied non-Boolean value is InvalidData, never Disconnected/Unknown.
     fn boolean(&mut self, value: &Self::Value) -> Result<bool, BluetoothError>;
+    #[cfg(windows)]
+    fn begin_controls(&mut self) {}
+    fn observe_control(&mut self, _radio: &Self::Radio, _observation: &BluetoothRadioObservation) {}
+    #[cfg(windows)]
+    fn finish_controls(
+        &mut self,
+        result: &Result<Vec<BluetoothRadioObservation>, BluetoothError>,
+    ) -> Result<Vec<tessera_system::bluetooth::BluetoothControlledRadio>, BluetoothError> {
+        result.as_ref().map(|_| Vec::new()).map_err(Clone::clone)
+    }
+    fn retire_controls(&mut self) {}
 }
 
 pub(super) struct Owner<C: Calls> {
@@ -85,6 +96,19 @@ impl<C: Calls> Owner<C> {
         })
     }
 
+    #[cfg(windows)]
+    pub(super) fn read_controls(&mut self) -> tessera_system::bluetooth::BluetoothControlSnapshot {
+        self.calls.begin_controls();
+        let snapshot = self.read();
+        let radios = self.calls.finish_controls(&snapshot.radios);
+        tessera_system::bluetooth::BluetoothControlSnapshot { snapshot, radios }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn calls_mut(&mut self) -> &mut C {
+        &mut self.calls
+    }
+
     fn read_radios(&mut self) -> Result<Vec<BluetoothRadioObservation>, BluetoothError> {
         let radios = self.calls.radios()?;
         let mut observations = Vec::new();
@@ -98,7 +122,9 @@ impl<C: Calls> Owner<C> {
                     3 => BluetoothRadioState::Disabled,
                     _ => BluetoothRadioState::Unknown,
                 };
-                observations.push(BluetoothRadioObservation { name, state });
+                let observation = BluetoothRadioObservation { name, state };
+                self.calls.observe_control(&radio, &observation);
+                observations.push(observation);
             }
         }
         Ok(observations)
@@ -160,8 +186,9 @@ impl<C: Calls> Driver for Owner<C> {
 
 impl<C: Calls> Drop for Owner<C> {
     fn drop(&mut self) {
-        // All SDK resources were scoped to query methods and already retired,
-        // including during unwind. The adapter itself holds no SDK resources.
+        // Opt-in control tokens/radios retire before balancing the apartment.
+        // Legacy adapters retain nothing, preserving their scoped read contract.
+        self.calls.retire_controls();
         self.calls.uninitialize();
     }
 }

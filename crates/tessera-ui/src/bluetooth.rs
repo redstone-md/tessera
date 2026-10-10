@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Read-only paired Bluetooth observations in one independently leased popup.
+//! Passive paired observations and explicit owner-issued Bluetooth radio power.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -9,12 +9,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use slint::{ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize};
+use slint::{ComponentHandle, Model, ModelRc, PhysicalPosition, PhysicalSize};
 use tessera_system::bluetooth::{
-    BluetoothError, BluetoothErrorKind, BluetoothHost, BluetoothSnapshot,
+    BluetoothControlSnapshot, BluetoothControlledRadio, BluetoothError, BluetoothErrorKind,
+    BluetoothHost, BluetoothRadioAccess, BluetoothRadioCommand, BluetoothRadioOutcome,
+    BluetoothRadioPower, BluetoothRadioState, BluetoothSnapshot,
 };
 
-use crate::generated::{BluetoothMenu, PopoverMotion, TileBounds};
+use crate::generated::{
+    BluetoothMenu, BluetoothRadioControlRow, BluetoothRadioStatus, PopoverMotion, TileBounds,
+};
 use crate::popup_placement::{self as placement, PopupRect};
 use crate::sanitize::bounded_text;
 use crate::theme::{PresentationTheme, ThemedComponent};
@@ -52,6 +56,8 @@ struct State {
     flight: Option<ReadToken>,
     snapshot: Option<BluetoothSnapshot>,
     notice: String,
+    controls: Vec<BluetoothControlledRadio>,
+    command_pending: bool,
 }
 
 impl State {
@@ -59,13 +65,30 @@ impl State {
         self.read_requested
             || self
                 .flight
-                .is_some_and(|token| token.session == self.session)
+                .is_some_and(|token| token.session == self.session && !self.command_pending)
     }
+
+    fn next_token(&mut self) -> Option<ReadToken> {
+        self.sequence = self.sequence.checked_add(1)?;
+        Some(ReadToken {
+            session: self.session,
+            sequence: self.sequence,
+        })
+    }
+}
+
+enum EventResult {
+    Read(Result<BluetoothControlSnapshot, BluetoothError>),
+    Radio {
+        radio: BluetoothControlledRadio,
+        power: BluetoothRadioPower,
+        result: Result<BluetoothRadioOutcome, BluetoothError>,
+    },
 }
 
 struct Completion {
     token: ReadToken,
-    result: Result<BluetoothSnapshot, BluetoothError>,
+    result: EventResult,
 }
 
 /// One accepted flight survives close/reopen. Even an inline native callback
@@ -81,7 +104,7 @@ fn complete(
     mailbox: &Arc<Mutex<Mailbox>>,
     root: &slint::Weak<BluetoothMenu>,
     token: ReadToken,
-    result: Result<BluetoothSnapshot, BluetoothError>,
+    result: EventResult,
 ) {
     {
         let mut mailbox = mailbox.lock();
@@ -132,6 +155,11 @@ pub(crate) struct BluetoothController {
     drain_timer: slint::Timer,
     focus_watch: slint::Timer,
     focus_seen: Cell<bool>,
+    control_generation: Cell<u64>,
+    control_frame: RefCell<String>,
+    control_model: RefCell<ModelRc<BluetoothRadioControlRow>>,
+    control_rows: RefCell<Vec<BluetoothRadioControlRow>>,
+    control_scale: Cell<f32>,
 }
 
 impl BluetoothController {
@@ -150,6 +178,11 @@ impl BluetoothController {
             drain_timer: slint::Timer::default(),
             focus_watch: slint::Timer::default(),
             focus_seen: Cell::new(false),
+            control_generation: Cell::new(0),
+            control_frame: RefCell::default(),
+            control_model: RefCell::default(),
+            control_rows: RefCell::default(),
+            control_scale: Cell::new(1.0),
         });
         let weak = Rc::downgrade(&controller);
         controller.surface.on_bluetooth_event_ready(move || {
@@ -163,6 +196,14 @@ impl BluetoothController {
                 controller.refresh();
             }
         });
+        let weak = Rc::downgrade(&controller);
+        controller
+            .surface
+            .on_radio_power_requested(move |frame, index, on| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.set_radio(frame.as_str(), index, on);
+                }
+            });
         let weak = Rc::downgrade(&controller);
         controller.surface.on_hide_requested(move || {
             if let Some(controller) = weak.upgrade() {
@@ -205,6 +246,9 @@ impl BluetoothController {
         self.hide();
         if !source.is_visible() || context.fullscreen_active() {
             return Err("Bluetooth needs a visible source and usable monitor geometry.".into());
+        }
+        if self.state.borrow().session == u64::MAX {
+            return Err("Bluetooth presentation counter exhausted; restart required.".into());
         }
         let scale = source.scale_factor();
         let anchor = toolbar_anchor(source.position(), source.size(), scale, &bounds)?;
@@ -271,9 +315,10 @@ impl BluetoothController {
         self.focus_seen.set(false);
         {
             let mut state = self.state.borrow_mut();
-            state.session = state.session.wrapping_add(1);
+            state.session = state.session.saturating_add(1);
             state.read_requested = false;
             state.snapshot = None;
+            state.controls.clear();
             state.notice.clear();
             // No cancellation or joining. Only the accepted completion can
             // retire flight, even after a subsequent session has opened.
@@ -281,6 +326,7 @@ impl BluetoothController {
         self.placement.set(None);
         self.rect.borrow_mut().take();
         self.surface.set_refresh_enabled(false);
+        self.control_frame.borrow_mut().clear();
         self.surface.hide();
     }
 
@@ -307,7 +353,7 @@ impl BluetoothController {
     }
 
     fn current(&self, session: u64) -> bool {
-        self.is_open() && self.state.borrow().session == session
+        session != u64::MAX && self.is_open() && self.state.borrow().session == session
     }
 
     fn refresh(self: &Rc<Self>) {
@@ -319,9 +365,157 @@ impl BluetoothController {
             // A bool coalesces every press into one fresh observation, not a queue.
             state.read_requested = true;
             state.notice.clear();
+            state.controls.clear();
         }
         self.project_and_fit();
         self.pump();
+    }
+
+    fn set_radio(self: &Rc<Self>, frame: &str, index: i32, on: bool) {
+        if !self.is_open()
+            || self.projecting.get()
+            || self.presenting.get()
+            || self.admitting.get()
+            || frame != self.control_frame.borrow().as_str()
+            || !self.controls_current()
+            || self.component().window().scale_factor() != self.control_scale.get()
+        {
+            return;
+        }
+        let Ok(index) = usize::try_from(index) else {
+            return;
+        };
+        let issuer_scale = self.control_scale.get();
+        let (provider, issuer_session) = {
+            let state = self.state.borrow();
+            if state.flight.is_some() || state.read_requested {
+                return;
+            }
+            let Some(provider) = state.provider.clone() else {
+                return;
+            };
+            (provider, state.session)
+        };
+        self.admitting.set(true);
+        let _guard = Guard(&self.admitting);
+        // Capability access can reenter presentation. Never hold UI state
+        // across host calls, and retain this exact capability for submission.
+        let Some(controls) = provider.radio_controls() else {
+            return;
+        };
+        if !self.current(issuer_session)
+            || frame != self.control_frame.borrow().as_str()
+            || !self.controls_current()
+            || self.component().window().scale_factor() != issuer_scale
+        {
+            return;
+        }
+        let (radio, token) = {
+            let mut state = self.state.borrow_mut();
+            if state.flight.is_some()
+                || state.read_requested
+                || !state
+                    .provider
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &provider))
+            {
+                return;
+            }
+            let Some(radio) = state.controls.get(index).cloned() else {
+                return;
+            };
+            let requested = if on {
+                BluetoothRadioState::On
+            } else {
+                BluetoothRadioState::Off
+            };
+            if radio.observation.state == requested
+                || !matches!(
+                    radio.observation.state,
+                    BluetoothRadioState::On | BluetoothRadioState::Off
+                )
+            {
+                return;
+            }
+            let Some(token) = state.next_token() else {
+                return;
+            };
+            state.flight = Some(token);
+            state.command_pending = true;
+            state.notice.clear();
+            (radio, token)
+        };
+        self.mailbox.lock().expected = Some(token);
+        self.project_and_fit();
+        // Generated model/geometry callbacks can retire the reserved source.
+        // Consent has not started yet: abandon this unsubmitted intent only.
+        if !self.current(token.session)
+            || !self.controls_current()
+            || self.component().window().scale_factor() != issuer_scale
+            || self.state.borrow().controls.get(index) != Some(&radio)
+        {
+            let mut state = self.state.borrow_mut();
+            state.flight = None;
+            state.command_pending = false;
+            self.mailbox.lock().expected = None;
+            drop(state);
+            self.schedule_drain();
+            return;
+        }
+        let power = if on {
+            BluetoothRadioPower::On
+        } else {
+            BluetoothRadioPower::Off
+        };
+        let command = BluetoothRadioCommand {
+            radio: radio.clone(),
+            power,
+        };
+        let mailbox = self.mailbox.clone();
+        let root = self.surface.as_weak();
+        let captured = radio.clone();
+        // Consent initiation stays on the GUI; only native awaits use the owner.
+        let admission = controls.set_radio(
+            command,
+            Box::new(move |result| {
+                complete(
+                    &mailbox,
+                    &root,
+                    token,
+                    EventResult::Radio {
+                        radio: captured,
+                        power,
+                        result,
+                    },
+                );
+            }),
+        );
+        if let Err(error) = admission {
+            complete(
+                &self.mailbox,
+                &self.surface.as_weak(),
+                token,
+                EventResult::Radio {
+                    radio,
+                    power,
+                    result: Err(error),
+                },
+            );
+        }
+    }
+
+    fn controls_current(&self) -> bool {
+        if self.control_generation.get() == u64::MAX {
+            return false;
+        }
+        let model = self.component().get_radio_controls();
+        let rows = self.control_rows.borrow();
+        model == *self.control_model.borrow()
+            && model.row_count() == rows.len()
+            && rows
+                .iter()
+                .enumerate()
+                .all(|(index, row)| model.row_data(index).as_ref() == Some(row))
     }
 
     fn pump(self: &Rc<Self>) {
@@ -364,7 +558,7 @@ impl BluetoothController {
                 return;
             }
         }
-        let (provider, token) = {
+        let submission = {
             let mut state = self.state.borrow_mut();
             if state.flight.is_some() || !state.read_requested {
                 return;
@@ -373,13 +567,16 @@ impl BluetoothController {
                 return;
             };
             state.read_requested = false;
-            state.sequence = state.sequence.wrapping_add(1);
-            let token = ReadToken {
-                session: state.session,
-                sequence: state.sequence,
-            };
-            state.flight = Some(token);
-            (provider, token)
+            state.next_token().map(|token| {
+                state.flight = Some(token);
+                (provider, token)
+            })
+        };
+        let Some((provider, token)) = submission else {
+            self.state.borrow_mut().notice =
+                "Bluetooth request counter exhausted; restart required.".into();
+            self.project_and_fit();
+            return;
         };
         self.mailbox.lock().expected = Some(token);
         self.project_and_fit();
@@ -392,10 +589,44 @@ impl BluetoothController {
         }
         let mailbox = self.mailbox.clone();
         let root = self.surface.as_weak();
-        if let Err(error) = provider.read(Box::new(move |result| {
-            complete(&mailbox, &root, token, result)
-        })) {
-            complete(&self.mailbox, &self.surface.as_weak(), token, Err(error));
+        let controls = provider.radio_controls();
+        if !self.current(token.session)
+            || !self
+                .state
+                .borrow()
+                .provider
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &provider))
+        {
+            self.state.borrow_mut().flight = None;
+            self.mailbox.lock().expected = None;
+            self.schedule_drain();
+            return;
+        }
+        let admission = if let Some(controls) = controls {
+            controls.read_controls(Box::new(move |result| {
+                complete(&mailbox, &root, token, EventResult::Read(result));
+            }))
+        } else {
+            provider.read(Box::new(move |result| {
+                complete(
+                    &mailbox,
+                    &root,
+                    token,
+                    EventResult::Read(result.map(|snapshot| BluetoothControlSnapshot {
+                        snapshot,
+                        radios: Ok(Vec::new()),
+                    })),
+                );
+            }))
+        };
+        if let Err(error) = admission {
+            complete(
+                &self.mailbox,
+                &self.surface.as_weak(),
+                token,
+                EventResult::Read(Err(error)),
+            );
         }
         // No inline drain: even immediate rejection is event-loop delivered.
     }
@@ -421,15 +652,49 @@ impl BluetoothController {
                 && state.flight == Some(completion.token)
             {
                 state.flight = None;
+                state.command_pending = false;
                 if visible && state.session == completion.token.session {
                     match completion.result {
-                        Ok(snapshot) => {
-                            state.snapshot = Some(snapshot);
-                            state.notice.clear();
+                        EventResult::Read(Ok(observation)) => {
+                            state.snapshot = Some(observation.snapshot);
+                            match observation.radios {
+                                Ok(radios) => {
+                                    state.controls = radios;
+                                    state.notice.clear();
+                                }
+                                Err(error) => {
+                                    state.controls.clear();
+                                    state.notice = failure("Radio control", &error);
+                                }
+                            }
                         }
-                        Err(error) => {
+                        EventResult::Read(Err(error)) => {
                             state.snapshot = None;
+                            state.controls.clear();
                             state.notice = failure("Bluetooth", &error);
+                        }
+                        EventResult::Radio {
+                            radio,
+                            power,
+                            result,
+                        } => {
+                            state.notice = radio_feedback(power, &result);
+                            let radio_index = state
+                                .controls
+                                .iter()
+                                .position(|source| source.key == radio.key);
+                            // Preserve Classic/LE observations. Readback only
+                            // updates this exact command's retained radio row.
+                            if let Ok(outcome) = result
+                                && let Ok(observed) = outcome.observed
+                                && let Some(snapshot) = state.snapshot.as_mut()
+                                && let Ok(radios) = snapshot.radios.as_mut()
+                                && let Some(index) = radio_index
+                                && let Some(row) = radios.get_mut(index)
+                            {
+                                *row = observed;
+                            }
+                            state.controls.clear();
                         }
                     }
                 }
@@ -454,7 +719,11 @@ impl BluetoothController {
                 .map(Projection::from_snapshot)
                 .unwrap_or_default();
             if !state.notice.is_empty() {
-                projection.notice = state.notice.clone();
+                projection.notice = if projection.notice.is_empty() {
+                    state.notice.clone()
+                } else {
+                    format!("{} · {}", projection.notice, state.notice)
+                };
             }
             (
                 state.session,
@@ -463,6 +732,44 @@ impl BluetoothController {
                 state.snapshot.is_some(),
             )
         };
+        self.control_generation
+            .set(self.control_generation.get().saturating_add(1));
+        let frame = format!("{session}:{}", self.control_generation.get());
+        let (control_rows, command_pending) = {
+            let state = self.state.borrow();
+            let enabled = self.is_open()
+                && state.flight.is_none()
+                && !state.read_requested
+                && state.session != u64::MAX
+                && state.sequence != u64::MAX
+                && self.control_generation.get() != u64::MAX;
+            let rows = state
+                .controls
+                .iter()
+                .enumerate()
+                .map(|(index, radio)| BluetoothRadioControlRow {
+                    name: bounded_text(&radio.observation.name, 128).into(),
+                    state: radio_status(radio.observation.state),
+                    frame: frame.clone().into(),
+                    index: i32::try_from(index).unwrap_or(-1),
+                    enabled: enabled
+                        && matches!(
+                            radio.observation.state,
+                            BluetoothRadioState::On | BluetoothRadioState::Off
+                        ),
+                })
+                .collect::<Vec<_>>();
+            (
+                rows,
+                state.command_pending && state.flight.is_some_and(|token| token.session == session),
+            )
+        };
+        *self.control_rows.borrow_mut() = control_rows.clone();
+        let control_model = ModelRc::new(slint::VecModel::from(control_rows));
+        *self.control_frame.borrow_mut() = frame;
+        *self.control_model.borrow_mut() = control_model.clone();
+        self.control_scale
+            .set(self.component().window().scale_factor());
         let root = self.component();
         // A property callback can hide/reopen. Do not finish projecting the old
         // session over its replacement; Rust input is gated during projection.
@@ -476,6 +783,8 @@ impl BluetoothController {
         }
         set!(set_loading, loading);
         set!(set_has_snapshot, has_snapshot);
+        set!(set_radio_command_pending, command_pending);
+        set!(set_radio_controls, control_model);
         set!(
             set_radios,
             ModelRc::new(slint::VecModel::from(projection.radios))
@@ -615,6 +924,63 @@ impl BluetoothController {
 impl Drop for BluetoothController {
     fn drop(&mut self) {
         self.hide();
+    }
+}
+
+fn radio_status(state: BluetoothRadioState) -> BluetoothRadioStatus {
+    match state {
+        BluetoothRadioState::On => BluetoothRadioStatus::On,
+        BluetoothRadioState::Off => BluetoothRadioStatus::Off,
+        BluetoothRadioState::Disabled => BluetoothRadioStatus::Disabled,
+        BluetoothRadioState::Unknown => BluetoothRadioStatus::Unknown,
+    }
+}
+
+fn radio_feedback(
+    power: BluetoothRadioPower,
+    result: &Result<BluetoothRadioOutcome, BluetoothError>,
+) -> String {
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) => return failure("Radio power", error),
+    };
+    match outcome.access {
+        BluetoothRadioAccess::DeniedByUser => {
+            return "Radio power: access denied by the user.".into();
+        }
+        BluetoothRadioAccess::DeniedBySystem => {
+            return "Radio power: access denied by the system or policy.".into();
+        }
+        BluetoothRadioAccess::Unspecified => {
+            return "Radio power: permission is unavailable; no confirmed power change.".into();
+        }
+        BluetoothRadioAccess::Allowed => {}
+    }
+    match &outcome.observed {
+        Ok(observed) => {
+            let confirmed = matches!(
+                (power, observed.state),
+                (BluetoothRadioPower::On, BluetoothRadioState::On)
+                    | (BluetoothRadioPower::Off, BluetoothRadioState::Off)
+            );
+            let state = match observed.state {
+                BluetoothRadioState::On => "On",
+                BluetoothRadioState::Off => "Off",
+                BluetoothRadioState::Disabled => "Disabled",
+                BluetoothRadioState::Unknown => "Unknown",
+            };
+            if confirmed {
+                format!("Radio power: native state confirmed {state}.")
+            } else {
+                format!(
+                    "Radio power request accepted; native state is {state}. The requested state is not confirmed. Refresh to read it again."
+                )
+            }
+        }
+        Err(error) => format!(
+            "Radio power request accepted; {}",
+            failure("Native readback", error)
+        ),
     }
 }
 

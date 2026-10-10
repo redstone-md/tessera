@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Independent, read-only Bluetooth observations; construction has no OS effects.
+//! Passive Bluetooth reads with optional exact-radio control on explicit intent.
 use std::sync::Arc;
 use tessera_system::bluetooth::BluetoothHost;
 
-/// Creates admission only. Each accepted request owns its worker and apartment;
-/// creating or dropping this host never enumerates, requests consent, or joins.
+/// Creates admission only; no enumeration or consent. Legacy reads own one
+/// scoped worker/apartment. Opt-in controls retain exact radios on their owner;
+/// dropping this host closes admission without joining accepted work.
 pub fn native_bluetooth_host() -> Arc<dyn BluetoothHost> {
     #[cfg(windows)]
     {
-        Arc::new(crate::native_bluetooth::NativeBluetoothHost::default())
+        Arc::new(crate::native_bluetooth::ControlledBluetoothHost::default())
     }
     #[cfg(not(windows))]
     {

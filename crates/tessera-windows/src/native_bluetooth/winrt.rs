@@ -16,11 +16,28 @@ use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUnini
 use windows::core::{HSTRING, IInspectable, Interface};
 use windows_collections::{IIterable, IMapView, IVectorView};
 
+pub(super) enum NativeRadios {
+    Passive(IVectorView<Radio>),
+    Controlled(Vec<Radio>),
+}
+
 #[derive(Default)]
-pub(super) struct NativeCalls(PhantomData<Rc<()>>);
+pub(super) struct NativeCalls {
+    _thread: PhantomData<Rc<()>>,
+    pub(super) controls: super::radio_control::RadioInventory,
+}
+
+impl NativeCalls {
+    pub(super) fn with_authorities(authorities: super::radio_control::Authorities) -> Self {
+        Self {
+            controls: super::radio_control::RadioInventory::with_authorities(authorities),
+            ..Self::default()
+        }
+    }
+}
 
 impl Calls for NativeCalls {
-    type Radios = IVectorView<Radio>;
+    type Radios = NativeRadios;
     type Radio = Radio;
     type Selector = HSTRING;
     type RequestedProperties = IIterable<HSTRING>;
@@ -29,6 +46,28 @@ impl Calls for NativeCalls {
     type Pairing = DeviceInformationPairing;
     type Properties = IMapView<HSTRING, IInspectable>;
     type Value = IInspectable;
+    fn begin_controls(&mut self) {
+        self.controls.begin();
+    }
+
+    fn observe_control(
+        &mut self,
+        radio: &Radio,
+        observation: &tessera_system::bluetooth::BluetoothRadioObservation,
+    ) {
+        self.controls.observe(radio, observation);
+    }
+
+    fn finish_controls(
+        &mut self,
+        result: &Result<Vec<tessera_system::bluetooth::BluetoothRadioObservation>, BluetoothError>,
+    ) -> Result<Vec<tessera_system::bluetooth::BluetoothControlledRadio>, BluetoothError> {
+        self.controls.finish(result)
+    }
+
+    fn retire_controls(&mut self) {
+        self.controls.retire();
+    }
 
     fn initialize(&mut self) -> Result<(), BluetoothError> {
         // Result treats both S_OK and S_FALSE as success, each balanced once.
@@ -41,25 +80,49 @@ impl Calls for NativeCalls {
     }
 
     fn radios(&mut self) -> Result<Self::Radios, BluetoothError> {
+        if self.controls.active() {
+            return self.controls.enumerate().map(NativeRadios::Controlled);
+        }
         let operation = Radio::GetRadiosAsync()
             .map_err(|error| native_error(error, "Bluetooth radio enumeration could not start"))?;
         // Both operation and returned collection remain on this request thread.
         // The operation drops here even when join fails or unwinds.
         operation
             .join()
+            .map(NativeRadios::Passive)
             .map_err(|error| native_error(error, "Bluetooth radio enumeration failed"))
     }
 
     fn radio_count(&mut self, radios: &Self::Radios) -> Result<u32, BluetoothError> {
-        radios
-            .Size()
-            .map_err(|error| native_error(error, "Radio collection size is unavailable"))
+        match radios {
+            NativeRadios::Passive(radios) => radios
+                .Size()
+                .map_err(|error| native_error(error, "Radio collection size is unavailable")),
+            NativeRadios::Controlled(radios) => u32::try_from(radios.len()).map_err(|_| {
+                BluetoothError::new(
+                    BluetoothErrorKind::InvalidData,
+                    "Bluetooth radio inventory exceeds the native collection limit",
+                )
+            }),
+        }
     }
 
     fn radio(&mut self, radios: &Self::Radios, index: u32) -> Result<Radio, BluetoothError> {
-        radios
-            .GetAt(index)
-            .map_err(|error| native_error(error, "Radio observation is unavailable"))
+        match radios {
+            NativeRadios::Passive(radios) => radios
+                .GetAt(index)
+                .map_err(|error| native_error(error, "Radio observation is unavailable")),
+            NativeRadios::Controlled(radios) => usize::try_from(index)
+                .ok()
+                .and_then(|index| radios.get(index))
+                .cloned()
+                .ok_or_else(|| {
+                    BluetoothError::new(
+                        BluetoothErrorKind::InvalidData,
+                        "Bluetooth radio inventory position is unavailable",
+                    )
+                }),
+        }
     }
 
     fn is_bluetooth(&mut self, radio: &Radio) -> Result<bool, BluetoothError> {
@@ -225,7 +288,7 @@ fn text(value: &HSTRING) -> Result<String, BluetoothError> {
     })
 }
 
-fn native_error(error: windows::core::Error, message: &'static str) -> BluetoothError {
+pub(super) fn native_error(error: windows::core::Error, message: &'static str) -> BluetoothError {
     let code = error.code().0 as u32;
     let kind = match code {
         0x8007_0005 => BluetoothErrorKind::AccessDenied,
