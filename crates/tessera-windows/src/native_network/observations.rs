@@ -32,18 +32,33 @@ pub(super) fn radio<C: NativeCalls>(
     handle: usize,
     id: &GUID,
 ) -> Result<RadioState, NetworkError> {
+    Ok(radio_from_phys(&radio_phys(calls, handle, id)?))
+}
+
+pub(super) fn radio_phys<C: NativeCalls>(
+    calls: &C,
+    handle: usize,
+    id: &GUID,
+) -> Result<Vec<WLAN_PHY_RADIO_STATE>, NetworkError> {
     let buffer = Buffer::acquire(
         calls,
         calls.query(handle, id, wlan_intf_opcode_radio_state),
         "WLAN radio observation",
     )?;
     let count = buffer.read::<u32>(offset_of!(WLAN_RADIO_STATE, dwNumberOfPhys))?;
-    let phys = buffer.list::<WLAN_PHY_RADIO_STATE>(
+    let mut phys = buffer.list::<WLAN_PHY_RADIO_STATE>(
         offset_of!(WLAN_RADIO_STATE, PhyRadioState),
         count,
         64,
     )?;
-    Ok(radio_from_phys(&phys))
+    phys.sort_by_key(|phy| phy.dwPhyIndex);
+    if phys
+        .windows(2)
+        .any(|pair| pair[0].dwPhyIndex == pair[1].dwPhyIndex)
+    {
+        return Err(invalid("WLAN returned duplicate radio PHY identifiers"));
+    }
+    Ok(phys)
 }
 
 fn radio_from_phys(phys: &[WLAN_PHY_RADIO_STATE]) -> RadioState {

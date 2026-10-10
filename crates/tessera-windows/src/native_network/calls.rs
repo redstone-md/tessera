@@ -59,6 +59,14 @@ pub(super) unsafe trait NativeCalls: Send + 'static {
     fn disconnect(&self, _handle: usize, _id: &GUID) -> u32 {
         50
     }
+    fn set_radio(
+        &self,
+        _handle: usize,
+        _id: &GUID,
+        _state: &windows::Win32::NetworkManagement::WiFi::WLAN_PHY_RADIO_STATE,
+    ) -> u32 {
+        50
+    }
     unsafe fn free(&self, data: *mut c_void);
     fn register(
         &self,

@@ -3,7 +3,7 @@
 
 import { ScrollView as NativeScrollView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
-import { TileButton, FocusTokens } from "tiles.slint";
+import { ViewportTileButton, FocusTokens, TileBounds } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
@@ -115,7 +115,7 @@ component NetworkSection inherits Rectangle {
         }
     }
 }
-component NetworkAction inherits TileButton {
+component NetworkAction inherits ViewportTileButton {
     in property <string> label;
     radius: 6px;
     filled: false;
@@ -134,9 +134,10 @@ component NetworkAction inherits TileButton {
     }
 }
 
-component NetworkControlChoice inherits TileButton {
+component NetworkControlChoice inherits ViewportTileButton {
     in property <NetworkControlRow> net-row;
     in property <float> text-line-height-factor;
+    in property <int> details-lines: 1;
     radius: 6px;
     filled: false;
     allow-return-repeat: false;
@@ -147,7 +148,13 @@ component NetworkControlChoice inherits TileButton {
         padding: NetworkMetrics.xs;
         spacing: 0px;
         NetworkText { text: root.net-row.label; font-weight: 500; overflow: elide; line-height-factor: root.text-line-height-factor; }
-        NetworkText { text: root.net-row.details; color: SeelenPalette.secondary; overflow: elide; line-height-factor: root.text-line-height-factor; }
+        NetworkText {
+            text: root.net-row.details;
+            height: root.details-lines * NetworkMetrics.text-height;
+            color: SeelenPalette.secondary;
+            overflow: elide;
+            line-height-factor: root.text-line-height-factor;
+        }
     }
 }
 
@@ -208,6 +215,9 @@ export component NetworkMenu inherits Window {
     in property <[NetworkRow]> hidden;
     in property <[NetworkControlRow]> control-rows;
     in property <bool> connection-controls-supported;
+    in property <[NetworkControlRow]> radio-rows;
+    in property <bool> radio-controls-supported;
+    callback radio-requested(string);
     in property <string> selected-network;
     in property <string> command-label;
     in property <string> command-key;
@@ -242,8 +252,8 @@ export component NetworkMenu inherits Window {
     property <length> action-height: 2 * NetworkMetrics.xs + NetworkMetrics.text-height;
     property <string> feedback: root.notice != "" ? root.notice + (root.summary != "" ? "\n" + root.summary : "")
         : root.loading ? @tr("Reading Windows Wi-Fi cache…") + (root.summary != "" ? "\n" + root.summary : "") : root.summary;
-    property <string> cache-text: root.connection-controls-supported
-        ? @tr("Windows cached Wi-Fi observations; Refresh does not scan. Connections use the selected adapter and native security facts. Passwords are temporary and not saved. Radio and hotspot controls are not supported here.")
+    property <string> cache-text: root.connection-controls-supported || root.radio-controls-supported
+        ? @tr("Windows cached Wi-Fi observations; Refresh does not scan. Connections use exact native adapter/security facts. Radio On/Off changes software only; hardware switches are read-only. No automatic connection request or profile save is issued. Passwords are temporary. Hotspot is not supported here.")
         : @tr("Read-only Windows cache; Refresh does not scan. Connection, radio and hotspot controls are not supported here.");
     property <length> measure-width: max(0px, min(root.width > 0px ? root.width : root.popup-content-width,
         root.popup-content-width) - 2 * PopoverTokens.shadow-margin - 2 * root.inset - 2 * FocusTokens.outer-margin);
@@ -253,6 +263,7 @@ export component NetworkMenu inherits Window {
         + connected-section.natural-height + saved-section.natural-height
         + available-section.natural-height + hidden-section.natural-height
         + root.control-rows.length * 2 * root.action-height
+        + root.radio-rows.length * 3 * root.action-height
         + (root.selected-network != "" ? 2 * root.action-height + NetworkMetrics.xs : 0px)
         + (root.credentials-active ? root.action-height + NetworkMetrics.xs : 0px)
         + NetworkMetrics.xs + cache-metrics.preferred-height
@@ -290,6 +301,14 @@ export component NetworkMenu inherits Window {
             scroll.content-y = -max(0px, min(desired-bottom - scroll.visible-height,
                 scroll.content-height - scroll.visible-height));
         }
+    }
+    property <TileBounds> command-clip: {
+        origin: scroll.absolute-position,
+        width: scroll.visible-width,
+        height: scroll.visible-height,
+    };
+    function reveal-command(frame: TileBounds) {
+        root.reveal-area(frame.origin.y - content.absolute-position.y, frame.height);
     }
     public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
     public function focus-content() { scroll.content-y = 0px; escape-scope.focus(); }
@@ -352,8 +371,25 @@ export component NetworkMenu inherits Window {
                         accessible-label: self.text;
                         line-height-factor: body.text-line-height-factor;
                     }
-                    connected-section := NetworkSection {
+                    radio-choices := Rectangle {
                         y: watch.y + watch.height;
+                        width: parent.width;
+                        height: root.radio-rows.length * 3 * root.action-height;
+                        accessible-role: none;
+                        for row[index] in root.radio-rows: NetworkControlChoice {
+                            y: index * 3 * root.action-height;
+                            width: parent.width;
+                            height: 3 * root.action-height;
+                            net-row: row;
+                            details-lines: 3;
+                            clip-bounds: root.command-clip;
+                            text-line-height-factor: body.text-line-height-factor;
+                            scoped-clicked => { root.password = ""; root.radio-requested(row.key); }
+                            reveal-requested(frame) => { root.reveal-command(frame); }
+                        }
+                    }
+                    connected-section := NetworkSection {
+                        y: radio-choices.y + radio-choices.height;
                         width: parent.width;
                         caption: @tr("CONNECTED TO");
                         rows: root.connected;
@@ -390,9 +426,10 @@ export component NetworkMenu inherits Window {
                             width: parent.width;
                             height: 2 * root.action-height;
                             net-row: row;
+                            clip-bounds: root.command-clip;
                             text-line-height-factor: body.text-line-height-factor;
-                            clicked => { root.control-selected(row.key); }
-                            focus-acquired => { root.reveal-area(choices.y + self.y, self.height); }
+                            scoped-clicked => { root.control-selected(row.key); }
+                            reveal-requested(frame) => { root.reveal-command(frame); }
                         }
                     }
                     selected := NetworkText {
@@ -424,15 +461,16 @@ export component NetworkMenu inherits Window {
                         height: root.selected-network != "" ? root.action-height + NetworkMetrics.xs : 0px;
                         visible: root.selected-network != "";
                         label: root.command-label;
+                        clip-bounds: root.command-clip;
                         activation-key: root.command-key;
                         enabled: root.command-key != "" && (!root.credentials-active || root.password != "");
-                        clicked => {
+                        scoped-clicked => {
                             let key = root.command-key;
                             let password = root.password;
                             root.password = "";
                             root.command-requested(key, password);
                         }
-                        focus-acquired => { root.reveal-focused(self.y); }
+                        reveal-requested(frame) => { root.reveal-command(frame); }
                     }
                     cache := NetworkText {
                         y: connect-action.y + connect-action.height + NetworkMetrics.xs;
@@ -450,20 +488,22 @@ export component NetworkMenu inherits Window {
                         width: parent.width;
                         height: root.action-height;
                         label: @tr("Refresh");
+                        clip-bounds: root.command-clip;
                         enabled: root.refresh-key != "" && !root.loading;
                         activation-key: root.refresh-key;
-                        clicked => { root.refresh-requested(root.refresh-key); }
-                        focus-acquired => { root.reveal-focused(self.y); }
+                        scoped-clicked => { root.refresh-requested(root.refresh-key); }
+                        reveal-requested(frame) => { root.reveal-command(frame); }
                     }
                     settings := NetworkAction {
                         y: refresh.y + refresh.height + NetworkMetrics.xs;
                         width: parent.width;
                         height: root.action-height;
                         label: @tr("More Network Settings");
+                        clip-bounds: root.command-clip;
                         enabled: root.settings-key != "" && !root.settings-loading;
                         activation-key: root.settings-key;
-                        clicked => { root.settings-requested(root.settings-key); }
-                        focus-acquired => { root.reveal-focused(self.y); }
+                        scoped-clicked => { root.settings-requested(root.settings-key); }
+                        reveal-requested(frame) => { root.reveal-command(frame); }
                     }
                 }
             }

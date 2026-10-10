@@ -9,8 +9,9 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::Ndis::{NDIS_OBJECT_HEADER, NDIS_OBJECT_TYPE_DEFAULT};
 use windows::Win32::NetworkManagement::WiFi::{
     DOT11_BSSID_LIST, DOT11_BSSID_LIST_REVISION_1, DOT11_SSID, WLAN_CONNECTION_PARAMETERS,
-    WlanConnect, WlanDisconnect, WlanGetProfile, dot11_BSS_type_infrastructure,
-    wlan_connection_mode_profile, wlan_connection_mode_temporary_profile,
+    WLAN_PHY_RADIO_STATE, WlanConnect, WlanDisconnect, WlanGetProfile, WlanSetInterface,
+    dot11_BSS_type_infrastructure, wlan_connection_mode_profile,
+    wlan_connection_mode_temporary_profile, wlan_intf_opcode_radio_state,
 };
 use windows::Win32::NetworkManagement::WiFi::{
     WLAN_INTF_OPCODE, WLAN_NOTIFICATION_CALLBACK, WLAN_NOTIFICATION_SOURCES, WlanCloseHandle,
@@ -200,6 +201,19 @@ unsafe impl NativeCalls for WindowsCalls {
 
     fn disconnect(&self, handle: usize, id: &GUID) -> u32 {
         unsafe { WlanDisconnect(HANDLE(handle as *mut c_void), id, None) }
+    }
+
+    fn set_radio(&self, handle: usize, id: &GUID, state: &WLAN_PHY_RADIO_STATE) -> u32 {
+        unsafe {
+            WlanSetInterface(
+                HANDLE(handle as *mut c_void),
+                id,
+                wlan_intf_opcode_radio_state,
+                std::mem::size_of::<WLAN_PHY_RADIO_STATE>() as u32,
+                std::ptr::from_ref(state).cast(),
+                None,
+            )
+        }
     }
 
     unsafe fn free(&self, data: *mut c_void) {

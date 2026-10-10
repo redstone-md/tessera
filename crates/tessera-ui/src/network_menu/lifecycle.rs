@@ -79,6 +79,12 @@ impl NetworkController {
                 }
             });
         let weak = Rc::downgrade(&controller);
+        controller.surface.on_radio_requested(move |key| {
+            if let Some(controller) = weak.upgrade() {
+                controller.submit_radio(key);
+            }
+        });
+        let weak = Rc::downgrade(&controller);
         controller.surface.on_hide_requested(move || {
             if let Some(controller) = weak.upgrade() {
                 controller.hide();
@@ -186,6 +192,10 @@ impl NetworkController {
             state.controls_supported = false;
             state.selected = None;
             state.row_keys.clear();
+            state.radios.clear();
+            state.radio_keys.clear();
+            state.radios_supported = false;
+            state.radio_notice.clear();
             state.command_key = SharedString::default();
             state.control_notice.clear();
             state.inventory_notice.clear();
@@ -213,6 +223,8 @@ impl NetworkController {
         self.surface.set_hidden(ModelRc::default());
         self.surface.set_control_rows(ModelRc::default());
         self.surface.set_connection_controls_supported(false);
+        self.surface.set_radio_controls_supported(false);
+        self.surface.set_radio_rows(ModelRc::default());
         self.surface.set_command_key(SharedString::default());
         self.surface.set_selected_network(SharedString::default());
         self.surface.set_credentials_active(false);

@@ -17,6 +17,7 @@ pub(super) struct Context {
     admitted: AtomicBool,
     wake: Arc<dyn Fn() + Send + Sync>,
     revision: AtomicU64,
+    source_revision: AtomicU64,
     incarnation: u64,
     effect: Mutex<Option<EffectNotice>>,
 }
@@ -33,6 +34,7 @@ impl Context {
             admitted: AtomicBool::new(true),
             wake,
             revision: AtomicU64::new(1),
+            source_revision: AtomicU64::new(1),
             // MAX is a permanent global exhaustion sentinel, never an identity.
             incarnation: NEXT_CONTEXT
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
@@ -51,6 +53,10 @@ impl Context {
         self.revision.load(Ordering::Acquire)
     }
 
+    pub(super) fn source_revision(&self) -> u64 {
+        self.source_revision.load(Ordering::Acquire)
+    }
+
     pub(super) fn incarnation(&self) -> u64 {
         self.incarnation
     }
@@ -66,6 +72,7 @@ impl Context {
             && self.incarnation != u64::MAX
             && revision != 0
             && revision != u64::MAX
+            && self.source_revision() != u64::MAX
     }
 
     pub(super) fn observe_effect(&self, interface: GUID, ssid: &[u8]) {
@@ -162,6 +169,16 @@ impl Context {
             )
             && self.admitted.load(Ordering::Acquire)
         {
+            // Removal/replacement and policy changes are never attributed to
+            // our own software-radio writes. This independent epoch survives
+            // ordinary connection/linked-PHY notifications during a batch.
+            if matches!(code, 1 | 2 | 5 | 12 | 13 | 14 | 15 | 16 | 23 | 25) {
+                let _ = self.source_revision.fetch_update(
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                    |revision| Some(revision.saturating_add(1)),
+                );
+            }
             // Exhaustion invalidates effect authority forever but must not stop
             // legacy cache-change wakeups or wrap to an earlier revision.
             let _ = self

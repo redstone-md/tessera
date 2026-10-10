@@ -8,6 +8,7 @@ pub(super) struct Mailbox {
     pub expected_read: Option<Token>,
     pub read: Option<(Token, Result<NetworkSnapshot, NetworkError>)>,
     pub controls: Option<(Token, Option<Observation<NetworkControlInventory>>)>,
+    pub radios: Option<(Token, Option<Observation<NetworkRadioInventory>>)>,
     pub expected_command: Option<Token>,
     pub command: Option<(Token, Result<NetworkCommandOutcome, NetworkError>)>,
     pub accepted: Option<Token>,
@@ -52,11 +53,11 @@ pub(super) fn read_complete(
     wake(mailbox, root);
 }
 
-pub(super) fn view_complete(
+pub(super) fn control_view_complete(
     mailbox: &Arc<Mutex<Mailbox>>,
     root: &slint::Weak<NetworkMenu>,
     token: Token,
-    result: Result<NetworkView, NetworkError>,
+    result: Result<NetworkControlView, NetworkError>,
 ) {
     {
         let mut slot = mailbox.lock();
@@ -65,6 +66,7 @@ pub(super) fn view_complete(
         }
         let result = result.map(|view| {
             slot.controls = Some((token, view.controls));
+            slot.radios = Some((token, view.radios));
             view.snapshot
         });
         slot.read = Some((token, result));
@@ -142,6 +144,7 @@ pub(super) fn event(
 pub(super) struct Delivery {
     pub read: Option<(Token, Result<NetworkSnapshot, NetworkError>)>,
     pub controls: Option<(Token, Option<Observation<NetworkControlInventory>>)>,
+    pub radios: Option<(Token, Option<Observation<NetworkRadioInventory>>)>,
     pub command: Option<(Token, Result<NetworkCommandOutcome, NetworkError>)>,
     pub accepted: Option<Token>,
     pub settings: Option<(Token, Result<(), NetworkError>)>,
@@ -168,6 +171,7 @@ impl Mailbox {
         Delivery {
             read,
             controls: self.controls.take(),
+            radios: self.radios.take(),
             command,
             accepted: self.accepted.take(),
             settings,

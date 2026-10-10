@@ -5,8 +5,8 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use tessera_system::network::{
-    InterfaceId, NetworkCommand, NetworkCommandOutcome, NetworkError, NetworkErrorKind,
-    NetworkSnapshot, NetworkView, Observation, WifiInterface,
+    InterfaceId, NetworkCommand, NetworkCommandOutcome, NetworkControlView, NetworkError,
+    NetworkErrorKind, NetworkSnapshot, NetworkView, Observation, WifiInterface,
 };
 use windows::Win32::NetworkManagement::WiFi::{
     WLAN_NOTIFICATION_SOURCE_ACM, WLAN_NOTIFICATION_SOURCE_NONE,
@@ -105,10 +105,27 @@ impl<C: NativeCalls> Owner<C> {
         })
     }
 
+    pub(super) fn read_control_view(&mut self) -> Result<NetworkControlView, NetworkError> {
+        let view = self.read_view()?;
+        let handle = self.handle()?;
+        let radios = observation(self.controls.radio_inventory(
+            &self.calls,
+            handle,
+            self.context.as_deref(),
+        ));
+        let mut result = NetworkControlView::from(view);
+        result.radios = Some(radios);
+        Ok(result)
+    }
+
     pub(super) fn command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         let handle = self.handle()?;
         self.controls
             .begin(&self.calls, handle, self.context.as_deref(), command)
+    }
+
+    pub(super) fn command_accepted(&self) -> bool {
+        self.controls.accepted()
     }
 
     pub(super) fn command_readback(

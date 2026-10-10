@@ -10,8 +10,9 @@ use std::mem::offset_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tessera_system::network::{
     InterfaceId, NetworkCommand, NetworkCommandOutcome, NetworkConnectCapability, NetworkControl,
-    NetworkControlInventory, NetworkError, NetworkErrorKind, NetworkSnapshot, NetworkTarget,
-    Observation, Ssid,
+    NetworkControlInventory, NetworkError, NetworkErrorKind, NetworkRadioControl,
+    NetworkRadioInitiation, NetworkRadioInventory, NetworkRadioResult, NetworkSnapshot,
+    NetworkTarget, Observation, Ssid,
 };
 use windows::Win32::NetworkManagement::WiFi::*;
 use windows::Win32::Storage::FileSystem::{
@@ -49,6 +50,8 @@ pub(super) struct Controls {
     watch: u64,
     records: Vec<Record>,
     pending: Option<(Record, bool)>,
+    radios: Vec<super::radio::Record>,
+    radio_result: Option<NetworkRadioResult>,
 }
 
 impl Controls {
@@ -64,15 +67,115 @@ impl Controls {
             watch: 0,
             records: Vec::new(),
             pending: None,
+            radios: Vec::new(),
+            radio_result: None,
         }
     }
 
     pub(super) fn retire(&mut self) {
         self.pending = None;
+        self.radio_result = None;
     }
 
     fn has_authority(&self) -> bool {
         self.owner != 0 && self.owner != u64::MAX && self.sequence != u64::MAX
+    }
+
+    fn target(&mut self, revision: u64) -> Result<NetworkTarget, NetworkError> {
+        let Some(sequence) = self.sequence.checked_add(1).filter(|next| *next < u64::MAX) else {
+            self.sequence = u64::MAX;
+            self.records.clear();
+            self.radios.clear();
+            return Err(watch_unavailable());
+        };
+        self.sequence = sequence;
+        Ok(NetworkTarget::new(self.owner, sequence, revision))
+    }
+
+    pub(super) fn radio_inventory<C: NativeCalls>(
+        &mut self,
+        calls: &C,
+        handle: usize,
+        context: Option<&Context>,
+    ) -> Result<NetworkRadioInventory, NetworkError> {
+        self.radios.clear();
+        let admitted = context.filter(|context| context.has_authority() && self.has_authority());
+        let revision = admitted.map(Context::revision);
+        let source_revision = admitted.map(Context::source_revision);
+        let mut interfaces = Vec::new();
+        let mut unavailable = Vec::new();
+        if admitted.is_none() {
+            unavailable.push(watch_unavailable());
+        }
+        for entry in observations::interfaces(calls, handle)? {
+            let phys = match observations::radio_phys(calls, handle, &entry.InterfaceGuid) {
+                Ok(phys) => phys,
+                Err(error) => {
+                    unavailable.push(error);
+                    continue;
+                }
+            };
+            let target = if !phys.is_empty() && admitted.is_some() && self.has_authority() {
+                match self.target(revision.expect("admitted revision")) {
+                    Ok(target) => Some(target),
+                    Err(error) => {
+                        unavailable.push(error);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let length = entry
+                .strInterfaceDescription
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(entry.strInterfaceDescription.len());
+            interfaces.push(NetworkRadioControl {
+                target,
+                interface: InterfaceId::new(entry.InterfaceGuid.to_u128().to_be_bytes()),
+                interface_name: String::from_utf16_lossy(&entry.strInterfaceDescription[..length]),
+                phys: phys.iter().map(super::radio::observed).collect(),
+            });
+            if let Some(target) = target {
+                let context = admitted.expect("admitted radio target");
+                self.radios.push(super::radio::Record {
+                    target,
+                    interface: entry.InterfaceGuid,
+                    description: entry.strInterfaceDescription,
+                    incarnation: context.incarnation(),
+                    revision: context.revision(),
+                    source_revision: context.source_revision(),
+                    phys,
+                });
+            }
+        }
+        if let Some(context) = admitted
+            && (Some(context.revision()) != revision
+                || Some(context.source_revision()) != source_revision
+                || !context.has_authority()
+                || !self.has_authority())
+        {
+            self.radios.clear();
+            for interface in &mut interfaces {
+                interface.target = None;
+            }
+            unavailable.push(changed());
+        }
+        Ok(NetworkRadioInventory {
+            interfaces,
+            unavailable,
+        })
+    }
+
+    pub(super) fn accepted(&self) -> bool {
+        self.pending.is_some()
+            || self.radio_result.as_ref().is_some_and(|result| {
+                result
+                    .phys
+                    .iter()
+                    .any(|phy| phy.initiation == NetworkRadioInitiation::Accepted)
+            })
     }
 
     pub(super) fn inventory<C: NativeCalls>(
@@ -141,16 +244,7 @@ impl Controls {
                         continue;
                     }
                 };
-                let Some(sequence) = self.sequence.checked_add(1).filter(|next| *next < u64::MAX)
-                else {
-                    // Retire every earlier key permanently; cached observations
-                    // remain independently available through the legacy read.
-                    self.sequence = u64::MAX;
-                    self.records.clear();
-                    return Err(watch_unavailable());
-                };
-                self.sequence = sequence;
-                record.target = NetworkTarget::new(self.owner, self.sequence, revision);
+                record.target = self.target(revision)?;
                 result.push(NetworkControl {
                     target: record.target,
                     interface: id,
@@ -186,9 +280,31 @@ impl Controls {
         let context = context
             .filter(|context| context.has_authority())
             .ok_or_else(watch_unavailable)?;
+        if let NetworkCommand::SetRadio { target, enabled } = &command {
+            let record = self
+                .radios
+                .iter()
+                .find(|record| record.target == *target)
+                .cloned()
+                .ok_or_else(changed)?;
+            // Admission failure before a write cannot become a native ACK.
+            if record.revision != context.revision()
+                || record.incarnation != context.incarnation()
+                || record.source_revision != context.source_revision()
+            {
+                return Err(changed());
+            }
+            self.radio_result = Some(super::radio::execute(
+                calls, handle, context, record, *enabled,
+            ));
+            self.records.clear();
+            self.radios.clear();
+            return Ok(());
+        }
         let (target, disconnect, password) = match command {
             NetworkCommand::Connect { target, password } => (target, false, password),
             NetworkCommand::Disconnect { target } => (target, true, None),
+            NetworkCommand::SetRadio { .. } => unreachable!("radio handled above"),
         };
         let previous = self
             .records
@@ -278,6 +394,9 @@ impl Controls {
         handle: usize,
         context: Option<&Context>,
     ) -> Result<Option<NetworkCommandOutcome>, NetworkError> {
+        if let Some(result) = self.radio_result.take() {
+            return Ok(Some(NetworkCommandOutcome::RadioObserved(result)));
+        }
         let Some((target, disconnect)) = self.pending.as_ref() else {
             return Ok(None);
         };
@@ -334,7 +453,7 @@ impl Controls {
 fn watch_unavailable() -> NetworkError {
     NetworkError::new(
         NetworkErrorKind::Unsupported,
-        "A working WLAN notification watch is required for connection controls.",
+        "A working WLAN notification watch and native source authority are required for Wi-Fi controls.",
     )
 }
 fn changed() -> NetworkError {

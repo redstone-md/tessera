@@ -33,8 +33,9 @@ pub(crate) mod worker {
     use std::time::{Duration, Instant};
     use tessera_system::network::{
         NetworkActionCompletion, NetworkCommand, NetworkCommandAccepted, NetworkCommandCompletion,
-        NetworkCommandOutcome, NetworkCompletion, NetworkError, NetworkErrorKind, NetworkEvent,
-        NetworkHost, NetworkSnapshot, NetworkView, NetworkViewCompletion,
+        NetworkCommandOutcome, NetworkCompletion, NetworkControlView, NetworkControlViewCompletion,
+        NetworkError, NetworkErrorKind, NetworkEvent, NetworkHost, NetworkSnapshot, NetworkView,
+        NetworkViewCompletion,
     };
 
     pub(crate) const MAX_SUBSCRIBERS: usize = 16;
@@ -48,11 +49,18 @@ pub(crate) mod worker {
                 controls: None,
             })
         }
+        fn read_control_view(&mut self) -> Result<NetworkControlView, NetworkError> {
+            self.read_view().map(NetworkControlView::from)
+        }
         fn command(&mut self, _command: NetworkCommand) -> Result<(), NetworkError> {
             Err(NetworkError::new(
                 NetworkErrorKind::Unsupported,
                 "Wi-Fi controls are unavailable.",
             ))
+        }
+        /// An admitted batch with every write denied has no native acceptance.
+        fn command_accepted(&self) -> bool {
+            true
         }
         fn command_readback(&mut self) -> Result<Option<NetworkCommandOutcome>, NetworkError> {
             Ok(Some(NetworkCommandOutcome::AcceptedUnconfirmed))
@@ -64,7 +72,8 @@ pub(crate) mod worker {
     }
 
     struct Read {
-        completion: NetworkViewCompletion,
+        completion: NetworkControlViewCompletion,
+        radios: bool,
         flight: Flight,
     }
     struct Action {
@@ -126,6 +135,31 @@ pub(crate) mod worker {
         shared: Arc<Shared>,
     }
 
+    impl Host {
+        fn enqueue_read(
+            &self,
+            completion: NetworkControlViewCompletion,
+            radios: bool,
+        ) -> Result<(), NetworkError> {
+            let flight = self.shared.read_gate.try_enter().ok_or_else(busy)?;
+            let mut state = self.shared.state();
+            if state.stopped {
+                return Err(stopped());
+            }
+            state.read = Some(Read {
+                completion,
+                radios,
+                flight,
+            });
+            if let Err(error) = self.shared.wake() {
+                state.read.take();
+                state.stopped = true;
+                return Err(error);
+            }
+            Ok(())
+        }
+    }
+
     impl NetworkHost for Host {
         fn read(&self, completion: NetworkCompletion) -> Result<(), NetworkError> {
             self.read_view(Box::new(move |result| {
@@ -133,18 +167,16 @@ pub(crate) mod worker {
             }))
         }
         fn read_view(&self, completion: NetworkViewCompletion) -> Result<(), NetworkError> {
-            let flight = self.shared.read_gate.try_enter().ok_or_else(busy)?;
-            let mut state = self.shared.state();
-            if state.stopped {
-                return Err(stopped());
-            }
-            state.read = Some(Read { completion, flight });
-            if let Err(error) = self.shared.wake() {
-                state.read.take();
-                state.stopped = true;
-                return Err(error);
-            }
-            Ok(())
+            self.enqueue_read(
+                Box::new(move |result| completion(result.map(NetworkView::from))),
+                false,
+            )
+        }
+        fn read_control_view(
+            &self,
+            completion: NetworkControlViewCompletion,
+        ) -> Result<(), NetworkError> {
+            self.enqueue_read(completion, true)
         }
         fn open_settings(&self, completion: NetworkActionCompletion) -> Result<(), NetworkError> {
             let flight = self.shared.action_gate.try_enter().ok_or_else(busy)?;
@@ -284,8 +316,10 @@ pub(crate) mod worker {
             let _ = catch_unwind(AssertUnwindSafe(|| (subscriber.events)(notification)));
         }
     }
-    fn read_complete(request: Read, result: Result<NetworkView, NetworkError>) {
-        let Read { completion, flight } = request;
+    fn read_complete(request: Read, result: Result<NetworkControlView, NetworkError>) {
+        let Read {
+            completion, flight, ..
+        } = request;
         drop(flight);
         let _ = catch_unwind(AssertUnwindSafe(|| completion(result)));
     }
@@ -401,8 +435,13 @@ pub(crate) mod worker {
                                 let result = if stop {
                                     Err(stopped())
                                 } else {
-                                    catch_unwind(AssertUnwindSafe(|| owner.read_view()))
-                                        .unwrap_or_else(|_| Err(panicked()))
+                                    catch_unwind(AssertUnwindSafe(|| {
+                                        if request.radios {
+                                            owner.read_control_view()
+                                        } else {
+                                            owner.read_view().map(NetworkControlView::from)
+                                        }
+                                    })).unwrap_or_else(|_| Err(panicked()))
                                 };
                                 read_complete(request, result);
                             }
@@ -426,7 +465,11 @@ pub(crate) mod worker {
                                 };
                                 match result {
                                     Ok(()) => {
-                                        let accepted = request.accepted.take();
+                                        let accepted = if catch_unwind(AssertUnwindSafe(|| owner.command_accepted())).unwrap_or(false) {
+                                            request.accepted.take()
+                                        } else {
+                                            None
+                                        };
                                         pending = Some((request, Instant::now() + Duration::from_secs(20)));
                                         if let Some(accepted) = accepted {
                                             let _ = catch_unwind(AssertUnwindSafe(accepted));

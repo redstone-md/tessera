@@ -229,6 +229,87 @@ pub struct NetworkView {
     pub controls: Option<Observation<NetworkControlInventory>>,
 }
 
+/// Native PHY identifiers are opaque source facts, not UI enumeration positions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NetworkRadioPhy {
+    pub id: u32,
+    pub software: RadioState,
+    pub hardware: RadioState,
+    pub effective: RadioState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRadioControl {
+    /// None exposes read-only PHY facts when native admission/watch is unavailable.
+    pub target: Option<NetworkTarget>,
+    pub interface: InterfaceId,
+    pub interface_name: String,
+    pub phys: Vec<NetworkRadioPhy>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRadioInventory {
+    pub interfaces: Vec<NetworkRadioControl>,
+    pub unavailable: Vec<NetworkError>,
+}
+
+/// Optional expansion keeps legacy snapshot/view providers source-compatible.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkControlView {
+    pub snapshot: NetworkSnapshot,
+    pub controls: Option<Observation<NetworkControlInventory>>,
+    /// Radio facts are independent of BSS discovery/location permission.
+    pub radios: Option<Observation<NetworkRadioInventory>>,
+}
+
+impl From<NetworkView> for NetworkControlView {
+    fn from(view: NetworkView) -> Self {
+        Self {
+            snapshot: view.snapshot,
+            controls: view.controls,
+            radios: None,
+        }
+    }
+}
+
+impl From<NetworkControlView> for NetworkView {
+    fn from(view: NetworkControlView) -> Self {
+        Self {
+            snapshot: view.snapshot,
+            controls: view.controls,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NetworkRadioInitiation {
+    /// Fresh source readback already matched; no native mutation was submitted.
+    AlreadyObserved,
+    Accepted,
+    Unavailable(NetworkError),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRadioPhyResult {
+    pub id: u32,
+    /// Native initiation only; failures never prevent independent readback.
+    pub initiation: NetworkRadioInitiation,
+    pub readback: Observation<NetworkRadioPhy>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkRadioResult {
+    pub target: NetworkTarget,
+    pub interface: InterfaceId,
+    pub requested: bool,
+    pub phys: Vec<NetworkRadioPhyResult>,
+    /// A final full-interface query failed; earlier independent observations remain.
+    pub readback_error: Option<NetworkError>,
+}
+
+pub type NetworkControlViewCompletion =
+    Box<dyn FnOnce(Result<NetworkControlView, NetworkError>) + Send + 'static>;
+
 /// Deliberately not Clone. Passwords are one-shot native inputs, never status.
 pub struct NetworkPassword(Vec<u8>);
 
@@ -263,12 +344,20 @@ pub enum NetworkCommand {
     Disconnect {
         target: NetworkTarget,
     },
+    /// Changes only software radio state on the exact observed interface/PHYs.
+    /// Never changes the hardware switch, connects, or saves a profile.
+    SetRadio {
+        target: NetworkTarget,
+        enabled: bool,
+    },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NetworkCommandOutcome {
     Connected,
     Disconnected,
+    /// Independent native per-PHY outcomes, never an assertion of effective On.
+    RadioObserved(NetworkRadioResult),
     /// Documented numeric WLAN reason only; no native profile/name diagnostics.
     Failed {
         reason: u32,
@@ -304,6 +393,14 @@ pub trait NetworkHost: Send + Sync + 'static {
                 snapshot,
                 controls: None,
             }))
+        }))
+    }
+    fn read_control_view(
+        &self,
+        completion: NetworkControlViewCompletion,
+    ) -> Result<(), NetworkError> {
+        self.read_view(Box::new(move |result| {
+            completion(result.map(NetworkControlView::from))
         }))
     }
     fn command(

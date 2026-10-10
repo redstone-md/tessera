@@ -12,8 +12,10 @@ use parking_lot::Mutex;
 use slint::{ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize, SharedString};
 use tessera_system::network::{
     NetworkCommand, NetworkCommandOutcome, NetworkConnectCapability, NetworkControl,
-    NetworkControlInventory, NetworkError, NetworkErrorKind, NetworkEvent, NetworkHost,
-    NetworkPassword, NetworkSnapshot, NetworkTarget, NetworkView, Observation,
+    NetworkControlInventory, NetworkControlView, NetworkError, NetworkErrorKind, NetworkEvent,
+    NetworkHost, NetworkPassword, NetworkRadioControl, NetworkRadioInitiation,
+    NetworkRadioInventory, NetworkRadioResult, NetworkSnapshot, NetworkTarget, Observation,
+    RadioState,
 };
 
 use crate::generated::{NetworkMenu, PopoverMotion, TileBounds};
@@ -61,6 +63,11 @@ struct State {
     snapshot: Option<NetworkSnapshot>,
     controls: Vec<NetworkControl>,
     controls_supported: bool,
+    radios: Vec<NetworkRadioControl>,
+    radios_supported: bool,
+    radio_keys: Vec<(SharedString, NetworkTarget, bool)>,
+    radio_notice: String,
+    command_radio: bool,
     selected: Option<NetworkControl>,
     row_keys: Vec<(SharedString, NetworkTarget)>,
     command_key: SharedString,
@@ -135,9 +142,9 @@ impl NetworkController {
         session != u64::MAX && self.is_open() && self.state.borrow().session == session
     }
     fn accepts_input(&self) -> bool {
+        let open = self.is_open();
         let state = self.state.borrow();
-        self.is_open()
-            && !self.projecting.get()
+        open && !self.projecting.get()
             && !self.presenting.get()
             && state.session != u64::MAX
             && state.sequence != u64::MAX
@@ -163,6 +170,8 @@ impl NetworkController {
             state.controls.clear();
             state.selected = None;
             state.row_keys.clear();
+            state.radios.clear();
+            state.radio_keys.clear();
             state.command_key = SharedString::default();
             state.settings_notice.clear();
             state.read_requested = true;
@@ -289,8 +298,8 @@ impl NetworkController {
         }
         let mailbox = self.mailbox.clone();
         let root = self.surface.as_weak();
-        if let Err(error) = provider.read_view(Box::new(move |result| {
-            mailbox::view_complete(&mailbox, &root, token, result)
+        if let Err(error) = provider.read_control_view(Box::new(move |result| {
+            mailbox::control_view_complete(&mailbox, &root, token, result)
         })) {
             mailbox::read_complete(&self.mailbox, &self.surface.as_weak(), token, Err(error));
         }
@@ -371,6 +380,37 @@ impl NetworkController {
                     state.selected = None;
                     state.row_keys.clear();
                     state.command_key = SharedString::default();
+                    state.radios.clear();
+                    state.radio_keys.clear();
+                    state.radios_supported = false;
+                    state.radio_notice.clear();
+                    if let Some((inventory_token, inventory)) = delivery.radios
+                        && inventory_token == token
+                    {
+                        state.radios_supported = inventory.is_some();
+                        match inventory {
+                            Some(Observation::Ready(radios)) => {
+                                state.radios = radios.interfaces;
+                                state.radio_notice = radios
+                                    .unavailable
+                                    .first()
+                                    .map(|error| {
+                                        format!(
+                                            "Some radio facts/controls are unavailable. {}",
+                                            failure(error.kind)
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                            }
+                            Some(Observation::Unavailable(error)) => {
+                                state.radio_notice = format!(
+                                    "Radio facts/controls unavailable. {}",
+                                    failure(error.kind)
+                                );
+                            }
+                            None => {}
+                        }
+                    }
                     if let Some((inventory_token, inventory)) = delivery.controls
                         && inventory_token == token
                     {
@@ -440,7 +480,11 @@ impl NetworkController {
                 && visible
                 && state.session == token.session
             {
-                state.control_notice = "Windows accepted the connection request; connecting/disconnecting is pending actual native readback.".into();
+                state.control_notice = if state.command_radio {
+                    "Windows accepted at least one software-radio write; each PHY still requires actual readback."
+                } else {
+                    "Windows accepted the connection request; connecting/disconnecting is pending actual native readback."
+                }.into();
             }
             if let Some((token, result)) = delivery.command
                 && state.command_flight == Some(token)
@@ -450,6 +494,10 @@ impl NetworkController {
                     state.control_notice = match result {
                         Ok(NetworkCommandOutcome::Connected) => "Windows readback confirms connection to the selected access point. Internet access is not confirmed.".into(),
                         Ok(NetworkCommandOutcome::Disconnected) => "Windows readback confirms that the selected adapter is disconnected.".into(),
+                        Ok(NetworkCommandOutcome::RadioObserved(result)) => {
+                            controls::apply_radio_result(&mut state, &result);
+                            controls::radio_result_notice(&result)
+                        },
                         Ok(NetworkCommandOutcome::Failed { reason }) => {
                             state.automatic_blocked = true;
                             format!("Windows could not complete the Wi-Fi connection (WLAN reason {reason}). No retry was issued.")
@@ -461,6 +509,14 @@ impl NetworkController {
                         },
                     };
                     state.selected = None;
+                    if state.command_radio {
+                        state.controls.clear();
+                        state.row_keys.clear();
+                        state.radio_keys.clear();
+                        for radio in &mut state.radios {
+                            radio.target = None;
+                        }
+                    }
                     state.read_requested = !state.automatic_blocked;
                 }
             }
@@ -474,6 +530,8 @@ impl NetworkController {
                         state.controls.clear();
                         state.selected = None;
                         state.row_keys.clear();
+                        state.radios.clear();
+                        state.radio_keys.clear();
                         state.command_key = SharedString::default();
                         state.watch_status = format!(
                             "Change notifications unavailable. {} Use Refresh.",
@@ -490,6 +548,8 @@ impl NetworkController {
                     state.controls.clear();
                     state.selected = None;
                     state.row_keys.clear();
+                    state.radios.clear();
+                    state.radio_keys.clear();
                     state.command_key = SharedString::default();
                     if !state.automatic_blocked {
                         state.read_requested = true;
@@ -508,6 +568,7 @@ impl NetworkController {
             return;
         }
         let _guard = Guard(&self.projecting);
+        let open = self.is_open();
         let (
             session,
             projection,
@@ -526,7 +587,7 @@ impl NetworkController {
                 .unwrap_or_default();
             let loading = state.loading();
             let settings_loading = state.settings_flight.is_some();
-            let input = self.is_open() && !self.presenting.get();
+            let input = open && !self.presenting.get();
             state.refresh_key = if input && !loading {
                 state.key()
             } else {
@@ -542,6 +603,7 @@ impl NetworkController {
                 &state.settings_notice,
                 &state.control_notice,
                 &state.inventory_notice,
+                &state.radio_notice,
             ]
             .into_iter()
             .filter(|notice| !notice.is_empty())

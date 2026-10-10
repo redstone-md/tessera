@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Worker-only WLAN cache and explicit scoped connection adapter. Construction
-//! performs no native calls; reads do not scan and credentials are not saved.
+//! Worker-only WLAN cache, scoped connections and explicit software-radio controls.
+//! Construction performs no native calls; reads do not scan and credentials are not saved.
 //! A failed unregister barrier intentionally retains its callback context rather
 //! than risking use-after-free; Settings dispatch acknowledges only Shell launch.
 
 use std::sync::Arc;
 
 use tessera_system::network::{
-    NetworkCommand, NetworkCommandOutcome, NetworkError, NetworkSnapshot, NetworkView,
+    NetworkCommand, NetworkCommandOutcome, NetworkControlView, NetworkError, NetworkSnapshot,
+    NetworkView,
 };
 
 use crate::network::worker::NetworkOwner;
@@ -26,6 +27,8 @@ mod controls;
 mod observations;
 #[path = "native_network/owner.rs"]
 mod owner;
+#[path = "native_network/radio.rs"]
+mod radio;
 #[path = "native_network/sdk.rs"]
 mod sdk;
 
@@ -51,8 +54,16 @@ impl NetworkOwner for NativeOwner {
         self.owner.read_view()
     }
 
+    fn read_control_view(&mut self) -> Result<NetworkControlView, NetworkError> {
+        self.owner.read_control_view()
+    }
+
     fn command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         self.owner.command(command)
+    }
+
+    fn command_accepted(&self) -> bool {
+        self.owner.command_accepted()
     }
 
     fn command_readback(&mut self) -> Result<Option<NetworkCommandOutcome>, NetworkError> {

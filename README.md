@@ -312,6 +312,10 @@ unavailable. Native acceptance is separate from association/readback; after
 20 seconds without a conclusive result it stays unconfirmed, never replayed.
 No scan, hotspot or Forget is added. Windows cached queries may prompt for
 location consent or deny access under Privacy & security > Location.
+Software radio On/Off targets exact enumerated interfaces and native PHY IDs,
+independently of location-denied network discovery. Hardware switches remain
+read-only; each PHY records actual acceptance/error and software/hardware
+readback. Partial results never trigger rollback, replay or fake all-success.
 
 Development Bluetooth adds explicit On/Off for each available Bluetooth
 radio, with exact native device IDs, retained COM incarnations and source/state

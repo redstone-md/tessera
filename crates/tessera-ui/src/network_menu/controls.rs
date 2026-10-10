@@ -9,19 +9,24 @@ impl NetworkController {
         let Some(placement) = self.placement.get() else {
             return false;
         };
-        let frame = self.rect.borrow();
-        let Some(frame) = frame.as_ref() else {
+        let Some((position, size)) = self
+            .rect
+            .borrow()
+            .as_ref()
+            .map(|frame| (frame.position, frame.size))
+        else {
             return false;
         };
         self.component().window().scale_factor() == placement.scale
-            && self.component().window().position() == frame.position
-            && self.component().window().size() == frame.size
+            && self.component().window().position() == position
+            && self.component().window().size() == size
     }
 
     pub(super) fn control_frame_changed(&self) {
         {
             let mut state = self.state.borrow_mut();
             state.row_keys.clear();
+            state.radio_keys.clear();
             state.command_key = SharedString::default();
         }
         self.component().set_command_key(SharedString::default());
@@ -97,20 +102,104 @@ impl NetworkController {
                 }
             };
             state.command_flight = Some(token);
+            state.command_radio = false;
             state.command_key = SharedString::default();
             state.row_keys.clear();
+            state.radio_keys.clear();
             state.selected = None;
             state.control_notice = "Request pending; native acceptance and connection completion are not yet confirmed.".into();
             (provider, token, command)
         };
+        self.dispatch_control(provider, token, command);
+    }
+
+    pub(super) fn submit_radio(self: &Rc<Self>, key: SharedString) {
+        if !self.accepts_input() || !self.control_frame_valid() {
+            return;
+        }
+        let (provider, token, command) = {
+            let mut state = self.state.borrow_mut();
+            if key.is_empty()
+                || state.loading()
+                || state.command_flight.is_some()
+                || state.settings_flight.is_some()
+            {
+                return;
+            }
+            let Some((_, target, enabled)) = state
+                .radio_keys
+                .iter()
+                .find(|(issued, _, _)| *issued == key)
+                .cloned()
+            else {
+                return;
+            };
+            if !state
+                .radios
+                .iter()
+                .any(|radio| radio.target == Some(target))
+            {
+                return;
+            }
+            let Some(provider) = state.provider.clone() else {
+                return;
+            };
+            let token = state.token();
+            state.command_flight = Some(token);
+            state.command_radio = true;
+            state.selected = None;
+            state.row_keys.clear();
+            state.radio_keys.clear();
+            state.command_key = SharedString::default();
+            state.control_notice =
+                "Software-radio request pending; native initiation is not yet confirmed.".into();
+            (
+                provider,
+                token,
+                NetworkCommand::SetRadio { target, enabled },
+            )
+        };
+        self.dispatch_control(provider, token, command);
+    }
+
+    fn dispatch_control(
+        self: &Rc<Self>,
+        provider: Arc<dyn NetworkHost>,
+        token: Token,
+        command: NetworkCommand,
+    ) {
         self.mailbox.lock().expected_command = Some(token);
         // Clearing unsubmitted UI credentials must not cancel an accepted flight.
         self.component().set_command_key(SharedString::default());
         self.component().set_credentials_active(false);
         self.component().set_password(SharedString::default());
-        if !self.current(token.session) || !self.control_frame_valid() {
-            self.state.borrow_mut().command_flight = None;
-            self.mailbox.lock().expected_command = None;
+        let frame_valid = self.control_frame_valid();
+        let model_valid = {
+            let state = self.state.borrow();
+            state.command_flight == Some(token)
+                && state
+                    .provider
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &provider))
+                && match &command {
+                    NetworkCommand::SetRadio { target, .. } => state
+                        .radios
+                        .iter()
+                        .any(|radio| radio.target == Some(*target)),
+                    NetworkCommand::Connect { target, .. }
+                    | NetworkCommand::Disconnect { target } => state
+                        .controls
+                        .iter()
+                        .any(|control| control.target == *target),
+                }
+        };
+        if !self.current(token.session) || !frame_valid || !model_valid {
+            if self.state.borrow().command_flight == Some(token) {
+                self.state.borrow_mut().command_flight = None;
+            }
+            if self.mailbox.lock().expected_command == Some(token) {
+                self.mailbox.lock().expected_command = None;
+            }
             return;
         }
         let mailbox = self.mailbox.clone();
@@ -128,9 +217,10 @@ impl NetworkController {
     }
 
     pub(super) fn project_controls(&self) {
+        let open = self.is_open();
         let (session, rows, selection, command_key, credentials, supported) = {
             let mut state = self.state.borrow_mut();
-            let input = self.is_open()
+            let input = open
                 && !self.presenting.get()
                 && !state.loading()
                 && state.command_flight.is_none()
@@ -236,5 +326,173 @@ impl NetworkController {
             root.set_credentials_active(credentials);
             root.set_command_key(command_key);
         }
+        self.project_radios();
+    }
+
+    fn project_radios(&self) {
+        let open = self.is_open();
+        let frame_valid = self.control_frame_valid();
+        let (session, supported, rows) = {
+            let mut state = self.state.borrow_mut();
+            state.radio_keys.clear();
+            let input = open
+                && frame_valid
+                && !self.presenting.get()
+                && !state.loading()
+                && state.command_flight.is_none()
+                && state.settings_flight.is_none()
+                && state.session != u64::MAX
+                && state.sequence != u64::MAX
+                && state.key_sequence != u64::MAX;
+            let radios = state.radios.clone();
+            let mut rows = Vec::with_capacity(radios.len() * 2);
+            for radio in radios {
+                let details = radio_details(&radio);
+                for enabled in [true, false] {
+                    let key = if input && radio.target.is_some() {
+                        state.key()
+                    } else {
+                        SharedString::default()
+                    };
+                    if let Some(target) = radio.target
+                        && !key.is_empty()
+                    {
+                        state.radio_keys.push((key.clone(), target, enabled));
+                    }
+                    rows.push(NetworkControlRow {
+                        label: format!(
+                            "{} · Wi-Fi software {}",
+                            bounded_text(&radio.interface_name, 80),
+                            if enabled { "On" } else { "Off" }
+                        )
+                        .into(),
+                        details: details.clone().into(),
+                        key,
+                    });
+                }
+            }
+            (state.session, state.radios_supported, rows)
+        };
+        if self.current(session) {
+            self.component().set_radio_controls_supported(supported);
+            self.component()
+                .set_radio_rows(ModelRc::new(slint::VecModel::from(rows)));
+        }
+    }
+}
+
+fn radio_details(radio: &NetworkRadioControl) -> String {
+    let counts = |select: fn(&tessera_system::network::NetworkRadioPhy) -> RadioState| {
+        let on = radio
+            .phys
+            .iter()
+            .filter(|phy| select(phy) == RadioState::Enabled)
+            .count();
+        let off = radio
+            .phys
+            .iter()
+            .filter(|phy| select(phy) == RadioState::Disabled)
+            .count();
+        let unknown = radio.phys.len() - on - off;
+        format!("On {on} / Off {off} / ? {unknown}")
+    };
+    format!(
+        "Software: {}\nHardware (read-only): {}\nEffective: {}",
+        counts(|phy| phy.software),
+        counts(|phy| phy.hardware),
+        counts(|phy| phy.effective)
+    )
+}
+
+pub(super) fn radio_result_notice(result: &NetworkRadioResult) -> String {
+    let desired = if result.requested {
+        RadioState::Enabled
+    } else {
+        RadioState::Disabled
+    };
+    let accepted = result
+        .phys
+        .iter()
+        .filter(|phy| phy.initiation == NetworkRadioInitiation::Accepted)
+        .count();
+    let already = result
+        .phys
+        .iter()
+        .filter(|phy| phy.initiation == NetworkRadioInitiation::AlreadyObserved)
+        .count();
+    let failed = result
+        .phys
+        .iter()
+        .filter(|phy| matches!(&phy.initiation, NetworkRadioInitiation::Unavailable(_)))
+        .count();
+    let confirmed = result
+        .phys
+        .iter()
+        .filter(|phy| matches!(&phy.readback, Observation::Ready(phy) if phy.software == desired))
+        .count();
+    let unconfirmed = result.phys.len() - confirmed;
+    let hardware_off = result.phys.iter().filter(|phy| {
+        matches!(&phy.readback, Observation::Ready(phy) if phy.hardware == RadioState::Disabled)
+    }).count();
+    let effective_on = result.phys.iter().filter(|phy| {
+        matches!(&phy.readback, Observation::Ready(phy) if phy.effective == RadioState::Enabled)
+    }).count();
+    let unavailable = result
+        .phys
+        .iter()
+        .filter(|phy| matches!(&phy.readback, Observation::Unavailable(_)))
+        .count();
+    let final_notice = result.readback_error.as_ref().map(|error| {
+        format!(" Final full-interface readback unavailable. {} Earlier per-PHY observations may precede the last write.", failure(error.kind))
+    }).unwrap_or_default();
+    format!(
+        "Software {} · {accepted} native writes accepted, {already} already observed, {failed} denied/stale; requested software observed on {confirmed}/{} PHYs, {unconfirmed} unconfirmed ({unavailable} readbacks unavailable). Hardware switch Off on {hardware_off}; effective On observed on {effective_on}.{final_notice} No retry, connection request or profile save was issued.",
+        if result.requested { "On" } else { "Off" },
+        result.phys.len()
+    )
+}
+
+pub(super) fn apply_radio_result(state: &mut State, result: &NetworkRadioResult) {
+    if result.readback_error.is_some() {
+        return;
+    }
+    let phys = result
+        .phys
+        .iter()
+        .map(|phy| match &phy.readback {
+            Observation::Ready(phy) => Some(*phy),
+            Observation::Unavailable(_) => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(phys) = phys.filter(|phys| !phys.is_empty()) else {
+        return;
+    };
+    if let Some(radio) = state
+        .radios
+        .iter_mut()
+        .find(|radio| radio.interface == result.interface && radio.target == Some(result.target))
+        && radio.phys.len() == phys.len()
+        && radio
+            .phys
+            .iter()
+            .zip(&phys)
+            .all(|(before, after)| before.id == after.id)
+    {
+        radio.phys.clone_from(&phys);
+    }
+    if let Some(interface) = state.snapshot.as_mut().and_then(|snapshot| {
+        snapshot
+            .interfaces
+            .iter_mut()
+            .find(|interface| interface.id == result.interface)
+    }) {
+        let effective = if phys.iter().any(|phy| phy.effective == RadioState::Enabled) {
+            RadioState::Enabled
+        } else if phys.iter().all(|phy| phy.effective == RadioState::Disabled) {
+            RadioState::Disabled
+        } else {
+            RadioState::Unknown
+        };
+        interface.radio = Observation::Ready(effective);
     }
 }
