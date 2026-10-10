@@ -20,6 +20,7 @@ use crate::{
 };
 
 mod actions;
+mod battery;
 mod calendar;
 mod context_menu;
 mod dock_order;
@@ -36,6 +37,7 @@ mod shortcuts;
 mod tooltip;
 mod user_menu;
 mod visibility;
+use battery::BatteryPopups;
 use calendar::CalendarPopups;
 use context_menu::Menus;
 use dock_utilities::DockUtilities;
@@ -156,6 +158,7 @@ pub(crate) struct PanelController {
     dock_utilities: DockUtilities,
     recycle_bin: RecycleBins,
     tooltips: Tooltips,
+    battery: BatteryPopups,
     network_menu: NetworkPopups,
     bluetooth: BluetoothPopups,
     input_language: InputLanguagePopups,
@@ -225,6 +228,7 @@ impl PanelController {
             dock_utilities: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
+            battery: Rc::default(),
             network_menu: Rc::default(),
             bluetooth: Rc::default(),
             input_language: Rc::default(),
@@ -275,6 +279,7 @@ impl PanelController {
             dock_order: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
+            battery: Rc::default(),
             network_menu: Rc::default(),
             bluetooth: Rc::default(),
             input_language: Rc::default(),
@@ -748,6 +753,18 @@ impl PanelController {
         toolbar.on_calendar_requested(move |bounds| {
             if weak.bar_input_ready(SurfaceKind::Toolbar) {
                 weak.open_calendar(bounds);
+            }
+        });
+        let controller = self.clone();
+        let owner = toolbar.as_weak();
+        toolbar.on_battery_requested(move |bounds| {
+            let cached = controller.battery.borrow().is_some();
+            if let Some(toolbar) = owner.upgrade()
+                && toolbar.get_battery_visible()
+                && !toolbar.get_battery_activation_key().is_empty()
+                && cached
+            {
+                controller.open_battery(bounds);
             }
         });
         let weak = self.clone();

@@ -115,6 +115,7 @@ mod desktop {
 
     use parking_lot::Mutex;
     use tessera_system::audio::{AudioError, AudioHost};
+    use tessera_system::battery::{BatteryError, BatteryHost};
     use tessera_system::bluetooth::{BluetoothError, BluetoothHost};
     use tessera_system::calendar::{CalendarError, CalendarHost};
     use tessera_system::display_context::{DisplayContextError, DisplayContextHost};
@@ -165,6 +166,7 @@ mod desktop {
         presentation: Presentation,
         window_icons: Mutex<HashMap<String, CachedWindowIcon>>,
         audio: LazyLock<Provider<dyn AudioHost>>,
+        battery: LazyLock<Provider<dyn BatteryHost>>,
         folders: LazyLock<Provider<dyn FolderHost>>,
         calendar: LazyLock<Provider<dyn CalendarHost>>,
         dock_utilities: LazyLock<Provider<dyn DockUtilitiesHost>>,
@@ -312,6 +314,15 @@ mod desktop {
         ) -> Result<Option<Arc<dyn PowerUpdatesHost>>, PowerUpdatesError> {
             self.power_updates
                 .get(|| Ok(tessera_windows::power_updates::native_power_updates_host()))
+                .map(Some)
+        }
+
+        fn battery_host(&self) -> Result<Option<Arc<dyn BatteryHost>>, BatteryError> {
+            if self.presentation != Presentation::Desktop {
+                return Ok(None);
+            }
+            self.battery
+                .get(tessera_windows::battery::native_battery_host)
                 .map(Some)
         }
 
@@ -653,6 +664,7 @@ mod desktop {
             presentation,
             window_icons: Mutex::new(HashMap::new()),
             audio: LazyLock::new(Provider::default),
+            battery: LazyLock::new(Provider::default),
             folders: LazyLock::new(Provider::default),
             calendar: LazyLock::new(Provider::default),
             dock_utilities: LazyLock::new(Provider::default),

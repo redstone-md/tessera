@@ -7,6 +7,7 @@
 
 mod audio_devices;
 
+pub mod battery;
 pub mod bluetooth;
 pub mod input_language;
 pub mod media;

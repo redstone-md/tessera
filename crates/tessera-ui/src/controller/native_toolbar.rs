@@ -7,6 +7,7 @@ use slint::ComponentHandle;
 
 use super::popups::PopupKind;
 use super::{PanelController, Rc};
+use crate::battery::BatteryController;
 use crate::bluetooth::BluetoothController;
 use crate::generated::TileBounds;
 use crate::input_language::InputLanguageController;
@@ -114,6 +115,7 @@ macro_rules! toolbar_popup {
 }
 
 impl PanelController {
+    toolbar_popup!(open_battery, battery, BatteryController, Battery);
     toolbar_popup!(open_network_menu, network_menu, NetworkController, Network);
     toolbar_popup!(open_bluetooth, bluetooth, BluetoothController, Bluetooth);
     toolbar_popup!(
@@ -127,6 +129,10 @@ impl PanelController {
         let network = self.network_menu.borrow().clone();
         let bluetooth = self.bluetooth.borrow().clone();
         let input = self.input_language.borrow().clone();
+        let battery = self.battery.borrow().clone();
+        if let Some(actor) = battery {
+            actor.apply_theme(theme.clone());
+        }
         if let Some(actor) = network {
             actor.apply_theme(theme.clone());
         }
@@ -142,6 +148,10 @@ impl PanelController {
         let network = self.network_menu.borrow().clone();
         let bluetooth = self.bluetooth.borrow().clone();
         let input = self.input_language.borrow().clone();
+        let battery = self.battery.borrow().clone();
+        if let Some(actor) = battery {
+            actor.disable_motion();
+        }
         if let Some(actor) = network {
             actor.disable_motion();
         }
@@ -157,6 +167,10 @@ impl PanelController {
         let network = self.network_menu.borrow().clone();
         let bluetooth = self.bluetooth.borrow().clone();
         let input = self.input_language.borrow().clone();
+        let battery = self.battery.borrow().clone();
+        if let Some(actor) = battery {
+            actor.close_if_geometry_changed(context, scale);
+        }
         if let Some(actor) = network {
             actor.close_if_geometry_changed(context, scale);
         }
@@ -170,6 +184,7 @@ impl PanelController {
 }
 
 pub(super) struct ToolbarPopupScope {
+    _battery: TransientScope<BatteryController>,
     _network: TransientScope<NetworkController>,
     _bluetooth: TransientScope<BluetoothController>,
     _input: TransientScope<InputLanguageController>,
@@ -178,6 +193,10 @@ pub(super) struct ToolbarPopupScope {
 impl ToolbarPopupScope {
     pub(super) fn new(controller: &PanelController) -> Self {
         Self {
+            _battery: TransientScope::new(Rc::clone(&controller.battery), |actor| {
+                actor.stop_root();
+                actor.hide();
+            }),
             _network: TransientScope::new(
                 Rc::clone(&controller.network_menu),
                 NetworkController::hide,

@@ -15,6 +15,7 @@
 
 #![deny(unsafe_code)]
 
+pub(crate) mod battery;
 pub(crate) mod bluetooth;
 #[cfg(test)]
 mod bluetooth_render_tests;
@@ -627,7 +628,19 @@ pub trait DesktopHost: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Independent read-only network capability, acquired on popup intent.
+    /// Optional passive battery/power facts shared by the toolbar and its popup.
+    /// Legacy hosts remain inert; this never borrows desktop observation state.
+    fn battery_host(
+        &self,
+    ) -> Result<
+        Option<std::sync::Arc<dyn tessera_system::battery::BatteryHost>>,
+        tessera_system::battery::BatteryError,
+    > {
+        Ok(None)
+    }
+
+    /// Independent cached WLAN facts and explicit source-scoped controls.
+    /// Acquisition is lazy popup intent; reading never actively scans.
     fn network_host(
         &self,
     ) -> Result<
@@ -637,7 +650,8 @@ pub trait DesktopHost: Send + Sync + 'static {
         Ok(None)
     }
 
-    /// Independent read-only Bluetooth capability, acquired on popup intent.
+    /// Paired/radio facts and optional exact-source radio power control.
+    /// Acquisition is lazy popup intent; reads do not request consent.
     fn bluetooth_host(
         &self,
     ) -> Result<

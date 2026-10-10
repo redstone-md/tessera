@@ -323,8 +323,15 @@ invalidation. Consent begins only from deliberate GUI input; native acceptance
 does not fabricate the requested state. Refresh reads a later transition.
 Legacy paired-device reads keep their scoped resource lifetime; opt-in controls
 retain one owned radio/event apartment without idle polling. Discovery, pairing
-and device connection are not implemented. Both layers require actual Windows
-outcome verification and are outside the published release.
+and device connection are not implemented.
+
+Development battery adds actual cached presence, charging/supply, percent,
+remaining-runtime and energy-saver facts through one event-driven native owner
+shared by Toolbar and popup. Unknown/error stays visible; only confirmed
+absence or unsupported capability hides the indicator. Refresh does not poll,
+and Power & battery Settings acknowledges SDK initiation, not a visible window.
+These development layers need actual Windows outcome verification and are
+outside the published release.
 
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 

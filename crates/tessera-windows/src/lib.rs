@@ -21,6 +21,7 @@
 mod activation;
 mod apps;
 mod audio;
+pub mod battery;
 pub mod bluetooth;
 pub mod calendar;
 mod diagnostics;
@@ -47,6 +48,9 @@ mod native_apps;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_audio;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_battery;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_bluetooth;

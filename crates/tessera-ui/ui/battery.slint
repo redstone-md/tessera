@@ -1,0 +1,224 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+import { ScrollView as NativeScrollView } from "std-widgets.slint";
+import { SeelenPalette } from "palette.slint";
+import { TileButton, ViewportTileButton, TileBounds, FocusTokens } from "tiles.slint";
+import { PopoverBody, PopoverTokens } from "popover.slint";
+import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
+
+// Original simple meter; only an actual valid observation draws a fill.
+export component BatteryIndicator inherits TileButton {
+    in property <string> text: "Battery";
+    in property <string> status-label: "Battery status unknown";
+    in property <bool> percent-known;
+    in property <int> percent;
+    property <bool> meter-visible: root.percent-known && root.percent >= 0 && root.percent <= 100;
+    radius: SeelenPalette.reference-mode ? 4.8px : self.height / 2;
+    filled: false;
+    allow-return-repeat: false;
+    accessible-text: root.status-label;
+    tooltip-text: root.status-label;
+    preferred-width: label.preferred-width + (root.meter-visible ? 32px : 0px) + 16px;
+    background: SeelenPalette.reference-mode
+        ? (!self.enabled ? transparent : self.pressed ? SeelenPalette.accent.with-alpha(0.3)
+            : self.hovered ? SeelenPalette.accent.with-alpha(0.2) : transparent)
+        : (!self.enabled ? transparent : self.pressed ? SeelenPalette.primary-container-pressed
+            : self.hovered ? SeelenPalette.primary-container-hover : transparent);
+    if root.meter-visible: Rectangle {
+        x: 8px; y: (root.height - 12px) / 2;
+        width: 22px; height: 12px;
+        border-radius: 2px;
+        border-width: 1px;
+        border-color: SeelenPalette.bar-content;
+        accessible-role: none;
+        Rectangle {
+            x: 2px; y: 2px; height: 8px;
+            width: 18px * root.percent / 100;
+            background: SeelenPalette.bar-content;
+            accessible-role: none;
+        }
+        Rectangle {
+            x: 22px; y: 4px; width: 2px; height: 4px;
+            background: SeelenPalette.bar-content;
+            accessible-role: none;
+        }
+    }
+    label := Text {
+        x: root.meter-visible ? 40px : 8px;
+        width: max(0px, root.width - self.x - 8px);
+        height: root.height;
+        text: root.text;
+        color: SeelenPalette.bar-content;
+        font-family: SeelenPalette.font-family;
+        font-size: SeelenPalette.body-font-size;
+        font-weight: SeelenPalette.body-font-weight;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}
+
+export struct BatteryRow { label: string, value: string }
+component BatteryText inherits Text {
+    color: SeelenPalette.foreground;
+    font-family: PopoverTokens.font-family;
+    font-size: PopoverTokens.font-size;
+    accessible-role: none;
+}
+component BatteryAction inherits ViewportTileButton {
+    in property <string> label;
+    radius: 6px;
+    filled: false;
+    allow-return-repeat: false;
+    accessible-text: root.label;
+    BatteryText {
+        x: 8px;
+        width: max(0px, parent.width - 16px);
+        height: parent.height;
+        text: root.label;
+        font-weight: 600;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component BatteryMenu inherits Window {
+    default-font-family: SeelenPalette.font-family;
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    title: "Tessera battery";
+    min-width: 1px;
+    min-height: 1px;
+    in property <[BatteryRow]> rows;
+    in property <string> feedback;
+    in property <string> watch-status;
+    in property <string> refresh-key;
+    in property <string> settings-key;
+    callback refresh-requested(string);
+    callback settings-requested(string);
+    callback hide-requested();
+    callback preferred-size-changed();
+    callback battery-event-ready();
+    property <length> text-height: PopoverTokens.font-size * PopoverTokens.line-height;
+    property <length> row-height: 3 * root.text-height + 12px;
+    property <length> action-height: root.text-height + 16px;
+    property <length> inset: 4px;
+    out property <length> popup-content-width: 360px + 2 * PopoverTokens.shadow-margin;
+    out property <length> popup-content-height: min(680px, root.natural-height + 2 * root.inset)
+        + 2 * PopoverTokens.shadow-margin;
+    preferred-width: root.popup-content-width;
+    preferred-height: root.popup-content-height;
+    changed popup-content-width => { root.preferred-size-changed(); }
+    changed popup-content-height => { root.preferred-size-changed(); }
+    property <length> measure-width: max(1px, min(root.width > 0px ? root.width : root.popup-content-width,
+        root.popup-content-width) - 2 * PopoverTokens.shadow-margin - 2 * root.inset
+        - 2 * FocusTokens.outer-margin - 14px);
+    property <length> natural-height: 2 * FocusTokens.outer-margin + root.text-height
+        + (root.feedback != "" ? 8px + feedback-metrics.preferred-height : 0px)
+        + (root.watch-status != "" ? 8px + watch-metrics.preferred-height : 0px)
+        + root.rows.length * (root.row-height + 8px) + 8px + explanation-metrics.preferred-height
+        + 16px + 2 * root.action-height;
+    property <string> explanation: @tr("Windows cached observations, read independently. Runtime is an estimate, not a guarantee. Refresh re-reads the cache. Power policy is not changed here.");
+    feedback-metrics := BatteryText {
+        width: root.measure-width; height: 0px; opacity: 0;
+        text: root.feedback; wrap: word-wrap; line-height-factor: body.text-line-height-factor;
+    }
+    watch-metrics := BatteryText {
+        width: root.measure-width; height: 0px; opacity: 0;
+        text: root.watch-status; wrap: word-wrap; line-height-factor: body.text-line-height-factor;
+    }
+    explanation-metrics := BatteryText {
+        width: root.measure-width; height: 0px; opacity: 0;
+        text: root.explanation; wrap: word-wrap; line-height-factor: body.text-line-height-factor;
+    }
+    property <TileBounds> action-clip-bounds: {
+        origin: scroll.absolute-position, width: scroll.visible-width, height: scroll.visible-height
+    };
+    function reveal(bounds: TileBounds) {
+        if bounds.width <= 0px || bounds.height <= 0px || root.action-clip-bounds.height <= 0px { return; }
+        let top = bounds.origin.y - root.action-clip-bounds.origin.y - FocusTokens.outer-margin;
+        let bottom = bounds.origin.y + bounds.height - root.action-clip-bounds.origin.y + FocusTokens.outer-margin;
+        let offset = top < 0px ? -top : bottom > root.action-clip-bounds.height ? root.action-clip-bounds.height - bottom : 0px;
+        scroll.content-y = clamp(scroll.content-y + offset, min(0px, scroll.visible-height - scroll.content-height), 0px);
+    }
+    public function cancel-input() { refresh.cancel-input(); settings.cancel-input(); }
+    public function set-presentation-opacity(value: float) { body.set-presentation-opacity(value); }
+    public function focus-content() { scroll.content-y = 0px; escape-scope.focus(); }
+    forward-focus: escape-scope;
+    escape-scope := FocusScope {
+        width: root.width; height: root.height;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.hide-requested(); return accept; }
+            return reject;
+        }
+        body := PopoverBody {
+            width: root.width; height: root.height;
+            scroll := NativeScrollView {
+                x: root.inset; y: root.inset;
+                width: max(0px, body.content-width - 2 * root.inset);
+                height: max(0px, body.content-height - 2 * root.inset);
+                horizontal-scrollbar-policy: always-off;
+                vertical-scrollbar-policy: as-needed;
+                content-height: root.natural-height;
+                content-width: Slint1181FluentNativeGridMetrics.source-width(self.visible-width,
+                    self.content-height, self.visible-height, ScrollBarPolicy.as-needed);
+                VerticalLayout {
+                    width: parent.width; height: root.natural-height;
+                    padding: FocusTokens.outer-margin; spacing: 8px;
+                    BatteryText {
+                        text: @tr("Power & battery"); font-weight: 600; height: root.text-height;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                    if root.feedback != "": BatteryText {
+                        text: root.feedback; wrap: word-wrap; height: feedback-metrics.preferred-height;
+                        line-height-factor: body.text-line-height-factor;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                    if root.watch-status != "": BatteryText {
+                        text: root.watch-status; wrap: word-wrap; height: watch-metrics.preferred-height;
+                        color: SeelenPalette.secondary; line-height-factor: body.text-line-height-factor;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                    for row in root.rows: Rectangle {
+                        height: root.row-height;
+                        accessible-role: text;
+                        accessible-label: row.label + ": " + row.value;
+                        BatteryText {
+                            x: 4px; y: 4px; width: max(0px, parent.width - 8px); height: root.text-height;
+                            text: row.label; font-weight: 600; overflow: elide;
+                            line-height-factor: body.text-line-height-factor;
+                        }
+                        BatteryText {
+                            x: 4px; y: root.text-height + 4px;
+                            width: max(0px, parent.width - 8px); height: 2 * root.text-height;
+                            text: row.value; wrap: word-wrap; overflow: elide;
+                            color: SeelenPalette.secondary; line-height-factor: body.text-line-height-factor;
+                        }
+                    }
+                    BatteryText {
+                        text: root.explanation; wrap: word-wrap; height: explanation-metrics.preferred-height;
+                        color: SeelenPalette.secondary; line-height-factor: body.text-line-height-factor;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                    refresh := BatteryAction {
+                        height: root.action-height; label: @tr("Refresh cached observations");
+                        enabled: root.refresh-key != ""; activation-key: root.refresh-key;
+                        clip-bounds: root.action-clip-bounds;
+                        reveal-requested(bounds) => { root.reveal(bounds); }
+                        scoped-clicked => { root.refresh-requested(root.refresh-key); }
+                    }
+                    settings := BatteryAction {
+                        height: root.action-height; label: @tr("Windows Power & battery Settings");
+                        enabled: root.settings-key != ""; activation-key: root.settings-key;
+                        clip-bounds: root.action-clip-bounds;
+                        reveal-requested(bounds) => { root.reveal(bounds); }
+                        scoped-clicked => { root.settings-requested(root.settings-key); }
+                    }
+                }
+            }
+        }
+    }
+}

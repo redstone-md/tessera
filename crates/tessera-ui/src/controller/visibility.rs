@@ -287,6 +287,7 @@ impl PanelController {
     /// Missing geometry revokes timers and popup scope; the retained validated
     /// frame is recovery placement only and must never count as fresh readiness.
     pub(super) fn retire_visibility_geometry(&self) -> Result<(), String> {
+        self.stop_battery_root();
         self.cancel_dock_reorder();
         let (retired, frame, revision) = {
             let mut root = self.visibility_geometry.borrow_mut();
@@ -385,6 +386,9 @@ impl PanelController {
         let tuple = (rect.x, rect.y, rect.width, rect.height);
         if !visible {
             // Revoke affected popup input and drop attachment before native hide.
+            if kind == SurfaceKind::Toolbar {
+                self.stop_battery_root();
+            }
             self.popup_operation.replace(Rc::new(()));
             self.dismiss_tooltip(false);
             if kind == SurfaceKind::Dock {
@@ -445,6 +449,8 @@ impl PanelController {
                 return Ok(());
             }
             self.sync_dock_reorder();
+        } else if kind == SurfaceKind::Toolbar && current() {
+            self.sync_battery_root();
         }
         Ok(())
     }

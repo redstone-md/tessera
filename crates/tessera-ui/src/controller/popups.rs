@@ -13,6 +13,7 @@ pub(super) enum PopupKind {
     User,
     Calendar,
     Power,
+    Battery,
     Network,
     Bluetooth,
     InputLanguage,
@@ -41,6 +42,7 @@ impl PanelController {
                 PopupKind::User => "User menu",
                 PopupKind::Calendar => "Calendar",
                 PopupKind::Power => "Power menu",
+                PopupKind::Battery => "Battery",
                 PopupKind::Network => "Network",
                 PopupKind::Bluetooth => "Bluetooth",
                 PopupKind::InputLanguage => "Keyboard selector",
@@ -67,6 +69,7 @@ impl PanelController {
         let user = self.user_menu.borrow().clone();
         let calendar = self.calendar.borrow().clone();
         let power = self.power_menu.borrow().clone();
+        let battery = self.battery.borrow().clone();
         let network = self.network_menu.borrow().clone();
         let bluetooth = self.bluetooth.borrow().clone();
         let input = self.input_language.borrow().clone();
@@ -100,6 +103,12 @@ impl PanelController {
             && let Some(power) = power
         {
             power.hide();
+        }
+        if keep != Some(PopupKind::Battery)
+            && current()
+            && let Some(actor) = battery
+        {
+            actor.hide();
         }
         if keep != Some(PopupKind::Network)
             && current()
