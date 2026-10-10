@@ -184,98 +184,67 @@ fn native_gl_material3_toolbar_and_dock_frames() {
             verify_material3_toolbar(&toolbar, &bar_frame, scale, container, foreground);
             verify_material3_dock(&dock, &dock_frame, scale, body, outline);
         }
-        for (name, scheme, primary, on_primary) in [
-            (
-                "dark",
-                ColorScheme::Dark,
-                [0xad, 0xd2, 0x8e],
-                [0x1b, 0x37, 0x04],
-            ),
-            (
-                "light",
-                ColorScheme::Light,
-                [0x48, 0x67, 0x2f],
-                [0xff, 0xff, 0xff],
-            ),
-        ] {
-            panel.set_theme_index(if scheme == ColorScheme::Dark { 2 } else { 1 });
-            panel.apply_presentation_theme(PresentationTheme::uniform(scheme));
-            let frame = panel.window().take_snapshot().unwrap();
-            let scale = panel.window().scale_factor();
-            assert!(
-                panel_gl.get(),
-                "selected settings navigation must traverse NativeOpenGL"
-            );
-            assert_eq!(
-                (frame.width(), frame.height()),
-                ((800.0 * scale) as u32, (500.0 * scale) as u32)
-            );
-            export_frame(&format!("material3-settings-{name}-{scale}x"), &frame);
-            verify_material3_settings_navigation(
-                &panel, &frame, scale, scheme, primary, on_primary,
-            );
-            calendar.apply_presentation_theme(PresentationTheme::uniform(scheme));
-            calendar
-                .window()
-                .dispatch_event(slint::platform::WindowEvent::PointerExited);
-            let calendar_frame = calendar.window().take_snapshot().unwrap();
-            let calendar_scale = calendar.window().scale_factor();
-            assert!(
-                calendar_gl.get(),
-                "selected calendar must traverse NativeOpenGL"
-            );
-            assert_eq!(calendar_scale, scale);
-            export_frame(
-                &format!("material3-calendar-{name}-{calendar_scale}x"),
-                &calendar_frame,
-            );
-            verify_material3_calendar_selection(
-                &calendar,
-                &calendar_frame,
-                calendar_scale,
-                primary,
-                on_primary,
-            );
-        }
-        // Keep unfocused island/outer-alpha oracles independent of keyboard rings.
-        for (name, scheme) in [("dark", ColorScheme::Dark), ("light", ColorScheme::Light)] {
-            toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
-            dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
-            let clock = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-                &toolbar,
-                "Open calendar",
-            )
-            .next()
-            .unwrap();
-            let app = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
-                &dock,
-                "Launch Editor",
-            )
-            .next()
-            .unwrap();
-            verify_material3_input(
-                toolbar.window(),
-                &clock,
-                &bar_actions,
-                &format!("material3-toolbar-{name}"),
-                0.0,
-            );
-            verify_material3_input(
-                dock.window(),
-                &app,
-                &dock_actions,
-                &format!("material3-dock-{name}"),
-                2.0,
-            );
-        }
-        assert_eq!(bar_actions.get(), 6);
-        assert_eq!(dock_actions.get(), 6);
-        toolbar.hide().unwrap();
-        dock.hide().unwrap();
-        panel.hide().unwrap();
-        calendar.hide().unwrap();
-        result.set(true);
-        slint::quit_event_loop().unwrap();
+        capture_material3_settings_scheme(
+            panel,
+            calendar,
+            ColorScheme::Dark,
+            Rc::clone(&panel_gl),
+            Rc::clone(&calendar_gl),
+            move |panel, calendar| {
+                capture_material3_settings_scheme(
+                    panel,
+                    calendar,
+                    ColorScheme::Light,
+                    panel_gl,
+                    calendar_gl,
+                    move |panel, calendar| {
+                        // Keep unfocused island/outer-alpha oracles independent of keyboard rings.
+                        for (name, scheme) in
+                            [("dark", ColorScheme::Dark), ("light", ColorScheme::Light)]
+                        {
+                            toolbar.apply_presentation_theme(PresentationTheme::uniform(scheme));
+                            dock.apply_presentation_theme(PresentationTheme::uniform(scheme));
+                            let clock =
+                                i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                                    &toolbar,
+                                    "Open calendar",
+                                )
+                                .next()
+                                .unwrap();
+                            let app =
+                                i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                                    &dock,
+                                    "Launch Editor",
+                                )
+                                .next()
+                                .unwrap();
+                            verify_material3_input(
+                                toolbar.window(),
+                                &clock,
+                                &bar_actions,
+                                &format!("material3-toolbar-{name}"),
+                                0.0,
+                            );
+                            verify_material3_input(
+                                dock.window(),
+                                &app,
+                                &dock_actions,
+                                &format!("material3-dock-{name}"),
+                                2.0,
+                            );
+                        }
+                        assert_eq!(bar_actions.get(), 6);
+                        assert_eq!(dock_actions.get(), 6);
+                        toolbar.hide().unwrap();
+                        dock.hide().unwrap();
+                        panel.hide().unwrap();
+                        calendar.hide().unwrap();
+                        result.set(true);
+                        slint::quit_event_loop().unwrap();
+                    },
+                );
+            },
+        );
     })
     .unwrap();
     slint::run_event_loop().unwrap();
@@ -283,6 +252,184 @@ fn native_gl_material3_toolbar_and_dock_frames() {
         completed.get(),
         "the bounded native Material3 scenario must complete"
     );
+}
+
+fn capture_material3_settings_scheme(
+    panel: Panel,
+    calendar: CalendarMenu,
+    scheme: ColorScheme,
+    panel_gl: Rc<Cell<bool>>,
+    calendar_gl: Rc<Cell<bool>>,
+    finished: impl FnOnce(Panel, CalendarMenu) + 'static,
+) {
+    panel.set_theme_index(if scheme == ColorScheme::Dark { 2 } else { 1 });
+    panel.apply_presentation_theme(PresentationTheme::uniform(scheme));
+    panel
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerExited);
+    // Prime lazy stock bindings before their genuine 150ms color animations.
+    // Capture each scheme only after the real event loop has settled it.
+    let _ = panel.window().take_snapshot().unwrap();
+    slint::Timer::single_shot(std::time::Duration::from_millis(200), move || {
+        let (name, primary, on_primary) = match scheme {
+            ColorScheme::Dark => ("dark", [0xad, 0xd2, 0x8e], [0x1b, 0x37, 0x04]),
+            ColorScheme::Light => ("light", [0x48, 0x67, 0x2f], [0xff, 0xff, 0xff]),
+            _ => panic!("the native Material fixture requires an explicit theme"),
+        };
+        let frame = panel.window().take_snapshot().unwrap();
+        let scale = panel.window().scale_factor();
+        assert!(
+            panel_gl.get(),
+            "selected settings navigation must traverse NativeOpenGL"
+        );
+        assert_eq!(
+            (frame.width(), frame.height()),
+            ((800.0 * scale) as u32, (500.0 * scale) as u32)
+        );
+        export_frame(&format!("material3-settings-{name}-{scale}x"), &frame);
+        assert_eq!(
+            panel
+                .global::<crate::generated::Palette>()
+                .get_color_scheme(),
+            scheme,
+            "the genuine settings root drives the public stock Palette scheme"
+        );
+        verify_material3_settings_navigation(&panel, &frame, scale, scheme, primary, on_primary);
+        verify_material3_settings_controls(&panel, &frame, scale, scheme);
+        calendar.apply_presentation_theme(PresentationTheme::uniform(scheme));
+        calendar
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::PointerExited);
+        let calendar_frame = calendar.window().take_snapshot().unwrap();
+        let calendar_scale = calendar.window().scale_factor();
+        assert!(
+            calendar_gl.get(),
+            "selected calendar must traverse NativeOpenGL"
+        );
+        assert_eq!(calendar_scale, scale);
+        export_frame(
+            &format!("material3-calendar-{name}-{calendar_scale}x"),
+            &calendar_frame,
+        );
+        verify_material3_calendar_selection(
+            &calendar,
+            &calendar_frame,
+            calendar_scale,
+            primary,
+            on_primary,
+        );
+        finished(panel, calendar);
+    });
+}
+
+fn verify_material3_settings_controls(
+    panel: &Panel,
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    scheme: ColorScheme,
+) {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    // Independent pinned Fluent literals, not Material onSurface or Palette reads.
+    let (foreground, arrow) = match scheme {
+        ColorScheme::Dark => ([0xff, 0xff, 0xff, 0xff], [0xff, 0xff, 0xff, 0xc9]),
+        ColorScheme::Light => ([0x00, 0x00, 0x00, 0xe6], [0x00, 0x00, 0x00, 0x99]),
+        _ => panic!("the native Material fixture requires an explicit theme"),
+    };
+    for label in ["Save preferences", "Cancel changes"] {
+        let button = ElementHandle::find_by_accessible_label(panel, label)
+            .find(|element| element.accessible_role() == Some(AccessibleRole::Button))
+            .expect("the genuine settings header exposes its stock Button");
+        assert_eq!(button.accessible_enabled(), Some(true));
+        verify_material3_control_glyph(frame, scale, &button, "Text", foreground, 1.0);
+    }
+    let combo = ElementHandle::find_by_accessible_label(panel, "Start of week")
+        .find(|element| element.accessible_role() == Some(AccessibleRole::Combobox))
+        .expect("the genuine General page exposes its stock ComboBox");
+    assert_eq!(combo.accessible_value().as_deref(), Some("Monday"));
+    assert_eq!(combo.accessible_enabled(), Some(true));
+    verify_material3_control_glyph(frame, scale, &combo, "Text", foreground, 1.0);
+    // The pinned dropdown SVG has its own 0.786 fill opacity, before colorize
+    // alpha and diagonal edge coverage. It is not an opaque text glyph.
+    verify_material3_control_glyph(frame, scale, &combo, "Image", arrow, 0.786);
+}
+
+fn verify_material3_control_glyph(
+    frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    scale: f32,
+    control: &i_slint_backend_testing::ElementHandle,
+    kind: &str,
+    foreground: [u8; 4],
+    source_opacity: f32,
+) {
+    let child = control
+        .query_descendants()
+        .match_type_name(kind)
+        .find_first()
+        .expect("inspect the real stock control's source-type glyph");
+    let origin = control.absolute_position();
+    let size = control.size();
+    let child_origin = child.absolute_position();
+    let child_size = child.size();
+    assert!(child_size.width > 0.0 && child_size.height > 0.0);
+    assert!(child_origin.x >= origin.x && child_origin.y >= origin.y);
+    assert!(child_origin.x + child_size.width <= origin.x + size.width);
+    // Fluent's arrow Image is shifted down 2px while retaining the full row
+    // height. Inspect the control interior, excluding its 1px bottom border.
+    let visible_size = slint::LogicalSize::new(
+        child_size.width,
+        child_size
+            .height
+            .min(origin.y + size.height - 1.0 - child_origin.y),
+    );
+    assert!(visible_size.height > 0.0);
+    // Both pinned controls have flat interiors and at least 11px left padding.
+    // Read the actual substrate, away from glyphs, rounded corners and borders.
+    let background = material3_pixel(frame, scale, origin.x + 4.0, origin.y + size.height / 2.0);
+    assert_eq!(background.a, 255);
+    let background_rgb = [background.r, background.g, background.b];
+    let blend = |coverage: f32| {
+        std::array::from_fn(|channel| {
+            let alpha = f32::from(foreground[3]) / 255.0 * source_opacity * coverage;
+            (f32::from(foreground[channel]) * alpha
+                + f32::from(background_rgb[channel]) * (1.0 - alpha))
+                .round() as u8
+        })
+    };
+    let target: [u8; 3] = blend(1.0);
+    let pixels = gl_region(frame, child_origin, visible_size, scale);
+    assert!(pixels.iter().all(|pixel| pixel.a == 255));
+    if kind == "Text" {
+        assert!(
+            pixels.iter().any(|pixel| material3_rgb(*pixel, target)),
+            "settled stock Text paints its literal foreground alpha over the actual background"
+        );
+    } else {
+        let contrast = f32::from(target[0]) - f32::from(background.r);
+        assert!(
+            contrast.abs() > 32.0,
+            "the real arrow must have visible contrast"
+        );
+        let tolerance = 2.0 / contrast.abs();
+        let mut ink = 0;
+        for pixel in pixels {
+            // Infer only antialias coverage, not the semantic foreground:
+            // the independent RGBA/source-opacity pair fixes the maximum ink.
+            let coverage = (f32::from(pixel.r) - f32::from(background.r)) / contrast;
+            assert!(
+                coverage >= -tolerance
+                    && coverage <= 1.0 + tolerance
+                    && material3_rgb(pixel, blend(coverage.clamp(0.0, 1.0))),
+                "settled stock Image pixels blend the literal arrow tint and source alpha, not stale white"
+            );
+            if coverage >= 0.5 {
+                ink += 1;
+            }
+        }
+        assert!(
+            ink > 2,
+            "the genuine dropdown vector must paint substantial glyph pixels"
+        );
+    }
 }
 
 fn verify_material3_settings_navigation(

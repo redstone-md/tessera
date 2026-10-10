@@ -194,9 +194,40 @@ Both actual owned Mesa scenarios passed separately at 1×/2×: Material
 (90/scale; 338,365,734 bytes) have complete payloads and matching families;
 all 32 Material frames retain literal doubled dimensions. Default Green
 light/dark frames were visually inspected; this is not a five-preset native
-desktop capture. Fresh native Windows execution remains required. The receipts
-below certify earlier static-green checkpoints only, not this HCT/schema-6 layer,
-optimized release assets, ordinary effects or the VM toolbar offset.
+desktop capture. The exact source checkpoint and subsequent fixture correction
+have separate receipts below; neither certifies optimized release assets,
+ordinary effects or the VM toolbar offset.
+
+**Actual source-color native checkpoint (`4f28b52`):**
+[CI 38009841918](https://github.com/redstone-md/tessera/actions/runs/38009841918)
+passed Windows 1.92/stable (each 1,543 tests/19 suites, zero failed/ignored)
+and Linux stable (1,454/19 suites, two separately gated GL cases ignored).
+Strict lint/docs, layout demo, Windows read-only inspection and isolated
+deployment checks passed. Complete root-job logs and exact-source metadata
+were authenticated and all 57 suite summaries independently recounted.
+Packaging was skipped with zero steps; no release assets were published.
+[Native Debug 38009841951](https://github.com/redstone-md/tessera/actions/runs/38009841951)
+passed at the same source in 11m33s: 1,543/19 suites, actual Rust 1.92/static-CRT
+production GUI/supervisor, two real UI-thread pulses and owned cleanup.
+This hosted diagnostic excludes ordinary providers/preferences/hooks and is not
+Windows 11 interactive composition, mixed-DPI/focus or native-effect certification.
+
+**Separate settled-control renderer correction:** the earlier light Settings
+export captured the start of the stock Fluent 150ms dark→light transition:
+Monday changed immediately while Button labels and the dropdown arrow had
+not settled. No product palette, controls, SDK or fonts were changed. Each
+Settings capture now primes a real frame and serially waits one genuine 200ms
+event-loop timer before asserting literal stock foreground/arrow paint.
+The source-type Image oracle preserves the SVG's 0.786 intrinsic opacity and
+2/255 channel tolerance; it checks the actual border-free control intersection,
+bounded tint direction/maximum ink and substantial coverage, not a recreated
+antialias raster. Genuine input/action counts and neutral/vector/alpha guards stay.
+Rust 1.92 full tests again passed 1,454/19 suites; strict Linux all-target Clippy
+and format/diff passed. Actual Mesa Material 1×/2× passed 1.63s/2.37s;
+neutral/source passed 10.08s/16.43s. All 180 P6 exports remain complete
+(90/scale; 338,365,734 bytes), with the same families and literal doubled Material
+dimensions. Settled light 1×/2× pixels were visually inspected. This later
+Unix GL fixture/doc descendant is outside exact `4f28b52` native execution.
 
 **First tracer (`dd52da5`) local proof:** focused geometry/inspection checks passed (8/6); all 821 software UI cases
 passed with two explicitly ignored native GL scenarios. Both actual Mesa

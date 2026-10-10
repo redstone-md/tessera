@@ -244,9 +244,15 @@ strict Linux/MSVC checks, rustdoc, 35 notices and both actual GL scenarios at
 [Debug GUI](https://github.com/redstone-md/tessera/actions/runs/38005383217)
 (two actual UI pulses and owned cleanup). Complete logs were authenticated/
 recounted; packaging was skipped. Those gates cover the earlier static-green
-layer, not later RGB/HCT/schema-6 work or ordinary-session effects. The new
-source presets reuse explicit preview/Save/Cancel and complete-record storage.
-See the
+layer. The subsequent RGB/HCT/schema-6 checkpoint `4f28b52` passed its own
+[CI](https://github.com/redstone-md/tessera/actions/runs/38009841918)
+(Windows 1.92/stable: 1,543 tests each; Linux: 1,454) and
+[Debug GUI](https://github.com/redstone-md/tessera/actions/runs/38009841951)
+(two actual UI pulses and owned cleanup), with complete logs authenticated/
+recounted and packaging skipped. Presets reuse explicit preview/Save/Cancel and
+complete-record storage. A later test-only correction captures settled stock
+control colors; it changes no production palette or controls. Ordinary-session
+effects remain uncertified. See the
 [exact source/gate boundaries and remaining gaps](docs/adr/0005-native-presentation.md#alpha21-source-visual-layer-development);
 this is not a published release, complete 1:1 parity or a fix claim for the VM toolbar offset.
 
