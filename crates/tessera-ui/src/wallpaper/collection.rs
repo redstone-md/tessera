@@ -92,7 +92,7 @@ impl Projection {
             _ if collection.is_some() => {
                 "The selected native collection has been consumed. Choose a fresh collection to start again.".into()
             }
-            _ => "No current collection. Native slideshow policy has not been read.".into(),
+            _ => "No file collection draft. Actual current slideshow policy is shown separately.".into(),
         };
         Self {
             items: collection
@@ -205,7 +205,7 @@ impl WallpaperController {
                 match SelectedCollection::new(selection) {
                     Some(group) => {
                         let notice = format!(
-                            "{} actual native-selected files. Thumbnails are Shell previews, not desktop pixels. The initial 30 minute / shuffle off values are proposals only; native current slideshow policy has not been read.",
+                            "{} actual native-selected files. Thumbnails are Shell previews, not desktop pixels. The initial 30 minute / shuffle off values are proposals only; they do not describe the separate current-policy observation.",
                             group.count,
                         );
                         (Some(group), notice)

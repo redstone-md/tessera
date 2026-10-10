@@ -9,10 +9,12 @@ use tessera_system::wallpaper::{WallpaperError, WallpaperPreview};
 use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, GENERIC_READ, HANDLE, HWND};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
-    FILE_INFO_BY_HANDLE_CLASS, FILE_SHARE_READ, FILE_STANDARD_INFO, FILE_TYPE_DISK,
-    FileAttributeTagInfo, FileBasicInfo, FileIdInfo, FileStandardInfo,
-    GetFileInformationByHandleEx, GetFileType, OPEN_EXISTING,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAGS_AND_ATTRIBUTES, FILE_ID_INFO,
+    FILE_INFO_BY_HANDLE_CLASS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_MODE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_STANDARD_INFO, FILE_TYPE_DISK, FileAttributeTagInfo,
+    FileBasicInfo, FileIdInfo, FileStandardInfo, GetFileInformationByHandleEx, GetFileType,
+    OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
@@ -150,6 +152,83 @@ impl Image {
             .and_then(|file| file.identity())
             .is_ok_and(|identity| identity == self.identity)
     }
+}
+
+/// Read-only native policy identity. Handles are transient and never retained
+/// across observations; unlike protected image admission, this permits writers.
+pub(super) struct PolicyEntry {
+    item: IShellItem,
+    identity: PolicyIdentity,
+}
+
+impl PolicyEntry {
+    pub(super) fn capture(item: IShellItem) -> Result<Self, WallpaperError> {
+        let path = NativeName::take(
+            unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }
+                .map_err(|_| WallpaperError::Unavailable)?,
+            MAX_PATH_UNITS,
+        )?;
+        let identity = Self::at_name(&path)?;
+        Ok(Self { item, identity })
+    }
+
+    pub(super) fn wallpaper(path: PWSTR) -> Result<PolicyIdentity, WallpaperError> {
+        let path = NativeName::take(path, MAX_PATH_UNITS)?;
+        let identity = Self::at_name(&path)?;
+        if identity.directory {
+            return Err(WallpaperError::Unavailable);
+        }
+        Ok(identity)
+    }
+
+    fn at_name(path: &NativeName) -> Result<PolicyIdentity, WallpaperError> {
+        FileLease::open_handle(
+            path,
+            FILE_READ_ATTRIBUTES.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+        )?
+        .policy_identity()
+    }
+
+    pub(super) fn is_directory(&self) -> bool {
+        self.identity.directory
+    }
+
+    pub(super) fn same_identity(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+
+    pub(super) fn same_object(&self, other: &Self) -> bool {
+        self.identity.file.volume == other.identity.file.volume
+            && self.identity.file.file == other.identity.file.file
+    }
+
+    pub(super) fn is_current(&self) -> bool {
+        Self::capture(self.item.clone()).is_ok_and(|fresh| self.same_identity(&fresh))
+    }
+
+    pub(super) fn parent(&self) -> Result<Self, WallpaperError> {
+        let parent = unsafe { self.item.GetParent() }.map_err(|_| WallpaperError::Unavailable)?;
+        let parent = Self::capture(parent)?;
+        if !parent.is_directory() {
+            return Err(WallpaperError::Unavailable);
+        }
+        Ok(parent)
+    }
+
+    pub(super) fn is_in_container(&self, parent: &Self) -> Result<bool, WallpaperError> {
+        // Canonical Shell equality supplements, never replaces filesystem IDs.
+        Ok(same_container(&self.item, &parent.item)? && self.parent()?.same_identity(parent))
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub(super) struct PolicyIdentity {
+    file: FileIdentity,
+    directory: bool,
+    attributes: u32,
+    created: i64,
 }
 
 /// Shared real dialog setup; callers retain either GetResult or exact GetResults.
@@ -304,20 +383,35 @@ pub(super) struct FileLease(HANDLE);
 
 impl FileLease {
     fn open(path: &NativeName) -> Result<Self, WallpaperError> {
+        // Read sharing only denies writers, deletion and replacement for the
+        // entire protected selection lifetime. Preserve image admission exactly.
+        Self::open_handle(
+            path,
+            GENERIC_READ.0,
+            FILE_SHARE_READ,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+        )
+    }
+
+    fn open_handle(
+        path: &NativeName,
+        access: u32,
+        share: FILE_SHARE_MODE,
+        flags: FILE_FLAGS_AND_ATTRIBUTES,
+    ) -> Result<Self, WallpaperError> {
         if !path.has_no_stream() {
             return Err(WallpaperError::Unavailable);
         }
-        // SAFETY: owned, terminated SDK path. Read sharing only denies writers,
-        // deletion and replacement for the entire admitted selection lifetime.
-        // Opening the final reparse point itself lets validation reject it.
+        // SAFETY: terminated SDK path; final reparse point is opened for
+        // rejection, not followed. This owns the only raw-handle open/close path.
         unsafe {
             CreateFileW(
                 path.as_pcwstr(),
-                GENERIC_READ.0,
-                FILE_SHARE_READ,
+                access,
+                share,
                 None,
                 OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                flags,
                 None,
             )
         }
@@ -346,12 +440,34 @@ impl FileLease {
             return Err(WallpaperError::Unavailable);
         }
         let basic: FILE_BASIC_INFO = self.information(FileBasicInfo)?;
-        Ok(FileIdentity {
-            volume: id.VolumeSerialNumber,
-            file: id.FileId.Identifier,
-            bytes: standard.EndOfFile,
-            modified: basic.LastWriteTime,
-            changed: basic.ChangeTime,
+        Ok(FileIdentity::from_native(&id, &standard, &basic))
+    }
+
+    fn policy_identity(&self) -> Result<PolicyIdentity, WallpaperError> {
+        if unsafe { GetFileType(self.0) } != FILE_TYPE_DISK {
+            return Err(WallpaperError::Unavailable);
+        }
+        let attributes: FILE_ATTRIBUTE_TAG_INFO = self.information(FileAttributeTagInfo)?;
+        let standard: FILE_STANDARD_INFO = self.information(FileStandardInfo)?;
+        let directory = attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
+        if attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+            || directory != standard.Directory
+            || standard.DeletePending
+            || standard.NumberOfLinks == 0
+            || standard.EndOfFile < 0
+        {
+            return Err(WallpaperError::Unavailable);
+        }
+        let id = self.file_id()?;
+        if id.VolumeSerialNumber == 0 || id.FileId.Identifier == [0; 16] {
+            return Err(WallpaperError::Unavailable);
+        }
+        let basic: FILE_BASIC_INFO = self.information(FileBasicInfo)?;
+        Ok(PolicyIdentity {
+            file: FileIdentity::from_native(&id, &standard, &basic),
+            directory,
+            attributes: attributes.FileAttributes,
+            created: basic.CreationTime,
         })
     }
 
@@ -392,4 +508,20 @@ struct FileIdentity {
     bytes: i64,
     modified: i64,
     changed: i64,
+}
+
+impl FileIdentity {
+    fn from_native(
+        id: &FILE_ID_INFO,
+        standard: &FILE_STANDARD_INFO,
+        basic: &FILE_BASIC_INFO,
+    ) -> Self {
+        Self {
+            volume: id.VolumeSerialNumber,
+            file: id.FileId.Identifier,
+            bytes: standard.EndOfFile,
+            modified: basic.LastWriteTime,
+            changed: basic.ChangeTime,
+        }
+    }
 }

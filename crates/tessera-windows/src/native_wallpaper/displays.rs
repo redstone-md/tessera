@@ -3,7 +3,9 @@
 
 //! SDK-origin device IDs are the only monitor authority; order is incidental.
 
-use tessera_system::wallpaper::WallpaperError;
+use tessera_system::wallpaper::{
+    WallpaperError, WallpaperMonitorSelection, WallpaperMonitorTarget,
+};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Shell::{DesktopWallpaper, IDesktopWallpaper};
 use windows::core::PCWSTR;
@@ -30,9 +32,18 @@ pub(super) struct Monitor {
     rect: [i32; 4],
 }
 
+pub(super) struct Binding {
+    pub(super) target: WallpaperMonitorTarget,
+    pub(super) monitor: Monitor,
+}
+
 impl Monitor {
     pub(super) fn id(&self) -> PCWSTR {
         self.id.as_pcwstr()
+    }
+
+    pub(super) fn same_device(&self, other: &Self) -> bool {
+        self.id == other.id
     }
 
     pub(super) fn caption(&self) -> Result<String, WallpaperError> {
@@ -56,6 +67,26 @@ impl Monitor {
 }
 
 impl Topology {
+    pub(super) fn issue_members(
+        &self,
+    ) -> Result<(Vec<Binding>, Vec<WallpaperMonitorSelection>), WallpaperError> {
+        self.monitors
+            .iter()
+            .map(|monitor| {
+                let caption = monitor.caption()?;
+                let target = WallpaperMonitorTarget::new();
+                Ok((
+                    Binding {
+                        target: target.clone(),
+                        monitor: monitor.clone(),
+                    },
+                    WallpaperMonitorSelection { target, caption },
+                ))
+            })
+            .collect::<Result<Vec<_>, WallpaperError>>()
+            .map(|pairs| pairs.into_iter().unzip())
+    }
+
     pub(super) fn capture(desktop: &IDesktopWallpaper) -> Result<Self, WallpaperError> {
         let count = unsafe { desktop.GetMonitorDevicePathCount() }
             .map_err(|_| WallpaperError::Unavailable)?;

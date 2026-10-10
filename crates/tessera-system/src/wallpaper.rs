@@ -7,6 +7,7 @@ use std::sync::{Arc, Weak};
 
 pub mod collection;
 pub mod position;
+pub mod slideshow;
 
 /// An opaque selection identity, never a filesystem path or monitor identifier.
 #[derive(Clone)]
@@ -300,6 +301,27 @@ pub trait WallpaperHost: Send + Sync {
         _target: collection::Target,
         _options: collection::Options,
         _completion: collection::ApplyCompletion,
+    ) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
+
+    /// Explicit SDK read of current slideshow policy/status and actual monitors.
+    /// This observes OS state, not the user's unsubmitted file-selection draft.
+    /// Readable but disabled/unsupported policy grants no advancement target.
+    fn read_slideshow(&self, _completion: slideshow::ReadCompletion) -> Result<(), WallpaperError> {
+        Err(WallpaperError::Unavailable)
+    }
+
+    /// Consume one exact issued current-policy observation and advance only its
+    /// exact native monitor member. Revalidate original policy/cohort before SDK.
+    /// No null, next-scheduled, primary, caption or UI-index monitor fallback.
+    /// SDK state can race the checked read/advance pair; readback is not pixels.
+    fn advance_slideshow(
+        &self,
+        _target: slideshow::Target,
+        _monitor: WallpaperMonitorTarget,
+        _direction: slideshow::Direction,
+        _completion: slideshow::AdvanceCompletion,
     ) -> Result<(), WallpaperError> {
         Err(WallpaperError::Unavailable)
     }

@@ -8,7 +8,9 @@ use std::sync::Arc;
 use tessera_system::wallpaper::WallpaperHost;
 
 use super::selection::SelectionPresentation;
-use super::{Operation, ResetFlag, SelectedImage, Session, State, WallpaperController, collection};
+use super::{
+    Operation, ResetFlag, SelectedImage, Session, State, WallpaperController, collection, slideshow,
+};
 
 struct Projection {
     provider: Option<Arc<dyn WallpaperHost>>,
@@ -20,6 +22,7 @@ struct Projection {
     status: slint::SharedString,
     selected: SelectionPresentation,
     collection: collection::Projection,
+    slideshow: slideshow::Projection,
     revision: u64,
     ticket: Option<u64>,
 }
@@ -35,6 +38,9 @@ impl Projection {
             }
             Some(flight) if matches!(flight.operation, Operation::ChooseCollection | Operation::ApplyCollection) => {
                 "A native collection request is pending. See global slideshow receipts below.".into()
+            }
+            Some(flight) if matches!(flight.operation, Operation::ReadSlideshow | Operation::AdvanceSlideshow(_)) => {
+                state.notice.clone()
             }
             Some(flight) => format!(
                 "Requesting wallpaper on {} selected captured display(s)… Awaiting native path/file readback; rendered pixels are not checked.",
@@ -63,6 +69,7 @@ impl Projection {
                 .map(SelectedImage::presentation)
                 .unwrap_or_default(),
             collection: collection::Projection::capture(state, session),
+            slideshow: slideshow::Projection::capture(state, session),
             revision: state.sequence,
             ticket: state.flight.as_ref().map(|flight| flight.ticket),
         }
@@ -109,6 +116,8 @@ impl WallpaperController {
         publish!(set_wallpaper_colors_enabled, false);
         publish!(set_wallpaper_collection_controls_enabled, false);
         publish!(set_wallpaper_collection_apply_enabled, false);
+        publish!(set_wallpaper_slideshow_read_enabled, false);
+        publish!(set_wallpaper_slideshow_advance_enabled, false);
         // Consuming the image hides all selection-only presentation immediately.
         // Pending readonly monitor captions/index preserve final scope agreement only.
         publish!(
@@ -155,6 +164,28 @@ impl WallpaperController {
         publish!(
             set_wallpaper_collection_status,
             projection.collection.status
+        );
+        publish!(
+            set_wallpaper_slideshow_monitors,
+            slint::ModelRc::new(slint::VecModel::from(projection.slideshow.captions))
+        );
+        publish!(
+            set_wallpaper_slideshow_monitor_index,
+            projection.slideshow.index
+        );
+        publish!(
+            set_wallpaper_slideshow_selector_available,
+            projection.slideshow.selector_available
+        );
+        publish!(set_wallpaper_slideshow_facts, projection.slideshow.facts);
+        publish!(set_wallpaper_slideshow_status, projection.slideshow.status);
+        publish!(
+            set_wallpaper_slideshow_advance_enabled,
+            projection.slideshow.advance_enabled
+        );
+        publish!(
+            set_wallpaper_slideshow_read_enabled,
+            projection.provider.is_some() && !projection.busy
         );
         publish!(
             set_wallpaper_collection_apply_enabled,

@@ -167,7 +167,7 @@ fn receipt(result: windows::core::Result<()>) -> contract::NativeStep {
     }
 }
 
-fn read_options(desktop: &IDesktopWallpaper) -> Option<contract::OptionsReadback> {
+pub(super) fn read_options(desktop: &IDesktopWallpaper) -> Option<contract::OptionsReadback> {
     let mut flags = DESKTOP_SLIDESHOW_OPTIONS(0);
     let mut interval_ms = 0;
     unsafe { desktop.GetSlideshowOptions(&mut flags, &mut interval_ms) }.ok()?;
@@ -180,7 +180,7 @@ fn read_options(desktop: &IDesktopWallpaper) -> Option<contract::OptionsReadback
     })
 }
 
-fn read_state(desktop: &IDesktopWallpaper) -> Option<contract::StateFacts> {
+pub(super) fn read_state(desktop: &IDesktopWallpaper) -> Option<contract::StateFacts> {
     let state = unsafe { desktop.GetStatus() }.ok()?;
     let known = DSS_ENABLED.0 | DSS_SLIDESHOW.0 | DSS_DISABLED_BY_REMOTE_SESSION.0;
     if state.0 & !known != 0 {

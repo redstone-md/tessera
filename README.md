@@ -410,8 +410,14 @@ ticket and requests global Windows image collection, interval and shuffle
 settings, enabling the desktop background. Windows owns persistence/transitions;
 there is no local timer or JSON mirror. Collection/options SDK receipts and fresh
 file-identity/settings readback remain separate; partial effects are not rolled
-back. Video, next/previous, collection editing/import, per-workspace selection,
-automatic live accent and media policies remain open.
+back. Separate explicit current-slideshow Read/Previous/Next controls observe the
+actual Windows policy and require a genuine choice of a native-issued monitor.
+Advancement consumes that exact policy/member observation and revalidates it;
+there is no null/primary/index fallback. Fresh native wallpaper-file change and
+policy readback remain distinct from SDK acceptance and rendered pixels.
+Single-folder policies are observed by native folder identity without enumeration;
+their array-member count is not an image count. Video, collection editing/import,
+per-workspace selection, automatic live accent and media policies remain open.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! One lazy STA owns the dialog, one protected selection and a separate global
-//! position observation. Its one-slot mailbox is event-backed; idle means wait.
+//! One lazy STA owns the dialog, protected file selection, global position and
+//! current slideshow policy ledgers. One event-backed mailbox; idle means wait.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -10,8 +10,9 @@ use std::sync::{Arc, Mutex, TryLockError};
 use tessera_system::wallpaper::{
     WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
     WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
-    WallpaperImageTargetWeak, WallpaperMonitorSelection, WallpaperMonitorTarget,
-    WallpaperSelection, collection as collection_contract, position as position_contract,
+    WallpaperImageTargetWeak, WallpaperMonitorTarget, WallpaperSelection,
+    collection as collection_contract, position as position_contract,
+    slideshow as slideshow_contract,
 };
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_FAILED, WAIT_OBJECT_0};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
@@ -28,6 +29,7 @@ use crate::single_flight::{Flight, FlightGate};
 mod collection;
 mod displays;
 mod position;
+mod slideshow;
 mod source;
 mod thumbnail;
 
@@ -70,6 +72,18 @@ impl NativeWallpaperHost {
             // Position tickets are independent of image/monitor authority.
             return Err(WallpaperError::InvalidTarget);
         }
+        if let Work::AdvanceSlideshow {
+            target, monitor, ..
+        } = &work
+            && !inbox
+                .slideshow_issued
+                .as_ref()
+                .is_some_and(|issued| issued.accepts(target, monitor))
+        {
+            // Both the exact policy and its exact native cohort member are
+            // required before starting/signaling an owner or touching the SDK.
+            return Err(WallpaperError::InvalidTarget);
+        }
         if inbox.job.is_some() {
             return Err(WallpaperError::Busy);
         }
@@ -93,15 +107,22 @@ impl NativeWallpaperHost {
             inbox.failed = true;
             inbox.issued = None;
             inbox.position_issued = None;
+            inbox.slideshow_issued = None;
             return Err(WallpaperError::Unavailable);
         }
         match &work {
-            Work::Choose { .. }
-            | Work::Apply { .. }
-            | Work::ChooseCollection { .. }
-            | Work::ApplyCollection { .. } => inbox.issued = None,
+            Work::Choose { .. } | Work::ChooseCollection { .. } => inbox.issued = None,
+            Work::Apply { .. } | Work::ApplyCollection { .. } => {
+                inbox.issued = None;
+                // Accepted file application changes OS policy; draft choice
+                // never revokes independently captured current-policy authority.
+                inbox.slideshow_issued = None;
+            }
             Work::ReadPosition { .. } | Work::SetPosition { .. } => {
                 inbox.position_issued = None;
+            }
+            Work::ReadSlideshow { .. } | Work::AdvanceSlideshow { .. } => {
+                inbox.slideshow_issued = None;
             }
         }
         inbox.job = Some(Job { work, flight });
@@ -166,6 +187,28 @@ impl WallpaperHost for NativeWallpaperHost {
             completion,
         })
     }
+
+    fn read_slideshow(
+        &self,
+        completion: slideshow_contract::ReadCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::ReadSlideshow { completion })
+    }
+
+    fn advance_slideshow(
+        &self,
+        target: slideshow_contract::Target,
+        monitor: WallpaperMonitorTarget,
+        direction: slideshow_contract::Direction,
+        completion: slideshow_contract::AdvanceCompletion,
+    ) -> Result<(), WallpaperError> {
+        self.submit(Work::AdvanceSlideshow {
+            target,
+            monitor,
+            direction,
+            completion,
+        })
+    }
 }
 
 impl Drop for NativeWallpaperHost {
@@ -194,6 +237,7 @@ struct Inbox {
     wake: Option<WakeEvent>,
     issued: Option<Issuer>,
     position_issued: Option<position_contract::Target>,
+    slideshow_issued: Option<slideshow::Issuer>,
     retire_pending: bool,
 }
 
@@ -263,6 +307,15 @@ enum Work {
         desired: position_contract::Position,
         completion: position_contract::WriteCompletion,
     },
+    ReadSlideshow {
+        completion: slideshow_contract::ReadCompletion,
+    },
+    AdvanceSlideshow {
+        target: slideshow_contract::Target,
+        monitor: WallpaperMonitorTarget,
+        direction: slideshow_contract::Direction,
+        completion: slideshow_contract::AdvanceCompletion,
+    },
 }
 
 struct Job {
@@ -290,6 +343,12 @@ impl Job {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
             Work::SetPosition { completion, .. } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::ReadSlideshow { completion } => {
+                finish(move || completion(Err(WallpaperError::Unavailable)))
+            }
+            Work::AdvanceSlideshow { completion, .. } => {
                 finish(move || completion(Err(WallpaperError::Unavailable)))
             }
         }
@@ -394,6 +453,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
         .wake = Some(event);
     let mut current: Option<FileSelection> = None;
     let mut current_position = position::Ledger::default();
+    let mut current_slideshow = slideshow::Ledger::default();
     loop {
         let (job, closed, retired) = {
             let mut inbox = mailbox
@@ -415,6 +475,9 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
         {
             current = None;
             publish_issuer(&mailbox, None);
+        }
+        if retired && current_slideshow.retire() {
+            publish_slideshow_issuer(&mailbox, None);
         }
         if let Some(Job { work, flight }) = job {
             match work {
@@ -449,6 +512,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     scope,
                     completion,
                 } => {
+                    current_slideshow.clear();
                     let result = current
                         .take()
                         .and_then(|selection| match selection {
@@ -498,6 +562,7 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                     options,
                     completion,
                 } => {
+                    current_slideshow.clear();
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         current
                             .take()
@@ -542,6 +607,36 @@ fn owner_loop(mailbox: Arc<Mailbox>) {
                                 Err(WallpaperError::Unavailable)
                             });
                     publish_position_issuer(&mailbox, current_position.issuer());
+                    drop(flight);
+                    finish(move || completion(result));
+                }
+                Work::ReadSlideshow { completion } => {
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| current_slideshow.read(&mailbox)))
+                            .unwrap_or_else(|_| {
+                                current_slideshow.clear();
+                                Err(WallpaperError::Unavailable)
+                            });
+                    publish_slideshow_issuer(&mailbox, current_slideshow.issuer());
+                    drop(flight);
+                    finish(move || completion(result));
+                }
+                Work::AdvanceSlideshow {
+                    target,
+                    monitor,
+                    direction,
+                    completion,
+                } => {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        current_slideshow.advance(target, monitor, direction, &mailbox)
+                    }))
+                    .unwrap_or_else(|_| {
+                        // A panic may follow a native effect. Unavailable never
+                        // promises that no effect occurred or that it rolled back.
+                        current_slideshow.clear();
+                        Err(WallpaperError::Unavailable)
+                    });
+                    publish_slideshow_issuer(&mailbox, current_slideshow.issuer());
                     drop(flight);
                     finish(move || completion(result));
                 }
@@ -609,6 +704,18 @@ fn publish_position_issuer(mailbox: &Mailbox, target: Option<position_contract::
     };
 }
 
+fn publish_slideshow_issuer(mailbox: &Mailbox, target: Option<slideshow::Issuer>) {
+    let mut inbox = mailbox
+        .inbox
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    inbox.slideshow_issued = if inbox.closed || inbox.failed {
+        None
+    } else {
+        target
+    };
+}
+
 fn retirement_target(mailbox: &Arc<Mailbox>) -> WallpaperImageTarget {
     WallpaperImageTarget::with_retirement(retirement_callback(mailbox))
 }
@@ -645,6 +752,7 @@ fn fail_mailbox(mailbox: &Mailbox) {
         inbox.failed = true;
         inbox.issued = None;
         inbox.position_issued = None;
+        inbox.slideshow_issued = None;
         inbox.wake = None;
         inbox.job.take()
     };
@@ -658,7 +766,7 @@ fn finish(callback: impl FnOnce()) {
     let _ = catch_unwind(AssertUnwindSafe(callback));
 }
 
-/// One typed file slot: either choice replaces the other, never position state.
+/// One typed file slot: either choice replaces the other, never control state.
 enum FileSelection {
     Image(Selection),
     Collection(collection::Collection),
@@ -677,12 +785,7 @@ struct Selection {
     target: WallpaperImageTargetWeak,
     image: source::Image,
     topology: displays::Topology,
-    bindings: Vec<MonitorBinding>,
-}
-
-struct MonitorBinding {
-    target: WallpaperMonitorTarget,
-    monitor: displays::Monitor,
+    bindings: Vec<displays::Binding>,
 }
 
 impl Selection {
@@ -699,23 +802,7 @@ impl Selection {
         let _fresh_file = image.validate()?;
         // Tokens bind only to these original descriptors. Fresh topology
         // equality remains descriptor-only, never newly minted ticket equality.
-        let (bindings, monitors): (Vec<_>, Vec<_>) = topology
-            .monitors
-            .iter()
-            .map(|monitor| {
-                let caption = monitor.caption()?;
-                let target = WallpaperMonitorTarget::new();
-                Ok((
-                    MonitorBinding {
-                        target: target.clone(),
-                        monitor: monitor.clone(),
-                    },
-                    WallpaperMonitorSelection { target, caption },
-                ))
-            })
-            .collect::<Result<Vec<_>, WallpaperError>>()?
-            .into_iter()
-            .unzip();
+        let (bindings, monitors) = topology.issue_members()?;
         let target = retirement_target(mailbox);
         let snapshot = WallpaperSelection {
             target: target.clone(),

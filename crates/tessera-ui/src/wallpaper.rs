@@ -12,7 +12,7 @@ use slint::ComponentHandle;
 use tessera_system::wallpaper::{
     WallpaperApplyCompletion, WallpaperApplyOutcome, WallpaperApplyScope,
     WallpaperChooseCompletion, WallpaperError, WallpaperHost, WallpaperImageTarget,
-    collection as native_collection,
+    WallpaperMonitorTarget, collection as native_collection, slideshow as native_slideshow,
 };
 
 use crate::DesktopHost;
@@ -21,10 +21,12 @@ use crate::generated::Panel;
 
 mod collection;
 mod colors;
+mod commands;
 mod image;
 mod position;
 mod presentation;
 mod selection;
+mod slideshow;
 
 use selection::{PreparedSelection, SelectedImage};
 
@@ -40,6 +42,8 @@ enum Operation {
     Apply,
     ChooseCollection,
     ApplyCollection,
+    ReadSlideshow,
+    AdvanceSlideshow(native_slideshow::Direction),
 }
 
 enum Request {
@@ -56,6 +60,13 @@ enum Request {
         options: native_collection::Options,
         index: i32,
     },
+    ReadSlideshow,
+    AdvanceSlideshow {
+        target: native_slideshow::Target,
+        monitor: WallpaperMonitorTarget,
+        direction: native_slideshow::Direction,
+        index: i32,
+    },
 }
 
 #[derive(Clone)]
@@ -69,6 +80,7 @@ struct Flight {
     collection_target: Option<native_collection::TargetWeak>,
     collection_options: Option<native_collection::Options>,
     collection_index: Option<i32>,
+    slideshow: Option<slideshow::Issued>,
 }
 
 enum Reply {
@@ -76,6 +88,8 @@ enum Reply {
     Applied(Result<WallpaperApplyOutcome, WallpaperError>),
     CollectionChosen(Result<Option<native_collection::Selection>, WallpaperError>),
     CollectionApplied(Result<native_collection::ApplyOutcome, WallpaperError>),
+    SlideshowRead(Result<native_slideshow::Observation, WallpaperError>),
+    SlideshowAdvanced(Result<native_slideshow::AdvanceOutcome, WallpaperError>),
 }
 
 struct Receipt {
@@ -92,6 +106,8 @@ struct State {
     session: Option<Session>,
     selection: Option<SelectedImage>,
     collection: Option<collection::SelectedCollection>,
+    slideshow: Option<slideshow::Current>,
+    slideshow_notice: String,
     collection_notice: String,
     monitor_captions: Vec<slint::SharedString>,
     monitor_index: i32,
@@ -100,6 +116,18 @@ struct State {
 }
 
 impl State {
+    fn clear_root(
+        &mut self,
+    ) -> (
+        Option<SelectedImage>,
+        Option<collection::SelectedCollection>,
+        Option<slideshow::Current>,
+    ) {
+        let (image, collection) = self.clear_files();
+        self.slideshow_notice.clear();
+        (image, collection, self.slideshow.take())
+    }
+
     fn clear_selection(&mut self) -> Option<SelectedImage> {
         self.monitor_captions.clear();
         self.monitor_index = -1;
@@ -221,6 +249,34 @@ impl WallpaperController {
                     actor.collection_options_changed(None);
                 }
             });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_read_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::ReadSlideshow);
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_previous_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::AdvanceSlideshow(
+                        native_slideshow::Direction::Backward,
+                    ));
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_next_requested(move || {
+                if let Some(actor) = weak.upgrade() {
+                    actor.request(Operation::AdvanceSlideshow(
+                        native_slideshow::Direction::Forward,
+                    ));
+                }
+            });
+            let weak = Rc::downgrade(&actor);
+            panel.on_wallpaper_slideshow_monitor_changed(move |index| {
+                if let Some(actor) = weak.upgrade() {
+                    actor.slideshow_monitor_changed(index);
+                }
+            });
         }
         actor
     }
@@ -287,14 +343,14 @@ impl WallpaperController {
         let (session, retired) = {
             let mut state = self.state.borrow_mut();
             if state.exhausted {
-                (None, state.clear_files())
+                (None, state.clear_root())
             } else if state.session.is_none_or(|session| session.frame != frame) {
-                let retired = state.clear_files();
+                let retired = state.clear_root();
                 state.notice.clear();
                 state.session = state.next().map(|id| Session { id, frame });
                 (state.session, retired)
             } else {
-                (state.session, (None, None))
+                (state.session, (None, None, None))
             }
         };
         // Native selection retirement can enqueue work; no state borrow survives it.
@@ -319,7 +375,7 @@ impl WallpaperController {
             if state.session.take().is_some() || self.acquiring.get() {
                 let _ = state.next();
             }
-            let retired = state.clear_files();
+            let retired = state.clear_root();
             state.notice.clear();
             (state.sequence, retired)
         };
@@ -372,6 +428,19 @@ impl WallpaperController {
             set_wallpaper_collection_status,
             "No current collection. Native slideshow policy has not been read.".into()
         );
+        clear!(set_wallpaper_slideshow_read_enabled, false);
+        clear!(set_wallpaper_slideshow_advance_enabled, false);
+        clear!(set_wallpaper_slideshow_selector_available, false);
+        clear!(set_wallpaper_slideshow_monitors, slint::ModelRc::default());
+        clear!(set_wallpaper_slideshow_monitor_index, -1);
+        clear!(
+            set_wallpaper_slideshow_facts,
+            "Native current slideshow policy has not been read.".into()
+        );
+        clear!(
+            set_wallpaper_slideshow_status,
+            "Read current explicitly; no monitor is assumed.".into()
+        );
         clear!(set_wallpaper_available, false);
         clear!(set_wallpaper_busy, busy);
         clear!(
@@ -414,6 +483,23 @@ impl WallpaperController {
                     panel.get_wallpaper_collection_apply_input_active()
                         && panel.get_wallpaper_collection_apply_control_visible()
                         && self.collection_options_current(&panel)
+                }
+                Operation::ReadSlideshow => {
+                    panel.get_wallpaper_slideshow_read_input_active()
+                        && panel.get_wallpaper_slideshow_read_control_visible()
+                }
+                Operation::AdvanceSlideshow(direction) => {
+                    let input = match direction {
+                        native_slideshow::Direction::Backward => {
+                            panel.get_wallpaper_slideshow_previous_input_active()
+                                && panel.get_wallpaper_slideshow_previous_control_visible()
+                        }
+                        native_slideshow::Direction::Forward => {
+                            panel.get_wallpaper_slideshow_next_input_active()
+                                && panel.get_wallpaper_slideshow_next_control_visible()
+                        }
+                    };
+                    input && self.slideshow_choice_current(&panel, direction)
                 }
             }
     }
@@ -502,334 +588,6 @@ impl WallpaperController {
     fn focused(_panel: &Panel) -> bool {
         false
     }
-
-    fn request(self: &Rc<Self>, operation: Operation) {
-        if self.projecting.get() || self.acquiring.get() || self.submitting.get() {
-            return;
-        }
-        let session = self.state.borrow().session;
-        let Some(session) = session else { return };
-        if !self.intent_current(session, operation) {
-            return;
-        }
-        let (provider, flight, request, retired) = {
-            let mut state = self.state.borrow_mut();
-            if state.flight.is_some() || state.session != Some(session) {
-                return;
-            }
-            let Some(provider) = state.provider.clone() else {
-                return;
-            };
-            // Both a new picker and an apply retire the old selection. Even
-            // rejection cannot restore it or turn a held gesture into a retry.
-            let (request, retired) = match operation {
-                Operation::Choose => (Request::Choose, state.clear_files()),
-                Operation::ChooseCollection => (Request::ChooseCollection, state.clear_files()),
-                Operation::Apply => {
-                    let Some(selection) = state.selection.as_ref() else {
-                        return;
-                    };
-                    if selection.scope_at(state.monitor_index).as_ref() != Some(&selection.scope) {
-                        return;
-                    }
-                    let Some(requested) = selection.requested() else {
-                        return;
-                    };
-                    let request = Request::Apply {
-                        target: selection.image.target.clone(),
-                        scope: selection.scope.clone(),
-                        index: state.monitor_index,
-                        requested,
-                    };
-                    // Keep only readonly display projection until the flight
-                    // completes; no image authority remains in actor state.
-                    (request, (state.selection.take(), None))
-                }
-                Operation::ApplyCollection => {
-                    let Some(collection) = state.collection.as_mut() else {
-                        return;
-                    };
-                    let Some(target) = collection.target.take() else {
-                        return;
-                    };
-                    let request = Request::ApplyCollection {
-                        target,
-                        options: collection.options,
-                        index: collection.index,
-                    };
-                    // Gallery and proposals remain readonly during submission so
-                    // the final live geometry/input check still has its subject.
-                    (request, (None, None))
-                }
-            };
-            let Some(ticket) = state.next() else {
-                drop(state);
-                drop(retired);
-                drop(request);
-                self.stop_root();
-                return;
-            };
-            let (scope, monitor_index, requested) = match &request {
-                Request::Choose | Request::ChooseCollection | Request::ApplyCollection { .. } => {
-                    (None, None, 0)
-                }
-                Request::Apply {
-                    scope,
-                    index,
-                    requested,
-                    ..
-                } => (Some(scope.clone()), Some(*index), *requested),
-            };
-            let (collection_target, collection_options, collection_index) = match &request {
-                Request::ApplyCollection {
-                    target,
-                    options,
-                    index,
-                } => (Some(target.downgrade()), Some(*options), Some(*index)),
-                _ => (None, None, None),
-            };
-            let flight = Flight {
-                ticket,
-                session,
-                operation,
-                scope,
-                monitor_index,
-                requested,
-                collection_target,
-                collection_options,
-                collection_index,
-            };
-            state.flight = Some(flight.clone());
-            state.notice.clear();
-            state.collection_notice.clear();
-            (provider, flight, request, retired)
-        };
-        drop(retired);
-        if !self.project(session, Some(operation))
-            || !self.intent_current(session, operation)
-            || !self.provider_current(Some(&provider))
-            || !self.request_current(&request, flight.ticket)
-            || self
-                .state
-                .borrow()
-                .flight
-                .as_ref()
-                .is_none_or(|current| current.ticket != flight.ticket)
-        {
-            let retired = {
-                let mut state = self.state.borrow_mut();
-                state.flight = None;
-                let retired = state.clear_files();
-                state.notice = "The file request lost its live admission before submission. No SDK work was requested; choose fresh files.".into();
-                let _ = state.next();
-                retired
-            };
-            drop(retired);
-            drop(request);
-            // A clipped file gesture is not retirement of the orthogonal
-            // global-position observation. Only actual Root loss stops it.
-            self.refresh_root();
-            return;
-        }
-        let mailbox = self.mailbox.clone();
-        let panel = self.panel.clone();
-        // Accepted work retains its provider independently of this actor/Root.
-        let owner = provider.clone();
-        let admitted = {
-            self.submitting.set(true);
-            let _guard = ResetFlag(&self.submitting);
-            match request {
-                Request::Choose => {
-                    let completion: WallpaperChooseCompletion = Box::new(move |result| {
-                        let _owner = owner;
-                        let result = result.map(|image| image.map(PreparedSelection::new));
-                        deliver(&mailbox, &panel, flight.ticket, Reply::Chosen(result));
-                    });
-                    provider.choose(completion)
-                }
-                Request::Apply { target, scope, .. } => {
-                    let completion: WallpaperApplyCompletion = Box::new(move |result| {
-                        let _owner = owner;
-                        deliver(&mailbox, &panel, flight.ticket, Reply::Applied(result));
-                    });
-                    provider.apply(target, scope, completion)
-                }
-                Request::ChooseCollection => {
-                    let completion: native_collection::ChooseCompletion = Box::new(move |result| {
-                        let _owner = owner;
-                        deliver(
-                            &mailbox,
-                            &panel,
-                            flight.ticket,
-                            Reply::CollectionChosen(result),
-                        );
-                    });
-                    provider.choose_collection(completion)
-                }
-                Request::ApplyCollection {
-                    target, options, ..
-                } => {
-                    let completion: native_collection::ApplyCompletion = Box::new(move |result| {
-                        let _owner = owner;
-                        deliver(
-                            &mailbox,
-                            &panel,
-                            flight.ticket,
-                            Reply::CollectionApplied(result),
-                        );
-                    });
-                    provider.apply_collection(target, options, completion)
-                }
-            }
-        };
-        if let Err(error) = admitted {
-            // Immediate errors accepted no work and owe no completion.
-            let reply = match operation {
-                Operation::Choose => Reply::Chosen(Err(error)),
-                Operation::Apply => Reply::Applied(Err(error)),
-                Operation::ChooseCollection => Reply::CollectionChosen(Err(error)),
-                Operation::ApplyCollection => Reply::CollectionApplied(Err(error)),
-            };
-            let retired = self.mailbox.lock().replace(Receipt {
-                ticket: flight.ticket,
-                reply,
-            });
-            drop(retired);
-        }
-        // Synchronous/reentrant providers cannot recursively start another flight.
-        self.receive();
-    }
-
-    fn request_current(&self, request: &Request, ticket: u64) -> bool {
-        let state = self.state.borrow();
-        let Some(flight) = state.flight.as_ref() else {
-            return false;
-        };
-        if flight.ticket != ticket {
-            return false;
-        }
-        match request {
-            Request::Choose => flight.operation == Operation::Choose && flight.scope.is_none(),
-            Request::Apply {
-                scope,
-                index,
-                requested,
-                ..
-            } => {
-                flight.operation == Operation::Apply
-                    && flight.scope.as_ref() == Some(scope)
-                    && flight.monitor_index == Some(*index)
-                    && state.monitor_index == *index
-                    && flight.requested == *requested
-            }
-            Request::ChooseCollection => {
-                flight.operation == Operation::ChooseCollection
-                    && flight.collection_target.is_none()
-            }
-            Request::ApplyCollection {
-                target,
-                options,
-                index,
-            } => {
-                flight.operation == Operation::ApplyCollection
-                    && flight
-                        .collection_target
-                        .as_ref()
-                        .is_some_and(|weak| weak.is_alive() && weak.matches(target))
-                    && flight.collection_options == Some(*options)
-                    && flight.collection_index == Some(*index)
-                    && state.collection.as_ref().is_some_and(|collection| {
-                        collection.target.is_none()
-                            && collection.options == *options
-                            && collection.index == *index
-                    })
-            }
-        }
-    }
-
-    fn receive(self: &Rc<Self>) {
-        if self.projecting.get() || self.acquiring.get() || self.submitting.get() {
-            return;
-        }
-        let receipt = self.mailbox.lock().take();
-        let Some(receipt) = receipt else { return };
-        let flight = {
-            let mut state = self.state.borrow_mut();
-            let Some(current) = state.flight.as_ref() else {
-                return;
-            };
-            if current.ticket != receipt.ticket {
-                return;
-            }
-            let Some(flight) = state.flight.take() else {
-                return;
-            };
-            flight
-        };
-        if !self.current(flight.session) {
-            // Discard every old result/target before independently projecting
-            // current availability. Releasing a flight does not revive its scope.
-            drop(receipt);
-            self.refresh_root();
-            return;
-        }
-        if matches!(
-            flight.operation,
-            Operation::ChooseCollection | Operation::ApplyCollection
-        ) {
-            self.receive_collection(flight, receipt.reply);
-            return;
-        }
-        // Validation and rejected target destruction happen outside RefCell borrows.
-        let (selection, notice) = match (flight.operation, receipt.reply) {
-            (Operation::Choose, Reply::Chosen(Ok(Some(image)))) => {
-                match SelectedImage::new(image).and_then(|selection| {
-                    let notice = selection.notice(&selection.scope)?;
-                    Some((selection, notice))
-                }) {
-                    Some((selection, notice)) => (Some(selection), notice),
-                    None => (
-                        None,
-                        "The native image selection contains invalid display metadata. No image is selected; choose again.".into(),
-                    ),
-                }
-            }
-            (Operation::Choose, Reply::Chosen(Ok(None))) => {
-                (None, "Image picker cancelled. No image is selected.".into())
-            }
-            (Operation::Apply, Reply::Applied(Ok(outcome))) => {
-                (None, outcome_notice(outcome, flight.requested))
-            }
-            (Operation::Choose, Reply::Chosen(Err(error)))
-            | (Operation::Apply, Reply::Applied(Err(error))) => {
-                (None, error_notice(flight.operation, error).into())
-            }
-            _ => (
-                None,
-                "The provider returned an invalid response. Actual Windows wallpaper is unknown; choose a fresh image.".into(),
-            ),
-        };
-        if !self.current(flight.session) {
-            drop(selection);
-            self.refresh_root();
-            return;
-        }
-        let captions = selection
-            .as_ref()
-            .map(SelectedImage::captions)
-            .unwrap_or_default();
-        let index = if selection.is_some() { 0 } else { -1 };
-        {
-            let mut state = self.state.borrow_mut();
-            state.selection = selection;
-            state.monitor_captions = captions;
-            state.monitor_index = index;
-            state.notice = notice;
-        }
-        if !self.project(flight.session, None) {
-            self.stop_root();
-        }
-    }
 }
 
 fn deliver(
@@ -885,6 +643,12 @@ fn error_notice(operation: Operation, error: WallpaperError) -> &'static str {
         }
         (Operation::ApplyCollection, WallpaperError::Unavailable) => {
             "The native slideshow request is unavailable. Some SDK effects may already have occurred; actual Windows policy is unknown. No rollback or retry was performed."
+        }
+        (
+            Operation::ReadSlideshow | Operation::AdvanceSlideshow(_),
+            WallpaperError::Unavailable,
+        ) => {
+            "The native slideshow request is unavailable. Effects may already have occurred; current facts are unknown. No rollback or retry was performed."
         }
         (_, WallpaperError::InvalidTarget) => {
             "The native file selection, captured monitors, or target is no longer valid. Nothing is confirmed; choose fresh files."

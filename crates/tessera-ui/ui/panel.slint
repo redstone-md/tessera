@@ -291,6 +291,33 @@ export component Panel inherits Window {
     callback wallpaper-position-apply-requested();
     callback wallpaper-position-desired-changed(int);
     callback wallpaper-position-event-ready();
+    // Explicit actual native slideshow policy; file collection drafts are separate.
+    in property <bool> wallpaper-slideshow-read-enabled;
+    in property <bool> wallpaper-slideshow-advance-enabled;
+    in property <bool> wallpaper-slideshow-selector-available;
+    in property <[string]> wallpaper-slideshow-monitors;
+    in-out property <int> wallpaper-slideshow-monitor-index: -1;
+    in property <string> wallpaper-slideshow-facts: "Native current slideshow policy has not been read.";
+    in property <string> wallpaper-slideshow-status: "Read current explicitly; no monitor is assumed.";
+    out property <bool> wallpaper-slideshow-read-input-active;
+    out property <bool> wallpaper-slideshow-previous-input-active;
+    out property <bool> wallpaper-slideshow-next-input-active;
+    out property <bool> wallpaper-slideshow-monitor-input-active;
+    property <bool> wallpaper-slideshow-read-clip;
+    property <bool> wallpaper-slideshow-previous-clip;
+    property <bool> wallpaper-slideshow-next-clip;
+    out property <bool> wallpaper-slideshow-read-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available && root.wallpaper-slideshow-read-clip;
+    out property <bool> wallpaper-slideshow-previous-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-slideshow-selector-available && root.wallpaper-slideshow-previous-clip;
+    out property <bool> wallpaper-slideshow-next-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available
+        && root.wallpaper-slideshow-selector-available && root.wallpaper-slideshow-next-clip;
+    callback wallpaper-slideshow-read-requested();
+    callback wallpaper-slideshow-previous-requested();
+    callback wallpaper-slideshow-next-requested();
+    callback wallpaper-slideshow-monitor-changed(int);
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -984,6 +1011,129 @@ export component Panel inherits Window {
                                 model: ["Center", "Tile", "Stretch", "Fit", "Fill", "Span"];
                                 current-index <=> root.wallpaper-position-desired-index;
                                 selected(value) => { root.wallpaper-position-desired-changed(self.current-index); }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
+                            label: "Current Windows slideshow";
+                            description: root.wallpaper-slideshow-facts + "\n" + root.wallpaper-slideshow-status;
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-slideshow-read-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 100px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-slideshow-read-enabled && !root.wallpaper-busy;
+                                accessible-text: "Read current native Windows slideshow policy";
+                                accessible-description: "Explicitly read actual native flags, options, array member count and captured monitors. File-selection drafts are preserved.";
+                                clicked => {
+                                    root.wallpaper-slideshow-read-input-active =
+                                        root.wallpaper-slideshow-read-control-visible
+                                        && root.wallpaper-slideshow-read-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-slideshow-read-input-active { root.wallpaper-slideshow-read-requested(); }
+                                    root.wallpaper-slideshow-read-input-active = false;
+                                }
+                                Text {
+                                    text: "Read current";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-slideshow-selector-available: SettingsRow {
+                            label: "Current-policy display";
+                            description: "Choose one actual SDK-captured monitor. No primary, first display, or next-scheduled monitor is assumed.";
+                            ComboBox {
+                                width: 200px;
+                                min-height: 24px;
+                                max-height: 24px;
+                                enabled: root.wallpaper-controls-enabled && !root.wallpaper-busy;
+                                accessible-label: "Actual native current-slideshow captured monitor";
+                                model: root.wallpaper-slideshow-monitors;
+                                current-index <=> root.wallpaper-slideshow-monitor-index;
+                                selected(value) => {
+                                    let origin = self.absolute-position;
+                                    let viewport = page-scroll.absolute-position;
+                                    root.wallpaper-slideshow-monitor-input-active =
+                                        root.wallpaper-page-visible && root.wallpaper-available
+                                        && root.wallpaper-slideshow-selector-available
+                                        && root.wallpaper-controls-enabled && !root.wallpaper-busy
+                                        && self.width > 0px && self.height > 0px
+                                        && origin.x >= viewport.x && origin.y >= viewport.y
+                                        && origin.x + self.width <= viewport.x + page-scroll.visible-width
+                                        && origin.y + self.height <= viewport.y + page-scroll.visible-height;
+                                    if root.wallpaper-slideshow-monitor-input-active {
+                                        root.wallpaper-slideshow-monitor-changed(self.current-index);
+                                    }
+                                    root.wallpaper-slideshow-monitor-input-active = false;
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode
+                            && root.wallpaper-slideshow-selector-available: SettingsRow {
+                            label: "Advance on chosen display";
+                            description: "One immediate Forward or Backward request on this exact observed monitor. Save and Cancel do not apply or undo it. Fresh native readback does not confirm rendered pixels.";
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-slideshow-previous-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 80px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-slideshow-advance-enabled && !root.wallpaper-busy;
+                                accessible-text: "Request previous slideshow item on the exact selected native monitor";
+                                accessible-description: root.wallpaper-slideshow-status;
+                                clicked => {
+                                    root.wallpaper-slideshow-previous-input-active =
+                                        root.wallpaper-slideshow-previous-control-visible
+                                        && root.wallpaper-slideshow-advance-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-slideshow-previous-input-active { root.wallpaper-slideshow-previous-requested(); }
+                                    root.wallpaper-slideshow-previous-input-active = false;
+                                }
+                                Text {
+                                    text: "Previous";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            ViewportTileButton {
+                                fully-visible <=> root.wallpaper-slideshow-next-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 68px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-slideshow-advance-enabled && !root.wallpaper-busy;
+                                accessible-text: "Request next slideshow item on the exact selected native monitor";
+                                accessible-description: root.wallpaper-slideshow-status;
+                                clicked => {
+                                    root.wallpaper-slideshow-next-input-active =
+                                        root.wallpaper-slideshow-next-control-visible
+                                        && root.wallpaper-slideshow-advance-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-slideshow-next-input-active { root.wallpaper-slideshow-next-requested(); }
+                                    root.wallpaper-slideshow-next-input-active = false;
+                                }
+                                Text {
+                                    text: "Next";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
                             }
                         }
                         if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
