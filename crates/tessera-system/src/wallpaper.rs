@@ -154,7 +154,7 @@ impl WallpaperPreview {
             return Err(WallpaperError::Unavailable);
         }
         let mut visible = false;
-        for pixel in rgba.chunks_exact(4) {
+        for pixel in rgba.as_chunks::<4>().0 {
             let alpha = pixel[3];
             if pixel[..3].iter().any(|channel| *channel > alpha) {
                 return Err(WallpaperError::Unavailable);

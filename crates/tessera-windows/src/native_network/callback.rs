@@ -30,6 +30,8 @@ struct EffectNotice {
 }
 
 impl Context {
+    // try_update is unavailable at our Rust 1.92 MSRV; this rename starts in 1.99.
+    #[allow(deprecated)]
     pub(super) fn new(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         Self {
             admitted: AtomicBool::new(true),
@@ -145,6 +147,8 @@ impl Context {
         }
     }
 
+    // try_update is unavailable at our Rust 1.92 MSRV; this rename starts in 1.99.
+    #[allow(deprecated)]
     fn notify(&self, source: u32, code: u32) {
         // ACM arrival/removal, connection/disconnection, cached scan-list and
         // relevant radio/profile invalidations retire unsubmitted authority.

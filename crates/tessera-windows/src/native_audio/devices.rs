@@ -134,6 +134,8 @@ impl DeviceInventory {
         }
     }
 
+    // try_update is unavailable at our Rust 1.92 MSRV; this rename starts in 1.99.
+    #[allow(deprecated)]
     fn incarnation() -> Result<u64, AudioError> {
         // A key from a retired/replaced AudioHost must not collide with a new
         // owner's record, even when Windows reuses the exact endpoint ID.

@@ -15,7 +15,9 @@ use crate::SourceSeed;
 pub(super) fn source_seed(preview: &WallpaperPreview) -> Option<SourceSeed> {
     let opaque = preview
         .rgba()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[3] == 255);
     let count = opaque.clone().count();
     if count == 0 {

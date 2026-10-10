@@ -32,10 +32,27 @@ pub(super) fn radio<C: NativeCalls>(
     handle: usize,
     id: &GUID,
 ) -> Result<RadioState, NetworkError> {
-    Ok(radio_from_phys(&radio_phys(calls, handle, id)?))
+    // Aggregate facts do not grant per-PHY mutation authority.
+    Ok(radio_from_phys(&read_radio_phys(calls, handle, id)?))
 }
 
 pub(super) fn radio_phys<C: NativeCalls>(
+    calls: &C,
+    handle: usize,
+    id: &GUID,
+) -> Result<Vec<WLAN_PHY_RADIO_STATE>, NetworkError> {
+    let mut phys = read_radio_phys(calls, handle, id)?;
+    phys.sort_by_key(|phy| phy.dwPhyIndex);
+    if phys
+        .windows(2)
+        .any(|pair| pair[0].dwPhyIndex == pair[1].dwPhyIndex)
+    {
+        return Err(invalid("WLAN returned duplicate radio PHY identifiers"));
+    }
+    Ok(phys)
+}
+
+fn read_radio_phys<C: NativeCalls>(
     calls: &C,
     handle: usize,
     id: &GUID,
@@ -46,19 +63,7 @@ pub(super) fn radio_phys<C: NativeCalls>(
         "WLAN radio observation",
     )?;
     let count = buffer.read::<u32>(offset_of!(WLAN_RADIO_STATE, dwNumberOfPhys))?;
-    let mut phys = buffer.list::<WLAN_PHY_RADIO_STATE>(
-        offset_of!(WLAN_RADIO_STATE, PhyRadioState),
-        count,
-        64,
-    )?;
-    phys.sort_by_key(|phy| phy.dwPhyIndex);
-    if phys
-        .windows(2)
-        .any(|pair| pair[0].dwPhyIndex == pair[1].dwPhyIndex)
-    {
-        return Err(invalid("WLAN returned duplicate radio PHY identifiers"));
-    }
-    Ok(phys)
+    buffer.list(offset_of!(WLAN_RADIO_STATE, PhyRadioState), count, 64)
 }
 
 fn radio_from_phys(phys: &[WLAN_PHY_RADIO_STATE]) -> RadioState {

@@ -12,6 +12,8 @@ use windows::Devices::Enumeration::{
 use windows::Foundation::TypedEventHandler;
 use windows::core::{HSTRING, IInspectable};
 
+// try_update is unavailable at our Rust 1.92 MSRV; this rename starts in 1.99.
+#[allow(deprecated)]
 pub(super) fn invalidate(revision: &AtomicU64) {
     // MAX is a permanent tombstone, never a wrapped/reusable source revision.
     let _ = revision.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {

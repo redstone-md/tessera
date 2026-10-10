@@ -57,6 +57,8 @@ pub(super) struct Controls {
 }
 
 impl Controls {
+    // try_update is unavailable at our Rust 1.92 MSRV; this rename starts in 1.99.
+    #[allow(deprecated)]
     pub(super) fn new() -> Self {
         Self {
             owner: NEXT_OWNER
