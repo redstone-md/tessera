@@ -279,6 +279,13 @@ becomes a launch command. Missing identity keeps separate windows. The selected
 member has a real, scoped DWM thumbnail; protected/unavailable previews remain honest and
 do not disable window actions.
 
+Pinned applications support native drag to measured Dock slots and discrete
+Move earlier/later menu actions. The existing complete-record saver commits
+order only on success; cancellation clears passive feedback without replay.
+Scrolling/layout changes cancel drag, and feedback stays in the owned Dock
+window rather than a new desktop overlay. Full monitor/action preferences and
+Windows drag/runtime outcomes still require completion and verification.
+
 Development Quick Settings adds active input/output devices, selected-device
 volume/mute, each output's app/System Sounds mixer and independent default-role
 observations. All mutations capture complete endpoint/session incarnations and

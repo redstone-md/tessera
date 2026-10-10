@@ -61,6 +61,7 @@ pub(super) struct RootCapabilityScope {
     admission: Rc<RootAdmission>,
     shortcuts: Rc<ShortcutIntegration>,
     power_closed: Rc<Cell<bool>>,
+    root: PanelController,
 }
 
 impl RootCapabilityScope {
@@ -69,6 +70,7 @@ impl RootCapabilityScope {
             admission: root.admission.clone(),
             shortcuts: root.shortcuts.clone(),
             power_closed: root.power_admission_closed.clone(),
+            root: root.clone(),
         }
     }
 }
@@ -79,6 +81,8 @@ impl Drop for RootCapabilityScope {
         self.power_closed.set(true);
         self.admission.alive.set(false);
         self.admission.active_popup.set(None);
+        // The stack-owned scope closes admission before clearing a native drag.
+        self.root.cancel_dock_reorder();
         self.shortcuts.enabled.set(false);
         self.shortcuts.capture_requested.set(false);
         self.shortcuts.trigger.borrow_mut().take();

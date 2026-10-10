@@ -193,6 +193,10 @@ impl PanelController {
             dock_edge: edge(dock_edge),
             scale,
         };
+        let placement_changed = self.visibility_geometry.borrow().placement != Some(placement);
+        if placement_changed {
+            self.cancel_dock_reorder();
+        }
         let revision = {
             let mut root = self.visibility_geometry.borrow_mut();
             if root.placement != Some(placement) {
@@ -225,9 +229,10 @@ impl PanelController {
                         })
                 })
             };
-            let dragging = self
-                .launcher_and_upgrade()
-                .is_some_and(|launcher| launcher.get_reorder_dragging());
+            let dragging = self.dock_reorder_active()
+                || self
+                    .launcher_and_upgrade()
+                    .is_some_and(|launcher| launcher.get_reorder_dragging());
             let dock_focus = self
                 .dock_and_upgrade()
                 .and_then(|dock| own_focus(dock.window()));
@@ -282,6 +287,7 @@ impl PanelController {
     /// Missing geometry revokes timers and popup scope; the retained validated
     /// frame is recovery placement only and must never count as fresh readiness.
     pub(super) fn retire_visibility_geometry(&self) -> Result<(), String> {
+        self.cancel_dock_reorder();
         let (retired, frame, revision) = {
             let mut root = self.visibility_geometry.borrow_mut();
             let retired = root.placement.take().is_some();
@@ -382,6 +388,10 @@ impl PanelController {
             self.popup_operation.replace(Rc::new(()));
             self.dismiss_tooltip(false);
             if kind == SurfaceKind::Dock {
+                self.cancel_dock_reorder();
+                if !current() {
+                    return Ok(());
+                }
                 let menu = self.menus.borrow().clone();
                 if let Some(menu) = menu {
                     menu.hide();
@@ -404,6 +414,12 @@ impl PanelController {
         }
         let changed = self.leases.borrow().geometry_changed(kind, tuple);
         if changed {
+            if kind == SurfaceKind::Dock {
+                self.cancel_dock_reorder();
+                if !current() {
+                    return Ok(());
+                }
+            }
             self.detach_lease(kind);
             if !current() {
                 return Ok(());
@@ -425,6 +441,10 @@ impl PanelController {
         }
         if kind == SurfaceKind::Dock {
             self.recycle_bin_shown();
+            if !current() {
+                return Ok(());
+            }
+            self.sync_dock_reorder();
         }
         Ok(())
     }

@@ -48,6 +48,7 @@ pub(crate) struct ContextMenuController {
     dock: slint::Weak<Dock>,
     key: RefCell<SharedString>,
     scope_generation: Cell<Option<u64>>,
+    pin_order: RefCell<Vec<String>>,
     focus_seen: Cell<bool>,
     focus_watch: slint::Timer,
     host: Arc<dyn DesktopHost>,
@@ -98,6 +99,7 @@ impl ContextMenuController {
             dock: dock.as_weak(),
             key: RefCell::default(),
             scope_generation: Cell::new(Some(0)),
+            pin_order: RefCell::default(),
             focus_seen: Cell::new(false),
             focus_watch: slint::Timer::default(),
             host,
@@ -211,6 +213,23 @@ impl ContextMenuController {
         self.surface.set_kind(kind);
         self.surface.set_launcher_favorite_scope(false);
         self.surface.set_media_scope(media_scope);
+        let pin_order: Vec<_> = dock
+            .get_pinned_apps()
+            .iter()
+            .map(|app| app.key.to_string())
+            .collect();
+        let pin_index = pin_order.iter().position(|pin| pin == key.as_str());
+        self.surface.set_pin_move_earlier_enabled(
+            kind == DockMenuKind::Pinned
+                && dock.get_reorder_enabled()
+                && pin_index.is_some_and(|index| index > 0),
+        );
+        self.surface.set_pin_move_later_enabled(
+            kind == DockMenuKind::Pinned
+                && dock.get_reorder_enabled()
+                && pin_index.is_some_and(|index| index + 1 < pin_order.len()),
+        );
+        self.pin_order.replace(pin_order);
         let metadata = dock.get_group_metadata();
         let group = metadata.iter().find(|group| group.key == key);
         let members: Vec<_> = if matches!(kind, DockMenuKind::Pinned | DockMenuKind::Window) {
@@ -252,7 +271,17 @@ impl ContextMenuController {
                 for (action, label) in [
                     (DockMenuAction::Launch, "Open new instance"),
                     (DockMenuAction::Unpin, "Unpin"),
+                    (DockMenuAction::MoveEarlier, "Move earlier"),
+                    (DockMenuAction::MoveLater, "Move later"),
                 ] {
+                    if matches!(
+                        action,
+                        DockMenuAction::MoveEarlier | DockMenuAction::MoveLater
+                    ) && !self.surface.get_pin_move_earlier_enabled()
+                        && !self.surface.get_pin_move_later_enabled()
+                    {
+                        continue;
+                    }
                     entries.push(MenuEntry {
                         action,
                         label: label.into(),
@@ -551,6 +580,7 @@ impl ContextMenuController {
         {
             return;
         }
+        let pin_order = self.pin_order.borrow().clone();
         // Releasing our foreground/native role precedes any parent callback.
         self.hide();
         let Some(dock) = dock else { return };
@@ -566,6 +596,28 @@ impl ContextMenuController {
             }
             DockMenuAction::Launch => dock.invoke_launch_requested(key),
             DockMenuAction::Unpin => dock.invoke_pin_toggle_requested(key, false),
+            DockMenuAction::MoveEarlier | DockMenuAction::MoveLater => {
+                // A native lease Drop may replace even this same-key popup.
+                // The old discrete intent cannot reorder its replacement.
+                let same_scope = scope_generation
+                    .and_then(|generation| generation.checked_add(1))
+                    .is_some_and(|generation| self.scope_generation.get() == Some(generation))
+                    && !self.is_open()
+                    && self.surface.get_kind() == DockMenuKind::Pinned
+                    && *self.key.borrow() == key;
+                let current_order: Vec<_> = dock
+                    .get_pinned_apps()
+                    .iter()
+                    .map(|app| app.key.to_string())
+                    .collect();
+                if same_scope
+                    && dock.window().is_visible()
+                    && dock.get_reorder_enabled()
+                    && current_order == pin_order
+                {
+                    dock.invoke_reorder_move_requested(key, action == DockMenuAction::MoveLater);
+                }
+            }
             DockMenuAction::Settings => dock.invoke_open_settings_requested(),
             DockMenuAction::FileManager => {
                 dock.invoke_system_command_requested(DockSystemCommand::FileManager)
@@ -673,7 +725,13 @@ fn allowed(kind: DockMenuKind, action: DockMenuAction) -> bool {
                 | DockMenuAction::Restore
                 | DockMenuAction::Exit
         ),
-        DockMenuKind::Pinned => matches!(action, DockMenuAction::Launch | DockMenuAction::Unpin),
+        DockMenuKind::Pinned => matches!(
+            action,
+            DockMenuAction::Launch
+                | DockMenuAction::Unpin
+                | DockMenuAction::MoveEarlier
+                | DockMenuAction::MoveLater
+        ),
         DockMenuKind::Window => matches!(
             action,
             DockMenuAction::Activate | DockMenuAction::Minimize | DockMenuAction::Close

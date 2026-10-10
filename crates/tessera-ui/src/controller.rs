@@ -22,6 +22,7 @@ use crate::{
 mod actions;
 mod calendar;
 mod context_menu;
+mod dock_order;
 mod dock_utilities;
 mod geometry;
 mod launcher;
@@ -142,6 +143,7 @@ pub(crate) struct PanelController {
     icon_cache: Rc<RefCell<crate::icons::IconCache>>,
     leases: Rc<RefCell<SurfaceLeases>>,
     launcher_state: Rc<RefCell<launcher::LauncherState>>,
+    dock_order: Rc<dock_order::DockOrder>,
     preference_saving: Rc<Cell<bool>>,
     surface_failure: Rc<RefCell<Option<String>>>,
     popup_operation: Rc<RefCell<Rc<()>>>,
@@ -175,6 +177,7 @@ impl Drop for PreferenceSave<'_> {
     fn drop(&mut self) {
         self.0.preference_saving.set(false);
         self.0.sync_launcher_reorder();
+        self.0.sync_dock_reorder();
     }
 }
 
@@ -186,6 +189,7 @@ impl PanelController {
         let save = PreferenceSave(self);
         self.cancel_launcher_input();
         self.cancel_launcher_reorder();
+        self.cancel_dock_reorder();
         self.hide_launcher_app_menu();
         let menu = self.menus.borrow().clone();
         if let Some(menu) = menu {
@@ -208,6 +212,7 @@ impl PanelController {
             icon_cache: Rc::default(),
             leases: Rc::default(),
             launcher_state: Rc::default(),
+            dock_order: Rc::default(),
             preference_saving: Rc::default(),
             surface_failure: Rc::default(),
             popup_operation: Rc::default(),
@@ -267,6 +272,7 @@ impl PanelController {
             calendar: Rc::default(),
             power_menu: Rc::default(),
             dock_utilities: Rc::default(),
+            dock_order: Rc::default(),
             recycle_bin: Rc::default(),
             tooltips: Rc::default(),
             network_menu: Rc::default(),
@@ -405,6 +411,7 @@ impl PanelController {
     }
 
     fn wire_dock(&self, dock: &Dock) {
+        self.wire_dock_reorder(dock);
         dock.on_group_count(|metadata, key| {
             metadata
                 .iter()
@@ -1146,6 +1153,7 @@ impl PanelController {
     }
 
     fn refresh_strip(&self, dock: &Dock) {
+        self.invalidate_dock_projection();
         let menu = self.menus.borrow().clone();
         if let Some(menu) = menu {
             menu.retire_window_scope();
@@ -1262,6 +1270,7 @@ impl PanelController {
         // Every member stays in the retained model used for action admission.
         dock.set_observed_windows(ModelRc::new(VecModel::from(observed)));
         dock.set_running_windows(ModelRc::new(VecModel::from(windows)));
+        self.invalidate_dock_projection();
     }
 
     /// Places the dock and toolbar windows inside the monitor bounds and

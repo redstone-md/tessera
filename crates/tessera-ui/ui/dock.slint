@@ -11,27 +11,66 @@ export struct DockApp { key: string, label: string, icon: image, pinned: bool }
 export struct DockWindow { key: string, caption: string, icon: image }
 export struct DockGroup { key: string, identity: string, count: int, representative: string }
 export struct DockStatus { notice: string, status: string, refreshing: bool, stale: bool }
+export struct DockTileAppearance {
+    reference-mode: bool, tile-color: color, hover-color: color,
+    pressed-color: color, foreground: color, icon-pad: length, radius: length
+}
+export struct DockDragVisual {
+    visible: bool, source: DockApp, count: int, pressed: bool,
+    appearance: DockTileAppearance, bounds: TileBounds
+}
+export struct DockOrderMetrics { viewport: TileBounds, vertical: bool, edge: int }
+
 
 // Keep the action/input slot fixed while only ordinary tile paint moves.
 // Media deliberately retains its separate, stationary interaction treatment.
 component DockButton inherits TileButton {
+    in property <bool> paint-pressed: root.pressed;
+    in property <DockTileAppearance> appearance: {
+        reference-mode: SeelenPalette.reference-mode,
+        tile-color: SeelenPalette.tile, hover-color: SeelenPalette.hover,
+        pressed-color: SeelenPalette.pressed, foreground: SeelenPalette.foreground,
+        icon-pad: 6.5px, radius: root.radius
+    };
     background: transparent;
     Rectangle {
-        y: root.pressed ? 2px : 0px;
+        y: root.paint-pressed ? 2px : 0px;
         width: root.width;
         height: root.height;
         border-radius: root.radius;
-        background: SeelenPalette.reference-mode
-            ? (root.enabled && (root.hovered || root.pressed) ? SeelenPalette.hover : SeelenPalette.tile)
+        background: root.appearance.reference-mode
+            ? (root.enabled && (root.hovered || root.paint-pressed) ? root.appearance.hover-color : root.appearance.tile-color)
             : (!root.enabled ? transparent :
-                root.pressed ? SeelenPalette.pressed :
-                root.hovered ? SeelenPalette.hover : transparent);
-        drop-shadow-color: SeelenPalette.reference-mode ? #000000.with-alpha(0.08) : transparent;
+                root.paint-pressed ? root.appearance.pressed-color :
+                root.hovered ? root.appearance.hover-color : transparent);
+        drop-shadow-color: root.appearance.reference-mode ? #000000.with-alpha(0.08) : transparent;
         drop-shadow-offset-x: 1px;
         drop-shadow-offset-y: 1px;
         drop-shadow-blur: 2px;
         accessible-role: none;
         @children
+    }
+}
+// The real source and passive feedback use exactly the same tile paint.
+component DockApplicationButton inherits DockButton {
+    in property <DockApp> app;
+    in property <int> count;
+    accessible-role: button;
+    ApplicationIcon {
+        x: root.appearance.icon-pad;
+        y: root.appearance.icon-pad;
+        width: parent.width - 2 * root.appearance.icon-pad;
+        height: parent.height - 2 * root.appearance.icon-pad;
+        source: root.app.icon;
+        accessible-role: none;
+    }
+    if root.count > 0: Text {
+        x: parent.width - self.width - 2px;
+        y: parent.height - self.height;
+        text: root.count;
+        font-size: 11px;
+        color: root.appearance.foreground;
+        accessible-role: none;
     }
 }
 component DockIndicator inherits Rectangle {
@@ -119,6 +158,27 @@ export component Dock inherits Window {
     callback context-menu-requested(DockMenuKind, string, Point);
     callback tooltip-requested(string, TileBounds);
     callback tooltip-dismissed(bool, Point);
+    in-out property <bool> reorder-enabled;
+    in-out property <data-transfer> reorder-data;
+    in-out property <DockDragVisual> reorder-visual;
+    in-out property <string> reorder-target-key;
+    in-out property <int> reorder-projection;
+    out property <bool> reorder-dragging: pinned-drag.dragging;
+    out property <DockOrderMetrics> reorder-metrics: {
+        viewport: { origin: scroll.absolute-position,
+            width: scroll.visible-width, height: scroll.visible-height },
+        vertical: root.vertical, edge: root.edge
+    };
+    callback reorder-origin(DockDragVisual, PointerEvent, TileBounds, Point);
+    callback reorder-slot-measured(string, TileBounds, int);
+    callback reorder-dragging-changed(bool);
+    callback reorder-can-drop(DropEvent, Point) -> DragAction;
+    callback reorder-window-hover(DropEvent, Point);
+    callback reorder-dropped(DropEvent, Point) -> DragAction;
+    callback reorder-finished(DragAction);
+    callback reorder-metrics-changed();
+    callback reorder-move-requested(string, bool); // true means later in saved order
+    changed reorder-metrics => { root.reorder-metrics-changed(); }
 
     // Chosen native Material3 geometry; compact shrinks proportionally.
     // Keep item/pad/gap/margin synchronized with src/dock.rs placement.
@@ -144,6 +204,18 @@ export component Dock inherits Window {
         + (root.recycle-empty-notice == "" ? "" : "\n" + root.recycle-empty-notice);
     property <length> media-length: root.media-view.enabled ? 136px * root.factor + root.gap : 0px;
 
+    // A window-sized passive hover target preserves feedback outside the
+    // clipped strip. Only the measured pinned slots below authorize a drop.
+    DropArea {
+        x: 0px; y: 0px;
+        width: root.width; height: root.height;
+        enabled: root.reorder-enabled && root.reorder-dragging;
+        can-drop(event) => {
+            root.reorder-window-hover(event, self.absolute-position);
+            return DragAction.none;
+        }
+        dropped(event) => { return DragAction.none; }
+    }
     // The bar itself: an inner rounded rectangle inside the transparent
     // window's outer margin. Start/Show desktop lead, Trash trails, and only
     // application/window tiles scroll between these fixed utilities.
@@ -247,20 +319,67 @@ export component Dock inherits Window {
                 tooltip-dismissed(delayed, origin) => { root.tooltip-dismissed(delayed, origin); }
             }
             // Tiles: pinned applications first, then running windows.
+            pinned-drag := DragArea {
+                x: root.vertical ? root.pad : root.media-length;
+                y: root.vertical ? root.media-length : root.pad;
+                width: root.vertical ? root.item : max(0px, root.pinned-apps.length * (root.item + root.gap) - root.gap);
+                height: root.vertical ? max(0px, root.pinned-apps.length * (root.item + root.gap) - root.gap) : root.item;
+                enabled: root.reorder-enabled && !root.blocked;
+                data: root.reorder-data;
+                allow-move: true;
+                changed dragging => { root.reorder-dragging-changed(self.dragging); }
+                drag-finished(action) => { root.reorder-finished(action); }
+            DropArea {
+                x: 0px; y: 0px;
+                width: parent.width; height: parent.height;
+                enabled: root.reorder-enabled && !root.blocked;
+                can-drop(event) => { return root.reorder-can-drop(event, self.absolute-position); }
+                dropped(event) => { return root.reorder-dropped(event, self.absolute-position); }
             for tile[i] in root.pinned-apps: Rectangle {
                 property <length> step: root.item + root.gap;
-                property <length> offset: root.media-length + i * step;
-                x: root.vertical ? root.pad : self.offset;
-                y: root.vertical ? self.offset : root.pad;
+                property <length> offset: i * step;
+                x: root.vertical ? 0px : self.offset;
+                y: root.vertical ? self.offset : 0px;
                 width: root.item;
                 height: root.item;
                 clip: false;
+                property <TileBounds> slot-bounds: {
+                    origin: self.absolute-position, width: self.width, height: self.height
+                };
+                property <string> slot-key: tile.key;
+                property <int> measurement-revision: root.reorder-projection;
+                init => { root.reorder-slot-measured(self.slot-key, self.slot-bounds, self.measurement-revision); }
+                changed slot-bounds => { root.reorder-slot-measured(self.slot-key, self.slot-bounds, self.measurement-revision); }
+                changed slot-key => { root.reorder-slot-measured(self.slot-key, self.slot-bounds, self.measurement-revision); }
+                changed measurement-revision => { root.reorder-slot-measured(self.slot-key, self.slot-bounds, self.measurement-revision); }
+                if root.reorder-target-key == tile.key: Rectangle {
+                    border-width: 2px;
+                    border-color: SeelenPalette.accent;
+                    border-radius: root.tile-radius;
+                    accessible-role: none;
+                }
 
-                DockButton {
+                DockApplicationButton {
                     width: parent.width;
                     height: parent.height;
                     radius: root.tile-radius;
                     enabled: !root.blocked;
+                    app: tile;
+                    count: root.group-count(root.group-metadata, tile.key);
+                    appearance: {
+                        reference-mode: SeelenPalette.reference-mode,
+                        tile-color: SeelenPalette.tile, hover-color: SeelenPalette.hover,
+                        pressed-color: SeelenPalette.pressed, foreground: SeelenPalette.foreground,
+                        icon-pad: root.icon-pad, radius: root.tile-radius
+                    };
+                    report-pointer-metadata: true;
+                    pointer-metadata(event, bounds, point) => {
+                        root.reorder-origin({
+                            visible: false, source: tile, count: self.count,
+                            pressed: self.pressed, appearance: self.appearance, bounds: bounds
+                        }, event, bounds, point);
+                    }
+                    opacity: root.reorder-visual.visible && root.reorder-visual.source.key == tile.key ? 0.35 : 1;
                     activation-key: tile.key;
                     accessible-text: (root.group-count(root.group-metadata, tile.key) > 0 ? "Switch to " : "Launch ") + tile.label;
                     tooltip-text: tile.label + root.group-tooltip(root.observed-windows, root.group-metadata, tile.key);
@@ -276,24 +395,9 @@ export component Dock inherits Window {
                     context-requested(position) => {
                         root.context-menu-requested(DockMenuKind.pinned, tile.key, position);
                     }
-
-                    ApplicationIcon {
-                        x: root.icon-pad;
-                        y: root.icon-pad;
-                        width: parent.width - 2 * root.icon-pad;
-                        height: parent.height - 2 * root.icon-pad;
-                        source: tile.icon;
-                        accessible-role: none;
-                    }
-                    if root.group-count(root.group-metadata, tile.key) > 0: Text {
-                        x: parent.width - self.width - 2px;
-                        y: parent.height - self.height;
-                        text: root.group-count(root.group-metadata, tile.key);
-                        font-size: 11px;
-                        color: SeelenPalette.foreground;
-                        accessible-role: none;
-                    }
                 }
+            }
+            }
             }
             for tile[i] in root.running-windows: Rectangle {
                 property <length> step: root.item + root.gap;
@@ -408,5 +512,20 @@ export component Dock inherits Window {
                 accessible-role: none;
             }
         }
+    }
+    // Outside both bar and ScrollView clipping; no input/AX/launch authority.
+    if root.reorder-visual.visible: DockApplicationButton {
+        x: root.reorder-visual.bounds.origin.x;
+        y: root.reorder-visual.bounds.origin.y;
+        width: root.reorder-visual.bounds.width;
+        height: root.reorder-visual.bounds.height;
+        radius: root.reorder-visual.appearance.radius;
+        app: root.reorder-visual.source;
+        count: root.reorder-visual.count;
+        appearance: root.reorder-visual.appearance;
+        paint-pressed: root.reorder-visual.pressed;
+        interactive: false;
+        accessible-role: none;
+        show-focus-ring: false;
     }
 }

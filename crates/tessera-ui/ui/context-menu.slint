@@ -70,6 +70,8 @@ export component ContextMenuSurface inherits Window {
     // Launcher favorites are independent from dock pins; no dock kind is added.
     in property <bool> launcher-favorite-scope: false;
     in property <bool> launcher-favorite: false;
+    in property <bool> pin-move-earlier-enabled: false;
+    in property <bool> pin-move-later-enabled: false;
     // Optional module membership is applied preference state, not playback.
     in property <bool> media-scope: false;
     in property <bool> media-enabled: false;
@@ -120,6 +122,15 @@ export component ContextMenuSurface inherits Window {
         opacity: 0;
         text: root.metric-labels(root.entries, true);
     }
+    property <MenuEntry> pinned-open-entry: {
+        label: @tr("Open"), action: DockMenuAction.launch,
+        icon: root.target-icon.width > 0 ? root.target-icon :
+            @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg"),
+        application-image: root.target-icon.width > 0
+    };
+    property <MenuEntry> pinned-unpin-entry: {
+        label: @tr("Unpin"), action: DockMenuAction.unpin
+    };
     property <[MenuEntry]> entries: root.window-entries.length > 0 ? root.window-entries : root.launcher-favorite-scope ? [
         { label: root.launcher-favorite ? @tr("Unpin") : @tr("Pin"),
             action: root.launcher-favorite ? DockMenuAction.favorite-remove : DockMenuAction.favorite-add }
@@ -134,13 +145,13 @@ export component ContextMenuSurface inherits Window {
         { label: @tr("Exit Tessera"), action: DockMenuAction.exit },
         { label: root.media-enabled ? @tr("Remove media module") : @tr("Add media module"),
             action: root.media-enabled ? DockMenuAction.media-remove : DockMenuAction.media-bar-add }
-    ] : root.kind == DockMenuKind.pinned ? [
-        { label: @tr("Open"), action: DockMenuAction.launch,
-            icon: root.target-icon.width > 0 ? root.target-icon :
-                @image-url("../assets/icons/ionicons-5.5.4/open-outline.svg"),
-            application-image: root.target-icon.width > 0 },
-        { label: @tr("Unpin"), action: DockMenuAction.unpin }
-    ] : root.kind == DockMenuKind.recycle ? [
+    ] : root.kind == DockMenuKind.pinned
+        ? (root.pin-move-earlier-enabled || root.pin-move-later-enabled
+            ? [root.pinned-open-entry, root.pinned-unpin-entry,
+                { label: @tr("Move earlier"), action: DockMenuAction.move-earlier },
+                { label: @tr("Move later"), action: DockMenuAction.move-later }]
+            : [root.pinned-open-entry, root.pinned-unpin-entry])
+    : root.kind == DockMenuKind.recycle ? [
         { label: @tr("Empty Recycle Bin"), action: DockMenuAction.recycle-empty, danger: true },
         { label: @tr("Retry"), action: DockMenuAction.recycle-retry }
     ] : [
@@ -158,12 +169,15 @@ export component ContextMenuSurface inherits Window {
             && (root.entries[index].action != DockMenuAction.recycle-empty
                 || root.recycle-empty-enabled)
             && (root.entries[index].action != DockMenuAction.media-bar-add || !root.media-enabled)
-            && (root.entries[index].action != DockMenuAction.media-remove || root.media-enabled);
+            && (root.entries[index].action != DockMenuAction.media-remove || root.media-enabled)
+            && (root.entries[index].action != DockMenuAction.move-earlier || root.pin-move-earlier-enabled)
+            && (root.entries[index].action != DockMenuAction.move-later || root.pin-move-later-enabled);
     }
     pure function non-repeating-action(action: DockMenuAction) -> bool {
         return action == DockMenuAction.recycle-empty
             || action == DockMenuAction.favorite-add || action == DockMenuAction.favorite-remove
-            || action == DockMenuAction.media-bar-add || action == DockMenuAction.media-remove;
+            || action == DockMenuAction.media-bar-add || action == DockMenuAction.media-remove
+            || action == DockMenuAction.move-earlier || action == DockMenuAction.move-later;
     }
     pure function adjacent-index(index: int, direction: int) -> int {
         return direction > 0
