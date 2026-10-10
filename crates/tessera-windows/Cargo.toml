@@ -25,6 +25,7 @@ windows = { workspace = true, features = [
     "Graphics_Imaging",
     "Media_Control",
     "Storage_Streams",
+    "System",
     "System_Power",
     "UI_ViewManagement",
     "Win32_Foundation",

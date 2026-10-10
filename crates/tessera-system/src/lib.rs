@@ -15,6 +15,7 @@ pub mod network;
 pub mod profile;
 pub mod shortcuts;
 pub mod visibility;
+pub mod web_search;
 
 /// Gregorian calendar projection and asynchronous real-date/locale capability.
 pub mod calendar;

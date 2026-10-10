@@ -4,7 +4,7 @@
 import { ListView } from "std-widgets.slint";
 import { SeelenPalette } from "palette.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
-import { TileButton, FocusTokens, TileBounds } from "tiles.slint";
+import { TileButton, ViewportTileButton, FocusTokens, TileBounds } from "tiles.slint";
 import { LauncherTile, LaunchTile } from "launcher-tile.slint";
 import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
@@ -188,6 +188,29 @@ export component Launcher inherits Window {
     property <bool> input-exhausted: false;
     property <string> input-scope: "launcher/" + root.input-generation + ":";
     out property <bool> input-available: !root.input-exhausted;
+    // Explicit provider scope; ordinary application captions remain unchanged.
+    in property <bool> web-scope: false;
+    in property <bool> files-scope: false;
+    in property <bool> web-available: false;
+    in property <bool> web-busy: false;
+    in property <string> web-notice;
+    in property <string> web-action-key;
+    in property <data-transfer> web-action-data;
+    out property <TileBounds> web-action-bounds: {
+        origin: web-command.absolute-position,
+        width: web-command.width, height: web-command.height
+    };
+    out property <TileBounds> web-clip-bounds: {
+        origin: grid-frame.absolute-position,
+        width: grid-frame.width, height: grid-frame.height
+    };
+    callback web-search-requested(data-transfer);
+    callback web-search-completed(data-transfer);
+    callback web-input-cancelled();
+    callback web-geometry-changed();
+    changed web-action-bounds => { root.web-geometry-changed(); }
+    changed web-clip-bounds => { root.web-geometry-changed(); }
+    public function cancel-web-input() { web-command.cancel-input(); }
     in property <bool> reorder-enabled: false;
     in property <data-transfer> reorder-data;
     in property <LauncherDragVisual> reorder-visual;
@@ -277,6 +300,7 @@ export component Launcher inherits Window {
     // Scoped keys revoke virtual delegates synchronously when input is checked;
     // named commands also release their held visual/input state immediately.
     public function cancel-input() {
+        root.web-input-cancelled();
         root.tooltip-cancelled();
         if root.input-generation < 2147483647 {
             root.input-generation += 1;
@@ -395,6 +419,12 @@ export component Launcher inherits Window {
                     if event.modifiers.control || event.modifiers.alt
                         || event.modifiers.shift || event.modifiers.meta { return reject; }
                     if event.text == Key.Return {
+                        // Web dispatch belongs solely to the genuine button.
+                        // Return in the editor reveals/focuses it, never launches.
+                        if root.web-scope {
+                            if !event.repeat { web-command.focus-for-keyboard(); }
+                            return accept;
+                        }
                         if !root.blocked && root.selected-key != "" && !event.repeat {
                             root.activate-selected-requested();
                         }
@@ -524,6 +554,7 @@ export component Launcher inherits Window {
                     }
                 }
             grid-scroll := ListView {
+                visible: !root.web-scope && !root.files-scope;
                 x: 0px;
                 y: 0px;
                 width: grid-frame.width;
@@ -636,7 +667,55 @@ export component Launcher inherits Window {
             }
             }
 
-                if root.application-count == 0: VerticalLayout {
+                web-command := ViewportTileButton {
+                    x: FocusTokens.outer-margin;
+                    y: FocusTokens.outer-margin;
+                    width: max(0px, min(240px, grid-frame.width - 2 * FocusTokens.outer-margin));
+                    height: 44px;
+                    visible: root.web-scope;
+                    enabled: root.web-scope && root.web-available && !root.web-busy
+                        && root.input-available;
+                    activation-key: root.web-action-key;
+                    allow-return-repeat: false;
+                    clip-bounds: root.web-clip-bounds;
+                    accessible-text: "Search DuckDuckGo";
+                    radius: 6px;
+                    scoped-clicked => { root.web-search-requested(root.web-action-data); }
+                    reveal-requested(bounds) => {
+                        // Anchored at the viewport origin; a clipped small
+                        // frame remains unavailable instead of dispatching.
+                        root.web-geometry-changed();
+                    }
+                    Text {
+                        width: parent.width;
+                        height: parent.height;
+                        text: "Search DuckDuckGo";
+                        font-family: PopoverTokens.font-family;
+                        font-size: SeelenPalette.body-font-size;
+                        color: parent.enabled ? SeelenPalette.foreground : SeelenPalette.muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        accessible-role: none;
+                    }
+                }
+                if root.web-scope || root.files-scope: Text {
+                    x: FocusTokens.outer-margin;
+                    y: root.web-scope ? 56px : FocusTokens.outer-margin;
+                    width: max(0px, grid-frame.width - 2 * FocusTokens.outer-margin);
+                    height: max(0px, grid-frame.height - self.y);
+                    text: root.files-scope ? "File search is not implemented." :
+                        root.web-busy ? "Requesting browser dispatch…" :
+                        root.web-notice != "" ? root.web-notice :
+                        root.web-available ? "Opens this query in your default browser. No live results or suggestions." :
+                        "DuckDuckGo search unavailable. Enter a valid query after web: and use Search DuckDuckGo.";
+                    font-family: PopoverTokens.font-family;
+                    font-size: SeelenPalette.body-font-size;
+                    color: SeelenPalette.secondary;
+                    wrap: word-wrap;
+                    accessible-role: text;
+                }
+                if root.application-count == 0 && !root.web-scope && !root.files-scope: VerticalLayout {
                     x: 0px;
                     y: (grid-scroll.visible-height - self.preferred-height) / 2;
                     width: grid-scroll.visible-width;

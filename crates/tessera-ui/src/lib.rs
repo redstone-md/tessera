@@ -681,6 +681,14 @@ pub trait DesktopHost: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Optional fixed-provider web search, dispatched only on explicit input.
+    /// No live queries/suggestions; legacy and diagnostic hosts remain inert.
+    fn web_search_host(
+        &self,
+    ) -> Option<std::sync::Arc<dyn tessera_system::web_search::WebSearchHost>> {
+        None
+    }
+
     /// Passive physical pointer hints; only the production desktop host opts in.
     fn pointer_host(
         &self,

@@ -19,6 +19,8 @@ use crate::launcher::order::{
 use crate::launcher::{LauncherInventory, LauncherRows, LauncherSelection, Navigation};
 use crate::{LauncherDisplayMode, SurfaceKind};
 
+mod web_search;
+
 #[derive(Default)]
 pub(super) struct LauncherState {
     view: LauncherView,
@@ -30,6 +32,7 @@ pub(super) struct LauncherState {
     session: Rc<LauncherSession>,
     projection: u64,
     reorder: Rc<ReorderOwner>,
+    web: Rc<web_search::WebState>,
 }
 
 impl LauncherState {
@@ -997,6 +1000,7 @@ impl PanelController {
     }
 
     pub(super) fn wire_launcher(&self, launcher: &Launcher) {
+        self.wire_launcher_web(launcher);
         let controller = self.clone();
         let owner = launcher.as_weak();
         launcher.on_tooltip_requested(move |content, bounds| {
@@ -1259,11 +1263,16 @@ impl PanelController {
         let pins = self.core.pins();
         let view = self.launcher_state.borrow().effective_view(&search);
         let view_changed = self.launcher_state.borrow().view != view;
-        let apps = match view {
-            LauncherView::Favorites => {
-                crate::projection::project_favorite_apps(&catalog, &favorites, &pins)
-            }
-            LauncherView::All => crate::projection::project_launcher_apps(&catalog, &pins, &search),
+        let apps = match web_search::app_filter(&search) {
+            None => Vec::new(),
+            Some(filter) => match view {
+                LauncherView::Favorites => {
+                    crate::projection::project_favorite_apps(&catalog, &favorites, &pins)
+                }
+                LauncherView::All => {
+                    crate::projection::project_launcher_apps(&catalog, &pins, filter)
+                }
+            },
         };
         let inventory = Rc::new(LauncherInventory::new(apps));
         let catalog_keys: Vec<_> = catalog.iter().map(|app| app.key().to_owned()).collect();
@@ -1342,6 +1351,7 @@ impl PanelController {
             }
         }
         self.sync_launcher_reorder();
+        self.sync_launcher_web();
     }
 
     fn switch_launcher_view(&self, view: LauncherView) {
@@ -1618,6 +1628,7 @@ impl PanelController {
     /// Revoke native captures even when a projection keeps the same app keys.
     pub(super) fn cancel_launcher_input(&self) {
         if let Some(launcher) = self.launcher_and_upgrade() {
+            self.cancel_launcher_web(&launcher);
             launcher.invoke_cancel_input();
         } else {
             self.dismiss_tooltip(false);

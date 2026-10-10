@@ -329,6 +329,12 @@ Legacy paired-device reads keep their scoped resource lifetime; opt-in controls
 retain one owned radio/event apartment without idle polling. Discovery, pairing
 and device connection are not implemented.
 
+Development Launcher adds explicit `web:` Search DuckDuckGo through a fixed,
+escaped HTTPS URI and Windows default-browser dispatch. No live queries, fake
+results or arbitrary URL launch; acceptance is not page visibility. Query/source
+replacement retires input and prevents an old outcome from labeling a new query.
+`apps:` uses the real existing filter; `files:` remains visibly unimplemented.
+
 Development battery adds actual cached presence, charging/supply, percent,
 remaining-runtime and energy-saver facts through one event-driven native owner
 shared by Toolbar and popup. Unknown/error stays visible; only confirmed

@@ -131,6 +131,7 @@ mod desktop {
     use tessera_system::recycle_bin_mutation::RecycleBinMutationHost;
     use tessera_system::shortcuts::{ShortcutError, ShortcutHost};
     use tessera_system::visibility::{PointerHost, PointerWatchError};
+    use tessera_system::web_search::WebSearchHost;
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
         PixelIcon, RunOptions, ShellIdentity, SurfaceKind, SurfaceMode, SystemAction,
@@ -179,6 +180,7 @@ mod desktop {
         bluetooth: LazyLock<Provider<dyn BluetoothHost>>,
         input_language: LazyLock<Provider<dyn InputLanguageHost>>,
         media: LazyLock<Provider<dyn MediaHost>>,
+        web_search: LazyLock<Option<Arc<dyn WebSearchHost>>>,
         pointer: LazyLock<Provider<dyn PointerHost>>,
         shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
         profile: LazyLock<Provider<dyn ProfileHost>>,
@@ -353,6 +355,13 @@ mod desktop {
                         .map(|host| -> Arc<dyn MediaHost> { Arc::new(host) })
                 })
                 .map(Some)
+        }
+
+        fn web_search_host(&self) -> Option<Arc<dyn WebSearchHost>> {
+            if self.presentation != Presentation::Desktop {
+                return None;
+            }
+            self.web_search.as_ref().map(Arc::clone)
         }
 
         fn pointer_host(&self) -> Result<Option<Arc<dyn PointerHost>>, PointerWatchError> {
@@ -677,6 +686,7 @@ mod desktop {
             bluetooth: LazyLock::new(Provider::default),
             input_language: LazyLock::new(Provider::default),
             media: LazyLock::new(Provider::default),
+            web_search: LazyLock::new(tessera_windows::web_search::native_web_search_host),
             pointer: LazyLock::new(Provider::default),
             shortcuts: LazyLock::new(Provider::default),
             profile: LazyLock::new(Provider::default),

@@ -107,6 +107,9 @@ mod native_shortcuts;
 mod native_visibility;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+mod native_web_search;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 mod native_window_actions;
 pub mod network;
 pub mod power;
@@ -123,6 +126,7 @@ mod single_flight;
 mod snapshot;
 mod ui_preferences;
 pub mod visibility;
+pub mod web_search;
 mod window_actions;
 #[cfg(windows)]
 #[allow(unsafe_code)]
