@@ -20,6 +20,7 @@ pub mod shortcuts;
 pub mod startup;
 pub mod telemetry;
 pub mod visibility;
+pub mod wallpaper;
 pub mod web_search;
 
 /// Gregorian calendar projection and asynchronous real-date/locale capability.

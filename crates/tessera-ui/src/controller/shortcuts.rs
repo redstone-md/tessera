@@ -392,6 +392,7 @@ impl PanelController {
         }
         if self.dock.is_some() {
             self.stop_startup_root();
+            self.stop_wallpaper_root();
             if !self.root_current() {
                 return;
             }

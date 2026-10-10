@@ -61,6 +61,7 @@ pub(crate) mod startup;
 pub(crate) mod telemetry;
 pub(crate) mod user_menu;
 pub(crate) mod visibility;
+pub(crate) mod wallpaper;
 // Renderer-backed tests: test-only (they need the software renderer and the
 // testing backend's element introspection; see build.rs debug info).
 #[cfg(all(test, target_os = "linux"))]
@@ -815,6 +816,13 @@ pub trait DesktopHost: Send + Sync + 'static {
 
     /// Explicit current-user startup registration; OS registration is not a launch guarantee.
     fn startup_host(&self) -> Option<std::sync::Arc<dyn tessera_system::startup::StartupHost>> {
+        None
+    }
+
+    /// Explicit static wallpaper selection and application; native OS state is not a preference draft.
+    fn wallpaper_host(
+        &self,
+    ) -> Option<std::sync::Arc<dyn tessera_system::wallpaper::WallpaperHost>> {
         None
     }
 

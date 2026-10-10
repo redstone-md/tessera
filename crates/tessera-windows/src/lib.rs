@@ -121,6 +121,9 @@ mod native_uri_dispatch;
 mod native_visibility;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+mod native_wallpaper;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 mod native_web_search;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -142,6 +145,7 @@ pub mod startup;
 pub mod telemetry;
 mod ui_preferences;
 pub mod visibility;
+pub mod wallpaper;
 pub mod web_search;
 mod window_actions;
 #[cfg(windows)]

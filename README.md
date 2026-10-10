@@ -390,6 +390,12 @@ protection and fail-visible behavior when native hints are unavailable.
 Material Appearance supports both the five presets and exact custom `#RRGGBB`.
 Custom text needs explicit Preview before Save; invalid text leaves paint intact.
 Both routes reuse the existing typed RGB/HCT and captured-theme boundary.
+Material Appearance also opens the native Windows static-image picker and applies
+its opaque file selection to the exact monitors captured when choosing it.
+This changes OS state immediately, not through Save/Cancel or a JSON mirror.
+Native acceptance, path/file readback, failures and unsubmitted monitors are
+reported separately; readback does not certify rendered pixels. Video,
+collections, thumbnails, per-workspace selection and accent extraction remain open.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

@@ -165,6 +165,7 @@ mod desktop {
     use tessera_system::startup::StartupHost;
     use tessera_system::telemetry::TelemetryHost;
     use tessera_system::visibility::{PointerHost, PointerWatchError};
+    use tessera_system::wallpaper::WallpaperHost;
     use tessera_system::web_search::WebSearchHost;
     use tessera_ui::{
         DesktopHost, DockContext, PanelApplication, PanelPreferences, PanelSnapshot, PanelWindow,
@@ -220,6 +221,7 @@ mod desktop {
         application_menu: OnceLock<Option<Arc<dyn ApplicationMenuHost>>>,
         startup: LazyLock<Option<Arc<dyn StartupHost>>>,
         startup_allowed: bool,
+        wallpaper: LazyLock<Option<Arc<dyn WallpaperHost>>>,
         pointer: LazyLock<Provider<dyn PointerHost>>,
         shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
         profile: LazyLock<Provider<dyn ProfileHost>>,
@@ -436,6 +438,13 @@ mod desktop {
                 return None;
             }
             self.startup.as_ref().map(Arc::clone)
+        }
+
+        fn wallpaper_host(&self) -> Option<Arc<dyn WallpaperHost>> {
+            if self.presentation != Presentation::Desktop {
+                return None;
+            }
+            self.wallpaper.as_ref().map(Arc::clone)
         }
 
         fn telemetry_host(&self) -> Option<Arc<dyn TelemetryHost>> {
@@ -773,6 +782,7 @@ mod desktop {
             application_menu: OnceLock::new(),
             startup: LazyLock::new(tessera_windows::startup::native_startup_host),
             startup_allowed: heartbeat.is_none(),
+            wallpaper: LazyLock::new(tessera_windows::wallpaper::native_wallpaper_host),
             pointer: LazyLock::new(Provider::default),
             shortcuts: LazyLock::new(Provider::default),
             profile: LazyLock::new(Provider::default),

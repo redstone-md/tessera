@@ -42,6 +42,20 @@ export struct AppRow {
     pinned: bool,
 }
 
+// Derived geometry lives in this component, including in conditional pages.
+component ViewportTileButton inherits TileButton {
+    in property <length> viewport-x;
+    in property <length> viewport-y;
+    in property <length> viewport-width;
+    in property <length> viewport-height;
+    in-out property <bool> fully-visible: self.width > 0px && self.height > 0px
+        && root.viewport-width > 0px && root.viewport-height > 0px
+        && self.absolute-position.x >= root.viewport-x
+        && self.absolute-position.y >= root.viewport-y
+        && self.absolute-position.x + self.width <= root.viewport-x + root.viewport-width
+        && self.absolute-position.y + self.height <= root.viewport-y + root.viewport-height;
+}
+
 // Settings use flat translucent groups, not the shared shell's raised tiles.
 component SettingsGroup inherits Rectangle {
     border-radius: 10px;
@@ -183,6 +197,29 @@ export component Panel inherits Window {
     callback startup-event-ready();
     callback startup-view-changed();
     changed startup-general-visible => { root.startup-view-changed(); }
+    // Wallpaper is an immediate Windows effect, not a preference draft.
+    in property <bool> wallpaper-available: false;
+    in property <bool> wallpaper-busy;
+    in property <bool> wallpaper-controls-enabled;
+    in property <bool> wallpaper-apply-enabled;
+    in property <string> wallpaper-status: "Current Windows wallpaper has not been read.";
+    in property <string> wallpaper-input-key;
+    out property <bool> wallpaper-page-visible: root.selected-page == 1 && !SeelenPalette.reference-mode;
+    out property <bool> wallpaper-choose-input-active;
+    out property <bool> wallpaper-apply-input-active;
+    // Live geometry stays independent of busy/enabled: admitted callbacks
+    // temporarily disable controls before rechecking their actual clipping.
+    property <bool> wallpaper-choose-clip;
+    property <bool> wallpaper-apply-clip;
+    out property <bool> wallpaper-choose-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available && root.wallpaper-choose-clip;
+    out property <bool> wallpaper-apply-control-visible:
+        root.wallpaper-page-visible && root.wallpaper-available && root.wallpaper-apply-clip;
+    callback wallpaper-choose-requested();
+    callback wallpaper-apply-requested();
+    callback wallpaper-event-ready();
+    callback wallpaper-view-changed();
+    changed wallpaper-page-visible => { root.wallpaper-view-changed(); }
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -671,6 +708,66 @@ export component Panel inherits Window {
                                 }
                                 Text {
                                     text: "Preview";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                        }
+                        if root.wallpaper-available && !SeelenPalette.reference-mode: SettingsRow {
+                            label: "Windows wallpaper";
+                            description: "Apply changes Windows immediately on the monitors captured when choosing the image. Save and Cancel do not apply or undo it.\n" + root.wallpaper-status;
+                            wallpaper-choose := ViewportTileButton {
+                                fully-visible <=> root.wallpaper-choose-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 100px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-controls-enabled && !root.wallpaper-busy;
+                                accessible-text: "Choose a Windows wallpaper image";
+                                accessible-description: "Open the native Windows file picker. " + root.wallpaper-status;
+                                clicked => {
+                                    root.wallpaper-choose-input-active = root.wallpaper-choose-control-visible
+                                        && root.wallpaper-controls-enabled && !root.wallpaper-busy;
+                                    if root.wallpaper-choose-input-active { root.wallpaper-choose-requested(); }
+                                    root.wallpaper-choose-input-active = false;
+                                }
+                                Text {
+                                    text: "Choose image";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            wallpaper-apply := ViewportTileButton {
+                                fully-visible <=> root.wallpaper-apply-clip;
+                                viewport-x: page-scroll.absolute-position.x;
+                                viewport-y: page-scroll.absolute-position.y;
+                                viewport-width: page-scroll.visible-width;
+                                viewport-height: page-scroll.visible-height;
+                                min-width: 68px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.wallpaper-input-key;
+                                enabled: root.wallpaper-controls-enabled && root.wallpaper-apply-enabled
+                                    && !root.wallpaper-busy;
+                                accessible-text: "Apply selected Windows wallpaper immediately";
+                                accessible-description: root.wallpaper-status;
+                                clicked => {
+                                    root.wallpaper-apply-input-active = root.wallpaper-apply-control-visible
+                                        && root.wallpaper-controls-enabled && root.wallpaper-apply-enabled
+                                        && !root.wallpaper-busy;
+                                    if root.wallpaper-apply-input-active { root.wallpaper-apply-requested(); }
+                                    root.wallpaper-apply-input-active = false;
+                                }
+                                Text {
+                                    text: "Apply";
                                     color: SeelenPalette.foreground;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
