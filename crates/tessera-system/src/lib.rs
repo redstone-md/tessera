@@ -9,10 +9,12 @@ mod audio_devices;
 
 pub mod battery;
 pub mod bluetooth;
+pub mod file_search;
 pub mod input_language;
 pub mod media;
 pub mod network;
 pub mod profile;
+pub mod search;
 pub mod shortcuts;
 pub mod visibility;
 pub mod web_search;

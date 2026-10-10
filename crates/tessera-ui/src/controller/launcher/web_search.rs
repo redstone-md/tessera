@@ -3,9 +3,11 @@
 
 use super::*;
 use std::sync::Arc;
-use tessera_system::web_search::{
-    WebSearchHost, WebSearchOutcome, WebSearchProvider, WebSearchQuery, WebSearchRequest,
-};
+mod action;
+use action::SearchAction;
+
+// Historical web_* naming is the shared fixed-target input/receipt seam. Web
+// and Windows Search use one owner, epoch, flight and native-button authority.
 
 pub(super) fn app_filter(query: &str) -> Option<&str> {
     if query.starts_with("web:") || query.starts_with("files:") {
@@ -41,10 +43,9 @@ struct Notice {
 /// Identity is owner-issued Rc, never query text, indices or metadata. Native
 /// input retains the opaque key; dispatch also requires this exact payload.
 struct Intent {
-    request: WebSearchRequest,
+    action: SearchAction,
     raw: String,
     inventory: Rc<LauncherInventory>,
-    host: Arc<dyn WebSearchHost>,
     view: LauncherView,
     mode: UiDisplayMode,
     session: Rc<LauncherSession>,
@@ -159,6 +160,9 @@ impl PanelController {
     /// Outcome attribution is independent of flight/gesture admission. Source
     /// retirement invalidates projection only, never accepted native work.
     fn web_attributed(&self, launcher: &Launcher, intent: &Rc<Intent>) -> bool {
+        if !intent.action.host_current(self) {
+            return false;
+        }
         let same_epoch = Rc::ptr_eq(
             &intent.source_epoch,
             &self.web_state().source_epoch.borrow(),
@@ -224,16 +228,27 @@ impl PanelController {
         let busy = flight
             .as_ref()
             .is_some_and(|flight| self.web_attributed(&launcher, &flight.intent));
+        if !publishing() {
+            return;
+        }
         let notice = match scoped_notice {
-            Some(notice) if self.web_attributed(&launcher, &notice.intent) => notice.message,
-            _ => {
-                let retired = web.notice.borrow_mut().take();
-                drop(retired);
-                String::new()
+            Some(notice) => {
+                let attributed = self.web_attributed(&launcher, &notice.intent);
+                if !publishing() {
+                    return;
+                }
+                if attributed {
+                    notice.message
+                } else {
+                    let retired = web.notice.borrow_mut().take();
+                    drop(retired);
+                    String::new()
+                }
             }
+            None => String::new(),
         };
         let notice = if flight.is_some() && !busy {
-            "A previous browser dispatch is still pending.".to_owned()
+            "A previous search dispatch is still pending.".to_owned()
         } else {
             notice
         };
@@ -245,22 +260,18 @@ impl PanelController {
         if !publishing() {
             return;
         }
-        let request = raw
-            .strip_prefix("web:")
-            .and_then(WebSearchQuery::new)
-            .map(|query| WebSearchRequest {
-                provider: WebSearchProvider::DuckDuckGo,
-                query,
-            });
-        if request.is_none() || web.flight.borrow().is_some() || web.exhausted.get() {
+        if (!is_web && !raw.starts_with("files:"))
+            || web.flight.borrow().is_some()
+            || web.exhausted.get()
+        {
             self.retire_web_input(&launcher);
             return;
         }
         let intent = web.intent.borrow().clone();
-        if intent
+        let current = intent
             .as_ref()
-            .is_some_and(|intent| self.web_current(&launcher, intent))
-        {
+            .is_some_and(|intent| self.web_current(&launcher, intent));
+        if !publishing() || current {
             return;
         }
         self.retire_web_input(&launcher);
@@ -275,7 +286,7 @@ impl PanelController {
         if !frame.valid() {
             return;
         }
-        let Some(host) = self.core.host().web_search_host() else {
+        let Some(action) = SearchAction::acquire(self, &raw) else {
             return;
         };
         // Provider acquisition can synchronously replace/hide the source.
@@ -302,10 +313,9 @@ impl PanelController {
         let source_epoch = Rc::clone(&web.source_epoch.borrow());
         let session_generation = session.generation.get();
         let intent = Rc::new(Intent {
-            request: request.expect("validated web scope"),
+            action,
             raw: raw.clone(),
             inventory,
-            host,
             view,
             mode: launcher.get_display_mode(),
             session,
@@ -315,7 +325,7 @@ impl PanelController {
             session_generation,
         });
         *web.intent.borrow_mut() = Some(Rc::clone(&intent));
-        launcher.set_web_action_key(format!("web/{serial}").into());
+        launcher.set_web_action_key(format!("search/{serial}").into());
         if !publishing() || !source_current() || !self.web_current(&launcher, &intent) {
             return;
         }
@@ -340,10 +350,7 @@ impl PanelController {
             return;
         }
         let source_current = self.launcher_source_guard();
-        let Some(host) = self.core.host().web_search_host() else {
-            return;
-        };
-        if !Arc::ptr_eq(&host, &intent.host)
+        if !intent.action.host_current(self)
             || !source_current()
             || !self.web_current(launcher, &intent)
         {
@@ -354,7 +361,7 @@ impl PanelController {
         launcher.invoke_cancel_web_input();
         launcher.set_web_available(false);
         launcher.set_web_busy(true);
-        launcher.set_web_notice("Requesting browser dispatch…".into());
+        launcher.set_web_notice(intent.action.pending_message().into());
         if !source_current() || !self.web_current(launcher, &intent) {
             self.sync_launcher_web();
             return;
@@ -369,24 +376,19 @@ impl PanelController {
         drop(retired);
         let signal = launcher.as_weak();
         let ticket = Arc::clone(&flight);
-        let result = host.search(
-            intent.request.clone(),
-            Box::new(move |result| {
-                let message = match result {
-                    Ok(WebSearchOutcome::Accepted) => {
-                        "Browser dispatch accepted; page visibility is not confirmed.".to_owned()
-                    }
-                    Ok(WebSearchOutcome::Declined) => "Browser dispatch declined.".to_owned(),
-                    Err(error) => error.to_string(),
-                };
-                let _ = signal.upgrade_in_event_loop(move |launcher| {
-                    // A completion owns its accepted flight, not a new query/session.
-                    launcher.invoke_web_search_completed(transfer_completion(ticket, message));
-                });
-            }),
-        );
+        let receipt = intent.action.receipt();
+        let result = intent.action.dispatch(move |result| {
+            let message = match result {
+                Ok(outcome) => receipt(outcome).to_owned(),
+                Err(message) => message,
+            };
+            let _ = signal.upgrade_in_event_loop(move |launcher| {
+                // A completion owns its accepted flight, not a new query/session.
+                launcher.invoke_web_search_completed(transfer_completion(ticket, message));
+            });
+        });
         if let Err(error) = result {
-            self.complete_launcher_web(launcher, &flight, error.to_string());
+            self.complete_launcher_web(launcher, &flight, error);
         }
     }
 
@@ -398,12 +400,18 @@ impl PanelController {
         };
         let retired = web.flight.borrow_mut().take();
         drop(retired);
+        let publication = Rc::clone(&web.publication.borrow());
         let notice = self
             .web_attributed(launcher, &captured.intent)
             .then(|| Notice {
                 intent: Rc::clone(&captured.intent),
                 message,
             });
+        // Capability getters may synchronously retire or replace the source.
+        // Never overwrite a newer scope's notice after that reentry.
+        if !Rc::ptr_eq(&publication, &web.publication.borrow()) {
+            return;
+        }
         let retired = web.notice.replace(notice);
         drop(retired);
         if self.root_current() {

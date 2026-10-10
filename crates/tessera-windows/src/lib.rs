@@ -29,6 +29,7 @@ pub mod display_context;
 pub mod dock_utilities;
 mod error;
 mod events;
+pub mod file_search;
 pub mod folders;
 #[cfg(any(windows, test))]
 mod helpers;
@@ -102,6 +103,9 @@ mod native_recycle_bin_mutation;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_shortcuts;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_uri_dispatch;
 #[cfg(any(windows, test))]
 #[cfg_attr(windows, allow(unsafe_code))]
 mod native_visibility;

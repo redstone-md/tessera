@@ -4,27 +4,10 @@
 //! Deliberate fixed-provider search, never arbitrary URI dispatch or live results.
 use std::fmt;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WebSearchQuery(String);
-
-impl WebSearchQuery {
-    /// Preserve valid text verbatim; whitespace-only, controls and oversized
-    /// inputs cannot become an effect. The bound includes UTF-16 surrogate pairs.
-    pub fn new(text: &str) -> Option<Self> {
-        if text.len() > 8192
-            || text.trim().is_empty()
-            || text.chars().any(char::is_control)
-            || text.encode_utf16().count() > 2048
-        {
-            return None;
-        }
-        Some(Self(text.to_owned()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+pub use crate::search::{
+    SearchErrorKind as WebSearchErrorKind, SearchOutcome as WebSearchOutcome,
+    SearchQuery as WebSearchQuery,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WebSearchProvider {
@@ -35,21 +18,6 @@ pub enum WebSearchProvider {
 pub struct WebSearchRequest {
     pub provider: WebSearchProvider,
     pub query: WebSearchQuery,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WebSearchOutcome {
-    /// The SDK accepted dispatch, not evidence that a browser/page is visible.
-    Accepted,
-    Declined,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WebSearchErrorKind {
-    Busy,
-    Unavailable,
-    /// Dispatch was attempted, but its final acceptance could not be confirmed.
-    Unconfirmed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

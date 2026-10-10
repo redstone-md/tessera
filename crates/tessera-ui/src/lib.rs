@@ -702,6 +702,14 @@ pub trait DesktopHost: Send + Sync + 'static {
         None
     }
 
+    /// Optional fixed Windows Search action; results open outside the launcher.
+    /// No indexed-file inventory is implied, and legacy/diagnostic hosts stay inert.
+    fn file_search_host(
+        &self,
+    ) -> Option<std::sync::Arc<dyn tessera_system::file_search::FileSearchHost>> {
+        None
+    }
+
     /// Passive physical pointer hints; only the production desktop host opts in.
     fn pointer_host(
         &self,

@@ -340,7 +340,11 @@ Development Launcher adds explicit `web:` Search DuckDuckGo through a fixed,
 escaped HTTPS URI and Windows default-browser dispatch. No live queries, fake
 results or arbitrary URL launch; acceptance is not page visibility. Query/source
 replacement retires input and prevents an old outcome from labeling a new query.
-`apps:` uses the real existing filter; `files:` remains visibly unimplemented.
+`apps:` uses the real existing filter. Explicit `files:` opens Windows Search
+with a fixed, escaped `search-ms:query=...&` URI; it does not invent a file list
+inside Launcher. Web/files share scope admission and a single native dispatch
+gate. SDK acceptance is not visible search results; embedded file inventory,
+provider preferences and actual Windows outcome verification remain open.
 
 Development battery adds actual cached presence, charging/supply, percent,
 remaining-runtime and energy-saver facts through one event-driven native owner

@@ -9,9 +9,7 @@ use tessera_system::web_search::WebSearchHost;
 pub fn native_web_search_host() -> Option<Arc<dyn WebSearchHost>> {
     #[cfg(windows)]
     {
-        Some(Arc::new(
-            crate::native_web_search::NativeWebSearchHost::default(),
-        ))
+        Some(Arc::new(crate::native_web_search::NativeWebSearchHost))
     }
     #[cfg(not(windows))]
     {

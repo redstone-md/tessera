@@ -122,6 +122,7 @@ mod desktop {
     use tessera_system::calendar::{CalendarError, CalendarHost};
     use tessera_system::display_context::{DisplayContextError, DisplayContextHost};
     use tessera_system::dock_utilities::{DockUtilitiesHost, DockUtilityError};
+    use tessera_system::file_search::FileSearchHost;
     use tessera_system::folders::{FolderError, FolderHost};
     use tessera_system::input_language::{InputLanguageError, InputLanguageHost};
     use tessera_system::media::{MediaError, MediaHost};
@@ -183,6 +184,7 @@ mod desktop {
         input_language: LazyLock<Provider<dyn InputLanguageHost>>,
         media: LazyLock<Provider<dyn MediaHost>>,
         web_search: LazyLock<Option<Arc<dyn WebSearchHost>>>,
+        file_search: LazyLock<Option<Arc<dyn FileSearchHost>>>,
         pointer: LazyLock<Provider<dyn PointerHost>>,
         shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
         profile: LazyLock<Provider<dyn ProfileHost>>,
@@ -364,6 +366,13 @@ mod desktop {
                 return None;
             }
             self.web_search.as_ref().map(Arc::clone)
+        }
+
+        fn file_search_host(&self) -> Option<Arc<dyn FileSearchHost>> {
+            if self.presentation != Presentation::Desktop {
+                return None;
+            }
+            self.file_search.as_ref().map(Arc::clone)
         }
 
         fn pointer_host(&self) -> Result<Option<Arc<dyn PointerHost>>, PointerWatchError> {
@@ -689,6 +698,7 @@ mod desktop {
             input_language: LazyLock::new(Provider::default),
             media: LazyLock::new(Provider::default),
             web_search: LazyLock::new(tessera_windows::web_search::native_web_search_host),
+            file_search: LazyLock::new(tessera_windows::file_search::native_file_search_host),
             pointer: LazyLock::new(Provider::default),
             shortcuts: LazyLock::new(Provider::default),
             profile: LazyLock::new(Provider::default),

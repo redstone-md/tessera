@@ -188,7 +188,8 @@ export component Launcher inherits Window {
     property <bool> input-exhausted: false;
     property <string> input-scope: "launcher/" + root.input-generation + ":";
     out property <bool> input-available: !root.input-exhausted;
-    // Explicit provider scope; ordinary application captions remain unchanged.
+    // Fixed-target scopes; legacy web_* properties/callbacks share dispatch
+    // input and receipts across web/files. They never carry live results.
     in property <bool> web-scope: false;
     in property <bool> files-scope: false;
     in property <bool> web-available: false;
@@ -419,9 +420,9 @@ export component Launcher inherits Window {
                     if event.modifiers.control || event.modifiers.alt
                         || event.modifiers.shift || event.modifiers.meta { return reject; }
                     if event.text == Key.Return {
-                        // Web dispatch belongs solely to the genuine button.
-                        // Return in the editor reveals/focuses it, never launches.
-                        if root.web-scope {
+                        // Dispatch belongs solely to the genuine scoped button.
+                        // Editor Return reveals/focuses it, never launches.
+                        if root.web-scope || root.files-scope {
                             if !event.repeat { web-command.focus-for-keyboard(); }
                             return accept;
                         }
@@ -672,13 +673,13 @@ export component Launcher inherits Window {
                     y: FocusTokens.outer-margin;
                     width: max(0px, min(240px, grid-frame.width - 2 * FocusTokens.outer-margin));
                     height: 44px;
-                    visible: root.web-scope;
-                    enabled: root.web-scope && root.web-available && !root.web-busy
+                    visible: root.web-scope || root.files-scope;
+                    enabled: (root.web-scope || root.files-scope) && root.web-available && !root.web-busy
                         && root.input-available;
                     activation-key: root.web-action-key;
                     allow-return-repeat: false;
                     clip-bounds: root.web-clip-bounds;
-                    accessible-text: "Search DuckDuckGo";
+                    accessible-text: root.files-scope ? @tr("Open in Windows Search") : "Search DuckDuckGo";
                     radius: 6px;
                     scoped-clicked => { root.web-search-requested(root.web-action-data); }
                     reveal-requested(bounds) => {
@@ -689,7 +690,7 @@ export component Launcher inherits Window {
                     Text {
                         width: parent.width;
                         height: parent.height;
-                        text: "Search DuckDuckGo";
+                        text: web-command.accessible-text;
                         font-family: PopoverTokens.font-family;
                         font-size: SeelenPalette.body-font-size;
                         color: parent.enabled ? SeelenPalette.foreground : SeelenPalette.muted;
@@ -701,10 +702,15 @@ export component Launcher inherits Window {
                 }
                 if root.web-scope || root.files-scope: Text {
                     x: FocusTokens.outer-margin;
-                    y: root.web-scope ? 56px : FocusTokens.outer-margin;
+                    y: 56px;
                     width: max(0px, grid-frame.width - 2 * FocusTokens.outer-margin);
                     height: max(0px, grid-frame.height - self.y);
-                    text: root.files-scope ? "File search is not implemented." :
+                    text: root.files-scope ?
+                        (root.web-busy ? "Requesting Windows Search dispatch…" :
+                         root.web-notice != "" ? root.web-notice :
+                         root.web-available ? "Open this query in Windows Search." :
+                         "Windows Search dispatch unavailable. Enter a valid query after files: and use Open in Windows Search.")
+                        + " Results open in Windows, not here. In-Launcher file inventory is not implemented." :
                         root.web-busy ? "Requesting browser dispatch…" :
                         root.web-notice != "" ? root.web-notice :
                         root.web-available ? "Opens this query in your default browser. No live results or suggestions." :
