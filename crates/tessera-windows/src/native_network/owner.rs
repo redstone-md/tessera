@@ -5,7 +5,8 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use tessera_system::network::{
-    InterfaceId, NetworkError, NetworkErrorKind, NetworkSnapshot, Observation, WifiInterface,
+    InterfaceId, NetworkCommand, NetworkCommandOutcome, NetworkError, NetworkErrorKind,
+    NetworkSnapshot, NetworkView, Observation, WifiInterface,
 };
 use windows::Win32::NetworkManagement::WiFi::{
     WLAN_NOTIFICATION_SOURCE_ACM, WLAN_NOTIFICATION_SOURCE_NONE,
@@ -19,6 +20,7 @@ pub(super) struct Owner<C: NativeCalls> {
     calls: C,
     handle: Option<usize>,
     context: Option<Box<Context>>,
+    controls: super::controls::Controls,
 }
 
 impl<C: NativeCalls> Owner<C> {
@@ -27,6 +29,7 @@ impl<C: NativeCalls> Owner<C> {
             calls,
             handle: None,
             context: None,
+            controls: super::controls::Controls::new(),
         }
     }
 
@@ -85,6 +88,42 @@ impl<C: NativeCalls> Owner<C> {
             .collect::<Vec<_>>();
         interfaces.sort_by_key(|interface| interface.id);
         Ok(NetworkSnapshot { interfaces })
+    }
+
+    pub(super) fn read_view(&mut self) -> Result<NetworkView, NetworkError> {
+        let snapshot = self.read()?;
+        let handle = self.handle()?;
+        let controls = observation(self.controls.inventory(
+            &self.calls,
+            handle,
+            self.context.as_deref(),
+            &snapshot,
+        ));
+        Ok(NetworkView {
+            snapshot,
+            controls: Some(controls),
+        })
+    }
+
+    pub(super) fn command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
+        let handle = self.handle()?;
+        self.controls
+            .begin(&self.calls, handle, self.context.as_deref(), command)
+    }
+
+    pub(super) fn command_readback(
+        &mut self,
+    ) -> Result<Option<NetworkCommandOutcome>, NetworkError> {
+        let handle = self.handle()?;
+        self.controls
+            .progress(&self.calls, handle, self.context.as_deref())
+    }
+
+    pub(super) fn command_retired(&mut self) {
+        self.controls.retire();
+        if let Some(context) = self.context.as_deref() {
+            context.retire_effect();
+        }
     }
 
     pub(super) fn open_settings(&mut self) -> Result<(), NetworkError> {

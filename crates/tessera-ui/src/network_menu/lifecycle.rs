@@ -65,6 +65,20 @@ impl NetworkController {
             }
         });
         let weak = Rc::downgrade(&controller);
+        controller.surface.on_control_selected(move |key| {
+            if let Some(controller) = weak.upgrade() {
+                controller.select_control(key);
+            }
+        });
+        let weak = Rc::downgrade(&controller);
+        controller
+            .surface
+            .on_command_requested(move |key, password| {
+                if let Some(controller) = weak.upgrade() {
+                    controller.submit_control(key, password);
+                }
+            });
+        let weak = Rc::downgrade(&controller);
         controller.surface.on_hide_requested(move || {
             if let Some(controller) = weak.upgrade() {
                 controller.hide();
@@ -163,11 +177,18 @@ impl NetworkController {
         self.focus_seen.set(false);
         let (watch, session) = {
             let mut state = self.state.borrow_mut();
-            state.session = state.session.wrapping_add(1);
+            state.session = state.session.saturating_add(1);
             state.read_requested = false;
             state.refresh_key = SharedString::default();
             state.settings_key = SharedString::default();
             state.snapshot = None;
+            state.controls.clear();
+            state.controls_supported = false;
+            state.selected = None;
+            state.row_keys.clear();
+            state.command_key = SharedString::default();
+            state.control_notice.clear();
+            state.inventory_notice.clear();
             state.notice.clear();
             state.settings_notice.clear();
             state.watch_status.clear();
@@ -190,6 +211,12 @@ impl NetworkController {
         self.surface.set_saved(ModelRc::default());
         self.surface.set_available(ModelRc::default());
         self.surface.set_hidden(ModelRc::default());
+        self.surface.set_control_rows(ModelRc::default());
+        self.surface.set_connection_controls_supported(false);
+        self.surface.set_command_key(SharedString::default());
+        self.surface.set_selected_network(SharedString::default());
+        self.surface.set_credentials_active(false);
+        self.surface.set_password(SharedString::default());
         self.surface.set_notice(SharedString::default());
         self.surface.set_watch_status(SharedString::default());
         self.surface.set_radio_text(SharedString::default());
@@ -241,6 +268,7 @@ impl NetworkController {
                 let changed = self.rect.borrow().as_ref() != Some(&rect);
                 if changed && self.surface.reposition(rect.position, rect.size) {
                     *self.rect.borrow_mut() = Some(rect);
+                    self.control_frame_changed();
                 }
                 Ok(())
             }

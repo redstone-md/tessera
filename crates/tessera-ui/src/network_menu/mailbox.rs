@@ -7,6 +7,10 @@ use super::*;
 pub(super) struct Mailbox {
     pub expected_read: Option<Token>,
     pub read: Option<(Token, Result<NetworkSnapshot, NetworkError>)>,
+    pub controls: Option<(Token, Option<Observation<NetworkControlInventory>>)>,
+    pub expected_command: Option<Token>,
+    pub command: Option<(Token, Result<NetworkCommandOutcome, NetworkError>)>,
+    pub accepted: Option<Token>,
     pub expected_settings: Option<Token>,
     pub settings: Option<(Token, Result<(), NetworkError>)>,
     pub watch_session: Option<u64>,
@@ -44,6 +48,57 @@ pub(super) fn read_complete(
             return;
         }
         slot.read = Some((token, result));
+    }
+    wake(mailbox, root);
+}
+
+pub(super) fn view_complete(
+    mailbox: &Arc<Mutex<Mailbox>>,
+    root: &slint::Weak<NetworkMenu>,
+    token: Token,
+    result: Result<NetworkView, NetworkError>,
+) {
+    {
+        let mut slot = mailbox.lock();
+        if slot.expected_read != Some(token) || slot.read.is_some() {
+            return;
+        }
+        let result = result.map(|view| {
+            slot.controls = Some((token, view.controls));
+            view.snapshot
+        });
+        slot.read = Some((token, result));
+    }
+    wake(mailbox, root);
+}
+
+pub(super) fn command_accepted(
+    mailbox: &Arc<Mutex<Mailbox>>,
+    root: &slint::Weak<NetworkMenu>,
+    token: Token,
+) {
+    {
+        let mut slot = mailbox.lock();
+        if slot.expected_command != Some(token) || slot.command.is_some() {
+            return;
+        }
+        slot.accepted = Some(token);
+    }
+    wake(mailbox, root);
+}
+
+pub(super) fn command_complete(
+    mailbox: &Arc<Mutex<Mailbox>>,
+    root: &slint::Weak<NetworkMenu>,
+    token: Token,
+    result: Result<NetworkCommandOutcome, NetworkError>,
+) {
+    {
+        let mut slot = mailbox.lock();
+        if slot.expected_command != Some(token) || slot.command.is_some() {
+            return;
+        }
+        slot.command = Some((token, result));
     }
     wake(mailbox, root);
 }
@@ -86,6 +141,9 @@ pub(super) fn event(
 
 pub(super) struct Delivery {
     pub read: Option<(Token, Result<NetworkSnapshot, NetworkError>)>,
+    pub controls: Option<(Token, Option<Observation<NetworkControlInventory>>)>,
+    pub command: Option<(Token, Result<NetworkCommandOutcome, NetworkError>)>,
+    pub accepted: Option<Token>,
     pub settings: Option<(Token, Result<(), NetworkError>)>,
     pub watch_session: Option<u64>,
     pub changed: bool,
@@ -97,6 +155,10 @@ impl Mailbox {
         self.wake_queued = false;
         let read = self.read.take();
         let settings = self.settings.take();
+        let command = self.command.take();
+        if command.is_some() {
+            self.expected_command = None;
+        }
         if read.is_some() {
             self.expected_read = None;
         }
@@ -105,6 +167,9 @@ impl Mailbox {
         }
         Delivery {
             read,
+            controls: self.controls.take(),
+            command,
+            accepted: self.accepted.take(),
             settings,
             watch_session: self.watch_session,
             changed: std::mem::take(&mut self.changed),

@@ -45,7 +45,7 @@ pub(super) fn failure(kind: NetworkErrorKind) -> &'static str {
     match kind {
         NetworkErrorKind::Unsupported => "Wi-Fi information is not supported on this platform.",
         NetworkErrorKind::AccessDenied => {
-            "Windows denied Wi-Fi access. Check location permissions in Settings, then Refresh."
+            "Windows denied Wi-Fi access. Check location permissions in Windows Settings > Privacy & security > Location and managed network/profile policy, then Refresh."
         }
         NetworkErrorKind::ServiceUnavailable => {
             "Windows WLAN service is unavailable. Check Settings, then Refresh."
@@ -71,7 +71,7 @@ fn adapter_name(name: &str) -> String {
     }
 }
 
-fn bssid(value: &[u8; 6]) -> String {
+pub(super) fn bssid(value: &[u8; 6]) -> String {
     value
         .iter()
         .map(|byte| format!("{byte:02x}"))

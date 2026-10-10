@@ -7,8 +7,9 @@ import { TileButton, FocusTokens } from "tiles.slint";
 import { PopoverBody, PopoverTokens } from "popover.slint";
 import { Slint1181FluentNativeGridMetrics } from "native-grid-metrics.slint";
 
-// Presentation only: no row key or mutation callback exists.
+// Cached read rows remain presentation-only; control keys come from the native inventory.
 export struct NetworkRow { label: string, details: string, description: string, bands: string }
+export struct NetworkControlRow { label: string, details: string, key: string }
 global NetworkMetrics {
     out property <length> xs: 6.4px;
     out property <length> two-xs: 3.2px;
@@ -133,6 +134,66 @@ component NetworkAction inherits TileButton {
     }
 }
 
+component NetworkControlChoice inherits TileButton {
+    in property <NetworkControlRow> net-row;
+    in property <float> text-line-height-factor;
+    radius: 6px;
+    filled: false;
+    allow-return-repeat: false;
+    activation-key: root.net-row.key;
+    enabled: root.net-row.key != "";
+    accessible-text: root.net-row.label + "; " + root.net-row.details;
+    VerticalLayout {
+        padding: NetworkMetrics.xs;
+        spacing: 0px;
+        NetworkText { text: root.net-row.label; font-weight: 500; overflow: elide; line-height-factor: root.text-line-height-factor; }
+        NetworkText { text: root.net-row.details; color: SeelenPalette.secondary; overflow: elide; line-height-factor: root.text-line-height-factor; }
+    }
+}
+
+// Public native TextInput owns password editing/IME/undo. Never publish its value
+// in accessibility metadata (the stock LineEdit exposes accessible-value <=> text).
+component NetworkPasswordInput inherits Rectangle {
+    in-out property <string> text <=> editor.text;
+    callback focus-acquired();
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: editor.has-focus ? SeelenPalette.accent : SeelenPalette.muted;
+    background: SeelenPalette.tile;
+    forward-focus: editor;
+    accessible-role: none;
+    viewport := Rectangle {
+        x: NetworkMetrics.xs;
+        y: NetworkMetrics.two-xs;
+        width: max(1px, root.width - 2 * NetworkMetrics.xs);
+        height: max(1px, root.height - 2 * NetworkMetrics.two-xs);
+        clip: true;
+        accessible-role: none;
+        editor := TextInput {
+            property <length> scroll-x;
+            x: clamp(self.scroll-x, min(0px, viewport.width - self.width), 0px);
+            width: max(viewport.width, self.preferred-width + self.text-cursor-width);
+            height: viewport.height;
+            single-line: true;
+            input-type: password;
+            font-family: PopoverTokens.font-family;
+            font-size: PopoverTokens.font-size;
+            color: SeelenPalette.foreground;
+            vertical-alignment: center;
+            accessible-role: text-input;
+            accessible-label: @tr("Wi-Fi password; not saved");
+            accessible-value: "";
+            changed has-focus => { if self.has-focus { root.focus-acquired(); } }
+            cursor-position-changed(point) => {
+                if point.x + self.x < 0px { self.scroll-x = -point.x; }
+                else if point.x + self.x + self.text-cursor-width > viewport.width {
+                    self.scroll-x = viewport.width - point.x - self.text-cursor-width;
+                }
+            }
+        }
+    }
+}
+
 export component NetworkMenu inherits Window {
     default-font-family: SeelenPalette.font-family;
     no-frame: true;
@@ -145,6 +206,15 @@ export component NetworkMenu inherits Window {
     in property <[NetworkRow]> saved;
     in property <[NetworkRow]> available;
     in property <[NetworkRow]> hidden;
+    in property <[NetworkControlRow]> control-rows;
+    in property <bool> connection-controls-supported;
+    in property <string> selected-network;
+    in property <string> command-label;
+    in property <string> command-key;
+    in property <bool> credentials-active;
+    in-out property <string> password;
+    callback control-selected(string);
+    callback command-requested(string, string);
     in property <string> radio-text;
     in property <string> summary;
     in property <string> notice;
@@ -172,7 +242,9 @@ export component NetworkMenu inherits Window {
     property <length> action-height: 2 * NetworkMetrics.xs + NetworkMetrics.text-height;
     property <string> feedback: root.notice != "" ? root.notice + (root.summary != "" ? "\n" + root.summary : "")
         : root.loading ? @tr("Reading Windows Wi-Fi cache…") + (root.summary != "" ? "\n" + root.summary : "") : root.summary;
-    property <string> cache-text: @tr("Read-only Windows cache; Refresh does not scan. Connection, radio and hotspot controls are not supported here.");
+    property <string> cache-text: root.connection-controls-supported
+        ? @tr("Windows cached Wi-Fi observations; Refresh does not scan. Connections use the selected adapter and native security facts. Passwords are temporary and not saved. Radio and hotspot controls are not supported here.")
+        : @tr("Read-only Windows cache; Refresh does not scan. Connection, radio and hotspot controls are not supported here.");
     property <length> measure-width: max(0px, min(root.width > 0px ? root.width : root.popup-content-width,
         root.popup-content-width) - 2 * PopoverTokens.shadow-margin - 2 * root.inset - 2 * FocusTokens.outer-margin);
     property <length> natural-height: 2 * FocusTokens.outer-margin + NetworkMetrics.text-height
@@ -180,6 +252,9 @@ export component NetworkMenu inherits Window {
         + (root.watch-status != "" ? NetworkMetrics.xs + watch-metrics.preferred-height : 0px)
         + connected-section.natural-height + saved-section.natural-height
         + available-section.natural-height + hidden-section.natural-height
+        + root.control-rows.length * 2 * root.action-height
+        + (root.selected-network != "" ? 2 * root.action-height + NetworkMetrics.xs : 0px)
+        + (root.credentials-active ? root.action-height + NetworkMetrics.xs : 0px)
         + NetworkMetrics.xs + cache-metrics.preferred-height
         + 2 * NetworkMetrics.xs + 2 * root.action-height;
     settings-metrics := NetworkText {
@@ -204,10 +279,11 @@ export component NetworkMenu inherits Window {
         text: root.cache-text; wrap: word-wrap;
         line-height-factor: body.text-line-height-factor;
     }
-    function reveal-focused(top: length) {
+    function reveal-focused(top: length) { root.reveal-area(top, root.action-height); }
+    function reveal-area(top: length, item-height: length) {
         let visible-top = -scroll.content-y;
         let desired-top = top - FocusTokens.outer-margin;
-        let desired-bottom = top + root.action-height + FocusTokens.outer-margin;
+        let desired-bottom = top + item-height + FocusTokens.outer-margin;
         if desired-top < visible-top {
             scroll.content-y = -max(0px, desired-top);
         } else if desired-bottom > visible-top + scroll.visible-height {
@@ -304,8 +380,62 @@ export component NetworkMenu inherits Window {
                         rows: root.hidden;
                         text-line-height-factor: body.text-line-height-factor;
                     }
+                    choices := Rectangle {
+                        y: hidden-section.y + hidden-section.height;
+                        width: parent.width;
+                        height: root.control-rows.length * 2 * root.action-height;
+                        accessible-role: none;
+                        for row[index] in root.control-rows: NetworkControlChoice {
+                            y: index * 2 * root.action-height;
+                            width: parent.width;
+                            height: 2 * root.action-height;
+                            net-row: row;
+                            text-line-height-factor: body.text-line-height-factor;
+                            clicked => { root.control-selected(row.key); }
+                            focus-acquired => { root.reveal-area(choices.y + self.y, self.height); }
+                        }
+                    }
+                    selected := NetworkText {
+                        y: choices.y + choices.height;
+                        width: parent.width;
+                        height: root.selected-network != "" ? root.action-height : 0px;
+                        text: root.selected-network;
+                        font-weight: 600;
+                        overflow: elide;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                        line-height-factor: body.text-line-height-factor;
+                    }
+                    credential-slot := Rectangle {
+                        y: selected.y + selected.height;
+                        width: parent.width;
+                        height: root.credentials-active ? root.action-height + NetworkMetrics.xs : 0px;
+                        accessible-role: none;
+                        if root.credentials-active: NetworkPasswordInput {
+                            width: parent.width;
+                            height: root.action-height;
+                            text <=> root.password;
+                            focus-acquired => { root.reveal-focused(credential-slot.y); }
+                        }
+                    }
+                    connect-action := NetworkAction {
+                        y: credential-slot.y + credential-slot.height;
+                        width: parent.width;
+                        height: root.selected-network != "" ? root.action-height + NetworkMetrics.xs : 0px;
+                        visible: root.selected-network != "";
+                        label: root.command-label;
+                        activation-key: root.command-key;
+                        enabled: root.command-key != "" && (!root.credentials-active || root.password != "");
+                        clicked => {
+                            let key = root.command-key;
+                            let password = root.password;
+                            root.password = "";
+                            root.command-requested(key, password);
+                        }
+                        focus-acquired => { root.reveal-focused(self.y); }
+                    }
                     cache := NetworkText {
-                        y: hidden-section.y + hidden-section.height + NetworkMetrics.xs;
+                        y: connect-action.y + connect-action.height + NetworkMetrics.xs;
                         width: parent.width;
                         height: cache-metrics.preferred-height;
                         text: root.cache-text;
@@ -321,6 +451,7 @@ export component NetworkMenu inherits Window {
                         height: root.action-height;
                         label: @tr("Refresh");
                         enabled: root.refresh-key != "" && !root.loading;
+                        activation-key: root.refresh-key;
                         clicked => { root.refresh-requested(root.refresh-key); }
                         focus-acquired => { root.reveal-focused(self.y); }
                     }
@@ -330,6 +461,7 @@ export component NetworkMenu inherits Window {
                         height: root.action-height;
                         label: @tr("More Network Settings");
                         enabled: root.settings-key != "" && !root.settings-loading;
+                        activation-key: root.settings-key;
                         clicked => { root.settings-requested(root.settings-key); }
                         focus-acquired => { root.reveal-focused(self.y); }
                     }

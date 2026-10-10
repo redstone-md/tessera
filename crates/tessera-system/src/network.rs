@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Read-only, best-effort Windows WLAN cache observations, not Internet connectivity.
+//! Best-effort WLAN cache observations and optional explicitly scoped controls.
 
 use std::fmt;
 use std::sync::Arc;
@@ -165,9 +165,129 @@ pub enum NetworkEvent {
     WatchUnavailable(NetworkError),
 }
 
+/// Native-issued authority, scoped to one owner and observation revision.
+/// Never derive this from a display name, SSID text or an adapter index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NetworkTarget {
+    owner: u64,
+    key: u64,
+    revision: u64,
+}
+
+impl NetworkTarget {
+    pub const fn new(owner: u64, key: u64, revision: u64) -> Self {
+        Self {
+            owner,
+            key,
+            revision,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkConnectCapability {
+    SavedProfile,
+    Open,
+    Wpa2Personal,
+    Unavailable,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct NetworkControl {
+    pub target: NetworkTarget,
+    pub interface: InterfaceId,
+    pub interface_name: String,
+    pub ssid: Ssid,
+    pub bssid: [u8; 6],
+    pub connect: NetworkConnectCapability,
+    pub connected: bool,
+}
+
+impl fmt::Debug for NetworkControl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NetworkControl")
+            .field("target", &self.target)
+            .field("connect", &self.connect)
+            .field("connected", &self.connected)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkControlInventory {
+    pub networks: Vec<NetworkControl>,
+    /// Redacted independent failures; successful adapter observations survive.
+    pub unavailable: Vec<NetworkError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkView {
+    pub snapshot: NetworkSnapshot,
+    /// None preserves legacy read-only providers. Partial per-interface failures
+    /// do not discard independently successful snapshot/control observations.
+    pub controls: Option<Observation<NetworkControlInventory>>,
+}
+
+/// Deliberately not Clone. Passwords are one-shot native inputs, never status.
+pub struct NetworkPassword(Vec<u8>);
+
+impl NetworkPassword {
+    pub fn new(value: &str) -> Self {
+        Self(value.as_bytes().to_vec())
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for NetworkPassword {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NetworkPassword([redacted])")
+    }
+}
+
+impl Drop for NetworkPassword {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&mut self.0);
+    }
+}
+
+#[derive(Debug)]
+pub enum NetworkCommand {
+    Connect {
+        target: NetworkTarget,
+        password: Option<NetworkPassword>,
+    },
+    Disconnect {
+        target: NetworkTarget,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkCommandOutcome {
+    Connected,
+    Disconnected,
+    /// Documented numeric WLAN reason only; no native profile/name diagnostics.
+    Failed {
+        reason: u32,
+    },
+    /// Native initiation was accepted but no conclusive readback arrived within
+    /// the bounded observation window. This is NOT success or a retry request.
+    AcceptedUnconfirmed,
+}
+
+pub type NetworkViewCompletion =
+    Box<dyn FnOnce(Result<NetworkView, NetworkError>) + Send + 'static>;
+pub type NetworkCommandCompletion =
+    Box<dyn FnOnce(Result<NetworkCommandOutcome, NetworkError>) + Send + 'static>;
+/// Optional one-shot native-initiation acknowledgement, never connected success.
+pub type NetworkCommandAccepted = Box<dyn FnOnce() + Send + 'static>;
+
 /// Prompt admission. `Ok` transfers exactly one completion (possibly inline or on
 /// any thread); an immediate error transfers none. Accepted reads/actions outlive
-/// UI retirement. No method joins a worker, actively scans, or mutates WLAN state.
+/// UI retirement. Reads never actively scan; only explicit typed commands mutate.
 ///
 /// A subscribe guard acknowledges startup, not readiness. WatchReady follows
 /// successful native registration. Guard drop closes event admission immediately
@@ -178,6 +298,33 @@ pub enum NetworkEvent {
 /// initiation, never visible Settings/focus or completion of an OS configuration.
 pub trait NetworkHost: Send + Sync + 'static {
     fn read(&self, completion: NetworkCompletion) -> Result<(), NetworkError>;
+    fn read_view(&self, completion: NetworkViewCompletion) -> Result<(), NetworkError> {
+        self.read(Box::new(move |result| {
+            completion(result.map(|snapshot| NetworkView {
+                snapshot,
+                controls: None,
+            }))
+        }))
+    }
+    fn command(
+        &self,
+        _command: NetworkCommand,
+        _completion: NetworkCommandCompletion,
+    ) -> Result<(), NetworkError> {
+        Err(NetworkError::new(
+            NetworkErrorKind::Unsupported,
+            "Wi-Fi controls are unavailable.",
+        ))
+    }
+    fn command_with_acceptance(
+        &self,
+        command: NetworkCommand,
+        _accepted: NetworkCommandAccepted,
+        completion: NetworkCommandCompletion,
+    ) -> Result<(), NetworkError> {
+        // Legacy/control hosts without native-initiation feedback stay truthful.
+        self.command(command, completion)
+    }
     fn open_settings(&self, completion: NetworkActionCompletion) -> Result<(), NetworkError>;
     fn subscribe(
         &self,

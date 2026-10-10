@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! User-opened, read-only WLAN cache popup. No startup discovery or scan timer.
+//! User-opened WLAN cache popup with optional scoped connection controls. No scan timer.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -11,7 +11,9 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use slint::{ComponentHandle, ModelRc, PhysicalPosition, PhysicalSize, SharedString};
 use tessera_system::network::{
-    NetworkError, NetworkErrorKind, NetworkEvent, NetworkHost, NetworkSnapshot,
+    NetworkCommand, NetworkCommandOutcome, NetworkConnectCapability, NetworkControl,
+    NetworkControlInventory, NetworkError, NetworkErrorKind, NetworkEvent, NetworkHost,
+    NetworkPassword, NetworkSnapshot, NetworkTarget, NetworkView, Observation,
 };
 
 use crate::generated::{NetworkMenu, PopoverMotion, TileBounds};
@@ -21,6 +23,7 @@ use crate::theme::{PresentationTheme, ThemedComponent};
 use crate::transient_window::{TransientComponent, TransientWindow};
 use crate::{DesktopHost, DockContext, SurfaceKind};
 
+mod controls;
 mod lifecycle;
 mod mailbox;
 mod presentation;
@@ -56,6 +59,14 @@ struct State {
     flight: Option<Token>,
     settings_flight: Option<Token>,
     snapshot: Option<NetworkSnapshot>,
+    controls: Vec<NetworkControl>,
+    controls_supported: bool,
+    selected: Option<NetworkControl>,
+    row_keys: Vec<(SharedString, NetworkTarget)>,
+    command_key: SharedString,
+    command_flight: Option<Token>,
+    control_notice: String,
+    inventory_notice: String,
     refresh_key: SharedString,
     settings_key: SharedString,
     notice: String,
@@ -72,11 +83,19 @@ impl State {
         self.acquiring || self.subscribing || self.read_requested || self.flight.is_some()
     }
     fn key(&mut self) -> SharedString {
-        self.key_sequence = self.key_sequence.wrapping_add(1);
+        let Some(sequence) = self
+            .key_sequence
+            .checked_add(1)
+            .filter(|value| *value != u64::MAX)
+        else {
+            self.key_sequence = u64::MAX;
+            return SharedString::default();
+        };
+        self.key_sequence = sequence;
         format!("network-{:x}-{:x}", self.session, self.key_sequence).into()
     }
     fn token(&mut self) -> Token {
-        self.sequence = self.sequence.wrapping_add(1);
+        self.sequence = self.sequence.saturating_add(1);
         Token {
             session: self.session,
             sequence: self.sequence,
@@ -113,10 +132,16 @@ pub(crate) struct NetworkController {
 
 impl NetworkController {
     fn current(&self, session: u64) -> bool {
-        self.is_open() && self.state.borrow().session == session
+        session != u64::MAX && self.is_open() && self.state.borrow().session == session
     }
     fn accepts_input(&self) -> bool {
-        self.is_open() && !self.projecting.get() && !self.presenting.get()
+        let state = self.state.borrow();
+        self.is_open()
+            && !self.projecting.get()
+            && !self.presenting.get()
+            && state.session != u64::MAX
+            && state.sequence != u64::MAX
+            && state.key_sequence != u64::MAX
     }
 
     fn refresh(self: &Rc<Self>, key: SharedString) {
@@ -131,6 +156,14 @@ impl NetworkController {
             // Only an explicit user retry lifts the privacy/failure barrier.
             state.automatic_blocked = false;
             state.notice.clear();
+            state.inventory_notice.clear();
+            if state.command_flight.is_none() {
+                state.control_notice.clear();
+            }
+            state.controls.clear();
+            state.selected = None;
+            state.row_keys.clear();
+            state.command_key = SharedString::default();
             state.settings_notice.clear();
             state.read_requested = true;
         }
@@ -174,6 +207,15 @@ impl NetworkController {
     // hold UI-state/native-lease borrows while invoking an external host.
     fn pump(self: &Rc<Self>) {
         if !self.is_open() {
+            return;
+        }
+        if self.state.borrow().sequence == u64::MAX {
+            {
+                let mut state = self.state.borrow_mut();
+                state.read_requested = false;
+                state.notice = "Network request counter exhausted; restart required.".into();
+            }
+            self.project_and_fit();
             return;
         }
         let acquire = {
@@ -247,8 +289,8 @@ impl NetworkController {
         }
         let mailbox = self.mailbox.clone();
         let root = self.surface.as_weak();
-        if let Err(error) = provider.read(Box::new(move |result| {
-            mailbox::read_complete(&mailbox, &root, token, result)
+        if let Err(error) = provider.read_view(Box::new(move |result| {
+            mailbox::view_complete(&mailbox, &root, token, result)
         })) {
             mailbox::read_complete(&self.mailbox, &self.surface.as_weak(), token, Err(error));
         }
@@ -324,6 +366,38 @@ impl NetworkController {
             {
                 state.flight = None;
                 if visible && state.session == token.session {
+                    state.controls.clear();
+                    state.controls_supported = false;
+                    state.selected = None;
+                    state.row_keys.clear();
+                    state.command_key = SharedString::default();
+                    if let Some((inventory_token, inventory)) = delivery.controls
+                        && inventory_token == token
+                    {
+                        state.controls_supported = inventory.is_some();
+                        match inventory {
+                            Some(Observation::Ready(controls)) => {
+                                state.controls = controls.networks;
+                                state.inventory_notice = controls
+                                    .unavailable
+                                    .first()
+                                    .map(|error| {
+                                        format!(
+                                            "Some connection targets are unavailable. {}",
+                                            failure(error.kind)
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                            }
+                            Some(Observation::Unavailable(error)) => {
+                                state.inventory_notice = format!(
+                                    "Connection controls unavailable. {}",
+                                    failure(error.kind)
+                                )
+                            }
+                            None => state.inventory_notice.clear(),
+                        }
+                    }
                     match result {
                         Ok(snapshot) => {
                             state.automatic_blocked =
@@ -361,6 +435,35 @@ impl NetworkController {
                     };
                 }
             }
+            if let Some(token) = delivery.accepted
+                && state.command_flight == Some(token)
+                && visible
+                && state.session == token.session
+            {
+                state.control_notice = "Windows accepted the connection request; connecting/disconnecting is pending actual native readback.".into();
+            }
+            if let Some((token, result)) = delivery.command
+                && state.command_flight == Some(token)
+            {
+                state.command_flight = None;
+                if visible && state.session == token.session {
+                    state.control_notice = match result {
+                        Ok(NetworkCommandOutcome::Connected) => "Windows readback confirms connection to the selected access point. Internet access is not confirmed.".into(),
+                        Ok(NetworkCommandOutcome::Disconnected) => "Windows readback confirms that the selected adapter is disconnected.".into(),
+                        Ok(NetworkCommandOutcome::Failed { reason }) => {
+                            state.automatic_blocked = true;
+                            format!("Windows could not complete the Wi-Fi connection (WLAN reason {reason}). No retry was issued.")
+                        }
+                        Ok(NetworkCommandOutcome::AcceptedUnconfirmed) => "Windows accepted the request, but connection completion is unconfirmed. No retry was issued. Refresh for current facts.".into(),
+                        Err(error) => {
+                            state.automatic_blocked = true;
+                            format!("Wi-Fi request did not complete. {}", failure(error.kind))
+                        },
+                    };
+                    state.selected = None;
+                    state.read_requested = !state.automatic_blocked;
+                }
+            }
             if visible && delivery.watch_session == Some(state.session) {
                 match delivery.watch {
                     Some(NetworkEvent::WatchReady) => {
@@ -368,6 +471,10 @@ impl NetworkController {
                             "Windows cache change notifications active; no active scanning.".into()
                     }
                     Some(NetworkEvent::WatchUnavailable(error)) => {
+                        state.controls.clear();
+                        state.selected = None;
+                        state.row_keys.clear();
+                        state.command_key = SharedString::default();
                         state.watch_status = format!(
                             "Change notifications unavailable. {} Use Refresh.",
                             failure(error.kind)
@@ -379,8 +486,14 @@ impl NetworkController {
                     }
                     _ => {}
                 }
-                if delivery.changed && !state.automatic_blocked {
-                    state.read_requested = true;
+                if delivery.changed {
+                    state.controls.clear();
+                    state.selected = None;
+                    state.row_keys.clear();
+                    state.command_key = SharedString::default();
+                    if !state.automatic_blocked {
+                        state.read_requested = true;
+                    }
                 }
             }
         }
@@ -424,12 +537,17 @@ impl NetworkController {
             } else {
                 SharedString::default()
             };
-            let notice = [&state.notice, &state.settings_notice]
-                .into_iter()
-                .filter(|notice| !notice.is_empty())
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(" ");
+            let notice = [
+                &state.notice,
+                &state.settings_notice,
+                &state.control_notice,
+                &state.inventory_notice,
+            ]
+            .into_iter()
+            .filter(|notice| !notice.is_empty())
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
             (
                 state.session,
                 projection,
@@ -458,6 +576,7 @@ impl NetworkController {
             root.set_refresh_key(refresh_key);
             root.set_settings_key(settings_key);
         }
+        self.project_controls();
     }
 
     fn project_and_fit(&self) {

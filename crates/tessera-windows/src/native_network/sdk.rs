@@ -6,6 +6,12 @@ use std::ptr;
 
 use tessera_system::network::NetworkError;
 use windows::Win32::Foundation::HANDLE;
+use windows::Win32::NetworkManagement::Ndis::{NDIS_OBJECT_HEADER, NDIS_OBJECT_TYPE_DEFAULT};
+use windows::Win32::NetworkManagement::WiFi::{
+    DOT11_BSSID_LIST, DOT11_BSSID_LIST_REVISION_1, DOT11_SSID, WLAN_CONNECTION_PARAMETERS,
+    WlanConnect, WlanDisconnect, WlanGetProfile, dot11_BSS_type_infrastructure,
+    wlan_connection_mode_profile, wlan_connection_mode_temporary_profile,
+};
 use windows::Win32::NetworkManagement::WiFi::{
     WLAN_INTF_OPCODE, WLAN_NOTIFICATION_CALLBACK, WLAN_NOTIFICATION_SOURCES, WlanCloseHandle,
     WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList, WlanGetNetworkBssList,
@@ -16,8 +22,9 @@ use windows::Win32::UI::Shell::{
     SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
 };
 use windows::core::{GUID, w};
+use windows::core::{PCWSTR, PWSTR};
 
-use super::calls::{NativeCalls, Reply, native_error};
+use super::calls::{ConnectRequest, NativeCalls, ProfileReply, Reply, native_error};
 
 pub(super) struct WindowsCalls;
 
@@ -125,6 +132,74 @@ unsafe impl NativeCalls for WindowsCalls {
             data: data.cast(),
             size: None,
         }
+    }
+    fn profile(&self, handle: usize, id: &GUID, name: &[u16]) -> ProfileReply {
+        let mut xml = PWSTR::null();
+        // Never request WLAN_PROFILE_GET_PLAINTEXT_KEY.
+        let mut flags = 0;
+        let mut granted_access = 0;
+        let status = unsafe {
+            WlanGetProfile(
+                HANDLE(handle as *mut c_void),
+                id,
+                PCWSTR(name.as_ptr()),
+                None,
+                &mut xml,
+                Some(&mut flags),
+                Some(&mut granted_access),
+            )
+        };
+        ProfileReply {
+            allocation: Reply {
+                status,
+                data: xml.0.cast(),
+                size: None,
+            },
+            flags,
+            granted_access,
+        }
+    }
+
+    fn connect(&self, handle: usize, id: &GUID, request: ConnectRequest<'_>) -> u32 {
+        let ConnectRequest {
+            ssid,
+            bssid,
+            profile,
+            temporary,
+        } = request;
+        let mut native_ssid = DOT11_SSID {
+            uSSIDLength: ssid.len() as u32,
+            ..Default::default()
+        };
+        native_ssid.ucSSID[..ssid.len()].copy_from_slice(ssid);
+        let mut desired = DOT11_BSSID_LIST {
+            Header: NDIS_OBJECT_HEADER {
+                Type: NDIS_OBJECT_TYPE_DEFAULT as u8,
+                Revision: DOT11_BSSID_LIST_REVISION_1 as u8,
+                Size: size_of::<DOT11_BSSID_LIST>() as u16,
+            },
+            uNumOfEntries: 1,
+            uTotalNumOfEntries: 1,
+            BSSIDs: bssid,
+        };
+        let parameters = WLAN_CONNECTION_PARAMETERS {
+            wlanConnectionMode: if temporary {
+                wlan_connection_mode_temporary_profile
+            } else {
+                wlan_connection_mode_profile
+            },
+            strProfile: PCWSTR(profile.as_ptr()),
+            pDot11Ssid: &mut native_ssid,
+            pDesiredBssidList: &mut desired,
+            dot11BssType: dot11_BSS_type_infrastructure,
+            dwFlags: 0,
+        };
+        // All pointers own initialized call-local storage until synchronous return.
+        unsafe { WlanConnect(HANDLE(handle as *mut c_void), id, &parameters, None) }
+    }
+
+    fn disconnect(&self, handle: usize, id: &GUID) -> u32 {
+        unsafe { WlanDisconnect(HANDLE(handle as *mut c_void), id, None) }
     }
 
     unsafe fn free(&self, data: *mut c_void) {

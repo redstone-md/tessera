@@ -304,6 +304,15 @@ the current popup and visible frame. Toolbar observation still works with
 saved Dock media off, without an implicit Save. Native effects and the separate
 parked timeline-interpolation work are not certified by this source layer.
 
+Development Wi-Fi adds explicit Connect/Disconnect for exact native
+interface/network observations: supported saved profiles, open networks and
+WPA2-Personal AES temporary profiles. Credentials are scoped, cleared and never
+saved by Tessera; WPA/WPA3/enterprise/hidden or ambiguous sources remain
+unavailable. Native acceptance is separate from association/readback; after
+20 seconds without a conclusive result it stays unconfirmed, never replayed.
+No scan, hotspot or Forget is added. Windows cached queries may prompt for
+location consent or deny access under Privacy & security > Location.
+
 These checks do not validate a complete shell. Interactive Windows 11 testing is still needed for actual sign-in/rollback, accessibility, keyboard/focus, idle resource use, mixed DPI, multiple monitors, games, Explorer reappearance, and security-product compatibility. A supervisor blocked before launch cannot perform its own fallback; the independent restore and Task Manager emergency path remain mandatory.
 
 Home and Pro are targets, but Microsoft's [Shell Launcher](https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/) is unavailable on them. The selected isolated per-user Winlogon integration is experimental, not an edition-independent Microsoft support guarantee; machine shell configuration and security policies remain untouched.

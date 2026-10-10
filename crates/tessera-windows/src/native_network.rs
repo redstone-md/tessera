@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Worker-only, read-only WLAN cache adapter. Construction performs no native
-//! calls. There is no scan, route/Internet probe, radio mutation or profile action.
+//! Worker-only WLAN cache and explicit scoped connection adapter. Construction
+//! performs no native calls; reads do not scan and credentials are not saved.
 //! A failed unregister barrier intentionally retains its callback context rather
 //! than risking use-after-free; Settings dispatch acknowledges only Shell launch.
 
 use std::sync::Arc;
 
-use tessera_system::network::{NetworkError, NetworkSnapshot};
+use tessera_system::network::{
+    NetworkCommand, NetworkCommandOutcome, NetworkError, NetworkSnapshot, NetworkView,
+};
 
 use crate::network::worker::NetworkOwner;
 
@@ -18,6 +20,8 @@ mod buffer;
 mod callback;
 #[path = "native_network/calls.rs"]
 mod calls;
+#[path = "native_network/controls.rs"]
+mod controls;
 #[path = "native_network/observations.rs"]
 mod observations;
 #[path = "native_network/owner.rs"]
@@ -41,6 +45,22 @@ impl NativeOwner {
 impl NetworkOwner for NativeOwner {
     fn read(&mut self) -> Result<NetworkSnapshot, NetworkError> {
         self.owner.read()
+    }
+
+    fn read_view(&mut self) -> Result<NetworkView, NetworkError> {
+        self.owner.read_view()
+    }
+
+    fn command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
+        self.owner.command(command)
+    }
+
+    fn command_readback(&mut self) -> Result<Option<NetworkCommandOutcome>, NetworkError> {
+        self.owner.command_readback()
+    }
+
+    fn command_retired(&mut self) {
+        self.owner.command_retired();
     }
 
     fn open_settings(&mut self) -> Result<(), NetworkError> {
