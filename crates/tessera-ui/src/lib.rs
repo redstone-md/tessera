@@ -57,6 +57,7 @@ mod recycle_bin_render_tests;
 pub(crate) mod shortcuts;
 #[cfg(test)]
 mod shortcuts_render_tests;
+pub(crate) mod startup;
 pub(crate) mod telemetry;
 pub(crate) mod user_menu;
 pub(crate) mod visibility;
@@ -767,6 +768,11 @@ pub trait DesktopHost: Send + Sync + 'static {
     fn application_menu_host(
         &self,
     ) -> Option<std::sync::Arc<dyn tessera_system::application_menu::ApplicationMenuHost>> {
+        None
+    }
+
+    /// Explicit current-user startup registration; OS registration is not a launch guarantee.
+    fn startup_host(&self) -> Option<std::sync::Arc<dyn tessera_system::startup::StartupHost>> {
         None
     }
 

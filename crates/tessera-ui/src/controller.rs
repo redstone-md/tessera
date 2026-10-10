@@ -37,6 +37,7 @@ mod power_menu;
 mod quick_settings;
 mod recycle_bin;
 mod shortcuts;
+mod startup;
 mod telemetry;
 mod tooltip;
 mod user_menu;
@@ -166,6 +167,7 @@ pub(crate) struct PanelController {
     tooltips: Tooltips,
     battery: BatteryPopups,
     telemetry: telemetry::TelemetryRoots,
+    startup: startup::StartupRoots,
     network_menu: NetworkPopups,
     bluetooth: BluetoothPopups,
     input_language: InputLanguagePopups,
@@ -189,6 +191,7 @@ impl Drop for PreferenceSave<'_> {
         self.0.sync_launcher_reorder();
         self.0.sync_dock_reorder();
         self.0.sync_dock_middle_click();
+        self.0.sync_startup_root();
     }
 }
 
@@ -240,6 +243,7 @@ impl PanelController {
             tooltips: Rc::default(),
             battery: Rc::default(),
             telemetry: Rc::default(),
+            startup: Rc::default(),
             network_menu: Rc::default(),
             bluetooth: Rc::default(),
             input_language: Rc::default(),
@@ -294,6 +298,7 @@ impl PanelController {
             tooltips: Rc::default(),
             battery: Rc::default(),
             telemetry: Rc::default(),
+            startup: Rc::default(),
             network_menu: Rc::default(),
             bluetooth: Rc::default(),
             input_language: Rc::default(),
@@ -393,6 +398,7 @@ impl PanelController {
         panel.set_dock_preferences_available(self.dock.is_some());
         let telemetry_available = self.core.host().telemetry_host().is_some();
         panel.set_telemetry_available(telemetry_available);
+        self.wire_startup(panel);
         let weak = self.clone();
         panel.on_refresh_requested(move || {
             let _ = weak.refresh();
@@ -933,6 +939,7 @@ impl PanelController {
         }
         if let Some(panel) = self.panel.upgrade() {
             if !panel.window().is_visible() {
+                self.stop_startup_root();
                 self.prepare_shortcut_draft();
             }
             if !current() {
@@ -947,6 +954,9 @@ impl PanelController {
                         if current() {
                             self.sync_launcher_status();
                         }
+                    }
+                    if current() {
+                        self.sync_startup_root();
                     }
                 }
                 Ok(()) => {}
@@ -1192,6 +1202,7 @@ impl PanelController {
         self.show_launcher_tiles();
         self.update_launcher_geometry();
         self.sync_telemetry_root();
+        self.sync_startup_root();
     }
 
     fn refresh_strip(&self, dock: &Dock) {

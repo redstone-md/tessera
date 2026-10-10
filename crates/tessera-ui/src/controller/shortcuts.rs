@@ -383,6 +383,10 @@ impl PanelController {
             return;
         }
         if self.dock.is_some() {
+            self.stop_startup_root();
+            if !self.root_current() {
+                return;
+            }
             let _ = panel.hide();
         }
     }

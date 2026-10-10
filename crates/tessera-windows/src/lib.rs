@@ -109,6 +109,9 @@ mod native_recycle_bin_mutation;
 mod native_shortcuts;
 #[cfg(windows)]
 #[allow(unsafe_code)]
+mod native_startup;
+#[cfg(windows)]
+#[allow(unsafe_code)]
 mod native_telemetry;
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -135,6 +138,7 @@ pub mod shortcuts;
 #[cfg(any(windows, test))]
 mod single_flight;
 mod snapshot;
+pub mod startup;
 pub mod telemetry;
 mod ui_preferences;
 pub mod visibility;

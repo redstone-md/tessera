@@ -372,6 +372,15 @@ explicitly covers the worker's primary processor group, not the whole machine.
 Hide/detach/resume retires the sampling epoch and resets CPU baseline; no idle
 sampling, chart/history, second desktop observer or fake successful read.
 Its optional schema-6 Toolbar group is omitted at the default.
+
+Development General adds explicit current-user startup registration for an
+ordinary no-argument `tessera-desktop.exe` only, not custom-shell/diagnostic modes.
+It uses the exact observed fixed HKCU Run entry and fresh native readback; foreign
+or malformed entries stay readonly. Changes apply immediately in Windows, not
+through Settings Save/Cancel or a duplicate JSON flag. Registration does not prove
+Task Manager enablement, policy permission or next-sign-in execution.
+One lazy bounded owner reads only admitted General sessions/explicit Refresh;
+there is no idle polling, automatic retry or overwrite of another installation.
 These development layers need actual Windows outcome verification and are
 outside the published release.
 

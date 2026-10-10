@@ -94,6 +94,16 @@ native Dock lease retirement and popup/frame epochs revoke unsubmitted input;
 accepted work survives presentation retirement. SDK acceptance is not visible
 Explorer/UAC/elevation completion, and actual Windows outcomes remain uncertified.
 
+Development General exposes explicit current-user Run registration only in an
+ordinary no-argument Desktop session. The current native executable and fixed
+HKCU value are the only targets; foreign/malformed values are readonly. An opaque
+native observation is revalidated immediately before mutation and actual readback
+publishes the result. Registration is OS state, not a mirrored JSON draft:
+Save/Cancel does not undo it, nor does Registered prove policy/Task Manager
+enablement or next-sign-in execution. One bounded lazy owner does no idle work.
+External registry editors can race compare/write; uncertain readback is reported,
+never retried or silently rolled back.
+
 `inspect --check-surfaces` is a read-only, nonvacuous geometry diagnostic. Its physical toolbar contract is full monitor origin/width and the shared DPI-scaled toolbar token, not the already-reserved work area. It preserves unavailable metadata as unknown and rejects missing/ambiguous/incomplete observations. The Windows fixture drives the same CLI from conformant geometry to a deliberate offset and back, using only its own window and a restored thread DPI context. Portable tests and MSVC cross-target checks do not prove native fixture execution, actual AppBar negotiation, Slint scale, foreground behavior or Windows composition. The reported VM toolbar offset remains unresolved until captured evidence identifies its cause.
 
 The immutable [alpha.10 CI run](https://github.com/redstone-md/tessera/actions/runs/37675695227) passed on Windows stable and Rust 1.92.0, including actual execution of the controlled toolbar green/offset-red/restored-green CLI fixture, and published only after native packaging/runtime preflight passed. This verifies the diagnostic feedback loop, not the cause or correction of the user's VM toolbar offset.

@@ -156,6 +156,7 @@ mod desktop {
     use tessera_system::recycle_bin::RecycleBinHost;
     use tessera_system::recycle_bin_mutation::RecycleBinMutationHost;
     use tessera_system::shortcuts::{ShortcutError, ShortcutHost};
+    use tessera_system::startup::StartupHost;
     use tessera_system::telemetry::TelemetryHost;
     use tessera_system::visibility::{PointerHost, PointerWatchError};
     use tessera_system::web_search::WebSearchHost;
@@ -211,6 +212,8 @@ mod desktop {
         file_search: LazyLock<Option<Arc<dyn FileSearchHost>>>,
         telemetry: LazyLock<Option<Arc<dyn TelemetryHost>>>,
         application_menu: OnceLock<Option<Arc<dyn ApplicationMenuHost>>>,
+        startup: LazyLock<Option<Arc<dyn StartupHost>>>,
+        startup_allowed: bool,
         pointer: LazyLock<Provider<dyn PointerHost>>,
         shortcuts: LazyLock<Provider<dyn ShortcutHost>>,
         profile: LazyLock<Provider<dyn ProfileHost>>,
@@ -420,6 +423,13 @@ mod desktop {
                 })
                 .as_ref()
                 .map(Arc::clone)
+        }
+
+        fn startup_host(&self) -> Option<Arc<dyn StartupHost>> {
+            if self.presentation != Presentation::Desktop || !self.startup_allowed {
+                return None;
+            }
+            self.startup.as_ref().map(Arc::clone)
         }
 
         fn telemetry_host(&self) -> Option<Arc<dyn TelemetryHost>> {
@@ -755,6 +765,8 @@ mod desktop {
             file_search: LazyLock::new(tessera_windows::file_search::native_file_search_host),
             telemetry: LazyLock::new(tessera_windows::telemetry::native_telemetry_host),
             application_menu: OnceLock::new(),
+            startup: LazyLock::new(tessera_windows::startup::native_startup_host),
+            startup_allowed: heartbeat.is_none(),
             pointer: LazyLock::new(Provider::default),
             shortcuts: LazyLock::new(Provider::default),
             profile: LazyLock::new(Provider::default),

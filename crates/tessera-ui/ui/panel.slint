@@ -154,6 +154,23 @@ export component Panel inherits Window {
     in-out property <int> dock-middle-click-index: 0;
     in property <bool> telemetry-available: false;
     in-out property <bool> telemetry-enabled: false;
+    // OS registration is immediate and deliberately separate from Save/Cancel.
+    in property <bool> startup-available: false;
+    in property <bool> startup-busy;
+    in property <bool> startup-known;
+    in property <bool> startup-registered;
+    in property <bool> startup-controls-enabled;
+    in property <string> startup-status: "Registration has not been read.";
+    in property <string> startup-input-key;
+    out property <bool> startup-general-visible: root.selected-page == 0;
+    out property <bool> startup-input-active;
+    out property <bool> startup-refresh-input-active;
+    out property <bool> startup-control-visible;
+    callback startup-requested(bool);
+    callback startup-refresh-requested();
+    callback startup-event-ready();
+    callback startup-view-changed();
+    changed startup-general-visible => { root.startup-view-changed(); }
     // Inputs from the controller.
     in property <string> summary: "No observation yet";
     in property <string> status: "Ready to observe";
@@ -493,6 +510,68 @@ export component Panel inherits Window {
                                 max-height: 24px;
                                 accessible-label: "Show native CPU and RAM statistics after Save";
                                 checked <=> root.telemetry-enabled;
+                            }
+                        }
+                        if root.startup-available: SettingsRow {
+                            label: "Start Tessera at sign-in";
+                            description: "Changes the current user's startup registration immediately, not the sign-in shell. Save and Cancel do not affect it. Windows may delay or disable startup.\n" + root.startup-status;
+                            TileButton {
+                                min-width: 68px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.startup-input-key;
+                                enabled: root.startup-controls-enabled && !root.startup-busy;
+                                accessible-text: root.startup-registered
+                                    ? "Disable current-user startup registration"
+                                    : "Enable current-user startup registration";
+                                accessible-description: root.startup-status;
+                                clicked => {
+                                    let origin = self.absolute-position;
+                                    let viewport = page-scroll.absolute-position;
+                                    root.startup-control-visible = self.width > 0px && self.height > 0px
+                                        && origin.x >= viewport.x && origin.y >= viewport.y
+                                        && origin.x + self.width <= viewport.x + page-scroll.visible-width
+                                        && origin.y + self.height <= viewport.y + page-scroll.visible-height;
+                                    root.startup-input-active = root.startup-known
+                                        && root.startup-controls-enabled && !root.startup-busy
+                                        && root.startup-control-visible;
+                                    if root.startup-input-active {
+                                        root.startup-requested(!root.startup-registered);
+                                    }
+                                    root.startup-input-active = false;
+                                }
+                                Text {
+                                    text: root.startup-known ? (root.startup-registered ? "Disable" : "Enable") : "Unknown";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            TileButton {
+                                min-width: 68px;
+                                radius: 6px;
+                                allow-return-repeat: false;
+                                activation-key: root.startup-input-key;
+                                enabled: !root.startup-busy;
+                                accessible-text: "Refresh startup registration";
+                                clicked => {
+                                    let origin = self.absolute-position;
+                                    let viewport = page-scroll.absolute-position;
+                                    root.startup-refresh-input-active = self.width > 0px && self.height > 0px
+                                        && origin.x >= viewport.x && origin.y >= viewport.y
+                                        && origin.x + self.width <= viewport.x + page-scroll.visible-width
+                                        && origin.y + self.height <= viewport.y + page-scroll.visible-height;
+                                    if root.startup-refresh-input-active { root.startup-refresh-requested(); }
+                                    root.startup-refresh-input-active = false;
+                                }
+                                Text {
+                                    text: "Refresh";
+                                    color: SeelenPalette.foreground;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
                             }
                         }
                     }
