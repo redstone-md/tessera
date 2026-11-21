@@ -13,16 +13,19 @@ use gpui::{
 
 use crate::icons::{Icon, icon_of_pixels};
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, Spring};
+use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{Tray, TrayButton, TrayIcon};
 use crate::theme::Theme;
-use crate::ui::state_layer;
+use crate::ui::{icon, state_layer};
 
 /// How often the icons are checked for changes.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The side of an icon, as a share of the height of a pill.
 const ICON_SHARE: f32 = 0.5;
+
+/// On the button that shows and hides the icons over the limit.
+const ICON_MORE: &str = "\u{e712}";
 
 /// How much a pressed icon shrinks, as a share of its size.
 const PRESS_SHRINK: f32 = 0.16;
@@ -48,12 +51,13 @@ impl Module for TrayModule {
                 Some("right") => Some(TipSide::Right),
                 Some(other) => {
                     report!(
-                        "the `tips` of a tray must be \"left\" or \"right\",                          `{other}` is ignored"
+                        "the `tips` of a tray must be \"left\" or \"right\", `{other}` is ignored"
                     );
                     None
                 }
             };
-            cx.new(|cx| TrayStrip::new(tips, cx)).into()
+            let limit = context.number("limit").map(|limit| limit.max(0.) as usize);
+            cx.new(|cx| TrayStrip::new(tips, limit, cx)).into()
         })
     }
 }
@@ -86,10 +90,20 @@ struct TrayStrip {
     generation: Option<u64>,
     /// Where descriptions are shown, if at all.
     tips: Option<TipSide>,
+    /// How many icons are shown at all times; the others only while the
+    /// strip is unrolled. Without it every icon is.
+    limit: Option<usize>,
+    /// 0 while only the icons within the limit are shown, 1 when all are.
+    unrolled: Spring,
+    /// 0 while no icon is over the limit, 1 while the button for them is
+    /// shown.
+    crowded: Spring,
+    more: Interaction,
 }
 
 impl TrayStrip {
-    fn new(tips: Option<TipSide>, cx: &mut Context<Self>) -> Self {
+    fn new(tips: Option<TipSide>, limit: Option<usize>, cx: &mut Context<Self>) -> Self {
+        let motion = cx.global::<Theme>().motion;
         match Tray::start() {
             Ok(()) => cx
                 .spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -107,6 +121,10 @@ impl TrayStrip {
             items: Vec::new(),
             generation: None,
             tips,
+            limit,
+            unrolled: Spring::new(motion.spatial, 0.),
+            crowded: Spring::new(motion.spatial, 0.),
+            more: Interaction::new(&motion),
         }
     }
 
@@ -150,11 +168,12 @@ impl TrayStrip {
 
     fn render_item(
         item: &mut TrayItem,
+        shown: f32,
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let presence = item.presence.value(window);
+        let presence = item.presence.value(window) * shown;
         let state = item.interaction.state(window);
         let id = item.icon.id;
         let side = theme.bar.pill_height * ICON_SHARE;
@@ -198,6 +217,48 @@ impl TrayStrip {
             .justify_center()
             .overflow_hidden()
             .opacity(presence.clamp(0., 1.))
+            .child(button)
+            .into_any_element()
+    }
+
+    /// The button that unrolls the strip to the icons over the limit and
+    /// rolls it up again, as wide as there are such icons.
+    fn render_more(&mut self, theme: Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let crowded = self.crowded.value(window);
+        let unrolled = self.unrolled.value(window).clamp(0., 1.);
+        let state = self.more.state(window);
+        let colors = theme.colors;
+        let side = theme.bar.pill_height * ICON_SHARE + theme.spacing.small;
+        let ground = mix(
+            colors.surface_container,
+            colors.secondary_container,
+            unrolled,
+        );
+        let button = div()
+            .id("tray-more")
+            .size(side)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.full)
+            .bg(state_layer(&theme, ground, state))
+            .text_color(mix(colors.on_surface_variant, colors.on_surface, unrolled))
+            .on_click(cx.listener(|this, _, _, cx| {
+                let unrolled = this.unrolled.target() > 0.5;
+                this.unrolled.animate_to(if unrolled { 0. } else { 1. });
+                cx.notify();
+            }))
+            .child(icon(&theme, ICON_MORE));
+        let button = Interaction::track(button, cx, |this: &mut Self| Some(&mut this.more));
+        div()
+            .w((side + theme.spacing.tiny) * crowded.max(0.))
+            .h(side)
+            .flex()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .opacity(crowded.clamp(0., 1.))
             .child(button)
             .into_any_element()
     }
@@ -248,11 +309,23 @@ fn image_of(icon: &TrayIcon) -> Icon {
 impl Render for TrayStrip {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        let elements: Vec<AnyElement> = self
+        let limit = self.limit.unwrap_or(usize::MAX);
+        let staying = self.items.iter().filter(|item| !item.leaving).count();
+        self.crowded
+            .animate_to(if staying > limit { 1. } else { 0. });
+        let unrolled = self.unrolled.value(window).max(0.);
+        let mut elements: Vec<AnyElement> = self
             .items
             .iter_mut()
-            .map(|item| Self::render_item(item, theme, window, cx))
+            .enumerate()
+            .map(|(index, item)| {
+                let shown = if index < limit { 1. } else { unrolled };
+                Self::render_item(item, shown, theme, window, cx)
+            })
             .collect();
+        if self.limit.is_some() && !elements.is_empty() {
+            elements.push(self.render_more(theme, window, cx));
+        }
         // An icon that has finished leaving was just drawn at no width.
         self.items
             .retain(|item| !(item.leaving && item.presence.is_settled()));

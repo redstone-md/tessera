@@ -70,6 +70,8 @@
 #               the icon under the pointer unrolls. Choose the end that can
 #               grow without moving the icons (left in `end`, right in
 #               `start`); without the option no descriptions are shown.
+#               Option limit, a number: only that many icons are shown,
+#               and a button unrolls the strip to the others
 #   "windows"   a button for each open window of the display; option pinned,
 #               applications that keep a button whether they run or not:
 #               paths of programs or shortcuts, names the Start menu gives
