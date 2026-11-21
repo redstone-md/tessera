@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, MouseButton,
     ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, div, img, px,
+    Window, deferred, div, img, px, relative,
 };
 
 use crate::icons::{Icon, icon_of_pixels};
@@ -264,7 +264,8 @@ impl TrayStrip {
     }
 
     /// The description of the icon the pointer is on, as wide as the
-    /// pointer has settled there.
+    /// pointer has settled there. It lies beside the strip, over what is
+    /// there, so that nothing on the bar moves for it.
     fn render_tip(&mut self, theme: Theme, window: &Window) -> Option<AnyElement> {
         let side = self.tips?;
         let (reveal, item) = self
@@ -280,15 +281,27 @@ impl TrayStrip {
             .max_w(TIP_WIDTH * reveal)
             .overflow_hidden()
             .whitespace_nowrap()
-            .opacity(reveal)
             .text_size(theme.typography.label_size)
             .text_color(theme.colors.on_surface_variant)
             .child(SharedString::from(tip));
-        let gap = theme.spacing.small * reveal;
-        Some(match side {
-            TipSide::Left => label.pl(gap).pr(gap / 2.).into_any_element(),
-            TipSide::Right => label.pr(gap).pl(gap / 2.).into_any_element(),
-        })
+        let pill = div()
+            .absolute()
+            .top_0()
+            .h_full()
+            .px(theme.spacing.medium * reveal)
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .rounded(theme.shape.full)
+            .bg(theme.colors.surface_container)
+            .opacity(reveal)
+            .child(label);
+        let pill = match side {
+            TipSide::Left => pill.right(relative(1.)).mr(theme.spacing.tiny),
+            TipSide::Right => pill.left(relative(1.)).ml(theme.spacing.tiny),
+        };
+        // Drawn after the rest of the bar, so that it is on top of it.
+        Some(deferred(pill).into_any_element())
     }
 }
 
@@ -334,20 +347,16 @@ impl Render for TrayStrip {
             return div();
         }
         let tip = self.render_tip(theme, window);
-        let (before, after) = match self.tips {
-            Some(TipSide::Left) => (tip, None),
-            _ => (None, tip),
-        };
         div()
+            .relative()
             .h(theme.bar.pill_height)
             .px(theme.spacing.small - theme.spacing.tiny / 2.)
             .flex()
             .items_center()
             .rounded(theme.shape.full)
             .bg(theme.colors.surface_container)
-            .children(before)
             .children(elements)
-            .children(after)
+            .children(tip)
     }
 }
 

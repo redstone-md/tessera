@@ -69,10 +69,9 @@
 #               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
-#               or "right": the end of the strip where the description of
-#               the icon under the pointer unrolls. Choose the end that can
-#               grow without moving the icons (left in `end`, right in
-#               `start`); without the option no descriptions are shown.
+#               or "right": the side of the strip where the description of
+#               the icon under the pointer unrolls, over what is there;
+#               without the option no descriptions are shown.
 #               Option limit, a number: only that many icons are shown,
 #               and a button unrolls the strip to the others
 #   "windows"   a button for each application with windows on the display,
