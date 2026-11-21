@@ -16,6 +16,7 @@ mod power;
 mod shortcuts;
 mod system;
 mod taskbar;
+mod thumbnail;
 mod tray;
 
 pub use accent::{accent_color, light_mode};
@@ -29,6 +30,7 @@ pub use power::PowerAction;
 pub use shortcuts::Shortcut;
 pub use system::{Battery, MemoryLoad, ProcessorLoad};
 pub use taskbar::Taskbar;
+pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};
 
 use std::ffi::c_void;
@@ -37,7 +39,7 @@ use std::mem::size_of;
 use anyhow::{Context as _, Result, bail};
 use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
@@ -45,10 +47,10 @@ use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, WINDOW_EX_STYLE, WM_APP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
-    WS_VISIBLE,
+    GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST,
+    PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
 
 /// Message the system posts to a window that reserves a screen edge.
@@ -201,6 +203,22 @@ impl NativeSurface {
         // SAFETY: `hwnd` belongs to a live window owned by this thread.
         unsafe {
             let _ = SetForegroundWindow(self.hwnd);
+        }
+    }
+
+    /// Tells the window that the pointer is just beyond its top left
+    /// corner, unless the pointer is on the window.
+    pub fn forget_pointer(self) {
+        /// The position -1, -1 as a mouse message carries it.
+        const OUTSIDE: isize = 0xffff_ffff;
+        let mut pointer = POINT::default();
+        // SAFETY: `pointer` outlives the call that fills it, and posting to
+        // a window that has since been destroyed fails without side effects.
+        unsafe {
+            if GetCursorPos(&raw mut pointer).is_ok() && WindowFromPoint(pointer) == self.hwnd {
+                return;
+            }
+            let _ = PostMessageW(Some(self.hwnd), WM_MOUSEMOVE, WPARAM(0), LPARAM(OUTSIDE));
         }
     }
 

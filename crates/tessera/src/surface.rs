@@ -13,6 +13,7 @@ use gpui::{
 
 use crate::platform::{DisplayKey, EdgeReservation, NativeSurface, ScreenEdge};
 use crate::theme::Theme;
+use crate::ui::release_hover;
 
 /// Describes a strip along one edge of a display.
 #[derive(Clone, Copy, Debug)]
@@ -128,7 +129,8 @@ impl<V: Render> EdgeSurfaceView<V> {
 }
 
 impl<V: Render> Render for EdgeSurfaceView<V> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        release_hover(window);
         div()
             .size_full()
             .font_family(cx.global::<Theme>().typography.family)

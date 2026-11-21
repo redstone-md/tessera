@@ -11,7 +11,23 @@ use gpui::{
 };
 
 use crate::motion::{InteractionState, mix};
+use crate::platform::NativeSurface;
 use crate::theme::Theme;
+
+/// Ends the hover of what the pointer was on when it left `window`. GPUI
+/// learns that the pointer left but goes on taking it to be where it was
+/// last seen, so the root view of every window calls this as it renders,
+/// which it does when the pointer leaves.
+pub fn release_hover(window: &Window) {
+    let position = window.mouse_position();
+    let inside = position.x >= px(0.) && position.y >= px(0.);
+    if !window.is_window_hovered()
+        && inside
+        && let Ok(native) = NativeSurface::of(window)
+    {
+        native.forget_pointer();
+    }
+}
 
 /// A floating, fully rounded container that holds a group of bar content.
 pub fn pill(theme: &Theme) -> Div {

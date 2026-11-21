@@ -17,6 +17,7 @@ use crate::modules;
 use crate::panel::Panel;
 use crate::platform::ScreenEdge;
 use crate::popup::Popups;
+use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::theme::Theme;
 
@@ -46,6 +47,7 @@ impl Shell {
         cx.set_global(Theme::load(config.theme.as_deref()));
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
+        cx.set_global(Previews::default());
         cx.set_global(AppIcons::new(&config.icons));
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);
         if surfaces.is_empty() {

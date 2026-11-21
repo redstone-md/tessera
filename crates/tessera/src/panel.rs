@@ -11,7 +11,7 @@ use gpui::{
 use crate::config::{SurfaceConfig, WidgetSpec};
 use crate::module::WidgetRegistry;
 use crate::motion::{Interaction, Spring};
-use crate::platform::{DisplayKey, NativeSurface, ScreenEdge};
+use crate::platform::{DisplayKey, ScreenEdge};
 use crate::popup::{PopupAnchor, Popups};
 use crate::theme::Theme;
 use crate::ui::{HOVER_LAYER, PRESS_LAYER, centered_row};
@@ -29,7 +29,6 @@ pub struct Panel {
     slots: [Vec<Placed>; 3],
     /// The edge the content slides in from when the surface opens.
     edge: ScreenEdge,
-    display: Option<DisplayKey>,
     /// How far the content has come in: 0 is hidden behind the edge.
     entrance: Spring,
 }
@@ -61,32 +60,15 @@ impl Panel {
         Self {
             slots,
             edge: layout.edge,
-            display,
             entrance,
         }
     }
 
     fn open_popup(&self, name: &str, window: &Window, cx: &mut App) {
-        let frames = NativeSurface::of(window)
-            .and_then(|native| Ok((native.frame()?, native.display_frame()?)));
-        let (surface, screen) = match frames {
-            Ok(frames) => frames,
-            Err(error) => {
-                eprintln!("tessera: the popup `{name}` has nowhere to open: {error:#}");
-                return;
-            }
-        };
-        let scale = window.scale_factor();
-        let anchor = PopupAnchor {
-            surface,
-            edge: self.edge,
-            x: surface.left + (f32::from(window.mouse_position().x) * scale).round() as i32,
-            screen,
-            scale,
-            display_id: window.display(cx).map(|display| display.id()),
-            display: self.display,
-        };
-        Popups::toggle(name, anchor, cx);
+        match PopupAnchor::at(window, window.mouse_position().x, cx) {
+            Ok(anchor) => Popups::toggle(name, anchor, cx),
+            Err(error) => eprintln!("tessera: the popup `{name}` has nowhere to open: {error:#}"),
+        }
     }
 
     /// The widget at `index` of `slot`. One that opens a popup is wrapped in

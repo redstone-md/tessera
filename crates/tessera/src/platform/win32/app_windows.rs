@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
@@ -23,9 +23,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowPlacement, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync, WINDOWPLACEMENT,
-    WS_EX_TOOLWINDOW,
+    GetWindowPlacement, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, PostMessageW, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
+    WINDOWPLACEMENT, WM_CLOSE, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -36,7 +36,7 @@ use super::DisplayKey;
 pub struct AppWindowId(isize);
 
 impl AppWindowId {
-    fn hwnd(self) -> HWND {
+    pub(super) fn hwnd(self) -> HWND {
         HWND(self.0 as *mut c_void)
     }
 
@@ -61,11 +61,41 @@ impl AppWindowId {
                 let _ = ShowWindowAsync(hwnd, SW_MINIMIZE);
                 return;
             }
+        }
+        self.activate();
+    }
+
+    /// Brings the window to the foreground, restoring it if minimized.
+    /// Windows may refuse, as for [`Self::activate_or_minimize`].
+    pub fn activate(self) {
+        let hwnd = self.hwnd();
+        // SAFETY: every call tolerates a handle whose window has since been
+        // destroyed and fails without side effects.
+        unsafe {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindowAsync(hwnd, SW_RESTORE);
             }
             let _ = SetForegroundWindow(hwnd);
         }
+    }
+
+    /// Asks the window to close, as its close button does. The application
+    /// may ask the user first, or refuse.
+    pub fn close(self) {
+        // SAFETY: posting to a window that has since been destroyed fails
+        // without side effects.
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd()), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    /// What the window's title bar says; empty if Windows does not tell.
+    pub fn title(self) -> String {
+        let mut buffer = [0u16; 512];
+        // SAFETY: the buffer outlives the call, which writes no more than
+        // its length.
+        let length = unsafe { GetWindowTextW(self.hwnd(), &mut buffer) };
+        String::from_utf16_lossy(&buffer[..length.max(0) as usize])
     }
 }
 

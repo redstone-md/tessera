@@ -164,6 +164,17 @@ impl Interaction {
         cx: &mut Context<V>,
         find: impl for<'a> Fn(&'a mut V) -> Option<&'a mut Self> + Clone + 'static,
     ) -> Stateful<Div> {
+        Self::track_hover(element, cx, find, |_, _, _, _| {})
+    }
+
+    /// Like [`Self::track`], and tells `hover` when the pointer comes onto
+    /// the element, with `true`, or leaves it.
+    pub fn track_hover<V: 'static>(
+        element: Stateful<Div>,
+        cx: &mut Context<V>,
+        find: impl for<'a> Fn(&'a mut V) -> Option<&'a mut Self> + Clone + 'static,
+        hover: impl Fn(&mut V, bool, &mut Window, &mut Context<V>) + 'static,
+    ) -> Stateful<Div> {
         let update = move |apply: fn(&mut Self, bool), value: bool| {
             let find = find.clone();
             move |view: &mut V, cx: &mut Context<V>| {
@@ -183,12 +194,13 @@ impl Interaction {
             update(Self::set_hovered, false),
         );
         element
-            .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+            .on_hover(cx.listener(move |view, hovered: &bool, window, cx| {
                 if *hovered {
                     enter(view, cx)
                 } else {
                     leave(view, cx)
                 }
+                hover(view, *hovered, window, cx);
             }))
             .on_mouse_down(
                 MouseButton::Left,

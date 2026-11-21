@@ -4,18 +4,22 @@
 //! One button per pinned application and per open application window.
 //! Widget: `windows`.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, ParentElement,
-    Render, StatefulInteractiveElement, Styled, WeakEntity, Window, div, img,
+    Pixels, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas, div, img,
 };
 
 use crate::icons::{AppIcons, Icon};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{AppWindow, AppWindowId, DisplayKey, Shortcut, WindowEvents};
+use crate::popup::PopupAnchor;
+use crate::preview::Previews;
 use crate::theme::Theme;
 use crate::ui::state_layer;
 
@@ -143,6 +147,9 @@ struct DockItem {
     /// 1 while the window is the foreground window.
     active: Spring,
     interaction: Interaction,
+    /// The middle of the button in its surface, once it has been drawn:
+    /// where the preview of its window opens.
+    middle: Rc<Cell<Option<Pixels>>>,
     /// The window is gone and its button is shrinking away.
     leaving: bool,
 }
@@ -213,9 +220,28 @@ impl WindowList {
             presence,
             active: Spring::new(motion.spatial, 0.),
             interaction: Interaction::new(&motion),
+            middle: Rc::default(),
             leaving: false,
         });
         self.next_key += 1;
+    }
+
+    /// The pointer came onto the button `key`, or left it: the preview of
+    /// its window opens after a moment, or closes.
+    fn preview(&self, key: usize, hovered: bool, window: &Window, cx: &mut Context<Self>) {
+        let item = self.items.iter().find(|item| item.key == key);
+        let target = item
+            .filter(|item| !item.leaving)
+            .and_then(|item| Some((item.window.as_ref()?.id, item.middle.get()?)));
+        let Some((id, middle)) = target.filter(|_| hovered) else {
+            let left = target.filter(|_| !hovered).map(|(id, _)| id);
+            Previews::leave(left, cx);
+            return;
+        };
+        match PopupAnchor::at(window, middle, cx) {
+            Ok(anchor) => Previews::request(id, anchor, cx),
+            Err(error) => eprintln!("tessera: a preview has nowhere to open: {error:#}"),
+        }
     }
 
     /// Re-reads the window list and repaints only when it changed. Known
@@ -228,6 +254,12 @@ impl WindowList {
         let foreground = AppWindowId::foreground();
         let mut changed = foreground != self.foreground;
         self.foreground = foreground;
+        let shows = |items: &[DockItem], id| {
+            let shown =
+                |item: &DockItem| !item.leaving && item.window.as_ref().map(|w| w.id) == Some(id);
+            items.iter().any(shown)
+        };
+        let previewed = Previews::shown(cx).filter(|&id| shows(&self.items, id));
 
         for item in &mut self.items {
             let held = item.window.as_ref().map(|window| window.id);
@@ -259,6 +291,10 @@ impl WindowList {
         for window in windows {
             self.add(None, Some(window), cx);
             changed = true;
+        }
+        // A preview does not outlive its window.
+        if previewed.is_some_and(|id| !shows(&self.items, id)) {
+            Previews::close(cx);
         }
         for item in &mut self.items {
             let shown = item.window.as_ref().filter(|_| !item.leaving);
@@ -305,10 +341,21 @@ impl WindowList {
             .gap(theme.spacing.tiny)
             .rounded(theme.shape.medium)
             .bg(state_layer(&theme, background, state))
-            .on_click(move |_, _, _| match (id, &shortcut) {
-                (Some(id), _) => id.activate_or_minimize(),
-                (None, Some(shortcut)) => shortcut.launch(),
-                (None, None) => {}
+            .on_click(move |_, _, cx| {
+                Previews::close(cx);
+                match (id, &shortcut) {
+                    (Some(id), _) => id.activate_or_minimize(),
+                    (None, Some(shortcut)) => shortcut.launch(),
+                    (None, None) => {}
+                }
+            })
+            .child({
+                let middle = item.middle.clone();
+                let measure =
+                    move |bounds: gpui::Bounds<Pixels>, _: &mut Window, _: &mut gpui::App| {
+                        middle.set(Some(bounds.origin.x + bounds.size.width / 2.));
+                    };
+                canvas(measure, |_, (), _, _| {}).absolute().size_full()
             })
             .child(match icon {
                 Some(icon) => img(icon).size(icon_size).into_any_element(),
@@ -319,10 +366,15 @@ impl WindowList {
                     .into_any_element(),
             })
             .child(Self::render_indicator(active, running, theme));
-        let button = Interaction::track(button, cx, move |this: &mut Self| {
-            let item = this.items.iter_mut().find(|item| item.key == key)?;
-            Some(&mut item.interaction)
-        });
+        let button = Interaction::track_hover(
+            button,
+            cx,
+            move |this: &mut Self| {
+                let item = this.items.iter_mut().find(|item| item.key == key)?;
+                Some(&mut item.interaction)
+            },
+            move |this, hovered, window, cx| this.preview(key, hovered, window, cx),
+        );
 
         // The slot includes the spacing between buttons, so that a button
         // that comes or goes moves its neighbors smoothly.

@@ -14,6 +14,7 @@ mod motion;
 mod panel;
 mod platform;
 mod popup;
+mod preview;
 mod shell;
 mod surface;
 mod theme;

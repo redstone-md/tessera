@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, DisplayId, Global, IntoElement, ParentElement,
-    Render, Styled, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance,
+    AnyView, App, AppContext, Bounds, Context, DisplayId, Div, Global, IntoElement, ParentElement,
+    Pixels, Render, Styled, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 
@@ -17,16 +17,19 @@ use crate::module::WidgetRegistry;
 use crate::motion::Spring;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect};
 use crate::theme::Theme;
+use crate::ui::release_hover;
 
-/// Transparent space around a popup's panel, which its motion moves through.
-const MARGIN: f32 = 12.;
+/// Transparent space around the panel of a floating window, which its
+/// motion moves through.
+pub const MARGIN: f32 = 12.;
 
 /// How long after a popup closes a request to open it again is ignored. The
 /// click that asks to close an open popup first takes focus from it, which
 /// closes it; without this the same click would then reopen it.
 const REOPEN_GUARD: Duration = Duration::from_millis(250);
 
-/// Where a popup should appear. Positions are in physical pixels.
+/// Where a floating window should appear. Positions are in physical pixels.
+#[derive(Clone, Copy)]
 pub struct PopupAnchor {
     /// The surface the popup belongs to.
     pub surface: ScreenRect,
@@ -40,6 +43,114 @@ pub struct PopupAnchor {
     pub scale: f32,
     pub display_id: Option<DisplayId>,
     pub display: Option<DisplayKey>,
+}
+
+impl PopupAnchor {
+    /// The anchor at `x`, a horizontal position in `window`, which is a
+    /// surface docked to the edge of its display that it is nearer to.
+    pub fn at(window: &Window, x: Pixels, cx: &App) -> anyhow::Result<Self> {
+        let native = NativeSurface::of(window)?;
+        let (surface, screen) = (native.frame()?, native.display_frame()?);
+        let scale = window.scale_factor();
+        let edge = if surface.top + surface.bottom < screen.top + screen.bottom {
+            ScreenEdge::Top
+        } else {
+            ScreenEdge::Bottom
+        };
+        Ok(Self {
+            surface,
+            edge,
+            x: surface.left + (x / px(1.) * scale).round() as i32,
+            screen,
+            scale,
+            display_id: window.display(cx).map(|display| display.id()),
+            display: Some(native.display()),
+        })
+    }
+
+    /// The frame of a floating window whose panel is `width` by `height`
+    /// logical pixels: touching the surface, so the panel sits one margin
+    /// away from it, centered on the anchor and kept on the display.
+    pub fn frame(&self, width: f32, height: f32) -> ScreenRect {
+        let physical = |length: f32| ((length + MARGIN * 2.) * self.scale).round() as i32;
+        let (width, height) = (physical(width), physical(height));
+        let rightmost = (self.screen.right - width).max(self.screen.left);
+        let left = (self.x - width / 2).clamp(self.screen.left, rightmost);
+        let top = match self.edge {
+            ScreenEdge::Top => self.surface.bottom,
+            ScreenEdge::Bottom => self.surface.top - height,
+        };
+        ScreenRect {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+        }
+    }
+}
+
+/// The options of a floating window on the display `display_id`. GPUI sizes
+/// the window for a frame that adopting it removes, so `rough` only picks
+/// the display, and the window is to be placed once it is open. `focus`
+/// says whether it takes the keyboard.
+pub fn floating_window(
+    rough: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
+    focus: bool,
+) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(rough)),
+        // See `EdgeSurface::open` for why a title bar is requested.
+        titlebar: Some(TitlebarOptions::default()),
+        focus,
+        show: true,
+        kind: WindowKind::PopUp,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id,
+        window_background: WindowBackgroundAppearance::Transparent,
+        ..Default::default()
+    }
+}
+
+/// How far from its place the panel of a floating window is while it is
+/// `visibility` of the way open: it comes from the surface at `edge`.
+pub fn floating_travel(edge: ScreenEdge, visibility: f32) -> Pixels {
+    let travel = px(MARGIN * (1. - visibility));
+    match edge {
+        ScreenEdge::Top => -travel,
+        ScreenEdge::Bottom => travel,
+    }
+}
+
+/// The content of a floating window: a themed panel, which `fill` gives
+/// its children, inside the margin it moves through.
+pub fn floating_panel(
+    theme: &Theme,
+    edge: ScreenEdge,
+    visibility: f32,
+    fill: impl FnOnce(Div) -> Div,
+) -> Div {
+    let panel = div()
+        .size_full()
+        .relative()
+        .top(floating_travel(edge, visibility))
+        .p(theme.spacing.medium)
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.medium)
+        .overflow_hidden()
+        .rounded(theme.shape.large)
+        .bg(theme.colors.surface_container);
+    div()
+        .size_full()
+        .p(px(MARGIN))
+        .font_family(theme.typography.family)
+        .text_size(theme.typography.label_size)
+        .text_color(theme.colors.on_surface)
+        .opacity(visibility.clamp(0., 1.))
+        .child(fill(panel))
 }
 
 /// The configured popups and the one that is open.
@@ -118,9 +229,7 @@ impl Popups {
         anchor: &PopupAnchor,
         cx: &mut App,
     ) -> anyhow::Result<WindowHandle<PopupView>> {
-        let frame = Self::frame(config, anchor);
-        // GPUI sizes the window for a frame that `adopt_as_popup` removes,
-        // so these bounds only pick the display; `place` sets the real ones.
+        let frame = anchor.frame(config.width, config.height);
         let rough = Bounds {
             origin: point(
                 px(frame.left as f32 / anchor.scale),
@@ -128,20 +237,7 @@ impl Popups {
             ),
             size: size(px(config.width), px(config.height)),
         };
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(rough)),
-            // See `EdgeSurface::open` for why a title bar is requested.
-            titlebar: Some(TitlebarOptions::default()),
-            focus: true,
-            show: true,
-            kind: WindowKind::PopUp,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: anchor.display_id,
-            window_background: WindowBackgroundAppearance::Transparent,
-            ..Default::default()
-        };
+        let options = floating_window(rough, anchor.display_id, true);
         let (edge, display) = (anchor.edge, anchor.display);
         cx.open_window(options, |window, cx| {
             let adopted = NativeSurface::of(window).and_then(|native| {
@@ -160,25 +256,6 @@ impl Popups {
                 .collect();
             cx.new(|cx| PopupView::new(config.name.clone(), edge, content, window, cx))
         })
-    }
-
-    /// The window frame: touching the surface, so the panel sits one margin
-    /// away from it, centered on the anchor and kept on the display.
-    fn frame(config: &PopupConfig, anchor: &PopupAnchor) -> ScreenRect {
-        let physical = |length: f32| ((length + MARGIN * 2.) * anchor.scale).round() as i32;
-        let (width, height) = (physical(config.width), physical(config.height));
-        let rightmost = (anchor.screen.right - width).max(anchor.screen.left);
-        let left = (anchor.x - width / 2).clamp(anchor.screen.left, rightmost);
-        let top = match anchor.edge {
-            ScreenEdge::Top => anchor.surface.bottom,
-            ScreenEdge::Bottom => anchor.surface.top - height,
-        };
-        ScreenRect {
-            left,
-            top,
-            right: left + width,
-            bottom: top + height,
-        }
     }
 }
 
@@ -247,37 +324,15 @@ impl PopupView {
 
 impl Render for PopupView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        release_hover(window);
         let theme = *cx.global::<Theme>();
         let visibility = self.visibility.value(window);
         if self.closing && self.visibility.is_settled() {
             window.remove_window();
         }
-        let travel = px(MARGIN * (1. - visibility));
-        let offset = match self.edge {
-            ScreenEdge::Top => -travel,
-            ScreenEdge::Bottom => travel,
-        };
-        div()
-            .size_full()
-            .p(px(MARGIN))
-            .font_family(theme.typography.family)
-            .text_size(theme.typography.label_size)
-            .text_color(theme.colors.on_surface)
-            .opacity(visibility.clamp(0., 1.))
-            .child(
-                div()
-                    .size_full()
-                    .relative()
-                    .top(offset)
-                    .p(theme.spacing.medium)
-                    .flex()
-                    .flex_col()
-                    .gap(theme.spacing.medium)
-                    .overflow_hidden()
-                    .rounded(theme.shape.large)
-                    .bg(theme.colors.surface_container)
-                    .children(self.content.iter().cloned()),
-            )
+        floating_panel(&theme, self.edge, visibility, |panel| {
+            panel.children(self.content.iter().cloned())
+        })
     }
 }
 
@@ -302,13 +357,8 @@ mod tests {
         }
     }
 
-    fn config() -> PopupConfig {
-        PopupConfig {
-            name: "test".into(),
-            width: 176.,
-            height: 76.,
-            content: Vec::new(),
-        }
+    fn framed(anchor: &PopupAnchor) -> ScreenRect {
+        anchor.frame(176., 76.)
     }
 
     #[test]
@@ -319,7 +369,7 @@ mod tests {
             right: 1000,
             bottom: 48,
         };
-        let below = Popups::frame(&config(), &anchor(ScreenEdge::Top, bar, 500));
+        let below = framed(&anchor(ScreenEdge::Top, bar, 500));
         assert_eq!(
             (below.left, below.top, below.right, below.bottom),
             (400, 48, 600, 148)
@@ -331,7 +381,7 @@ mod tests {
             right: 1000,
             bottom: 800,
         };
-        let above = Popups::frame(&config(), &anchor(ScreenEdge::Bottom, dock, 500));
+        let above = framed(&anchor(ScreenEdge::Bottom, dock, 500));
         assert_eq!((above.top, above.bottom), (624, 724));
     }
 
@@ -343,9 +393,9 @@ mod tests {
             right: 1000,
             bottom: 48,
         };
-        let frame = Popups::frame(&config(), &anchor(ScreenEdge::Top, bar, 990));
+        let frame = framed(&anchor(ScreenEdge::Top, bar, 990));
         assert_eq!((frame.left, frame.right), (800, 1000));
-        let frame = Popups::frame(&config(), &anchor(ScreenEdge::Top, bar, 3));
+        let frame = framed(&anchor(ScreenEdge::Top, bar, 3));
         assert_eq!(frame.left, 0);
     }
 }
