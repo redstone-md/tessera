@@ -3,6 +3,9 @@
 
 //! Shell-wide appearance tokens, following Material 3 role names.
 
+use std::collections::HashSet;
+use std::sync::Mutex;
+
 use anyhow::bail;
 use gpui::{Global, Hsla, Pixels, px, rgb};
 use serde::Deserialize;
@@ -19,6 +22,18 @@ pub const ACCENT_THEME: &str = "accent";
 
 /// What a theme file writes as its seed to follow the accent color.
 const ACCENT_SEED: &str = "accent";
+
+/// The longest length a theme file may set, in pixels. The built-in radius
+/// of fully rounded corners is just below it.
+const LENGTH_LIMIT: f32 = 10_000.;
+
+/// What a theme file may set the stiffness of a spring to. Below, nothing
+/// seems to move; above, the steps a spring is advanced in are too coarse.
+const STIFFNESS_RANGE: (f32, f32) = (20., 5_000.);
+
+/// What a theme file may set the damping ratio of a spring to: from
+/// swinging for seconds to creeping.
+const DAMPING_RANGE: (f32, f32) = (0.2, 2.);
 
 /// The seed of the built-in colors, for the schemes derived from it.
 const BUILT_IN_SEED: [u8; 3] = [0xad, 0xd2, 0x8e];
@@ -275,6 +290,9 @@ impl Theme {
                 if let Err(error) = file.colors.apply_to(&mut theme.colors) {
                     report!("theme `{name}` is only partly applied: {error:#}");
                 }
+                for problem in file.apply_measures_to(&mut theme) {
+                    report!("theme `{name}`: {problem}, which is left as it was");
+                }
             }
             None => report!("theme `{name}` is not loaded, the built-in theme is used"),
         }
@@ -341,6 +359,251 @@ struct ThemeFile {
     scheme: Scheme,
     #[serde(default)]
     colors: ColorOverrides,
+    #[serde(default)]
+    shape: ShapeOverrides,
+    #[serde(default)]
+    spacing: SpacingOverrides,
+    #[serde(default)]
+    typography: TypographyOverrides,
+    #[serde(default)]
+    motion: MotionOverrides,
+    #[serde(default)]
+    bar: BarOverrides,
+    #[serde(default)]
+    dock: DockOverrides,
+    #[serde(default)]
+    calendar: CalendarOverrides,
+    #[serde(default)]
+    slider: SliderOverrides,
+    #[serde(default)]
+    meter: MeterOverrides,
+    #[serde(default)]
+    launcher: LauncherOverrides,
+}
+
+impl ThemeFile {
+    /// Replaces the shapes, sizes, font and motion that are set and
+    /// usable. Returns what is not usable, each as the start of a
+    /// sentence.
+    fn apply_measures_to(&self, theme: &mut Theme) -> Vec<String> {
+        let mut problems = Vec::new();
+        self.shape
+            .apply_to(&mut theme.shape, "shape", &mut problems);
+        self.spacing
+            .apply_to(&mut theme.spacing, "spacing", &mut problems);
+        self.typography
+            .apply_to(&mut theme.typography, &mut problems);
+        self.motion.apply_to(&mut theme.motion, &mut problems);
+        self.bar.apply_to(&mut theme.bar, "bar", &mut problems);
+        self.dock.apply_to(&mut theme.dock, "dock", &mut problems);
+        self.calendar
+            .apply_to(&mut theme.calendar, "calendar", &mut problems);
+        self.slider
+            .apply_to(&mut theme.slider, "slider", &mut problems);
+        self.meter
+            .apply_to(&mut theme.meter, "meter", &mut problems);
+        self.launcher
+            .apply_to(&mut theme.launcher, "launcher", &mut problems);
+        problems
+    }
+}
+
+/// `value` if it lies between `least` and `most`; otherwise `None` and a
+/// note in `problems` that names it `name`.
+fn within(
+    value: f32,
+    (least, most): (f32, f32),
+    name: &str,
+    problems: &mut Vec<String>,
+) -> Option<f32> {
+    let usable = value.is_finite() && (least..=most).contains(&value);
+    if !usable {
+        problems.push(format!("`{name}` is not a number from {least} to {most}"));
+    }
+    usable.then_some(value)
+}
+
+/// Declares the lengths, in pixels, that a theme file may replace in one
+/// section of the theme: the fields of `$target` that are named.
+macro_rules! length_overrides {
+    ($(#[$meta:meta])* $name:ident for $target:ty { $($field:ident),+ $(,)? }) => {
+        $(#[$meta])*
+        #[derive(Debug, Default, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct $name {
+            $($field: Option<f32>,)+
+        }
+
+        impl $name {
+            /// Replaces the lengths that are set and usable; the others
+            /// are noted in `problems` by `section` and name.
+            fn apply_to(&self, target: &mut $target, section: &str, problems: &mut Vec<String>) {
+                $(
+                    let name = format!("{section}.{}", stringify!($field));
+                    let length = self.$field;
+                    let length =
+                        length.and_then(|length| within(length, (0., LENGTH_LIMIT), &name, problems));
+                    if let Some(length) = length {
+                        target.$field = px(length);
+                    }
+                )+
+            }
+        }
+    };
+}
+
+length_overrides!(
+    /// Replacement corner radii.
+    ShapeOverrides for Shape { small, medium, large, full }
+);
+length_overrides!(
+    /// Replacement distances.
+    SpacingOverrides for Spacing { tiny, small, medium }
+);
+length_overrides!(
+    /// Replacement bar measurements.
+    BarOverrides for BarMetrics { pill_height }
+);
+length_overrides!(
+    /// Replacement dock measurements.
+    DockOverrides for DockMetrics {
+        container_height,
+        item_size,
+        icon_size,
+        indicator_height,
+        indicator_active_width,
+    }
+);
+length_overrides!(
+    /// Replacement calendar measurements.
+    CalendarOverrides for CalendarMetrics { cell_size }
+);
+length_overrides!(
+    /// Replacement slider measurements.
+    SliderOverrides for SliderMetrics {
+        track_height,
+        handle_width,
+        handle_height,
+        handle_gap,
+        inner_radius,
+        value_width,
+    }
+);
+length_overrides!(
+    /// Replacement measurements of the wavy line.
+    MeterOverrides for MeterMetrics { width, stroke, amplitude, wavelength, gap }
+);
+length_overrides!(
+    /// Replacement launcher sizes.
+    LauncherOverrides for LauncherMetrics { field_height, row_height, icon_size }
+);
+
+/// A replacement font and text sizes. The font of the icons is not
+/// replaceable: the shell names its icons by their place in that font.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TypographyOverrides {
+    /// The name of an installed font.
+    family: Option<String>,
+    label_size: Option<f32>,
+    icon_size: Option<f32>,
+}
+
+impl TypographyOverrides {
+    fn apply_to(&self, typography: &mut Typography, problems: &mut Vec<String>) {
+        match self.family.as_deref().map(str::trim) {
+            Some("") => problems.push("`typography.family` names no font".to_owned()),
+            Some(family) => typography.family = kept(family),
+            None => {}
+        }
+        let sizes = [
+            (self.label_size, &mut typography.label_size, "label_size"),
+            (self.icon_size, &mut typography.icon_size, "icon_size"),
+        ];
+        for (size, target, name) in sizes {
+            let name = format!("typography.{name}");
+            let size = size.and_then(|size| within(size, (1., LENGTH_LIMIT), &name, problems));
+            if let Some(size) = size {
+                *target = px(size);
+            }
+        }
+    }
+}
+
+/// `name` for as long as the program runs, which is how long a theme may
+/// be in use. Each name is kept once, however often themes are read.
+fn kept(name: &str) -> &'static str {
+    static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let mut names = NAMES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let names = names.get_or_insert_with(HashSet::new);
+    match names.get(name) {
+        Some(kept) => kept,
+        None => {
+            let kept: &'static str = Box::leak(name.to_owned().into_boxed_str());
+            names.insert(kept);
+            kept
+        }
+    }
+}
+
+/// Replacement springs.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MotionOverrides {
+    #[serde(default)]
+    spatial: SpringOverrides,
+    #[serde(default)]
+    spatial_fast: SpringOverrides,
+    #[serde(default)]
+    effects: SpringOverrides,
+}
+
+impl MotionOverrides {
+    fn apply_to(&self, motion: &mut Motion, problems: &mut Vec<String>) {
+        let springs = [
+            (&self.spatial, &mut motion.spatial, "spatial"),
+            (&self.spatial_fast, &mut motion.spatial_fast, "spatial_fast"),
+            (&self.effects, &mut motion.effects, "effects"),
+        ];
+        for (replacement, spring, name) in springs {
+            replacement.apply_to(spring, name, problems);
+        }
+    }
+}
+
+/// What to replace of one spring.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpringOverrides {
+    stiffness: Option<f32>,
+    damping_ratio: Option<f32>,
+}
+
+impl SpringOverrides {
+    fn apply_to(&self, spring: &mut SpringSpec, name: &str, problems: &mut Vec<String>) {
+        let parts = [
+            (
+                self.stiffness,
+                &mut spring.stiffness,
+                "stiffness",
+                STIFFNESS_RANGE,
+            ),
+            (
+                self.damping_ratio,
+                &mut spring.damping_ratio,
+                "damping_ratio",
+                DAMPING_RANGE,
+            ),
+        ];
+        for (value, target, part, range) in parts {
+            let name = format!("motion.{name}.{part}");
+            if let Some(value) = value.and_then(|value| within(value, range, &name, problems)) {
+                *target = value;
+            }
+        }
+    }
 }
 
 /// Replacement colors as `#rrggbb`, by Material 3 role name.
@@ -428,6 +691,105 @@ mod tests {
         theme.derive(None, Scheme::Light, "test");
         assert!(theme.colors.surface_container.l > theme.colors.on_surface.l);
         assert_eq!(theme.followed, Followed::default());
+    }
+
+    #[test]
+    fn a_theme_file_replaces_shapes_sizes_font_and_motion() {
+        let file: ThemeFile = toml::from_str(
+            r#"
+            [shape]
+            medium = 4
+            [spacing]
+            small = 6.5
+            [typography]
+            family = " Bahnschrift "
+            label_size = 15
+            [motion.spatial]
+            stiffness = 200
+            damping_ratio = 0.45
+            [bar]
+            pill_height = 40
+            [dock]
+            icon_size = 28
+            [meter]
+            amplitude = 4
+            "#,
+        )
+        .unwrap();
+        let mut theme = Theme::default();
+        let built_in = Theme::default();
+        assert!(file.apply_measures_to(&mut theme).is_empty());
+
+        assert_eq!(theme.shape.medium, px(4.));
+        assert_eq!(theme.shape.small, built_in.shape.small);
+        assert_eq!(theme.spacing.small, px(6.5));
+        assert_eq!(theme.typography.family, "Bahnschrift");
+        assert_eq!(theme.typography.label_size, px(15.));
+        assert_eq!(theme.typography.icon_size, built_in.typography.icon_size);
+        assert_eq!(theme.motion.spatial.stiffness, 200.);
+        assert_eq!(theme.motion.spatial.damping_ratio, 0.45);
+        assert_eq!(
+            theme.motion.effects.stiffness,
+            built_in.motion.effects.stiffness
+        );
+        assert_eq!(theme.bar.pill_height, px(40.));
+        assert_eq!(theme.dock.icon_size, px(28.));
+        assert_eq!(theme.dock.item_size, built_in.dock.item_size);
+        assert_eq!(theme.meter.amplitude, px(4.));
+    }
+
+    #[test]
+    fn what_a_theme_file_gets_wrong_is_named_and_left_alone() {
+        let file: ThemeFile = toml::from_str(
+            r#"
+            [shape]
+            small = -1
+            medium = 12
+            [typography]
+            family = ""
+            label_size = 0
+            [motion.spatial_fast]
+            stiffness = 1e9
+            damping_ratio = 0
+            [dock]
+            item_size = inf
+            "#,
+        )
+        .unwrap();
+        let mut theme = Theme::default();
+        let built_in = Theme::default();
+        let problems = file.apply_measures_to(&mut theme);
+
+        let named: Vec<&str> = problems
+            .iter()
+            .map(|problem| problem.split('`').nth(1).unwrap())
+            .collect();
+        assert_eq!(
+            named,
+            [
+                "shape.small",
+                "typography.family",
+                "typography.label_size",
+                "motion.spatial_fast.stiffness",
+                "motion.spatial_fast.damping_ratio",
+                "dock.item_size"
+            ]
+        );
+        assert_eq!(theme.shape.small, built_in.shape.small);
+        assert_eq!(theme.shape.medium, px(12.));
+        assert_eq!(theme.typography.family, built_in.typography.family);
+        assert_eq!(theme.typography.label_size, built_in.typography.label_size);
+        assert_eq!(
+            theme.motion.spatial_fast.stiffness,
+            built_in.motion.spatial_fast.stiffness
+        );
+        assert_eq!(theme.dock.item_size, built_in.dock.item_size);
+        assert!(toml::from_str::<ThemeFile>("[shape]\nhuge = 1\n").is_err());
+    }
+
+    #[test]
+    fn a_font_name_is_kept_once() {
+        assert!(std::ptr::eq(kept("Some Font"), kept("Some Font")));
     }
 
     #[test]

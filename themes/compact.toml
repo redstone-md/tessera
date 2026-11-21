@@ -1,0 +1,47 @@
+# A Tessera theme: small, square and calm. Copy it to
+# %APPDATA%\tessera\themes\ and choose it in the settings, or write
+# `theme = "compact"` at the top of config.toml.
+
+seed = "#8ab4f8"
+scheme = "dark"
+
+[shape]
+small = 3
+medium = 6
+large = 10
+full = 8
+
+[spacing]
+tiny = 3
+small = 6
+medium = 12
+
+[typography]
+family = "Segoe UI"
+label_size = 13
+icon_size = 15
+
+# Nothing overshoots.
+[motion.spatial]
+stiffness = 600
+damping_ratio = 1
+
+[motion.spatial_fast]
+stiffness = 1200
+damping_ratio = 1
+
+[bar]
+pill_height = 32
+
+[dock]
+container_height = 54
+item_size = 42
+icon_size = 28
+indicator_height = 3
+indicator_active_width = 12
+
+[meter]
+width = 36
+stroke = 2
+amplitude = 1.5
+wavelength = 10
