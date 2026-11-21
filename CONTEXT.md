@@ -2,7 +2,7 @@
 
 A modular desktop environment for Windows. Its primary product is a customizable native shell with conventional floating-window behavior. Automatic tiling is an optional capability, not the baseline interaction model.
 
-The presentation target is full Seelen UI behavior and appearance, independently implemented on the native stack. Current missing modules remain work to do, not exclusions from that target; [the native presentation decision](docs/adr/0005-native-presentation.md) records the reference and acceptance contract.
+Seelen UI is the functional reference, independently implemented on a native stack with a Material 3 Expressive appearance. This glossary defines vocabulary; it does not claim that a named capability is implemented.
 
 ## Terminology
 
