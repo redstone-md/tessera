@@ -54,7 +54,7 @@ impl Global for Shell {}
 impl Shell {
     /// Applies `config`, opens its surfaces and starts watching its files.
     pub fn start(config: Config, cx: &mut App) -> anyhow::Result<()> {
-        cx.set_global(Theme::load(config.theme.as_deref()));
+        cx.set_global(Theme::load(config.theme.as_deref(), config.contrast));
         cx.set_global(config.language);
         Tiler::start(&config.tiling, cx);
         Workspaces::start(&config.workspaces, cx);
@@ -171,8 +171,9 @@ impl Shell {
                 let stale = cx.update(|cx| {
                     let stale = cx.global::<Theme>().is_stale();
                     if stale {
-                        let name = cx.global::<Self>().config.theme.clone();
-                        cx.set_global(Theme::load(name.as_deref()));
+                        let config = &cx.global::<Self>().config;
+                        let theme = Theme::load(config.theme.as_deref(), config.contrast);
+                        cx.set_global(theme);
                         cx.refresh_windows();
                     }
                     stale
@@ -205,7 +206,7 @@ impl Shell {
             report!("the configuration in use stays");
             return;
         };
-        cx.set_global(Theme::load(config.theme.as_deref()));
+        cx.set_global(Theme::load(config.theme.as_deref(), config.contrast));
         cx.set_global(config.language);
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);

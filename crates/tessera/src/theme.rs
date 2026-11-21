@@ -14,6 +14,7 @@ use crate::config::{read_user_file, theme_file};
 use crate::motion::SpringSpec;
 use crate::platform::{accent_color, light_mode};
 
+mod contrast;
 mod tonal;
 
 /// The theme name that stands for colors derived from the accent color of
@@ -294,7 +295,17 @@ impl Theme {
 
     /// The built-in theme with the user's theme file `name` applied over it.
     /// A missing or unusable file is reported and leaves the built-in theme.
-    pub fn load(name: Option<&str>) -> Self {
+    /// With `legible`, colors that are read are then moved away from what
+    /// they lie on until they have the contrast WCAG 2.1 asks for.
+    pub fn load(name: Option<&str>, legible: bool) -> Self {
+        let mut theme = Self::named(name);
+        if legible {
+            theme.colors.make_legible();
+        }
+        theme
+    }
+
+    fn named(name: Option<&str>) -> Self {
         let mut theme = Self::default();
         let Some(name) = name else {
             return theme;

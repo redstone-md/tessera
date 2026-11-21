@@ -261,6 +261,16 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        section: Section::General,
+        card: "Contrast",
+        title: "Keep text readable (WCAG 2.1 AA)",
+        target: Target::Key("contrast"),
+        kind: Kind::Switch {
+            on: Answer::Unset,
+            off: Answer::Flag(false),
+        },
+    },
+    Setting {
         section: Section::Widgets,
         card: "Clock",
         title: "Format",

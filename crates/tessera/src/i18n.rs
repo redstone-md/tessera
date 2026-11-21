@@ -146,6 +146,11 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Язык настроек и маркетплейса.",
     ),
     ("Windows key", "Клавиша Windows"),
+    ("Contrast", "Контраст"),
+    (
+        "Keep text readable (WCAG 2.1 AA)",
+        "Держать текст читаемым (WCAG 2.1 AA)",
+    ),
     ("Opens the launcher", "Открывает лаунчер"),
     ("Theme", "Тема"),
     ("Built-in", "Встроенная"),

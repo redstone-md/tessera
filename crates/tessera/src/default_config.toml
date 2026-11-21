@@ -10,6 +10,14 @@
 #   [colors]            single roles as "#rrggbb", applied last
 # theme = "example"
 
+# Colors that are read (text, icons, the accent, outlines) are made lighter
+# or darker by as little as gives them the contrast WCAG 2.1 asks for at
+# level AA to the surfaces of the theme: 4.5 to 1, outlines 3 to 1. Colors
+# that already have it stay. `false` leaves a theme exactly as written.
+# What is behind a bar that lets the wallpaper through is not known and
+# not counted.
+# contrast = false
+
 # The language of the settings and the marketplace: "en" (default) or "ru".
 # What the widgets of the bars say stays English.
 # language = "ru"

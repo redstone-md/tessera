@@ -194,12 +194,20 @@ impl SurfaceConfig {
     }
 }
 
+fn yes() -> bool {
+    true
+}
+
 /// Everything the user can configure.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Name of the theme file to apply over the built-in theme.
     pub theme: Option<String>,
+    /// Whether colors that are read are moved away from what they lie on
+    /// until they have the contrast WCAG 2.1 asks for.
+    #[serde(default = "yes")]
+    pub contrast: bool,
     /// The language of the settings and the marketplace.
     #[serde(default)]
     pub language: Language,
@@ -307,6 +315,7 @@ mod tests {
     fn builtin_configuration_describes_a_bar_and_a_dock() {
         let config = Config::builtin();
         assert_eq!(config.theme, None);
+        assert!(config.contrast);
         let [bar, dock] = config.surfaces.as_slice() else {
             panic!("expected two surfaces, got {}", config.surfaces.len());
         };
