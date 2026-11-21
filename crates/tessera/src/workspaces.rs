@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::config::config_dir;
 use crate::platform::{
-    AppWindow, AppWindowId, Hotkey, Hotkeys, Modifiers, VirtualDesktops, WindowEvents,
+    AppWindow, AppWindowId, Departure, Hotkey, Hotkeys, Modifiers, VirtualDesktops, WindowEvents,
 };
 use crate::tiling::listed;
 
@@ -137,6 +137,9 @@ struct Change {
     show: Vec<AppWindowId>,
     /// The window to bring to the front.
     front: Option<AppWindowId>,
+    /// Whether the workspace the change leads to comes after the one
+    /// before, so that what leaves does so to the left.
+    onward: bool,
 }
 
 impl Homes {
@@ -206,6 +209,7 @@ impl Homes {
         for id in &change.show {
             self.hidden.remove(id);
         }
+        change.onward = index > self.current;
         self.current = index;
         change.front = self.fronts[index];
         change
@@ -225,6 +229,8 @@ impl Homes {
         self.fronts[index] = Some(id);
         Change {
             hide: vec![id],
+            // A window that is sent leaves towards where it goes.
+            onward: index < self.current,
             ..Change::default()
         }
     }
@@ -398,9 +404,7 @@ impl Workspaces {
     /// written down first.
     fn apply(&mut self, change: Change) {
         self.write_record();
-        for id in change.hide {
-            id.hide();
-        }
+        Departure::play(change.hide, !change.onward);
         for id in change.show {
             id.unhide();
         }
