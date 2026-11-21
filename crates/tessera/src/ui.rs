@@ -5,9 +5,12 @@
 
 use std::f32::consts::TAU;
 
+use std::panic::Location;
+
 use gpui::{
-    Bounds, Canvas, Div, Hsla, IntoElement, ParentElement, PathBuilder, Pixels, SharedString,
-    Styled, Window, canvas, div, point, px,
+    App, AvailableSpace, Bounds, Canvas, Div, Element, ElementId, GlobalElementId, Hsla,
+    InspectorElementId, IntoElement, LayoutId, ParentElement, PathBuilder, Pixels, ShapedLine,
+    SharedString, Size, Style, Styled, Window, canvas, div, point, px,
 };
 
 use crate::motion::{InteractionState, mix};
@@ -140,4 +143,122 @@ pub fn centered_row(theme: &Theme, start: Div, center: Div, end: Div) -> Div {
         .child(div().flex_1().flex().justify_start().child(start))
         .child(center)
         .child(div().flex_1().flex().justify_end().child(end))
+}
+
+/// What stands for the part of a text that was cut off.
+const CUT: &str = "\u{2026}";
+
+/// How far over its room a text may be before it is cut; shaping a text
+/// twice does not give the same width to the last fraction.
+const CUT_SLACK: f32 = 0.5;
+
+/// `text` on one line in the text style around it, as wide as the text
+/// and no wider than the room it gets, its end cut off and marked where
+/// it does not fit. A line break in it counts as a space.
+///
+/// GPUI can cut a text too, but measures a text that may not wrap only
+/// once, without a limit, and so never cuts it, and loses count of the
+/// bytes of a text that may wrap when it cuts it a second time.
+pub fn one_line(text: impl Into<SharedString>) -> OneLine {
+    let text = text.into();
+    let text = if text.contains(['\n', '\r']) {
+        text.replace(['\n', '\r'], " ").into()
+    } else {
+        text
+    };
+    OneLine { text }
+}
+
+/// The element [`one_line`] makes.
+pub struct OneLine {
+    text: SharedString,
+}
+
+impl OneLine {
+    /// The text shaped in the text style around it, cut to `room` if one
+    /// is given and the text is `whole` wide and does not fit.
+    fn shaped(&self, room: Option<(Pixels, Pixels)>, window: &Window, cx: &App) -> ShapedLine {
+        let style = window.text_style();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let mut runs = vec![style.to_run(self.text.len())];
+        let text = match room {
+            Some((room, whole)) if whole > room + px(CUT_SLACK) => cx
+                .text_system()
+                .line_wrapper(style.font(), size)
+                .truncate_line(self.text.clone(), room, CUT, &mut runs),
+            _ => self.text.clone(),
+        };
+        window.text_system().shape_line(text, size, &runs, None)
+    }
+}
+
+impl IntoElement for OneLine {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for OneLine {
+    /// How wide the whole text is.
+    type RequestLayoutState = Pixels;
+    type PrepaintState = ShapedLine;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Pixels) {
+        let whole = self.shaped(None, window, cx).width.ceil();
+        let height = window.line_height();
+        let layout = window.request_measured_layout(Style::default(), move |known, room, _, _| {
+            let room = known.width.or(match room.width {
+                AvailableSpace::Definite(room) => Some(room),
+                _ => None,
+            });
+            Size {
+                width: room.map_or(whole, |room| room.min(whole)),
+                height,
+            }
+        });
+        (layout, whole)
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        whole: &mut Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> ShapedLine {
+        self.shaped(Some((bounds.size.width, *whole)), window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut Pixels,
+        line: &mut ShapedLine,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if let Err(error) = line.paint(bounds.origin, window.line_height(), window, cx) {
+            report!("a line of text was not drawn: {error:#}");
+        }
+    }
 }

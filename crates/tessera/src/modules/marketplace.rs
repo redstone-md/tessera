@@ -18,7 +18,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, InteractionState, Spring};
 use crate::shell::Shell;
 use crate::theme::Theme;
-use crate::ui::state_layer;
+use crate::ui::{one_line, state_layer};
 
 /// The size of secondary text, as a share of the label size.
 const CAPTION_SHARE: f32 = 0.85;
@@ -340,10 +340,9 @@ impl Marketplace {
         }
         let title = div()
             .flex_1()
-            .min_w(px(0.))
-            .truncate()
+            .min_w_0()
             .text_color(theme.colors.on_surface)
-            .child(SharedString::from(format!(
+            .child(one_line(format!(
                 "{} {}",
                 row.offer.name, row.offer.version
             )));

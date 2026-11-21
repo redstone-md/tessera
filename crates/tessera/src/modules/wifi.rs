@@ -16,7 +16,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
 use crate::platform::{Wifi, WifiNetwork, WifiReach};
 use crate::theme::Theme;
-use crate::ui::{icon, state_layer};
+use crate::ui::{icon, one_line, state_layer};
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(3);
@@ -235,16 +235,16 @@ impl WifiList {
                     .flex_col()
                     .child(
                         div()
-                            .truncate()
+                            .min_w_0()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(SharedString::from(network.name.clone())),
+                            .child(one_line(network.name.clone())),
                     )
                     .child(
                         div()
-                            .truncate()
+                            .min_w_0()
                             .text_size(px(11.))
                             .text_color(theme.colors.on_surface_variant)
-                            .child(note(network, self.joining.as_deref())),
+                            .child(one_line(note(network, self.joining.as_deref()))),
                     ),
             )
             .children(network.connected.then(|| {

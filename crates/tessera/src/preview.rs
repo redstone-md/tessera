@@ -16,7 +16,7 @@ use crate::motion::{Interaction, Spring};
 use crate::platform::{AppWindowId, NativeSurface, ScreenEdge, ScreenRect, Thumbnail};
 use crate::popup::{MARGIN, PopupAnchor, floating_panel, floating_travel, floating_window};
 use crate::theme::Theme;
-use crate::ui::{icon, release_hover, state_layer};
+use crate::ui::{icon, one_line, release_hover, state_layer};
 
 /// How long the pointer rests before a preview opens.
 const OPEN_DELAY: Duration = Duration::from_millis(400);
@@ -294,15 +294,7 @@ impl Render for PreviewView {
             .flex()
             .items_center()
             .gap(theme.spacing.small)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(self.title.clone()),
-            )
+            .child(div().flex_1().min_w_0().child(one_line(self.title.clone())))
             .child(close);
         // Windows draws the picture over this.
         let picture = self.thumbnail.is_some().then(|| {

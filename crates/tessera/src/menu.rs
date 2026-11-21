@@ -16,7 +16,7 @@ use crate::motion::{Interaction, Spring};
 use crate::platform::{NativeSurface, ScreenEdge};
 use crate::popup::{PopupAnchor, floating_panel, floating_window};
 use crate::theme::Theme;
-use crate::ui::{icon, release_hover, state_layer};
+use crate::ui::{icon, one_line, release_hover, state_layer};
 
 /// The width of a menu, in logical pixels.
 const WIDTH: f32 = 208.;
@@ -206,10 +206,7 @@ impl Render for MenuView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(entry.label.clone()),
+                            .child(one_line(entry.label.clone())),
                     );
                 Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index))
             })

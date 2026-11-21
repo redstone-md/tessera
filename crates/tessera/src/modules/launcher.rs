@@ -19,7 +19,7 @@ use crate::motion::Spring;
 use crate::platform::Shortcut;
 use crate::popup::Popups;
 use crate::theme::Theme;
-use crate::ui::icon;
+use crate::ui::{icon, one_line};
 
 const ICON_SEARCH: &str = "\u{e721}";
 const ICON_PIN: &str = "\u{e718}";
@@ -265,10 +265,8 @@ impl Launcher {
             .child(
                 div()
                     .flex_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(SharedString::new(shortcut.name.as_str())),
+                    .min_w_0()
+                    .child(one_line(SharedString::new(shortcut.name.as_str()))),
             )
             .children(self.render_pin(row, theme, cx))
             .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))

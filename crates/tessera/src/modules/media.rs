@@ -21,7 +21,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{Media, MediaCommand, NowPlaying, Position};
 use crate::theme::Theme;
-use crate::ui::{icon, pill, state_layer, wave_bar};
+use crate::ui::{icon, one_line, pill, state_layer, wave_bar};
 
 /// How often it is read what is playing.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -308,7 +308,7 @@ impl Render for Readout {
                     .max_w(self.width)
                     .font_weight(FontWeight::MEDIUM)
                     .child(icon(&theme, glyph).flex_none().text_color(color))
-                    .child(div().truncate().child(SharedString::from(headline(now)))),
+                    .child(div().min_w_0().child(one_line(headline(now)))),
             )
     }
 }
@@ -515,16 +515,16 @@ impl Render for Controls {
             .gap(theme.spacing.tiny)
             .child(
                 div()
-                    .truncate()
+                    .min_w_0()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(mix(theme.colors.on_surface, theme.colors.primary, playing))
-                    .child(SharedString::from(title)),
+                    .child(one_line(title)),
             )
             .children((!now.artist.is_empty()).then(|| {
                 div()
-                    .truncate()
+                    .min_w_0()
                     .text_color(theme.colors.on_surface_variant)
-                    .child(SharedString::from(now.artist.clone()))
+                    .child(one_line(now.artist.clone()))
             }));
         div()
             .flex()

@@ -16,7 +16,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Spring, staggered};
 use crate::platform::{Bluetooth, PairedDevice};
 use crate::theme::Theme;
-use crate::ui::{icon, wave_bar};
+use crate::ui::{icon, one_line, wave_bar};
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(5);
@@ -164,16 +164,16 @@ impl Devices {
                     .flex_col()
                     .child(
                         div()
-                            .truncate()
+                            .min_w_0()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(SharedString::from(device.name.clone())),
+                            .child(one_line(device.name.clone())),
                     )
                     .child(
                         div()
-                            .truncate()
+                            .min_w_0()
                             .text_size(px(11.))
                             .text_color(theme.colors.on_surface_variant)
-                            .child(SharedString::from(note(device))),
+                            .child(one_line(note(device))),
                     ),
             )
             .children(device.battery.map(|charge| {

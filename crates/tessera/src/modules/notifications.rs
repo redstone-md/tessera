@@ -16,7 +16,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
 use crate::platform::{Notification, Notifications};
 use crate::theme::Theme;
-use crate::ui::{icon, state_layer};
+use crate::ui::{icon, one_line, state_layer};
 
 /// How often the notification center is read.
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -236,19 +236,18 @@ impl NotificationList {
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(0.))
-                    .truncate()
+                    .min_w_0()
                     .text_size(caption_size)
                     .text_color(theme.colors.primary)
-                    .child(SharedString::from(caption)),
+                    .child(one_line(caption)),
             )
             .child(dismiss);
         let title = (!notification.title.is_empty()).then(|| {
             div()
                 .flex_none()
-                .truncate()
+                .min_w_0()
                 .text_color(theme.colors.on_surface)
-                .child(SharedString::from(notification.title.clone()))
+                .child(one_line(notification.title.clone()))
         });
         let body = (!notification.body.is_empty()).then(|| {
             div()
