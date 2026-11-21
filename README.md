@@ -62,7 +62,8 @@ Besides drawing, an extension can:
 - read its settings, the keys of the `[extension.<id>]` table in `config.toml`;
 - keep up to 64 KiB of text across restarts, stored as `state.txt` in its own directory;
 - read the files its manifest lists under `permissions.files`, and no others;
-- send HTTPS requests to the hosts its manifest lists under `permissions.network`, and no others. Requests run in the background and the answer is delivered later; redirects are not followed, a response is cut off at 1 MiB, and servers are verified against the Windows certificate store.
+- send HTTPS requests to the hosts its manifest lists under `permissions.network`, and no others. Requests run in the background and the answer is delivered later; redirects are not followed, a response is cut off at 1 MiB, and servers are verified against the Windows certificate store;
+- learn which Bluetooth devices are paired with the machine, whether each is connected and the charge Windows knows of it, when its manifest lists `bluetooth` under `permissions.devices`. Tessera reads the devices on a thread of its own every twenty seconds while an extension asks, so an answer can be that old, and the first question is answered with an error while the first reading runs. An extension cannot connect, disconnect or talk to a device.
 
 The limits of that:
 
@@ -121,11 +122,13 @@ rustup target add wasm32-unknown-unknown
 cargo build --release --target wasm32-unknown-unknown --manifest-path extensions/counter/Cargo.toml --target-dir target/extensions
 ```
 
-and copy `target/extensions/wasm32-unknown-unknown/release/tessera_example_counter.wasm` as `extension.wasm` next to a copy of its `extension.toml`. Once both examples are built, `cargo test -- --include-ignored` also runs the tests that load them.
+and copy `target/extensions/wasm32-unknown-unknown/release/tessera_example_counter.wasm` as `extension.wasm` next to a copy of its `extension.toml`. Once the examples are built, `cargo test -- --include-ignored` also runs the tests that load them.
 
 ### Examples
 
 [`extensions/counter`](extensions/counter) counts presses of its buttons. `counter.clicks` is the count with a button for a bar; `counter.total` is the count alone, and a click on it opens the popup the extension brings, with buttons that add to the count and reset it.
+
+[`extensions/device-battery`](extensions/device-battery) shows the charge of a Bluetooth device. `device-battery.charge` is the name of one device with its charge as a bar and a number, for a bar; a click on it opens the popup the extension brings, which lists every paired device. `device = "mouse"` in `[extension.device-battery]` picks the first device with that in its name; without it the first connected device that reports a charge is shown, or else one whose charge Windows remembers, marked `was`. Tried on a running shell with four paired devices, none connected, one with a remembered charge: the bar showed that device with `was 80%` and the popup listed the four. A connected device, a changing charge and the `device` setting were tried only in the test that feeds the extension made-up devices.
 
 [`extensions/ai-limits`](extensions/ai-limits) shows what is left of the usage limits of AI services: the plan, each limit as a share and a bar, and when it resets. Its `summary` widget is one line for a bar; its `details` widget is meant for a popup, which has a fixed size, so size it for the services you enable:
 

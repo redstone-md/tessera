@@ -5,7 +5,7 @@
 ///
 /// This interface is unstable: it will change without a compatibility
 /// period until the package version reaches 1.0.0.
-package tessera:extension@0.2.0;
+package tessera:extension@0.3.0;
 
 world extension {
     /// A button the user can press.
@@ -61,6 +61,15 @@ world extension {
         body: string,
     }
 
+    /// A Bluetooth device paired with the machine.
+    record bluetooth-device {
+        name: string,
+        connected: bool,
+        /// Its charge in percent, when it reported one to Windows. For a
+        /// device that is not connected it is the last one Windows knew.
+        battery: option<u8>,
+    }
+
     /// Writes a diagnostic message to the shell's log.
     import log: func(message: string);
 
@@ -88,6 +97,13 @@ world extension {
     /// outcome arrives later through `fetched`. Redirects are not
     /// followed. Only a few requests may be under way at a time.
     import fetch: func(request: request) -> result<u32, string>;
+
+    /// The Bluetooth devices paired with the machine, the connected ones
+    /// first, as Tessera read them last: it reads them every twenty
+    /// seconds while they are asked for. The extension manifest must list
+    /// `bluetooth` under `permissions.devices`. The first call only starts
+    /// the reading and fails saying so; ask again on a later `render`.
+    import bluetooth-devices: func() -> result<list<bluetooth-device>, string>;
 
     /// Describes the current content of `widget`, one of the widgets the
     /// extension manifest declares. The first node is the root.

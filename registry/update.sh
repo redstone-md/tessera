@@ -41,5 +41,6 @@ END
         "An example: counts presses of its buttons, in a bar and in a popup of its own."
     offer ai-limits "AI limits" \
         "What is left of the usage limits of Claude, Codex, OpenRouter and DeepSeek, and when they reset."
+    offer device-battery "Device battery"         "An example: the charge of a Bluetooth device in the bar, and every paired device in a popup."
 } > registry/registry.toml.new
 mv registry/registry.toml.new registry/registry.toml

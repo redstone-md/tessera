@@ -442,6 +442,10 @@ fn asks(package: &Package) -> String {
     if !package.files.is_empty() {
         wishes.push(format!("read {}", package.files.join(", ")));
     }
+    if !package.devices.is_empty() {
+        let kinds: Vec<_> = package.devices.iter().map(|kind| kind.name()).collect();
+        wishes.push(format!("be told of the {} devices", kinds.join(", ")));
+    }
     if wishes.is_empty() {
         "Asks for nothing beyond showing its widgets.".to_owned()
     } else {
@@ -526,20 +530,25 @@ impl Render for Marketplace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extension::DeviceKind;
 
     #[test]
     fn what_an_extension_asks_for_is_said_in_full() {
-        let package = |network: &[&str], files: &[&str]| {
+        let package = |network: &[&str], files: &[&str], devices: &[DeviceKind]| {
             let names = |names: &[&str]| names.iter().map(|&name| name.to_owned()).collect();
-            Package::asking(names(network), names(files))
+            Package::asking(names(network), names(files), devices.to_vec())
         };
         assert_eq!(
-            asks(&package(&[], &[])),
+            asks(&package(&[], &[], &[])),
             "Asks for nothing beyond showing its widgets."
         );
         assert_eq!(
-            asks(&package(&["a.example", "b.example"], &["~/x"])),
+            asks(&package(&["a.example", "b.example"], &["~/x"], &[])),
             "Asks to contact a.example, b.example and to read ~/x."
+        );
+        assert_eq!(
+            asks(&package(&[], &[], &[DeviceKind::Bluetooth])),
+            "Asks to be told of the bluetooth devices."
         );
     }
 }

@@ -73,6 +73,16 @@ impl bindings::ExtensionImports for HostState {
         self.access.read_file(&path)
     }
 
+    fn bluetooth_devices(&mut self) -> Result<Vec<bindings::BluetoothDevice>, String> {
+        let devices = self.access.bluetooth()?.into_iter();
+        let devices = devices.map(|device| bindings::BluetoothDevice {
+            name: device.name,
+            connected: device.connected,
+            battery: device.battery,
+        });
+        Ok(devices.collect())
+    }
+
     fn fetch(&mut self, request: bindings::Request) -> Result<u32, String> {
         self.access.permissions.check_url(&request.url)?;
         if self.under_way >= REQUEST_LIMIT {
@@ -259,6 +269,7 @@ mod tests {
             ]
             .into(),
             state_file: None,
+            bluetooth: None,
         };
         let mut limits = Runtime::new()
             .unwrap()
@@ -294,6 +305,87 @@ mod tests {
         let shown = texts(limits.render("summary").unwrap());
         assert_eq!(shown, ["DeepSeek 110.00 USD", "Claude ?"]);
         assert!(limits.take_requests().is_empty());
+    }
+
+    /// Needs the example extension, built as the README describes.
+    #[test]
+    #[ignore = "requires extensions/device-battery to be built first"]
+    fn the_device_battery_example_shows_the_charge_of_a_device() {
+        let wasm = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/extensions/wasm32-unknown-unknown/release/tessera_example_device_battery.wasm"
+        );
+        let wasm = std::fs::read(wasm).unwrap();
+        let device = |name: &str, connected, battery| crate::platform::PairedDevice {
+            name: name.to_owned(),
+            connected,
+            battery,
+        };
+        let access = |permitted: bool, device_setting: Option<&str>| Access {
+            permissions: if permitted {
+                toml::from_str("devices = [\"bluetooth\"]").unwrap()
+            } else {
+                Default::default()
+            },
+            settings: device_setting
+                .map(|name| ("device".to_owned(), name.to_owned()))
+                .into_iter()
+                .collect(),
+            state_file: None,
+            bluetooth: Some(vec![
+                device("Headphones", true, None),
+                device("Mouse", true, Some(80)),
+                device("Old Speaker", false, Some(15)),
+            ]),
+        };
+        let texts = |nodes: Vec<Node>| -> Vec<String> {
+            let text = |node: Node| match node.kind {
+                NodeKind::Text(text) | NodeKind::Caption(text) => Some(text),
+                _ => None,
+            };
+            nodes.into_iter().filter_map(text).collect()
+        };
+        let runtime = Runtime::new().unwrap();
+        let start = |access| {
+            runtime
+                .instantiate("device-battery", &wasm, access)
+                .unwrap()
+        };
+
+        // Unless one is named, the first connected device with a charge.
+        let mut any = start(access(true, None));
+        let shown = any.render("charge").unwrap();
+        assert!(
+            shown
+                .iter()
+                .any(|node| matches!(node.kind, NodeKind::Progress(level) if level == 0.8))
+        );
+        assert_eq!(texts(shown), ["Mouse", "80%"]);
+        let all = texts(any.render("all").unwrap());
+        assert_eq!(
+            all,
+            [
+                "Headphones",
+                "Connected",
+                "Mouse",
+                "Connected, 80%",
+                "Old Speaker",
+                "Not connected, was 15%"
+            ]
+        );
+
+        let mut named = start(access(true, Some("speak")));
+        assert_eq!(
+            texts(named.render("charge").unwrap()),
+            ["Old Speaker", "was 15%"]
+        );
+        let mut unknown = start(access(true, Some("keyboard")));
+        let shown = texts(unknown.render("charge").unwrap());
+        assert_eq!(shown, ["No paired device is called `keyboard`"]);
+
+        let mut refused = start(access(false, None));
+        let shown = texts(refused.render("charge").unwrap());
+        assert!(shown[0].contains("does not permit"), "got {shown:?}");
     }
 
     #[test]

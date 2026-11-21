@@ -15,7 +15,7 @@ use anyhow::{Context as _, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{MANIFEST_FILE, Manifest, STATE_FILE, WASM_FILE, http, is_identifier};
+use super::{DeviceKind, MANIFEST_FILE, Manifest, STATE_FILE, WASM_FILE, http, is_identifier};
 
 /// The registry that is read when the configuration names none.
 pub const OFFICIAL_REGISTRY: &str =
@@ -228,6 +228,7 @@ impl Offer {
             },
             network: parsed.permissions.network().to_vec(),
             files: parsed.permissions.files().to_vec(),
+            devices: parsed.permissions.devices().to_vec(),
             manifest,
             wasm,
         })
@@ -323,14 +324,17 @@ pub struct Package {
     pub network: Vec<String>,
     /// The files the extension asks to read.
     pub files: Vec<String>,
+    /// The kinds of devices the extension asks to be told of.
+    pub devices: Vec<DeviceKind>,
     manifest: String,
     wasm: Vec<u8>,
 }
 
 impl Package {
-    /// A package that asks for `network` and `files` and holds nothing.
+    /// A package that asks for `network`, `files` and `devices` and holds
+    /// nothing.
     #[cfg(test)]
-    pub fn asking(network: Vec<String>, files: Vec<String>) -> Self {
+    pub fn asking(network: Vec<String>, files: Vec<String>, devices: Vec<DeviceKind>) -> Self {
         Self {
             id: String::new(),
             receipt: Receipt {
@@ -339,6 +343,7 @@ impl Package {
             },
             network,
             files,
+            devices,
             manifest: String::new(),
             wasm: Vec::new(),
         }

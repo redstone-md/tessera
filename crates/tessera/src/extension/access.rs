@@ -9,6 +9,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+use super::devices;
+use crate::platform::PairedDevice;
+
 /// The most text `read-file` returns.
 const FILE_LIMIT: u64 = 1 << 20;
 
@@ -25,6 +28,25 @@ pub struct Permissions {
     /// The files the extension may read; `~` is the home directory.
     #[serde(default)]
     files: Vec<String>,
+    /// The kinds of devices the extension may be told of.
+    #[serde(default)]
+    devices: Vec<DeviceKind>,
+}
+
+/// A kind of device an extension can ask about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceKind {
+    Bluetooth,
+}
+
+impl DeviceKind {
+    /// What a manifest calls it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bluetooth => "bluetooth",
+        }
+    }
 }
 
 impl Permissions {
@@ -36,6 +58,11 @@ impl Permissions {
     /// The files the extension asks to read.
     pub fn files(&self) -> &[String] {
         &self.files
+    }
+
+    /// The kinds of devices the extension asks to be told of.
+    pub fn devices(&self) -> &[DeviceKind] {
+        &self.devices
     }
 
     /// Whether a request to `url` is permitted.
@@ -89,6 +116,9 @@ pub struct Access {
     pub settings: HashMap<String, String>,
     /// Where `save-state` writes; `None` keeps nothing.
     pub state_file: Option<PathBuf>,
+    /// Stands in for the Bluetooth devices of the machine.
+    #[cfg(test)]
+    pub bluetooth: Option<Vec<PairedDevice>>,
 }
 
 impl Access {
@@ -101,6 +131,18 @@ impl Access {
             return Err(format!("`{path}` is larger than {FILE_LIMIT} bytes"));
         }
         fs::read_to_string(&file).map_err(|error| error.to_string())
+    }
+
+    /// The paired Bluetooth devices, as they were read last.
+    pub fn bluetooth(&self) -> Result<Vec<PairedDevice>, String> {
+        if !self.permissions.devices.contains(&DeviceKind::Bluetooth) {
+            return Err("the manifest does not permit asking about Bluetooth devices".to_owned());
+        }
+        #[cfg(test)]
+        if let Some(devices) = &self.bluetooth {
+            return Ok(devices.clone());
+        }
+        devices::bluetooth()
     }
 
     pub fn load_state(&self) -> String {
@@ -130,7 +172,25 @@ mod tests {
         Permissions {
             network: network.iter().map(|&host| host.to_owned()).collect(),
             files: files.iter().map(|&file| file.to_owned()).collect(),
+            devices: Vec::new(),
         }
+    }
+
+    #[test]
+    fn devices_are_told_of_only_when_the_manifest_asks() {
+        let device = PairedDevice {
+            name: "Mouse".to_owned(),
+            connected: true,
+            battery: Some(80),
+        };
+        let mut access = Access {
+            bluetooth: Some(vec![device.clone()]),
+            ..Access::default()
+        };
+        assert!(access.bluetooth().is_err());
+        access.permissions = toml::from_str("devices = [\"bluetooth\"]").unwrap();
+        assert_eq!(access.bluetooth(), Ok(vec![device]));
+        assert!(toml::from_str::<Permissions>("devices = [\"usb\"]").is_err());
     }
 
     #[test]

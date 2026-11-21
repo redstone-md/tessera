@@ -1,0 +1,36 @@
+# Layouts refer to the widgets below as "device-battery.charge" and
+# "device-battery.all".
+#
+# Which device the bar shows is set in the configuration of Tessera:
+#
+#     [extension.device-battery]
+#     device = "mouse"
+#
+# names the first paired device with `mouse` in its name, whatever the
+# case. Without it, the first connected device that reports a charge is
+# shown, or else the first one Windows remembers a charge of.
+id = "device-battery"
+
+# The extension is told which Bluetooth devices are paired, whether they
+# are connected and how charged they are.
+[permissions]
+devices = ["bluetooth"]
+
+# The name and the charge of one device, for a bar. A click on it opens
+# the popup below, unless the layout names another popup for it.
+[[widget]]
+name = "charge"
+refresh_seconds = 10
+popup = "devices"
+
+# Every paired device, for a popup.
+[[widget]]
+name = "all"
+refresh_seconds = 10
+
+# Layouts refer to this popup as "device-battery.devices".
+[[popup]]
+name = "devices"
+width = 280
+height = 300
+content = ["all"]

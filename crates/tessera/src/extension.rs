@@ -4,6 +4,7 @@
 //! Extensions: modules loaded from WebAssembly files at startup.
 
 mod access;
+mod devices;
 mod host;
 mod http;
 pub mod registry;
@@ -22,6 +23,7 @@ use anyhow::{Context as _, bail};
 use gpui::AppContext;
 use serde::Deserialize;
 
+pub use self::access::DeviceKind;
 use self::access::{Access, Permissions};
 use self::host::Host;
 use self::runtime::Runtime;
@@ -95,6 +97,8 @@ impl ExtensionsModule {
             permissions: manifest.permissions.clone(),
             settings: self.settings_of(&manifest.id),
             state_file: Some(directory.join(STATE_FILE)),
+            #[cfg(test)]
+            bluetooth: None,
         };
         let instance = runtime.instantiate(&manifest.id, &wasm, access)?;
         // The host is an entity, which only a running application can
