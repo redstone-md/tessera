@@ -54,7 +54,9 @@ impl Module for TrayModule {
             let named_side = context.options.get("tips").is_some_and(toml::Value::is_str);
             let tips = named_side || context.flag("tips").unwrap_or(true);
             let limit = context.number("limit").map(|limit| limit.max(0.) as usize);
-            cx.new(|cx| TrayStrip::new(tips, limit, cx)).into()
+            let bluetooth = context.flag("bluetooth").unwrap_or(false);
+            cx.new(|cx| TrayStrip::new(tips, limit, bluetooth, cx))
+                .into()
         })
     }
 }
@@ -83,6 +85,8 @@ struct TrayStrip {
     /// How many icons are shown at all times; the others only while the
     /// strip is unrolled. Without it every icon is.
     limit: Option<usize>,
+    /// Whether the Bluetooth icon of Windows is shown among the others.
+    bluetooth: bool,
     /// 0 while only the icons within the limit are shown, 1 when all are.
     unrolled: Spring,
     /// 0 while no icon is over the limit, 1 while the button for them is
@@ -92,7 +96,7 @@ struct TrayStrip {
 }
 
 impl TrayStrip {
-    fn new(tips: bool, limit: Option<usize>, cx: &mut Context<Self>) -> Self {
+    fn new(tips: bool, limit: Option<usize>, bluetooth: bool, cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
         match Tray::start() {
             Ok(()) => cx
@@ -112,6 +116,7 @@ impl TrayStrip {
             generation: None,
             tips,
             limit,
+            bluetooth,
             unrolled: Spring::new(motion.spatial, 0.),
             crowded: Spring::new(motion.spatial, 0.),
             more: Interaction::new(&motion),
@@ -125,6 +130,7 @@ impl TrayStrip {
             return;
         }
         let (generation, mut icons) = Tray::icons();
+        icons.retain(|icon| self.bluetooth || !icon.is_of_bluetooth());
         self.generation = Some(generation);
         let motion = cx.global::<Theme>().motion;
 

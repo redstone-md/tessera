@@ -25,17 +25,20 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared};
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW,
-    GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST,
-    IsWindow, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SendNotifyMessageW, SetForegroundWindow, SetTimer,
-    SetWindowPos, TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    GetClassNameW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST,
+    HWND_TOPMOST, IsWindow, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SendNotifyMessageW, SetForegroundWindow,
+    SetTimer, SetWindowPos, TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
 use super::ScreenRect;
 use super::icon::IconPixels;
+
+/// The class of the window Windows gives its Bluetooth icon for.
+const BLUETOOTH_CLASS: &str = "BluetoothNotificationAreaIconWindowClass";
 
 /// The class applications look for to deliver their icons.
 const CLASS: PCWSTR = w!("Shell_TrayWnd");
@@ -298,6 +301,7 @@ impl Icons {
             .filter(|entry| !entry.hidden)
             .map(|entry| TrayIcon {
                 id: entry.id,
+                owner: entry.window,
                 tip: entry.tip.clone(),
                 pixels: entry.pixels.clone(),
                 image_version: entry.image_version,
@@ -313,11 +317,24 @@ impl Icons {
 pub struct TrayIcon {
     /// Identifies the icon for as long as its application keeps it.
     pub id: u64,
+    /// The window the application gave the icon for.
+    owner: u32,
     /// What the application says about the icon; may be empty.
     pub tip: String,
     pub pixels: Option<Arc<IconPixels>>,
     /// Grows whenever the application replaces the image.
     pub image_version: u64,
+}
+
+impl TrayIcon {
+    /// Whether this is the icon Windows itself shows for Bluetooth.
+    pub fn is_of_bluetooth(&self) -> bool {
+        let mut name = [0u16; 64];
+        // SAFETY: the buffer outlives the call, which fills nothing for a
+        // window that is gone.
+        let length = unsafe { GetClassNameW(handle(self.owner), &mut name) }.max(0) as usize;
+        String::from_utf16_lossy(&name[..length]) == BLUETOOTH_CLASS
+    }
 }
 
 /// A mouse button pressed and released on an icon.
