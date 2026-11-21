@@ -8,6 +8,7 @@
 mod accent;
 mod app_windows;
 mod audio;
+mod backdrop;
 mod bluetooth;
 mod desktops;
 mod icon;
