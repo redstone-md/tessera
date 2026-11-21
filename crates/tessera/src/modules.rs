@@ -12,6 +12,7 @@ mod marketplace;
 mod media;
 mod notifications;
 mod session;
+mod settings;
 mod sound;
 mod system;
 mod tray;
@@ -35,6 +36,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(media::MediaModule),
         Box::new(notifications::NotificationsModule),
         Box::new(session::SessionModule),
+        Box::new(settings::SettingsModule),
         Box::new(sound::SoundModule),
         Box::new(system::SystemModule),
         Box::new(tray::TrayModule),

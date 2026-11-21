@@ -33,6 +33,8 @@
 #               option show, "percent" (default) or "used" for gigabytes
 #   "battery"   the charge of the battery, with option style as for "cpu";
 #               shows nothing on a machine without a battery
+#   "settings"  the layout, the pinned applications and the theme, to change
+#               by clicking; it rewrites this file and keeps its comments
 #   "media"     what is playing, on one line; absent while no application
 #               offers anything; option width, the most it takes, in pixels
 #   "media-controls"  what is playing, with buttons to skip and pause
@@ -65,7 +67,7 @@
 [[surface]]
 edge = "top"
 thickness = 48
-start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, "cpu", "memory", "battery"]
+start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, { widget = "label", icon = "\uE713", popup = "settings" }, "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
 end = [{ widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, { widget = "volume", popup = "sound" }, "quit"]
 
@@ -96,6 +98,12 @@ name = "calendar"
 width = 300
 height = 720
 content = ["calendar", "notifications"]
+
+[[popup]]
+name = "settings"
+width = 480
+height = 680
+content = ["settings"]
 
 [[popup]]
 name = "media"

@@ -147,6 +147,13 @@ impl WidgetRegistry {
         (!popup.is_empty()).then(|| popup.clone())
     }
 
+    /// The identifiers of the widgets a layout can name, in order.
+    pub fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.factories.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
     /// Builds a new instance of the widget `spec` names for a surface on
     /// `display`. A name no module provides is reported.
     pub fn build(spec: &WidgetSpec, display: Option<DisplayKey>, cx: &mut App) -> Option<AnyView> {

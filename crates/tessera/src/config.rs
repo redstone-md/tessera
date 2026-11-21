@@ -14,6 +14,8 @@ use serde::Deserialize;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::platform::ScreenEdge;
 
+pub mod edit;
+
 const DEFAULT: &str = include_str!("default_config.toml");
 
 const CONFIG_FILE: &str = "config.toml";
@@ -244,7 +246,7 @@ mod tests {
         assert_eq!(names(&bar.center), ["clock"]);
         assert_eq!(
             names(&bar.start),
-            ["label", "label", "cpu", "memory", "battery"]
+            ["label", "label", "label", "cpu", "memory", "battery"]
         );
         assert_eq!(config.registries(), [OFFICIAL_REGISTRY]);
         assert_eq!(names(&bar.end), ["media", "tray", "volume", "quit"]);
