@@ -10,6 +10,6 @@ pub use win32::{
     IconPixels, InputLanguage, Link, Media, MediaCommand, MemoryLoad, NativeSurface, Network,
     Notification, Notifications, NowPlaying, PairedDevice, Position, PowerAction, ProcessorLoad,
     RecentDocument, ScreenEdge, ScreenRect, Shortcut, Taskbar, Thumbnail, Tray, TrayButton,
-    TrayIcon, Typing, Wifi, WifiNetwork, WifiReach, WindowEvents, WindowsKey, accent_color,
-    app_id_in, app_id_of_program, app_path, light_mode, pointer_held,
+    TrayIcon, Typing, VirtualDesktops, Wifi, WifiNetwork, WifiReach, WindowEvents, WindowsKey,
+    accent_color, app_id_in, app_id_of_program, app_path, light_mode, pointer_held,
 };

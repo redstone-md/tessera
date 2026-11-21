@@ -24,6 +24,7 @@ mod tiling;
 mod tray;
 mod wifi;
 mod windows;
+mod workspaces;
 
 use crate::config::Config;
 use crate::extension::ExtensionsModule;
@@ -55,6 +56,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(tray::TrayModule),
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
+        Box::new(workspaces::WorkspacesModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),

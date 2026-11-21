@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const UNASSIGNED_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0xe8);
 
 /// What marks the key presses made here, so that the hook leaves them out.
-const MADE_HERE: usize = 0x5445_5353;
+pub(super) const MADE_HERE: usize = 0x5445_5353;
 
 /// Whether the Windows key is down and nothing else was pressed since.
 #[derive(Debug, Default)]
