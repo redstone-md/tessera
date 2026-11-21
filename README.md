@@ -33,6 +33,8 @@ While Tessera runs:
 
 Tessera injects nothing into other processes. To learn when windows open, close or come to the foreground it asks Windows for out-of-context window events (`SetWinEventHook`), which arrive in its own process; the list is also read again every five seconds for anything that goes unreported. Anything the taskbar provided that is not listed above, such as jump lists or window previews, has no replacement yet. The Windows key still opens the Windows Start menu, not the launcher.
 
+Measured once on one machine (three displays, a release build, the built-in layout, nothing clicked): the shell process held about 80 MB of memory, used about 1.9 seconds of processor time to start, and about half a second of processor time for every 30 seconds it then sat idle. Most of the idle work is widgets asking Windows every second or so for values that Windows does not report on its own, such as the processor load.
+
 ## Configuration
 
 Everything a surface shows is a widget provided by a module. The compiled-in modules provide the widgets `clock`, `calendar`, `label`, `launcher`, `apps`, `power`, `notifications`, `settings`, `media`, `media-controls`, `network`, `volume`, `volume-slider`, `cpu`, `memory`, `battery`, `command`, `tray`, `quit` and `windows`; extensions add more.
