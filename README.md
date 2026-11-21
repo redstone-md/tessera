@@ -20,11 +20,32 @@ Tessera registers no hooks. Anything the taskbar provided that is not listed abo
 
 ## Configuration
 
-Everything a surface shows is a widget provided by a module. Three modules are compiled in, providing the widgets `clock`, `quit` and `windows`. **There is no way to load a module from outside the binary yet**: no extension API, no extension loading, no marketplace.
+Everything a surface shows is a widget provided by a module. Three modules are compiled in, providing the widgets `clock`, `quit` and `windows`; extensions add more.
 
 The layout is read once at startup from `%APPDATA%\tessera\config.toml`. It lists the surfaces — screen edge, thickness, all displays or only the primary one — and the widgets in the start, center and end of each. Without that file the [built-in layout](crates/tessera/src/default_config.toml) is used; it documents the format. A file that fails to parse is ignored as a whole, and an unknown widget name is skipped; both are reported on standard error, which only a debug build started from a terminal shows.
 
 `theme = "name"` in that file applies `%APPDATA%\tessera\themes\name.toml` over the built-in theme. A theme can replace colors only, as `#rrggbb` under `[colors]`, using the role names `surface_container`, `surface_container_highest`, `on_surface`, `on_surface_variant`, `outline`, `primary` and `secondary_container`. Shapes, sizes, fonts and motion are not themeable yet.
+
+## Extensions
+
+An extension is a WebAssembly file that Tessera runs in a [Wasmtime](https://wasmtime.dev) sandbox. It describes the content of its widgets as a tree of rows, text and buttons, which Tessera draws with the active theme, and it is told when one of its buttons is pressed. [`wit/extension.wit`](wit/extension.wit) is the whole interface. It is unstable and will change.
+
+What an extension can do today is deliberately little:
+
+- Its only access to the outside is a `log` function. It cannot reach files, the network, the clock, devices or other processes, so an extension that shows a battery level or talks to Bluetooth cannot be written yet; that needs host APIs that do not exist.
+- It can only add widgets to a surface. It cannot open popups or screens of its own, and it has no icons, images or layout beyond a row.
+- Each call into an extension is limited in computation, and an extension is limited to 64 MiB of memory. A widget whose extension exceeds a limit or crashes shows "stopped working" until Tessera restarts.
+- Extensions are loaded once at startup. A widget placed on several displays shares one extension instance, and pressing a button on one display does not repaint the others until their next refresh.
+- There is no marketplace, registry, installer, signing or update mechanism. Installing means copying files by hand.
+
+To install one, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id` and its widgets. A layout then refers to a widget as `<id>.<widget name>`. [`extensions/counter`](extensions/counter) is a working example; build it with:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown --manifest-path extensions/counter/Cargo.toml --target-dir target/extensions
+```
+
+and copy `target/extensions/wasm32-unknown-unknown/release/tessera_example_counter.wasm` as `extension.wasm` next to a copy of its `extension.toml`. `cargo test -- --include-ignored` then also runs the test that loads it.
 
 ## History
 

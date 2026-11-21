@@ -1,0 +1,5 @@
+# Layouts refer to the widget below as "counter.clicks".
+id = "counter"
+
+[[widget]]
+name = "clicks"

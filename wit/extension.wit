@@ -1,0 +1,45 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+/// The contract between Tessera and an extension.
+///
+/// This interface is unstable: it will change without a compatibility
+/// period until the package version reaches 1.0.0.
+package tessera:extension@0.1.0;
+
+world extension {
+    /// A button the user can press.
+    record button {
+        label: string,
+        /// Passed back to `activate` when the button is pressed.
+        action: string,
+    }
+
+    /// What a node is. Tessera draws every kind with the active theme.
+    variant node-kind {
+        /// Lays its children out horizontally.
+        row,
+        /// A line of text.
+        text(string),
+        button(button),
+    }
+
+    /// One node of a widget's content tree.
+    record node {
+        kind: node-kind,
+        /// Indices into the list `render` returned. Each must be greater
+        /// than the index of this node; others are ignored.
+        children: list<u32>,
+    }
+
+    /// Writes a diagnostic message to the shell's log.
+    import log: func(message: string);
+
+    /// Describes the current content of `widget`, one of the widgets the
+    /// extension manifest declares. The first node is the root.
+    export render: func(widget: string) -> list<node>;
+
+    /// Tells the extension that the user pressed a button of `widget`.
+    /// Tessera calls `render` again afterwards.
+    export activate: func(widget: string, action: string);
+}
