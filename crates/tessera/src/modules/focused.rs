@@ -172,15 +172,14 @@ impl Render for Focused {
             .max_w(self.width * presence.max(0.))
             .opacity(presence.clamp(0., 1.))
             .child(
-                pill(&theme)
-                    .max_w(self.width)
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(
-                        div()
-                            .min_w_0()
-                            .opacity(arrival)
-                            .child(one_line(name.clone())),
-                    ),
+                // The room is kept by the element around: a pill with a
+                // limit of its own does not pass it on to its text.
+                pill(&theme).font_weight(FontWeight::MEDIUM).child(
+                    div()
+                        .min_w_0()
+                        .opacity(arrival)
+                        .child(one_line(name.clone())),
+                ),
             )
     }
 }

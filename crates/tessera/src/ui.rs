@@ -148,6 +148,12 @@ pub fn centered_row(theme: &Theme, start: Div, center: Div, end: Div) -> Div {
 /// What stands for the part of a text that was cut off.
 const CUT: &str = "\u{2026}";
 
+/// The `beginning` of a text with the mark that the rest was cut off, which
+/// stands right after the last thing that is not a space.
+fn cut_after(beginning: &str) -> String {
+    format!("{}{CUT}", beginning.trim_end())
+}
+
 /// How far over its room a text may be before it is cut; shaping a text
 /// twice does not give the same width to the last fraction.
 const CUT_SLACK: f32 = 0.5;
@@ -179,7 +185,9 @@ pub fn text_width(
 ///
 /// GPUI can cut a text too, but measures a text that may not wrap only
 /// once, without a limit, and so never cuts it, and loses count of the
-/// bytes of a text that may wrap when it cuts it a second time.
+/// bytes of a text that may wrap when it cuts it a second time. The
+/// cut is found here by shaping the text with its mark, the way it is
+/// drawn, instead of adding up the widths of single characters.
 pub fn one_line(text: impl Into<SharedString>) -> OneLine {
     let text = text.into();
     let text = if text.contains(['\n', '\r']) {
@@ -198,18 +206,31 @@ pub struct OneLine {
 impl OneLine {
     /// The text shaped in the text style around it, cut to `room` if one
     /// is given and the text is `whole` wide and does not fit.
-    fn shaped(&self, room: Option<(Pixels, Pixels)>, window: &Window, cx: &App) -> ShapedLine {
+    fn shaped(&self, room: Option<(Pixels, Pixels)>, window: &Window) -> ShapedLine {
         let style = window.text_style();
         let size = style.font_size.to_pixels(window.rem_size());
-        let mut runs = vec![style.to_run(self.text.len())];
-        let text = match room {
-            Some((room, whole)) if whole > room + px(CUT_SLACK) => cx
-                .text_system()
-                .line_wrapper(style.font(), size)
-                .truncate_line(self.text.clone(), room, CUT, &mut runs),
-            _ => self.text.clone(),
+        let shape = |text: SharedString| {
+            let run = style.to_run(text.len());
+            window.text_system().shape_line(text, size, &[run], None)
         };
-        window.text_system().shape_line(text, size, &runs, None)
+        let room = match room {
+            Some((room, whole)) if whole > room + px(CUT_SLACK) => room,
+            _ => return shape(self.text.clone()),
+        };
+        // The longest beginning that fits with the mark after it, found by
+        // shaping, which is what tells how wide a text is drawn.
+        let ends: Vec<usize> = self.text.char_indices().map(|(end, _)| end).collect();
+        let cut = |kept: usize| shape(cut_after(&self.text[..ends[kept]]).into());
+        let (mut fits, mut over) = (0, ends.len());
+        while over - fits > 1 {
+            let kept = fits + (over - fits) / 2;
+            if cut(kept).width <= room + px(CUT_SLACK) {
+                fits = kept;
+            } else {
+                over = kept;
+            }
+        }
+        cut(fits)
     }
 }
 
@@ -239,9 +260,9 @@ impl Element for OneLine {
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        _: &mut App,
     ) -> (LayoutId, Pixels) {
-        let whole = self.shaped(None, window, cx).width.ceil();
+        let whole = self.shaped(None, window).width.ceil();
         let height = window.line_height();
         let layout = window.request_measured_layout(Style::default(), move |known, room, _, _| {
             let room = known.width.or(match room.width {
@@ -263,9 +284,9 @@ impl Element for OneLine {
         bounds: Bounds<Pixels>,
         whole: &mut Pixels,
         window: &mut Window,
-        cx: &mut App,
+        _: &mut App,
     ) -> ShapedLine {
-        self.shaped(Some((bounds.size.width, *whole)), window, cx)
+        self.shaped(Some((bounds.size.width, *whole)), window)
     }
 
     fn paint(

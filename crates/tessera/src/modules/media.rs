@@ -304,8 +304,9 @@ impl Render for Readout {
             .max_w(self.width * presence.max(0.))
             .opacity(presence.clamp(0., 1.))
             .child(
+                // The room is kept by the element around: a pill with a
+                // limit of its own does not pass it on to its text.
                 pill(&theme)
-                    .max_w(self.width)
                     .font_weight(FontWeight::MEDIUM)
                     .child(icon(&theme, glyph).flex_none().text_color(color))
                     .child(div().min_w_0().child(one_line(headline(now)))),
