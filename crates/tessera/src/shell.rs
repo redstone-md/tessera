@@ -18,7 +18,7 @@ use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::panel::Panel;
-use crate::platform::{ScreenEdge, WindowsKey};
+use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
@@ -115,13 +115,27 @@ impl Shell {
         let Some(name) = this.config.windows_key.clone() else {
             return;
         };
+        // The display the pointer is on comes first, then the primary one.
         let primary = cx.primary_display().map(|display| display.id());
+        let pointed = DisplayKey::under_pointer();
         let mut surfaces: Vec<_> = this
             .surfaces
             .iter()
             .map(|surface| (Some(surface.display) != primary, surface.window))
             .collect();
-        surfaces.sort_by_key(|&(elsewhere, _)| elsewhere);
+        let mut surfaces: Vec<_> = surfaces
+            .drain(..)
+            .map(|(elsewhere, surface)| {
+                let display = surface
+                    .update(cx, |_, window, _| NativeSurface::of(window).ok())
+                    .ok()
+                    .flatten()
+                    .map(NativeSurface::display);
+                let away = pointed.is_none() || display != pointed;
+                ((away, elsewhere), surface)
+            })
+            .collect();
+        surfaces.sort_by_key(|&(order, _)| order);
         let mut anywhere = None;
         for (_, surface) in surfaces {
             let found = surface.update(cx, |view, window, cx| {

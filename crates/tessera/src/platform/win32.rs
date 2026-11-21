@@ -72,7 +72,8 @@ use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    MonitorFromWindow,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
@@ -171,6 +172,14 @@ pub struct NativeSurface {
 pub struct DisplayKey(isize);
 
 impl DisplayKey {
+    /// The display the pointer is on, or the nearest one to it.
+    pub fn under_pointer() -> Option<Self> {
+        let (x, y) = pointer_at()?;
+        // SAFETY: the call only reads the arrangement of the displays.
+        let display = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+        (!display.is_invalid()).then_some(Self(display.0 as isize))
+    }
+
     /// The part of the display that the surfaces at its edges leave to
     /// windows.
     pub fn work_area(self) -> Option<ScreenRect> {
