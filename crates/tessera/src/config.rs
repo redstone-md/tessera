@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(config.registries(), [OFFICIAL_REGISTRY]);
         assert_eq!(
             names(&bar.end),
-            ["media", "tray", "network", "volume", "quit"]
+            ["media", "tray", "label", "network", "volume", "quit"]
         );
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);

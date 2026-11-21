@@ -21,6 +21,7 @@ ureq.workspace = true
 wasmtime.workspace = true
 wit-component.workspace = true
 windows.workspace = true
+windows-collections.workspace = true
 
 [lints]
 workspace = true

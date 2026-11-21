@@ -6,9 +6,9 @@
 mod win32;
 
 pub use win32::{
-    AppWindow, AppWindowId, AudioOutput, Battery, DisplayKey, EdgeReservation, IconPixels, Link,
-    Media, MediaCommand, MemoryLoad, NativeSurface, Network, Notification, Notifications,
-    NowPlaying, Position, PowerAction, ProcessorLoad, ScreenEdge, ScreenRect, Shortcut, Taskbar,
-    Thumbnail, Tray, TrayButton, TrayIcon, Wifi, WifiNetwork, WifiReach, WindowEvents,
-    accent_color, app_id_in, app_path, light_mode,
+    AppWindow, AppWindowId, AudioOutput, Battery, Bluetooth, DisplayKey, EdgeReservation,
+    IconPixels, Link, Media, MediaCommand, MemoryLoad, NativeSurface, Network, Notification,
+    Notifications, NowPlaying, PairedDevice, Position, PowerAction, ProcessorLoad, ScreenEdge,
+    ScreenRect, Shortcut, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Wifi, WifiNetwork,
+    WifiReach, WindowEvents, accent_color, app_id_in, app_path, light_mode,
 };

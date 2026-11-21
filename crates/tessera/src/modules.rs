@@ -3,6 +3,7 @@
 
 //! The modules the shell is assembled from.
 
+mod bluetooth;
 mod calendar;
 mod clock;
 mod command;
@@ -29,6 +30,7 @@ use crate::module::Module;
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
     vec![
         Box::new(clock::ClockModule),
+        Box::new(bluetooth::BluetoothModule),
         Box::new(calendar::CalendarModule),
         Box::new(command::CommandModule),
         Box::new(label::LabelModule),

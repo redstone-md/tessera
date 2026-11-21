@@ -217,6 +217,18 @@ impl Interaction {
     }
 }
 
+/// How much later each of several things that arrive together starts than
+/// the one before it, as a share of the way.
+const STAGGER: f32 = 0.12;
+
+/// How far along its way the thing at `index` of `count` is when the whole
+/// group is `arrival` along, from 0 to 1: they start one after another and
+/// all get there.
+pub fn staggered(arrival: f32, index: usize, count: usize) -> f32 {
+    let span = 1. + STAGGER * count.saturating_sub(1) as f32;
+    (arrival * span - STAGGER * index as f32).clamp(0., 1.)
+}
+
 /// The color `amount` of the way from `from` to `to`, with `amount` clamped
 /// to 0..=1.
 pub fn mix(from: Hsla, to: Hsla, amount: f32) -> Hsla {
@@ -234,6 +246,14 @@ pub fn mix(from: Hsla, to: Hsla, amount: f32) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staggered_things_start_one_after_another_and_all_get_there() {
+        assert_eq!(staggered(0., 0, 5), 0.);
+        assert!(staggered(0.3, 0, 5) > staggered(0.3, 4, 5));
+        assert_eq!(staggered(1., 4, 5), 1.);
+        assert_eq!(staggered(1., 0, 1), 1.);
+    }
 
     const BOUNCY: SpringSpec = SpringSpec {
         stiffness: 380.,

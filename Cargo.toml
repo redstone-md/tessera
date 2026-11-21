@@ -22,8 +22,11 @@ toml_edit = "0.25"
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
 wasmtime = { version = "51", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 wit-component = "0.263"
+windows-collections = "0.2"
 windows = { version = "0.61", features = [
     "ApplicationModel",
+    "Devices_Bluetooth",
+    "Devices_Enumeration",
     "Foundation",
     "Foundation_Collections",
     "Media_Control",
@@ -32,6 +35,8 @@ windows = { version = "0.61", features = [
     "UI_Notifications",
     "UI_Notifications_Management",
     "UI_ViewManagement",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",

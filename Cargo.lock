@@ -5808,6 +5808,7 @@ dependencies = [
  "ureq",
  "wasmtime",
  "windows 0.61.3",
+ "windows-collections",
  "wit-component",
 ]
 

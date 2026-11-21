@@ -13,7 +13,7 @@ use gpui::{
 };
 
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, Spring};
+use crate::motion::{Interaction, Spring, staggered};
 use crate::platform::{Wifi, WifiNetwork, WifiReach};
 use crate::theme::Theme;
 use crate::ui::{icon, state_layer};
@@ -28,10 +28,8 @@ const READS_PER_SCAN: u32 = 5;
 /// How high a row is.
 const ROW_HEIGHT: Pixels = px(40.);
 
-/// How far below its place a row starts when the list arrives, and how
-/// much later each row starts than the one above, as a share of the way.
+/// How far below its place a row starts when the list arrives.
 const ROW_TRAVEL: f32 = 10.;
-const ROW_DELAY: f32 = 0.12;
 
 /// How much of a row shows while it cannot be joined here.
 const UNKNOWN_OPACITY: f32 = 0.6;
@@ -72,13 +70,6 @@ fn note(network: &WifiNetwork, joining: Option<&str>) -> &'static str {
     } else {
         "Open; join it in the Windows settings first"
     }
-}
-
-/// How far along its way row `index` of `count` is when the whole list is
-/// `arrival` along: the rows start one after another.
-fn row_arrival(arrival: f32, index: usize, count: usize) -> f32 {
-    let span = 1. + ROW_DELAY * count.saturating_sub(1) as f32;
-    (arrival * span - ROW_DELAY * index as f32).clamp(0., 1.)
 }
 
 /// Lists the networks and follows them while it is shown.
@@ -201,7 +192,7 @@ impl WifiList {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let arrived = row_arrival(self.arrival.value(window).clamp(0., 1.), index, count);
+        let arrived = staggered(self.arrival.value(window).clamp(0., 1.), index, count);
         let state = self.rows[index].state(window);
         let joinable = !network.connected && network.profile.is_some();
         let base = if network.connected {
@@ -354,13 +345,5 @@ mod tests {
         assert_eq!(note(&network(false, true, true), Some("Other")), "Saved");
         assert!(note(&network(false, false, true), None).starts_with("Not saved"));
         assert!(note(&network(false, false, false), None).starts_with("Open"));
-    }
-
-    #[test]
-    fn the_rows_arrive_one_after_another_and_all_get_there() {
-        assert_eq!(row_arrival(0., 0, 5), 0.);
-        assert!(row_arrival(0.3, 0, 5) > row_arrival(0.3, 4, 5));
-        assert_eq!(row_arrival(1., 4, 5), 1.);
-        assert_eq!(row_arrival(1., 0, 1), 1.);
     }
 }

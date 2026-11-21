@@ -8,6 +8,7 @@
 mod accent;
 mod app_windows;
 mod audio;
+mod bluetooth;
 mod icon;
 mod media;
 mod network;
@@ -24,6 +25,7 @@ mod wifi;
 pub use accent::{accent_color, light_mode};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
 pub use audio::AudioOutput;
+pub use bluetooth::{Bluetooth, PairedDevice};
 pub use icon::IconPixels;
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use network::{Link, Network};

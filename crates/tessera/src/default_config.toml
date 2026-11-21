@@ -50,6 +50,8 @@
 #   "media-controls"  what is playing, with its picture and buttons to skip and pause
 #   "wifi"      the Wi-Fi networks in reach, for a popup; a click joins
 #               one Windows has the settings of
+#   "bluetooth" the paired Bluetooth devices, for a popup: which are
+#               connected, and the charge of those that report one
 #   "volume"    the output volume, as an icon and a percentage
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
@@ -92,7 +94,7 @@ edge = "top"
 thickness = 48
 start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, { widget = "label", icon = "\uE713", popup = "settings" }, "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
-end = [{ widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, "quit"]
+end = [{ widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, "quit"]
 
 [[surface]]
 edge = "bottom"
@@ -139,6 +141,12 @@ name = "network"
 width = 320
 height = 300
 content = ["wifi"]
+
+[[popup]]
+name = "bluetooth"
+width = 320
+height = 260
+content = ["bluetooth"]
 
 [[popup]]
 name = "sound"
