@@ -62,11 +62,24 @@ impl Notifications {
             .map_err(|error| format!("the notification could not be dismissed: {error}"))
     }
 
-    /// Removes every notification from the notification center.
+    /// Removes every notification from the notification center. Windows
+    /// has been seen to refuse removing all at once and to leave them all,
+    /// so they are then removed one by one.
     pub fn clear() -> Result<(), String> {
-        listener()?
-            .ClearNotifications()
-            .map_err(|error| format!("the notifications could not be cleared: {error}"))
+        let listener = listener()?;
+        if listener.ClearNotifications().is_ok() {
+            return Ok(());
+        }
+        let mut refused = None;
+        for notification in Self::list()? {
+            if let Err(error) = listener.RemoveNotification(notification.id) {
+                refused = Some(error);
+            }
+        }
+        match refused {
+            Some(error) => Err(format!("not every notification could be cleared: {error}")),
+            None => Ok(()),
+        }
     }
 }
 

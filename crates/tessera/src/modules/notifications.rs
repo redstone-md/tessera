@@ -161,14 +161,32 @@ impl NotificationList {
             item.leaving = true;
             item.presence.animate_to(0.);
         }
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = Notifications::dismiss(id) {
-                    report!("{error}");
-                }
-            })
-            .detach();
+        Self::remove(cx, move || Notifications::dismiss(id));
         cx.notify();
+    }
+
+    /// Has `remove` take notifications out of the notification center. If
+    /// it fails, that is reported and the notifications that were leaving
+    /// come back, as they are still there.
+    fn remove(
+        cx: &mut Context<Self>,
+        remove: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) {
+        let removing = cx.background_executor().spawn(async move { remove() });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Err(error) = removing.await else {
+                return;
+            };
+            report!("{error}");
+            let _ = this.update(cx, |this, cx| {
+                for item in &mut this.items {
+                    item.leaving = false;
+                    item.presence.animate_to(1.);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Removes every notification from the notification center.
@@ -177,13 +195,7 @@ impl NotificationList {
             item.leaving = true;
             item.presence.animate_to(0.);
         }
-        cx.background_executor()
-            .spawn(async {
-                if let Err(error) = Notifications::clear() {
-                    report!("{error}");
-                }
-            })
-            .detach();
+        Self::remove(cx, Notifications::clear);
         cx.notify();
     }
 
