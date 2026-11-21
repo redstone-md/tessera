@@ -249,7 +249,10 @@ mod tests {
             ["label", "label", "label", "cpu", "memory", "battery"]
         );
         assert_eq!(config.registries(), [OFFICIAL_REGISTRY]);
-        assert_eq!(names(&bar.end), ["media", "tray", "volume", "quit"]);
+        assert_eq!(
+            names(&bar.end),
+            ["media", "tray", "network", "volume", "quit"]
+        );
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);
         assert_eq!(names(&dock.center), ["windows"]);

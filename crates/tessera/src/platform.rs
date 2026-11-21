@@ -6,8 +6,8 @@
 mod win32;
 
 pub use win32::{
-    AppWindow, AppWindowId, AudioOutput, Battery, DisplayKey, EdgeReservation, IconPixels, Media,
-    MediaCommand, MemoryLoad, NativeSurface, Notification, Notifications, NowPlaying, PowerAction,
-    ProcessorLoad, ScreenEdge, ScreenRect, Shortcut, Taskbar, Tray, TrayButton, TrayIcon,
-    WindowEvents, accent_color,
+    AppWindow, AppWindowId, AudioOutput, Battery, DisplayKey, EdgeReservation, IconPixels, Link,
+    Media, MediaCommand, MemoryLoad, NativeSurface, Network, Notification, Notifications,
+    NowPlaying, PowerAction, ProcessorLoad, ScreenEdge, ScreenRect, Shortcut, Taskbar, Tray,
+    TrayButton, TrayIcon, WindowEvents, accent_color,
 };

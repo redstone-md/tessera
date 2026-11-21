@@ -10,6 +10,7 @@ mod label;
 mod launcher;
 mod marketplace;
 mod media;
+mod network;
 mod notifications;
 mod session;
 mod settings;
@@ -35,6 +36,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
             registries: config.registries(),
         }),
         Box::new(media::MediaModule),
+        Box::new(network::NetworkModule),
         Box::new(notifications::NotificationsModule),
         Box::new(session::SessionModule),
         Box::new(settings::SettingsModule),

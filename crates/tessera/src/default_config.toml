@@ -35,6 +35,10 @@
 #               option show, "percent" (default) or "used" for gigabytes
 #   "battery"   the charge of the battery, with option style as for "cpu";
 #               shows nothing on a machine without a battery
+#   "network"   the connection Windows reaches the internet through: an icon
+#               for a cable, Wi-Fi or a mobile network with its signal, and
+#               the name of the network; option show, "name" (default) or
+#               "icon" for the icon alone
 #   "settings"  the layout, the pinned applications and the theme, to change
 #               by clicking; it rewrites this file and keeps its comments
 #   "media"     what is playing, on one line; absent while no application
@@ -80,7 +84,7 @@ edge = "top"
 thickness = 48
 start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, { widget = "label", icon = "\uE713", popup = "settings" }, "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
-end = [{ widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, { widget = "volume", popup = "sound" }, "quit"]
+end = [{ widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, "network", { widget = "volume", popup = "sound" }, "quit"]
 
 [[surface]]
 edge = "bottom"
