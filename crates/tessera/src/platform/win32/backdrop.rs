@@ -22,8 +22,11 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::Write;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -123,13 +126,74 @@ const WHOLE_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
 ///
 /// The desktop window draws itself into a bitmap of the size of `frame`
 /// for this, which takes a moment: not for the thread of the interface.
-/// While it does, Windows charges the process with memory for the whole
-/// desktop window, tens of megabytes on several displays, though little
-/// of it is touched. The desktop is therefore read by one caller at a
+/// The process that asks is charged with memory for the whole desktop
+/// window, tens of megabytes on several displays, and keeps being charged
+/// for seconds after. Another process of this program is therefore
+/// started to read, which gives the pixels and ends, and what it was
+/// charged with goes with it. The desktop is read by one caller at a
 /// time, and asked for seldom: see [`desktop_look`].
 pub fn desktop_pixels(frame: ScreenRect) -> Option<(usize, Vec<u8>)> {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
     let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    desktop_pixels_by_reader(frame).or_else(|| desktop_pixels_here(frame))
+}
+
+/// The argument that has the program read the desktop and end. The
+/// sides of the frame follow it: left, top, right and bottom.
+const READER_FLAG: &str = "--read-desktop";
+
+/// Has a started process create no console window.
+const NO_WINDOW: u32 = 0x0800_0000;
+
+/// Reads the desktop within `frame` in another process of this program.
+/// `None` where that process cannot be started or gives something else
+/// than the pixels of `frame`.
+fn desktop_pixels_by_reader(frame: ScreenRect) -> Option<(usize, Vec<u8>)> {
+    let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let sides = [frame.left, frame.top, frame.right, frame.bottom];
+    let read = Command::new(std::env::current_exe().ok()?)
+        .arg(READER_FLAG)
+        .args(sides.map(|side| side.to_string()))
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(NO_WINDOW)
+        .output()
+        .ok()?;
+    let length = width as usize * height as usize * 4;
+    (read.status.success() && read.stdout.len() == length).then_some((width as usize, read.stdout))
+}
+
+/// When the program was started to read the desktop, does so, writes the
+/// pixels [`desktop_pixels`] gives to its output and returns `true`:
+/// the program is to end then.
+pub fn read_desktop_if_requested(mut arguments: impl Iterator<Item = String>) -> bool {
+    if arguments.next().as_deref() != Some(READER_FLAG) {
+        return false;
+    }
+    let mut side = || arguments.next().and_then(|value| value.parse::<i32>().ok());
+    let read = (|| {
+        let frame = ScreenRect {
+            left: side()?,
+            top: side()?,
+            right: side()?,
+            bottom: side()?,
+        };
+        let (_, pixels) = desktop_pixels_here(frame)?;
+        let mut output = std::io::stdout().lock();
+        output.write_all(&pixels).ok()?;
+        output.flush().ok()
+    })();
+    if read.is_none() {
+        std::process::exit(1);
+    }
+    true
+}
+
+/// Reads the desktop within `frame` in this process.
+fn desktop_pixels_here(frame: ScreenRect) -> Option<(usize, Vec<u8>)> {
     let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
     if width <= 0 || height <= 0 {
         return None;
@@ -662,7 +726,7 @@ mod tests {
             ..frame
         };
         let began = Instant::now();
-        let (width, pixels) = desktop_pixels(bar).expect("the desktop is read");
+        let (width, pixels) = desktop_pixels_here(bar).expect("the desktop is read");
         println!("read in {:?}", began.elapsed());
         assert_eq!(width as i32, bar.right - bar.left);
         assert_eq!(pixels.len(), width * 36 * 4);

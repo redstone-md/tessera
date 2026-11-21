@@ -42,7 +42,9 @@ use crate::shell::Shell;
 const TASKBAR_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 fn main() {
-    if Taskbar::run_watchdog_if_requested(std::env::args().skip(1)) {
+    if Taskbar::run_watchdog_if_requested(std::env::args().skip(1))
+        || platform::read_desktop_if_requested(std::env::args().skip(1))
+    {
         return;
     }
     platform::Pace::keep();

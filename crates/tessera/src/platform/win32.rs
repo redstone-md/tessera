@@ -38,6 +38,7 @@ pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_
 pub use audio::{AppSound, AudioDevice, AudioOutput};
 pub use backdrop::{
     BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,
+    read_desktop_if_requested,
 };
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use brightness::ScreenBrightness;
