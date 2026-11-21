@@ -8,6 +8,8 @@ end = ["problems", { widget = "media", popup = "media" }, "tray", "keyboard", { 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to
 #   width, height  size in logical pixels
+#   side           widgets in a second column to the right of content; the
+#                  two columns share the width evenly
 #   place          "surface" (default): at the widget that opened it;
 #                  "center": in the middle of the display, the rest dimmed
 #   content        widgets, stacked from the top
@@ -20,9 +22,10 @@ content = ["apps", "launcher", "power"]
 
 [[popup]]
 name = "calendar"
-width = 300
-height = 720
-content = ["calendar", "notifications"]
+width = 620
+height = 400
+content = ["calendar"]
+side = ["notifications"]
 
 [[popup]]
 name = "settings"

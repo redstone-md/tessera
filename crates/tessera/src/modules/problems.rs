@@ -47,6 +47,7 @@ impl Module for ProblemsModule {
             name: POPUP.to_owned(),
             width: 380.,
             height: 320.,
+            side: Vec::new(),
             content: vec![WidgetSpec {
                 widget: "problem-list".to_owned(),
                 popup: None,

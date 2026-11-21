@@ -240,7 +240,7 @@ impl Manifest {
     fn popups(&self) -> Vec<PopupConfig> {
         let popups = self.popups.iter().cloned().map(|mut popup| {
             popup.name = self.qualified(&popup.name);
-            for spec in &mut popup.content {
+            for spec in popup.content.iter_mut().chain(&mut popup.side) {
                 if self.widgets.iter().any(|own| own.name == spec.widget) {
                     spec.widget = self.qualified(&spec.widget);
                 }

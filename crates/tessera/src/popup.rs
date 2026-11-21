@@ -13,7 +13,7 @@ use gpui::{
     px, size,
 };
 
-use crate::config::{PopupConfig, PopupPlace};
+use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
 use crate::module::WidgetRegistry;
 use crate::motion::Spring;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect, Veil};
@@ -305,15 +305,18 @@ impl Popups {
                 report!("a popup is not where it belongs: {error:#}");
                 None
             });
-            let content = config
-                .content
-                .iter()
-                .filter_map(|spec| WidgetRegistry::build(spec, display, cx))
-                .collect();
+            let mut built = |specs: &[WidgetSpec]| -> Vec<AnyView> {
+                specs
+                    .iter()
+                    .filter_map(|spec| WidgetRegistry::build(spec, display, cx))
+                    .collect()
+            };
+            let (content, side) = (built(&config.content), built(&config.side));
             let centered = place == PopupPlace::Center;
             cx.new(|cx| {
                 let mut view = PopupView::new(config.name.clone(), edge, content, window, cx);
                 (view.centered, view.veil) = (centered, veil);
+                view.side = side;
                 view
             })
         })
@@ -331,6 +334,8 @@ pub struct PopupView {
     /// What dims the display behind such a popup.
     veil: Option<Veil>,
     content: Vec<AnyView>,
+    /// What stands in a second column, to the right of the content.
+    side: Vec<AnyView>,
     /// 0 while hidden, 1 when fully open.
     visibility: Spring,
     closing: bool,
@@ -363,6 +368,7 @@ impl PopupView {
             centered: false,
             veil: None,
             content,
+            side: Vec::new(),
             visibility,
             closing: false,
             was_active: false,
@@ -402,7 +408,24 @@ impl Render for PopupView {
             veil.darken(VEIL * visibility);
         }
         floating_panel(&theme, self.edge, visibility, |panel| {
-            let panel = panel.children(self.content.iter().cloned());
+            let panel = if self.side.is_empty() {
+                panel.children(self.content.iter().cloned())
+            } else {
+                let column = |widgets: &[AnyView]| {
+                    div()
+                        .h_full()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(theme.spacing.medium)
+                        .children(widgets.iter().cloned())
+                };
+                panel
+                    .flex_row()
+                    .child(column(&self.content))
+                    .child(column(&self.side))
+            };
             match self.centered {
                 true => panel.top(px(RISE * (1. - visibility))),
                 false => panel,

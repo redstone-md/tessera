@@ -167,6 +167,17 @@ pub struct PopupConfig {
     /// Widgets, stacked from the top.
     #[serde(default)]
     pub content: Vec<WidgetSpec>,
+    /// Widgets stacked in a second column, to the right of `content`;
+    /// the two columns share the width evenly.
+    #[serde(default)]
+    pub side: Vec<WidgetSpec>,
+}
+
+impl PopupConfig {
+    /// Every widget of the popup, in the order of the file.
+    pub fn widgets(&self) -> impl Iterator<Item = &WidgetSpec> {
+        self.content.iter().chain(&self.side)
+    }
 }
 
 /// One strip docked to a screen edge, and the widgets in its slots.
@@ -298,7 +309,7 @@ impl Config {
     /// The first widget `name`, on a surface or in a popup.
     pub fn widget(&self, name: &str) -> Option<&WidgetSpec> {
         let placed = self.surfaces.iter().flat_map(SurfaceConfig::widgets);
-        let shown = self.popups.iter().flat_map(|popup| &popup.content);
+        let shown = self.popups.iter().flat_map(PopupConfig::widgets);
         placed.chain(shown).find(|spec| spec.widget == name)
     }
 
