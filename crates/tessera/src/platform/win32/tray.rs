@@ -22,9 +22,7 @@ use anyhow::{Context as _, Result, anyhow};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Shell::{
-    APPBARDATA, SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared,
-};
+use windows::Win32::UI::Shell::{SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared};
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW,
     GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST,
@@ -528,11 +526,20 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
         return send(data);
     }
 
-    const SIZE: usize = size_of::<APPBARDATA>();
+    // The request starts with the structure the memory holds, which states
+    // its own length. That is less than `APPBARDATA` takes in a program,
+    // as handles are 32 bits wide in a request, and not a byte more may be
+    // written: the memory of a request from this very process is not
+    // mapped but lies among its other allocations.
+    let stated = bytes
+        .get(..4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map_or(0, u32::from_le_bytes);
+    let size = (stated as usize).min(SHARED_HANDLE);
     // SAFETY: the shared memory functions accept any handle and answer
-    // null for one that is not theirs. A block they map holds at least
-    // the structure its sender put there, and both blocks stay mapped
-    // until they are unlocked below.
+    // null for one that is not theirs. A block they hand out holds the
+    // structure its sender put there, of the length that structure
+    // states, and both blocks stay valid until they are unlocked below.
     unsafe {
         let ours = SHLockShared(HANDLE(handle as usize as *mut c_void), owner);
         if ours.is_null() {
@@ -540,7 +547,7 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
         }
         let mut process = 0;
         GetWindowThreadProcessId(explorer, Some(&mut process));
-        let shared = SHAllocShared(Some(ours.cast_const()), SIZE as u32, process);
+        let shared = SHAllocShared(Some(ours.cast_const()), size as u32, process);
         if shared.is_invalid() {
             let _ = SHUnlockShared(ours);
             return send(data);
@@ -558,7 +565,7 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
 
         let theirs = SHLockShared(shared, process);
         if !theirs.is_null() {
-            std::ptr::copy_nonoverlapping(theirs.cast::<u8>(), ours.cast::<u8>(), SIZE);
+            std::ptr::copy_nonoverlapping(theirs.cast::<u8>(), ours.cast::<u8>(), size);
             let _ = SHUnlockShared(theirs);
         }
         let _ = SHFreeShared(shared, process);
