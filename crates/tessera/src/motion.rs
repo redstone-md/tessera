@@ -57,6 +57,16 @@ impl Spring {
         self.target = target;
     }
 
+    /// Where the value is heading.
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
+    /// Puts the value at `value`, at rest.
+    pub fn jump_to(&mut self, value: f32) {
+        *self = Self::new(self.spec, value);
+    }
+
     /// Pushes the value, as a change of `velocity` in units per second.
     pub fn kick(&mut self, velocity: f32) {
         self.velocity += velocity;

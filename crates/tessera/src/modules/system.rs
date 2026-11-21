@@ -70,6 +70,7 @@ fn one_of(context: &WidgetContext, key: &str, choices: &[&str]) -> usize {
 }
 
 /// What a gauge shows at one moment.
+#[derive(PartialEq)]
 struct Reading {
     /// From 0 to 1.
     level: f32,
@@ -178,6 +179,11 @@ fn battery_glyph(battery: Battery) -> &'static str {
     }
 }
 
+/// The change of a level, as a share of the whole, below which the meter
+/// moves in one step. Levels waver by less than this all the time, and
+/// following each waver with a spring would keep every bar repainting.
+const SMALL_CHANGE: f32 = 0.03;
+
 /// How a meter draws its level.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Style {
@@ -224,11 +230,20 @@ impl Meter {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         // A gauge that has nothing new keeps what it showed.
-        if let Some(reading) = self.gauge.read() {
-            self.level.animate_to(reading.level);
-            self.reading = Some(reading);
-            cx.notify();
+        let Some(reading) = self.gauge.read() else {
+            return;
+        };
+        if self.reading.as_ref() == Some(&reading) {
+            return;
         }
+        let change = (reading.level - self.level.target()).abs();
+        if change < SMALL_CHANGE && self.level.is_settled() {
+            self.level.jump_to(reading.level);
+        } else {
+            self.level.animate_to(reading.level);
+        }
+        self.reading = Some(reading);
+        cx.notify();
     }
 }
 
