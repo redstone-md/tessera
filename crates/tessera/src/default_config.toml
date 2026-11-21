@@ -49,3 +49,10 @@ name = "sound"
 width = 340
 height = 76
 content = ["volume-slider"]
+
+# [icons] replaces application icons. Each key is the file name of an
+# executable, each value an image file (PNG, JPEG or ICO); a relative path is
+# looked up in %APPDATA%\tessera.
+#
+# [icons]
+# "notepad.exe" = "icons/notepad.png"

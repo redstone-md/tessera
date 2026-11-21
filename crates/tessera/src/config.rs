@@ -3,6 +3,7 @@
 
 //! User configuration: which surfaces exist and what they hold.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -128,6 +129,10 @@ pub struct Config {
     pub surfaces: Vec<SurfaceConfig>,
     #[serde(default, rename = "popup")]
     pub popups: Vec<PopupConfig>,
+    /// Image files to show instead of the icons of applications, by the
+    /// file name of the executable.
+    #[serde(default)]
+    pub icons: HashMap<String, PathBuf>,
 }
 
 impl Config {

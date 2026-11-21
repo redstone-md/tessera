@@ -7,6 +7,7 @@
 
 mod config;
 mod extension;
+mod icons;
 mod module;
 mod modules;
 mod motion;
@@ -22,6 +23,7 @@ use std::time::Duration;
 use gpui::{App, Application, AsyncApp, px};
 
 use crate::config::{Config, Displays};
+use crate::icons::AppIcons;
 use crate::module::WidgetRegistry;
 use crate::panel::Panel;
 use crate::platform::Taskbar;
@@ -41,6 +43,7 @@ fn main() {
         cx.set_global(Theme::load(config.theme.as_deref()));
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin()));
         cx.set_global(Popups::new(&config.popups));
+        cx.set_global(AppIcons::new(&config.icons));
         match Taskbar::hide_until_exit() {
             Ok(()) => cx
                 .spawn(async move |cx: &mut AsyncApp| {

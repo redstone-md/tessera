@@ -3,35 +3,28 @@
 
 //! One button per open application window. Widget: `windows`.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, ParentElement,
-    Render, RenderImage, StatefulInteractiveElement, Styled, WeakEntity, Window, div, img,
+    Render, StatefulInteractiveElement, Styled, WeakEntity, Window, div, img,
 };
 
+use crate::icons::{AppIcons, Icon};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{AppWindow, AppWindowId, DisplayKey, IconPixels};
+use crate::platform::{AppWindow, AppWindowId, DisplayKey};
 use crate::theme::Theme;
 use crate::ui::state_layer;
 
 /// How often the window list is re-read.
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Pixel size icons are extracted at; large enough for 200% scaling.
-const ICON_SOURCE_SIZE: u32 = 64;
-
 /// How much the icon under the pointer grows, as a share of its size.
 const HOVER_GROWTH: f32 = 0.12;
 
 /// How much a pressed icon shrinks, as a share of its size.
 const PRESS_SHRINK: f32 = 0.16;
-
-type Icon = Option<Arc<RenderImage>>;
 
 pub struct WindowsModule;
 
@@ -70,8 +63,6 @@ struct WindowList {
     items: Vec<DockItem>,
     foreground: Option<AppWindowId>,
     next_key: usize,
-    /// Icons by executable, including executables known to have none.
-    icons: HashMap<PathBuf, Icon>,
 }
 
 impl WindowList {
@@ -91,7 +82,6 @@ impl WindowList {
             items: Vec::new(),
             foreground: None,
             next_key: 0,
-            icons: HashMap::new(),
         };
         list.refresh(cx);
         list
@@ -146,15 +136,6 @@ impl WindowList {
         if changed {
             cx.notify();
         }
-    }
-
-    fn icon_for(icons: &mut HashMap<PathBuf, Icon>, executable: &Path) -> Icon {
-        if let Some(icon) = icons.get(executable) {
-            return icon.clone();
-        }
-        let icon = IconPixels::of_executable(executable, ICON_SOURCE_SIZE).and_then(render_image);
-        icons.insert(executable.to_owned(), icon.clone());
-        icon
     }
 
     fn render_item(
@@ -230,20 +211,16 @@ impl WindowList {
     }
 }
 
-fn render_image(pixels: IconPixels) -> Icon {
-    let buffer = image::RgbaImage::from_raw(pixels.width, pixels.height, pixels.bgra)?;
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
-}
-
 impl Render for WindowList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        let Self { items, icons, .. } = self;
+        let items = &mut self.items;
         let elements: Vec<AnyElement> = items
             .iter_mut()
             .map(|item| {
                 let executable = item.window.executable.as_deref();
-                let icon = executable.and_then(|executable| Self::icon_for(icons, executable));
+                let icon = executable
+                    .and_then(|executable| cx.global::<AppIcons>().of_executable(executable));
                 Self::render_item(item, icon, theme, window, cx)
             })
             .collect();
