@@ -14,7 +14,12 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager as Manager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
 };
+use windows::Storage::Streams::DataReader;
 use windows::core::Result as WindowsResult;
+
+/// The largest picture read; what is offered is a few hundred kilobytes
+/// at most.
+const COVER_LIMIT: u64 = 8 << 20;
 
 /// What the application Windows considers current is playing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +68,33 @@ impl Media {
             }))
         };
         read().map_err(|error| format!("what is playing could not be read: {error}"))
+    }
+
+    /// The picture the current media application shows for what it plays,
+    /// as the image file it offers; `None` while there is none.
+    pub fn cover() -> Result<Option<Vec<u8>>, String> {
+        let read = || -> WindowsResult<Option<Vec<u8>>> {
+            let Some(session) = session()? else {
+                return Ok(None);
+            };
+            let properties = session.TryGetMediaPropertiesAsync()?.get()?;
+            // Without a picture Windows answers with nothing, which reads
+            // as an error.
+            let Ok(picture) = properties.Thumbnail() else {
+                return Ok(None);
+            };
+            let stream = picture.OpenReadAsync()?.get()?;
+            let size = stream.Size()?;
+            if size == 0 || size > COVER_LIMIT {
+                return Ok(None);
+            }
+            let reader = DataReader::CreateDataReader(&stream)?;
+            reader.LoadAsync(size as u32)?.get()?;
+            let mut bytes = vec![0; size as usize];
+            reader.ReadBytes(&mut bytes)?;
+            Ok(Some(bytes))
+        };
+        read().map_err(|error| format!("the picture of what is playing could not be read: {error}"))
     }
 
     /// Passes `command` to the current media application. Whether the

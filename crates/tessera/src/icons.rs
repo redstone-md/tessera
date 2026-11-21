@@ -100,10 +100,20 @@ impl AppIcons {
 
 /// Reads an image file and scales it down to icon size.
 fn load_image(path: &Path) -> anyhow::Result<Icon> {
-    let mut image =
-        image::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
-    if image.width() > SOURCE_SIZE || image.height() > SOURCE_SIZE {
-        image = image.resize(SOURCE_SIZE, SOURCE_SIZE, FilterType::Triangle);
+    let image = image::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
+    Ok(prepared(image, SOURCE_SIZE))
+}
+
+/// Decodes the image file `bytes` hold and scales it down to fit a square
+/// of `size` pixels.
+pub fn image_of_bytes(bytes: &[u8], size: u32) -> anyhow::Result<Icon> {
+    Ok(prepared(image::load_from_memory(bytes)?, size))
+}
+
+/// `image` ready to draw, scaled down to fit a square of `size` pixels.
+fn prepared(mut image: image::DynamicImage, size: u32) -> Icon {
+    if image.width() > size || image.height() > size {
+        image = image.resize(size, size, FilterType::Triangle);
     }
     let mut pixels = image.into_rgba8();
     // The renderer expects blue first.
@@ -111,7 +121,7 @@ fn load_image(path: &Path) -> anyhow::Result<Icon> {
         pixel.0.swap(0, 2);
     }
     let (width, height) = pixels.dimensions();
-    Ok(render_image(width, height, pixels.into_raw()))
+    render_image(width, height, pixels.into_raw())
 }
 
 /// An image of `pixels`, ready to draw.

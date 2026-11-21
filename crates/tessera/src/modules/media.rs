@@ -3,15 +3,19 @@
 
 //! What is playing. Widgets: `media`, a compact readout that is there only
 //! while an application offers something, and `media-controls`, the title
-//! with buttons to skip and pause.
+//! with its picture and buttons to skip and pause.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, div, px,
+    IntoElement, ObjectFit, ParentElement, Pixels, Render, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, WeakEntity, Window, div, img,
+    px,
 };
+
+use crate::icons::{Icon, image_of_bytes};
 
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
@@ -21,6 +25,15 @@ use crate::ui::{icon, pill, state_layer};
 
 /// How often it is read what is playing.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How many more times the picture is read after what is playing changed:
+/// applications tend to offer it a moment after the title.
+const COVER_READS: u8 = 4;
+
+/// The size the picture is shown at, and the pixels it is prepared with,
+/// enough for 200% scaling.
+const COVER_SIZE: Pixels = px(44.);
+const COVER_SOURCE: u32 = 96;
 
 /// How wide the readout gets unless the layout says otherwise.
 const READOUT_WIDTH: f32 = 260.;
@@ -71,9 +84,53 @@ fn headline(now: &NowPlaying) -> String {
     }
 }
 
+/// What tells one piece from another: its title and its artist.
+fn track_of(now: &NowPlaying) -> (String, String) {
+    (now.title.clone(), now.artist.clone())
+}
+
+/// The picture of what is playing as it was read.
+#[derive(Clone, Default)]
+struct Cover {
+    /// Tells one image file from another; 0 without one.
+    digest: u64,
+    image: Icon,
+}
+
+impl Cover {
+    /// Reads and decodes the picture; one that cannot be used is reported
+    /// and counts as none.
+    fn read() -> Self {
+        let bytes = Media::cover().and_then(|bytes| bytes.ok_or_else(String::new));
+        let image = bytes.and_then(|bytes| {
+            let image = image_of_bytes(&bytes, COVER_SOURCE);
+            let image = image.map_err(|error| format!("the picture is not an image: {error}"))?;
+            Ok((digest(&bytes), image))
+        });
+        match image {
+            Ok((digest, image)) => Self { digest, image },
+            Err(error) => {
+                if !error.is_empty() {
+                    eprintln!("tessera: {error}");
+                }
+                Self::default()
+            }
+        }
+    }
+}
+
+/// A number that differs between different `bytes`, and is never 0.
+fn digest(bytes: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish().max(1)
+}
+
 /// What is playing, shared by every media widget.
 struct Player {
     now: Option<NowPlaying>,
+    /// The picture of what is playing, if it has one.
+    cover: Icon,
     /// Why nothing is known, if reading failed.
     error: Option<String>,
 }
@@ -90,12 +147,36 @@ impl Player {
         }
         let player = cx.new(|cx: &mut Context<Self>| {
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let mut track = None;
+                let mut cover = Cover::default();
+                // How many more readings look at the picture.
+                let mut reads = 0;
                 loop {
-                    let read = cx
-                        .background_executor()
-                        .spawn(async { Media::now_playing() });
-                    let read = read.await;
-                    if this.update(cx, |this, cx| this.take(read, cx)).is_err() {
+                    let (known, wanted) = (track.clone(), reads > 0);
+                    let read = cx.background_executor().spawn(async move {
+                        let now = Media::now_playing();
+                        let playing = now.as_ref().ok().and_then(|now| now.as_ref());
+                        let changed = playing.map(track_of) != known;
+                        let cover = (changed || wanted).then(Cover::read);
+                        (now, cover)
+                    });
+                    let (now, read) = read.await;
+                    if let Ok(now) = &now {
+                        let playing = now.as_ref().map(track_of);
+                        if playing != track {
+                            (track, reads) = (playing, COVER_READS);
+                        } else {
+                            reads = reads.saturating_sub(1);
+                        }
+                    }
+                    // The same picture read again is not shown anew.
+                    let fresh = read.filter(|read| read.digest != cover.digest);
+                    if let Some(fresh) = &fresh {
+                        cover = fresh.clone();
+                    }
+                    let fresh = fresh.map(|cover| cover.image);
+                    let taken = this.update(cx, |this, cx| this.take(now, fresh, cx));
+                    if taken.is_err() {
                         break;
                     }
                     cx.background_executor().timer(POLL_INTERVAL).await;
@@ -104,6 +185,7 @@ impl Player {
             .detach();
             Self {
                 now: None,
+                cover: None,
                 error: None,
             }
         });
@@ -111,7 +193,17 @@ impl Player {
         player
     }
 
-    fn take(&mut self, read: Result<Option<NowPlaying>, String>, cx: &mut Context<Self>) {
+    /// Takes over what was read, and `cover` if the picture changed.
+    fn take(
+        &mut self,
+        read: Result<Option<NowPlaying>, String>,
+        cover: Option<Icon>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(cover) = cover {
+            self.cover = cover;
+            cx.notify();
+        }
         match read {
             Ok(now) => {
                 self.error = None;
@@ -224,6 +316,9 @@ struct Controls {
     player: Entity<Player>,
     /// 1 while it plays, 0 while it does not; shapes the middle button.
     playing: Spring,
+    /// The picture shown, and how much of it: it fades in when it changes.
+    cover: Icon,
+    cover_presence: Spring,
     buttons: [Interaction; 3],
     _changes: Subscription,
 }
@@ -232,12 +327,52 @@ impl Controls {
     fn new(player: Entity<Player>, cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
         let playing = player.read(cx).now.as_ref().is_some_and(|now| now.playing);
+        let cover = player.read(cx).cover.clone();
         Self {
-            _changes: cx.observe(&player, |_, _, cx| cx.notify()),
+            _changes: cx.observe(&player, |this: &mut Self, _, cx| this.follow(cx)),
             player,
             playing: Spring::new(motion.spatial_fast, if playing { 1. } else { 0. }),
+            cover,
+            cover_presence: Spring::new(motion.effects, 1.),
             buttons: [Interaction::new(&motion); 3],
         }
+    }
+
+    /// Takes over the picture if it changed, which then fades in.
+    fn follow(&mut self, cx: &mut Context<Self>) {
+        let cover = self.player.read(cx).cover.clone();
+        if !same_image(&cover, &self.cover) {
+            self.cover = cover;
+            self.cover_presence.jump_to(0.);
+            self.cover_presence.animate_to(1.);
+        }
+        cx.notify();
+    }
+
+    /// The picture, or a note in its place while there is none.
+    fn picture(&mut self, theme: &Theme, window: &mut Window) -> AnyElement {
+        let presence = self.cover_presence.value(window).clamp(0., 1.);
+        let frame = div()
+            .size(COVER_SIZE)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.small)
+            .overflow_hidden()
+            .bg(theme.colors.surface_container_highest)
+            .text_color(theme.colors.on_surface_variant);
+        match &self.cover {
+            Some(cover) => frame.child(
+                img(cover.clone())
+                    .size_full()
+                    .rounded(theme.shape.small)
+                    .object_fit(ObjectFit::Cover)
+                    .opacity(presence),
+            ),
+            None => frame.child(icon(theme, ICON_NOTE).opacity(presence)),
+        }
+        .into_any_element()
     }
 
     /// One round button. `emphasis` is 0 for a plain one and up to 1 for
@@ -344,7 +479,9 @@ impl Render for Controls {
                 cx,
             ),
         ];
-        div()
+        let names = div()
+            .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
             .gap(theme.spacing.tiny)
@@ -360,7 +497,18 @@ impl Render for Controls {
                     .truncate()
                     .text_color(theme.colors.on_surface_variant)
                     .child(SharedString::from(now.artist.clone()))
-            }))
+            }));
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.medium)
+                    .child(self.picture(&theme, window))
+                    .child(names),
+            )
             .child(
                 div()
                     .pt(theme.spacing.small)
@@ -370,6 +518,15 @@ impl Render for Controls {
                     .gap(theme.spacing.small)
                     .children(buttons),
             )
+    }
+}
+
+/// Whether both are the same picture, or both none.
+fn same_image(one: &Icon, other: &Icon) -> bool {
+    match (one, other) {
+        (Some(one), Some(other)) => std::sync::Arc::ptr_eq(one, other),
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -386,6 +543,13 @@ mod tests {
             can_previous: true,
             can_next: true,
         }
+    }
+
+    #[test]
+    fn different_pictures_have_different_digests_and_none_has_zero() {
+        assert_ne!(digest(b"one"), digest(b"other"));
+        assert_eq!(digest(b"one"), digest(b"one"));
+        assert_ne!(digest(b""), 0);
     }
 
     #[test]

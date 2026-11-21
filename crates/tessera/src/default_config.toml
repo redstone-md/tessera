@@ -47,7 +47,7 @@
 #               by clicking; it rewrites this file and keeps its comments
 #   "media"     what is playing, on one line; absent while no application
 #               offers anything; option width, the most it takes, in pixels
-#   "media-controls"  what is playing, with buttons to skip and pause
+#   "media-controls"  what is playing, with its picture and buttons to skip and pause
 #   "volume"    the output volume, as an icon and a percentage
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
