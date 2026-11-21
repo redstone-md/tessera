@@ -81,7 +81,9 @@ impl EdgeSurface {
             let mut below = false;
             while view.upgrade().is_some() {
                 let filled = native.display_is_filled();
-                if filled != below {
+                // Said again each time while it is below: what raises the
+                // surface meanwhile must not leave it over the game.
+                if filled || below {
                     below = filled;
                     native.keep_above(!below);
                 }

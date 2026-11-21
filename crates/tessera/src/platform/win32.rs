@@ -76,8 +76,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, LWA_ALPHA, PostMessageW, SW_SHOW, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
-    WM_APP, WM_MOUSEMOVE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-    WS_POPUP, WS_VISIBLE, WindowFromPoint,
+    WM_APP, WM_MOUSEMOVE, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
 
 /// Classes of windows that cover a display without being an application
@@ -135,6 +135,16 @@ impl From<RECT> for ScreenRect {
             right: rect.right,
             bottom: rect.bottom,
         }
+    }
+}
+
+impl ScreenRect {
+    /// Whether all of `other` lies within this rectangle.
+    pub fn covers(self, other: Self) -> bool {
+        self.left <= other.left
+            && self.top <= other.top
+            && self.right >= other.right
+            && self.bottom >= other.bottom
     }
 }
 
@@ -293,7 +303,9 @@ impl NativeSurface {
     /// Whether the window in front fills the whole display of this one, as
     /// a game or a video played full screen does. The desktop and the
     /// screens of Windows that show all windows do not count, nor does a
-    /// window of Tessera.
+    /// window of Tessera. A window without a caption counts when it fills
+    /// the room left to windows: Windows moves a game out of an edge that
+    /// gets reserved while it runs, and it stays there.
     pub fn display_is_filled(self) -> bool {
         // SAFETY: the calls only read the state of windows; a window that
         // went away meanwhile makes them fail, which counts as not filled.
@@ -327,11 +339,11 @@ impl NativeSurface {
             {
                 return false;
             }
-            let all = monitor.rcMonitor;
-            frame.left <= all.left
-                && frame.top <= all.top
-                && frame.right >= all.right
-                && frame.bottom >= all.bottom
+            let captioned =
+                GetWindowLongPtrW(front, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
+            let frame = ScreenRect::from(frame);
+            frame.covers(monitor.rcMonitor.into())
+                || (!captioned && frame.covers(monitor.rcWork.into()))
         }
     }
 
