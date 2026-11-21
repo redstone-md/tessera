@@ -24,7 +24,7 @@ use crate::menu::{MenuEntry, Menus};
 use crate::module::WidgetRegistry;
 use crate::motion::{Interaction, Spring};
 use crate::platform::{
-    DisplayKey, NativeSurface, ScreenEdge, ScreenRect, desktop_pixels, pointer_at,
+    DisplayKey, NativeSurface, ScreenEdge, ScreenRect, desktop_look, desktop_pixels, pointer_at,
 };
 use crate::popup::{PopupAnchor, Popups};
 use crate::shell::Shell;
@@ -83,9 +83,14 @@ struct Arena(Vec<WeakEntity<Panel>>);
 
 impl Global for Arena {}
 
-/// How often a bar that lets the desktop through looks at what is under
-/// it: a wallpaper changes seldom.
-const GROUND_CHECK: Duration = Duration::from_secs(5);
+/// How often a bar that lets the desktop through asks whether the
+/// wallpaper changed, which is cheap.
+const GROUND_CHECK: Duration = Duration::from_secs(1);
+
+/// How long a bar goes without reading the desktop under it while the
+/// wallpaper is not seen to change: reading is not cheap, and a wallpaper
+/// that moves is not seen to change.
+const GROUND_KEPT: Duration = Duration::from_secs(60);
 
 /// A widget in a slot, and the popup a click on it opens.
 struct Placed {
@@ -267,7 +272,9 @@ impl Panel {
 
     /// Starts looking at the desktop under the surface, where the bars
     /// are flat and kept readable. The desktop is read off the thread of
-    /// the interface, again every [`GROUND_CHECK`].
+    /// the interface: when the wallpaper is seen to change, once more a
+    /// [`GROUND_CHECK`] later, since a wallpaper fades in, and every
+    /// [`GROUND_KEPT`] otherwise.
     fn watch_ground(&mut self, theme: &Theme, window: &Window, cx: &mut Context<Self>) {
         if self.watching || !theme.grounds_bars() {
             return;
@@ -277,18 +284,29 @@ impl Panel {
         };
         self.watching = true;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut seen = None;
+            let mut again = false;
+            let mut read_at: Option<Instant> = None;
+            let mut ground = None;
             loop {
                 let wanted = cx.update(|cx| cx.global::<Theme>().grounds_bars());
-                let ground = match wanted {
-                    Ok(true) => {
+                if matches!(wanted, Ok(true)) {
+                    let look = cx.background_executor().spawn(async { desktop_look() });
+                    let look = Some(look.await);
+                    let changed = look != seen;
+                    let kept = read_at.is_some_and(|at| at.elapsed() < GROUND_KEPT);
+                    if changed || again || !kept {
+                        (seen, again, read_at) = (look, changed, Some(Instant::now()));
                         let read = async move {
                             let (width, pixels) = desktop_pixels(frame)?;
                             Some(Ground::read(width, &pixels))
                         };
-                        cx.background_executor().spawn(read).await
+                        ground = cx.background_executor().spawn(read).await;
                     }
-                    _ => None,
-                };
+                } else {
+                    (seen, read_at, ground) = (None, None, None);
+                }
+                let ground = ground.clone();
                 let kept = this.update(cx, |this, cx| {
                     if this.ground != ground {
                         this.ground = ground;

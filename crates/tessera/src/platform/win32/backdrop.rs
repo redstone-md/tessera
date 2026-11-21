@@ -21,10 +21,12 @@
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::fs::File;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use anyhow::{Context as _, Result, bail};
 use windows::Win32::Foundation::{
@@ -42,10 +44,11 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{CreateFileMappingW, PAGE_READWRITE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GWLP_USERDATA,
-    GetWindowLongPtrW, GetWindowRect, LWA_ALPHA, RegisterClassW, SMTO_NORMAL, SW_SHOWNA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SendMessageTimeoutW, SetLayeredWindowAttributes,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW,
-    WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    GetWindowLongPtrW, GetWindowRect, LWA_ALPHA, RegisterClassW, SMTO_NORMAL, SPI_GETDESKWALLPAPER,
+    SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SendMessageTimeoutW, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    SystemParametersInfoW, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_CHILD,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE,
 };
 use windows::core::{BOOL, w};
 
@@ -80,6 +83,35 @@ pub fn display_frames() -> Vec<ScreenRect> {
     frames
 }
 
+/// How many times a wallpaper of Tessera began to come, came to be shown
+/// or went.
+static BACKDROPS_CHANGED: AtomicU64 = AtomicU64::new(0);
+
+/// A number that is another one when the wallpaper has changed: that of
+/// Windows, by the name and the time of its file, or one of Tessera. A
+/// wallpaper that moves is not seen to change.
+pub fn desktop_look() -> u64 {
+    let mut name = [0_u16; 520];
+    // SAFETY: the buffer is of the length given.
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            name.len() as u32,
+            Some(name.as_mut_ptr().cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    let length = name.iter().position(|&unit| unit == 0).unwrap_or(0);
+    let name = String::from_utf16_lossy(&name[..length]);
+    let changed = std::fs::metadata(&name)
+        .and_then(|file| file.modified())
+        .ok();
+    let mut look = DefaultHasher::new();
+    (read.is_ok(), name, changed).hash(&mut look);
+    BACKDROPS_CHANGED.load(Ordering::Relaxed).hash(&mut look);
+    look.finish()
+}
+
 /// Has a window drawn with all that the compositor shows of it.
 const WHOLE_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
 
@@ -91,7 +123,13 @@ const WHOLE_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
 ///
 /// The desktop window draws itself into a bitmap of the size of `frame`
 /// for this, which takes a moment: not for the thread of the interface.
+/// While it does, Windows charges the process with memory for the whole
+/// desktop window, tens of megabytes on several displays, though little
+/// of it is touched. The desktop is therefore read by one caller at a
+/// time, and asked for seldom: see [`desktop_look`].
 pub fn desktop_pixels(frame: ScreenRect) -> Option<(usize, Vec<u8>)> {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
     if width <= 0 || height <= 0 {
         return None;
@@ -473,6 +511,8 @@ impl DesktopBackdrop {
             });
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, Box::into_raw(held) as isize);
         }
+        // The picture begins to come: the desktop is about to change.
+        BACKDROPS_CHANGED.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -487,6 +527,9 @@ impl DesktopBackdrop {
         }
         let to = to.clamp(0., 1.);
         let from = from.clamp(0., to);
+        if to >= 1. {
+            BACKDROPS_CHANGED.fetch_add(1, Ordering::Relaxed);
+        }
         let byte = |share: f32| (share * 255.).round().clamp(0., 255.) as u8;
         // SAFETY: `held` is alive as in `set`; the drawing context of the
         // window is released after use.
@@ -545,6 +588,7 @@ impl Drop for DesktopBackdrop {
         unsafe {
             let _ = DestroyWindow(self.hwnd);
         }
+        BACKDROPS_CHANGED.fetch_add(1, Ordering::Relaxed);
     }
 }
 

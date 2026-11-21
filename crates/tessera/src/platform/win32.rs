@@ -36,7 +36,9 @@ mod windows_key;
 pub use accent::{accent_color, light_mode};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::{AppSound, AudioDevice, AudioOutput};
-pub use backdrop::{BackdropPicture, DesktopBackdrop, desktop_pixels, display_frames};
+pub use backdrop::{
+    BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,
+};
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use brightness::ScreenBrightness;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
