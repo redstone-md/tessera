@@ -24,6 +24,7 @@ mod surface;
 mod theme;
 mod tiling;
 mod ui;
+mod wallpaper;
 mod workspaces;
 
 use std::time::Duration;

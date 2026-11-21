@@ -14,6 +14,7 @@ use serde::Deserialize;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::platform::ScreenEdge;
 use crate::tiling::TilingConfig;
+use crate::wallpaper::WallpaperConfig;
 use crate::workspaces::WorkspacesConfig;
 
 pub mod edit;
@@ -205,6 +206,9 @@ pub struct Config {
     /// hold.
     #[serde(default)]
     pub workspaces: WorkspacesConfig,
+    /// The pictures Tessera draws behind the icons of the desktop.
+    #[serde(default)]
+    pub wallpaper: WallpaperConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

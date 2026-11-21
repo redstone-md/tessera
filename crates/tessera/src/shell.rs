@@ -22,6 +22,7 @@ use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::theme::Theme;
 use crate::tiling::Tiler;
+use crate::wallpaper::Wallpaper;
 use crate::workspaces::Workspaces;
 
 /// How often the configuration files are checked for changes. A change is
@@ -59,6 +60,7 @@ impl Shell {
         if surfaces.is_empty() {
             bail!("the layout opened no surface");
         }
+        Wallpaper::start(&config.wallpaper, cx);
         cx.set_global(Self { config, surfaces });
         Self::watch(cx);
         Self::answer_windows_key(cx);
@@ -174,6 +176,7 @@ impl Shell {
         cx.set_global(Theme::load(config.theme.as_deref()));
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
+        Wallpaper::configure(&config.wallpaper, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

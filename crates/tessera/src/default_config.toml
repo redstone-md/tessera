@@ -199,6 +199,17 @@ content = ["volume-slider"]
 # own = 3
 # except = ["taskmgr.exe"]
 
+# [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
+# every display, each scaled to cover it. images lists picture files (.jpg,
+# .png) and directories, whose pictures are taken in the order of their
+# names; with several pictures, each stays interval seconds (600, at least
+# 5) and fades into the next. The wallpaper of Windows is not changed and
+# shows again when Tessera exits. Needs Windows 11 24H2 or later.
+#
+# [wallpaper]
+# images = ["C:/Users/me/Pictures/Wallpapers"]
+# interval = 600
+
 # [icons] replaces application icons. Each key is the file name of an
 # executable, each value an image file (PNG, JPEG or ICO); a relative path is
 # looked up in %APPDATA%\tessera.
