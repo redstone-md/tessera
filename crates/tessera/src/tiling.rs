@@ -191,17 +191,20 @@ impl TilingConfig {
     /// program that Windows does not let be read is one whose windows it
     /// does not let be moved either.
     fn covers(&self, executable: Option<&Path>) -> bool {
-        let Some(name) = executable.and_then(Path::file_name) else {
-            return false;
-        };
-        let name = name.to_string_lossy();
-        let listed = |names: &[String]| {
-            names
-                .iter()
-                .any(|listed| listed.eq_ignore_ascii_case(&name))
-        };
-        (self.only.is_empty() || listed(&self.only)) && !listed(&self.except)
+        listed(&self.only, &self.except, executable)
     }
+}
+
+/// Whether the program at `executable` is one of `only`, or `only` is
+/// empty, and it is none of `except`; both name programs by the file name
+/// of the executable. A program that Windows does not let be read is not.
+pub fn listed(only: &[String], except: &[String], executable: Option<&Path>) -> bool {
+    let Some(name) = executable.and_then(Path::file_name) else {
+        return false;
+    };
+    let name = name.to_string_lossy();
+    let among = |names: &[String]| names.iter().any(|one| one.eq_ignore_ascii_case(&name));
+    (only.is_empty() || among(only)) && !among(except)
 }
 
 /// Whether windows are tiled right now, and how. It starts as the

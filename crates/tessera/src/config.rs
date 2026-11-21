@@ -14,6 +14,7 @@ use serde::Deserialize;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::platform::ScreenEdge;
 use crate::tiling::TilingConfig;
+use crate::workspaces::WorkspacesConfig;
 
 pub mod edit;
 
@@ -200,6 +201,10 @@ pub struct Config {
     /// Whether and how windows are arranged side by side.
     #[serde(default)]
     pub tiling: TilingConfig,
+    /// Whether the workspaces are Tessera's own, and whose windows they
+    /// hold.
+    #[serde(default)]
+    pub workspaces: WorkspacesConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

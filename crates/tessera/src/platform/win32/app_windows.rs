@@ -27,10 +27,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindow,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, PostMessageW, SW_MINIMIZE,
-    SW_RESTORE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
-    SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW,
-    WS_THICKFRAME,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD,
+    WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -43,6 +43,58 @@ pub struct AppWindowId(isize);
 impl AppWindowId {
     pub(super) fn hwnd(self) -> HWND {
         HWND(self.0 as *mut c_void)
+    }
+
+    /// The window a number names that [`Self::raw`] gave.
+    pub fn from_raw(raw: isize) -> Self {
+        Self(raw)
+    }
+
+    /// The number Windows knows the window by, which may name another
+    /// window once this one is gone.
+    pub fn raw(self) -> isize {
+        self.0
+    }
+
+    /// Whether the window is still there.
+    pub fn exists(self) -> bool {
+        // SAFETY: the call only reads whether the handle names a window.
+        unsafe { IsWindow(Some(self.hwnd())).as_bool() }
+    }
+
+    /// Whether the window is shown; a minimized window is.
+    pub fn is_shown(self) -> bool {
+        // SAFETY: the call only reads window state and tolerates a handle
+        // whose window has since been destroyed.
+        unsafe { IsWindowVisible(self.hwnd()).as_bool() }
+    }
+
+    /// The process the window belongs to; 0 if the window is gone.
+    pub fn process(self) -> u32 {
+        let mut process = 0u32;
+        // SAFETY: `process` outlives the call, which tolerates a handle
+        // whose window has since been destroyed.
+        unsafe { GetWindowThreadProcessId(self.hwnd(), Some(&raw mut process)) };
+        process
+    }
+
+    /// Asks the window to stop being shown, without closing it. Windows
+    /// does not hide a window of an elevated process.
+    pub fn hide(self) {
+        // SAFETY: the call tolerates a handle whose window has since been
+        // destroyed and fails without side effects.
+        unsafe {
+            let _ = ShowWindowAsync(self.hwnd(), SW_HIDE);
+        }
+    }
+
+    /// Asks a window that was hidden to be shown again as it was, without
+    /// bringing it forward.
+    pub fn unhide(self) {
+        // SAFETY: as in `hide`.
+        unsafe {
+            let _ = ShowWindowAsync(self.hwnd(), SW_SHOWNA);
+        }
     }
 
     /// The window that currently receives keyboard input, if any.

@@ -185,6 +185,19 @@ content = ["volume-slider"]
 # gap = 8
 # except = ["taskmgr.exe"]
 
+# [workspaces] makes the "workspaces" widget show workspaces of Tessera's
+# own instead of the virtual desktops of Windows: own is how many, 2 to 9.
+# Going to a workspace hides the windows of the one left; a click with the
+# right button on a button of the widget sends the window in front there.
+# only and except list programs by the file name of their executable: the
+# only ones whose windows belong to a workspace, and the ones whose windows
+# are seen on every workspace. Every window is shown again when Tessera
+# quits, and at its next start if it was terminated.
+#
+# [workspaces]
+# own = 3
+# except = ["taskmgr.exe"]
+
 # [icons] replaces application icons. Each key is the file name of an
 # executable, each value an image file (PNG, JPEG or ICO); a relative path is
 # looked up in %APPDATA%\tessera.

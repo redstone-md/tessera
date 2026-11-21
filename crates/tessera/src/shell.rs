@@ -22,6 +22,7 @@ use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::theme::Theme;
 use crate::tiling::Tiler;
+use crate::workspaces::Workspaces;
 
 /// How often the configuration files are checked for changes. A change is
 /// applied once the files have stayed the same for one interval, so that a
@@ -48,6 +49,7 @@ impl Shell {
     pub fn start(config: Config, cx: &mut App) -> anyhow::Result<()> {
         cx.set_global(Theme::load(config.theme.as_deref()));
         Tiler::start(&config.tiling, cx);
+        Workspaces::start(&config.workspaces, cx);
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
         cx.set_global(Previews::default());
@@ -171,6 +173,7 @@ impl Shell {
         };
         cx.set_global(Theme::load(config.theme.as_deref()));
         Tiler::configure(&config.tiling, cx);
+        Workspaces::configure(&config.workspaces, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

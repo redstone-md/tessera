@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The `workspaces` widget: a button for each virtual desktop of Windows,
-//! the one shown standing out; a click goes to that desktop.
+//! The `workspaces` widget: a button for each workspace, the one shown
+//! standing out; a click goes to that workspace, and a click with the
+//! other button sends the window in front there.
 
 use std::time::Duration;
 
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
+    MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    div,
 };
 
 use crate::module::{Module, WidgetRegistry};
@@ -16,8 +18,10 @@ use crate::motion::{Interaction, Spring, mix};
 use crate::platform::VirtualDesktops;
 use crate::theme::Theme;
 use crate::ui::state_layer;
+use crate::workspaces::Workspaces as Kept;
 
-/// How often the desktops are looked at; Windows announces no change.
+/// How often the workspaces are looked at; Windows announces no change
+/// of its desktops.
 const CHECK_INTERVAL: Duration = Duration::from_millis(300);
 
 /// The height of a button, as a share of the height of a pill.
@@ -65,7 +69,7 @@ impl Workspaces {
         })
         .detach();
         let mut this = Self {
-            desktops: VirtualDesktops::now(),
+            desktops: Kept::now(cx),
             buttons: Vec::new(),
         };
         this.follow(cx);
@@ -79,7 +83,7 @@ impl Workspaces {
     }
 
     fn look(&mut self, cx: &mut Context<Self>) {
-        let desktops = VirtualDesktops::now();
+        let desktops = Kept::now(cx);
         if desktops != self.desktops {
             self.desktops = desktops;
             self.follow(cx);
@@ -139,11 +143,14 @@ impl Workspaces {
             .text_size(theme.typography.label_size)
             .text_color(mix(colors.on_surface_variant, colors.on_surface, lit))
             .font_weight(FontWeight::MEDIUM)
-            .on_click(cx.listener(move |this, _, _, _| {
-                if !this.desktops.show(index) {
-                    report!("Windows did not take the keys that go to another desktop");
-                }
+            .on_click(cx.listener(move |this, _, _, cx| {
+                Kept::show(index, cx);
+                this.look(cx);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |_, _, _, cx| Kept::send_front(index, cx)),
+            )
             .child((index + 1).to_string());
         let face = Interaction::track(face, cx, move |this: &mut Self| {
             Some(&mut this.buttons.get_mut(index)?.interaction)
