@@ -15,12 +15,18 @@ use gpui::{
 use crate::icons::{AppIcons, Icon};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{AppWindow, AppWindowId, DisplayKey, Shortcut};
+use crate::platform::{AppWindow, AppWindowId, DisplayKey, Shortcut, WindowEvents};
 use crate::theme::Theme;
 use crate::ui::state_layer;
 
-/// How often the window list is re-read.
-const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+/// How often it is checked whether something happened to a window.
+const CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How many checks pass before the window list is read again although
+/// nothing was reported: every half second when Windows reports nothing at
+/// all, and every five seconds otherwise, for what goes unreported.
+const CHECKS_UNWATCHED: u32 = 5;
+const CHECKS_WATCHED: u32 = 50;
 
 /// How much the icon under the pointer grows, as a share of its size.
 const HOVER_GROWTH: f32 = 0.12;
@@ -154,9 +160,26 @@ struct WindowList {
 
 impl WindowList {
     fn new(display: Option<DisplayKey>, pins: Vec<Pin>, cx: &mut Context<Self>) -> Self {
+        let patience = if WindowEvents::watch() {
+            CHECKS_WATCHED
+        } else {
+            eprintln!("tessera: Windows does not report window changes, so they are polled");
+            CHECKS_UNWATCHED
+        };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut seen = WindowEvents::generation();
+            let mut quiet = 0;
             loop {
-                cx.background_executor().timer(REFRESH_INTERVAL).await;
+                cx.background_executor().timer(CHECK_INTERVAL).await;
+                let now = WindowEvents::generation();
+                quiet += 1;
+                if now == seen && quiet < patience {
+                    if this.upgrade().is_none() {
+                        break;
+                    }
+                    continue;
+                }
+                (seen, quiet) = (now, 0);
                 if this.update(cx, Self::refresh).is_err() {
                     break;
                 }

@@ -8,5 +8,5 @@ mod win32;
 pub use win32::{
     AppWindow, AppWindowId, AudioOutput, Battery, DisplayKey, EdgeReservation, IconPixels,
     MemoryLoad, NativeSurface, Notification, Notifications, ProcessorLoad, ScreenEdge, ScreenRect,
-    Shortcut, Taskbar, Tray, TrayButton, TrayIcon,
+    Shortcut, Taskbar, Tray, TrayButton, TrayIcon, WindowEvents,
 };

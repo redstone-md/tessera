@@ -5,6 +5,8 @@
 
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::sync::Once;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
@@ -12,6 +14,12 @@ use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
+};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE,
+    EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, OBJID_WINDOW,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
@@ -58,6 +66,68 @@ impl AppWindowId {
             }
             let _ = SetForegroundWindow(hwnd);
         }
+    }
+}
+
+/// Counts what happened to windows since `WindowEvents::watch`.
+static HAPPENED: AtomicU64 = AtomicU64::new(0);
+
+/// Tells when the list of application windows may have changed, so that it
+/// is read again only then.
+pub struct WindowEvents;
+
+impl WindowEvents {
+    /// The ranges of events that can change the list or the foreground
+    /// window: from a new foreground window to the end of a move, a resize
+    /// or a minimized state; windows destroyed, shown and hidden; renamed;
+    /// cloaked and uncloaked.
+    const WATCHED: [(u32, u32); 4] = [
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND),
+        (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE),
+        (EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE),
+        (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+    ];
+
+    /// Starts counting, once. Windows delivers the events through the
+    /// message queue of the calling thread, which therefore has to be one
+    /// that handles messages, and delivers them for as long as the process
+    /// runs. Whether Windows accepted every request is returned.
+    pub fn watch() -> bool {
+        static STARTED: Once = Once::new();
+        static WATCHING: AtomicU64 = AtomicU64::new(0);
+        STARTED.call_once(|| {
+            let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
+            let accepted = Self::WATCHED.iter().all(|&(first, last)| {
+                // SAFETY: `happened` is a function of this program, which
+                // is never unloaded; no module is injected anywhere.
+                let hook =
+                    unsafe { SetWinEventHook(first, last, None, Some(happened), 0, 0, flags) };
+                !hook.is_invalid()
+            });
+            WATCHING.store(accepted.into(), Ordering::Relaxed);
+        });
+        WATCHING.load(Ordering::Relaxed) != 0
+    }
+
+    /// A number that changes whenever something happened to a window.
+    pub fn generation() -> u64 {
+        HAPPENED.load(Ordering::Relaxed)
+    }
+}
+
+unsafe extern "system" fn happened(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    object: i32,
+    child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    // Events of the parts of a window, such as its scroll bars, and of the
+    // pointer do not change the list.
+    if object == OBJID_WINDOW.0 && child == 0 {
+        HAPPENED.fetch_add(1, Ordering::Relaxed);
     }
 }
 

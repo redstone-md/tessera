@@ -27,7 +27,7 @@ While Tessera runs:
 - Both surfaces stay above other windows and reserve their screen edge, so maximized windows stop at them. Windows releases that space when Tessera exits.
 - The Windows taskbar is hidden. To stop it reserving space, Tessera switches it to auto-hide, which is a persistent Explorer setting. A second `tessera` process waits for the shell to exit — normally, by crashing or by being terminated — and then restores the previous auto-hide setting and shows the taskbar again. If that watchdog process is itself terminated first, the taskbar stays hidden until you turn off "Automatically hide the taskbar" in Windows Settings or restart Explorer.
 
-Tessera registers no hooks. Anything the taskbar provided that is not listed above, such as jump lists or window previews, has no replacement yet. The Windows key still opens the Windows Start menu, not the launcher.
+Tessera injects nothing into other processes. To learn when windows open, close or come to the foreground it asks Windows for out-of-context window events (`SetWinEventHook`), which arrive in its own process; the list is also read again every five seconds for anything that goes unreported. Anything the taskbar provided that is not listed above, such as jump lists or window previews, has no replacement yet. The Windows key still opens the Windows Start menu, not the launcher.
 
 ## Configuration
 

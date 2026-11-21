@@ -14,7 +14,7 @@ mod system;
 mod taskbar;
 mod tray;
 
-pub use app_windows::{AppWindow, AppWindowId};
+pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
 pub use notifications::{Notification, Notifications};
