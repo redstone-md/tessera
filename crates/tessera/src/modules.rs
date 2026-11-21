@@ -18,6 +18,7 @@ mod sound;
 mod start;
 mod system;
 mod tray;
+mod wifi;
 mod windows;
 
 use crate::config::Config;
@@ -44,6 +45,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(sound::SoundModule),
         Box::new(system::SystemModule),
         Box::new(tray::TrayModule),
+        Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
