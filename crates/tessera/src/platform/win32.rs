@@ -24,6 +24,7 @@ mod system;
 mod taskbar;
 mod thumbnail;
 mod tray;
+mod veil;
 mod wifi;
 mod windows_key;
 
@@ -46,6 +47,7 @@ pub use system::{Battery, MemoryLoad, ProcessorLoad};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};
+pub use veil::Veil;
 pub use wifi::{Wifi, WifiNetwork, WifiReach};
 pub use windows_key::WindowsKey;
 
@@ -64,11 +66,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, LWA_ALPHA,
-    PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
-    WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+    GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
+    IsWindowVisible, LWA_ALPHA, PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SetWindowPos, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
 
 /// Classes of windows that cover a display without being an application
@@ -260,13 +262,19 @@ impl NativeSurface {
 
     /// Whether the window in front fills the whole display of this one, as
     /// a game or a video played full screen does. The desktop and the
-    /// screens of Windows that show all windows do not count.
+    /// screens of Windows that show all windows do not count, nor does a
+    /// window of Tessera.
     pub fn display_is_filled(self) -> bool {
         // SAFETY: the calls only read the state of windows; a window that
         // went away meanwhile makes them fail, which counts as not filled.
         unsafe {
             let front = GetForegroundWindow();
             if front.is_invalid() || front == self.hwnd || !IsWindowVisible(front).as_bool() {
+                return false;
+            }
+            let mut process = 0;
+            GetWindowThreadProcessId(front, Some(&raw mut process));
+            if process == std::process::id() {
                 return false;
             }
             let mut name = [0u16; 64];
