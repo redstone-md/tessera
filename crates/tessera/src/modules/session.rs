@@ -39,7 +39,11 @@ impl Render for QuitButton {
         let state = self.interaction.state(window);
         let button = pill(&theme)
             .id("quit")
-            .bg(state_layer(&theme, theme.colors.surface_container, state))
+            .bg(state_layer(
+                &theme,
+                theme.on_bar(theme.colors.surface_container),
+                state,
+            ))
             .text_color(theme.colors.on_surface_variant)
             .on_click(|_, _, cx| cx.quit())
             .child("Quit Tessera");

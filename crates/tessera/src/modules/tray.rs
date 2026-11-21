@@ -206,7 +206,11 @@ impl TrayStrip {
             .items_center()
             .justify_center()
             .rounded(theme.shape.full)
-            .bg(state_layer(&theme, theme.colors.surface_container, state))
+            .bg(state_layer(
+                &theme,
+                theme.on_bar(theme.colors.surface_container),
+                state,
+            ))
             .on_click(move |_, _, cx| {
                 Tips::close(cx);
                 Tray::press(id, TrayButton::Left);
@@ -269,7 +273,7 @@ impl TrayStrip {
         let colors = theme.colors;
         let side = theme.bar.pill_height * ICON_SHARE + theme.spacing.small;
         let ground = mix(
-            colors.surface_container,
+            theme.on_bar(colors.surface_container),
             colors.secondary_container,
             unrolled,
         );
@@ -393,7 +397,7 @@ impl Render for TrayStrip {
             .flex()
             .items_center()
             .rounded(theme.shape.full)
-            .bg(theme.colors.surface_container)
+            .bg(theme.on_bar(theme.colors.surface_container))
             .children(elements)
     }
 }

@@ -114,6 +114,9 @@ pub struct Motion {
 #[derive(Clone, Copy, Debug)]
 pub struct BarMetrics {
     pub pill_height: Pixels,
+    /// Whether the widgets of a bar stand on it without a field of their
+    /// own behind them.
+    pub flat: bool,
 }
 
 /// Dock measurements.
@@ -233,6 +236,7 @@ impl Default for Theme {
             },
             bar: BarMetrics {
                 pill_height: px(36.),
+                flat: false,
             },
             dock: DockMetrics {
                 container_height: px(64.),
@@ -269,6 +273,25 @@ impl Default for Theme {
 impl Global for Theme {}
 
 impl Theme {
+    /// `fill` as the field behind a widget of a bar has it: itself, or
+    /// nothing where the bars are flat.
+    pub fn on_bar(&self, fill: Hsla) -> Hsla {
+        if self.bar.flat {
+            // The content color at no strength, so that what is mixed
+            // into it under the pointer tints and does not darken.
+            self.colors.on_surface.opacity(0.)
+        } else {
+            fill
+        }
+    }
+
+    /// Whether `text` is a theme file. What of it is out of range is not
+    /// looked at: that is reported when the theme is applied.
+    pub fn check(text: &str) -> anyhow::Result<()> {
+        toml::from_str::<ThemeFile>(text)?;
+        Ok(())
+    }
+
     /// The built-in theme with the user's theme file `name` applied over it.
     /// A missing or unusable file is reported and leaves the built-in theme.
     pub fn load(name: Option<&str>) -> Self {
@@ -394,7 +417,7 @@ impl ThemeFile {
         self.typography
             .apply_to(&mut theme.typography, &mut problems);
         self.motion.apply_to(&mut theme.motion, &mut problems);
-        self.bar.apply_to(&mut theme.bar, "bar", &mut problems);
+        self.bar.apply_to(&mut theme.bar, &mut problems);
         self.dock.apply_to(&mut theme.dock, "dock", &mut problems);
         self.calendar
             .apply_to(&mut theme.calendar, "calendar", &mut problems);
@@ -460,10 +483,27 @@ length_overrides!(
     /// Replacement distances.
     SpacingOverrides for Spacing { tiny, small, medium }
 );
-length_overrides!(
-    /// Replacement bar measurements.
-    BarOverrides for BarMetrics { pill_height }
-);
+/// Replacement bar measurements.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BarOverrides {
+    pill_height: Option<f32>,
+    flat: Option<bool>,
+}
+
+impl BarOverrides {
+    fn apply_to(&self, bar: &mut BarMetrics, problems: &mut Vec<String>) {
+        let height = self.pill_height;
+        let height = height
+            .and_then(|height| within(height, (0., LENGTH_LIMIT), "bar.pill_height", problems));
+        if let Some(height) = height {
+            bar.pill_height = px(height);
+        }
+        if let Some(flat) = self.flat {
+            bar.flat = flat;
+        }
+    }
+}
 length_overrides!(
     /// Replacement dock measurements.
     DockOverrides for DockMetrics {

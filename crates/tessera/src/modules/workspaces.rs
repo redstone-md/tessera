@@ -126,7 +126,7 @@ impl Workspaces {
         let width = height * (1. + SHOWN_STRETCH * shown.max(0.));
         let lit = shown.clamp(0., 1.);
         let ground = mix(
-            colors.surface_container_highest,
+            theme.on_bar(colors.surface_container_highest),
             colors.secondary_container,
             lit,
         );
@@ -191,7 +191,7 @@ impl Render for Workspaces {
             .flex()
             .items_center()
             .rounded(theme.shape.full)
-            .bg(theme.colors.surface_container)
+            .bg(theme.on_bar(theme.colors.surface_container))
             .children(buttons)
     }
 }

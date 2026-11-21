@@ -41,7 +41,7 @@ pub fn pill(theme: &Theme) -> Div {
         .items_center()
         .gap(theme.spacing.small)
         .rounded(theme.shape.full)
-        .bg(theme.colors.surface_container)
+        .bg(theme.on_bar(theme.colors.surface_container))
         .text_size(theme.typography.label_size)
         .text_color(theme.colors.on_surface)
 }

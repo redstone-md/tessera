@@ -100,7 +100,7 @@ impl Render for Keyboard {
         let changed = self.changed.value(window).clamp(0., 1.);
         let state = self.interaction.state(window);
         let ground = mix(
-            colors.surface_container,
+            theme.on_bar(colors.surface_container),
             colors.secondary_container,
             changed,
         );

@@ -57,7 +57,11 @@ impl Render for TilingButton {
         let tiled = self.tiled.value(window).clamp(0., 1.);
         let state = self.interaction.state(window);
         let colors = theme.colors;
-        let ground = mix(colors.surface_container, colors.secondary_container, tiled);
+        let ground = mix(
+            theme.on_bar(colors.surface_container),
+            colors.secondary_container,
+            tiled,
+        );
         let (glyph, label) = match mode.enabled {
             true => (ICON_TILES, mode.layout.name()),
             false => (ICON_FLOATING, "Floating"),

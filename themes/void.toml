@@ -1,0 +1,50 @@
+# A Tessera theme after the desktops of tiling window managers: the
+# widgets of the bars stand on the wallpaper without fields behind them,
+# and everything is small and quiet. It goes with the arrangement "Void"
+# of the settings. Copy it to %APPDATA%\tessera\themes\ and choose it in
+# the settings, install it from the marketplace, or write `theme = "void"`
+# at the top of config.toml.
+
+seed = "#8fb996"
+scheme = "dark"
+
+[shape]
+small = 6
+medium = 12
+large = 18
+
+[spacing]
+tiny = 3
+small = 7
+medium = 12
+
+[typography]
+label_size = 13
+icon_size = 15
+
+[motion.spatial]
+stiffness = 420
+damping_ratio = 0.8
+
+[motion.spatial_fast]
+stiffness = 900
+damping_ratio = 0.85
+
+# `flat` leaves out the fields behind the widgets of a bar. What marks a
+# state stays: the shown workspace, a pressed button.
+[bar]
+pill_height = 28
+flat = true
+
+[dock]
+container_height = 56
+item_size = 44
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 14
+
+[meter]
+width = 36
+stroke = 2
+amplitude = 2
+wavelength = 10
