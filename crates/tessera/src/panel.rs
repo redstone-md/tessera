@@ -49,12 +49,12 @@ const AWAY: Pixels = px(40.);
 /// How fast the outlines of the widgets breathe, in radians a second, how
 /// far apart neighbors are in that, and how strong the outline is at its
 /// weakest and beyond that.
-const BREATH: f32 = 3.2;
+pub const BREATH: f32 = 3.2;
 const BREATH_STEP: f32 = 0.8;
-const OUTLINE_REST: f32 = 0.35;
-const OUTLINE_SWING: f32 = 0.3;
+pub const OUTLINE_REST: f32 = 0.35;
+pub const OUTLINE_SWING: f32 = 0.3;
 /// How much of the outline's color fills a widget.
-const HANDLE_FILL: f32 = 0.25;
+pub const HANDLE_FILL: f32 = 0.25;
 /// How much of a widget is left to see while it is dragged.
 const LIFTED: f32 = 0.35;
 
@@ -789,7 +789,7 @@ impl Panel {
 
 /// Changes the configuration file with `change` and takes the file over at
 /// once. A change that cannot be made or written is reported.
-fn rewrite(cx: &mut App, change: impl FnOnce(&mut ConfigFile) -> bool) {
+pub fn rewrite(cx: &mut App, change: impl FnOnce(&mut ConfigFile) -> bool) {
     let written = ConfigFile::open().and_then(|mut file| {
         if !change(&mut file) {
             return Err("the configuration has changed in the meantime".to_owned());

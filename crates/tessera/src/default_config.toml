@@ -267,6 +267,8 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # bottom-right or center; x and y are the distances of the panel from the two
 # sides of that corner (24 each; in the center they shift it right and down);
 # displays is "all" or "primary"; content lists widgets as a popup does.
+# While the surfaces are arranged a card is dragged with the pointer, which
+# writes corner, x and y here.
 #
 # [[card]]
 # corner = "top-right"

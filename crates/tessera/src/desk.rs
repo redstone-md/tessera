@@ -3,18 +3,20 @@
 
 //! Cards: panels of widgets that lie on the desktop, below every window.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, App, AppContext, AsyncApp, Bounds, Context, IntoElement, ParentElement, Pixels,
-    Render, Window, WindowHandle, px, size,
+    AnyView, App, AppContext, AsyncApp, Bounds, Context, CursorStyle, Div, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render, Stateful, Styled,
+    Window, WindowHandle, div, px, size,
 };
 use serde::Deserialize;
 
 use crate::config::{Displays, WidgetSpec};
 use crate::module::WidgetRegistry;
 use crate::motion::Spring;
-use crate::platform::{NativeSurface, ScreenEdge, ScreenRect};
+use crate::panel::{Arranging, BREATH, HANDLE_FILL, OUTLINE_REST, OUTLINE_SWING, rewrite};
+use crate::platform::{NativeSurface, ScreenEdge, ScreenRect, pointer_at, pointer_held};
 use crate::popup::{MARGIN, floating_panel, floating_window};
 use crate::theme::Theme;
 use crate::ui::release_hover;
@@ -22,6 +24,11 @@ use crate::ui::release_hover;
 /// How often a card looks whether the room windows may use has changed, as
 /// it does when a surface gets another thickness.
 const PLACE_CHECK: Duration = Duration::from_secs(1);
+
+/// How often a card that is held looks where the pointer is.
+const FOLLOW: Duration = Duration::from_millis(6);
+/// How much stronger the handle of a card is while it is held.
+const HELD: f32 = 2.;
 
 /// The part of the display a card is put at.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -119,24 +126,105 @@ impl CardConfig {
             bottom: top + height,
         }
     }
+
+    /// The corner and the two distances with which [`Self::frame`] gives
+    /// `frame` in `room`: the corner is the one nearest to the middle of
+    /// the frame, the distances whole logical pixels, none below zero.
+    fn placed(frame: ScreenRect, room: ScreenRect, scale: f32) -> (Corner, f32, f32) {
+        let logical = |length: i32| (length as f32 / scale + MARGIN).round().max(0.);
+        let left = frame.left + frame.right < room.left + room.right;
+        let top = frame.top + frame.bottom < room.top + room.bottom;
+        let corner = match (left, top) {
+            (true, true) => Corner::TopLeft,
+            (false, true) => Corner::TopRight,
+            (true, false) => Corner::BottomLeft,
+            (false, false) => Corner::BottomRight,
+        };
+        let x = if left {
+            frame.left - room.left
+        } else {
+            room.right - frame.right
+        };
+        let y = if top {
+            frame.top - room.top
+        } else {
+            room.bottom - frame.bottom
+        };
+        (corner, logical(x), logical(y))
+    }
+}
+
+/// Where a card was taken hold of.
+#[derive(Clone, Copy)]
+struct Grip {
+    pointer: (i32, i32),
+    frame: ScreenRect,
+    /// The room the card stays in while it is held.
+    room: ScreenRect,
+}
+
+impl Grip {
+    /// The frame of the card when the pointer is at `pointer`. It does not
+    /// leave the room; a card larger than the room keeps its left and top
+    /// sides in it.
+    fn follows(self, pointer: (i32, i32)) -> ScreenRect {
+        let along = |moved: i32, low: i32, high: i32, least: i32, most: i32| {
+            moved.min(most - high).max(least - low)
+        };
+        let Self { frame, room, .. } = self;
+        let x = along(
+            pointer.0 - self.pointer.0,
+            frame.left,
+            frame.right,
+            room.left,
+            room.right,
+        );
+        let y = along(
+            pointer.1 - self.pointer.1,
+            frame.top,
+            frame.bottom,
+            room.top,
+            room.bottom,
+        );
+        ScreenRect {
+            left: frame.left + x,
+            top: frame.top + y,
+            right: frame.right + x,
+            bottom: frame.bottom + y,
+        }
+    }
 }
 
 /// The cards that are open.
 #[derive(Default)]
 pub struct Cards {
-    open: Vec<WindowHandle<CardView>>,
+    /// Each open card with the place of its configuration among the cards.
+    open: Vec<(usize, WindowHandle<CardView>)>,
+    /// What the open cards were opened for.
+    shown: Vec<CardConfig>,
 }
 
 impl Cards {
     /// Closes the open cards and opens those of `configs` on the displays
     /// each one asks for. One that does not open is reported and left out.
+    ///
+    /// Cards that were only put elsewhere by hand keep their windows.
     pub fn show(&mut self, configs: &[CardConfig], cx: &mut App) {
-        for card in self.open.drain(..) {
+        if self.moved_by_hand(configs, cx) {
+            for (index, card) in &self.open {
+                let config = configs[*index].clone();
+                card.update(cx, |card, _, cx| card.put(config, cx)).ok();
+            }
+            self.shown = configs.to_vec();
+            return;
+        }
+        for (_, card) in self.open.drain(..) {
             card.update(cx, |_, window, _| window.remove_window()).ok();
         }
+        self.shown = configs.to_vec();
         let primary = cx.primary_display().map(|display| display.id());
         for display in cx.displays() {
-            for config in configs {
+            for (index, config) in configs.iter().enumerate() {
                 if config.displays == Displays::Primary && Some(display.id()) != primary {
                     continue;
                 }
@@ -168,14 +256,31 @@ impl Cards {
                         .iter()
                         .filter_map(|spec| WidgetRegistry::build(spec, key, cx))
                         .collect();
-                    cx.new(|cx| CardView::new(config.clone(), native, scale, content, cx))
+                    cx.new(|cx| CardView::new(index, config.clone(), native, scale, content, cx))
                 });
                 match opened {
-                    Ok(card) => self.open.push(card),
+                    Ok(card) => self.open.push((index, card)),
                     Err(error) => report!("a card did not open: {error:#}"),
                 }
             }
         }
+    }
+
+    /// Whether `configs` differ from what is shown only by where an open
+    /// card has been dragged to.
+    fn moved_by_hand(&self, configs: &[CardConfig], cx: &App) -> bool {
+        let dragged_to = |index: usize, config: &CardConfig| {
+            self.open.iter().any(|(at, card)| {
+                *at == index && card.read(cx).is_ok_and(|card| card.config == *config)
+            })
+        };
+        configs.len() == self.shown.len()
+            && configs != self.shown
+            && configs
+                .iter()
+                .zip(&self.shown)
+                .enumerate()
+                .all(|(index, (config, shown))| config == shown || dragged_to(index, config))
     }
 }
 
@@ -194,47 +299,164 @@ fn physical(bounds: Bounds<Pixels>, scale: f32) -> ScreenRect {
 
 /// The root view of a card: a themed panel around stacked widgets.
 pub struct CardView {
+    /// The place of the configuration among the cards.
+    index: usize,
+    config: CardConfig,
+    native: Option<NativeSurface>,
+    scale: f32,
     content: Vec<AnyView>,
     /// 0 while hidden, 1 when fully shown.
     visibility: Spring,
+    /// The room the window was last placed in.
+    room: Option<ScreenRect>,
+    /// Whether the card is being dragged.
+    held: bool,
+    /// How far the handle that arranging gives the card has come in.
+    chrome: Spring,
+    began: Instant,
 }
 
 impl CardView {
     fn new(
+        index: usize,
         config: CardConfig,
         native: Option<NativeSurface>,
         scale: f32,
         content: Vec<AnyView>,
         cx: &mut Context<Self>,
     ) -> Self {
-        if let Some(native) = native {
-            Self::keep_placed(config, native, scale, cx);
-        }
-        let mut visibility = Spring::new(cx.global::<Theme>().motion.spatial, 0.);
+        let motion = cx.global::<Theme>().motion;
+        let mut visibility = Spring::new(motion.spatial, 0.);
         visibility.animate_to(1.);
+        Self::keep_placed(cx);
         Self {
+            index,
+            config,
+            native,
+            scale,
             content,
             visibility,
+            room: None,
+            held: false,
+            chrome: Spring::new(motion.effects, 0.),
+            began: Instant::now(),
         }
     }
 
-    /// Puts the window where `config` says, now and whenever the room on
-    /// its display changes, until the view `cx` makes is gone.
-    fn keep_placed(config: CardConfig, native: NativeSurface, scale: f32, cx: &mut Context<Self>) {
+    /// Puts the window where the configuration says, now and whenever the
+    /// room on its display changes, until the view `cx` makes is gone.
+    fn keep_placed(cx: &mut Context<Self>) {
         cx.spawn(async move |view, cx: &mut AsyncApp| {
-            let mut placed = None;
-            while view.upgrade().is_some() {
-                let room = native.display().work_area();
-                if let Some(room) = room.filter(|_| room != placed) {
-                    placed = Some(room);
-                    if let Err(error) = native.place(config.frame(room, scale)) {
-                        report!("a card is not where it belongs: {error:#}");
-                    }
-                }
+            while view.update(cx, |card, _| card.settle()).is_ok() {
                 cx.background_executor().timer(PLACE_CHECK).await;
             }
         })
         .detach();
+    }
+
+    /// Places the window if the room on its display is not the one it was
+    /// last placed in. A card that is held stays with the pointer.
+    fn settle(&mut self) {
+        let Some(native) = self.native.filter(|_| !self.held) else {
+            return;
+        };
+        let room = native.display().work_area();
+        if let Some(room) = room.filter(|_| room != self.room) {
+            self.room = Some(room);
+            if let Err(error) = native.place(self.config.frame(room, self.scale)) {
+                report!("a card is not where it belongs: {error:#}");
+            }
+        }
+    }
+
+    /// Makes `config` the configuration of the card and places it anew.
+    fn put(&mut self, config: CardConfig, cx: &mut Context<Self>) {
+        if self.config != config {
+            self.config = config;
+            self.room = None;
+        }
+        self.settle();
+        cx.notify();
+    }
+
+    /// Lets the window follow the pointer until its button is let go, and
+    /// then writes the corner and the distances it was left at.
+    fn take_hold(&mut self, cx: &mut Context<Self>) {
+        let Some(native) = self.native.filter(|_| !self.held) else {
+            return;
+        };
+        let (Some(pointer), Ok(frame), Some(room)) =
+            (pointer_at(), native.frame(), native.display().work_area())
+        else {
+            return;
+        };
+        let grip = Grip {
+            pointer,
+            frame,
+            room,
+        };
+        self.held = true;
+        cx.notify();
+        cx.spawn(async move |view, cx: &mut AsyncApp| {
+            while pointer_held() {
+                if let Some(pointer) = pointer_at() {
+                    native.place(grip.follows(pointer)).ok();
+                }
+                cx.background_executor().timer(FOLLOW).await;
+            }
+            let left_at = native.frame().unwrap_or(grip.frame);
+            let moved = view.update(cx, |card, cx| {
+                card.held = false;
+                cx.notify();
+                let (corner, x, y) = CardConfig::placed(left_at, grip.room, card.scale);
+                let moved = (corner, x, y) != (card.config.corner, card.config.x, card.config.y);
+                (card.config.corner, card.config.x, card.config.y) = (corner, x, y);
+                card.room = None;
+                card.settle();
+                moved.then_some((card.index, corner, x, y))
+            });
+            let Ok(Some((index, corner, x, y))) = moved else {
+                return;
+            };
+            cx.update(|cx| {
+                rewrite(cx, |file| {
+                    file.set_card(index, "corner", Some(corner.name().into()))
+                        && file.set_card(index, "x", Some((x as i64).into()))
+                        && file.set_card(index, "y", Some((y as i64).into()))
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// What lies over the card while the widgets are arranged: an outline
+    /// that breathes, by which the card is dragged.
+    fn handle(&self, chrome: f32, theme: &Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let breath = self.began.elapsed().as_secs_f32() * BREATH;
+        let held = if self.held { HELD } else { 1. };
+        let strength = (OUTLINE_REST + OUTLINE_SWING * (0.5 + 0.5 * breath.sin())) * chrome * held;
+        let color = theme.colors.primary;
+        div()
+            .id("card-handle")
+            .absolute()
+            .size_full()
+            .top_0()
+            .left_0()
+            .rounded(theme.shape.large)
+            .border_1()
+            .border_color(color.opacity(strength.clamp(0., 1.)))
+            .bg(color.opacity((strength * HANDLE_FILL).clamp(0., 1.)))
+            .cursor(if self.held {
+                CursorStyle::ClosedHand
+            } else {
+                CursorStyle::OpenHand
+            })
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|card, _: &MouseDownEvent, _, cx| card.take_hold(cx)),
+            )
     }
 }
 
@@ -243,8 +465,20 @@ impl Render for CardView {
         release_hover(window);
         let theme = *cx.global::<Theme>();
         let visibility = self.visibility.value(window);
+        let arranging = Arranging::is_on(cx);
+        if (self.chrome.target() > 0.5) != arranging {
+            self.chrome.animate_to(if arranging { 1. } else { 0. });
+        }
+        let chrome = self.chrome.value(window);
+        if arranging {
+            // The outline breathes for as long as the card can be dragged.
+            window.request_animation_frame();
+        }
+        let handle = (chrome > 0.).then(|| self.handle(chrome, &theme, cx));
         floating_panel(&theme, ScreenEdge::Top, visibility, |panel| {
-            panel.children(self.content.iter().cloned())
+            panel
+                .children(self.content.iter().cloned())
+                .children(handle)
         })
     }
 }
@@ -287,6 +521,44 @@ mod tests {
         assert_eq!(sides(frame), (1012, 792, 1336, 1016));
         let frame = card(Corner::BottomRight).frame(ROOM, 1.);
         assert_eq!(sides(frame), (2664, 792, 2988, 1016));
+    }
+
+    #[test]
+    fn a_frame_gives_back_the_corner_and_the_distances_it_was_made_with() {
+        for corner in [
+            Corner::TopLeft,
+            Corner::TopRight,
+            Corner::BottomLeft,
+            Corner::BottomRight,
+        ] {
+            for scale in [1., 1.5] {
+                let frame = card(corner).frame(ROOM, scale);
+                assert_eq!(CardConfig::placed(frame, ROOM, scale), (corner, 24., 36.));
+            }
+        }
+        // One left outside the room is as near to its corner as zero.
+        let outside = ScreenRect {
+            left: 900,
+            top: 0,
+            right: 1224,
+            bottom: 224,
+        };
+        assert_eq!(
+            CardConfig::placed(outside, ROOM, 1.),
+            (Corner::TopLeft, 0., 0.)
+        );
+    }
+
+    #[test]
+    fn a_card_that_is_held_stays_in_the_room() {
+        let grip = Grip {
+            pointer: (1100, 100),
+            frame: card(Corner::TopLeft).frame(ROOM, 1.),
+            room: ROOM,
+        };
+        assert_eq!(sides(grip.follows((1150, 90))), (1062, 54, 1386, 278));
+        assert_eq!(sides(grip.follows((0, 0))), (1000, 40, 1324, 264));
+        assert_eq!(sides(grip.follows((9000, 9000))), (2676, 816, 3000, 1040));
     }
 
     #[test]

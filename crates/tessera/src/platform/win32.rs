@@ -78,7 +78,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, LWA_ALPHA, PostMessageW, SW_SHOW, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
-    WM_APP, WM_MOUSEMOVE, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WM_APP, WM_MOUSEMOVE, WM_SIZE, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
 
@@ -262,7 +262,14 @@ impl NativeSurface {
     }
 
     /// Moves and resizes the window without activating it.
+    ///
+    /// The window is told its new size once more through its queue. GPUI
+    /// drops the size it is told while the application is in use, as it is
+    /// whenever a view places its window, and then goes on looking for
+    /// what the pointer is on within the size it knew before.
     pub fn place(self, frame: ScreenRect) -> Result<()> {
+        let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+        let before = self.frame().ok();
         // SAFETY: `hwnd` belongs to a live window owned by this thread.
         unsafe {
             SetWindowPos(
@@ -270,12 +277,24 @@ impl NativeSurface {
                 None,
                 frame.left,
                 frame.top,
-                frame.right - frame.left,
-                frame.bottom - frame.top,
+                width,
+                height,
                 SWP_NOACTIVATE | SWP_NOZORDER,
             )
         }
-        .context("the window could not be moved")
+        .context("the window could not be moved")?;
+        let same = before.is_some_and(|before| {
+            (before.right - before.left, before.bottom - before.top) == (width, height)
+        });
+        if !same && (1..=0xffff).contains(&width) && (1..=0xffff).contains(&height) {
+            // The two sides of the client area, as `WM_SIZE` carries them:
+            // a window of Tessera has no frame around it.
+            let size = (height as isize) << 16 | width as isize;
+            // SAFETY: posting to a window that has since been destroyed
+            // fails without side effects.
+            let _ = unsafe { PostMessageW(Some(self.hwnd), WM_SIZE, WPARAM(0), LPARAM(size)) };
+        }
+        Ok(())
     }
 
     /// Shows the window, which was opened hidden so that it is first
