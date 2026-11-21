@@ -40,7 +40,10 @@
 #               the icon under the pointer unrolls. Choose the end that can
 #               grow without moving the icons (left in `end`, right in
 #               `start`); without the option no descriptions are shown.
-#   "windows"   a button for each open window of the display
+#   "windows"   a button for each open window of the display; option pinned,
+#               applications that keep a button whether they run or not:
+#               paths of programs or shortcuts, or names of shortcuts in
+#               the Start menu, such as ["C:/Windows/notepad.exe", "Paint"]
 #   "quit"      closes Tessera
 #   "label"     fixed content; options text and icon, a character of the
 #               Segoe Fluent Icons font such as "\uE71D"

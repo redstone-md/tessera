@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! One button per open application window. Widget: `windows`.
+//! One button per pinned application and per open application window.
+//! Widget: `windows`.
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{
@@ -13,7 +15,7 @@ use gpui::{
 use crate::icons::{AppIcons, Icon};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{AppWindow, AppWindowId, DisplayKey};
+use crate::platform::{AppWindow, AppWindowId, DisplayKey, Shortcut};
 use crate::theme::Theme;
 use crate::ui::state_layer;
 
@@ -36,16 +38,100 @@ impl Module for WindowsModule {
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("windows", |context, cx| {
             let display = context.display;
-            cx.new(|cx| WindowList::new(display, cx)).into()
+            let pins = Pin::find(&context.texts("pinned").unwrap_or_default());
+            cx.new(|cx| WindowList::new(display, pins, cx)).into()
         })
     }
 }
 
-/// One window's button and the motion it is in.
+/// An application that keeps a button whether it runs or not.
+struct Pin {
+    /// What a click opens while the application has no window.
+    shortcut: Shortcut,
+    /// The program its windows belong to, when that is known.
+    program: Option<PathBuf>,
+}
+
+impl Pin {
+    /// The applications `names` stand for. A name is the path of a file or
+    /// what the Start menu calls a shortcut; one that is neither is
+    /// reported and skipped.
+    fn find(names: &[String]) -> Vec<Self> {
+        let by_name = names.iter().any(|name| !Path::new(name).is_absolute());
+        let start_menu = if by_name {
+            Shortcut::start_menu()
+        } else {
+            Vec::new()
+        };
+        let pins = names.iter().filter_map(|name| {
+            let path = Path::new(name);
+            let shortcut = if path.is_absolute() {
+                path.is_file().then(|| Shortcut {
+                    name: name.clone(),
+                    path: path.to_owned(),
+                })
+            } else {
+                let known = |shortcut: &&Shortcut| shortcut.name.eq_ignore_ascii_case(name);
+                start_menu.iter().find(known).cloned()
+            };
+            if shortcut.is_none() {
+                eprintln!("tessera: nothing to pin is called `{name}`");
+            }
+            shortcut.map(Self::of)
+        });
+        pins.collect()
+    }
+
+    fn of(shortcut: Shortcut) -> Self {
+        let program = if is_link(&shortcut.path) {
+            shortcut.link().target
+        } else {
+            Some(shortcut.path.clone())
+        };
+        Self { shortcut, program }
+    }
+
+    /// Whether `window` belongs to the pinned application.
+    fn owns(&self, window: &AppWindow) -> bool {
+        let (Some(program), Some(executable)) = (&self.program, &window.executable) else {
+            return false;
+        };
+        same_file(program, executable)
+    }
+
+    fn icon(&self, icons: &AppIcons) -> Icon {
+        if is_link(&self.shortcut.path) {
+            icons.of_shortcut(&self.shortcut)
+        } else {
+            icons.of_executable(&self.shortcut.path)
+        }
+    }
+}
+
+fn is_link(path: &Path) -> bool {
+    let extension = path.extension();
+    extension.is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
+}
+
+/// Whether two paths as Windows writes them name one file: it ignores case
+/// and accepts both kinds of slashes.
+fn same_file(one: &Path, other: &Path) -> bool {
+    let plain = |path: &Path| path.to_string_lossy().replace('/', "\\").to_lowercase();
+    plain(one) == plain(other)
+}
+
+/// One button and the motion it is in.
 struct DockItem {
     /// Identifies the button for as long as it is shown.
     key: usize,
-    window: AppWindow,
+    /// The pinned application the button stands for. Such a button stays
+    /// when its window closes.
+    pin: Option<Pin>,
+    /// The window the button switches to; a button without one is that of
+    /// a pinned application that does not run on this display.
+    window: Option<AppWindow>,
+    /// 1 while there is a window, 0 while there is none.
+    running: Spring,
     /// 0 while absent, 1 when fully shown.
     presence: Spring,
     /// 1 while the window is the foreground window.
@@ -55,7 +141,8 @@ struct DockItem {
     leaving: bool,
 }
 
-/// Lists the application windows of one display and switches between them.
+/// Lists the pinned applications and the application windows of one display,
+/// starts the former and switches between the latter.
 struct WindowList {
     /// The display whose windows are listed; every window when unknown.
     display: Option<DisplayKey>,
@@ -66,7 +153,7 @@ struct WindowList {
 }
 
 impl WindowList {
-    fn new(display: Option<DisplayKey>, cx: &mut Context<Self>) -> Self {
+    fn new(display: Option<DisplayKey>, pins: Vec<Pin>, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(REFRESH_INTERVAL).await;
@@ -83,15 +170,36 @@ impl WindowList {
             foreground: None,
             next_key: 0,
         };
+        for pin in pins {
+            list.add(Some(pin), None, cx);
+        }
         list.refresh(cx);
         list
     }
 
+    /// Appends a button, which grows in.
+    fn add(&mut self, pin: Option<Pin>, window: Option<AppWindow>, cx: &Context<Self>) {
+        let motion = cx.global::<Theme>().motion;
+        let mut presence = Spring::new(motion.spatial, 0.);
+        presence.animate_to(1.);
+        self.items.push(DockItem {
+            key: self.next_key,
+            pin,
+            window,
+            running: Spring::new(motion.spatial, 0.),
+            presence,
+            active: Spring::new(motion.spatial, 0.),
+            interaction: Interaction::new(&motion),
+            leaving: false,
+        });
+        self.next_key += 1;
+    }
+
     /// Re-reads the window list and repaints only when it changed. Known
     /// windows keep their place, new ones are appended, and closed ones
-    /// start leaving.
+    /// start leaving. A pinned application takes one of its windows; the
+    /// buttons of pinned applications come first, so they choose first.
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let motion = cx.global::<Theme>().motion;
         let mut windows = AppWindow::enumerate();
         windows.retain(|window| self.display.is_none_or(|display| window.display == display));
         let foreground = AppWindowId::foreground();
@@ -99,39 +207,42 @@ impl WindowList {
         self.foreground = foreground;
 
         for item in &mut self.items {
-            let found = windows
-                .iter()
-                .position(|window| window.id == item.window.id);
-            let present = found.is_some();
-            if let Some(window) = found.map(|index| windows.remove(index))
-                && window != item.window
-            {
-                item.window = window;
-                changed = true;
+            let held = item.window.as_ref().map(|window| window.id);
+            let mut found = windows.iter().position(|window| Some(window.id) == held);
+            let Some(pin) = &item.pin else {
+                let present = found.is_some();
+                if let Some(window) = found.map(|index| windows.remove(index))
+                    && Some(&window) != item.window.as_ref()
+                {
+                    item.window = Some(window);
+                    changed = true;
+                }
+                if item.leaving == present {
+                    item.leaving = !present;
+                    item.presence.animate_to(if present { 1. } else { 0. });
+                    changed = true;
+                }
+                continue;
+            };
+            if found.is_none() {
+                found = windows.iter().position(|window| pin.owns(window));
             }
-            if item.leaving == present {
-                item.leaving = !present;
-                item.presence.animate_to(if present { 1. } else { 0. });
+            let window = found.map(|index| windows.remove(index));
+            if window != item.window {
+                item.window = window;
                 changed = true;
             }
         }
         for window in windows {
-            let mut presence = Spring::new(motion.spatial, 0.);
-            presence.animate_to(1.);
-            self.items.push(DockItem {
-                key: self.next_key,
-                window,
-                presence,
-                active: Spring::new(motion.spatial, 0.),
-                interaction: Interaction::new(&motion),
-                leaving: false,
-            });
-            self.next_key += 1;
+            self.add(None, Some(window), cx);
             changed = true;
         }
         for item in &mut self.items {
-            let is_foreground = !item.leaving && foreground == Some(item.window.id);
+            let shown = item.window.as_ref().filter(|_| !item.leaving);
+            let is_foreground = shown.is_some_and(|window| foreground == Some(window.id));
             item.active.animate_to(if is_foreground { 1. } else { 0. });
+            let runs = item.window.is_some();
+            item.running.animate_to(if runs { 1. } else { 0. });
         }
         if changed {
             cx.notify();
@@ -147,8 +258,11 @@ impl WindowList {
     ) -> AnyElement {
         let presence = item.presence.value(window);
         let active = item.active.value(window);
+        let running = item.running.value(window);
         let state = item.interaction.state(window);
-        let (id, key) = (item.window.id, item.key);
+        let key = item.key;
+        let id = item.window.as_ref().map(|window| window.id);
+        let shortcut = item.pin.as_ref().map(|pin| pin.shortcut.clone());
 
         let icon_size =
             theme.dock.icon_size * (1. + HOVER_GROWTH * state.hover - PRESS_SHRINK * state.press);
@@ -168,7 +282,11 @@ impl WindowList {
             .gap(theme.spacing.tiny)
             .rounded(theme.shape.medium)
             .bg(state_layer(&theme, background, state))
-            .on_click(move |_, _, _| id.activate_or_minimize())
+            .on_click(move |_, _, _| match (id, &shortcut) {
+                (Some(id), _) => id.activate_or_minimize(),
+                (None, Some(shortcut)) => shortcut.launch(),
+                (None, None) => {}
+            })
             .child(match icon {
                 Some(icon) => img(icon).size(icon_size).into_any_element(),
                 None => div()
@@ -177,7 +295,7 @@ impl WindowList {
                     .bg(theme.colors.outline)
                     .into_any_element(),
             })
-            .child(Self::render_indicator(active, theme));
+            .child(Self::render_indicator(active, running, theme));
         let button = Interaction::track(button, cx, move |this: &mut Self| {
             let item = this.items.iter_mut().find(|item| item.key == key)?;
             Some(&mut item.interaction)
@@ -198,14 +316,17 @@ impl WindowList {
             .into_any_element()
     }
 
-    /// A dot under every window; it grows into a pill for the foreground one.
-    fn render_indicator(active: f32, theme: Theme) -> AnyElement {
+    /// A dot under every window; it grows into a pill for the foreground
+    /// one. `running` is 0 under an application without a window, which
+    /// has no dot.
+    fn render_indicator(active: f32, running: f32, theme: Theme) -> AnyElement {
         let dot = theme.dock.indicator_height;
         let growth = theme.dock.indicator_active_width - dot;
         div()
             .h(dot)
             .w(dot + growth * active.max(0.))
             .rounded(theme.shape.full)
+            .opacity(running.clamp(0., 1.))
             .bg(mix(theme.colors.outline, theme.colors.primary, active))
             .into_any_element()
     }
@@ -218,9 +339,15 @@ impl Render for WindowList {
         let elements: Vec<AnyElement> = items
             .iter_mut()
             .map(|item| {
-                let executable = item.window.executable.as_deref();
-                let icon = executable
-                    .and_then(|executable| cx.global::<AppIcons>().of_executable(executable));
+                let icons = cx.global::<AppIcons>();
+                let icon = match (&item.pin, &item.window) {
+                    (Some(pin), _) => pin.icon(icons),
+                    (None, Some(window)) => {
+                        let executable = window.executable.as_deref();
+                        executable.and_then(|executable| icons.of_executable(executable))
+                    }
+                    (None, None) => None,
+                };
                 Self::render_item(item, icon, theme, window, cx)
             })
             .collect();
@@ -238,5 +365,26 @@ impl Render for WindowList {
             .rounded(theme.shape.large)
             .bg(theme.colors.surface_container)
             .children(elements)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_of_one_file_are_told_whatever_their_spelling() {
+        let one = Path::new(r"C:\Program Files\App\app.exe");
+        assert!(same_file(one, Path::new("c:/program files/APP/App.exe")));
+        assert!(!same_file(
+            one,
+            Path::new(r"C:\Program Files\App\other.exe")
+        ));
+    }
+
+    #[test]
+    fn only_shortcut_files_are_read_as_links() {
+        assert!(is_link(Path::new(r"C:\Menu\App.LNK")));
+        assert!(!is_link(Path::new(r"C:\Apps\app.exe")));
     }
 }
