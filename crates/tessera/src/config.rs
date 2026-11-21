@@ -219,7 +219,8 @@ pub struct Config {
     /// until they have the contrast WCAG 2.1 asks for.
     #[serde(default = "yes")]
     pub contrast: bool,
-    /// The language of the settings and the marketplace.
+    /// The language of the settings, the marketplace, the calendar and the
+    /// lists of notifications and problems.
     #[serde(default)]
     pub language: Language,
     #[serde(default, rename = "surface")]

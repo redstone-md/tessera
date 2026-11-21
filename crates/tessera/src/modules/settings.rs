@@ -1372,7 +1372,8 @@ impl Settings {
             .child(wrap(&theme).children(choices))
             .child(note(
                 &theme,
-                language.say("Of the settings and the marketplace."),
+                language
+                    .say("Of the settings, the marketplace, the calendar and the notifications."),
             ));
         (3, card.into_any_element())
     }

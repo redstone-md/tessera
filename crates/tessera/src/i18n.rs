@@ -190,8 +190,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     ("Language", "Язык"),
     (
-        "Of the settings and the marketplace.",
-        "Язык настроек и маркетплейса.",
+        "Of the settings, the marketplace, the calendar and the notifications.",
+        "Язык настроек, маркетплейса, календаря и уведомлений.",
     ),
     ("Windows key", "Клавиша Windows"),
     ("Contrast", "Контраст"),
