@@ -4,6 +4,7 @@
 //! Draws the content an extension describes, with the shell's theme.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -13,8 +14,9 @@ use gpui::{
 };
 
 use super::runtime::{Instance, Node, NodeKind};
+use crate::motion::Interaction;
 use crate::theme::Theme;
-use crate::ui::pill;
+use crate::ui::{pill, state_layer};
 
 /// One placed instance of a widget that an extension provides.
 pub struct ExtensionWidget {
@@ -25,6 +27,8 @@ pub struct ExtensionWidget {
     id: String,
     /// The last content the extension returned; `None` once a call failed.
     content: Option<Vec<Node>>,
+    /// Pointer feedback of the buttons, by node index.
+    buttons: HashMap<usize, Interaction>,
 }
 
 impl ExtensionWidget {
@@ -55,6 +59,7 @@ impl ExtensionWidget {
             widget,
             id,
             content: Some(Vec::new()),
+            buttons: HashMap::new(),
         };
         widget.refresh();
         widget
@@ -88,9 +93,11 @@ impl ExtensionWidget {
     }
 
     fn element(
+        &mut self,
         nodes: &[Node],
         index: usize,
         theme: &Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let node = nodes.get(index)?;
@@ -98,19 +105,26 @@ impl ExtensionWidget {
             NodeKind::Text(text) => div().child(text.clone()).into_any_element(),
             NodeKind::Button(button) => {
                 let action = button.action.clone();
-                let hover = theme.colors.surface_container_highest;
-                div()
+                let state = self
+                    .buttons
+                    .entry(index)
+                    .or_insert_with(|| Interaction::new(&theme.motion))
+                    .state(window);
+                let element = div()
                     .id(("extension-button", index))
                     .px(theme.spacing.small)
                     .rounded(theme.shape.full)
+                    .bg(state_layer(theme, theme.colors.surface_container, state))
                     .text_color(theme.colors.primary)
-                    .hover(move |style| style.bg(hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate(&action);
                         cx.notify();
                     }))
-                    .child(button.label.clone())
-                    .into_any_element()
+                    .child(button.label.clone());
+                Interaction::track(element, cx, move |this: &mut Self| {
+                    this.buttons.get_mut(&index)
+                })
+                .into_any_element()
             }
             NodeKind::Row => {
                 // Children must come later in the list, which rules out cycles.
@@ -119,7 +133,7 @@ impl ExtensionWidget {
                     .iter()
                     .map(|&child| child as usize)
                     .filter(|&child| child > index)
-                    .filter_map(|child| Self::element(nodes, child, theme, cx))
+                    .filter_map(|child| self.element(nodes, child, theme, window, cx))
                     .collect();
                 div()
                     .flex()
@@ -133,13 +147,13 @@ impl ExtensionWidget {
 }
 
 impl Render for ExtensionWidget {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         let Some(nodes) = self.content.clone() else {
             return pill(&theme)
                 .text_color(theme.colors.on_surface_variant)
                 .child(format!("{} stopped working", self.id));
         };
-        pill(&theme).children(Self::element(&nodes, 0, &theme, cx))
+        pill(&theme).children(self.element(&nodes, 0, &theme, window, cx))
     }
 }

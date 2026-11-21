@@ -9,6 +9,7 @@ mod config;
 mod extension;
 mod module;
 mod modules;
+mod motion;
 mod panel;
 mod platform;
 mod surface;

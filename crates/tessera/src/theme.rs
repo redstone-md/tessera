@@ -3,13 +3,12 @@
 
 //! Shell-wide appearance tokens, following Material 3 role names.
 
-use std::time::Duration;
-
 use anyhow::bail;
 use gpui::{Global, Hsla, Pixels, px, rgb};
 use serde::Deserialize;
 
 use crate::config::read_user_file;
+use crate::motion::SpringSpec;
 
 /// Material 3 color roles used by shell surfaces.
 #[derive(Clone, Copy, Debug)]
@@ -47,10 +46,17 @@ pub struct Typography {
     pub label_size: Pixels,
 }
 
-/// Durations of state changes.
+/// How state changes move. The split into spatial and effects springs, and
+/// the bounce of the spatial ones, follow the Material 3 Expressive motion
+/// scheme; the numbers are Tessera's own.
 #[derive(Clone, Copy, Debug)]
 pub struct Motion {
-    pub short: Duration,
+    /// For position and size.
+    pub spatial: SpringSpec,
+    /// For small, quick position and size changes such as press feedback.
+    pub spatial_fast: SpringSpec,
+    /// For color and opacity, which must not overshoot.
+    pub effects: SpringSpec,
 }
 
 /// Bar measurements.
@@ -109,7 +115,18 @@ impl Default for Theme {
                 label_size: px(14.),
             },
             motion: Motion {
-                short: Duration::from_millis(250),
+                spatial: SpringSpec {
+                    stiffness: 380.,
+                    damping_ratio: 0.7,
+                },
+                spatial_fast: SpringSpec {
+                    stiffness: 800.,
+                    damping_ratio: 0.6,
+                },
+                effects: SpringSpec {
+                    stiffness: 1600.,
+                    damping_ratio: 1.,
+                },
             },
             bar: BarMetrics {
                 pill_height: px(36.),

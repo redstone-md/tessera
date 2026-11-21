@@ -3,8 +3,9 @@
 
 //! Building blocks shared by shell surfaces.
 
-use gpui::{Div, ParentElement, Styled, div};
+use gpui::{Div, Hsla, ParentElement, Styled, div};
 
+use crate::motion::{InteractionState, mix};
 use crate::theme::Theme;
 
 /// A floating, fully rounded container that holds a group of bar content.
@@ -19,6 +20,18 @@ pub fn pill(theme: &Theme) -> Div {
         .bg(theme.colors.surface_container)
         .text_size(theme.typography.label_size)
         .text_color(theme.colors.on_surface)
+}
+
+/// How much of the content color covers a hovered control.
+const HOVER_LAYER: f32 = 0.08;
+
+/// How much more of it covers a pressed one.
+const PRESS_LAYER: f32 = 0.10;
+
+/// `base` as it looks under the pointer: tinted toward the content color.
+pub fn state_layer(theme: &Theme, base: Hsla, state: InteractionState) -> Hsla {
+    let amount = HOVER_LAYER * state.hover + PRESS_LAYER * state.press;
+    mix(base, theme.colors.on_surface, amount)
 }
 
 /// A row that keeps `center` in the middle regardless of the side widths.

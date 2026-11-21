@@ -11,6 +11,8 @@ What exists today, by default on every display:
 - A top bar with a clock and a **Quit Tessera** button, drawn as floating rounded pills.
 - A dock with one button per application window on that display; a minimized window counts for the display it restores to. Clicking a button brings its window to the foreground, or minimizes it if it already is there. The window list is polled twice a second. Packaged (Store) apps show a placeholder instead of their icon, and windows of elevated processes may ignore clicks.
 
+Motion is driven by springs: surfaces slide in from their edge at startup, dock buttons grow in and shrink away as windows open and close, the foreground indicator stretches, and buttons respond to hover and press. Nothing else is animated yet: text changes, the clock and extension content switch instantly, and surfaces do not animate out on exit.
+
 While Tessera runs:
 
 - Both surfaces stay above other windows and reserve their screen edge, so maximized windows stop at them. Windows releases that space when Tessera exits.

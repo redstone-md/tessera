@@ -7,6 +7,8 @@ use gpui::{AnyView, App, Context, Div, IntoElement, ParentElement, Render, Style
 
 use crate::config::SurfaceConfig;
 use crate::module::{WidgetContext, WidgetRegistry};
+use crate::motion::Spring;
+use crate::platform::ScreenEdge;
 use crate::theme::Theme;
 use crate::ui::centered_row;
 
@@ -15,6 +17,10 @@ pub struct Panel {
     start: Vec<AnyView>,
     center: Vec<AnyView>,
     end: Vec<AnyView>,
+    /// The edge the content slides in from when the surface opens.
+    edge: ScreenEdge,
+    /// How far the content has come in: 0 is hidden behind the edge.
+    entrance: Spring,
 }
 
 impl Panel {
@@ -32,10 +38,19 @@ impl Panel {
                 })
                 .collect()
         };
+        let (start, center, end) = (
+            build(&layout.start),
+            build(&layout.center),
+            build(&layout.end),
+        );
+        let mut entrance = Spring::new(cx.global::<Theme>().motion.spatial, 0.);
+        entrance.animate_to(1.);
         Self {
-            start: build(&layout.start),
-            center: build(&layout.center),
-            end: build(&layout.end),
+            start,
+            center,
+            end,
+            edge: layout.edge,
+            entrance,
         }
     }
 
@@ -49,13 +64,24 @@ impl Panel {
 }
 
 impl Render for Panel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        centered_row(
-            &theme,
-            Self::slot(&theme, &self.start),
-            Self::slot(&theme, &self.center),
-            Self::slot(&theme, &self.end),
-        )
+        let entrance = self.entrance.value(window);
+        let hidden = window.viewport_size().height * (1. - entrance);
+        let offset = match self.edge {
+            ScreenEdge::Top => -hidden,
+            ScreenEdge::Bottom => hidden,
+        };
+        div()
+            .size_full()
+            .relative()
+            .top(offset)
+            .opacity(entrance.clamp(0., 1.))
+            .child(centered_row(
+                &theme,
+                Self::slot(&theme, &self.start),
+                Self::slot(&theme, &self.center),
+                Self::slot(&theme, &self.end),
+            ))
     }
 }

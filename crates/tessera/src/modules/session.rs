@@ -9,8 +9,9 @@ use gpui::{
 };
 
 use crate::module::{Module, WidgetRegistry};
+use crate::motion::Interaction;
 use crate::theme::Theme;
-use crate::ui::pill;
+use crate::ui::{pill, state_layer};
 
 pub struct SessionModule;
 
@@ -20,21 +21,28 @@ impl Module for SessionModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("quit", |_, cx| cx.new(|_| QuitButton).into())
+        widgets.register("quit", |_, cx| {
+            let interaction = Interaction::new(&cx.global::<Theme>().motion);
+            cx.new(|_| QuitButton { interaction }).into()
+        })
     }
 }
 
 /// Closes the shell, which brings the Windows taskbar back.
-struct QuitButton;
+struct QuitButton {
+    interaction: Interaction,
+}
 
 impl Render for QuitButton {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        pill(&theme)
+        let state = self.interaction.state(window);
+        let button = pill(&theme)
             .id("quit")
+            .bg(state_layer(&theme, theme.colors.surface_container, state))
             .text_color(theme.colors.on_surface_variant)
-            .hover(|style| style.bg(theme.colors.surface_container_highest))
             .on_click(|_, _, cx| cx.quit())
-            .child("Quit Tessera")
+            .child("Quit Tessera");
+        Interaction::track(button, cx, |this: &mut Self| Some(&mut this.interaction))
     }
 }
