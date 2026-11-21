@@ -3,7 +3,7 @@ edge = "top"
 thickness = 36
 start = [{ widget = "focused", show = "program" }, { widget = "cpu", style = "text" }, { widget = "memory", style = "text" }, { widget = "media", popup = "media" }]
 center = ["workspaces", { widget = "clock", popup = "calendar" }]
-end = ["problems", "tray", "keyboard", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
+end = ["problems", "tray", "keyboard", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
 
 [[surface]]
 edge = "bottom"
@@ -44,15 +44,15 @@ content = ["media-controls"]
 
 [[popup]]
 name = "network"
-width = 320
-height = 300
-content = ["wifi"]
+width = 360
+height = 520
+content = ["connections", { widget = "radio-switch", radio = "wifi" }, "wifi"]
 
 [[popup]]
 name = "bluetooth"
-width = 320
-height = 260
-content = ["bluetooth"]
+width = 360
+height = 380
+content = [{ widget = "radio-switch", radio = "bluetooth" }, "bluetooth"]
 
 [[popup]]
 name = "sound"

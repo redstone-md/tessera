@@ -7,16 +7,16 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Context, Div, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, div, px,
+    AnyElement, AppContext, AsyncApp, Context, Div, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
 use crate::platform::{Wifi, WifiNetwork, WifiReach};
 use crate::theme::Theme;
-use crate::ui::{icon, one_line, state_layer};
+use crate::ui::{icon, list_row, state_layer};
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(3);
@@ -24,9 +24,6 @@ const READ_INTERVAL: Duration = Duration::from_secs(3);
 /// How many readings pass between the times the adapters are asked to
 /// look anew.
 const READS_PER_SCAN: u32 = 5;
-
-/// How high a row is.
-const ROW_HEIGHT: Pixels = px(40.);
 
 /// How far below its place a row starts when the list arrives.
 const ROW_TRAVEL: f32 = 10.;
@@ -201,62 +198,32 @@ impl WifiList {
             theme.colors.surface_container_highest
         };
         let reachable = network.connected || network.profile.is_some();
-        let row = div()
-            .id(("wifi-row", index))
-            .relative()
-            .top(px(ROW_TRAVEL * (1. - arrived)))
-            .opacity(arrived * if reachable { 1. } else { UNKNOWN_OPACITY })
-            .h(ROW_HEIGHT)
-            .flex_none()
-            .px(theme.spacing.medium)
-            .flex()
-            .items_center()
-            .gap(theme.spacing.medium)
-            .rounded(theme.shape.medium)
-            .bg(if joinable {
-                state_layer(theme, base, state)
-            } else {
-                base
-            })
-            .child(
-                icon(theme, signal_glyph(network.bars))
-                    .flex_none()
-                    .text_color(if network.connected {
-                        theme.colors.primary
-                    } else {
-                        theme.colors.on_surface_variant
-                    }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(one_line(network.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_size(px(11.))
-                            .text_color(theme.colors.on_surface_variant)
-                            .child(one_line(note(network, self.joining.as_deref()))),
-                    ),
-            )
-            .children(network.connected.then(|| {
-                icon(theme, ICON_CONNECTED)
-                    .flex_none()
-                    .text_color(theme.colors.primary)
-            }))
-            .children((network.secured && !network.connected).then(|| {
-                icon(theme, ICON_LOCK)
-                    .flex_none()
-                    .text_color(theme.colors.outline)
-            }));
+        let lit = network.connected;
+        let row = list_row(
+            theme,
+            signal_glyph(network.bars),
+            lit,
+            network.name.clone(),
+            Language::of(cx).say(note(network, self.joining.as_deref())),
+        )
+        .id(("wifi-row", index))
+        .relative()
+        .top(px(ROW_TRAVEL * (1. - arrived)))
+        .opacity(arrived * if reachable { 1. } else { UNKNOWN_OPACITY })
+        .children(network.connected.then(|| {
+            icon(theme, ICON_CONNECTED)
+                .flex_none()
+                .text_color(theme.colors.primary)
+        }))
+        .children((network.secured && !network.connected).then(|| {
+            icon(theme, ICON_LOCK)
+                .flex_none()
+                .text_color(theme.colors.outline)
+        }));
+        let row = match joinable {
+            true => row.bg(state_layer(theme, base, state)),
+            false => row,
+        };
         let row = Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index));
         match (joinable, &network.profile) {
             (true, Some(profile)) => {
@@ -274,28 +241,35 @@ impl WifiList {
 impl Render for WifiList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let frame = div()
             .id("wifi-list")
-            .size_full()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .gap(theme.spacing.tiny)
+            .gap(theme.spacing.small)
             .overflow_y_scroll();
         let networks = match self.reach.clone() {
-            None => return frame.child(self.message(&theme, "Looking for networks", window)),
+            None => {
+                let text = language.say("Looking for networks");
+                return frame.child(self.message(&theme, text, window));
+            }
             Some(Err(error)) => return frame.child(self.message(&theme, &error, window)),
             Some(Ok(WifiReach::NoAdapter)) => {
-                let text = "This machine has no Wi-Fi adapter";
+                let text = language.say("This machine has no Wi-Fi adapter");
                 return frame.child(self.message(&theme, text, window));
             }
             Some(Ok(WifiReach::Off)) => {
-                let text = "Wi-Fi is switched off; it is switched on in the Windows settings";
+                let text = language.say("Wi-Fi is switched off");
                 return frame.child(self.message(&theme, text, window));
             }
             Some(Ok(WifiReach::Networks(networks))) => networks,
         };
         if networks.is_empty() {
-            return frame.child(self.message(&theme, "No network is in reach", window));
+            let text = language.say("No network is in reach");
+            return frame.child(self.message(&theme, text, window));
         }
         let count = networks.len();
         let rows: Vec<AnyElement> = networks

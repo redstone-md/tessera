@@ -8,6 +8,7 @@ mod brightness;
 mod calendar;
 mod clock;
 mod command;
+mod connections;
 mod focused;
 mod keyboard;
 mod label;
@@ -39,6 +40,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(bluetooth::BluetoothModule),
         Box::new(calendar::CalendarModule),
         Box::new(command::CommandModule),
+        Box::new(connections::ConnectionsModule),
         Box::new(focused::FocusedModule),
         Box::new(keyboard::KeyboardModule),
         Box::new(label::LabelModule),

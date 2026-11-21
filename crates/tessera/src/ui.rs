@@ -3,6 +3,7 @@
 
 //! Building blocks shared by shell surfaces.
 
+mod list;
 mod slider;
 
 use std::f32::consts::TAU;
@@ -19,6 +20,7 @@ use crate::motion::{InteractionState, mix};
 use crate::platform::NativeSurface;
 use crate::theme::Theme;
 
+pub use list::{list_row, list_title, switch};
 pub use slider::Slider;
 
 /// Ends the hover of what the pointer was on when it left `window`. GPUI

@@ -3,7 +3,7 @@ edge = "bottom"
 thickness = 64
 start = [{ widget = "label", icon = "", popup = "launcher" }, "workspaces"]
 center = ["windows"]
-end = ["problems", { widget = "media", popup = "media" }, "tray", "keyboard", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "clock", popup = "calendar", format = "%H:%M  %d.%m.%Y" }, { widget = "label", icon = "", popup = "settings" }]
+end = ["problems", { widget = "media", popup = "media" }, "tray", "keyboard", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "clock", popup = "calendar", format = "%H:%M  %d.%m.%Y" }, { widget = "label", icon = "", popup = "settings" }]
 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to
@@ -39,15 +39,15 @@ content = ["media-controls"]
 
 [[popup]]
 name = "network"
-width = 320
-height = 300
-content = ["wifi"]
+width = 360
+height = 520
+content = ["connections", { widget = "radio-switch", radio = "wifi" }, "wifi"]
 
 [[popup]]
 name = "bluetooth"
-width = 320
-height = 260
-content = ["bluetooth"]
+width = 360
+height = 380
+content = [{ widget = "radio-switch", radio = "bluetooth" }, "bluetooth"]
 
 [[popup]]
 name = "sound"

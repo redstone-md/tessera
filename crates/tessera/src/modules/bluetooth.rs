@@ -1,28 +1,30 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The Bluetooth devices paired with the machine. Widget: `bluetooth`, a
-//! list for a popup.
+//! The Bluetooth devices paired with the machine. Widgets: `bluetooth`, a
+//! list for a popup, and `bluetooth-button`, an icon that is there only on
+//! a machine with Bluetooth.
 
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Context, Div, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, div, px,
+    AnyElement, AppContext, AsyncApp, Context, Div, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Spring, staggered};
 use crate::platform::{Bluetooth, PairedDevice};
 use crate::theme::Theme;
-use crate::ui::{icon, one_line, wave_bar};
+use crate::ui::{icon, list_row, pill, wave_bar};
+
+/// How often the machine is asked whether it has Bluetooth: an adapter may
+/// be plugged in and pulled out.
+const PRESENCE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(5);
-
-/// How high a row is.
-const ROW_HEIGHT: Pixels = px(44.);
 
 /// How far below its place a row starts when the list arrives.
 const ROW_TRAVEL: f32 = 10.;
@@ -43,20 +45,66 @@ impl Module for BluetoothModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("bluetooth", |_, cx| cx.new(Devices::new).into())
+        widgets.register("bluetooth", |_, cx| cx.new(Devices::new).into())?;
+        widgets.register("bluetooth-button", |_, cx| cx.new(Button::new).into())
+    }
+}
+
+/// The Bluetooth icon, on a machine that has Bluetooth.
+struct Button {
+    /// 0 while the machine has no Bluetooth, 1 while the icon is shown.
+    presence: Spring,
+}
+
+impl Button {
+    fn new(cx: &mut Context<Self>) -> Self {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                let present = cx
+                    .background_executor()
+                    .spawn(async { Bluetooth::present() })
+                    .await;
+                let shown = this.update(cx, |this, cx| {
+                    this.presence.animate_to(if present { 1. } else { 0. });
+                    cx.notify();
+                });
+                if shown.is_err() {
+                    break;
+                }
+                cx.background_executor().timer(PRESENCE_INTERVAL).await;
+            }
+        })
+        .detach();
+        Self {
+            presence: Spring::new(cx.global::<Theme>().motion.spatial, 0.),
+        }
+    }
+}
+
+impl Render for Button {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        let presence = self.presence.value(window).clamp(0., 1.);
+        if presence == 0. {
+            return div().into_any_element();
+        }
+        pill(&theme)
+            .opacity(presence)
+            .child(icon(&theme, ICON_BLUETOOTH))
+            .into_any_element()
     }
 }
 
 /// What a row says under the name of `device`.
-fn note(device: &PairedDevice) -> String {
-    let state = if device.connected {
+fn note(device: &PairedDevice, language: Language) -> String {
+    let state = language.say(if device.connected {
         "Connected"
     } else {
         "Not connected"
-    };
+    });
     match (device.battery, device.connected) {
         (Some(charge), true) => format!("{state}, {charge}%"),
-        (Some(charge), false) => format!("{state}, was {charge}%"),
+        (Some(charge), false) => format!("{state}, {} {charge}%", language.say("was")),
         (None, _) => state.to_owned(),
     }
 }
@@ -127,90 +175,63 @@ impl Devices {
         count: usize,
         device: &PairedDevice,
         theme: &Theme,
+        language: Language,
         window: &mut Window,
     ) -> AnyElement {
         let arrived = staggered(self.arrival.value(window).clamp(0., 1.), index, count);
         let presence = if device.connected { 1. } else { AWAY_OPACITY };
-        div()
-            .relative()
-            .top(px(ROW_TRAVEL * (1. - arrived)))
-            .opacity(arrived * presence)
-            .h(ROW_HEIGHT)
-            .flex_none()
-            .px(theme.spacing.medium)
-            .flex()
-            .items_center()
-            .gap(theme.spacing.medium)
-            .rounded(theme.shape.medium)
-            .bg(if device.connected {
-                theme.colors.secondary_container
-            } else {
-                theme.colors.surface_container_highest
-            })
-            .child(
-                icon(theme, ICON_BLUETOOTH)
-                    .flex_none()
-                    .text_color(if device.connected {
-                        theme.colors.primary
-                    } else {
-                        theme.colors.on_surface_variant
-                    }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(one_line(device.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_size(px(11.))
-                            .text_color(theme.colors.on_surface_variant)
-                            .child(one_line(note(device))),
-                    ),
-            )
-            .children(device.battery.map(|charge| {
-                // The line fills as the row arrives.
-                let level = f32::from(charge) / 100. * arrived;
-                div()
-                    .flex_none()
-                    .w(CHARGE_WIDTH)
-                    .child(wave_bar(theme, level))
-            }))
-            .into_any_element()
+        list_row(
+            theme,
+            ICON_BLUETOOTH,
+            device.connected,
+            device.name.clone(),
+            note(device, language),
+        )
+        .relative()
+        .top(px(ROW_TRAVEL * (1. - arrived)))
+        .opacity(arrived * presence)
+        .children(device.battery.map(|charge| {
+            // The line fills as the row arrives.
+            let level = f32::from(charge) / 100. * arrived;
+            div()
+                .flex_none()
+                .w(CHARGE_WIDTH)
+                .child(wave_bar(theme, level))
+        }))
+        .into_any_element()
     }
 }
 
 impl Render for Devices {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let frame = div()
             .id("bluetooth-list")
-            .size_full()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .gap(theme.spacing.tiny)
+            .gap(theme.spacing.small)
             .overflow_y_scroll();
         let devices = match self.devices.clone() {
-            None => return frame.child(self.message(&theme, "Looking for devices", window)),
+            None => {
+                let text = language.say("Looking for devices");
+                return frame.child(self.message(&theme, text, window));
+            }
             Some(Err(error)) => return frame.child(self.message(&theme, &error, window)),
             Some(Ok(devices)) => devices,
         };
         if devices.is_empty() {
-            return frame.child(self.message(&theme, "No Bluetooth device is paired", window));
+            let text = language.say("No Bluetooth device is paired");
+            return frame.child(self.message(&theme, text, window));
         }
         let count = devices.len();
         let rows: Vec<AnyElement> = devices
             .iter()
             .enumerate()
-            .map(|(index, device)| self.row(index, count, device, &theme, window))
+            .map(|(index, device)| self.row(index, count, device, &theme, language, window))
             .collect();
         frame.children(rows)
     }
@@ -230,9 +251,22 @@ mod tests {
 
     #[test]
     fn a_row_says_whether_it_is_connected_and_how_charged() {
-        assert_eq!(note(&device(true, None)), "Connected");
-        assert_eq!(note(&device(false, None)), "Not connected");
-        assert_eq!(note(&device(true, Some(80))), "Connected, 80%");
-        assert_eq!(note(&device(false, Some(80))), "Not connected, was 80%");
+        assert_eq!(note(&device(true, None), Language::English), "Connected");
+        assert_eq!(
+            note(&device(false, None), Language::English),
+            "Not connected"
+        );
+        assert_eq!(
+            note(&device(true, Some(80)), Language::English),
+            "Connected, 80%"
+        );
+        assert_eq!(
+            note(&device(false, Some(80)), Language::English),
+            "Not connected, was 80%"
+        );
+        assert_eq!(
+            note(&device(false, Some(80)), Language::Russian),
+            "Не подключено, было 80%"
+        );
     }
 }

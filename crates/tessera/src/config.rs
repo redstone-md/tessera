@@ -323,7 +323,13 @@ mod tests {
         assert_eq!(
             names(&bar.end),
             [
-                "problems", "media", "tray", "label", "network", "volume", "label"
+                "problems",
+                "media",
+                "tray",
+                "bluetooth-button",
+                "network",
+                "volume",
+                "label"
             ]
         );
         assert_eq!(dock.edge, ScreenEdge::Bottom);

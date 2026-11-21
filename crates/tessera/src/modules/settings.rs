@@ -26,7 +26,7 @@ use crate::motion::{Interaction, Spring, mix, staggered};
 use crate::platform::{AppWindow, ScreenEdge};
 use crate::shell::Shell;
 use crate::theme::{ACCENT_THEME, Theme};
-use crate::ui::{icon, state_layer};
+use crate::ui::{icon, state_layer, switch};
 
 /// The directory of the configuration directory that holds theme files.
 const THEMES_DIRECTORY: &str = "themes";
@@ -55,11 +55,6 @@ const TITLE_SIZE: Pixels = px(20.);
 
 /// How far below its place a card starts when its part is chosen.
 const CARD_RISE: f32 = 18.;
-
-/// A switch, and the dot that crosses it.
-const SWITCH_WIDTH: f32 = 44.;
-const SWITCH_HEIGHT: f32 = 24.;
-const SWITCH_DOT: f32 = 16.;
 
 /// The width kept for the number between the buttons that change it.
 const COUNT_WIDTH: Pixels = px(64.);
@@ -1405,35 +1400,15 @@ impl Settings {
                     spring.animate_to(is_on);
                 }
                 let travel = spring.value(window);
-                let shown = travel.clamp(0., 1.);
                 let control = Control::Toggle(index);
                 let state = self
                     .interactions
                     .entry(control.clone())
                     .or_insert_with(|| Interaction::new(&theme.motion))
                     .state(window);
-                let track = mix(theme.colors.surface_container, theme.colors.primary, shown);
-                let dot = mix(theme.colors.outline, theme.colors.surface_container, shown);
-                let inset = (SWITCH_HEIGHT - SWITCH_DOT) / 2.;
-                let way = SWITCH_WIDTH - SWITCH_DOT - inset * 2.;
                 let action = control.clone();
-                let switch = div()
-                    .id(SharedString::from(format!("{control:?}")))
-                    .flex_none()
-                    .relative()
-                    .w(px(SWITCH_WIDTH))
-                    .h(px(SWITCH_HEIGHT))
-                    .rounded(theme.shape.full)
-                    .bg(state_layer(&theme, track, state))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(inset))
-                            .left(px(inset + way * travel))
-                            .size(px(SWITCH_DOT))
-                            .rounded(theme.shape.full)
-                            .bg(dot),
-                    )
+                let id = SharedString::from(format!("{control:?}"));
+                let switch = switch(&theme, id, travel, state)
                     .on_click(cx.listener(move |this, _, _, cx| this.act(&action, cx)));
                 Interaction::track(switch, cx, move |this: &mut Self| {
                     this.interactions.get_mut(&control)

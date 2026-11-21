@@ -57,6 +57,44 @@ impl Language {
 }
 
 const RUSSIAN: &[(&str, &str)] = &[
+    // The connections.
+    ("Connections", "Подключения"),
+    ("Nothing is connected", "Нет подключений"),
+    ("Internet", "Интернет"),
+    ("No internet", "Без интернета"),
+    ("Not connected", "Не подключено"),
+    ("Connecting", "Подключение"),
+    ("Connected", "Подключено"),
+    ("Disconnecting", "Отключение"),
+    (
+        "Add a VPN in the Windows settings",
+        "Добавить VPN в параметрах Windows",
+    ),
+    ("Network settings", "Параметры сети"),
+    // The Wi-Fi networks and the Bluetooth devices.
+    ("Joining", "Подключение…"),
+    ("Saved", "Сохранена"),
+    (
+        "Not saved; join it in the Windows settings first",
+        "Не сохранена; сначала подключитесь в параметрах Windows",
+    ),
+    (
+        "Open; join it in the Windows settings first",
+        "Открытая; сначала подключитесь в параметрах Windows",
+    ),
+    ("Looking for networks", "Поиск сетей"),
+    (
+        "This machine has no Wi-Fi adapter",
+        "В компьютере нет адаптера Wi-Fi",
+    ),
+    ("Wi-Fi is switched off", "Wi-Fi выключен"),
+    ("No network is in reach", "Сетей поблизости нет"),
+    ("Looking for devices", "Поиск устройств"),
+    (
+        "No Bluetooth device is paired",
+        "Нет сопряжённых устройств Bluetooth",
+    ),
+    ("was", "было"),
     // Settings: the parts.
     ("General", "Общие"),
     ("Bars", "Панели"),

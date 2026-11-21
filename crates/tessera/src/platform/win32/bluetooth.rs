@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use windows::Devices::Bluetooth::{BluetoothDevice, BluetoothLEDevice};
+use windows::Devices::Bluetooth::{BluetoothAdapter, BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
 use windows::Foundation::IPropertyValue;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
@@ -48,6 +48,13 @@ pub struct PairedDevice {
 pub struct Bluetooth;
 
 impl Bluetooth {
+    /// Whether the machine has Bluetooth at all, switched on or not.
+    pub fn present() -> bool {
+        BluetoothAdapter::GetDefaultAsync()
+            .and_then(|adapter| adapter.get())
+            .is_ok()
+    }
+
     /// The paired devices, the connected ones first, each group by name.
     /// Empty without Bluetooth.
     pub fn devices() -> Result<Vec<PairedDevice>, String> {

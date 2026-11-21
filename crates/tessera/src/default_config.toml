@@ -73,6 +73,14 @@
 #               forgets it all; for a popup
 #   "bluetooth" the paired Bluetooth devices, for a popup: which are
 #               connected, and the charge of those that report one
+#   "connections"  what the machine is connected through, for a popup:
+#               each connection with its address and speed, the VPN
+#               connections Windows keeps, which a click connects and
+#               disconnects, and the way to the network settings
+#   "radio-switch"  a switch for a radio of the machine; option radio,
+#               "wifi" or "bluetooth". Nothing on a machine without it
+#   "bluetooth-button"  the Bluetooth icon, shown only on a machine that
+#               has Bluetooth
 #   "volume"    the output volume, as an icon and a percentage
 #   "workspaces"  a numbered button for each virtual desktop of Windows,
 #               or for each workspace of [workspaces], the shown one
@@ -89,7 +97,10 @@
 #               pointer comes out of the bar under it. Without the option
 #               it does.
 #               Option limit, a number: only that many icons are shown,
-#               and a button unrolls the strip to the others
+#               and a button unrolls the strip to the others.
+#               Option bluetooth, true or false: whether the Bluetooth icon
+#               of Windows is among them. Without the option it is not: the
+#               widgets below show Bluetooth
 #   "windows"   a button for each application with windows on the display,
 #               which a click goes through; option pinned,
 #               applications that keep a button whether they run or not:
@@ -130,7 +141,7 @@ edge = "top"
 thickness = 48
 start = ["workspaces", "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
-end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
+end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
 
 [[surface]]
 edge = "bottom"
@@ -171,15 +182,15 @@ content = ["media-controls"]
 
 [[popup]]
 name = "network"
-width = 320
-height = 300
-content = ["wifi"]
+width = 360
+height = 520
+content = ["connections", { widget = "radio-switch", radio = "wifi" }, "wifi"]
 
 [[popup]]
 name = "bluetooth"
-width = 320
-height = 260
-content = ["bluetooth"]
+width = 360
+height = 380
+content = [{ widget = "radio-switch", radio = "bluetooth" }, "bluetooth"]
 
 [[popup]]
 name = "sound"
