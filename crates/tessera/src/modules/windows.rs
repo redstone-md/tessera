@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! One button per pinned application and per application with open
-//! windows; the windows of one application share a button.
+//! windows; the windows of one application share a button, and a button
+//! before them may open a popup, the way a Start button does.
 //! Widget: `windows`.
 
 use std::cell::Cell;
@@ -12,8 +13,8 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas,
-    div, img,
+    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
+    Window, canvas, div, img, px,
 };
 
 use crate::config::edit::ConfigFile;
@@ -25,11 +26,11 @@ use crate::platform::{
     AppWindow, AppWindowId, DisplayKey, JumpTask, RecentDocument, Shortcut, WindowEvents,
     app_id_in, app_id_of_program, app_path,
 };
-use crate::popup::PopupAnchor;
+use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::shell::Shell;
 use crate::theme::Theme;
-use crate::ui::state_layer;
+use crate::ui::{icon, state_layer};
 
 /// How often it is checked whether something happened to a window.
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
@@ -50,6 +51,13 @@ const PRESS_SHRINK: f32 = 0.16;
 /// offers.
 const RECENT_SHOWN: u32 = 5;
 
+/// How large the glyph of the button that opens a popup is, as a part of
+/// the icon of an application, and how strong the line after it is.
+const START_GLYPH: f32 = 0.8;
+const START_LINE: f32 = 0.4;
+
+/// What the button that opens a popup shows when the layout names no icon.
+const ICON_START: &str = "\u{e71d}";
 const ICON_CLOSE: &str = "\u{e8bb}";
 const ICON_DOCUMENT: &str = "\u{e8a5}";
 const ICON_TASK: &str = "\u{e945}";
@@ -73,7 +81,12 @@ impl Module for WindowsModule {
         widgets.register("windows", |context, cx| {
             let display = context.display;
             let pins = Pin::find(&context.texts("pinned").unwrap_or_default());
-            cx.new(|cx| WindowList::new(display, pins, cx)).into()
+            let start = context.text("start").map(|popup| {
+                let glyph = context.text("start-icon").unwrap_or(ICON_START);
+                (popup.to_owned(), SharedString::from(glyph.to_owned()))
+            });
+            cx.new(|cx| WindowList::new(display, pins, start, cx))
+                .into()
         })
     }
 }
@@ -340,9 +353,19 @@ fn switch_to(windows: &[AppWindowId]) {
     }
 }
 
+/// The button before the applications, which opens a popup.
+struct Start {
+    popup: String,
+    glyph: SharedString,
+    interaction: Interaction,
+    /// The middle of the button in its surface, once it has been drawn.
+    middle: Rc<Cell<Option<Pixels>>>,
+}
+
 /// Lists the pinned applications and the applications with windows on one
 /// display, starts the former and switches between the windows of each.
 struct WindowList {
+    start: Option<Start>,
     /// The display whose windows are listed; every window when unknown.
     display: Option<DisplayKey>,
     /// In display order, including buttons that are still leaving.
@@ -352,7 +375,12 @@ struct WindowList {
 }
 
 impl WindowList {
-    fn new(display: Option<DisplayKey>, pins: Vec<Pin>, cx: &mut Context<Self>) -> Self {
+    fn new(
+        display: Option<DisplayKey>,
+        pins: Vec<Pin>,
+        start: Option<(String, SharedString)>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let patience = if WindowEvents::watch() {
             CHECKS_WATCHED
         } else {
@@ -380,7 +408,14 @@ impl WindowList {
         })
         .detach();
 
+        let motion = cx.global::<Theme>().motion;
         let mut list = Self {
+            start: start.map(|(popup, glyph)| Start {
+                popup,
+                glyph,
+                interaction: Interaction::new(&motion),
+                middle: Rc::default(),
+            }),
             display,
             items: Vec::new(),
             foreground: None,
@@ -687,6 +722,71 @@ impl WindowList {
             .into_any_element()
     }
 
+    /// The button that opens the popup of `start`, drawn like the buttons
+    /// of the applications, and the line that parts it from them when
+    /// there are `others`.
+    fn render_start(
+        start: &mut Start,
+        others: bool,
+        theme: Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let state = start.interaction.state(window);
+        let size =
+            theme.dock.icon_size * (1. + HOVER_GROWTH * state.hover - PRESS_SHRINK * state.press);
+        let (popup, middle) = (start.popup.clone(), start.middle.clone());
+        let (name, seen) = (popup.clone(), middle.clone());
+        let measure = move |bounds: gpui::Bounds<Pixels>, window: &mut Window, cx: &mut App| {
+            let x = bounds.origin.x + bounds.size.width / 2.;
+            seen.set(Some(x));
+            Popups::stand(&name, x, window, cx);
+        };
+        let button = div()
+            .id("dock-start")
+            .relative()
+            .size(theme.dock.item_size)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.medium)
+            .bg(state_layer(&theme, theme.colors.surface_container, state))
+            .on_click(move |_, window, cx| {
+                Previews::close(cx);
+                Menus::close(cx);
+                let x = middle.get().unwrap_or(window.mouse_position().x);
+                match PopupAnchor::at(window, x, cx) {
+                    Ok(anchor) => Popups::toggle(&popup, anchor, cx),
+                    Err(error) => report!("the popup `{popup}` has nowhere to open: {error:#}"),
+                }
+            })
+            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+            .child(
+                icon(&theme, start.glyph.clone())
+                    .text_size(size * START_GLYPH)
+                    .text_color(theme.colors.primary),
+            );
+        let button = Interaction::track(button, cx, |this: &mut Self| {
+            Some(&mut this.start.as_mut()?.interaction)
+        });
+        let line = others.then(|| {
+            div()
+                .w(px(1.))
+                .h(theme.dock.item_size / 2.)
+                .mx(theme.spacing.tiny)
+                .flex_none()
+                .bg(theme.colors.outline.opacity(START_LINE))
+        });
+        div()
+            .flex()
+            .items_center()
+            .flex_none()
+            .child(button)
+            .children(line)
+            .into_any_element()
+    }
+
     /// A dot under every application with a window, which grows into a
     /// pill while one of its windows is in front, and up to [`MORE_DOTS`]
     /// dots beside it, `more` of them, for its further windows. `running`
@@ -743,7 +843,11 @@ impl Render for WindowList {
         // A button that has finished leaving was just drawn at no width.
         items.retain(|item| !(item.leaving && item.presence.is_settled()));
 
-        if elements.is_empty() {
+        let start = self
+            .start
+            .as_mut()
+            .map(|start| Self::render_start(start, !elements.is_empty(), theme, window, cx));
+        if elements.is_empty() && start.is_none() {
             return div();
         }
         div()
@@ -753,6 +857,7 @@ impl Render for WindowList {
             .items_center()
             .rounded(theme.shape.large)
             .bg(theme.colors.surface_container)
+            .children(start)
             .children(elements)
     }
 }

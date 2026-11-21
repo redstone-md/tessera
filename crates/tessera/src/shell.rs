@@ -119,6 +119,7 @@ impl Shell {
         for (_, surface) in surfaces {
             let found = surface.update(cx, |view, window, cx| {
                 let middle = view.content().read(cx).popup_middle(&name);
+                let middle = middle.or_else(|| Popups::standing(&name, window, cx));
                 let x = middle.unwrap_or(window.viewport_size().width / 2.);
                 (middle.is_some(), PopupAnchor::at(window, x, cx))
             });

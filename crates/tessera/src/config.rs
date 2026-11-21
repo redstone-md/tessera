@@ -334,7 +334,7 @@ mod tests {
         );
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);
-        assert_eq!(names(&dock.center), ["label", "windows"]);
+        assert_eq!(names(&dock.center), ["windows"]);
         assert_eq!(config.language, Language::English);
         let settings = config.popups.iter().find(|popup| popup.name == "settings");
         assert_eq!(settings.map(|popup| popup.place), Some(PopupPlace::Center));

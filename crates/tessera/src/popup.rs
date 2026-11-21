@@ -7,9 +7,10 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, DisplayId, Div, Global, IntoElement, ParentElement,
-    Pixels, Render, Styled, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
+    AnyView, AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Div, Global,
+    IntoElement, ParentElement, Pixels, Render, Styled, Subscription, TitlebarOptions, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point,
+    px, size,
 };
 
 use crate::config::{PopupConfig, PopupPlace};
@@ -183,6 +184,9 @@ pub struct Popups {
     configs: HashMap<String, PopupConfig>,
     open: Option<(String, WindowHandle<PopupView>)>,
     closed: Option<(String, Instant)>,
+    /// Where in a surface a widget stands that opens a popup by itself,
+    /// rather than by a click on the whole of it.
+    stands: HashMap<(AnyWindowHandle, String), Pixels>,
 }
 
 impl Global for Popups {}
@@ -202,7 +206,24 @@ impl Popups {
             configs: known,
             open: None,
             closed: None,
+            stands: HashMap::new(),
         }
+    }
+
+    /// Remembers that the popup `name` is opened from `x` of the surface
+    /// in `window`.
+    pub fn stand(name: &str, x: Pixels, window: &Window, cx: &mut App) {
+        let key = (window.window_handle(), name.to_owned());
+        if cx.global::<Self>().stands.get(&key) != Some(&x) {
+            cx.global_mut::<Self>().stands.insert(key, x);
+        }
+    }
+
+    /// Where the popup `name` is opened from in the surface in `window`,
+    /// when a widget there said so.
+    pub fn standing(name: &str, window: &Window, cx: &App) -> Option<Pixels> {
+        let key = (window.window_handle(), name.to_owned());
+        cx.global::<Self>().stands.get(&key).copied()
     }
 
     /// Makes `configs` the configured popups without closing the open one,

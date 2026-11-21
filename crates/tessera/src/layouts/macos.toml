@@ -8,7 +8,7 @@ end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "bl
 [[surface]]
 edge = "bottom"
 thickness = 76
-center = [{ widget = "label", icon = "", popup = "launcher" }, "windows"]
+center = [{ widget = "windows", start = "launcher" }]
 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to

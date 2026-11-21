@@ -107,7 +107,10 @@
 #               paths of programs or shortcuts, names the Start menu gives
 #               applications, or "shell:AppsFolder/" and the identifier of
 #               a packaged (Store) application, such as
-#               ["C:/Windows/notepad.exe", "Paint"]
+#               ["C:/Windows/notepad.exe", "Paint"]; option start, the
+#               name of a popup: a button before the applications, drawn
+#               like theirs, opens it, the way a Start button does; option
+#               start-icon, the character it shows
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
 #   "quit"      closes Tessera
@@ -146,7 +149,7 @@ end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "bl
 [[surface]]
 edge = "bottom"
 thickness = 76
-center = [{ widget = "label", icon = "", popup = "launcher" }, "windows"]
+center = [{ widget = "windows", start = "launcher" }]
 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to

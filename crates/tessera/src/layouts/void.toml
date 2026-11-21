@@ -8,7 +8,7 @@ end = ["problems", "tray", "keyboard", { widget = "bluetooth-button", popup = "b
 [[surface]]
 edge = "bottom"
 thickness = 64
-center = ["windows", { widget = "label", icon = "", popup = "launcher" }]
+center = [{ widget = "windows", start = "launcher" }]
 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to
