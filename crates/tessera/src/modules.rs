@@ -5,6 +5,7 @@
 
 mod calendar;
 mod clock;
+mod command;
 mod label;
 mod launcher;
 mod notifications;
@@ -23,6 +24,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
     vec![
         Box::new(clock::ClockModule),
         Box::new(calendar::CalendarModule),
+        Box::new(command::CommandModule),
         Box::new(label::LabelModule),
         Box::new(launcher::LauncherModule),
         Box::new(notifications::NotificationsModule),

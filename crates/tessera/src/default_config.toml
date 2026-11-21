@@ -37,6 +37,12 @@
 #   "quit"      closes Tessera
 #   "label"     fixed content; options text and icon, a character of the
 #               Segoe Fluent Icons font such as "\uE71D"
+#   "command"   the first line a program prints, run again and again without
+#               a window; options command, the program and its arguments as
+#               a list such as ["cmd", "/C", "echo hello"], interval, the
+#               seconds between runs (default 10, at least 1), and icon as
+#               for "label". The program is expected to print UTF-8 and to
+#               finish within 10 seconds.
 #   "launcher"  a search field over the applications of the Start menu;
 #               option placeholder, the hint in the empty field
 

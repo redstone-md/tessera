@@ -41,6 +41,37 @@ impl WidgetContext {
         }
         text
     }
+
+    /// The number option `key`. A value of another type is reported and
+    /// treated as absent.
+    pub fn number(&self, key: &str) -> Option<f64> {
+        let value = self.options.get(key)?;
+        let number = value
+            .as_float()
+            .or_else(|| value.as_integer().map(|whole| whole as f64));
+        if number.is_none() {
+            eprintln!("tessera: the widget option `{key}` must be a number, `{value}` is ignored");
+        }
+        number
+    }
+
+    /// The option `key` as a list of texts. Anything else is reported and
+    /// treated as absent.
+    pub fn texts(&self, key: &str) -> Option<Vec<String>> {
+        let value = self.options.get(key)?;
+        let texts = value.as_array().and_then(|items| {
+            items
+                .iter()
+                .map(|item| item.as_str().map(str::to_owned))
+                .collect::<Option<Vec<String>>>()
+        });
+        if texts.is_none() {
+            eprintln!(
+                "tessera: the widget option `{key}` must be a list of texts, `{value}` is ignored"
+            );
+        }
+        texts
+    }
 }
 
 type WidgetFactory = Rc<dyn Fn(&WidgetContext, &mut App) -> AnyView>;
