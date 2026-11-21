@@ -13,7 +13,8 @@ use std::time::Instant;
 use gpui::{
     AnyElement, AnyView, App, AppContext, Bounds, Context, CursorStyle, DispatchPhase, Div,
     DragMoveEvent, Global, InteractiveElement, IntoElement, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
+    Point, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas,
+    div, px,
 };
 
 use crate::config::edit::{ConfigFile, Place, Slot};
@@ -22,7 +23,7 @@ use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::module::WidgetRegistry;
 use crate::motion::{Interaction, Spring};
-use crate::platform::{DisplayKey, ScreenEdge};
+use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect, pointer_at};
 use crate::popup::{PopupAnchor, Popups};
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -73,6 +74,13 @@ impl Arranging {
     }
 }
 
+/// The panels there are while the widgets are arranged, so that a widget
+/// dragged off one finds the one it is over.
+#[derive(Default)]
+struct Arena(Vec<WeakEntity<Panel>>);
+
+impl Global for Arena {}
+
 /// A widget in a slot, and the popup a click on it opens.
 struct Placed {
     view: AnyView,
@@ -101,10 +109,9 @@ struct Ghost {
     discarding: Rc<Cell<bool>>,
 }
 
-impl Render for Ghost {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = *cx.global::<Theme>();
-        let discarding = self.discarding.get();
+impl Ghost {
+    /// The pill that stands for the widget `name` on its way.
+    fn pill(theme: &Theme, name: SharedString, discarding: bool) -> Div {
         let color = if discarding {
             theme.colors.outline
         } else {
@@ -124,9 +131,16 @@ impl Render for Ghost {
             .whitespace_nowrap()
             .children(
                 discarding
-                    .then(|| icon(&theme, ICON_DISCARD).text_size(theme.typography.label_size)),
+                    .then(|| icon(theme, ICON_DISCARD).text_size(theme.typography.label_size)),
             )
-            .child(self.name.clone())
+            .child(name)
+    }
+}
+
+impl Render for Ghost {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        Self::pill(&theme, self.name.clone(), self.discarding.get())
     }
 }
 
@@ -135,6 +149,8 @@ impl Render for Ghost {
 enum Aim {
     /// Before what stands at this place of the file in this slot.
     Before(usize, usize),
+    /// The same on another panel, which shows the surface of this number.
+    Onto(usize, usize, usize),
     /// Out of the layout.
     Away,
 }
@@ -162,6 +178,16 @@ pub struct Panel {
     /// How far the line at the aim has grown.
     marker: Spring,
     discarding: Rc<Cell<bool>>,
+    /// Where the window is on the screen and how many physical pixels a
+    /// logical one of it takes, while the widgets are arranged.
+    frame: Option<(ScreenRect, f32)>,
+    /// Whether the panel is among those a dragged widget looks for.
+    listed: bool,
+    /// The panel the widget dragged off this one is over.
+    visited: Option<WeakEntity<Panel>>,
+    /// A widget dragged off another panel that is over this one, and where
+    /// the pointer is.
+    visitor: Option<(SharedString, Pixels)>,
 }
 
 impl Panel {
@@ -215,6 +241,10 @@ impl Panel {
             aim: None,
             marker: Spring::new(motion.spatial, 0.),
             discarding: Rc::default(),
+            frame: None,
+            listed: false,
+            visited: None,
+            visitor: None,
         }
     }
 
@@ -444,26 +474,15 @@ impl Panel {
         }
         let height = window.viewport_size().height;
         let aim = if position.y < -AWAY || position.y > height + AWAY {
-            Some(Aim::Away)
+            let abroad = self.aim_abroad(cx);
+            if abroad.is_none() {
+                self.end_visit(cx);
+            }
+            abroad.or(Some(Aim::Away))
         } else {
-            let distance = |bounds: Bounds<Pixels>| {
-                let before = bounds.left() - position.x;
-                let after = position.x - bounds.right();
-                before.max(after).max(px(0.))
-            };
-            let nearest = (0..self.slots.len())
-                .filter_map(|slot| Some((slot, distance(self.places[slot].get()?))))
-                .min_by(|(_, one), (_, other)| {
-                    one.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
-                });
-            nearest.map(|(slot, _)| {
-                let next = self.slots[slot].iter().find(|placed| {
-                    let bounds = placed.bounds.get();
-                    bounds.is_some_and(|bounds| bounds.center().x > position.x)
-                });
-                let index = next.map_or(self.counts[slot], |placed| placed.index);
-                Aim::Before(slot, index)
-            })
+            self.end_visit(cx);
+            self.place_for(position.x)
+                .map(|(slot, index)| Aim::Before(slot, index))
         };
         if aim != self.aim {
             self.aim = aim;
@@ -474,27 +493,133 @@ impl Panel {
         }
     }
 
+    /// The slot nearest to `x` of this panel and the place in it before the
+    /// first widget whose middle is past `x`.
+    fn place_for(&self, x: Pixels) -> Option<(usize, usize)> {
+        let distance = |bounds: Bounds<Pixels>| {
+            let before = bounds.left() - x;
+            let after = x - bounds.right();
+            before.max(after).max(px(0.))
+        };
+        let (slot, _) = (0..self.slots.len())
+            .filter_map(|slot| Some((slot, distance(self.places[slot].get()?))))
+            .min_by(|(_, one), (_, other)| {
+                one.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+        let next = self.slots[slot].iter().find(|placed| {
+            let bounds = placed.bounds.get();
+            bounds.is_some_and(|bounds| bounds.center().x > x)
+        });
+        Some((slot, next.map_or(self.counts[slot], |placed| placed.index)))
+    }
+
+    /// What the layout calls the widget being dragged.
+    fn dragged_name(&self) -> Option<SharedString> {
+        let place = self.dragged?;
+        let slot = Slot::ALL.iter().position(|slot| *slot == place.slot)?;
+        let mut widgets = self.slots[slot].iter();
+        Some(
+            widgets
+                .find(|placed| placed.index == place.index)?
+                .name
+                .clone(),
+        )
+    }
+
+    /// Takes aim on the panel of another window the pointer is over, which
+    /// then shows the widget and where it would go. The pointer stays with
+    /// the window the drag began in, so that panel learns of it from here.
+    fn aim_abroad(&mut self, cx: &mut Context<Self>) -> Option<Aim> {
+        let (x, y) = pointer_at()?;
+        let name = self.dragged_name()?;
+        let me = cx.entity_id();
+        let panels = cx.try_global::<Arena>()?.0.clone();
+        let over = panels.into_iter().find_map(|panel| {
+            if panel.entity_id() == me {
+                return None;
+            }
+            let (surface, (frame, scale)) = panel
+                .read_with(cx, |other, _| Some((other.surface, other.frame?)))
+                .ok()??;
+            let inside =
+                (frame.left..frame.right).contains(&x) && (frame.top..frame.bottom).contains(&y);
+            inside.then(|| (panel, surface, px((x - frame.left) as f32 / scale)))
+        });
+        let (panel, surface, at) = over?;
+        if self.visited.as_ref() != Some(&panel) {
+            self.end_visit(cx);
+            self.visited = Some(panel.clone());
+        }
+        let place = panel
+            .update(cx, |other, cx| other.receive(name, at, cx))
+            .ok()??;
+        Some(Aim::Onto(surface, place.0, place.1))
+    }
+
+    /// Shows the widget `name`, dragged off another panel, at `at` of this
+    /// one, and says where it would go.
+    fn receive(
+        &mut self,
+        name: SharedString,
+        at: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<(usize, usize)> {
+        let place = self.place_for(at);
+        let aim = place.map(|(slot, index)| Aim::Before(slot, index));
+        if aim != self.aim {
+            self.aim = aim;
+            self.marker.jump_to(0.);
+            self.marker.animate_to(1.);
+        }
+        self.visitor = Some((name, at));
+        cx.notify();
+        place
+    }
+
+    /// The widget of another panel is over this one no longer.
+    fn dismiss_visitor(&mut self, cx: &mut Context<Self>) {
+        self.visitor = None;
+        self.aim = None;
+        cx.notify();
+    }
+
+    /// The dragged widget is no longer over the panel of another window.
+    fn end_visit(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.visited.take() {
+            panel.update(cx, |other, cx| other.dismiss_visitor(cx)).ok();
+        }
+    }
+
     /// Lets go of the dragged widget: it goes where the aim is.
     fn let_go(&mut self, cx: &mut Context<Self>) {
         let Some(from) = self.dragged.take() else {
             return;
         };
         let aim = self.aim.take();
+        self.end_visit(cx);
         self.discarding.set(false);
         self.marker.jump_to(0.);
         cx.notify();
-        match aim {
-            Some(Aim::Away) => cx.defer(move |cx| rewrite(cx, |file| file.remove(from))),
-            Some(Aim::Before(slot, index)) => {
-                let slot = Slot::ALL[slot];
-                let stays = slot == from.slot && (index == from.index || index == from.index + 1);
-                if !stays {
-                    // This surface is still handling the pointer; it is
-                    // given new content after that.
-                    cx.defer(move |cx| rewrite(cx, |file| file.relocate(from, slot, index)));
-                }
+        let (surface, slot, index) = match aim {
+            Some(Aim::Away) => {
+                return cx.defer(move |cx| rewrite(cx, |file| file.remove(from)));
             }
-            None => {}
+            Some(Aim::Before(slot, index)) => (from.surface, slot, index),
+            Some(Aim::Onto(surface, slot, index)) => (surface, slot, index),
+            None => return,
+        };
+        let to = Place {
+            surface,
+            slot: Slot::ALL[slot],
+            index,
+        };
+        let stays = to.surface == from.surface
+            && to.slot == from.slot
+            && (index == from.index || index == from.index + 1);
+        if !stays {
+            // This surface is still handling the pointer; it is given new
+            // content after that.
+            cx.defer(move |cx| rewrite(cx, |file| file.transfer(from, to)));
         }
     }
 
@@ -521,7 +646,11 @@ impl Panel {
         cx: &mut Context<Self>,
     ) -> Div {
         let aimed = match self.aim {
-            Some(Aim::Before(at, index)) if at == slot && self.dragged.is_some() => Some(index),
+            Some(Aim::Before(at, index))
+                if at == slot && (self.dragged.is_some() || self.visitor.is_some()) =>
+            {
+                Some(index)
+            }
             _ => None,
         };
         let grown = self.marker.value(window);
@@ -591,6 +720,7 @@ impl Render for Panel {
         if !arranging {
             self.dragged = None;
             self.aim = None;
+            (self.frame, self.visited, self.visitor) = (None, None, None);
             let [start, center, end] = [0, 1, 2].map(|slot| self.slot(slot, &theme, window, cx));
             return root.child(centered_row(&theme, start, center, end));
         }
@@ -600,6 +730,29 @@ impl Render for Panel {
             self.aim = None;
             self.discarding.set(false);
         }
+        if self.visitor.is_some() && !cx.has_active_drag() {
+            self.visitor = None;
+            self.aim = None;
+        }
+        if !self.listed {
+            self.listed = true;
+            let panel = cx.entity().downgrade();
+            let arena = cx.default_global::<Arena>();
+            arena.0.retain(|panel| panel.upgrade().is_some());
+            arena.0.push(panel);
+        }
+        let native = NativeSurface::of(window).and_then(|native| native.frame());
+        self.frame = native.ok().map(|frame| (frame, window.scale_factor()));
+        let visitor = self.visitor.clone().map(|(name, at)| {
+            div()
+                .absolute()
+                .top_0()
+                .left(at + theme.spacing.small)
+                .h_full()
+                .flex()
+                .items_center()
+                .child(Ghost::pill(&theme, name, false))
+        });
         // The outlines keep breathing.
         window.request_animation_frame();
         let chrome = self.chrome.value(window);
@@ -622,6 +775,7 @@ impl Render for Panel {
             }),
         )
         .child(centered_row(&theme, start, center, end))
+        .children(visitor)
         .child(canvas(|_, _, _| {}, listen).absolute().size_0())
     }
 }

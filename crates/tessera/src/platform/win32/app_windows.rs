@@ -221,6 +221,14 @@ pub fn pointer_held() -> bool {
     held(VK_LBUTTON.0) || held(VK_RBUTTON.0)
 }
 
+/// Where the pointer is on the screen, in physical pixels.
+pub fn pointer_at() -> Option<(i32, i32)> {
+    let mut pointer = windows::Win32::Foundation::POINT::default();
+    // SAFETY: `pointer` outlives the call that fills it.
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&raw mut pointer) }.ok()?;
+    Some((pointer.x, pointer.y))
+}
+
 /// Counts what happened to windows since `WindowEvents::watch`.
 static HAPPENED: AtomicU64 = AtomicU64::new(0);
 

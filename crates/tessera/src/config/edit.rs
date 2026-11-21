@@ -223,20 +223,29 @@ impl ConfigFile {
         Some(widget)
     }
 
-    /// Moves the widget at `from` to stand before what is at `index` of
-    /// `slot` of the same surface now, or last in that slot when `index`
-    /// is past its end.
-    pub fn relocate(&mut self, from: Place, slot: Slot, index: usize) -> bool {
+    /// Moves the widget at `from` to stand before what is at `to` now,
+    /// which may be on another surface, or last in that slot when the
+    /// index of `to` is past its end.
+    pub fn transfer(&mut self, from: Place, to: Place) -> bool {
+        let surfaces = self
+            .document
+            .get("surface")
+            .and_then(Item::as_array_of_tables)
+            .map_or(0, |surfaces| surfaces.len());
+        if to.surface >= surfaces {
+            return false;
+        }
         let Some(widget) = self.take(from) else {
             return false;
         };
         // What stood after it in its own slot has moved up by one.
-        let index = if slot == from.slot && index > from.index {
-            index - 1
+        let same_slot = to.surface == from.surface && to.slot == from.slot;
+        let index = if same_slot && to.index > from.index {
+            to.index - 1
         } else {
-            index
+            to.index
         };
-        let Some(widgets) = self.slot(from.surface, slot) else {
+        let Some(widgets) = self.slot(to.surface, to.slot) else {
             return false;
         };
         let index = index.min(widgets.len());
@@ -634,6 +643,11 @@ center = ["windows"]
         widgets.iter().map(|spec| spec.widget.clone()).collect()
     }
 
+    /// Moves a widget within its surface.
+    fn relocate(file: &mut ConfigFile, from: Place, slot: Slot, index: usize) -> bool {
+        file.transfer(from, place(from.surface, slot, index))
+    }
+
     fn place(surface: usize, slot: Slot, index: usize) -> Place {
         Place {
             surface,
@@ -718,17 +732,22 @@ center = ["windows"]
         assert!(file.add(0, Slot::End, "volume"));
         assert!(file.add(0, Slot::End, "cpu"));
         // Toward the end of its own slot, and to the very end of it.
-        assert!(file.relocate(place(0, Slot::End, 0), Slot::End, 2));
+        assert!(relocate(&mut file, place(0, Slot::End, 0), Slot::End, 2));
         assert_eq!(names(&file, 0, Slot::End), ["volume", "quit", "cpu"]);
-        assert!(file.relocate(place(0, Slot::End, 0), Slot::End, 9));
+        assert!(relocate(&mut file, place(0, Slot::End, 0), Slot::End, 9));
         assert_eq!(names(&file, 0, Slot::End), ["quit", "cpu", "volume"]);
         // Toward the start of it.
-        assert!(file.relocate(place(0, Slot::End, 2), Slot::End, 0));
+        assert!(relocate(&mut file, place(0, Slot::End, 2), Slot::End, 0));
         assert_eq!(names(&file, 0, Slot::End), ["volume", "quit", "cpu"]);
         // Into another slot, also one the file does not have yet.
-        assert!(file.relocate(place(0, Slot::End, 1), Slot::Start, 1));
+        assert!(relocate(&mut file, place(0, Slot::End, 1), Slot::Start, 1));
         assert_eq!(names(&file, 0, Slot::Start), ["clock", "quit", "label"]);
-        assert!(file.relocate(place(0, Slot::Start, 2), Slot::Center, 0));
+        assert!(relocate(
+            &mut file,
+            place(0, Slot::Start, 2),
+            Slot::Center,
+            0
+        ));
         assert_eq!(names(&file, 0, Slot::Center), ["label"]);
         assert_eq!(names(&file, 0, Slot::End), ["volume", "cpu"]);
         assert!(
@@ -736,8 +755,26 @@ center = ["windows"]
                 .to_string()
                 .contains(r#"{ widget = "label", text = "Hi" }"#)
         );
-        assert!(!file.relocate(place(0, Slot::End, 5), Slot::Start, 0));
-        assert!(!file.relocate(place(4, Slot::End, 0), Slot::Start, 0));
+        assert!(!relocate(&mut file, place(0, Slot::End, 5), Slot::Start, 0));
+        assert!(!relocate(&mut file, place(4, Slot::End, 0), Slot::Start, 0));
+    }
+
+    #[test]
+    fn a_widget_goes_to_another_surface_with_its_options() {
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        assert!(file.transfer(place(0, Slot::Start, 1), place(1, Slot::Center, 0)));
+        assert_eq!(names(&file, 0, Slot::Start), ["clock"]);
+        assert_eq!(names(&file, 1, Slot::Center), ["label", "windows"]);
+        assert!(
+            file.document
+                .to_string()
+                .contains(r#"{ widget = "label", text = "Hi" }"#)
+        );
+        assert!(file.transfer(place(1, Slot::Center, 1), place(0, Slot::End, 9)));
+        assert_eq!(names(&file, 0, Slot::End), ["quit", "windows"]);
+        // A surface the file does not have takes nothing.
+        assert!(!file.transfer(place(0, Slot::End, 0), place(2, Slot::Start, 0)));
+        assert_eq!(names(&file, 0, Slot::End), ["quit", "windows"]);
     }
 
     #[test]

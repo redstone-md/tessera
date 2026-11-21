@@ -13,5 +13,5 @@ pub use win32::{
     ProcessorLoad, RecentDocument, ScreenBrightness, ScreenEdge, ScreenRect, Shortcut, Taskbar,
     Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil, VirtualDesktops, Vpn, VpnState, Wifi,
     WifiNetwork, WifiReach, WindowEvents, WindowsKey, Wireless, accent_color, app_id_in,
-    app_id_of_program, app_path, display_frames, light_mode, pointer_held,
+    app_id_of_program, app_path, display_frames, light_mode, pointer_at, pointer_held,
 };
