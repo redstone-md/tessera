@@ -6,7 +6,7 @@ A modular, native desktop shell for Windows 11, written in Rust with [GPUI](http
 
 **Early rewrite. Not usable as a desktop shell yet.**
 
-The repository currently contains a single top bar with a clock. It opens as an ordinary overlay window: it does not hide the Windows taskbar, reserve screen space, register hooks or change any system setting.
+The repository currently contains a single top bar with a clock. While it runs, the bar stays above other windows and reserves the top edge of the primary display, so maximized windows stop below it; Windows releases that space when the bar exits. It does not hide the Windows taskbar, register hooks or change any persistent system setting. There is no in-app way to quit yet: end the `tessera` process to close it.
 
 The previous Slint-based implementation was removed. Its source and test builds remain available at the [`v0.1.0-alpha.22`](https://github.com/redstone-md/tessera/releases/tag/v0.1.0-alpha.22) tag; it is unmaintained.
 

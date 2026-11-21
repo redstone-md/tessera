@@ -4,16 +4,20 @@
 //! The top bar surface.
 
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render, Styled, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, size,
+    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Pixels, Render, Styled,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, div, px, size,
 };
 
 use crate::clock::Clock;
+use crate::platform::{EdgeReservation, NativeSurface, ScreenEdge};
 use crate::theme::Theme;
 
 /// A full-width strip along the top edge of the primary display.
 pub struct Bar {
     clock: Entity<Clock>,
+    /// Held so maximized windows keep clear of the bar while it exists.
+    _reservation: Option<EdgeReservation>,
 }
 
 impl Bar {
@@ -29,7 +33,10 @@ impl Bar {
         };
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: None,
+            // GPUI insets the client area of windows without a title bar by the
+            // system frame thickness. Asking for an opaque title bar disables
+            // that; the caption itself is removed when the surface is adopted.
+            titlebar: Some(TitlebarOptions::default()),
             focus: false,
             show: true,
             kind: WindowKind::PopUp,
@@ -40,11 +47,25 @@ impl Bar {
             window_background: WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
-        cx.open_window(options, |_, cx| {
+        cx.open_window(options, |window, cx| {
+            let reservation = Self::dock(window, theme.bar_height)
+                .inspect_err(|error| {
+                    eprintln!("tessera: the bar is not docked to the screen edge: {error:#}");
+                })
+                .ok();
             cx.new(|cx| Self {
                 clock: cx.new(Clock::new),
+                _reservation: reservation,
             })
         })
+    }
+
+    /// Pins the bar above other windows and reserves the top screen edge.
+    fn dock(window: &Window, height: Pixels) -> anyhow::Result<EdgeReservation> {
+        let surface = NativeSurface::of(window)?;
+        surface.adopt_as_shell_surface()?;
+        let thickness = (height / px(1.) * window.scale_factor()).round() as i32;
+        surface.reserve_edge(ScreenEdge::Top, thickness)
     }
 }
 

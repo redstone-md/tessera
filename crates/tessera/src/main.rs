@@ -7,6 +7,7 @@
 
 mod bar;
 mod clock;
+mod platform;
 mod theme;
 
 use gpui::{App, Application};

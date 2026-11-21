@@ -5373,6 +5373,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "gpui",
+ "raw-window-handle",
+ "windows 0.61.3",
 ]
 
 [[package]]
