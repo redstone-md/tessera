@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use anyhow::{Context as _, Result, anyhow};
@@ -28,9 +29,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW,
     GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST,
     IsWindow, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SendNotifyMessageW, SetTimer, SetWindowPos,
-    TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SendNotifyMessageW, SetForegroundWindow, SetTimer,
+    SetWindowPos, TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -319,7 +321,9 @@ impl Tray {
             .values()
             .find(|entry| entry.id == id)
             .cloned();
-        let Some(entry) = entry else {
+        // An icon that was added before the shell started and is only
+        // modified since never said which message it wants.
+        let Some(mut entry) = entry.filter(|entry| entry.callback != 0) else {
             return;
         };
         let window = handle(entry.window);
@@ -330,10 +334,21 @@ impl Tray {
         unsafe {
             let _ = GetCursorPos(&raw mut pointer);
             GetWindowThreadProcessId(window, Some(&raw mut process));
-            // The application will want to show a menu or a window.
+            // The application will want to show a menu or a window, which
+            // it may put in front only if the shell, which lets it, is in
+            // front itself. The shell may come to the front, having just
+            // been clicked. A menu that is not in front stays open when
+            // something else is clicked.
+            let host = HOST.load(Ordering::Relaxed);
+            let _ = SetForegroundWindow(handle(host));
             let _ = AllowSetForegroundWindow(process);
         }
 
+        // Explorer's own icons were added before the shell started, so
+        // their version was never told; they use the current one.
+        if entry.version == 0 && explorer_process() == Some(process) {
+            entry.version = VERSION_4;
+        }
         let events: &[u32] = match (button, entry.version >= VERSION_4) {
             (TrayButton::Left, false) => &[WM_LBUTTONDOWN, WM_LBUTTONUP],
             (TrayButton::Left, true) => &[WM_LBUTTONDOWN, WM_LBUTTONUP, NIN_SELECT],
@@ -361,6 +376,10 @@ impl Tray {
     }
 }
 
+/// The window of the shell that applications deliver their icons to; 0
+/// before it exists.
+static HOST: AtomicU32 = AtomicU32::new(0);
+
 /// The handle a 32-bit value of a notification stands for.
 fn handle(value: u32) -> HWND {
     HWND(value as usize as *mut c_void)
@@ -375,6 +394,7 @@ fn run(ready: &mpsc::Sender<Result<()>>) {
             return;
         }
     };
+    HOST.store(window.0 as usize as u32, Ordering::Relaxed);
     let _ = ready.send(Ok(()));
 
     // SAFETY: the window belongs to this thread; `message` outlives the
@@ -448,6 +468,24 @@ fn explorer_tray(ours: HWND) -> Option<HWND> {
         }
         if window != ours {
             return Some(window);
+        }
+        previous = Some(window);
+    }
+    None
+}
+
+/// The process of Explorer's taskbar.
+fn explorer_process() -> Option<u32> {
+    let mut previous = None;
+    // SAFETY: as in `explorer_tray`; the out-parameter outlives the call.
+    while let Ok(window) = unsafe { FindWindowExW(None, previous, CLASS, PCWSTR::null()) } {
+        if window.is_invalid() {
+            break;
+        }
+        let mut process = 0;
+        unsafe { GetWindowThreadProcessId(window, Some(&raw mut process)) };
+        if process != 0 && process != std::process::id() {
+            return Some(process);
         }
         previous = Some(window);
     }
