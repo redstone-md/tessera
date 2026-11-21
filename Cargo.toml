@@ -21,6 +21,11 @@ ureq = { version = "3", default-features = false, features = ["native-tls"] }
 wasmtime = { version = "51", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 wit-component = "0.263"
 windows = { version = "0.61", features = [
+    "ApplicationModel",
+    "Foundation",
+    "Foundation_Collections",
+    "UI_Notifications",
+    "UI_Notifications_Management",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",

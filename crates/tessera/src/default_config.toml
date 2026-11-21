@@ -17,6 +17,9 @@
 # Built-in widgets:
 #   "clock"     date and time; option format, a strftime pattern
 #   "calendar"  a month to page through; option week_start, "monday" or "sunday"
+#   "notifications"  the notifications of the Windows notification center,
+#               each with a button that dismisses it; fills the height left
+#               in its popup and scrolls
 #   "volume"    the output volume, as an icon and a percentage
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
@@ -57,8 +60,8 @@ content = ["launcher"]
 [[popup]]
 name = "calendar"
 width = 300
-height = 348
-content = ["calendar"]
+height = 720
+content = ["calendar", "notifications"]
 
 [[popup]]
 name = "sound"

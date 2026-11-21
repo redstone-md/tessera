@@ -8,6 +8,7 @@
 mod app_windows;
 mod audio;
 mod icon;
+mod notifications;
 mod shortcuts;
 mod taskbar;
 mod tray;
@@ -15,6 +16,7 @@ mod tray;
 pub use app_windows::{AppWindow, AppWindowId};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
+pub use notifications::{Notification, Notifications};
 pub use shortcuts::Shortcut;
 pub use taskbar::Taskbar;
 pub use tray::{Tray, TrayButton, TrayIcon};
