@@ -9,8 +9,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AsyncApp, Context, InteractiveElement, IntoElement, ParentElement, Render, RenderImage,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, img,
+    Animation, AnimationExt, AnyElement, AsyncApp, Context, InteractiveElement, IntoElement,
+    ParentElement, Render, RenderImage, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    div, ease_out_quint, img,
 };
 
 use crate::platform::{AppWindow, AppWindowId, DisplayKey, IconPixels};
@@ -84,6 +85,60 @@ impl Dock {
         self.icons.insert(executable.to_owned(), icon.clone());
         icon
     }
+
+    fn render_item(&mut self, index: usize, window: &AppWindow, theme: Theme) -> AnyElement {
+        let icon = window
+            .executable
+            .as_deref()
+            .and_then(|executable| self.icon_for(executable));
+        let is_foreground = self.foreground == Some(window.id);
+        let id = window.id;
+
+        let item = div()
+            .id(("dock-item", index))
+            .size(theme.dock.item_size)
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(theme.spacing.tiny)
+            .rounded(theme.shape.medium)
+            .hover(|style| style.bg(theme.colors.surface_container_highest))
+            .on_click(move |_, _, _| id.activate_or_minimize())
+            .child(match icon {
+                Some(icon) => img(icon).size(theme.dock.icon_size).into_any_element(),
+                None => div()
+                    .size(theme.dock.icon_size)
+                    .rounded(theme.shape.small)
+                    .bg(theme.colors.outline)
+                    .into_any_element(),
+            })
+            .child(Self::render_indicator(index, is_foreground, theme));
+
+        if is_foreground {
+            item.bg(theme.colors.secondary_container).into_any_element()
+        } else {
+            item.into_any_element()
+        }
+    }
+
+    /// A dot under every window; it grows into a pill for the foreground one.
+    fn render_indicator(index: usize, is_foreground: bool, theme: Theme) -> AnyElement {
+        let dot = theme.dock.indicator_height;
+        let indicator = div().h(dot).rounded(theme.shape.full);
+        if !is_foreground {
+            return indicator.w(dot).bg(theme.colors.outline).into_any_element();
+        }
+        let growth = theme.dock.indicator_active_width - dot;
+        indicator
+            .bg(theme.colors.primary)
+            .with_animation(
+                ("dock-indicator", index),
+                Animation::new(theme.motion.short).with_easing(ease_out_quint()),
+                move |indicator, progress| indicator.w(dot + growth * progress),
+            )
+            .into_any_element()
+    }
 }
 
 fn render_image(pixels: IconPixels) -> Icon {
@@ -95,54 +150,26 @@ impl Render for Dock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         let windows = self.windows.clone();
-        let items = windows.into_iter().enumerate().map(|(index, window)| {
-            let icon = window
-                .executable
-                .as_deref()
-                .and_then(|executable| self.icon_for(executable));
-            let is_foreground = self.foreground == Some(window.id);
-            let id = window.id;
+        let items: Vec<AnyElement> = windows
+            .iter()
+            .enumerate()
+            .map(|(index, window)| self.render_item(index, window, theme))
+            .collect();
 
-            // A pill marks the foreground window, a dot every other one.
-            let (indicator_width, indicator_color) = if is_foreground {
-                (theme.dock.indicator_active_width, theme.colors.primary)
-            } else {
-                (theme.dock.indicator_height, theme.colors.outline)
-            };
-            let indicator = div()
-                .h(theme.dock.indicator_height)
-                .w(indicator_width)
-                .rounded(theme.shape.full)
-                .bg(indicator_color);
-
+        let row = div().size_full().flex().items_center().justify_center();
+        if items.is_empty() {
+            return row;
+        }
+        row.child(
             div()
-                .id(("dock-item", index))
-                .size(theme.dock.item_size)
+                .h(theme.dock.container_height)
+                .px(theme.spacing.small)
                 .flex()
-                .flex_col()
                 .items_center()
-                .justify_center()
                 .gap(theme.spacing.tiny)
-                .rounded(theme.shape.medium)
-                .hover(|style| style.bg(theme.colors.surface_container_highest))
-                .on_click(move |_, _, _| id.activate_or_minimize())
-                .child(match icon {
-                    Some(icon) => img(icon).size(theme.dock.icon_size).into_any_element(),
-                    None => div()
-                        .size(theme.dock.icon_size)
-                        .rounded(theme.shape.small)
-                        .bg(theme.colors.outline)
-                        .into_any_element(),
-                })
-                .child(indicator)
-        });
-
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(theme.spacing.small)
-            .children(items)
+                .rounded(theme.shape.large)
+                .bg(theme.colors.surface_container)
+                .children(items),
+        )
     }
 }

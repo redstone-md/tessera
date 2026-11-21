@@ -7,10 +7,9 @@ use std::time::Duration;
 
 use chrono::{Local, Timelike};
 use gpui::{
-    AsyncApp, Context, IntoElement, ParentElement, Render, Styled, WeakEntity, Window, div,
+    AsyncApp, Context, FontWeight, IntoElement, ParentElement, Render, Styled, WeakEntity, Window,
+    div,
 };
-
-use crate::theme::Theme;
 
 /// Displays the local date and time to minute precision.
 pub struct Clock;
@@ -40,11 +39,9 @@ impl Clock {
 }
 
 impl Render for Clock {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = *cx.global::<Theme>();
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .text_color(theme.colors.on_surface)
-            .text_size(theme.body_size)
+            .font_weight(FontWeight::MEDIUM)
             .child(Local::now().format("%a %-d %b  %H:%M").to_string())
     }
 }

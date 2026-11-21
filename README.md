@@ -8,7 +8,7 @@ A modular, native desktop shell for Windows 11, written in Rust with [GPUI](http
 
 What exists today, on every display:
 
-- A top bar with a clock and a **Quit Tessera** button.
+- A top bar with a clock and a **Quit Tessera** button, drawn as floating rounded pills.
 - A dock with one button per application window on that display; a minimized window counts for the display it restores to. Clicking a button brings its window to the foreground, or minimizes it if it already is there. The window list is polled twice a second. Packaged (Store) apps show a placeholder instead of their icon, and windows of elevated processes may ignore clicks.
 
 While Tessera runs:

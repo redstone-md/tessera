@@ -81,7 +81,7 @@ impl EdgeSurface {
     }
 }
 
-/// The root view of an edge surface: a themed backdrop around its content.
+/// The root view of an edge surface: a transparent strip around its content.
 pub struct EdgeSurfaceView<V> {
     content: Entity<V>,
     /// Held so maximized windows keep clear of the surface while it exists.
@@ -92,7 +92,7 @@ impl<V: Render> Render for EdgeSurfaceView<V> {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .bg(cx.global::<Theme>().colors.surface_container)
+            .font_family(cx.global::<Theme>().typography.family)
             .child(self.content.clone())
     }
 }

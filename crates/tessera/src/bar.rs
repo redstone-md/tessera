@@ -10,6 +10,7 @@ use gpui::{
 
 use crate::clock::Clock;
 use crate::theme::Theme;
+use crate::widgets::{centered_row, pill};
 
 /// Status content shown along the top edge of a display.
 pub struct Bar {
@@ -27,24 +28,18 @@ impl Bar {
 impl Render for Bar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        let quit = div()
+        let quit = pill(&theme)
             .id("quit")
-            .px(theme.spacing.medium)
-            .py(theme.spacing.tiny)
-            .rounded(theme.shape.full)
-            .text_size(theme.body_size)
             .text_color(theme.colors.on_surface_variant)
             .hover(|style| style.bg(theme.colors.surface_container_highest))
             .on_click(|_, _, cx| cx.quit())
             .child("Quit Tessera");
 
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .px(theme.spacing.medium)
-            .child(div().flex_1())
-            .child(self.clock.clone())
-            .child(div().flex_1().flex().justify_end().child(quit))
+        centered_row(
+            &theme,
+            div(),
+            pill(&theme).child(self.clock.clone()),
+            div().child(quit),
+        )
     }
 }

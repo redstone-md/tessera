@@ -11,6 +11,7 @@ mod dock;
 mod platform;
 mod surface;
 mod theme;
+mod widgets;
 
 use std::time::Duration;
 
@@ -54,7 +55,7 @@ fn open_surfaces(cx: &mut App) -> anyhow::Result<()> {
     let theme = *cx.global::<Theme>();
     let bar = EdgeSurface {
         edge: ScreenEdge::Top,
-        thickness: theme.bar_height,
+        thickness: theme.bar.height,
     };
     let dock = EdgeSurface {
         edge: ScreenEdge::Bottom,
