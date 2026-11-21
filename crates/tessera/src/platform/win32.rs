@@ -63,11 +63,22 @@ use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST,
-    PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+    GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
+    GetWindowRect, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, PostMessageW,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
+
+/// Classes of windows that cover a display without being an application
+/// shown full screen: the desktop, and the task view and window switcher
+/// of Windows.
+const NOT_FILLING: [&str; 4] = [
+    "Progman",
+    "WorkerW",
+    "XamlExplorerHostIslandWindow",
+    "MultitaskingViewFrame",
+];
 
 /// Message the system posts to a window that reserves a screen edge.
 const EDGE_NOTIFICATION: u32 = WM_APP + 1;
@@ -232,6 +243,60 @@ impl NativeSurface {
         // SAFETY: `hwnd` belongs to a live window owned by this thread.
         unsafe {
             let _ = SetForegroundWindow(self.hwnd);
+        }
+    }
+
+    /// Whether the window in front fills the whole display of this one, as
+    /// a game or a video played full screen does. The desktop and the
+    /// screens of Windows that show all windows do not count.
+    pub fn display_is_filled(self) -> bool {
+        // SAFETY: the calls only read the state of windows; a window that
+        // went away meanwhile makes them fail, which counts as not filled.
+        unsafe {
+            let front = GetForegroundWindow();
+            if front.is_invalid() || front == self.hwnd || !IsWindowVisible(front).as_bool() {
+                return false;
+            }
+            let mut name = [0u16; 64];
+            let length = GetClassNameW(front, &mut name).max(0) as usize;
+            let class = String::from_utf16_lossy(&name[..length]);
+            if NOT_FILLING.contains(&class.as_str()) {
+                return false;
+            }
+            let display = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            if MonitorFromWindow(front, MONITOR_DEFAULTTONEAREST) != display {
+                return false;
+            }
+            let mut monitor = MONITORINFO {
+                cbSize: size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let mut frame = RECT::default();
+            if !GetMonitorInfoW(display, &mut monitor).as_bool()
+                || GetWindowRect(front, &mut frame).is_err()
+            {
+                return false;
+            }
+            let all = monitor.rcMonitor;
+            frame.left <= all.left
+                && frame.top <= all.top
+                && frame.right >= all.right
+                && frame.bottom >= all.bottom
+        }
+    }
+
+    /// Puts the window above ordinary windows, or below all of them.
+    pub fn keep_above(self, above: bool) {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        // SAFETY: `hwnd` belongs to a live window owned by this thread, and
+        // the calls only change its place in the order of windows.
+        unsafe {
+            if above {
+                let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
+            } else {
+                let _ = SetWindowPos(self.hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, flags);
+                let _ = SetWindowPos(self.hwnd, Some(HWND_BOTTOM), 0, 0, 0, 0, flags);
+            }
         }
     }
 

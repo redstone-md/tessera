@@ -4,16 +4,20 @@
 //! Shell surfaces: borderless windows docked to a display edge.
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Pixels, PlatformDisplay,
-    Render, Styled, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowKind, WindowOptions, div, point, px, size,
+    App, AppContext, AsyncApp, Bounds, Context, Entity, IntoElement, ParentElement, Pixels,
+    PlatformDisplay, Render, Styled, TitlebarOptions, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 
 use crate::platform::{DisplayKey, EdgeReservation, NativeSurface, ScreenEdge};
 use crate::theme::Theme;
 use crate::ui::release_hover;
+
+/// How often a surface looks whether an application fills its display.
+const FILLED_CHECK: Duration = Duration::from_millis(300);
 
 /// Describes a strip along one edge of a display.
 #[derive(Clone, Copy, Debug)]
@@ -55,12 +59,36 @@ impl EdgeSurface {
                     report!("a surface is not docked to its screen edge: {error:#}");
                 })
                 .ok();
-            cx.new(|cx| EdgeSurfaceView {
-                surface: self,
-                content: cx.new(|cx| build(display, cx)),
-                reservation,
+            let native = NativeSurface::of(window).ok();
+            cx.new(|cx| {
+                if let Some(native) = native {
+                    Self::give_way(native, cx);
+                }
+                EdgeSurfaceView {
+                    surface: self,
+                    content: cx.new(|cx| build(display, cx)),
+                    reservation,
+                }
             })
         })
+    }
+
+    /// Has the surface `native` go below all windows while an application
+    /// fills its display, as a game shown full screen does, and come back
+    /// above them afterwards. Ends with the view `cx` makes.
+    fn give_way<V: Render>(native: NativeSurface, cx: &mut Context<EdgeSurfaceView<V>>) {
+        cx.spawn(async move |view, cx: &mut AsyncApp| {
+            let mut below = false;
+            while view.upgrade().is_some() {
+                let filled = native.display_is_filled();
+                if filled != below {
+                    below = filled;
+                    native.keep_above(!below);
+                }
+                cx.background_executor().timer(FILLED_CHECK).await;
+            }
+        })
+        .detach();
     }
 
     fn bounds_on(self, display: Bounds<Pixels>) -> Bounds<Pixels> {
