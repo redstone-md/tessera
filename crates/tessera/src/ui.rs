@@ -20,7 +20,7 @@ use crate::motion::{InteractionState, mix};
 use crate::platform::NativeSurface;
 use crate::theme::Theme;
 
-pub use list::{list_row, list_title, switch};
+pub use list::{ROW_HEIGHT, list_row, list_title, switch};
 pub use slider::Slider;
 
 /// Ends the hover of what the pointer was on when it left `window`. GPUI

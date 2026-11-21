@@ -402,6 +402,11 @@ fn display_of(hwnd: HWND) -> DisplayKey {
 
 /// The image of `process`, when the system allows reading it, and the
 /// identifier of the packaged application its window `hwnd` belongs to.
+/// The image of `process`, when the system allows reading it.
+pub(super) fn executable_of(process: u32) -> Option<PathBuf> {
+    program_of(HWND::default(), process).0
+}
+
 fn program_of(hwnd: HWND, process: u32) -> (Option<PathBuf>, Option<String>) {
     // SAFETY: the buffer and its length describe the same allocation, and the
     // process handle is closed before returning.

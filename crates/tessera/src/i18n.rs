@@ -157,6 +157,18 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("min", "мин"),
     ("h", "ч"),
     ("d", "д"),
+    // The sound.
+    ("No audio", "Нет звука"),
+    ("No audio output", "Нет устройства вывода"),
+    ("No microphone", "Нет микрофона"),
+    ("Applications", "Приложения"),
+    ("System sounds", "Системные звуки"),
+    (
+        "No application plays sound",
+        "Ни одно приложение не играет звук",
+    ),
+    ("Output", "Вывод"),
+    ("In use", "Используется"),
     // The connections.
     ("Connections", "Подключения"),
     ("Nothing is connected", "Нет подключений"),

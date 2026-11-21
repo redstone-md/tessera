@@ -23,6 +23,7 @@ wasmtime.workspace = true
 wit-component.workspace = true
 windows.workspace = true
 windows-collections.workspace = true
+windows-core.workspace = true
 
 [lints]
 workspace = true

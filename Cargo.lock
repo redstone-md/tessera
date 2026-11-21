@@ -4996,6 +4996,7 @@ dependencies = [
  "wasmtime",
  "windows",
  "windows-collections",
+ "windows-core 0.61.2",
  "wit-component",
 ]
 
