@@ -80,6 +80,10 @@
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume
+#   "brightness"  how bright the display of the surface is, as an icon and
+#               a percentage; nothing on a display that does not say
+#   "brightness-slider"  a slider for the brightness of the display it is
+#               shown on
 #   "tray"      the notification icons of applications; option tips, true
 #               or false: whether the description of the icon under the
 #               pointer comes out of the bar under it. Without the option
@@ -180,8 +184,8 @@ content = ["bluetooth"]
 [[popup]]
 name = "sound"
 width = 340
-height = 76
-content = ["volume-slider"]
+height = 136
+content = ["volume-slider", "brightness-slider"]
 
 # [tiling] puts the windows of each display side by side in the space the
 # bars leave. layout is "master" (one window on the left half, the others

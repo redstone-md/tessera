@@ -4,6 +4,7 @@
 //! The modules the shell is assembled from.
 
 mod bluetooth;
+mod brightness;
 mod calendar;
 mod clock;
 mod command;
@@ -53,6 +54,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(settings::SettingsModule),
         Box::new(start::StartModule),
         Box::new(sound::SoundModule),
+        Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
         Box::new(tray::TrayModule),

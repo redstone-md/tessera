@@ -52,5 +52,5 @@ content = ["bluetooth"]
 [[popup]]
 name = "sound"
 width = 340
-height = 76
-content = ["volume-slider"]
+height = 136
+content = ["volume-slider", "brightness-slider"]

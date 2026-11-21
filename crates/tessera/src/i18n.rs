@@ -61,6 +61,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("General", "Общие"),
     ("Bars", "Панели"),
     ("Desktop", "Рабочий стол"),
+    (
+        "This display does not let its brightness be set",
+        "Этот экран не даёт менять яркость",
+    ),
     // Settings: the cards of the desktop.
     ("Cards", "Карточки"),
     ("Card", "Карточка"),
