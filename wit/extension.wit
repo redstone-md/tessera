@@ -5,7 +5,7 @@
 ///
 /// This interface is unstable: it will change without a compatibility
 /// period until the package version reaches 1.0.0.
-package tessera:extension@0.1.0;
+package tessera:extension@0.2.0;
 
 world extension {
     /// A button the user can press.
@@ -17,11 +17,19 @@ world extension {
 
     /// What a node is. Tessera draws every kind with the active theme.
     variant node-kind {
-        /// Lays its children out horizontally.
+        /// Lays its children out horizontally. As the root, it makes the
+        /// widget a pill, as the widgets of a bar are. Inside a column it
+        /// is as wide as the column and spreads its children apart.
         row,
+        /// Lays its children out vertically, as wide as the space allows.
+        column,
         /// A line of text.
         text(string),
+        /// A line of less prominent text.
+        caption(string),
         button(button),
+        /// A bar filled to the given share, from 0 to 1.
+        progress(f32),
     }
 
     /// One node of a widget's content tree.
@@ -32,8 +40,54 @@ world extension {
         children: list<u32>,
     }
 
+    record header {
+        name: string,
+        value: string,
+    }
+
+    record request {
+        /// `GET`, `POST` and so on.
+        method: string,
+        /// Must start with `https://` and name a host the extension
+        /// manifest lists under `permissions.network`.
+        url: string,
+        headers: list<header>,
+        body: option<string>,
+    }
+
+    record response {
+        status: u16,
+        /// The body as text, at most 1 MiB of it.
+        body: string,
+    }
+
     /// Writes a diagnostic message to the shell's log.
     import log: func(message: string);
+
+    /// Seconds since 1970-01-01 00:00 UTC.
+    import now: func() -> u64;
+
+    /// The value the user gave `key` in the `[extension.<id>]` table of
+    /// the shell's configuration. Values that are not text are given the
+    /// way TOML writes them.
+    import setting: func(key: string) -> option<string>;
+
+    /// What `save-state` stored last, also before a restart; empty when
+    /// nothing was stored.
+    import load-state: func() -> string;
+
+    /// Stores up to 64 KiB of text for `load-state`.
+    import save-state: func(state: string) -> result<_, string>;
+
+    /// Reads a text file of at most 1 MiB. `path` must be one the
+    /// extension manifest lists under `permissions.files`, spelled the
+    /// same way; a leading `~` stands for the user's home directory.
+    import read-file: func(path: string) -> result<string, string>;
+
+    /// Starts a request and returns at once with a number for it; the
+    /// outcome arrives later through `fetched`. Redirects are not
+    /// followed. Only a few requests may be under way at a time.
+    import fetch: func(request: request) -> result<u32, string>;
 
     /// Describes the current content of `widget`, one of the widgets the
     /// extension manifest declares. The first node is the root.
@@ -42,4 +96,9 @@ world extension {
     /// Tells the extension that the user pressed a button of `widget`.
     /// Tessera calls `render` again afterwards.
     export activate: func(widget: string, action: string);
+
+    /// Delivers the outcome of the request that `fetch` numbered
+    /// `request`: a response of any status, or why there is none. Tessera
+    /// calls `render` for the extension's widgets again afterwards.
+    export fetched: func(request: u32, outcome: result<response, string>);
 }

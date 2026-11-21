@@ -133,6 +133,9 @@ pub struct Config {
     /// file name of the executable.
     #[serde(default)]
     pub icons: HashMap<String, PathBuf>,
+    /// Settings of extensions, by extension identifier.
+    #[serde(default, rename = "extension")]
+    pub extensions: HashMap<String, toml::Table>,
 }
 
 impl Config {

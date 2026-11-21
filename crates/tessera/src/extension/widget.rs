@@ -3,37 +3,47 @@
 
 //! Draws the content an extension describes, with the shell's theme.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AsyncApp, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div,
+    AnyElement, AsyncApp, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, div, relative,
 };
 
-use super::runtime::{Instance, Node, NodeKind};
-use crate::motion::Interaction;
+use super::host::Host;
+use super::runtime::{Node, NodeKind};
+use crate::motion::{Interaction, Spring};
 use crate::theme::Theme;
 use crate::ui::{pill, state_layer};
 
+/// How a node is laid out, which depends on what contains it.
+#[derive(Clone, Copy, PartialEq)]
+enum Placement {
+    /// The first node: it is the whole widget.
+    Root,
+    InRow,
+    InColumn,
+}
+
 /// One placed instance of a widget that an extension provides.
 pub struct ExtensionWidget {
-    instance: Rc<RefCell<Instance>>,
+    host: Entity<Host>,
     /// The widget's name inside its extension.
     widget: String,
     /// The name layouts use, for messages.
     id: String,
-    /// The last content the extension returned; `None` once a call failed.
+    /// The last content the extension returned; `None` once it has failed.
     content: Option<Vec<Node>>,
     /// Pointer feedback of the buttons, by node index.
     buttons: HashMap<usize, Interaction>,
+    /// The shown fill of the progress bars, by node index.
+    progress: HashMap<usize, Spring>,
 }
 
 impl ExtensionWidget {
     pub fn new(
-        instance: Rc<RefCell<Instance>>,
+        host: Entity<Host>,
         widget: String,
         id: String,
         refresh: Option<Duration>,
@@ -43,59 +53,57 @@ impl ExtensionWidget {
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor().timer(interval).await;
-                    let alive = this.update(cx, |this, cx| {
-                        this.refresh();
-                        cx.notify();
-                    });
-                    if alive.is_err() {
+                    if this.update(cx, |this, cx| this.refresh(cx)).is_err() {
                         break;
                     }
                 }
             })
             .detach();
         }
+        cx.observe(&host, |this, _, cx| this.refresh(cx)).detach();
         let mut widget = Self {
-            instance,
+            host,
             widget,
             id,
-            content: Some(Vec::new()),
+            content: None,
             buttons: HashMap::new(),
+            progress: HashMap::new(),
         };
-        widget.refresh();
+        widget.refresh(cx);
         widget
     }
 
-    /// Asks the extension for its content, unless it has failed before.
-    fn refresh(&mut self) {
-        if self.content.is_none() {
-            return;
-        }
-        let content = self.instance.borrow_mut().render(&self.widget);
-        self.content = self.checked(content);
+    /// Asks the extension for the content again.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let widget = &self.widget;
+        self.content = self.host.update(cx, |host, cx| host.render(widget, cx));
+        cx.notify();
     }
 
-    fn activate(&mut self, action: &str) {
-        if self.content.is_none() {
-            return;
-        }
-        let outcome = self.instance.borrow_mut().activate(&self.widget, action);
-        if self.checked(outcome).is_none() {
-            self.content = None;
-        }
-        self.refresh();
-    }
-
-    /// Reports a failed call into the extension.
-    fn checked<T>(&self, outcome: anyhow::Result<T>) -> Option<T> {
-        outcome
-            .inspect_err(|error| eprintln!("tessera: widget `{}` stopped: {error:#}", self.id))
-            .ok()
+    fn children(
+        &mut self,
+        nodes: &[Node],
+        index: usize,
+        placement: Placement,
+        theme: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        // Children must come later in the list, which rules out cycles.
+        nodes[index]
+            .children
+            .iter()
+            .map(|&child| child as usize)
+            .filter(|&child| child > index)
+            .filter_map(|child| self.element(nodes, child, placement, theme, window, cx))
+            .collect()
     }
 
     fn element(
         &mut self,
         nodes: &[Node],
         index: usize,
+        placement: Placement,
         theme: &Theme,
         window: &Window,
         cx: &mut Context<Self>,
@@ -103,6 +111,61 @@ impl ExtensionWidget {
         let node = nodes.get(index)?;
         Some(match &node.kind {
             NodeKind::Text(text) => div().child(text.clone()).into_any_element(),
+            NodeKind::Caption(text) => div()
+                .text_color(theme.colors.on_surface_variant)
+                .child(text.clone())
+                .into_any_element(),
+            NodeKind::Row => {
+                let row = match placement {
+                    Placement::Root => pill(theme),
+                    Placement::InRow => div().flex().items_center().gap(theme.spacing.small),
+                    Placement::InColumn => div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(theme.spacing.small),
+                };
+                row.children(self.children(nodes, index, Placement::InRow, theme, window, cx))
+                    .into_any_element()
+            }
+            NodeKind::Column => div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(theme.spacing.small)
+                .children(self.children(nodes, index, Placement::InColumn, theme, window, cx))
+                .into_any_element(),
+            NodeKind::Progress(share) => {
+                let share = if share.is_nan() {
+                    0.
+                } else {
+                    share.clamp(0., 1.)
+                };
+                let shown = self
+                    .progress
+                    .entry(index)
+                    .or_insert_with(|| Spring::new(theme.motion.effects, 0.));
+                shown.animate_to(share);
+                let shown = shown.value(window).clamp(0., 1.);
+                let track = div()
+                    .h(theme.spacing.small)
+                    .rounded(theme.shape.full)
+                    .overflow_hidden()
+                    .bg(theme.colors.surface_container_highest)
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(shown))
+                            .rounded(theme.shape.full)
+                            .bg(theme.colors.primary),
+                    );
+                match placement {
+                    Placement::InRow => track.w(theme.bar.pill_height * 1.5),
+                    Placement::Root | Placement::InColumn => track.w_full(),
+                }
+                .into_any_element()
+            }
             NodeKind::Button(button) => {
                 let action = button.action.clone();
                 let state = self
@@ -117,30 +180,15 @@ impl ExtensionWidget {
                     .bg(state_layer(theme, theme.colors.surface_container, state))
                     .text_color(theme.colors.primary)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.activate(&action);
-                        cx.notify();
+                        let widget = &this.widget;
+                        this.host
+                            .update(cx, |host, cx| host.activate(widget, &action, cx));
                     }))
                     .child(button.label.clone());
                 Interaction::track(element, cx, move |this: &mut Self| {
                     this.buttons.get_mut(&index)
                 })
                 .into_any_element()
-            }
-            NodeKind::Row => {
-                // Children must come later in the list, which rules out cycles.
-                let children: Vec<AnyElement> = node
-                    .children
-                    .iter()
-                    .map(|&child| child as usize)
-                    .filter(|&child| child > index)
-                    .filter_map(|child| self.element(nodes, child, theme, window, cx))
-                    .collect();
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(theme.spacing.small)
-                    .children(children)
-                    .into_any_element()
             }
         })
     }
@@ -152,8 +200,10 @@ impl Render for ExtensionWidget {
         let Some(nodes) = self.content.clone() else {
             return pill(&theme)
                 .text_color(theme.colors.on_surface_variant)
-                .child(format!("{} stopped working", self.id));
+                .child(format!("{} stopped working", self.id))
+                .into_any_element();
         };
-        pill(&theme).children(self.element(&nodes, 0, &theme, window, cx))
+        self.element(&nodes, 0, Placement::Root, &theme, window, cx)
+            .unwrap_or_else(|| div().into_any_element())
     }
 }

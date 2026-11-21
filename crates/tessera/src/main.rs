@@ -41,7 +41,7 @@ fn main() {
     let config = Config::load();
     Application::new().run(move |cx: &mut App| {
         cx.set_global(Theme::load(config.theme.as_deref()));
-        cx.set_global(WidgetRegistry::from_modules(&modules::builtin()));
+        cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
         cx.set_global(AppIcons::new(&config.icons));
         match Taskbar::hide_until_exit() {

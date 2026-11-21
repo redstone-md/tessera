@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Example extension: counts presses of its own button.
+//! Example extension: counts presses of its own button, and shows how far
+//! the count is on its way to the next ten.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -20,10 +21,14 @@ impl Guest for Counter {
         vec![
             Node {
                 kind: NodeKind::Row,
-                children: vec![1, 2],
+                children: vec![1, 2, 3],
             },
             Node {
                 kind: NodeKind::Text(format!("Clicks: {clicks}")),
+                children: Vec::new(),
+            },
+            Node {
+                kind: NodeKind::Progress((clicks % 10) as f32 / 10.),
                 children: Vec::new(),
             },
             Node {
@@ -41,6 +46,10 @@ impl Guest for Counter {
             let clicks = CLICKS.fetch_add(1, Ordering::Relaxed) + 1;
             log(&format!("button pressed {clicks} times"));
         }
+    }
+
+    fn fetched(_request: u32, _outcome: Result<Response, String>) {
+        // This extension starts no requests.
     }
 }
 

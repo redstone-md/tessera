@@ -13,7 +13,7 @@ What exists today, by default on every display:
 - The output volume in the top bar. Clicking it opens a popup with a mute button and a slider that also follows the mouse wheel. It controls the master volume of the default output device only: no device picker, no per-application volume, no microphone. Changes made elsewhere show up within a second.
 - A dock with one button per application window on that display; a minimized window counts for the display it restores to. Clicking a button brings its window to the foreground, or minimizes it if it already is there. The window list is polled twice a second. Packaged (Store) apps show a placeholder instead of their icon, and windows of elevated processes may ignore clicks. The `[icons]` table of the configuration replaces the icon of an application, chosen by the file name of its executable, with a PNG, JPEG or ICO file; it is read once at startup.
 
-Motion is driven by springs: surfaces slide in from their edge at startup, dock buttons grow in and shrink away as windows open and close, the foreground indicator stretches, popups fade and slide in and out, and buttons respond to hover and press. Nothing else is animated yet: text changes, the clock and extension content switch instantly, and surfaces do not animate out on exit.
+Motion is driven by springs: surfaces slide in from their edge at startup, dock buttons grow in and shrink away as windows open and close, the foreground indicator stretches, popups fade and slide in and out, and buttons respond to hover and press. Nothing else is animated yet: text changes and the clock switch instantly, as does extension content other than its progress bars, and surfaces do not animate out on exit.
 
 While Tessera runs:
 
@@ -32,17 +32,27 @@ The layout is read once at startup from `%APPDATA%\tessera\config.toml`. It list
 
 ## Extensions
 
-An extension is a WebAssembly file that Tessera runs in a [Wasmtime](https://wasmtime.dev) sandbox. It describes the content of its widgets as a tree of rows, text and buttons, which Tessera draws with the active theme, and it is told when one of its buttons is pressed. [`wit/extension.wit`](wit/extension.wit) is the whole interface. It is unstable and will change.
+An extension is a WebAssembly file that Tessera runs in a [Wasmtime](https://wasmtime.dev) sandbox. It describes the content of its widgets as a tree of rows, columns, text, captions, buttons and progress bars, which Tessera draws with the active theme, and it is told when one of its buttons is pressed. [`wit/extension.wit`](wit/extension.wit) is the whole interface. It is unstable and will change.
 
-What an extension can do today is deliberately little:
+Besides drawing, an extension can:
 
-- Its only access to the outside is a `log` function. It cannot reach files, the network, the clock, devices or other processes, so an extension that shows a battery level or talks to Bluetooth cannot be written yet; that needs host APIs that do not exist.
-- It can only add widgets to a surface. It cannot open popups or screens of its own, and it has no icons, images or layout beyond a row.
+- read the clock and write to the shell's log;
+- read its settings, the keys of the `[extension.<id>]` table in `config.toml`;
+- keep up to 64 KiB of text across restarts, stored as `state.txt` in its own directory;
+- read the files its manifest lists under `permissions.files`, and no others;
+- send HTTPS requests to the hosts its manifest lists under `permissions.network`, and no others. Requests run in the background and the answer is delivered later; redirects are not followed, a response is cut off at 1 MiB, and servers are verified against the Windows certificate store.
+
+The limits of that:
+
+- Permissions are granted by the manifest alone. Tessera does not ask before loading an extension and shows nowhere what an extension is permitted, so read `extension.toml` before installing one: an extension with a file and a host permitted can send that file to that host.
+- Settings, API keys included, are plain text in `config.toml`.
+- It still cannot reach devices, Bluetooth, other processes or anything else of Windows, so an extension that shows a mouse's battery level cannot be written yet.
+- It can only add widgets. It cannot declare popups or screens of its own — the user places its widgets in a popup in `config.toml` — and it has no icons, images, text input or scrolling.
 - Each call into an extension is limited in computation, and an extension is limited to 64 MiB of memory. A widget whose extension exceeds a limit or crashes shows "stopped working" until Tessera restarts.
-- Extensions are loaded once at startup. A widget placed on several displays shares one extension instance, and pressing a button on one display does not repaint the others until their next refresh.
+- Extensions are loaded once at startup. A widget placed on several displays shares one extension instance.
 - There is no marketplace, registry, installer, signing or update mechanism. Installing means copying files by hand.
 
-To install one, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id` and its widgets. A layout then refers to a widget as `<id>.<widget name>`. [`extensions/counter`](extensions/counter) is a working example; build it with:
+To install one, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id`, its widgets and its permissions. A layout then refers to a widget as `<id>.<widget name>`. [`extensions/counter`](extensions/counter) is a working example; build it with:
 
 ```sh
 rustup target add wasm32-unknown-unknown

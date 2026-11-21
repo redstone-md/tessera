@@ -67,3 +67,9 @@ content = ["volume-slider"]
 #
 # [icons]
 # "notepad.exe" = "icons/notepad.png"
+
+# [extension.<id>] holds the settings of the extension with that id; the
+# extension decides which keys it understands.
+#
+# [extension.ai-limits]
+# providers = ["claude", "codex"]

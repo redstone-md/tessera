@@ -11,11 +11,12 @@ mod session;
 mod sound;
 mod windows;
 
+use crate::config::Config;
 use crate::extension::ExtensionsModule;
 use crate::module::Module;
 
 /// Every module the shell starts with; the last one loads extensions.
-pub fn builtin() -> Vec<Box<dyn Module>> {
+pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
     vec![
         Box::new(clock::ClockModule),
         Box::new(calendar::CalendarModule),
@@ -24,6 +25,8 @@ pub fn builtin() -> Vec<Box<dyn Module>> {
         Box::new(session::SessionModule),
         Box::new(sound::SoundModule),
         Box::new(windows::WindowsModule),
-        Box::new(ExtensionsModule),
+        Box::new(ExtensionsModule {
+            settings: config.extensions.clone(),
+        }),
     ]
 }

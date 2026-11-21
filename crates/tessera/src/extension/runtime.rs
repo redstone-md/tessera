@@ -3,6 +3,8 @@
 
 //! Runs extension code in a WebAssembly sandbox.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use anyhow::{Context as _, anyhow};
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
@@ -17,21 +19,79 @@ mod bindings {
 
 pub use bindings::{Node, NodeKind};
 
+use super::access::Access;
+use super::http::{HttpRequest, HttpResponse};
+
 /// Fuel granted to one call into an extension; a call that runs out traps.
 const FUEL_PER_CALL: u64 = 100_000_000;
 
 /// The most linear memory one extension may hold.
 const MEMORY_LIMIT: usize = 64 << 20;
 
+/// The most requests of one extension that may be under way at a time.
+const REQUEST_LIMIT: usize = 4;
+
+/// A request an extension started, and the number it knows it by.
+pub type NumberedRequest = (u32, HttpRequest);
+
 /// What the host functions of one extension can reach.
 struct HostState {
     id: String,
     limits: StoreLimits,
+    access: Access,
+    /// Requests accepted since they were last taken for sending.
+    accepted: Vec<NumberedRequest>,
+    /// Requests whose outcome the extension has not been given yet.
+    under_way: usize,
+    next_request: u32,
 }
 
 impl bindings::ExtensionImports for HostState {
     fn log(&mut self, message: String) {
         eprintln!("tessera: [{}] {message}", self.id);
+    }
+
+    fn now(&mut self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs())
+    }
+
+    fn setting(&mut self, key: String) -> Option<String> {
+        self.access.settings.get(&key).cloned()
+    }
+
+    fn load_state(&mut self) -> String {
+        self.access.load_state()
+    }
+
+    fn save_state(&mut self, state: String) -> Result<(), String> {
+        self.access.save_state(&state)
+    }
+
+    fn read_file(&mut self, path: String) -> Result<String, String> {
+        self.access.read_file(&path)
+    }
+
+    fn fetch(&mut self, request: bindings::Request) -> Result<u32, String> {
+        self.access.permissions.check_url(&request.url)?;
+        if self.under_way >= REQUEST_LIMIT {
+            return Err(format!("{REQUEST_LIMIT} requests are already under way"));
+        }
+        let number = self.next_request;
+        self.next_request = number.wrapping_add(1);
+        self.under_way += 1;
+        let headers = request.headers.into_iter();
+        self.accepted.push((
+            number,
+            HttpRequest {
+                method: request.method,
+                url: request.url,
+                headers: headers.map(|header| (header.name, header.value)).collect(),
+                body: request.body,
+            },
+        ));
+        Ok(number)
     }
 }
 
@@ -54,7 +114,7 @@ impl Runtime {
 
     /// Instantiates the extension `id` from `wasm`, which is either a
     /// component or a core module carrying its component type information.
-    pub fn instantiate(&self, id: &str, wasm: &[u8]) -> anyhow::Result<Instance> {
+    pub fn instantiate(&self, id: &str, wasm: &[u8], access: Access) -> anyhow::Result<Instance> {
         let component = if is_component(wasm) {
             Component::new(&self.engine, wasm)
         } else {
@@ -71,6 +131,10 @@ impl Runtime {
         let state = HostState {
             id: id.to_owned(),
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
+            access,
+            accepted: Vec::new(),
+            under_way: 0,
+            next_request: 0,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -101,6 +165,33 @@ impl Instance {
         self.bindings
             .call_activate(&mut self.store, widget, action)
             .map_err(describe)
+    }
+
+    /// Gives the extension the outcome of the request numbered `request`.
+    pub fn fetched(
+        &mut self,
+        request: u32,
+        outcome: Result<HttpResponse, String>,
+    ) -> anyhow::Result<()> {
+        let state = self.store.data_mut();
+        state.under_way = state.under_way.saturating_sub(1);
+        let outcome = outcome.map(|response| bindings::Response {
+            status: response.status,
+            body: response.body,
+        });
+        self.store.set_fuel(FUEL_PER_CALL).map_err(describe)?;
+        self.bindings
+            .call_fetched(
+                &mut self.store,
+                request,
+                outcome.as_ref().map_err(String::as_str),
+            )
+            .map_err(describe)
+    }
+
+    /// The requests the extension started since this was last called.
+    pub fn take_requests(&mut self) -> Vec<NumberedRequest> {
+        std::mem::take(&mut self.store.data_mut().accepted)
     }
 }
 
@@ -138,7 +229,7 @@ mod tests {
         let wasm = std::fs::read(wasm).unwrap();
         let mut counter = Runtime::new()
             .unwrap()
-            .instantiate("counter", &wasm)
+            .instantiate("counter", &wasm, Access::default())
             .unwrap();
 
         let text_of = |nodes: Vec<Node>| match &nodes[1].kind {
@@ -153,6 +244,10 @@ mod tests {
     #[test]
     fn bytes_that_are_not_wasm_are_rejected() {
         let runtime = Runtime::new().unwrap();
-        assert!(runtime.instantiate("probe", b"not wasm").is_err());
+        assert!(
+            runtime
+                .instantiate("probe", b"not wasm", Access::default())
+                .is_err()
+        );
     }
 }
