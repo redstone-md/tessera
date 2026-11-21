@@ -10,16 +10,20 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas, div, img,
+    AnyElement, App, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas,
+    div, img,
 };
 
+use crate::config::edit::ConfigFile;
 use crate::icons::{AppIcons, Icon};
+use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{AppWindow, AppWindowId, DisplayKey, Shortcut, WindowEvents};
 use crate::popup::PopupAnchor;
 use crate::preview::Previews;
+use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::state_layer;
 
@@ -37,6 +41,11 @@ const HOVER_GROWTH: f32 = 0.12;
 
 /// How much a pressed icon shrinks, as a share of its size.
 const PRESS_SHRINK: f32 = 0.16;
+
+const ICON_CLOSE: &str = "\u{e8bb}";
+const ICON_NEW_WINDOW: &str = "\u{e78b}";
+const ICON_PIN: &str = "\u{e718}";
+const ICON_UNPIN: &str = "\u{e77a}";
 
 pub struct WindowsModule;
 
@@ -128,6 +137,43 @@ fn is_link(path: &Path) -> bool {
 fn same_file(one: &Path, other: &Path) -> bool {
     let plain = |path: &Path| path.to_string_lossy().replace('/', "\\").to_lowercase();
     plain(one) == plain(other)
+}
+
+/// How the configuration file names the program at `path` when it is
+/// pinned.
+fn pin_name(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// `pins` without those called `name`, whatever their case.
+fn without(pins: &[String], name: &str) -> Vec<String> {
+    let kept = pins.iter().filter(|pin| !pin.eq_ignore_ascii_case(name));
+    kept.cloned().collect()
+}
+
+/// `pins` and `name` after them, unless it is among them already.
+fn with(pins: &[String], name: &str) -> Vec<String> {
+    let mut pins = without(pins, name);
+    pins.push(name.to_owned());
+    pins
+}
+
+/// Makes `change` of the pinned applications in the configuration file,
+/// which the shell then takes over. A failure is reported on the error
+/// output.
+fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
+    let changed = ConfigFile::open().and_then(|mut file| {
+        let pins = file.config()?.pinned();
+        let pins = pins.ok_or("the layout has no `windows` widget to pin to")?;
+        if !file.set_pinned(&change(&pins)) {
+            return Err("the layout has no `windows` widget to pin to".to_owned());
+        }
+        file.save()
+    });
+    match changed {
+        Ok(()) => cx.defer(Shell::config_changed),
+        Err(error) => eprintln!("tessera: {error}"),
+    }
 }
 
 /// One button and the motion it is in.
@@ -244,6 +290,69 @@ impl WindowList {
         }
     }
 
+    /// What the menu of the button `key` offers: closing its window,
+    /// another window of its program, and pinning or unpinning it.
+    fn menu_entries(&self, key: usize) -> Vec<MenuEntry> {
+        let shown = |item: &&DockItem| item.key == key && !item.leaving;
+        let Some(item) = self.items.iter().find(shown) else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        let executable = item.window.as_ref().and_then(|w| w.executable.clone());
+        let launched = match (&item.pin, &executable) {
+            (Some(pin), _) => Some(pin.shortcut.clone()),
+            (None, Some(executable)) => Some(Shortcut {
+                name: pin_name(executable),
+                path: executable.clone(),
+            }),
+            (None, None) => None,
+        };
+        if let Some(shortcut) = launched {
+            let label = if item.window.is_some() {
+                "New window"
+            } else {
+                "Open"
+            };
+            entries.push(MenuEntry::new(ICON_NEW_WINDOW, label, move |_| {
+                shortcut.launch();
+            }));
+        }
+        match (&item.pin, executable) {
+            (Some(pin), _) => {
+                let name = pin.shortcut.name.clone();
+                entries.push(MenuEntry::new(ICON_UNPIN, "Unpin", move |cx| {
+                    repin(cx, |pins| without(pins, &name));
+                }));
+            }
+            (None, Some(executable)) => {
+                let name = pin_name(&executable);
+                entries.push(MenuEntry::new(ICON_PIN, "Pin to the dock", move |cx| {
+                    repin(cx, |pins| with(pins, &name));
+                }));
+            }
+            (None, None) => {}
+        }
+        if let Some(id) = item.window.as_ref().map(|window| window.id) {
+            entries.push(MenuEntry::new(ICON_CLOSE, "Close window", move |_| {
+                id.close();
+            }));
+        }
+        entries
+    }
+
+    /// Opens the menu of the button `key` above it.
+    fn menu(&self, key: usize, window: &Window, cx: &mut Context<Self>) {
+        Previews::close(cx);
+        let item = self.items.iter().find(|item| item.key == key);
+        let Some(middle) = item.and_then(|item| item.middle.get()) else {
+            return;
+        };
+        match PopupAnchor::at(window, middle, cx) {
+            Ok(anchor) => Menus::open(self.menu_entries(key), anchor, cx),
+            Err(error) => eprintln!("tessera: a menu has nowhere to open: {error:#}"),
+        }
+    }
+
     /// Re-reads the window list and repaints only when it changed. Known
     /// windows keep their place, new ones are appended, and closed ones
     /// start leaving. A pinned application takes one of its windows; the
@@ -341,8 +450,13 @@ impl WindowList {
             .gap(theme.spacing.tiny)
             .rounded(theme.shape.medium)
             .bg(state_layer(&theme, background, state))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| this.menu(key, window, cx)),
+            )
             .on_click(move |_, _, cx| {
                 Previews::close(cx);
+                Menus::close(cx);
                 match (id, &shortcut) {
                     (Some(id), _) => id.activate_or_minimize(),
                     (None, Some(shortcut)) => shortcut.launch(),
@@ -455,6 +569,19 @@ mod tests {
             one,
             Path::new(r"C:\Program Files\App\other.exe")
         ));
+    }
+
+    #[test]
+    fn a_program_is_pinned_once_and_unpinned_whatever_its_case() {
+        let name = pin_name(Path::new(r"C:\Apps\app.exe"));
+        assert_eq!(name, "C:/Apps/app.exe");
+        let pins = with(&["Notepad".to_owned()], &name);
+        assert_eq!(pins, ["Notepad", "C:/Apps/app.exe"]);
+        assert_eq!(
+            with(&pins, "c:/apps/APP.exe"),
+            ["Notepad", "c:/apps/APP.exe"]
+        );
+        assert_eq!(without(&pins, "notepad"), ["C:/Apps/app.exe"]);
     }
 
     #[test]

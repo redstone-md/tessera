@@ -168,6 +168,14 @@ pub struct SurfaceConfig {
     pub end: Vec<WidgetSpec>,
 }
 
+impl SurfaceConfig {
+    /// Every widget of the surface, in the order of the file.
+    fn widgets(&self) -> impl Iterator<Item = &WidgetSpec> {
+        let slots = [&self.start, &self.center, &self.end];
+        slots.into_iter().flatten()
+    }
+}
+
 /// Everything the user can configure.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -221,6 +229,19 @@ impl Config {
             .as_deref()
             .and_then(|name| modified(&theme_file(name)));
         [modified(CONFIG_FILE), theme]
+    }
+
+    /// The applications the first `windows` widget pins; `None` if the
+    /// layout has no such widget.
+    pub fn pinned(&self) -> Option<Vec<String>> {
+        let widgets = self.surfaces.iter().flat_map(SurfaceConfig::widgets);
+        let dock = { widgets }.find(|spec| spec.widget == edit::WINDOWS_WIDGET)?;
+        let listed = dock.options.get("pinned").and_then(toml::Value::as_array);
+        let names = |list: &Vec<toml::Value>| {
+            let names = list.iter().filter_map(toml::Value::as_str);
+            names.map(str::to_owned).collect()
+        };
+        Some(listed.map(names).unwrap_or_default())
     }
 
     fn builtin() -> Self {

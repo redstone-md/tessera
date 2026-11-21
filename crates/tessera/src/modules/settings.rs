@@ -23,9 +23,6 @@ use crate::shell::Shell;
 use crate::theme::{ACCENT_THEME, Theme};
 use crate::ui::{icon, state_layer};
 
-/// The widget whose `pinned` option lists the pinned applications.
-const WINDOWS_WIDGET: &str = "windows";
-
 /// The directory of the configuration directory that holds theme files.
 const THEMES_DIRECTORY: &str = "themes";
 
@@ -79,28 +76,6 @@ enum Face {
     Glyph(&'static str),
     /// A chip with a text, tinted while `selected`.
     Chip { text: SharedString, selected: bool },
-}
-
-/// Every widget of a surface, in the order of the file.
-fn widgets(surface: &SurfaceConfig) -> impl Iterator<Item = &WidgetSpec> {
-    let slots = [&surface.start, &surface.center, &surface.end];
-    slots.into_iter().flatten()
-}
-
-/// The applications the first `windows` widget pins; `None` if the layout
-/// has no such widget.
-fn pinned(config: &Config) -> Option<Vec<String>> {
-    let dock = config
-        .surfaces
-        .iter()
-        .flat_map(widgets)
-        .find(|spec| spec.widget == WINDOWS_WIDGET)?;
-    let listed = dock.options.get("pinned").and_then(toml::Value::as_array);
-    let names = |list: &Vec<toml::Value>| {
-        let names = list.iter().filter_map(toml::Value::as_str);
-        names.map(str::to_owned).collect()
-    };
-    Some(listed.map(names).unwrap_or_default())
 }
 
 /// What a widget of the layout is called: its name, and its text where it
@@ -214,7 +189,11 @@ impl Settings {
     fn look_around(&mut self, cx: &mut Context<Self>) {
         self.available = cx.global::<WidgetRegistry>().names();
         self.themes = themes();
-        let pins = self.config.as_ref().and_then(pinned).unwrap_or_default();
+        let pins = self
+            .config
+            .as_ref()
+            .and_then(Config::pinned)
+            .unwrap_or_default();
         let pins: Vec<String> = pins.iter().map(|pin| pin.to_lowercase()).collect();
         let mut running: Vec<PathBuf> = Vec::new();
         for window in AppWindow::enumerate() {
@@ -283,7 +262,7 @@ impl Settings {
                 self.change(cx, |file| file.add(surface, slot, &widget));
             }
             Control::Unpin(index) => {
-                let Some(mut pins) = self.config.as_ref().and_then(pinned) else {
+                let Some(mut pins) = self.config.as_ref().and_then(Config::pinned) else {
                     return;
                 };
                 if index < pins.len() {
@@ -293,7 +272,7 @@ impl Settings {
             }
             Control::Pin(index) => {
                 let (Some(mut pins), Some(program)) = (
-                    self.config.as_ref().and_then(pinned),
+                    self.config.as_ref().and_then(Config::pinned),
                     self.running.get(index),
                 ) else {
                     return;
@@ -612,7 +591,7 @@ impl Render for Settings {
         for (index, surface) in config.surfaces.iter().enumerate() {
             page = page.child(self.surface(index, surface, window, cx));
         }
-        page = match pinned(&config) {
+        page = match config.pinned() {
             Some(pins) => page.child(self.pins(&pins, window, cx)),
             None => page.child(
                 div()

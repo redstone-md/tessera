@@ -14,7 +14,7 @@ use super::{CONFIG_FILE, Config, DEFAULT, config_dir};
 
 /// The widget whose `pinned` option lists the applications pinned to the
 /// dock, and the one whose `pinned` option lists those of the Start menu.
-const WINDOWS_WIDGET: &str = "windows";
+pub(super) const WINDOWS_WIDGET: &str = "windows";
 const APPS_WIDGET: &str = "apps";
 
 /// The parts a surface is divided into along its length.

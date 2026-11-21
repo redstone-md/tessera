@@ -8,6 +8,7 @@
 mod config;
 mod extension;
 mod icons;
+mod menu;
 mod module;
 mod modules;
 mod motion;
