@@ -19,7 +19,9 @@ use gpui::{App, AsyncApp, Global};
 use serde::Deserialize;
 
 use crate::config::config_dir;
-use crate::platform::{AppWindow, AppWindowId, VirtualDesktops, WindowEvents};
+use crate::platform::{
+    AppWindow, AppWindowId, Hotkey, Hotkeys, Modifiers, VirtualDesktops, WindowEvents,
+};
 use crate::tiling::listed;
 
 /// How often it is checked whether something happened to the windows.
@@ -40,6 +42,10 @@ const MOST: usize = 9;
 /// The file of the configuration directory that lists the hidden windows.
 const RECORD: &str = "hidden-windows";
 
+/// What is added to the place of a workspace for the number of the key
+/// combination that sends a window there.
+const SENDING: u32 = 16;
+
 /// What the configuration says about workspaces.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +60,9 @@ pub struct WorkspacesConfig {
     /// The programs whose windows are seen on every workspace.
     #[serde(default)]
     except: Vec<String>,
+    /// The keys held with a digit to go to the workspace of that number,
+    /// and with Shift as well to send the window in front there.
+    keys: Option<String>,
 }
 
 impl WorkspacesConfig {
@@ -68,6 +77,42 @@ impl WorkspacesConfig {
             "`workspaces.own` is not a number from {FEWEST} to {MOST}, so the workspaces are the virtual desktops of Windows"
         );
         None
+    }
+
+    /// The key combinations for `count` workspaces: one for each to go
+    /// there and, unless Shift is among the keys held already, one to send
+    /// a window there.
+    fn hotkeys(&self, count: usize) -> Vec<Hotkey> {
+        let Some(keys) = self.keys.as_deref().filter(|_| count > 0) else {
+            return Vec::new();
+        };
+        let Some(modifiers) = Modifiers::parse(keys) else {
+            report!(
+                "`workspaces.keys` names keys among alt, ctrl, shift and win joined by +, not `{keys}`"
+            );
+            return Vec::new();
+        };
+        let sending = Modifiers {
+            shift: true,
+            ..modifiers
+        };
+        (0..count.min(MOST) as u32)
+            .flat_map(|place| {
+                let key = b'1' + place as u8;
+                let going = Hotkey {
+                    id: place,
+                    modifiers,
+                    key,
+                };
+                let sent = Hotkey {
+                    id: SENDING + place,
+                    modifiers: sending,
+                    key,
+                };
+                [Some(going), (!modifiers.shift).then_some(sent)]
+            })
+            .flatten()
+            .collect()
     }
 }
 
@@ -211,6 +256,19 @@ impl Workspaces {
             async {}
         })
         .detach();
+        let presses = Hotkeys::presses();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(pressed) = presses.recv().await {
+                let answered = cx.update(|cx| match pressed.checked_sub(SENDING) {
+                    Some(place) => Self::send_front(place as usize, cx),
+                    None => Self::show(pressed as usize, cx),
+                });
+                if answered.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self::configure(config, cx);
     }
 
@@ -227,6 +285,23 @@ impl Workspaces {
         this.homes = Homes::new(config.count().unwrap_or(0));
         this.task += 1;
         let task = this.task;
+        match Hotkeys::set(config.hotkeys(this.homes.count)) {
+            Ok(refused) if refused.is_empty() => {}
+            Ok(refused) => {
+                let digits: Vec<String> = refused
+                    .iter()
+                    .map(|id| match id.checked_sub(SENDING) {
+                        Some(place) => format!("Shift+{}", place + 1),
+                        None => (id + 1).to_string(),
+                    })
+                    .collect();
+                report!(
+                    "Windows did not give the workspace keys with {}: another program holds them",
+                    digits.join(", ")
+                );
+            }
+            Err(error) => report!("the workspaces have no keys: {error:#}"),
+        }
         if this.homes.count == 0 {
             return;
         }
@@ -406,6 +481,32 @@ mod tests {
     fn sorted(mut ids: Vec<AppWindowId>) -> Vec<isize> {
         ids.sort_by_key(|id| id.raw());
         ids.into_iter().map(AppWindowId::raw).collect()
+    }
+
+    #[test]
+    fn keys_go_to_each_workspace_and_send_there_with_shift() {
+        let config = |keys: &str| WorkspacesConfig {
+            keys: Some(keys.to_owned()),
+            ..WorkspacesConfig::default()
+        };
+        let keys = config("alt").hotkeys(2);
+        let seen: Vec<_> = keys
+            .iter()
+            .map(|key| (key.id, key.key, key.modifiers.alt, key.modifiers.shift))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (0, b'1', true, false),
+                (SENDING, b'1', true, true),
+                (1, b'2', true, false),
+                (SENDING + 1, b'2', true, true),
+            ]
+        );
+        assert_eq!(config("alt+shift").hotkeys(3).len(), 3);
+        assert!(config("alt").hotkeys(0).is_empty());
+        assert!(config("alt+2").hotkeys(3).is_empty());
+        assert!(WorkspacesConfig::default().hotkeys(3).is_empty());
     }
 
     #[test]

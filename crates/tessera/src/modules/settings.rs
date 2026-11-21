@@ -403,6 +403,18 @@ const SETTINGS: &[Setting] = &[
             unset: "Off",
         },
     },
+    Setting {
+        section: Section::Windows,
+        card: "Workspaces",
+        title: "Keys with a digit",
+        target: Target::Table("workspaces", "keys"),
+        kind: Kind::Choice(&[
+            ("Off", Answer::Unset),
+            ("Alt", Answer::Text("alt")),
+            ("Ctrl+Alt", Answer::Text("ctrl+alt")),
+            ("Win+Alt", Answer::Text("win+alt")),
+        ]),
+    },
 ];
 
 pub struct SettingsModule;

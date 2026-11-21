@@ -136,6 +136,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Gap", "Отступ"),
     ("Workspaces", "Рабочие столы"),
     ("Own workspaces", "Свои рабочие столы"),
+    ("Keys with a digit", "Клавиши с цифрой"),
     ("Default", "По умолчанию"),
     // The marketplace.
     ("Refresh", "Обновить"),

@@ -203,11 +203,15 @@ content = ["volume-slider"]
 # right button on a button of the widget sends the window in front there.
 # only and except list programs by the file name of their executable: the
 # only ones whose windows belong to a workspace, and the ones whose windows
-# are seen on every workspace. Every window is shown again when Tessera
-# quits, and at its next start if it was terminated.
+# are seen on every workspace. keys names the keys that, held with a digit,
+# go to the workspace of that number, and with Shift as well send the
+# window in front there: alt, ctrl, shift and win, joined by +. No program
+# gets those combinations while Tessera holds them. Every window is shown
+# again when Tessera quits, and at its next start if it was terminated.
 #
 # [workspaces]
 # own = 3
+# keys = "alt"
 # except = ["taskmgr.exe"]
 
 # [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
