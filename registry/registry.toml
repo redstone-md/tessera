@@ -1,5 +1,5 @@
-# The extensions Tessera offers to install unless its configuration names
-# other registries. Written by update.sh; see the README for the format.
+# The extensions and themes Tessera offers to install unless its
+# configuration names other registries. Written by update.sh; see the README for the format.
 name = "Tessera"
 
 [[extension]]
@@ -31,3 +31,27 @@ manifest = "device-battery/extension.toml"
 manifest_sha256 = "8acdfa5ecfc387728944a22298bc446637ebbce2dadd97e229a9c90a749ca805"
 wasm = "device-battery/extension.wasm"
 wasm_sha256 = "a0f74c19947f06218fbb6e773d049ab1dc643f93452c14a67e62d743209bab37"
+
+[[theme]]
+id = "void"
+name = "Void"
+description = "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
+version = "1.0.0"
+file = "themes/void.toml"
+sha256 = "9a05aa138b9f314fca34d5253628acb8b509327b63015f8de44e86e67a9660d1"
+
+[[theme]]
+id = "expressive"
+name = "Expressive"
+description = "Larger, rounder and livelier than what is built in."
+version = "1.0.0"
+file = "themes/expressive.toml"
+sha256 = "93c0204a6a638c8f87fa4aa02aed0c0f725945c614624aa205fcb19fdd86818c"
+
+[[theme]]
+id = "compact"
+name = "Compact"
+description = "Small, square and calm; nothing overshoots."
+version = "1.0.0"
+file = "themes/compact.toml"
+sha256 = "ea5d1372192a67e91d522b56dce64f985359826146fef0b2f051c2280485f0c9"

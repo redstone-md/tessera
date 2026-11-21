@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Tessera contributors.
 #
-# Builds the example extensions and writes the registry that offers them:
-# registry.toml and the files it lists. Run it after changing an example.
+# Builds the example extensions and writes the registry that offers them
+# and the themes of themes/: registry.toml and the files it lists. Run it
+# after changing an example or a theme; a changed theme needs a new version
+# here to be offered as an update.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -31,10 +33,26 @@ wasm_sha256 = "$(sha256sum "registry/$id/extension.wasm" | cut -d ' ' -f 1)"
 END
 }
 
+theme() {
+    id=$1 name=$2 version=$3 description=$4
+    mkdir -p registry/themes
+    tr -d '\r' < "themes/$id.toml" > "registry/themes/$id.toml"
+    cat <<END
+
+[[theme]]
+id = "$id"
+name = "$name"
+description = "$description"
+version = "$version"
+file = "themes/$id.toml"
+sha256 = "$(sha256sum "registry/themes/$id.toml" | cut -d ' ' -f 1)"
+END
+}
+
 {
     cat <<END
-# The extensions Tessera offers to install unless its configuration names
-# other registries. Written by update.sh; see the README for the format.
+# The extensions and themes Tessera offers to install unless its
+# configuration names other registries. Written by update.sh; see the README for the format.
 name = "Tessera"
 END
     offer counter "Counter" \
@@ -42,5 +60,11 @@ END
     offer ai-limits "AI limits" \
         "What is left of the usage limits of Claude, Codex, OpenRouter and DeepSeek, and when they reset."
     offer device-battery "Device battery"         "An example: the charge of a Bluetooth device in the bar, and every paired device in a popup."
+    theme void "Void" 1.0.0 \
+        "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
+    theme expressive "Expressive" 1.0.0 \
+        "Larger, rounder and livelier than what is built in."
+    theme compact "Compact" 1.0.0 \
+        "Small, square and calm; nothing overshoots."
 } > registry/registry.toml.new
 mv registry/registry.toml.new registry/registry.toml

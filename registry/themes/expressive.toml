@@ -1,0 +1,53 @@
+# A Tessera theme: larger, rounder and livelier than what is built in.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings, or
+# write `theme = "expressive"` at the top of config.toml.
+#
+# Every table and every key is optional; what a theme leaves out stays as
+# built in. Lengths are in pixels.
+
+# Every color is derived from this one; `seed = "accent"` follows the
+# accent color of Windows instead.
+seed = "#b69df8"
+scheme = "dark"
+
+# Corner radii. `full` rounds a corner as far as it goes.
+[shape]
+small = 12
+medium = 22
+large = 32
+
+[spacing]
+tiny = 5
+small = 10
+medium = 18
+
+[typography]
+label_size = 15
+icon_size = 17
+
+# Springs. A higher stiffness is faster; a damping ratio of 1 settles
+# without overshoot, and lower values bounce.
+[motion.spatial]
+stiffness = 300
+damping_ratio = 0.5
+
+[motion.spatial_fast]
+stiffness = 700
+damping_ratio = 0.45
+
+[bar]
+pill_height = 40
+
+[dock]
+container_height = 68
+item_size = 52
+icon_size = 34
+indicator_height = 5
+indicator_active_width = 22
+
+# The wavy line that shows a level.
+[meter]
+width = 52
+stroke = 4
+amplitude = 3.5
+wavelength = 16
