@@ -3,6 +3,8 @@
 
 //! Building blocks shared by shell surfaces.
 
+mod slider;
+
 use std::f32::consts::TAU;
 
 use std::panic::Location;
@@ -16,6 +18,8 @@ use gpui::{
 use crate::motion::{InteractionState, mix};
 use crate::platform::NativeSurface;
 use crate::theme::Theme;
+
+pub use slider::Slider;
 
 /// Ends the hover of what the pointer was on when it left `window`. GPUI
 /// learns that the pointer left but goes on taking it to be where it was

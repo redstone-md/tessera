@@ -4,28 +4,22 @@
 //! The volume of the default audio output. Widgets: `volume`, a compact
 //! readout, and `volume-slider`, the control to change it.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Render,
-    ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
-    Window, canvas, div, px,
+    App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, InteractiveElement,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription,
+    WeakEntity, Window, div,
 };
 
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, Spring};
+use crate::motion::Interaction;
 use crate::platform::AudioOutput;
 use crate::theme::Theme;
-use crate::ui::{icon, pill, state_layer};
+use crate::ui::{Slider, icon, pill, state_layer};
 
 /// How often changes made outside Tessera are picked up.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-/// The share of the range one notch of the mouse wheel moves the volume.
-const WHEEL_STEP: f32 = 0.02;
 
 const ICON_MUTED: &str = "\u{e74f}";
 const ICON_LEVELS: [&str; 4] = ["\u{e992}", "\u{e993}", "\u{e994}", "\u{e995}"];
@@ -175,71 +169,23 @@ impl Render for VolumeReadout {
     }
 }
 
-/// The volume for a pointer at `x`, on a track that starts at `left` and is
-/// `width` wide, with `inset` at each end taken by half the handle.
-fn volume_at(x: f32, left: f32, width: f32, inset: f32) -> f32 {
-    let travel = width - inset * 2.;
-    if travel <= 0. {
-        return 0.;
-    }
-    ((x - left - inset) / travel).clamp(0., 1.)
-}
-
 /// A mute button, a track to drag or scroll over, and the percentage.
 struct VolumeSlider {
     sound: Entity<Sound>,
-    /// The volume as drawn; it follows the real one.
-    shown: Spring,
-    dragging: bool,
-    /// Where the track was painted last, in window coordinates.
-    track: Rc<Cell<Bounds<Pixels>>>,
+    slider: Slider,
     mute: Interaction,
     _changes: Subscription,
 }
 
 impl VolumeSlider {
     fn new(sound: Entity<Sound>, cx: &mut Context<Self>) -> Self {
-        let motion = cx.global::<Theme>().motion;
+        let theme = *cx.global::<Theme>();
         let volume = sound.read(cx).level.map_or(0., |level| level.volume);
         Self {
             _changes: cx.observe(&sound, |_, _, cx| cx.notify()),
             sound,
-            shown: Spring::new(motion.effects, volume),
-            dragging: false,
-            track: Rc::default(),
-            mute: Interaction::new(&motion),
-        }
-    }
-
-    fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
-        self.sound
-            .update(cx, |sound, cx| sound.set_volume(volume, cx));
-    }
-
-    /// Moves the volume to where the pointer is on the track.
-    fn follow(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        let theme = *cx.global::<Theme>();
-        let track = self.track.get();
-        let inset = f32::from(theme.slider.handle_width) / 2. + f32::from(theme.slider.handle_gap);
-        let volume = volume_at(
-            f32::from(x),
-            f32::from(track.origin.x),
-            f32::from(track.size.width),
-            inset,
-        );
-        self.set_volume(volume, cx);
-    }
-
-    fn nudge(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
-        let up = match event.delta {
-            ScrollDelta::Lines(lines) => lines.y,
-            ScrollDelta::Pixels(pixels) => f32::from(pixels.y),
-        };
-        let Some(level) = self.sound.read(cx).level else {
-            return;
-        };
-        if up != 0. {
-            self.set_volume(level.volume + WHEEL_STEP * up.signum(), cx);
+            slider: Slider::new(&theme, volume),
+            mute: Interaction::new(&theme.motion),
         }
     }
 }
@@ -253,8 +199,6 @@ impl Render for VolumeSlider {
                 .child("No audio output")
                 .into_any_element();
         };
-        self.shown.animate_to(level.volume);
-        let shown = self.shown.value(window).clamp(0., 1.);
         let slider = theme.slider;
 
         let mute_state = self.mute.state(window);
@@ -277,79 +221,18 @@ impl Render for VolumeSlider {
             .child(icon(&theme, level.icon()));
         let mute = Interaction::track(mute, cx, |this: &mut Self| Some(&mut this.mute));
 
-        let width = self.track.get().size.width;
-        let travel = (width - slider.handle_width - slider.handle_gap * 2.).max(px(0.));
-        let (active, inactive) = if level.muted {
-            (theme.colors.outline, theme.colors.surface_container_highest)
-        } else {
-            (theme.colors.primary, theme.colors.secondary_container)
-        };
-        let painted = self.track.clone();
-        let track = div()
-            .id("volume-track")
-            .flex_1()
-            .h(slider.handle_height)
-            .relative()
-            .flex()
-            .items_center()
-            .gap(slider.handle_gap)
-            .child(
-                canvas(move |bounds, _, _| painted.set(bounds), |_, _, _, _| {})
-                    .absolute()
-                    .size_full(),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(travel * shown)
-                    .h(slider.track_height)
-                    .rounded_l(theme.shape.full)
-                    .rounded_r(slider.inner_radius)
-                    .bg(active),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(slider.handle_width)
-                    .h_full()
-                    .rounded(theme.shape.full)
-                    .bg(active),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .w(travel * (1. - shown))
-                    .h(slider.track_height)
-                    .rounded_l(slider.inner_radius)
-                    .rounded_r(theme.shape.full)
-                    .bg(inactive),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.dragging = true;
-                    this.follow(event.position.x, cx);
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                if !this.dragging {
-                    return;
-                }
-                if event.pressed_button == Some(MouseButton::Left) {
-                    this.follow(event.position.x, cx);
-                } else {
-                    this.dragging = false;
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.dragging = false),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.dragging = false),
-            )
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.nudge(event, cx)));
+        self.slider.dim(level.muted);
+        let track = self.slider.track(
+            "volume-track",
+            level.volume,
+            window,
+            cx,
+            |this: &mut Self| &mut this.slider,
+            |this, volume, cx| {
+                this.sound
+                    .update(cx, |sound, cx| sound.set_volume(volume, cx));
+            },
+        );
 
         div()
             .flex()
@@ -373,16 +256,6 @@ impl Render for VolumeSlider {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_track_maps_the_pointer_to_a_volume() {
-        assert_eq!(volume_at(100., 100., 220., 10.), 0.);
-        assert_eq!(volume_at(110., 100., 220., 10.), 0.);
-        assert_eq!(volume_at(210., 100., 220., 10.), 0.5);
-        assert_eq!(volume_at(310., 100., 220., 10.), 1.);
-        assert_eq!(volume_at(900., 100., 220., 10.), 1.);
-        assert_eq!(volume_at(5., 100., 0., 10.), 0.);
-    }
 
     #[test]
     fn the_icon_follows_the_level() {
