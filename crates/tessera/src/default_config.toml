@@ -17,6 +17,8 @@
 # Built-in widgets:
 #   "clock"     date and time; option format, a strftime pattern
 #   "calendar"  a month to page through; option week_start, "monday" or "sunday"
+#   "volume"    the output volume, as an icon and a percentage
+#   "volume-slider"  a mute button and a slider for the output volume
 #   "windows"   a button for each open window of the display
 #   "quit"      closes Tessera
 
@@ -24,7 +26,7 @@
 edge = "top"
 thickness = 48
 center = [{ widget = "clock", popup = "calendar" }]
-end = ["quit"]
+end = [{ widget = "volume", popup = "sound" }, "quit"]
 
 [[surface]]
 edge = "bottom"
@@ -41,3 +43,9 @@ name = "calendar"
 width = 300
 height = 348
 content = ["calendar"]
+
+[[popup]]
+name = "sound"
+width = 340
+height = 76
+content = ["volume-slider"]

@@ -6,10 +6,12 @@
 #![allow(unsafe_code)]
 
 mod app_windows;
+mod audio;
 mod icon;
 mod taskbar;
 
 pub use app_windows::{AppWindow, AppWindowId};
+pub use audio::AudioOutput;
 pub use icon::IconPixels;
 pub use taskbar::Taskbar;
 

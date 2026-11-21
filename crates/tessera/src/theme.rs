@@ -44,6 +44,9 @@ pub struct Spacing {
 pub struct Typography {
     pub family: &'static str,
     pub label_size: Pixels,
+    /// The font whose glyphs are the shell's icons.
+    pub icon_family: &'static str,
+    pub icon_size: Pixels,
 }
 
 /// How state changes move. The split into spatial and effects springs, and
@@ -75,6 +78,21 @@ pub struct DockMetrics {
     pub indicator_active_width: Pixels,
 }
 
+/// Slider measurements.
+#[derive(Clone, Copy, Debug)]
+pub struct SliderMetrics {
+    pub track_height: Pixels,
+    pub handle_width: Pixels,
+    /// Also the height of the whole control.
+    pub handle_height: Pixels,
+    /// Space between the handle and the track on each side.
+    pub handle_gap: Pixels,
+    /// Corner radius of the track ends that face the handle.
+    pub inner_radius: Pixels,
+    /// Room for the value shown next to the track.
+    pub value_width: Pixels,
+}
+
 /// Calendar measurements.
 #[derive(Clone, Copy, Debug)]
 pub struct CalendarMetrics {
@@ -93,6 +111,7 @@ pub struct Theme {
     pub bar: BarMetrics,
     pub dock: DockMetrics,
     pub calendar: CalendarMetrics,
+    pub slider: SliderMetrics,
 }
 
 impl Default for Theme {
@@ -121,6 +140,8 @@ impl Default for Theme {
             typography: Typography {
                 family: "Segoe UI Variable Display",
                 label_size: px(14.),
+                icon_family: "Segoe Fluent Icons",
+                icon_size: px(16.),
             },
             motion: Motion {
                 spatial: SpringSpec {
@@ -147,6 +168,14 @@ impl Default for Theme {
                 indicator_active_width: px(16.),
             },
             calendar: CalendarMetrics { cell_size: px(36.) },
+            slider: SliderMetrics {
+                track_height: px(16.),
+                handle_width: px(4.),
+                handle_height: px(44.),
+                handle_gap: px(6.),
+                inner_radius: px(2.),
+                value_width: px(44.),
+            },
         }
     }
 }

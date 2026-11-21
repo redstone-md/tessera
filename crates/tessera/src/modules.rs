@@ -6,6 +6,7 @@
 mod calendar;
 mod clock;
 mod session;
+mod sound;
 mod windows;
 
 use crate::extension::ExtensionsModule;
@@ -17,6 +18,7 @@ pub fn builtin() -> Vec<Box<dyn Module>> {
         Box::new(clock::ClockModule),
         Box::new(calendar::CalendarModule),
         Box::new(session::SessionModule),
+        Box::new(sound::SoundModule),
         Box::new(windows::WindowsModule),
         Box::new(ExtensionsModule),
     ]

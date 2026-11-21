@@ -22,6 +22,14 @@ pub fn pill(theme: &Theme) -> Div {
         .text_color(theme.colors.on_surface)
 }
 
+/// An icon: `glyph` is a character of the theme's icon font.
+pub fn icon(theme: &Theme, glyph: &'static str) -> Div {
+    div()
+        .font_family(theme.typography.icon_family)
+        .text_size(theme.typography.icon_size)
+        .child(glyph)
+}
+
 /// How much of the content color covers a hovered control.
 pub const HOVER_LAYER: f32 = 0.08;
 
