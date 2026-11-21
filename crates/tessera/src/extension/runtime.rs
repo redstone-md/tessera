@@ -241,6 +241,61 @@ mod tests {
         assert_eq!(text_of(counter.render("clicks").unwrap()), "Clicks: 1");
     }
 
+    /// Needs the example extension, built as the README describes.
+    #[test]
+    #[ignore = "requires extensions/ai-limits to be built first"]
+    fn the_ai_limits_example_asks_a_service_and_shows_its_answer() {
+        let wasm = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/extensions/wasm32-unknown-unknown/release/tessera_example_ai_limits.wasm"
+        );
+        let wasm = std::fs::read(wasm).unwrap();
+        let setting = |key: &str, value: &str| (key.to_owned(), value.to_owned());
+        let access = Access {
+            permissions: toml::from_str("network = [\"api.deepseek.com\"]").unwrap(),
+            settings: [
+                setting("providers", "deepseek, claude"),
+                setting("deepseek_key", "key-1"),
+            ]
+            .into(),
+            state_file: None,
+        };
+        let mut limits = Runtime::new()
+            .unwrap()
+            .instantiate("ai-limits", &wasm, access)
+            .unwrap();
+        let texts = |nodes: Vec<Node>| -> Vec<String> {
+            let text = |node: Node| match node.kind {
+                NodeKind::Text(text) | NodeKind::Caption(text) => Some(text),
+                _ => None,
+            };
+            nodes.into_iter().filter_map(text).collect()
+        };
+
+        // Claude's credentials are not permitted, so only one request starts.
+        let asking = texts(limits.render("details").unwrap());
+        assert_eq!(asking[..2], ["DeepSeek", "Asking…"]);
+        assert!(asking[3].contains("does not permit"), "got {asking:?}");
+        let requests = limits.take_requests();
+        let [(number, request)] = requests.as_slice() else {
+            panic!("expected one request, got {requests:?}");
+        };
+        assert_eq!(request.url, "https://api.deepseek.com/user/balance");
+        let authorization = ("Authorization".to_owned(), "Bearer key-1".to_owned());
+        assert!(request.headers.contains(&authorization));
+
+        let body = r#"{"is_available": true,
+            "balance_infos": [{"currency": "USD", "total_balance": "110.00"}]}"#;
+        let answer = HttpResponse {
+            status: 200,
+            body: body.to_owned(),
+        };
+        limits.fetched(*number, Ok(answer)).unwrap();
+        let shown = texts(limits.render("summary").unwrap());
+        assert_eq!(shown, ["DeepSeek 110.00 USD", "Claude ?"]);
+        assert!(limits.take_requests().is_empty());
+    }
+
     #[test]
     fn bytes_that_are_not_wasm_are_rejected() {
         let runtime = Runtime::new().unwrap();

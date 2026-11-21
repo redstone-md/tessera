@@ -52,14 +52,52 @@ The limits of that:
 - Extensions are loaded once at startup. A widget placed on several displays shares one extension instance.
 - There is no marketplace, registry, installer, signing or update mechanism. Installing means copying files by hand.
 
-To install one, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id`, its widgets and its permissions. A layout then refers to a widget as `<id>.<widget name>`. [`extensions/counter`](extensions/counter) is a working example; build it with:
+To install one, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id`, its widgets and its permissions. A layout then refers to a widget as `<id>.<widget name>`. Build an example with:
 
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo build --release --target wasm32-unknown-unknown --manifest-path extensions/counter/Cargo.toml --target-dir target/extensions
 ```
 
-and copy `target/extensions/wasm32-unknown-unknown/release/tessera_example_counter.wasm` as `extension.wasm` next to a copy of its `extension.toml`. `cargo test -- --include-ignored` then also runs the test that loads it.
+and copy `target/extensions/wasm32-unknown-unknown/release/tessera_example_counter.wasm` as `extension.wasm` next to a copy of its `extension.toml`. Once both examples are built, `cargo test -- --include-ignored` also runs the tests that load them.
+
+### Examples
+
+[`extensions/counter`](extensions/counter) counts presses of its button.
+
+[`extensions/ai-limits`](extensions/ai-limits) shows what is left of the usage limits of AI services: the plan, each limit as a share and a bar, and when it resets. Its `summary` widget is one line for a bar; its `details` widget is meant for a popup, which has a fixed size, so size it for the services you enable:
+
+```toml
+[[surface]]
+edge = "top"
+end = [{ widget = "ai-limits.summary", popup = "ai" }]
+
+[[popup]]
+name = "ai"
+width = 380
+height = 420
+content = ["ai-limits.details"]
+
+[extension.ai-limits]
+providers = ["claude", "codex", "openrouter", "deepseek"]  # default: claude and codex
+summary = ["claude"]            # services in the bar; default: all of `providers`
+interval_minutes = 5            # how often each service is asked
+openrouter_key = "..."
+deepseek_key = "..."
+```
+
+The buttons of `details` choose whether the plan, the reset times and the bars are shown and whether shares count what is left or what is used; the choice is remembered.
+
+How far each service has been tried:
+
+| Service | Asked with | Tried against the real service |
+| --- | --- | --- |
+| Claude | the sign-in of Claude Code, `~/.claude/.credentials.json` | No. The usage endpoint is undocumented; answers are parsed in tests against a made-up sample. |
+| Codex | the sign-in of the Codex CLI, `~/.codex/auth.json` | No. Same as Claude. |
+| OpenRouter | `openrouter_key` | Only that a wrong key is refused and reported. Answers are parsed against a sample in the documented format. |
+| DeepSeek | `deepseek_key` | No. Answers are parsed against a sample in the documented format. |
+
+The Claude and Codex endpoints may change or stop answering at any time, and their answers may differ from what this extension expects; it then shows an error instead of numbers. It never refreshes a sign-in: once the token in the file has expired, it shows an error until Claude Code or Codex has renewed it. A token is sent only to the service it belongs to.
 
 ## History
 
