@@ -237,7 +237,8 @@ impl Meter {
             return;
         }
         let change = (reading.level - self.level.target()).abs();
-        if change < SMALL_CHANGE && self.level.is_settled() {
+        // Without the line there is nothing a spring would move.
+        if self.style == Style::Text || (change < SMALL_CHANGE && self.level.is_settled()) {
             self.level.jump_to(reading.level);
         } else {
             self.level.animate_to(reading.level);
