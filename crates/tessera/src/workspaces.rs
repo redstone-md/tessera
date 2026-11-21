@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 use crate::config::config_dir;
 use crate::platform::{
-    AppWindow, AppWindowId, Departure, Hotkey, Hotkeys, Modifiers, VirtualDesktops, WindowEvents,
+    AppWindow, AppWindowId, Hotkey, Hotkeys, Modifiers, Passage, VirtualDesktops, WindowEvents,
 };
 use crate::tiling::listed;
 
@@ -404,13 +404,8 @@ impl Workspaces {
     /// written down first.
     fn apply(&mut self, change: Change) {
         self.write_record();
-        Departure::play(change.hide, !change.onward);
-        for id in change.show {
-            id.unhide();
-        }
-        if let Some(front) = change.front {
-            front.activate();
-        }
+        Passage::leave(change.hide, !change.onward);
+        Passage::enter(change.show, change.front, change.onward);
     }
 
     /// Shows every window that is hidden.
