@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Extensions: modules loaded from WebAssembly files at startup.
+//! Extensions: modules loaded from WebAssembly files, at startup and again
+//! whenever those files change.
 
 mod access;
 mod devices;
@@ -14,6 +15,7 @@ mod widget;
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -38,6 +40,26 @@ const STATE_FILE: &str = "state.txt";
 /// The directory extensions are installed in.
 pub fn extensions_dir() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("extensions"))
+}
+
+/// What the installed extensions are made of: it differs after the
+/// manifest or the WebAssembly file of any of them was written, added or
+/// removed. What an extension remembers by itself does not count.
+pub fn installed_stamp() -> u64 {
+    let mut files = Vec::new();
+    let entries = extensions_dir().and_then(|root| fs::read_dir(root).ok());
+    for directory in entries.into_iter().flatten().flatten() {
+        for name in [MANIFEST_FILE, WASM_FILE] {
+            let path = directory.path().join(name);
+            if let Ok(written) = fs::metadata(&path).and_then(|file| file.modified()) {
+                files.push((path, written));
+            }
+        }
+    }
+    files.sort();
+    let mut hasher = DefaultHasher::new();
+    files.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Loads every extension in the `extensions` configuration directory. Each

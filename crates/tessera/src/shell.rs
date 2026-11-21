@@ -12,6 +12,7 @@ use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
 use crate::config::{Config, Displays};
 use crate::desk::Cards;
+use crate::extension::installed_stamp;
 use crate::icons::AppIcons;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
@@ -44,6 +45,8 @@ pub struct Shell {
     config: Config,
     surfaces: Vec<Surface>,
     cards: Cards,
+    /// What the installed extensions were made of when they were loaded.
+    extensions: u64,
 }
 
 impl Global for Shell {}
@@ -55,6 +58,7 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::start(&config.tiling, cx);
         Workspaces::start(&config.workspaces, cx);
+        let extensions = installed_stamp();
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
         cx.set_global(Previews::default());
@@ -72,6 +76,7 @@ impl Shell {
             config,
             surfaces,
             cards,
+            extensions,
         });
         Self::watch(cx);
         Self::answer_windows_key(cx);
@@ -140,9 +145,24 @@ impl Shell {
     fn watch(cx: &mut App) {
         let mut applied = cx.global::<Self>().config.stamp();
         let mut seen = applied;
+        let mut installed = cx.global::<Self>().extensions;
         cx.spawn(async move |cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(WATCH_INTERVAL).await;
+                // An extension put into the directory, replaced or taken
+                // out of it by hand is loaded or dropped once its files
+                // have stayed the same for a moment.
+                let found = installed_stamp();
+                let settled = found == installed;
+                installed = found;
+                let changed = cx.update(|cx| {
+                    if settled && cx.global::<Self>().extensions != found {
+                        Self::extensions_changed(cx);
+                    }
+                });
+                if changed.is_err() {
+                    break;
+                }
                 let Ok(stamp) = cx.update(|cx| cx.global::<Self>().config.stamp()) else {
                     break;
                 };
@@ -209,6 +229,7 @@ impl Shell {
         // Widgets keep what they were built with, so new settings of
         // extensions, new registries and new icons need new widgets as well.
         if extensions {
+            cx.global_mut::<Self>().extensions = installed_stamp();
             cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         }
         if icons {
@@ -233,9 +254,13 @@ impl Shell {
     }
 
     /// Loads the extensions again and builds the widgets again, after an
-    /// extension was installed or removed.
+    /// extension was installed or removed. The popups are made again as
+    /// well, as an extension may bring some.
     pub fn extensions_changed(cx: &mut App) {
         let config = cx.global::<Self>().config.clone();
+        cx.global_mut::<Self>().extensions = installed_stamp();
+        Popups::close(cx);
+        cx.set_global(Popups::new(&config.popups));
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         Self::arrange(&config, cx);
         Self::show_cards(cx);

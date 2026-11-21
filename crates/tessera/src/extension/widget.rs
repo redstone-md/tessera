@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AsyncApp, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, relative,
+    AnyElement, AsyncApp, Context, Div, Entity, InteractiveElement, IntoElement, ParentElement,
+    Render, StatefulInteractiveElement, Styled, WeakEntity, Window, div, relative,
 };
 
 use super::host::Host;
@@ -99,6 +99,16 @@ impl ExtensionWidget {
             .collect()
     }
 
+    /// A text. In a row it stays on one line and keeps its width, so that
+    /// a full bar does not break it into lines; in a column it wraps.
+    fn words(text: &str, placement: Placement) -> Div {
+        let words = div().child(text.to_owned());
+        match placement {
+            Placement::Root | Placement::InRow => words.flex_none().whitespace_nowrap(),
+            Placement::InColumn => words,
+        }
+    }
+
     fn element(
         &mut self,
         nodes: &[Node],
@@ -110,15 +120,18 @@ impl ExtensionWidget {
     ) -> Option<AnyElement> {
         let node = nodes.get(index)?;
         Some(match &node.kind {
-            NodeKind::Text(text) => div().child(text.clone()).into_any_element(),
-            NodeKind::Caption(text) => div()
+            NodeKind::Text(text) => Self::words(text, placement).into_any_element(),
+            NodeKind::Caption(text) => Self::words(text, placement)
                 .text_color(theme.colors.on_surface_variant)
-                .child(text.clone())
                 .into_any_element(),
             NodeKind::Row => {
                 let row = match placement {
-                    Placement::Root => pill(theme),
-                    Placement::InRow => div().flex().items_center().gap(theme.spacing.small),
+                    Placement::Root => pill(theme).flex_none(),
+                    Placement::InRow => div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(theme.spacing.small),
                     Placement::InColumn => div()
                         .w_full()
                         .flex()
@@ -129,13 +142,24 @@ impl ExtensionWidget {
                 row.children(self.children(nodes, index, Placement::InRow, theme, window, cx))
                     .into_any_element()
             }
-            NodeKind::Column => div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.small)
-                .children(self.children(nodes, index, Placement::InColumn, theme, window, cx))
-                .into_any_element(),
+            NodeKind::Column => {
+                let children = self.children(nodes, index, Placement::InColumn, theme, window, cx);
+                let column = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(theme.spacing.small)
+                    .children(children);
+                match placement {
+                    // The whole widget: what does not fit is scrolled to.
+                    Placement::Root => column
+                        .id("extension-content")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .into_any_element(),
+                    Placement::InRow | Placement::InColumn => column.into_any_element(),
+                }
+            }
             NodeKind::Progress(share) => {
                 let share = if share.is_nan() {
                     0.
@@ -175,6 +199,8 @@ impl ExtensionWidget {
                     .state(window);
                 let element = div()
                     .id(("extension-button", index))
+                    .flex_none()
+                    .whitespace_nowrap()
                     .px(theme.spacing.small)
                     .rounded(theme.shape.full)
                     .bg(state_layer(theme, theme.colors.surface_container, state))
