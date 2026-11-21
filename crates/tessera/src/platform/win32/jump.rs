@@ -263,6 +263,9 @@ fn execute(program: HSTRING, arguments: HSTRING, name: String) {
     });
 }
 
+/// The identifier Explorer goes by.
+const EXPLORER: &str = "Microsoft.Windows.Explorer";
+
 /// A document an application opened lately.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentDocument {
@@ -289,8 +292,14 @@ impl AppWindowId {
 /// The identifier Windows makes up for the application whose program file
 /// is `executable` and which states none: the path of the file, with a
 /// well-known directory at its start replaced by the identifier of that
-/// directory.
+/// directory. Explorer is the exception: its windows state no identifier,
+/// yet Windows keeps its lists under a name.
 pub fn app_id_of_program(executable: &Path) -> String {
+    let explorer = env::var_os("SystemRoot").map(|root| PathBuf::from(root).join("explorer.exe"));
+    let whole = executable.as_os_str();
+    if explorer.is_some_and(|explorer| explorer.as_os_str().eq_ignore_ascii_case(whole)) {
+        return EXPLORER.to_owned();
+    }
     let folders = KNOWN_FOLDERS.iter().filter_map(|&(variable, below, id)| {
         let folder = PathBuf::from(env::var_os(variable)?).join(below);
         Some((folder, id))
