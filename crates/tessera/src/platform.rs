@@ -9,5 +9,5 @@ pub use win32::{
     AppWindow, AppWindowId, AudioOutput, Battery, DisplayKey, EdgeReservation, IconPixels, Link,
     Media, MediaCommand, MemoryLoad, NativeSurface, Network, Notification, Notifications,
     NowPlaying, PowerAction, ProcessorLoad, ScreenEdge, ScreenRect, Shortcut, Taskbar, Thumbnail,
-    Tray, TrayButton, TrayIcon, WindowEvents, accent_color, light_mode,
+    Tray, TrayButton, TrayIcon, WindowEvents, accent_color, app_id_in, app_path, light_mode,
 };

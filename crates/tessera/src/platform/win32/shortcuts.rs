@@ -27,7 +27,8 @@ const PROGRAMS: &str = r"Microsoft\Windows\Start Menu\Programs";
 /// The longest path a shortcut reports.
 const MAX_PATH: usize = 260;
 
-/// A shortcut file that starts an application.
+/// Something that starts an application: a shortcut file, a program file,
+/// or the path that names a packaged application.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shortcut {
     /// The name the Start menu shows.
@@ -45,10 +46,10 @@ pub struct ShortcutLink {
 }
 
 impl Shortcut {
-    /// Every shortcut in the Start menu folders of the user and of the
-    /// machine, by name. Of several with one name, the user's is kept.
-    /// Applications that have no shortcut file there, as most packaged
-    /// (Store) apps, are not found.
+    /// Everything the Start menu starts, by name: the shortcuts in its
+    /// folders of the user and of the machine, and the packaged (Store)
+    /// applications, which have no shortcut file. Of several with one
+    /// name, the user's shortcut is kept, or else the machine's.
     pub fn start_menu() -> Vec<Self> {
         let mut shortcuts = Vec::new();
         for profile in ["APPDATA", "PROGRAMDATA"] {
@@ -56,6 +57,7 @@ impl Shortcut {
                 Self::collect(&Path::new(&profile).join(PROGRAMS), &mut shortcuts);
             }
         }
+        shortcuts.extend(Self::packaged());
         let mut seen = HashSet::new();
         shortcuts.retain(|shortcut| seen.insert(shortcut.name.to_lowercase()));
         shortcuts.sort_by_cached_key(|shortcut| shortcut.name.to_lowercase());

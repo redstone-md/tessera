@@ -169,9 +169,20 @@ pub struct AppWindow {
     pub display: DisplayKey,
     /// The image of the owning process, when the system allows reading it.
     pub executable: Option<PathBuf>,
+    /// The identifier of the packaged (Store) application the window
+    /// belongs to, if it belongs to one.
+    pub app_id: Option<String>,
 }
 
 impl AppWindow {
+    /// What starts another window of the window's application and names
+    /// it when it is pinned: the packaged application, or else the program
+    /// file.
+    pub fn program(&self) -> Option<PathBuf> {
+        let app = self.app_id.as_deref().map(super::packaged::app_path);
+        app.or_else(|| self.executable.clone())
+    }
+
     /// Lists application windows in z-order, topmost first.
     pub fn enumerate() -> Vec<Self> {
         let mut handles: Vec<HWND> = Vec::new();
@@ -212,10 +223,12 @@ impl AppWindow {
             if process == GetCurrentProcessId() {
                 return None;
             }
+            let (executable, app_id) = program_of(hwnd, process);
             Some(Self {
                 id: AppWindowId(hwnd.0 as isize),
                 display: display_of(hwnd),
-                executable: executable_of(process),
+                executable,
+                app_id,
             })
         }
     }
@@ -248,11 +261,15 @@ fn display_of(hwnd: HWND) -> DisplayKey {
     DisplayKey::of_window(hwnd)
 }
 
-fn executable_of(process: u32) -> Option<PathBuf> {
+/// The image of `process`, when the system allows reading it, and the
+/// identifier of the packaged application its window `hwnd` belongs to.
+fn program_of(hwnd: HWND, process: u32) -> (Option<PathBuf>, Option<String>) {
     // SAFETY: the buffer and its length describe the same allocation, and the
     // process handle is closed before returning.
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process).ok()?;
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process) else {
+            return (None, None);
+        };
         let mut buffer = [0u16; 1024];
         let mut length = buffer.len() as u32;
         let result = QueryFullProcessImageNameW(
@@ -261,10 +278,11 @@ fn executable_of(process: u32) -> Option<PathBuf> {
             PWSTR(buffer.as_mut_ptr()),
             &raw mut length,
         );
+        let executable = result
+            .ok()
+            .map(|()| PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])));
+        let app_id = super::packaged::app_id_of(hwnd, handle, executable.as_deref());
         let _ = CloseHandle(handle);
-        result.ok()?;
-        Some(PathBuf::from(String::from_utf16_lossy(
-            &buffer[..length as usize],
-        )))
+        (executable, app_id)
     }
 }

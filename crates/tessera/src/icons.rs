@@ -13,7 +13,7 @@ use gpui::{Global, RenderImage};
 use image::imageops::FilterType;
 
 use crate::config::config_dir;
-use crate::platform::{IconPixels, Shortcut};
+use crate::platform::{IconPixels, Shortcut, app_id_in};
 
 /// Pixel size icons are prepared at; large enough for 200% scaling.
 const SOURCE_SIZE: u32 = 64;
@@ -47,17 +47,23 @@ impl AppIcons {
     }
 
     /// The icon to show for `executable`: the configured replacement, or
-    /// else the one embedded in the file.
+    /// else the one embedded in the file. The path that names a packaged
+    /// application has the icon the shell draws for it.
     pub fn of_executable(&self, executable: &Path) -> Icon {
-        self.cached(executable, || {
-            self.replacement(executable)
-                .or_else(|| embedded(executable, 0))
+        self.cached(executable, || match app_id_in(executable) {
+            Some(app) => of_app(app),
+            None => self
+                .replacement(executable)
+                .or_else(|| embedded(executable, 0)),
         })
     }
 
     /// The icon to show for `shortcut`: the replacement configured for the
     /// file it opens, or else the icon it asks for, or else that file's.
     pub fn of_shortcut(&self, shortcut: &Shortcut) -> Icon {
+        if app_id_in(&shortcut.path).is_some() {
+            return self.of_executable(&shortcut.path);
+        }
         self.cached(&shortcut.path, || {
             let link = shortcut.link();
             let target = link.target.as_deref();
@@ -116,6 +122,12 @@ pub fn icon_of_pixels(pixels: &IconPixels) -> Icon {
 /// The icon at `index` inside `file`.
 fn embedded(file: &Path, index: i32) -> Icon {
     let pixels = IconPixels::of_file(file, index, SOURCE_SIZE)?;
+    render_image(pixels.width, pixels.height, pixels.bgra)
+}
+
+/// The icon of the packaged application `id`.
+fn of_app(id: &str) -> Icon {
+    let pixels = IconPixels::of_app(id, SOURCE_SIZE)?;
     render_image(pixels.width, pixels.height, pixels.bgra)
 }
 

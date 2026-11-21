@@ -57,8 +57,10 @@
 #               `start`); without the option no descriptions are shown.
 #   "windows"   a button for each open window of the display; option pinned,
 #               applications that keep a button whether they run or not:
-#               paths of programs or shortcuts, or names of shortcuts in
-#               the Start menu, such as ["C:/Windows/notepad.exe", "Paint"]
+#               paths of programs or shortcuts, names the Start menu gives
+#               applications, or "shell:AppsFolder/" and the identifier of
+#               a packaged (Store) application, such as
+#               ["C:/Windows/notepad.exe", "Paint"]
 #   "quit"      closes Tessera
 #   "label"     fixed content; options text and icon, a character of the
 #               Segoe Fluent Icons font such as "\uE71D"

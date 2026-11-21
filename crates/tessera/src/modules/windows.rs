@@ -20,7 +20,9 @@ use crate::icons::{AppIcons, Icon};
 use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{AppWindow, AppWindowId, DisplayKey, Shortcut, WindowEvents};
+use crate::platform::{
+    AppWindow, AppWindowId, DisplayKey, Shortcut, WindowEvents, app_id_in, app_path,
+};
 use crate::popup::PopupAnchor;
 use crate::preview::Previews;
 use crate::shell::Shell;
@@ -67,16 +69,23 @@ impl Module for WindowsModule {
 struct Pin {
     /// What a click opens while the application has no window.
     shortcut: Shortcut,
-    /// The program its windows belong to, when that is known.
+    /// The program file its windows belong to, when that is known.
     program: Option<PathBuf>,
+    /// The packaged application its windows belong to, if it is one.
+    app: Option<String>,
 }
 
 impl Pin {
-    /// The applications `names` stand for. A name is the path of a file or
-    /// what the Start menu calls a shortcut; one that is neither is
-    /// reported and skipped.
+    /// The applications `names` stand for. A name is the path of a file,
+    /// the path that names a packaged application, or what the Start menu
+    /// calls an application; one that is none of these is reported and
+    /// skipped.
     fn find(names: &[String]) -> Vec<Self> {
-        let by_name = names.iter().any(|name| !Path::new(name).is_absolute());
+        let is_path = |name: &str| {
+            let path = Path::new(name);
+            path.is_absolute() || app_id_in(path).is_some()
+        };
+        let by_name = names.iter().any(|name| !is_path(name));
         let start_menu = if by_name {
             Shortcut::start_menu()
         } else {
@@ -84,7 +93,12 @@ impl Pin {
         };
         let pins = names.iter().filter_map(|name| {
             let path = Path::new(name);
-            let shortcut = if path.is_absolute() {
+            let shortcut = if let Some(app) = app_id_in(path) {
+                Some(Shortcut {
+                    name: name.clone(),
+                    path: app_path(app),
+                })
+            } else if path.is_absolute() {
                 path.is_file().then(|| Shortcut {
                     name: name.clone(),
                     path: path.to_owned(),
@@ -102,16 +116,26 @@ impl Pin {
     }
 
     fn of(shortcut: Shortcut) -> Self {
-        let program = if is_link(&shortcut.path) {
+        let app = app_id_in(&shortcut.path).map(str::to_owned);
+        let program = if app.is_some() {
+            None
+        } else if is_link(&shortcut.path) {
             shortcut.link().target
         } else {
             Some(shortcut.path.clone())
         };
-        Self { shortcut, program }
+        Self {
+            shortcut,
+            program,
+            app,
+        }
     }
 
     /// Whether `window` belongs to the pinned application.
     fn owns(&self, window: &AppWindow) -> bool {
+        if let (Some(app), Some(shown)) = (&self.app, &window.app_id) {
+            return app.eq_ignore_ascii_case(shown);
+        }
         let (Some(program), Some(executable)) = (&self.program, &window.executable) else {
             return false;
         };
@@ -119,11 +143,7 @@ impl Pin {
     }
 
     fn icon(&self, icons: &AppIcons) -> Icon {
-        if is_link(&self.shortcut.path) {
-            icons.of_shortcut(&self.shortcut)
-        } else {
-            icons.of_executable(&self.shortcut.path)
-        }
+        icons.of_shortcut(&self.shortcut)
     }
 }
 
@@ -298,7 +318,7 @@ impl WindowList {
             return Vec::new();
         };
         let mut entries = Vec::new();
-        let executable = item.window.as_ref().and_then(|w| w.executable.clone());
+        let executable = item.window.as_ref().and_then(AppWindow::program);
         let launched = match (&item.pin, &executable) {
             (Some(pin), _) => Some(pin.shortcut.clone()),
             (None, Some(executable)) => Some(Shortcut {
@@ -532,8 +552,8 @@ impl Render for WindowList {
                 let icon = match (&item.pin, &item.window) {
                     (Some(pin), _) => pin.icon(icons),
                     (None, Some(window)) => {
-                        let executable = window.executable.as_deref();
-                        executable.and_then(|executable| icons.of_executable(executable))
+                        let program = window.program();
+                        program.and_then(|program| icons.of_executable(&program))
                     }
                     (None, None) => None,
                 };
