@@ -21,8 +21,8 @@ use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{
-    AppWindow, AppWindowId, DisplayKey, RecentDocument, Shortcut, WindowEvents, app_id_in,
-    app_id_of_program, app_path,
+    AppWindow, AppWindowId, DisplayKey, JumpTask, RecentDocument, Shortcut, WindowEvents,
+    app_id_in, app_id_of_program, app_path,
 };
 use crate::popup::PopupAnchor;
 use crate::preview::Previews;
@@ -51,6 +51,7 @@ const RECENT_SHOWN: u32 = 5;
 
 const ICON_CLOSE: &str = "\u{e8bb}";
 const ICON_DOCUMENT: &str = "\u{e8a5}";
+const ICON_TASK: &str = "\u{e945}";
 const ICON_NEW_WINDOW: &str = "\u{e78b}";
 const ICON_PIN: &str = "\u{e718}";
 const ICON_UNPIN: &str = "\u{e77a}";
@@ -203,7 +204,7 @@ fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
 }
 
 /// The documents the application of `item` opened lately, each to be
-/// opened again by it.
+/// opened again by it, and then the tasks it put in its jump list.
 fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
     let window = item.window.as_ref();
     let pin = item.pin.as_ref();
@@ -224,7 +225,7 @@ fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
         return Vec::new();
     };
     let documents = RecentDocument::of_app(&app, RECENT_SHOWN);
-    let entries = documents.into_iter().map(|document| {
+    let documents = documents.into_iter().map(|document| {
         let program = program.clone();
         let label = document.name.clone();
         MenuEntry::new(ICON_DOCUMENT, label, move |_| match &program {
@@ -236,7 +237,11 @@ fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
             .launch(),
         })
     });
-    entries.collect()
+    let tasks = JumpTask::of_app(&app).into_iter().map(|task| {
+        let label = task.name.clone();
+        MenuEntry::new(ICON_TASK, label, move |_| task.start())
+    });
+    documents.chain(tasks).collect()
 }
 
 /// One button and the motion it is in.

@@ -32,7 +32,7 @@ pub use audio::AudioOutput;
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use desktops::VirtualDesktops;
 pub use icon::IconPixels;
-pub use jump::{RecentDocument, app_id_of_program};
+pub use jump::{JumpTask, RecentDocument, app_id_of_program};
 pub use keyboard::{InputLanguage, Typing};
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use network::{Link, Network};
