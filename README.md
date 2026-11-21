@@ -97,7 +97,7 @@ What this does and does not guard:
 - `Remove` deletes those files and the extension's `state.txt`. An extension without `installed.toml` was copied in by hand and is neither replaced nor removed.
 - A registry or an offer that cannot be used is listed at the top of the widget with the reason.
 
-Tried on a running shell: listing, installing and removing the `counter` example from a registry file on disk, with the widgets appearing in and leaving the bar. `Update`, failed downloads and nested registries are covered by tests only.
+Tried on a running shell: listing, installing and removing the `counter` example, from a registry file on disk and from the registry of this repository on the web, with the widgets appearing in and leaving the bar. `Update`, failed downloads and nested registries are covered by tests only.
 
 [`registry/update.sh`](registry/update.sh) rebuilds the examples and rewrites the registry of this repository.
 
