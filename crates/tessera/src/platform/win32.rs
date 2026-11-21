@@ -30,6 +30,7 @@ mod windows_key;
 pub use accent::{accent_color, light_mode};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_held};
 pub use audio::AudioOutput;
+pub use backdrop::{BackdropPicture, DesktopBackdrop, display_frames};
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use desktops::VirtualDesktops;
 pub use icon::IconPixels;

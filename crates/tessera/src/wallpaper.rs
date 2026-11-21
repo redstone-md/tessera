@@ -6,24 +6,21 @@
 //!
 //! The wallpaper of Windows is left as it is and shows again when Tessera
 //! exits, because the pictures are drawn in windows of Tessera that sit
-//! over it.
+//! over it. Those are plain windows, not ones of the user interface: a
+//! picture is kept once for each display, at the size of the display.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use gpui::{
-    App, AppContext, AsyncApp, Context, Global, IntoElement, ObjectFit, ParentElement,
-    PlatformDisplay, Render, RenderImage, Styled, StyledImage, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, black, div,
-    img,
-};
-use image::imageops::FilterType;
+use gpui::{App, AsyncApp, Global};
+use image::RgbImage;
 use serde::Deserialize;
 
-use crate::motion::Spring;
-use crate::platform::NativeSurface;
+use crate::motion::{Spring, SpringSpec};
+use crate::platform::{BackdropPicture, DesktopBackdrop, ScreenRect, display_frames};
 use crate::theme::Theme;
 
 /// How long a picture stays unless the configuration says, in seconds.
@@ -33,8 +30,12 @@ const INTERVAL: u64 = 600;
 /// takes time and memory.
 const SHORTEST_INTERVAL: u64 = 5;
 
-/// How long after one display the next one goes over to a new picture.
-const STAGGER: Duration = Duration::from_millis(400);
+/// How long one step of a fade stays on the screen.
+const FRAME: Duration = Duration::from_millis(16);
+
+/// How often the displays are looked at for a change while a picture
+/// stays.
+const DISPLAY_CHECK: Duration = Duration::from_secs(2);
 
 /// The kinds of file taken from a directory, by extension.
 const KINDS: [&str; 3] = ["jpg", "jpeg", "png"];
@@ -99,45 +100,123 @@ fn is_picture(path: &Path) -> bool {
     })
 }
 
-/// The picture in the file `path`, ready to draw and scaled down to the
-/// smallest size that still covers `width` by `height` pixels.
-fn picture(path: &Path, width: u32, height: u32) -> anyhow::Result<Arc<RenderImage>> {
-    let mut image =
-        image::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
-    let (wide, high) = covering(image.width(), image.height(), width, height);
-    if wide < image.width() {
-        image = image.resize_exact(wide, high, FilterType::Triangle);
+/// The pixels of the picture in the file `path`.
+fn read(path: &Path) -> anyhow::Result<RgbImage> {
+    let image = image::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
+    if image.width() == 0 || image.height() == 0 {
+        anyhow::bail!("{} is an empty picture", path.display());
     }
-    let mut pixels = image.into_rgba8();
-    // The renderer expects blue first.
-    for pixel in pixels.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Ok(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
+    Ok(image.into_rgb8())
 }
 
-/// The size a picture of `width` by `height` pixels is scaled to so that
-/// it just covers `over_width` by `over_height`, keeping its shape. A
-/// picture that is not larger than that keeps its size.
-fn covering(width: u32, height: u32, over_width: u32, over_height: u32) -> (u32, u32) {
-    if width == 0 || height == 0 {
-        return (width, height);
+/// For each of `to` pixels in a row that `from` pixels are scaled to: the
+/// first of the pixels it is mixed from, and the share of that one and of
+/// each after it. The shares fall off evenly with the distance and sum
+/// to 1.
+fn shares(from: u32, to: u32) -> Vec<(usize, Vec<f32>)> {
+    let ratio = from as f32 / to as f32;
+    // How far a pixel reaches: over its neighbours, and when the row gets
+    // shorter over all the pixels that go into one.
+    let reach = ratio.max(1.);
+    (0..to)
+        .map(|index| {
+            let centre = (index as f32 + 0.5) * ratio;
+            let first = (centre - reach).floor().max(0.) as usize;
+            let end = ((centre + reach).ceil() as usize).clamp(first + 1, from as usize);
+            let mut shares: Vec<f32> = (first..end)
+                .map(|source| (1. - ((source as f32 + 0.5 - centre) / reach).abs()).max(0.))
+                .collect();
+            let sum: f32 = shares.iter().sum();
+            if sum > 0. {
+                shares.iter_mut().for_each(|share| *share /= sum);
+            } else {
+                let even = 1. / shares.len() as f32;
+                shares.fill(even);
+            }
+            (first, shares)
+        })
+        .collect()
+}
+
+/// `image` scaled so that it just covers `width` by `height` pixels, and
+/// what then sticks out cut off evenly at both sides.
+///
+/// The scaling is done here, a few rows at a time: that of the `image`
+/// crate first makes a copy of the whole picture that is four times its
+/// size in memory.
+fn fit(image: &RgbImage, width: u32, height: u32) -> BackdropPicture {
+    let (left, top, wide, high) = covering_part(image.width(), image.height(), width, height);
+    let across = shares(wide, width);
+    let down = shares(high, height);
+    let source = image.as_raw();
+    let source_row = image.width() as usize * 3;
+    let row = width as usize * 3;
+    let stride = BackdropPicture::stride(width);
+    let mut pixels = vec![0; stride * height as usize];
+    // Rows of the source scaled across, with their number, kept as long
+    // as a row of the picture is still mixed from them.
+    let mut scaled: VecDeque<(usize, Vec<f32>)> = VecDeque::new();
+    let mut mixed = vec![0.; row];
+    for ((first, shares), out) in down.iter().zip(pixels.chunks_exact_mut(stride)) {
+        while scaled.front().is_some_and(|(number, _)| number < first) {
+            scaled.pop_front();
+        }
+        let mut next = scaled.back().map_or(*first, |(number, _)| number + 1);
+        while next < first + shares.len() {
+            let start = (top as usize + next) * source_row + left as usize * 3;
+            let line = &source[start..start + wide as usize * 3];
+            let mut wide_row = vec![0.; row];
+            for ((first, shares), to) in across.iter().zip(wide_row.as_chunks_mut::<3>().0) {
+                for (share, from) in shares.iter().zip(line[first * 3..].as_chunks::<3>().0) {
+                    // Windows expects blue first.
+                    to[0] += share * f32::from(from[2]);
+                    to[1] += share * f32::from(from[1]);
+                    to[2] += share * f32::from(from[0]);
+                }
+            }
+            scaled.push_back((next, wide_row));
+            next += 1;
+        }
+        mixed.fill(0.);
+        for (share, (_, line)) in shares.iter().zip(&scaled) {
+            for (to, from) in mixed.iter_mut().zip(line) {
+                *to += share * from;
+            }
+        }
+        for (to, from) in out.iter_mut().zip(&mixed) {
+            *to = from.round().clamp(0., 255.) as u8;
+        }
     }
-    let scale = f64::max(
-        f64::from(over_width) / f64::from(width),
-        f64::from(over_height) / f64::from(height),
-    );
-    if scale >= 1. {
-        return (width, height);
+    BackdropPicture::new(width, height, pixels)
+}
+
+/// The part of a picture of `width` by `height` pixels that has the shape
+/// of `over_width` by `over_height` and is as large as can be, in the
+/// middle of the picture: its left, top, width and height.
+fn covering_part(
+    width: u32,
+    height: u32,
+    over_width: u32,
+    over_height: u32,
+) -> (u32, u32, u32, u32) {
+    let (wide, high) = (u64::from(width), u64::from(height));
+    let (over_wide, over_high) = (u64::from(over_width.max(1)), u64::from(over_height.max(1)));
+    if wide * over_high > high * over_wide {
+        // Wider in shape: the sides go.
+        let kept = ((high * over_wide / over_high) as u32).clamp(1, width);
+        ((width - kept) / 2, 0, kept, height)
+    } else {
+        let kept = ((wide * over_high / over_wide) as u32).clamp(1, height);
+        (0, (height - kept) / 2, width, kept)
     }
-    let scaled = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
-    (scaled(width), scaled(height))
 }
 
 /// The wallpaper windows and the pictures they go through.
 pub struct Wallpaper {
     config: WallpaperConfig,
-    windows: Vec<WindowHandle<Backdrop>>,
+    backdrops: Vec<DesktopBackdrop>,
+    /// The displays the windows were opened for.
+    frames: Vec<ScreenRect>,
     /// Counts configurations, so that the task of an earlier one stops.
     task: usize,
 }
@@ -149,7 +228,8 @@ impl Wallpaper {
     pub fn start(config: &WallpaperConfig, cx: &mut App) {
         cx.set_global(Self {
             config: WallpaperConfig::default(),
-            windows: Vec::new(),
+            backdrops: Vec::new(),
+            frames: Vec::new(),
             task: 0,
         });
         Self::configure(config, cx);
@@ -167,206 +247,150 @@ impl Wallpaper {
         let task = this.task;
         let pictures = config.pictures();
         if pictures.is_empty() {
-            Self::close(cx);
+            this.backdrops.clear();
+            this.frames.clear();
             return;
         }
-        if cx.global::<Self>().windows.is_empty() {
-            let windows = cx
-                .displays()
-                .iter()
-                .filter_map(|display| {
-                    Backdrop::open(display, cx)
-                        .inspect_err(|error| report!("a display gets no wallpaper: {error:#}"))
-                        .ok()
-                })
-                .collect();
-            cx.global_mut::<Self>().windows = windows;
-        }
         let interval = config.interval();
+        let fade = cx.global::<Theme>().motion.effects;
         cx.spawn(async move |cx: &mut AsyncApp| {
-            for path in pictures.iter().cycle() {
-                // One picture for all displays, large enough for each.
-                let Ok(Some((width, height))) = cx.update(|cx| Self::largest(task, cx)) else {
+            let mut next = 0;
+            loop {
+                let Ok(Some(sizes)) = cx.update(|cx| Self::sizes(task, cx)) else {
                     return;
                 };
-                let path = path.clone();
-                let read = cx
-                    .background_executor()
-                    .spawn(async move { picture(&path, width, height) })
-                    .await;
-                match read {
-                    Ok(picture) => {
-                        let Ok(Some(windows)) = cx.update(|cx| Self::windows(task, cx)) else {
-                            return;
-                        };
-                        // One display after the other: the renderer takes
-                        // a copy of the picture for each window, and for a
-                        // while the memory of another to make it.
-                        for window in windows {
-                            window
-                                .update(cx, |backdrop, window, cx| {
-                                    backdrop.show(picture.clone(), window, cx);
-                                })
-                                .ok();
-                            cx.background_executor().timer(STAGGER).await;
-                        }
-                    }
+                let path = &pictures[next % pictures.len()];
+                match Self::show(task, path, &sizes, fade, cx).await {
+                    Ok(true) => {}
+                    Ok(false) => return,
                     Err(error) => report!("a wallpaper picture is left out: {error:#}"),
                 }
-                if pictures.len() == 1 {
-                    return;
+                // The picture stays, unless the displays change: then the
+                // windows are opened anew and get the same picture.
+                let until = (pictures.len() > 1).then(|| Instant::now() + interval);
+                loop {
+                    cx.background_executor().timer(DISPLAY_CHECK).await;
+                    match cx.update(|cx| Self::displays_changed(task, cx)) {
+                        Ok(Some(true)) => break,
+                        Ok(Some(false)) => {}
+                        _ => return,
+                    }
+                    if until.is_some_and(|until| Instant::now() >= until) {
+                        next += 1;
+                        break;
+                    }
                 }
-                cx.background_executor().timer(interval).await;
             }
         })
         .detach();
     }
 
-    /// The width and the height in pixels of the widest and the highest
-    /// wallpaper window, unless `task` is not the current one or no window
-    /// is left.
-    fn largest(task: usize, cx: &mut App) -> Option<(u32, u32)> {
+    /// Whether the displays are no longer the ones the windows were
+    /// opened for, unless `task` is not the current one.
+    fn displays_changed(task: usize, cx: &App) -> Option<bool> {
         let this = cx.global::<Self>();
+        (this.task == task).then(|| this.frames != display_frames())
+    }
+
+    /// The sizes of the wallpaper windows, which are opened anew first if
+    /// the displays changed. Nothing if `task` is not the current one or
+    /// no display takes a window.
+    fn sizes(task: usize, cx: &mut App) -> Option<Vec<(u32, u32)>> {
+        let this = cx.global_mut::<Self>();
         if this.task != task {
             return None;
         }
-        let sizes: Vec<(u32, u32)> = this
-            .windows
-            .clone()
-            .into_iter()
-            .filter_map(|window| {
-                window
-                    .update(cx, |_, window, _| {
-                        let size = window.viewport_size();
-                        let scale = window.scale_factor();
-                        let pixels = |side: gpui::Pixels| (f32::from(side) * scale).ceil() as u32;
-                        (pixels(size.width), pixels(size.height))
-                    })
-                    .ok()
-            })
-            .collect();
-        let width = sizes.iter().map(|size| size.0).max()?;
-        let height = sizes.iter().map(|size| size.1).max()?;
-        Some((width, height))
-    }
-
-    /// The wallpaper windows, unless `task` is not the current one.
-    fn windows(task: usize, cx: &App) -> Option<Vec<WindowHandle<Backdrop>>> {
-        let this = cx.global::<Self>();
-        (this.task == task).then(|| this.windows.clone())
-    }
-
-    fn close(cx: &mut App) {
-        for window in std::mem::take(&mut cx.global_mut::<Self>().windows) {
-            window
-                .update(cx, |backdrop, window, cx| {
-                    backdrop.forget(window, cx);
-                    window.remove_window();
+        let frames = display_frames();
+        if this.frames != frames {
+            // The old windows go first, and their pictures with them.
+            this.backdrops.clear();
+            this.backdrops = frames
+                .iter()
+                .filter_map(|frame| {
+                    DesktopBackdrop::open(*frame)
+                        .inspect_err(|error| report!("a display gets no wallpaper: {error:#}"))
+                        .ok()
                 })
-                .ok();
+                .collect();
+            this.frames = frames;
         }
-    }
-}
-
-/// The wallpaper of one display: the picture shown and, while that one is
-/// still fading in, the one before it underneath.
-struct Backdrop {
-    shown: Option<Arc<RenderImage>>,
-    before: Option<Arc<RenderImage>>,
-    /// 0 when the picture shown starts to appear, 1 once it is all there.
-    presence: Spring,
-}
-
-impl Backdrop {
-    /// Opens the wallpaper window of `display`, empty and behind the icons
-    /// of the desktop.
-    fn open(
-        display: &std::rc::Rc<dyn PlatformDisplay>,
-        cx: &mut App,
-    ) -> anyhow::Result<WindowHandle<Self>> {
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(display.bounds())),
-            // As for an edge surface: keeps GPUI from insetting the content.
-            titlebar: Some(TitlebarOptions::default()),
-            focus: false,
-            show: true,
-            kind: WindowKind::PopUp,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: Some(display.id()),
-            window_background: WindowBackgroundAppearance::Opaque,
-            ..Default::default()
-        };
-        let mut placed = Ok(());
-        let window = cx.open_window(options, |window, cx| {
-            placed = NativeSurface::of(window).and_then(NativeSurface::put_behind_desktop_icons);
-            let effects = cx.global::<Theme>().motion.effects;
-            cx.new(|_| Self {
-                shown: None,
-                before: None,
-                presence: Spring::new(effects, 1.),
-            })
-        })?;
-        if let Err(error) = placed {
-            // Left where it opened, the window would cover the display.
-            window
-                .update(cx, |_, window, _| window.remove_window())
-                .ok();
-            return Err(error);
-        }
-        Ok(window)
+        (!this.backdrops.is_empty())
+            .then(|| this.backdrops.iter().map(DesktopBackdrop::size).collect())
     }
 
-    /// Fades over to `picture` from the picture shown.
-    fn show(&mut self, picture: Arc<RenderImage>, window: &mut Window, cx: &mut Context<Self>) {
-        self.settle(window, cx);
-        self.before = self.shown.replace(picture);
-        let effects = cx.global::<Theme>().motion.effects;
-        self.presence = Spring::new(effects, 0.);
-        self.presence.animate_to(1.);
-        cx.notify();
-    }
-
-    /// Lets go of the picture underneath, which the renderer keeps a copy
-    /// of until told.
-    fn settle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(before) = self.before.take() {
-            cx.drop_image(before, Some(window));
+    /// Reads the picture at `path` and fades every window, of the `sizes`
+    /// given, over to it. Says whether `task` was the current one to the
+    /// end.
+    async fn show(
+        task: usize,
+        path: &Path,
+        sizes: &[(u32, u32)],
+        fade: SpringSpec,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<bool> {
+        let file = path.to_path_buf();
+        let image = cx
+            .background_executor()
+            .spawn(async move { read(&file) })
+            .await?;
+        let image = Arc::new(image);
+        // Displays of one size share the scaled picture.
+        let mut fitted: Option<Arc<BackdropPicture>> = None;
+        for (index, &(width, height)) in sizes.iter().enumerate() {
+            let picture = match fitted.take() {
+                Some(picture) if picture.size() == (width, height) => picture,
+                // The one of another size is let go of before the next
+                // is made.
+                _ => {
+                    let image = image.clone();
+                    let scaled = cx
+                        .background_executor()
+                        .spawn(async move { fit(&image, width, height) })
+                        .await;
+                    Arc::new(scaled)
+                }
+            };
+            let taken = cx.update(|cx| {
+                let this = cx.global::<Self>();
+                (this.task == task).then(|| match this.backdrops.get(index) {
+                    Some(backdrop) => backdrop.set(&picture),
+                    None => Ok(()),
+                })
+            })?;
+            match taken {
+                Some(taken) => taken?,
+                None => return Ok(false),
+            }
+            fitted = Some(picture);
         }
-    }
+        drop(fitted);
+        drop(image);
 
-    /// Lets go of every picture.
-    fn forget(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settle(window, cx);
-        if let Some(shown) = self.shown.take() {
-            cx.drop_image(shown, Some(window));
+        let mut presence = Spring::new(fade, 0.);
+        presence.animate_to(1.);
+        let mut shown = 0.;
+        while shown < 1. {
+            cx.background_executor().timer(FRAME).await;
+            let mut now = presence.value_at(Instant::now()).clamp(shown, 1.);
+            if presence.is_settled() {
+                now = 1.;
+            }
+            let current = cx.update(|cx| {
+                let this = cx.global::<Self>();
+                if this.task != task {
+                    return false;
+                }
+                for backdrop in &this.backdrops {
+                    backdrop.advance(shown, now);
+                }
+                true
+            })?;
+            if !current {
+                return Ok(false);
+            }
+            shown = now;
         }
-    }
-}
-
-impl Render for Backdrop {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let presence = self.presence.value(window).clamp(0., 1.);
-        if self.presence.is_settled() && self.before.is_some() {
-            self.settle(window, cx);
-        }
-        let layer = |picture: &Arc<RenderImage>| {
-            img(picture.clone())
-                .absolute()
-                .size_full()
-                .object_fit(ObjectFit::Cover)
-        };
-        div()
-            .size_full()
-            .relative()
-            .bg(black())
-            .children(self.before.as_ref().map(layer))
-            .children(
-                self.shown
-                    .as_ref()
-                    .map(|picture| layer(picture).opacity(presence)),
-            )
+        Ok(true)
     }
 }
 
@@ -375,18 +399,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_larger_picture_is_scaled_to_just_cover() {
-        // Wider than the display in shape: the height decides.
-        assert_eq!(covering(8000, 2000, 2000, 1000), (4000, 1000));
-        // Higher in shape: the width decides.
-        assert_eq!(covering(4000, 6000, 2000, 1000), (2000, 3000));
+    fn the_part_of_a_picture_that_covers_has_the_shape_of_the_display() {
+        // Wider in shape: the sides go.
+        assert_eq!(covering_part(8000, 2000, 2000, 1000), (2000, 0, 4000, 2000));
+        // Higher in shape: top and bottom go.
+        assert_eq!(covering_part(4000, 6000, 2000, 1000), (0, 2000, 4000, 2000));
+        // The same shape: all of it, larger or smaller.
+        assert_eq!(covering_part(1000, 500, 2000, 1000), (0, 0, 1000, 500));
+        assert_eq!(covering_part(1, 900, 3440, 1440), (0, 449, 1, 1));
     }
 
     #[test]
-    fn a_picture_that_is_not_larger_keeps_its_size() {
-        assert_eq!(covering(1000, 500, 2000, 1000), (1000, 500));
-        assert_eq!(covering(4000, 500, 2000, 1000), (4000, 500));
-        assert_eq!(covering(0, 500, 2000, 1000), (0, 500));
+    fn the_shares_of_the_pixels_mixed_into_one_sum_to_one() {
+        for (from, to) in [(3840, 2560), (1000, 3440), (7, 7), (1, 5), (5, 1)] {
+            let shares = shares(from, to);
+            assert_eq!(shares.len(), to as usize);
+            for (first, shares) in shares {
+                assert!(first + shares.len() <= from as usize);
+                assert!((shares.iter().sum::<f32>() - 1.).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn a_picture_scaled_down_keeps_its_halves() {
+        // Left half dark, right half bright.
+        let image = RgbImage::from_fn(8, 4, |x, _| image::Rgb([if x < 4 { 0 } else { 200 }; 3]));
+        let picture = fit(&image, 4, 2);
+        let row = &picture.pixels()[..12];
+        assert_eq!(row[..3], [0, 0, 0]);
+        assert_eq!(row[9..], [200, 200, 200]);
+    }
+
+    #[test]
+    fn a_picture_is_fitted_to_the_display_with_blue_first() {
+        let mut image = RgbImage::new(4, 2);
+        for pixel in image.pixels_mut() {
+            pixel.0 = [10, 20, 30];
+        }
+        let picture = fit(&image, 3, 3);
+        assert_eq!(picture.size(), (3, 3));
+        // Three pixels take nine bytes, a row twelve.
+        assert_eq!(BackdropPicture::stride(3), 12);
+        assert_eq!(
+            picture.pixels()[..12],
+            [30, 20, 10, 30, 20, 10, 30, 20, 10, 0, 0, 0]
+        );
     }
 
     #[test]
