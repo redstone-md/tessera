@@ -34,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
+use super::ScreenRect;
 use super::icon::IconPixels;
 
 /// The class applications look for to deliver their icons.
@@ -41,6 +42,18 @@ const CLASS: PCWSTR = w!("Shell_TrayWnd");
 
 /// Marks a `WM_COPYDATA` message that carries a notification icon.
 const ICON_DATA: usize = 1;
+
+/// Marks a `WM_COPYDATA` message that asks where an icon is, which is how
+/// `Shell_NotifyIconGetRect` works.
+const PLACE_DATA: usize = 3;
+
+/// What the request for the place of an icon starts with.
+const PLACE_SIGNATURE: u32 = 0x3475_3423;
+
+/// In such a request: asks for the left and top of the icon, or for its
+/// width and height. Windows asks for both and makes a rectangle of them.
+const PLACE_ORIGIN: u32 = 1;
+const PLACE_SIZE: u32 = 2;
 
 /// Marks a `WM_COPYDATA` message that carries the request of an edge bar.
 const EDGE_BAR_DATA: usize = 0;
@@ -145,6 +158,40 @@ enum Identity {
     Numbered(u32, u32),
 }
 
+/// Reads the request for the place of an icon: which part of it is asked
+/// for and of which icon. The structure is a signature, that part, a size
+/// and padding, then the window and number of the icon and its global
+/// identifier, which is all zeroes if it has none.
+fn place_request(data: &[u8]) -> Option<(u32, Identity)> {
+    let number = |at: usize| {
+        let bytes = data.get(at..at + 4)?.try_into().ok()?;
+        Some(u32::from_le_bytes(bytes))
+    };
+    if number(0)? != PLACE_SIGNATURE {
+        return None;
+    }
+    let guid: [u8; 16] = data.get(24..40)?.try_into().ok()?;
+    let identity = if guid == [0; 16] {
+        Identity::Numbered(number(16)?, number(20)?)
+    } else {
+        Identity::Guid(guid)
+    };
+    Some((number(4)?, identity))
+}
+
+/// Where the shell shows an icon, in physical pixels of the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Place {
+    frame: ScreenRect,
+    /// Where a menu of the icon belongs: under it, just off the bar.
+    menu: (i32, i32),
+}
+
+/// Two screen coordinates as the two halves of a message result.
+fn packed(x: i32, y: i32) -> isize {
+    ((x as u16 as usize) | ((y as u16 as usize) << 16)) as isize
+}
+
 #[derive(Clone, Debug)]
 struct Entry {
     id: u64,
@@ -162,6 +209,8 @@ struct Entry {
 #[derive(Default)]
 struct Icons {
     entries: HashMap<Identity, Entry>,
+    /// Where the shell said it shows the icons, by their `id`.
+    places: HashMap<u64, Place>,
     next_id: u64,
     /// Grows with every change.
     generation: u64,
@@ -223,6 +272,21 @@ impl Icons {
         self.entries.retain(|_, entry| exists(entry.window));
         if self.entries.len() != before {
             self.generation += 1;
+        }
+        let entries = &self.entries;
+        self.places
+            .retain(|id, _| entries.values().any(|entry| entry.id == *id));
+    }
+
+    /// The answer to the request for the part `corner` of the place of the
+    /// icon `identity`, if the shell shows it and said where.
+    fn corner(&self, corner: u32, identity: Identity) -> Option<isize> {
+        let entry = self.entries.get(&identity).filter(|entry| !entry.hidden)?;
+        let frame = self.places.get(&entry.id)?.frame;
+        match corner {
+            PLACE_ORIGIN => Some(packed(frame.left, frame.top)),
+            PLACE_SIZE => Some(packed(frame.right - frame.left, frame.bottom - frame.top)),
+            _ => None,
         }
     }
 
@@ -310,15 +374,25 @@ impl Tray {
         icons().generation
     }
 
+    /// Says where the shell shows the icon `id`: its `frame` on the screen
+    /// and the point `menu` under it where a menu of it belongs. An
+    /// application that asks Windows where its icon is gets that frame.
+    pub fn locate(id: u64, frame: ScreenRect, menu: (i32, i32)) {
+        icons().places.insert(id, Place { frame, menu });
+    }
+
     /// Tells the application of the icon `id` that `button` was clicked on
-    /// it, at the pointer's position. An application running with higher
-    /// privileges than the shell does not receive that.
+    /// it. The position it is told is the point under the icon where a
+    /// menu belongs, or the pointer's if the shell never said where the
+    /// icon is; an application may ignore it and ask for the pointer's. An
+    /// application running with higher privileges than the shell does not
+    /// receive the click.
     pub fn press(id: u64, button: TrayButton) {
-        let entry = icons()
-            .entries
-            .values()
-            .find(|entry| entry.id == id)
-            .cloned();
+        let (entry, place) = {
+            let icons = icons();
+            let entry = icons.entries.values().find(|entry| entry.id == id).cloned();
+            (entry, icons.places.get(&id).copied())
+        };
         // An icon that was added before the shell started and is only
         // modified since never said which message it wants.
         let Some(mut entry) = entry.filter(|entry| entry.callback != 0) else {
@@ -330,7 +404,12 @@ impl Tray {
         // SAFETY: both out-parameters outlive the calls, which tolerate a
         // window that has been destroyed.
         unsafe {
-            let _ = GetCursorPos(&raw mut pointer);
+            match place {
+                Some(place) => (pointer.x, pointer.y) = place.menu,
+                None => {
+                    let _ = GetCursorPos(&raw mut pointer);
+                }
+            }
             GetWindowThreadProcessId(window, Some(&raw mut process));
             // The application will want to show a menu or a window, which
             // it may put in front only if the shell, which lets it, is in
@@ -598,6 +677,25 @@ unsafe extern "system" fn receive(
             if let Some(notice) = notice {
                 icons().apply(&notice, load_icon);
             }
+            // SAFETY: as above.
+            let corner = unsafe {
+                let data = &*(lparam.0 as *const COPYDATASTRUCT);
+                (data.dwData == PLACE_DATA && !data.lpData.is_null())
+                    .then(|| {
+                        let bytes = std::slice::from_raw_parts(
+                            data.lpData.cast::<u8>(),
+                            data.cbData as usize,
+                        );
+                        place_request(bytes)
+                    })
+                    .flatten()
+            };
+            // Explorer would answer with the place in its own, hidden
+            // taskbar, where the application would then open its menu.
+            let corner = corner.and_then(|(corner, identity)| icons().corner(corner, identity));
+            if let Some(corner) = corner {
+                return LRESULT(corner);
+            }
             match explorer_tray(window) {
                 // SAFETY: `lparam` points to the COPYDATASTRUCT of this
                 // message, which stays readable until the procedure returns.
@@ -695,6 +793,42 @@ mod tests {
         let read = Notice::parse(&data);
         assert_eq!(read.identity(), Identity::Guid([7; 16]));
         assert_eq!(read.version, 4);
+    }
+
+    #[test]
+    fn the_place_of_an_icon_is_told_once_the_shell_said_it() {
+        let mut request = Vec::new();
+        for number in [PLACE_SIGNATURE, PLACE_SIZE, 0x20, 0, 7, 3] {
+            request.extend_from_slice(&number.to_le_bytes());
+        }
+        request.extend_from_slice(&[0; 16]);
+        let (corner, identity) = place_request(&request).expect("a request");
+        assert_eq!((corner, identity), (PLACE_SIZE, Identity::Numbered(7, 3)));
+        assert_eq!(place_request(&request[..30]), None);
+        assert_eq!(place_request(&[0; 40]), None);
+
+        let mut icons = Icons::default();
+        icons.apply(&notice(NIM_ADD, 7, 3, 0, ""), pixels);
+        assert_eq!(icons.corner(PLACE_SIZE, identity), None);
+        let id = icons.shown()[0].id;
+        let frame = ScreenRect {
+            left: -40,
+            top: 12,
+            right: -16,
+            bottom: 36,
+        };
+        icons.places.insert(
+            id,
+            Place {
+                frame,
+                menu: (-28, 48),
+            },
+        );
+        assert_eq!(icons.corner(PLACE_ORIGIN, identity), Some(packed(-40, 12)));
+        assert_eq!(icons.corner(PLACE_SIZE, identity), Some(packed(24, 24)));
+        assert_eq!(packed(-40, 12), 0x000c_ffd8);
+        icons.prune(|_| false);
+        assert!(icons.places.is_empty());
     }
 
     #[test]
