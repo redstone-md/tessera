@@ -60,6 +60,7 @@ END
     offer ai-limits "AI limits" \
         "What is left of the usage limits of Claude, Codex, OpenRouter and DeepSeek, and when they reset."
     offer device-battery "Device battery"         "An example: the charge of a Bluetooth device in the bar, and every paired device in a popup."
+    offer weather "Weather"         "The weather now and on the next days at a place named in the configuration, from Open-Meteo."
     theme void "Void" 1.0.0 \
         "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
     theme expressive "Expressive" 1.0.0 \

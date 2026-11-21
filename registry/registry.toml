@@ -10,7 +10,7 @@ version = "0.1.0"
 manifest = "counter/extension.toml"
 manifest_sha256 = "80a8698094b015324983e9d7d082adfc3937c805ad73dd4955de924d9dd99063"
 wasm = "counter/extension.wasm"
-wasm_sha256 = "fe30215312d70d85b01570bf09cb1c5eaf6e8eca472fc0bef2e661bb0d1d4eb0"
+wasm_sha256 = "be51c0525fc49f736c19a63151906f11a72b394d4ede8d56ba6193f885f8975d"
 
 [[extension]]
 id = "ai-limits"
@@ -31,6 +31,16 @@ manifest = "device-battery/extension.toml"
 manifest_sha256 = "8acdfa5ecfc387728944a22298bc446637ebbce2dadd97e229a9c90a749ca805"
 wasm = "device-battery/extension.wasm"
 wasm_sha256 = "a0f74c19947f06218fbb6e773d049ab1dc643f93452c14a67e62d743209bab37"
+
+[[extension]]
+id = "weather"
+name = "Weather"
+description = "The weather now and on the next days at a place named in the configuration, from Open-Meteo."
+version = "0.1.0"
+manifest = "weather/extension.toml"
+manifest_sha256 = "1ac140f6fd5cbc303f217c26ac0b05e69a7d97bccf4b841d964886c8592eba82"
+wasm = "weather/extension.wasm"
+wasm_sha256 = "23af02f06cbaf79f489b2f8e441f94445655e2c49475db930eaf90afc1c7a274"
 
 [[theme]]
 id = "void"

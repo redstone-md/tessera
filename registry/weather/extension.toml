@@ -1,0 +1,38 @@
+# Layouts refer to the widgets below as "weather.now" and
+# "weather.forecast".
+#
+# Where the weather is asked for is set in the configuration of Tessera,
+# in degrees, north and east counted positive:
+#
+#     [extension.weather]
+#     latitude = 52.52
+#     longitude = 13.41
+#     unit = "celsius"        # or "fahrenheit"
+#     interval_minutes = 20   # at least 5
+#
+# The place is sent to Open-Meteo, rounded to a hundredth of a degree, and
+# to nobody else. Without it nothing is asked.
+id = "weather"
+
+# The weather comes from Open-Meteo, which asks for no account.
+[permissions]
+network = ["api.open-meteo.com"]
+
+# The temperature and the sky, for a bar. A click on it opens the popup
+# below, unless the layout names another popup for it.
+[[widget]]
+name = "now"
+refresh_seconds = 30
+popup = "days"
+
+# The weather now and on the next days, for a popup.
+[[widget]]
+name = "forecast"
+refresh_seconds = 30
+
+# Layouts refer to this popup as "weather.days".
+[[popup]]
+name = "days"
+width = 320
+height = 232
+content = ["forecast"]
