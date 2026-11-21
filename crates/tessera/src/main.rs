@@ -5,21 +5,23 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod bar;
-mod clock;
-mod dock;
+mod config;
+mod module;
+mod modules;
+mod panel;
 mod platform;
 mod surface;
 mod theme;
-mod widgets;
+mod ui;
 
 use std::time::Duration;
 
-use gpui::{App, Application, AsyncApp};
+use gpui::{App, Application, AsyncApp, px};
 
-use crate::bar::Bar;
-use crate::dock::Dock;
-use crate::platform::{ScreenEdge, Taskbar};
+use crate::config::{Config, Displays};
+use crate::module::{WidgetContext, WidgetRegistry};
+use crate::panel::Panel;
+use crate::platform::Taskbar;
 use crate::surface::EdgeSurface;
 use crate::theme::Theme;
 
@@ -30,8 +32,10 @@ fn main() {
     if Taskbar::run_watchdog_if_requested(std::env::args().skip(1)) {
         return;
     }
-    Application::new().run(|cx: &mut App| {
-        cx.set_global(Theme::default());
+    let config = Config::load();
+    Application::new().run(move |cx: &mut App| {
+        cx.set_global(Theme::load(config.theme.as_deref()));
+        cx.set_global(WidgetRegistry::from_modules(&modules::builtin()));
         match Taskbar::hide_until_exit() {
             Ok(()) => cx
                 .spawn(async move |cx: &mut AsyncApp| {
@@ -43,27 +47,29 @@ fn main() {
                 .detach(),
             Err(error) => eprintln!("tessera: the Windows taskbar stays visible: {error:#}"),
         }
-        if let Err(error) = open_surfaces(cx) {
+        if let Err(error) = open_surfaces(&config, cx) {
             eprintln!("tessera: the shell surfaces could not be opened: {error:#}");
             cx.quit();
         }
     });
 }
 
-/// Opens a bar and a dock on every display.
-fn open_surfaces(cx: &mut App) -> anyhow::Result<()> {
-    let theme = *cx.global::<Theme>();
-    let bar = EdgeSurface {
-        edge: ScreenEdge::Top,
-        thickness: theme.bar.height,
-    };
-    let dock = EdgeSurface {
-        edge: ScreenEdge::Bottom,
-        thickness: theme.dock.height,
-    };
+/// Opens the configured surfaces on the displays each one asks for.
+fn open_surfaces(config: &Config, cx: &mut App) -> anyhow::Result<()> {
+    let primary = cx.primary_display().map(|display| display.id());
     for display in cx.displays() {
-        bar.open(&display, cx, |_, cx| Bar::new(cx))?;
-        dock.open(&display, cx, Dock::new)?;
+        for layout in &config.surfaces {
+            if layout.displays == Displays::Primary && Some(display.id()) != primary {
+                continue;
+            }
+            let surface = EdgeSurface {
+                edge: layout.edge,
+                thickness: px(layout.thickness),
+            };
+            surface.open(&display, cx, |display, cx| {
+                Panel::new(layout, WidgetContext { display }, cx)
+            })?;
+        }
     }
     Ok(())
 }

@@ -36,7 +36,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const EDGE_NOTIFICATION: u32 = WM_APP + 1;
 
 /// A screen edge a shell surface can reserve.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScreenEdge {
     Top,
     Bottom,

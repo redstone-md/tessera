@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The dock: one button per open application window.
+//! One button per open application window. Widget: `windows`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -9,11 +9,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, AsyncApp, Context, InteractiveElement, IntoElement,
-    ParentElement, Render, RenderImage, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    div, ease_out_quint, img,
+    Animation, AnimationExt, AnyElement, AppContext, AsyncApp, Context, InteractiveElement,
+    IntoElement, ParentElement, Render, RenderImage, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, div, ease_out_quint, img,
 };
 
+use crate::module::{Module, WidgetRegistry};
 use crate::platform::{AppWindow, AppWindowId, DisplayKey, IconPixels};
 use crate::theme::Theme;
 
@@ -25,8 +26,23 @@ const ICON_SOURCE_SIZE: u32 = 64;
 
 type Icon = Option<Arc<RenderImage>>;
 
+pub struct WindowsModule;
+
+impl Module for WindowsModule {
+    fn name(&self) -> &'static str {
+        "windows"
+    }
+
+    fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
+        widgets.register("windows", |context, cx| {
+            let display = context.display;
+            cx.new(|cx| WindowList::new(display, cx)).into()
+        })
+    }
+}
+
 /// Lists the application windows of one display and switches between them.
-pub struct Dock {
+struct WindowList {
     /// The display whose windows are listed; every window when unknown.
     display: Option<DisplayKey>,
     windows: Vec<AppWindow>,
@@ -35,8 +51,8 @@ pub struct Dock {
     icons: HashMap<PathBuf, Icon>,
 }
 
-impl Dock {
-    pub fn new(display: Option<DisplayKey>, cx: &mut Context<Self>) -> Self {
+impl WindowList {
+    fn new(display: Option<DisplayKey>, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(REFRESH_INTERVAL).await;
@@ -47,14 +63,14 @@ impl Dock {
         })
         .detach();
 
-        let mut dock = Self {
+        let mut list = Self {
             display,
             windows: Vec::new(),
             foreground: None,
             icons: HashMap::new(),
         };
-        dock.refresh(cx);
-        dock
+        list.refresh(cx);
+        list
     }
 
     /// Re-reads the window list and repaints only when it changed.
@@ -146,7 +162,7 @@ fn render_image(pixels: IconPixels) -> Icon {
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
-impl Render for Dock {
+impl Render for WindowList {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         let windows = self.windows.clone();
@@ -156,20 +172,17 @@ impl Render for Dock {
             .map(|(index, window)| self.render_item(index, window, theme))
             .collect();
 
-        let row = div().size_full().flex().items_center().justify_center();
         if items.is_empty() {
-            return row;
+            return div();
         }
-        row.child(
-            div()
-                .h(theme.dock.container_height)
-                .px(theme.spacing.small)
-                .flex()
-                .items_center()
-                .gap(theme.spacing.tiny)
-                .rounded(theme.shape.large)
-                .bg(theme.colors.surface_container)
-                .children(items),
-        )
+        div()
+            .h(theme.dock.container_height)
+            .px(theme.spacing.small)
+            .flex()
+            .items_center()
+            .gap(theme.spacing.tiny)
+            .rounded(theme.shape.large)
+            .bg(theme.colors.surface_container)
+            .children(items)
     }
 }

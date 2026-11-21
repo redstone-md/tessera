@@ -1,0 +1,24 @@
+# The layout Tessera uses when %APPDATA%\tessera\config.toml does not exist.
+# Copy this file there to change it; Tessera reads it once at startup.
+
+# Name of a theme file, %APPDATA%\tessera\themes\<name>.toml. Optional.
+# theme = "example"
+
+# Each [[surface]] is a strip docked to a screen edge.
+#   edge       "top" or "bottom"
+#   thickness  reserved screen space, in logical pixels
+#   displays   "all" (default) or "primary"
+#   start, center, end  widgets to place, by name
+#
+# Built-in widgets: "clock", "quit", "windows".
+
+[[surface]]
+edge = "top"
+thickness = 48
+center = ["clock"]
+end = ["quit"]
+
+[[surface]]
+edge = "bottom"
+thickness = 76
+center = ["windows"]
