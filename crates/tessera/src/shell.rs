@@ -16,8 +16,8 @@ use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::panel::Panel;
-use crate::platform::ScreenEdge;
-use crate::popup::Popups;
+use crate::platform::{ScreenEdge, WindowsKey};
+use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::theme::Theme;
@@ -59,7 +59,66 @@ impl Shell {
         }
         cx.set_global(Self { config, surfaces });
         Self::watch(cx);
+        Self::answer_windows_key(cx);
         Ok(())
+    }
+
+    /// Takes the Windows key over while the configuration names a popup
+    /// for it, and opens that popup whenever the key is pressed by itself.
+    fn answer_windows_key(cx: &mut App) {
+        Self::take_windows_key(cx);
+        let presses = WindowsKey::presses();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while presses.recv().await.is_ok() {
+                if cx.update(Self::windows_key_pressed).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn take_windows_key(cx: &App) {
+        let taken = cx.global::<Self>().config.windows_key.is_some();
+        if let Err(error) = WindowsKey::take_over(taken) {
+            report!("the Windows key stays with Windows: {error:#}");
+        }
+    }
+
+    /// Opens the popup of the Windows key, or closes it when it is open:
+    /// at the widget that opens it with a click, on the primary display if
+    /// it has one, and in the middle of a surface when no widget does.
+    fn windows_key_pressed(cx: &mut App) {
+        let this = cx.global::<Self>();
+        let Some(name) = this.config.windows_key.clone() else {
+            return;
+        };
+        let primary = cx.primary_display().map(|display| display.id());
+        let mut surfaces: Vec<_> = this
+            .surfaces
+            .iter()
+            .map(|surface| (Some(surface.display) != primary, surface.window))
+            .collect();
+        surfaces.sort_by_key(|&(elsewhere, _)| elsewhere);
+        let mut anywhere = None;
+        for (_, surface) in surfaces {
+            let found = surface.update(cx, |view, window, cx| {
+                let middle = view.content().read(cx).popup_middle(&name);
+                let x = middle.unwrap_or(window.viewport_size().width / 2.);
+                (middle.is_some(), PopupAnchor::at(window, x, cx))
+            });
+            match found {
+                Ok((true, Ok(anchor))) => return Popups::toggle(&name, anchor, cx),
+                Ok((false, Ok(anchor))) => {
+                    anywhere.get_or_insert(anchor);
+                }
+                _ => {}
+            }
+        }
+        match anywhere {
+            Some(anchor) => Popups::toggle(&name, anchor, cx),
+            None => report!("the popup `{name}` has nowhere to open"),
+        }
     }
 
     fn watch(cx: &mut App) {
@@ -139,6 +198,7 @@ impl Shell {
             config.surfaces = cx.global::<Self>().config.surfaces.clone();
         }
         cx.global_mut::<Self>().config = config;
+        Self::take_windows_key(cx);
         cx.refresh_windows();
     }
 

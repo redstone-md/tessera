@@ -15,6 +15,11 @@
 # repository; an empty list reads none.
 # registries = ["https://example.org/registry.toml"]
 
+# The [[popup]] the Windows key opens and closes when it is pressed by itself,
+# instead of the Start menu of Windows. Combinations with the key stay as
+# they are. Without the key in this file, the Windows key is left to Windows.
+# windows_key = "launcher"
+
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"
 #   thickness  reserved screen space, in logical pixels

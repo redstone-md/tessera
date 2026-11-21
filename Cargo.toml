@@ -11,6 +11,7 @@ license = "GPL-3.0-only"
 
 [workspace.dependencies]
 anyhow = "1"
+async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 gpui = "0.2.2"
 image = { version = "0.25", default-features = false, features = ["ico", "jpeg", "png"] }

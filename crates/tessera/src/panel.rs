@@ -3,9 +3,12 @@
 
 //! The content of an edge surface: widgets arranged in three slots.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui::{
-    AnyElement, AnyView, App, Context, Div, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, AnyView, App, Bounds, Context, Div, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Render, StatefulInteractiveElement, Styled, Window, canvas, div,
 };
 
 use crate::config::{SurfaceConfig, WidgetSpec};
@@ -21,6 +24,9 @@ struct Placed {
     view: AnyView,
     popup: Option<String>,
     interaction: Interaction,
+    /// The middle of the widget in its surface, once it has been drawn:
+    /// where its popup belongs when something other than a click opens it.
+    middle: Rc<Cell<Option<Pixels>>>,
 }
 
 /// Hosts the widgets a layout assigns to one surface.
@@ -46,6 +52,7 @@ impl Panel {
                         view: WidgetRegistry::build(spec, display, cx)?,
                         popup: cx.global::<WidgetRegistry>().popup_of(spec),
                         interaction: Interaction::new(&motion),
+                        middle: Rc::default(),
                     })
                 })
                 .collect()
@@ -62,6 +69,16 @@ impl Panel {
             edge: layout.edge,
             entrance,
         }
+    }
+
+    /// The middle of the first widget that opens the popup `name`, if
+    /// there is one and it has been drawn.
+    pub fn popup_middle(&self, name: &str) -> Option<Pixels> {
+        let mut placed = self.slots.iter().flatten();
+        placed
+            .find(|placed| placed.popup.as_deref() == Some(name))?
+            .middle
+            .get()
     }
 
     fn open_popup(&self, name: &str, window: &Window, cx: &mut App) {
@@ -87,11 +104,16 @@ impl Panel {
         };
         let state = placed.interaction.state(window);
         let layer = HOVER_LAYER * state.hover + PRESS_LAYER * state.press.clamp(0., 1.);
+        let middle = placed.middle.clone();
+        let measure = move |bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
+            middle.set(Some(bounds.origin.x + bounds.size.width / 2.));
+        };
         let button = div()
             .id(("panel-widget", slot * 1000 + index))
             .relative()
             .on_click(cx.listener(move |this, _, window, cx| this.open_popup(&popup, window, cx)))
             .child(placed.view.clone())
+            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
             .child(
                 div()
                     .absolute()

@@ -96,6 +96,10 @@ pub struct EdgeSurfaceView<V> {
 }
 
 impl<V: Render> EdgeSurfaceView<V> {
+    pub fn content(&self) -> &Entity<V> {
+        &self.content
+    }
+
     /// Makes the strip `thickness` thick and replaces its content with the
     /// view `build` returns. The window and its reservation of the screen
     /// edge are kept.

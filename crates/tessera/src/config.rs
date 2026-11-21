@@ -200,6 +200,9 @@ pub struct Config {
     /// Whether and how windows are arranged side by side.
     #[serde(default)]
     pub tiling: TilingConfig,
+    /// The popup that the Windows key, pressed by itself, opens and closes
+    /// instead of the Start menu of Windows.
+    pub windows_key: Option<String>,
 }
 
 impl Config {

@@ -5797,6 +5797,7 @@ name = "tessera"
 version = "0.2.0-dev"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "chrono",
  "gpui",
  "image",

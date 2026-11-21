@@ -22,6 +22,7 @@ mod taskbar;
 mod thumbnail;
 mod tray;
 mod wifi;
+mod windows_key;
 
 pub use accent::{accent_color, light_mode};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_held};
@@ -40,6 +41,7 @@ pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use wifi::{Wifi, WifiNetwork, WifiReach};
+pub use windows_key::WindowsKey;
 
 use std::ffi::c_void;
 use std::mem::size_of;
