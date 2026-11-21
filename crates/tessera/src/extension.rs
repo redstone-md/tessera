@@ -25,7 +25,7 @@ use self::access::{Access, Permissions};
 use self::host::Host;
 use self::runtime::Runtime;
 use self::widget::ExtensionWidget;
-use crate::config::config_dir;
+use crate::config::{PopupConfig, config_dir};
 use crate::module::{Module, WidgetRegistry};
 
 const MANIFEST_FILE: &str = "extension.toml";
@@ -84,8 +84,9 @@ impl ExtensionsModule {
             Manifest::parse(&manifest).with_context(|| format!("invalid {MANIFEST_FILE}"))?;
         let wasm = fs::read(directory.join(WASM_FILE))
             .with_context(|| format!("cannot read {WASM_FILE}"))?;
+        let popups = manifest.popups();
         let access = Access {
-            permissions: manifest.permissions,
+            permissions: manifest.permissions.clone(),
             settings: self.settings_of(&manifest.id),
             state_file: Some(directory.join(STATE_FILE)),
         };
@@ -95,13 +96,19 @@ impl ExtensionsModule {
         let instance = Rc::new(RefCell::new(Some(instance)));
         let host = Rc::new(OnceCell::new());
 
-        for widget in manifest.widgets {
-            let id = format!("{}.{}", manifest.id, widget.name);
+        for popup in popups {
+            widgets.register_popup(popup)?;
+        }
+        for widget in &manifest.widgets {
+            let id = manifest.qualified(&widget.name);
+            if let Some(popup) = &widget.popup {
+                widgets.open_with(&id, &manifest.qualified(popup));
+            }
             let refresh = widget
                 .refresh_seconds
                 .map(|seconds| Duration::from_secs(seconds.max(1)));
             let (instance, host) = (instance.clone(), host.clone());
-            let extension = manifest.id.clone();
+            let (extension, name) = (manifest.id.clone(), widget.name.clone());
             let registered_id = id.clone();
             widgets.register(&registered_id, move |_, cx| {
                 let host = host
@@ -111,7 +118,7 @@ impl ExtensionsModule {
                         cx.new(|_| Host::new(extension.clone(), instance))
                     })
                     .clone();
-                let (name, id) = (widget.name.clone(), id.clone());
+                let (name, id) = (name.clone(), id.clone());
                 cx.new(|cx| ExtensionWidget::new(host, name, id, refresh, cx))
                     .into()
             })?;
@@ -142,6 +149,10 @@ struct Manifest {
     id: String,
     #[serde(default, rename = "widget")]
     widgets: Vec<WidgetManifest>,
+    /// Popups the extension brings along, written as in a layout. Layouts
+    /// know them as `<id>.<name>`.
+    #[serde(default, rename = "popup")]
+    popups: Vec<PopupConfig>,
     #[serde(default)]
     permissions: Permissions,
 }
@@ -152,18 +163,59 @@ struct WidgetManifest {
     name: String,
     /// How often the content is asked for again without user input.
     refresh_seconds: Option<u64>,
+    /// The popup of this extension that a click on the widget opens,
+    /// unless the layout says otherwise.
+    popup: Option<String>,
 }
 
 impl Manifest {
     fn parse(text: &str) -> anyhow::Result<Self> {
         let manifest: Self = toml::from_str(text)?;
-        let names = manifest.widgets.iter().map(|widget| &widget.name);
-        for name in std::iter::once(&manifest.id).chain(names) {
+        let widgets = manifest.widgets.iter().map(|widget| &widget.name);
+        let popups = manifest.popups.iter().map(|popup| &popup.name);
+        for name in std::iter::once(&manifest.id).chain(widgets).chain(popups) {
             if !is_identifier(name) {
                 bail!("`{name}` is not a name made of a-z, 0-9 and `-`");
             }
         }
+        for popup in &manifest.popups {
+            let sized = |length: f32| length.is_finite() && length >= 1.;
+            if !sized(popup.width) || !sized(popup.height) {
+                bail!("the popup `{}` has no usable size", popup.name);
+            }
+        }
+        for widget in &manifest.widgets {
+            if let Some(popup) = &widget.popup
+                && !manifest.popups.iter().any(|known| known.name == *popup)
+            {
+                bail!(
+                    "the widget `{}` opens `{popup}`, which is not a popup of the extension",
+                    widget.name
+                );
+            }
+        }
         Ok(manifest)
+    }
+
+    /// The name layouts know the widget or popup `name` by.
+    fn qualified(&self, name: &str) -> String {
+        format!("{}.{name}", self.id)
+    }
+
+    /// The popups as layouts know them. A widget in their content that
+    /// the extension provides is named in full; any other name is kept,
+    /// so a popup can also hold widgets of the shell.
+    fn popups(&self) -> Vec<PopupConfig> {
+        let popups = self.popups.iter().cloned().map(|mut popup| {
+            popup.name = self.qualified(&popup.name);
+            for spec in &mut popup.content {
+                if self.widgets.iter().any(|own| own.name == spec.widget) {
+                    spec.widget = self.qualified(&spec.widget);
+                }
+            }
+            popup
+        });
+        popups.collect()
     }
 }
 
@@ -187,6 +239,41 @@ mod tests {
         assert_eq!(manifest.id, "counter");
         assert_eq!(manifest.widgets[0].name, "clicks");
         assert_eq!(manifest.widgets[0].refresh_seconds, Some(5));
+    }
+
+    #[test]
+    fn a_manifest_brings_popups_that_its_widgets_open() {
+        let manifest = Manifest::parse(concat!(
+            "id = \"lights\"\n",
+            "[[widget]]\nname = \"button\"\npopup = \"panel\"\n",
+            "[[widget]]\nname = \"controls\"\n",
+            "[[popup]]\nname = \"panel\"\nwidth = 300\nheight = 200\n",
+            "content = [\"controls\", \"clock\", { widget = \"other.thing\", size = 2 }]\n",
+        ))
+        .unwrap();
+        assert_eq!(manifest.widgets[0].popup.as_deref(), Some("panel"));
+        let [popup] = manifest.popups().try_into().unwrap();
+        assert_eq!(popup.name, "lights.panel");
+        let names: Vec<&str> = popup.content.iter().map(|spec| &*spec.widget).collect();
+        assert_eq!(names, ["lights.controls", "clock", "other.thing"]);
+    }
+
+    #[test]
+    fn a_manifest_with_a_popup_that_cannot_open_is_rejected() {
+        let missing = "id = \"a\"\n[[widget]]\nname = \"b\"\npopup = \"c\"\n";
+        assert!(Manifest::parse(missing).is_err());
+        let flat = "id = \"a\"\n[[popup]]\nname = \"c\"\nwidth = 300\nheight = 0\n";
+        assert!(Manifest::parse(flat).is_err());
+    }
+
+    #[test]
+    fn the_manifests_of_the_examples_are_valid() {
+        for manifest in [
+            include_str!("../../../extensions/counter/extension.toml"),
+            include_str!("../../../extensions/ai-limits/extension.toml"),
+        ] {
+            Manifest::parse(manifest).unwrap();
+        }
     }
 
     #[test]

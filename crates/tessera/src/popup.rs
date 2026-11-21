@@ -85,8 +85,12 @@ impl Popups {
         {
             return;
         }
-        let Some(config) = this.configs.get(name).cloned() else {
-            eprintln!("tessera: the layout has no popup named `{name}`");
+        let known = this
+            .configs
+            .get(name)
+            .or_else(|| cx.global::<WidgetRegistry>().popup(name));
+        let Some(config) = known.cloned() else {
+            eprintln!("tessera: there is no popup named `{name}`");
             return;
         };
         match Self::open(&config, &anchor, cx) {

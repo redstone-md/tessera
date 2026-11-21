@@ -11,7 +11,9 @@
 #   start, center, end  widgets to place
 #
 # A widget is its name, or a table: { widget = "name", popup = "name", ... }.
-#   popup   the [[popup]] a click on the widget opens; any widget can have one
+#   popup   the [[popup]] a click on the widget opens; any widget can have one.
+#           A widget of an extension may come with a popup of its own;
+#           popup = "" switches that off
 #   other keys are options of that widget
 #
 # Built-in widgets:

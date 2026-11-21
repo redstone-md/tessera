@@ -45,7 +45,7 @@ impl Panel {
                 .filter_map(|spec| {
                     Some(Placed {
                         view: WidgetRegistry::build(spec, display, cx)?,
-                        popup: spec.popup.clone(),
+                        popup: cx.global::<WidgetRegistry>().popup_of(spec),
                         interaction: Interaction::new(&motion),
                     })
                 })

@@ -57,7 +57,7 @@ The limits of that:
 - Permissions are granted by the manifest alone. Tessera does not ask before loading an extension and shows nowhere what an extension is permitted, so read `extension.toml` before installing one: an extension with a file and a host permitted can send that file to that host.
 - Settings, API keys included, are plain text in `config.toml`.
 - It still cannot reach devices, Bluetooth, other processes or anything else of Windows, so an extension that shows a mouse's battery level cannot be written yet.
-- It can only add widgets. It cannot declare popups or screens of its own — the user places its widgets in a popup in `config.toml` — and it has no icons, images, text input or scrolling.
+- It adds widgets and popups made of widgets. Its manifest can list `[[popup]]` entries, written as in a layout, and name one of them as the `popup` of a widget: a click on that widget then opens it without anything in `config.toml`. A layout knows such a popup as `<id>.<popup name>`; a `[[popup]]` of that name in the layout replaces it, a `popup` given to the widget in the layout opens that one instead, and `popup = ""` opens none. A popup of an extension can hold widgets of the shell and of other extensions too. An extension cannot open or close a popup from its code, cannot add a surface or a screen of another kind, and has no icons, images, text input or scrolling.
 - Each call into an extension is limited in computation, and an extension is limited to 64 MiB of memory. A widget whose extension exceeds a limit or crashes shows "stopped working" until Tessera restarts.
 - Extensions are loaded once at startup. A widget placed on several displays shares one extension instance.
 - There is no marketplace, registry, installer, signing or update mechanism. Installing means copying files by hand.
@@ -73,7 +73,7 @@ and copy `target/extensions/wasm32-unknown-unknown/release/tessera_example_count
 
 ### Examples
 
-[`extensions/counter`](extensions/counter) counts presses of its button.
+[`extensions/counter`](extensions/counter) counts presses of its buttons. `counter.clicks` is the count with a button for a bar; `counter.total` is the count alone, and a click on it opens the popup the extension brings, with buttons that add to the count and reset it.
 
 [`extensions/ai-limits`](extensions/ai-limits) shows what is left of the usage limits of AI services: the plan, each limit as a share and a bar, and when it resets. Its `summary` widget is one line for a bar; its `details` widget is meant for a popup, which has a fixed size, so size it for the services you enable:
 
