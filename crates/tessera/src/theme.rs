@@ -15,6 +15,7 @@ use crate::motion::SpringSpec;
 use crate::platform::{accent_color, light_mode};
 
 mod contrast;
+pub use contrast::Ground;
 mod tonal;
 
 /// The theme name that stands for colors derived from the accent color of
@@ -178,6 +179,8 @@ pub struct LauncherMetrics {
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     pub followed: Followed,
+    /// Whether what is read is kept apart from what it lies on.
+    pub legible: bool,
     pub colors: ColorRoles,
     pub shape: Shape,
     pub spacing: Spacing,
@@ -195,6 +198,7 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             followed: Followed::default(),
+            legible: false,
             colors: ColorRoles {
                 surface_container: rgb(0x1e211a).into(),
                 surface_container_highest: rgb(0x33362e).into(),
@@ -302,7 +306,21 @@ impl Theme {
         if legible {
             theme.colors.make_legible();
         }
+        theme.legible = legible;
         theme
+    }
+
+    /// Whether the widgets of a bar lie on the desktop and are to be read
+    /// there: the bar then looks at what is under it.
+    pub fn grounds_bars(&self) -> bool {
+        self.bar.flat && self.legible
+    }
+
+    /// Whether the text of a widget without a field is read on `ground`
+    /// between the pixels `from` and `to`.
+    pub fn is_read_on(&self, ground: &Ground, from: f32, to: f32) -> bool {
+        let contents = [self.colors.on_surface, self.colors.on_surface_variant];
+        ground.carries(&contents, from, to, contrast::TEXT)
     }
 
     fn named(name: Option<&str>) -> Self {

@@ -32,8 +32,73 @@ fn luminance(color: Hsla) -> f32 {
 
 /// The contrast ratio of two colors, from 1 to 21.
 pub fn ratio(one: Hsla, other: Hsla) -> f32 {
-    let (one, other) = (luminance(one), luminance(other));
+    ratio_of(luminance(one), luminance(other))
+}
+
+fn ratio_of(one: f32, other: f32) -> f32 {
     (one.max(other) + 0.05) / (one.min(other) + 0.05)
+}
+
+/// How wide a column of a [`Ground`] is, in pixels.
+const COLUMN: usize = 8;
+
+/// How dark and how light a picture is along its width: what a bar that
+/// lets the desktop through lies on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ground {
+    /// For each column of [`COLUMN`] pixels, the least and the greatest
+    /// relative luminance among the pieces of its rows.
+    columns: Vec<(f32, f32)>,
+}
+
+impl Ground {
+    /// Of a picture `width` pixels wide whose rows follow each other in
+    /// `pixels`, a pixel being blue, green, red and a byte that is not
+    /// looked at.
+    pub fn read(width: usize, pixels: &[u8]) -> Self {
+        let mut columns = vec![(f32::INFINITY, 0_f32); width.div_ceil(COLUMN)];
+        if width == 0 {
+            return Self::default();
+        }
+        for row in pixels.chunks_exact(width * 4) {
+            for (piece, column) in row.chunks(COLUMN * 4).zip(&mut columns) {
+                // A piece of a row counts as its average, so that a single
+                // bright pixel is not taken for a bright ground.
+                let mut sum = [0_u32; 3];
+                for pixel in piece.as_chunks::<4>().0 {
+                    for (sum, &channel) in sum.iter_mut().zip(pixel) {
+                        *sum += u32::from(channel);
+                    }
+                }
+                let count = (piece.len() / 4).max(1) as f32 * 255.;
+                let [b, g, r] = sum.map(|sum| sum as f32 / count);
+                let seen = luminance(Rgba { r, g, b, a: 1. }.into());
+                *column = (column.0.min(seen), column.1.max(seen));
+            }
+        }
+        Self { columns }
+    }
+
+    /// Whether each of `contents` has the ratio `wanted` to all of the
+    /// ground between the pixels `from` and `to`.
+    pub fn carries(&self, contents: &[Hsla], from: f32, to: f32, wanted: f32) -> bool {
+        let first = (from.max(0.) as usize / COLUMN).min(self.columns.len());
+        let last = ((to.max(0.) as usize).div_ceil(COLUMN)).clamp(first, self.columns.len());
+        let under = &self.columns[first..last];
+        let Some(&(mut darkest, mut lightest)) = under.first() else {
+            return true;
+        };
+        for &(dark, light) in under {
+            (darkest, lightest) = (darkest.min(dark), lightest.max(light));
+        }
+        contents.iter().all(|&content| {
+            let content = luminance(content);
+            // A content between the two ends of the ground is as light as
+            // some of the ground.
+            let apart = content < darkest || content > lightest;
+            apart && ratio_of(content, darkest) >= wanted && ratio_of(content, lightest) >= wanted
+        })
+    }
 }
 
 /// The least ratio `content` has to any of `grounds`.
@@ -99,6 +164,29 @@ mod tests {
 
     use super::*;
     use crate::theme::Theme;
+
+    #[test]
+    fn a_ground_tells_where_text_is_read() {
+        // 16 pixels of black, then 16 of white, two rows high.
+        let row: Vec<u8> = [[0, 0, 0, 0]; 16]
+            .into_iter()
+            .chain([[255, 255, 255, 0]; 16])
+            .flatten()
+            .collect();
+        let ground = Ground::read(32, &[row.clone(), row].concat());
+        let (white, black) = (rgb(0xffffff).into(), rgb(0x000000).into());
+        assert!(ground.carries(&[white], 0., 16., TEXT));
+        assert!(!ground.carries(&[white], 0., 17., TEXT));
+        assert!(!ground.carries(&[white], 16., 32., TEXT));
+        assert!(ground.carries(&[black], 16., 32., TEXT));
+        assert!(!ground.carries(&[white, black], 16., 32., TEXT));
+        // Past the picture there is nothing to be unread on.
+        assert!(ground.carries(&[white], 40., 50., TEXT));
+        // One bright pixel in a dark piece does not make it bright.
+        let mut dark = vec![0_u8; 32 * 4];
+        dark[..3].fill(255);
+        assert!(Ground::read(32, &dark).carries(&[white], 0., 32., TEXT));
+    }
 
     #[test]
     fn black_and_white_are_as_far_apart_as_colors_get() {

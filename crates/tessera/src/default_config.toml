@@ -14,8 +14,10 @@
 # or darker by as little as gives them the contrast WCAG 2.1 asks for at
 # level AA to the surfaces of the theme: 4.5 to 1, outlines 3 to 1. Colors
 # that already have it stay. `false` leaves a theme exactly as written.
-# What is behind a bar that lets the wallpaper through is not known and
-# not counted.
+# Where a theme leaves out the fields behind the widgets of a bar
+# (`flat`), the bar looks at the desktop under it every few seconds, and
+# a widget whose text does not have that contrast to the desktop there
+# gets its field back.
 # contrast = false
 
 # The language of the settings, the marketplace, the calendar, the lists of

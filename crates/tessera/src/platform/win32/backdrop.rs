@@ -26,14 +26,16 @@ use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
     EnumDisplayMonitors, FillRect, GdiAlphaBlend, GetDC, GetStockObject, HBITMAP, HBRUSH, HDC,
     HGDIOBJ, HMONITOR, MapWindowPoints, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject,
+    SetViewportOrgEx,
 };
+use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GWLP_USERDATA,
-    GetWindowLongPtrW, LWA_ALPHA, RegisterClassW, SMTO_NORMAL, SW_SHOWNA, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SendMessageTimeoutW, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_CHILD,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    GetWindowLongPtrW, GetWindowRect, LWA_ALPHA, RegisterClassW, SMTO_NORMAL, SW_SHOWNA,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SendMessageTimeoutW, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW,
+    WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
 };
 use windows::core::{BOOL, w};
 
@@ -66,6 +68,78 @@ pub fn display_frames() -> Vec<ScreenRect> {
         let _ = EnumDisplayMonitors(None, None, Some(add), LPARAM(&raw mut frames as isize));
     }
     frames
+}
+
+/// Has a window drawn with all that the compositor shows of it.
+const WHOLE_CONTENT: PRINT_WINDOW_FLAGS = PRINT_WINDOW_FLAGS(2);
+
+/// What the desktop window shows within `frame`, which is in pixels of
+/// the desktop: the wallpaper, what is laid over it there and the icons,
+/// and no window that is not a part of the desktop. The width of the
+/// picture and its rows from the top, a pixel being blue, green, red and
+/// a byte that says nothing. `None` where the desktop cannot be read.
+///
+/// The desktop window draws itself into a bitmap of the size of `frame`
+/// for this, which takes a moment: not for the thread of the interface.
+pub fn desktop_pixels(frame: ScreenRect) -> Option<(usize, Vec<u8>)> {
+    let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            // A negative height has the rows start at the top.
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    // SAFETY: the bitmap is made for `info` and read as the bytes `info`
+    // gives it while `held` keeps it; `held` releases the handles.
+    unsafe {
+        let desktop = FindWindowW(w!("Progman"), None).ok()?;
+        let mut whole = RECT::default();
+        GetWindowRect(desktop, &raw mut whole).ok()?;
+        let mut bits: *mut c_void = ptr::null_mut();
+        let bitmap = CreateDIBSection(
+            None,
+            &raw const info,
+            DIB_RGB_COLORS,
+            &raw mut bits,
+            None,
+            0,
+        )
+        .ok()?;
+        let context = CreateCompatibleDC(None);
+        let before = SelectObject(context, bitmap.into());
+        let held = Held {
+            context,
+            bitmap,
+            before,
+        };
+        // The window draws itself from its own corner: the corner is put
+        // where it is seen from `frame`.
+        let moved = SetViewportOrgEx(
+            held.context,
+            whole.left - frame.left,
+            whole.top - frame.top,
+            None,
+        );
+        if bits.is_null()
+            || !moved.as_bool()
+            || !PrintWindow(desktop, held.context, WHOLE_CONTENT).as_bool()
+        {
+            return None;
+        }
+        let length = width as usize * height as usize * 4;
+        let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), length).to_vec();
+        Some((width as usize, pixels))
+    }
 }
 
 /// The pixels of a picture for a [`DesktopBackdrop`]: rows from the top,
@@ -429,5 +503,29 @@ unsafe extern "system" fn respond(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM
             }
             _ => DefWindowProcW(hwnd, message, w, l),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Reads the desktop of the machine it runs on.
+    #[test]
+    #[ignore = "needs a desktop"]
+    fn the_desktop_is_read_under_a_bar() {
+        let frame = display_frames()[0];
+        let bar = ScreenRect {
+            bottom: frame.top + 36,
+            ..frame
+        };
+        let began = Instant::now();
+        let (width, pixels) = desktop_pixels(bar).expect("the desktop is read");
+        println!("read in {:?}", began.elapsed());
+        assert_eq!(width as i32, bar.right - bar.left);
+        assert_eq!(pixels.len(), width * 36 * 4);
+        assert!(pixels.iter().any(|&byte| byte != 0));
     }
 }

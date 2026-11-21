@@ -8,13 +8,13 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext, Bounds, Context, CursorStyle, DispatchPhase, Div,
-    DragMoveEvent, Global, InteractiveElement, IntoElement, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, canvas,
-    div, px,
+    AnyElement, AnyView, App, AppContext, AsyncApp, Bounds, Context, CursorStyle, DispatchPhase,
+    Div, DragMoveEvent, Global, InteractiveElement, IntoElement, MouseUpEvent, ParentElement,
+    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    canvas, div, px,
 };
 
 use crate::config::edit::{ConfigFile, Place, Slot};
@@ -23,10 +23,12 @@ use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::module::WidgetRegistry;
 use crate::motion::{Interaction, Spring};
-use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect, pointer_at};
+use crate::platform::{
+    DisplayKey, NativeSurface, ScreenEdge, ScreenRect, desktop_pixels, pointer_at,
+};
 use crate::popup::{PopupAnchor, Popups};
 use crate::shell::Shell;
-use crate::theme::Theme;
+use crate::theme::{Ground, Theme};
 use crate::ui::{HOVER_LAYER, PRESS_LAYER, centered_row, icon};
 
 const ICON_ADD: &str = "\u{e710}";
@@ -81,6 +83,10 @@ struct Arena(Vec<WeakEntity<Panel>>);
 
 impl Global for Arena {}
 
+/// How often a bar that lets the desktop through looks at what is under
+/// it: a wallpaper changes seldom.
+const GROUND_CHECK: Duration = Duration::from_secs(5);
+
 /// A widget in a slot, and the popup a click on it opens.
 struct Placed {
     view: AnyView,
@@ -93,6 +99,9 @@ struct Placed {
     interaction: Interaction,
     /// Where the widget is in its surface, once it has been drawn.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// How far the field has come in that a widget of a flat bar gets
+    /// where the desktop under it leaves its text unread.
+    field: Spring,
 }
 
 /// A widget on its way to another place.
@@ -188,6 +197,11 @@ pub struct Panel {
     /// A widget dragged off another panel that is over this one, and where
     /// the pointer is.
     visitor: Option<(SharedString, Pixels)>,
+    /// What the desktop under the surface looks like, where the bars are
+    /// flat and kept readable.
+    ground: Option<Ground>,
+    /// Whether the desktop under the surface is being looked at.
+    watching: bool,
 }
 
 impl Panel {
@@ -213,6 +227,7 @@ impl Panel {
                         popup: cx.global::<WidgetRegistry>().popup_of(spec),
                         interaction: Interaction::new(&motion),
                         bounds: Rc::default(),
+                        field: Spring::new(motion.effects, 0.),
                     })
                 })
                 .collect()
@@ -245,7 +260,84 @@ impl Panel {
             listed: false,
             visited: None,
             visitor: None,
+            ground: None,
+            watching: false,
         }
+    }
+
+    /// Starts looking at the desktop under the surface, where the bars
+    /// are flat and kept readable. The desktop is read off the thread of
+    /// the interface, again every [`GROUND_CHECK`].
+    fn watch_ground(&mut self, theme: &Theme, window: &Window, cx: &mut Context<Self>) {
+        if self.watching || !theme.grounds_bars() {
+            return;
+        }
+        let Ok(frame) = NativeSurface::of(window).and_then(|native| native.frame()) else {
+            return;
+        };
+        self.watching = true;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                let wanted = cx.update(|cx| cx.global::<Theme>().grounds_bars());
+                let ground = match wanted {
+                    Ok(true) => {
+                        let read = async move {
+                            let (width, pixels) = desktop_pixels(frame)?;
+                            Some(Ground::read(width, &pixels))
+                        };
+                        cx.background_executor().spawn(read).await
+                    }
+                    _ => None,
+                };
+                let kept = this.update(cx, |this, cx| {
+                    if this.ground != ground {
+                        this.ground = ground;
+                        cx.notify();
+                    }
+                });
+                if kept.is_err() {
+                    break;
+                }
+                cx.background_executor().timer(GROUND_CHECK).await;
+            }
+        })
+        .detach();
+    }
+
+    /// The field behind a widget of a flat bar: as strong as the desktop
+    /// under the widget takes from what is read on it. Nothing where the
+    /// bars do not look at the desktop.
+    fn field(
+        placed: &mut Placed,
+        ground: Option<&Ground>,
+        theme: &Theme,
+        window: &Window,
+    ) -> Option<Div> {
+        if !theme.grounds_bars() {
+            return None;
+        }
+        let unread = ground
+            .zip(placed.bounds.get())
+            .filter(|(_, bounds)| bounds.size.width > px(0.))
+            .is_some_and(|(ground, bounds)| {
+                let scale = window.scale_factor();
+                let (from, to) = (f32::from(bounds.left()), f32::from(bounds.right()));
+                !theme.is_read_on(ground, from * scale, to * scale)
+            });
+        let wanted = if unread { 1. } else { 0. };
+        if placed.field.target() != wanted {
+            placed.field.animate_to(wanted);
+        }
+        let shown = placed.field.value(window).clamp(0., 1.);
+        Some(
+            div()
+                .absolute()
+                .size_full()
+                .top_0()
+                .left_0()
+                .rounded(theme.shape.full)
+                .bg(theme.colors.surface_container.opacity(shown)),
+        )
     }
 
     /// The middle of the first widget that opens the popup `name`, if
@@ -267,7 +359,8 @@ impl Panel {
     }
 
     /// The widget at `index` of `slot`. One that opens a popup is wrapped in
-    /// a button with a state layer over it.
+    /// a button with a state layer over it; on a flat bar that is kept
+    /// readable each has its field under it.
     fn widget(
         &mut self,
         slot: usize,
@@ -277,19 +370,29 @@ impl Panel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let placed = &mut self.slots[slot][index];
-        let Some(popup) = placed.popup.clone() else {
-            return placed.view.clone().into_any_element();
-        };
-        let state = placed.interaction.state(window);
-        let layer = HOVER_LAYER * state.hover + PRESS_LAYER * state.press.clamp(0., 1.);
+        let field = Self::field(placed, self.ground.as_ref(), theme, window);
         let seen = placed.bounds.clone();
         let measure = move |bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
             seen.set(Some(bounds));
         };
+        let Some(popup) = placed.popup.clone() else {
+            let Some(field) = field else {
+                return placed.view.clone().into_any_element();
+            };
+            return div()
+                .relative()
+                .child(field)
+                .child(placed.view.clone())
+                .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+                .into_any_element();
+        };
+        let state = placed.interaction.state(window);
+        let layer = HOVER_LAYER * state.hover + PRESS_LAYER * state.press.clamp(0., 1.);
         let button = div()
             .id(("panel-widget", slot * 1000 + index))
             .relative()
             .on_click(cx.listener(move |this, _, window, cx| this.open_popup(&popup, window, cx)))
+            .children(field)
             .child(placed.view.clone())
             .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
             .child(
@@ -721,6 +824,7 @@ impl Render for Panel {
             self.dragged = None;
             self.aim = None;
             (self.frame, self.visited, self.visitor) = (None, None, None);
+            self.watch_ground(&theme, window, cx);
             let [start, center, end] = [0, 1, 2].map(|slot| self.slot(slot, &theme, window, cx));
             return root.child(centered_row(&theme, start, center, end));
         }
