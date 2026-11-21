@@ -6,7 +6,8 @@
 //! are written in English where they are used; a table gives them in the
 //! other languages, and a text it lacks stays English.
 
-use chrono::{Datelike, NaiveDate, Weekday};
+use chrono::format::{Fixed, Item, StrftimeItems};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
 use gpui::{App, Global};
 use serde::Deserialize;
 
@@ -67,6 +68,26 @@ impl Language {
         }
     }
 
+    /// The moment `now` written after the `strftime` pattern `format`, the
+    /// names of days and months in this language.
+    pub fn moment(self, now: NaiveDateTime, format: &str) -> String {
+        let items = StrftimeItems::new(format).map(|item| {
+            let (day, month) = (
+                now.weekday().num_days_from_monday() as usize,
+                now.month0() as usize,
+            );
+            let named = match (self, &item) {
+                (Self::Russian, Item::Fixed(Fixed::ShortWeekdayName)) => RUSSIAN_WEEKDAYS[day],
+                (Self::Russian, Item::Fixed(Fixed::LongWeekdayName)) => RUSSIAN_LONG_WEEKDAYS[day],
+                (Self::Russian, Item::Fixed(Fixed::ShortMonthName)) => RUSSIAN_SHORT_MONTHS[month],
+                (Self::Russian, Item::Fixed(Fixed::LongMonthName)) => RUSSIAN_MONTHS_OF[month],
+                _ => return item,
+            };
+            Item::Literal(named)
+        });
+        now.format_with_items(items).to_string()
+    }
+
     /// A day of the week in a few letters.
     pub fn weekday(self, day: Weekday) -> String {
         match self {
@@ -89,6 +110,37 @@ const RUSSIAN_MONTHS: [&str; 12] = [
     "Октябрь",
     "Ноябрь",
     "Декабрь",
+];
+
+/// As a date names its month: the day "of" it.
+const RUSSIAN_MONTHS_OF: [&str; 12] = [
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+];
+
+const RUSSIAN_SHORT_MONTHS: [&str; 12] = [
+    "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек",
+];
+
+/// From Monday on.
+const RUSSIAN_LONG_WEEKDAYS: [&str; 7] = [
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
 ];
 
 /// From Monday on.
@@ -190,8 +242,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     ("Language", "Язык"),
     (
-        "Of the settings, the marketplace, the calendar and the notifications.",
-        "Язык настроек, маркетплейса, календаря и уведомлений.",
+        "Of the settings, the marketplace, the calendar, the clock and the notifications.",
+        "Язык настроек, маркетплейса, календаря, часов и уведомлений.",
     ),
     ("Windows key", "Клавиша Windows"),
     ("Contrast", "Контраст"),
@@ -321,6 +373,26 @@ mod tests {
         assert_eq!(Language::Russian.say("Quit"), "Выйти");
         assert_eq!(Language::Russian.say("No such text"), "No such text");
         assert_eq!(Language::English.say("Quit"), "Quit");
+    }
+
+    #[test]
+    fn a_moment_names_its_day_and_month_in_the_language() {
+        let now = NaiveDate::from_ymd_opt(2026, 11, 21)
+            .and_then(|date| date.and_hms_opt(9, 5, 0))
+            .unwrap();
+        let moment = |language: Language, format| language.moment(now, format);
+        assert_eq!(
+            moment(Language::English, "%a %d %b %H:%M"),
+            "Sat 21 Nov 09:05"
+        );
+        assert_eq!(
+            moment(Language::Russian, "%a %d %b %H:%M"),
+            "Сб 21 ноя 09:05"
+        );
+        assert_eq!(
+            moment(Language::Russian, "%A, %-d %B"),
+            "суббота, 21 ноября"
+        );
     }
 
     #[test]

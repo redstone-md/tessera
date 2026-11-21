@@ -12,6 +12,7 @@ use gpui::{
     WeakEntity, Window,
 };
 
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::theme::Theme;
 use crate::ui::pill;
@@ -82,7 +83,7 @@ impl Render for Clock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         pill(cx.global::<Theme>())
             .font_weight(FontWeight::MEDIUM)
-            .child(Local::now().format(&self.format).to_string())
+            .child(Language::of(cx).moment(Local::now().naive_local(), &self.format))
     }
 }
 

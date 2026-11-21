@@ -1373,7 +1373,7 @@ impl Settings {
             .child(note(
                 &theme,
                 language
-                    .say("Of the settings, the marketplace, the calendar and the notifications."),
+                    .say("Of the settings, the marketplace, the calendar, the clock and the notifications."),
             ));
         (3, card.into_any_element())
     }
