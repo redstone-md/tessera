@@ -69,6 +69,13 @@ impl Popups {
         }
     }
 
+    /// Makes `configs` the configured popups without closing the open one,
+    /// which keeps the content it was opened with.
+    pub fn reconfigure(configs: &[PopupConfig], cx: &mut App) {
+        let known = Self::new(configs).configs;
+        cx.global_mut::<Self>().configs = known;
+    }
+
     /// Opens the popup `name` at `anchor`, or closes it when it is open.
     /// Any other open popup closes.
     pub fn toggle(name: &str, anchor: PopupAnchor, cx: &mut App) {

@@ -60,6 +60,15 @@
 #               finish within 10 seconds.
 #   "launcher"  a search field over the applications of the Start menu;
 #               option placeholder, the hint in the empty field
+#   "apps"      the applications pinned to the Start menu, as a grid; options
+#               pinned, their names as the search shows them, and columns,
+#               how many stand in a row (5). The search pins and unpins
+#               with the button of a row, a right click on a pinned one
+#               unpins it; both rewrite this file
+#   "power"     buttons that lock the session, put the computer to sleep, sign
+#               out, restart and shut down; all but locking ask for a second
+#               click. Option actions, which of "lock", "sleep", "sign-out",
+#               "restart" and "shut-down" to offer, in that order
 #   "marketplace"  the extensions the registries offer, to install, update
 #               and remove; contacts the registries when it is shown. Fills
 #               the height left in its popup and scrolls
@@ -90,8 +99,8 @@ content = ["marketplace"]
 [[popup]]
 name = "launcher"
 width = 420
-height = 520
-content = ["launcher"]
+height = 640
+content = ["apps", "launcher", "power"]
 
 [[popup]]
 name = "calendar"

@@ -12,8 +12,10 @@ use toml_edit::{Array, DocumentMut, InlineTable, Item, Value};
 
 use super::{CONFIG_FILE, Config, DEFAULT, config_dir};
 
-/// The widget whose `pinned` option lists the pinned applications.
+/// The widget whose `pinned` option lists the applications pinned to the
+/// dock, and the one whose `pinned` option lists those of the Start menu.
 const WINDOWS_WIDGET: &str = "windows";
+const APPS_WIDGET: &str = "apps";
 
 /// The parts a surface is divided into along its length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -206,7 +208,7 @@ impl ConfigFile {
                     continue;
                 };
                 for widget in widgets.iter_mut() {
-                    found |= Self::pin(widget, pinned);
+                    found |= Self::pin(widget, WINDOWS_WIDGET, pinned);
                 }
                 widgets.fmt();
             }
@@ -214,17 +216,39 @@ impl ConfigFile {
         found
     }
 
-    /// Sets the option on `widget` if it is a `windows` widget.
-    fn pin(widget: &mut Value, pinned: &[String]) -> bool {
-        if widget.as_str() == Some(WINDOWS_WIDGET) {
+    /// Makes `pinned` the applications of the Start menu: the `pinned`
+    /// option of each `apps` widget of a popup. Whether a popup has such a
+    /// widget is returned.
+    pub fn set_start_pinned(&mut self, pinned: &[String]) -> bool {
+        let popups = self.document.get_mut("popup");
+        let Some(popups) = popups.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        let mut found = false;
+        for popup in popups.iter_mut() {
+            let content = popup.get_mut("content").and_then(Item::as_array_mut);
+            let Some(widgets) = content else {
+                continue;
+            };
+            for widget in widgets.iter_mut() {
+                found |= Self::pin(widget, APPS_WIDGET, pinned);
+            }
+            widgets.fmt();
+        }
+        found
+    }
+
+    /// Sets the option on `widget` if it is the widget `name`.
+    fn pin(widget: &mut Value, name: &str, pinned: &[String]) -> bool {
+        if widget.as_str() == Some(name) {
             let mut table = InlineTable::new();
-            table.insert("widget", WINDOWS_WIDGET.into());
+            table.insert("widget", name.into());
             *widget = Value::InlineTable(table);
         }
         let Some(table) = widget.as_inline_table_mut() else {
             return false;
         };
-        if table.get("widget").and_then(Value::as_str) != Some(WINDOWS_WIDGET) {
+        if table.get("widget").and_then(Value::as_str) != Some(name) {
             return false;
         }
         if pinned.is_empty() {
@@ -233,9 +257,12 @@ impl ConfigFile {
             let list: Array = pinned.iter().map(String::as_str).collect();
             table.insert("pinned", Value::Array(list));
         }
+        // Otherwise the new option keeps the spacing of the brace it
+        // displaced.
+        table.fmt();
         if table.len() == 1 {
             // Nothing but the name is left, which reads better bare.
-            *widget = WINDOWS_WIDGET.into();
+            *widget = name.into();
         }
         true
     }
@@ -338,6 +365,40 @@ center = ["windows"]
 
         let mut bare = ConfigFile::parse("[[surface]]\nedge = \"top\"\nthickness = 4\n").unwrap();
         assert!(!bare.set_pinned(&pinned));
+    }
+
+    #[test]
+    fn start_pins_are_an_option_of_the_apps_widget() {
+        const POPUPS: &str = r#"[[surface]]
+edge = "top"
+thickness = 48
+
+# Start.
+[[popup]]
+name = "start"
+width = 400
+height = 500
+content = [{ widget = "apps", columns = 4 }, "launcher"]
+
+[[popup]]
+name = "more"
+width = 400
+height = 500
+content = ["apps"]
+"#;
+        let mut file = ConfigFile::parse(POPUPS).unwrap();
+        assert!(file.set_start_pinned(&["Paint".to_owned()]));
+        let text = file.document.to_string();
+        assert!(text.contains(
+            r#"content = [{ widget = "apps", columns = 4, pinned = ["Paint"] }, "launcher"]"#
+        ));
+        assert!(text.contains(r#"content = [{ widget = "apps", pinned = ["Paint"] }]"#));
+        file.config().expect("it stays usable");
+        assert!(file.set_start_pinned(&[]));
+        assert_eq!(file.document.to_string(), POPUPS);
+
+        let mut bare = ConfigFile::parse(LAYOUT).unwrap();
+        assert!(!bare.set_start_pinned(&["Paint".to_owned()]));
     }
 
     #[test]

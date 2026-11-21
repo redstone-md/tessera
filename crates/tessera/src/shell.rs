@@ -69,7 +69,7 @@ impl Shell {
                     // A new configuration may name another theme file, so
                     // what was applied is asked for again afterwards.
                     let reloaded = cx.update(|cx| {
-                        Self::reload(cx);
+                        Self::reload(cx, false);
                         cx.global::<Self>().config.stamp()
                     });
                     match reloaded {
@@ -85,7 +85,7 @@ impl Shell {
 
     /// Reads the configuration again and applies it. One that cannot be
     /// used is reported, as when starting, and changes nothing.
-    fn reload(cx: &mut App) {
+    fn reload(cx: &mut App, written_here: bool) {
         let Some(mut config) = Config::reload() else {
             eprintln!("tessera: the configuration in use stays");
             return;
@@ -99,9 +99,12 @@ impl Shell {
         let surfaces = old.surfaces != config.surfaces;
         // An open popup stays while it is still what the configuration
         // describes, so that the settings do not close at every change.
-        if extensions || icons || old.popups != config.popups {
+        if extensions || icons || (old.popups != config.popups && !written_here) {
             Popups::close(cx);
             cx.set_global(Popups::new(&config.popups));
+        } else {
+            // The widget that wrote the file already shows what it wrote.
+            Popups::reconfigure(&config.popups, cx);
         }
         // Widgets keep what they were built with, so new settings of
         // extensions, new registries and new icons need new widgets as well.
@@ -121,7 +124,7 @@ impl Shell {
     /// Takes over the configuration file right after Tessera wrote it,
     /// without waiting to notice the change.
     pub fn config_changed(cx: &mut App) {
-        Self::reload(cx);
+        Self::reload(cx, true);
     }
 
     /// Loads the extensions again and builds the widgets again, after an

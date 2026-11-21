@@ -6,14 +6,15 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, AppContext, Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, UTF16Selection, Window, canvas,
-    div, img, point, px,
+    AnyElement, AppContext, Bounds, Context, ElementInputHandler, Entity, EntityInputHandler,
+    FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point,
+    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, UTF16Selection, Window,
+    canvas, div, img, point, px,
 };
 
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
+use crate::modules::start::Pins;
 use crate::motion::Spring;
 use crate::platform::Shortcut;
 use crate::popup::Popups;
@@ -21,6 +22,11 @@ use crate::theme::Theme;
 use crate::ui::icon;
 
 const ICON_SEARCH: &str = "\u{e721}";
+const ICON_PIN: &str = "\u{e718}";
+const ICON_PINNED: &str = "\u{e841}";
+
+/// The side of the button that pins the application of a row.
+const PIN_BUTTON: Pixels = px(28.);
 
 const DEFAULT_PLACEHOLDER: &str = "Search applications";
 
@@ -96,12 +102,17 @@ struct Launcher {
     focus: FocusHandle,
     focused: bool,
     placeholder: SharedString,
+    /// What is pinned to the Start menu, which a row can change.
+    pins: Entity<Pins>,
 }
 
 impl Launcher {
     fn new(placeholder: SharedString, cx: &mut Context<Self>) -> Self {
         let shortcuts = Shortcut::start_menu();
+        let pins = Pins::shared(cx);
+        cx.observe(&pins, |_, _, cx| cx.notify()).detach();
         Self {
+            pins,
             matches: (0..shortcuts.len()).collect(),
             shortcuts,
             query: String::new(),
@@ -259,9 +270,44 @@ impl Launcher {
                     .text_ellipsis()
                     .child(SharedString::new(shortcut.name.as_str())),
             )
+            .children(self.render_pin(row, theme, cx))
             .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))
             .on_click(cx.listener(move |this, _, _, cx| this.launch(row, cx)))
             .into_any_element()
+    }
+
+    /// The button that pins the application of `row` to the Start menu or
+    /// unpins it. It is there on the selected row and on pinned ones, and
+    /// only if something shows the pins.
+    fn render_pin(&self, row: usize, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let name = self.shortcuts[self.matches[row]].name.clone();
+        let pins = self.pins.read(cx);
+        let pinned = pins.holds(&name);
+        if !pins.is_shown() || !(pinned || row == self.selected) {
+            return None;
+        }
+        let (glyph, color) = if pinned {
+            (ICON_PINNED, theme.colors.primary)
+        } else {
+            (ICON_PIN, theme.colors.on_surface_variant)
+        };
+        let button = div()
+            .id(("launcher-pin", row))
+            .size(PIN_BUTTON)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.full)
+            .text_color(color)
+            .hover(|style| style.bg(theme.colors.surface_container_highest))
+            .child(icon(theme, glyph))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                // The row under the button would start the application.
+                cx.stop_propagation();
+                this.pins.update(cx, |pins, cx| pins.toggle(&name, cx));
+            }));
+        Some(button.into_any_element())
     }
 
     fn render_list(
