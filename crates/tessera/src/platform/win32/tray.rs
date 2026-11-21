@@ -6,18 +6,24 @@
 //!
 //! Applications deliver those icons to the first window of the class
 //! `Shell_TrayWnd`. The shell creates such a window above Explorer's,
-//! records what arrives and passes every message on to Explorer unchanged,
-//! so Explorer's own notification area stays complete for when the shell
+//! records what arrives and passes every message on to Explorer, so
+//! Explorer's own notification area stays complete for when the shell
 //! exits.
+//!
+//! Edge bars reach Explorer through the same window, the shell's own
+//! surfaces among them, so their requests are passed on as well.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use anyhow::{Context as _, Result, anyhow};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::{
+    APPBARDATA, SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW,
     GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST,
@@ -35,6 +41,14 @@ const CLASS: PCWSTR = w!("Shell_TrayWnd");
 
 /// Marks a `WM_COPYDATA` message that carries a notification icon.
 const ICON_DATA: usize = 1;
+
+/// Marks a `WM_COPYDATA` message that carries the request of an edge bar.
+const EDGE_BAR_DATA: usize = 0;
+
+/// Where the request of an edge bar names the shared memory that holds its
+/// `APPBARDATA`: the handle, then the process the handle is valid in.
+const SHARED_HANDLE: usize = 48;
+const SHARED_OWNER: usize = 56;
 
 /// Milliseconds between checks that the window is still found first and
 /// that the owners of the icons still exist.
@@ -440,6 +454,81 @@ fn explorer_tray(ours: HWND) -> Option<HWND> {
     None
 }
 
+/// Sends Explorer the `WM_COPYDATA` message `data` came in, as `sender`
+/// sent it.
+///
+/// The request of an edge bar can name shared memory, which its sender made
+/// readable for the process of the window it found: this one. Explorer
+/// cannot read it and answers such a request without doing anything, so the
+/// memory is shared again with Explorer and Explorer's answer copied back.
+///
+/// # Safety
+///
+/// `data` must describe a buffer that is readable for the length it states.
+unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRESULT {
+    let send = |data: &COPYDATASTRUCT| {
+        let data = LPARAM(std::ptr::from_ref(data) as isize);
+        // SAFETY: the system copies the data to Explorer for the duration
+        // of the call.
+        unsafe { SendMessageW(explorer, WM_COPYDATA, Some(sender), Some(data)) }
+    };
+    if data.dwData != EDGE_BAR_DATA || data.lpData.is_null() {
+        return send(data);
+    }
+    // SAFETY: the caller guarantees the buffer.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize) };
+    let handle = bytes
+        .get(SHARED_HANDLE..SHARED_HANDLE + 8)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map_or(0, u64::from_le_bytes);
+    let owner = bytes
+        .get(SHARED_OWNER..SHARED_OWNER + 4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map_or(0, u32::from_le_bytes);
+    if handle == 0 {
+        return send(data);
+    }
+
+    const SIZE: usize = size_of::<APPBARDATA>();
+    // SAFETY: the shared memory functions accept any handle and answer
+    // null for one that is not theirs. A block they map holds at least
+    // the structure its sender put there, and both blocks stay mapped
+    // until they are unlocked below.
+    unsafe {
+        let ours = SHLockShared(HANDLE(handle as usize as *mut c_void), owner);
+        if ours.is_null() {
+            return send(data);
+        }
+        let mut process = 0;
+        GetWindowThreadProcessId(explorer, Some(&mut process));
+        let shared = SHAllocShared(Some(ours.cast_const()), SIZE as u32, process);
+        if shared.is_invalid() {
+            let _ = SHUnlockShared(ours);
+            return send(data);
+        }
+
+        let mut request = bytes.to_vec();
+        request[SHARED_HANDLE..SHARED_HANDLE + 8]
+            .copy_from_slice(&(shared.0 as usize as u64).to_le_bytes());
+        request[SHARED_OWNER..SHARED_OWNER + 4].copy_from_slice(&process.to_le_bytes());
+        let result = send(&COPYDATASTRUCT {
+            dwData: data.dwData,
+            cbData: data.cbData,
+            lpData: request.as_mut_ptr().cast(),
+        });
+
+        let theirs = SHLockShared(shared, process);
+        if !theirs.is_null() {
+            std::ptr::copy_nonoverlapping(theirs.cast::<u8>(), ours.cast::<u8>(), SIZE);
+            let _ = SHUnlockShared(theirs);
+        }
+        let _ = SHFreeShared(shared, process);
+        let _ = SHUnlockShared(ours);
+        result
+    }
+}
+
 /// The window procedure: records icons, keeps the window first, and passes
 /// what applications sent on to Explorer.
 unsafe extern "system" fn receive(
@@ -465,10 +554,10 @@ unsafe extern "system" fn receive(
                 icons().apply(&notice, load_icon);
             }
             match explorer_tray(window) {
-                // SAFETY: the system copies the data to Explorer for the
-                // duration of the call, as it did for this window.
+                // SAFETY: `lparam` points to the COPYDATASTRUCT of this
+                // message, which stays readable until the procedure returns.
                 Some(explorer) => unsafe {
-                    SendMessageW(explorer, message, Some(wparam), Some(lparam))
+                    pass_on(explorer, wparam, &*(lparam.0 as *const COPYDATASTRUCT))
                 },
                 None => LRESULT(1),
             }
