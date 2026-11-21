@@ -22,10 +22,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowPlacement, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindowVisible, PostMessageW, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
-    WINDOWPLACEMENT, WM_CLOSE, WS_EX_TOOLWINDOW,
+    EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW, SW_MINIMIZE, SW_RESTORE,
+    SetForegroundWindow, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -148,7 +148,7 @@ impl WindowEvents {
 unsafe extern "system" fn happened(
     _hook: HWINEVENTHOOK,
     _event: u32,
-    _hwnd: HWND,
+    hwnd: HWND,
     object: i32,
     child: i32,
     _thread: u32,
@@ -156,7 +156,16 @@ unsafe extern "system" fn happened(
 ) {
     // Events of the parts of a window, such as its scroll bars, and of the
     // pointer do not change the list.
-    if object == OBJID_WINDOW.0 && child == 0 {
+    if object != OBJID_WINDOW.0 || child != 0 {
+        return;
+    }
+    // Neither do those of the windows inside a window, which programs show,
+    // hide and rename all the time. A window that is gone by now has no
+    // style to read, and counts.
+    // SAFETY: reading the style of a window, valid or not, has no
+    // preconditions.
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    if style & WS_CHILD.0 == 0 {
         HAPPENED.fetch_add(1, Ordering::Relaxed);
     }
 }
