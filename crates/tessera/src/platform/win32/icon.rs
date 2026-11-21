@@ -61,7 +61,8 @@ impl IconPixels {
         pixels
     }
 
-    fn of_icon(icon: HICON) -> Option<Self> {
+    /// The pixels of `icon`, which stays the caller's to destroy.
+    pub(super) fn of_icon(icon: HICON) -> Option<Self> {
         // SAFETY: every structure passed is correctly sized, the pixel buffer
         // matches the dimensions given to GetDIBits, and every GDI object
         // obtained here is released before returning.

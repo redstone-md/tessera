@@ -108,6 +108,11 @@ fn load_image(path: &Path) -> anyhow::Result<Icon> {
     Ok(render_image(width, height, pixels.into_raw()))
 }
 
+/// An image of `pixels`, ready to draw.
+pub fn icon_of_pixels(pixels: &IconPixels) -> Icon {
+    render_image(pixels.width, pixels.height, pixels.bgra.clone())
+}
+
 /// The icon at `index` inside `file`.
 fn embedded(file: &Path, index: i32) -> Icon {
     let pixels = IconPixels::of_file(file, index, SOURCE_SIZE)?;

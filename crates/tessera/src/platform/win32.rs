@@ -10,12 +10,14 @@ mod audio;
 mod icon;
 mod shortcuts;
 mod taskbar;
+mod tray;
 
 pub use app_windows::{AppWindow, AppWindowId};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
 pub use shortcuts::Shortcut;
 pub use taskbar::Taskbar;
+pub use tray::{Tray, TrayButton, TrayIcon};
 
 use std::ffi::c_void;
 use std::mem::size_of;

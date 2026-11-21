@@ -9,6 +9,7 @@ mod label;
 mod launcher;
 mod session;
 mod sound;
+mod tray;
 mod windows;
 
 use crate::config::Config;
@@ -24,6 +25,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(launcher::LauncherModule),
         Box::new(session::SessionModule),
         Box::new(sound::SoundModule),
+        Box::new(tray::TrayModule),
         Box::new(windows::WindowsModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),

@@ -21,7 +21,8 @@ use windows::Win32::UI::Shell::{
     ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, IsWindowVisible, SW_HIDE, SW_SHOWNOACTIVATE, ShowWindow,
+    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE, SW_SHOWNOACTIVATE,
+    ShowWindow,
 };
 use windows::core::{PCWSTR, w};
 
@@ -121,7 +122,17 @@ impl Taskbar {
             if window.is_invalid() {
                 break;
             }
-            windows.push(window);
+            // The shell's own notification area has the taskbar's class.
+            let mut process = 0;
+            // SAFETY: `process` outlives the call, which only reads window
+            // state; so does the call that names this process.
+            let own = unsafe {
+                GetWindowThreadProcessId(window, Some(&raw mut process));
+                process == GetCurrentProcessId()
+            };
+            if !own {
+                windows.push(window);
+            }
             previous = Some(window);
         }
         windows

@@ -19,6 +19,11 @@
 #   "calendar"  a month to page through; option week_start, "monday" or "sunday"
 #   "volume"    the output volume, as an icon and a percentage
 #   "volume-slider"  a mute button and a slider for the output volume
+#   "tray"      the notification icons of applications; option tips, "left"
+#               or "right": the end of the strip where the description of
+#               the icon under the pointer unrolls. Choose the end that can
+#               grow without moving the icons (left in `end`, right in
+#               `start`); without the option no descriptions are shown.
 #   "windows"   a button for each open window of the display
 #   "quit"      closes Tessera
 #   "label"     fixed content; options text and icon, a character of the
@@ -31,7 +36,7 @@ edge = "top"
 thickness = 48
 start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }]
 center = [{ widget = "clock", popup = "calendar" }]
-end = [{ widget = "volume", popup = "sound" }, "quit"]
+end = [{ widget = "tray", tips = "left" }, { widget = "volume", popup = "sound" }, "quit"]
 
 [[surface]]
 edge = "bottom"
