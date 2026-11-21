@@ -20,7 +20,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
 use crate::platform::{AppWindow, ScreenEdge};
 use crate::shell::Shell;
-use crate::theme::Theme;
+use crate::theme::{ACCENT_THEME, Theme};
 use crate::ui::{icon, state_layer};
 
 /// The widget whose `pinned` option lists the pinned applications.
@@ -142,12 +142,10 @@ fn pin_title(pin: &str) -> String {
 
 /// The names of the theme files, in order.
 fn themes() -> Vec<String> {
-    let Some(directory) = config_dir().map(|directory| directory.join(THEMES_DIRECTORY)) else {
-        return Vec::new();
-    };
-    let Ok(entries) = fs::read_dir(directory) else {
-        return Vec::new();
-    };
+    let entries = config_dir()
+        .and_then(|directory| fs::read_dir(directory.join(THEMES_DIRECTORY)).ok())
+        .into_iter()
+        .flatten();
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
@@ -157,8 +155,20 @@ fn themes() -> Vec<String> {
         })
         .filter_map(|path| Some(path.file_stem()?.to_str()?.to_owned()))
         .collect();
+    names.retain(|name| name != ACCENT_THEME);
     names.sort();
+    // The colors of Windows are a choice like a file.
+    names.insert(0, ACCENT_THEME.to_owned());
     names
+}
+
+/// What the chip of the theme `name` says.
+fn theme_title(name: &str) -> SharedString {
+    if name == ACCENT_THEME {
+        "Windows accent".into()
+    } else {
+        SharedString::new(name)
+    }
 }
 
 /// Shows the configuration and changes its file.
@@ -539,7 +549,7 @@ impl Settings {
         )];
         for index in 0..self.themes.len() {
             let face = Face::Chip {
-                text: self.themes[index].clone().into(),
+                text: theme_title(&self.themes[index]),
                 selected: current == Some(self.themes[index].as_str()),
             };
             choices.push(self.control(Control::Theme(Some(index)), face, window, cx));
@@ -550,7 +560,7 @@ impl Settings {
             .gap(theme.spacing.small)
             .child(heading(&theme, "Theme"))
             .child(wrap(&theme).children(choices))
-            .children((self.themes.is_empty()).then(|| {
+            .children((self.themes.len() == 1).then(|| {
                 note(
                     &theme,
                     "Theme files are looked for in the themes directory of the configuration directory.",

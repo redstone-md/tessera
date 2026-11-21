@@ -65,6 +65,20 @@ impl Shell {
                 let Ok(stamp) = cx.update(|cx| cx.global::<Self>().config.stamp()) else {
                     break;
                 };
+                // Colors that follow the accent color of Windows are
+                // derived again when it changes.
+                let stale = cx.update(|cx| {
+                    let stale = cx.global::<Theme>().is_stale();
+                    if stale {
+                        let name = cx.global::<Self>().config.theme.clone();
+                        cx.set_global(Theme::load(name.as_deref()));
+                        cx.refresh_windows();
+                    }
+                    stale
+                });
+                if stale.is_err() {
+                    break;
+                }
                 if stamp != applied && stamp == seen {
                     // A new configuration may name another theme file, so
                     // what was applied is asked for again afterwards.

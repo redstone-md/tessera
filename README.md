@@ -42,6 +42,8 @@ The layout file and the theme file it names are checked every second, and a chan
 
  If the environment variable `TESSERA_CONFIG_DIR` is set, that directory is used instead of `%APPDATA%\tessera` for everything read from it: the layout, themes, icons and extensions.
 
+`theme = "accent"` names no file: it derives every color from the accent color of the Windows settings, and the settings popup offers it as **Windows accent**. A theme file can do the same with `seed = "accent"`, or derive the colors from a color of its own with `seed = "#rrggbb"`; what it sets under `[colors]` is applied over the derived colors. The roles are tones of palettes with the hue of the seed, as in Material 3, but built in the OKLCH color space instead of Material's HCT, so they are near the colors the Material tools give, not equal to them; only a dark scheme exists. While the colors follow the accent color it is asked for again every second. Choosing the accent theme was tried on a running shell; changing the accent color while it runs was not, since that would have changed the settings of the machine it was tried on.
+
 `theme = "name"` in that file applies `%APPDATA%\tessera\themes\name.toml` over the built-in theme. A theme can replace colors only, as `#rrggbb` under `[colors]`, using the role names `surface_container`, `surface_container_highest`, `on_surface`, `on_surface_variant`, `outline`, `primary` and `secondary_container`. Shapes, sizes, fonts and motion are not themeable yet.
 
 ## Extensions

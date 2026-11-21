@@ -2,6 +2,8 @@
 # Copy this file there to change it; Tessera applies it again whenever it is written.
 
 # Name of a theme file, %APPDATA%\tessera\themes\<name>.toml. Optional.
+# The name "accent" is no file: it derives the colors from the accent color
+# of the Windows settings and follows it when it changes.
 # theme = "example"
 
 # The registries the "marketplace" widget reads: https addresses or absolute

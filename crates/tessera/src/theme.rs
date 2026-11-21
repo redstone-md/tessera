@@ -9,6 +9,16 @@ use serde::Deserialize;
 
 use crate::config::{read_user_file, theme_file};
 use crate::motion::SpringSpec;
+use crate::platform::accent_color;
+
+mod tonal;
+
+/// The theme name that stands for colors derived from the accent color of
+/// Windows instead of for a file.
+pub const ACCENT_THEME: &str = "accent";
+
+/// What a theme file writes as its seed to follow the accent color.
+const ACCENT_SEED: &str = "accent";
 
 /// Material 3 color roles used by shell surfaces.
 #[derive(Clone, Copy, Debug)]
@@ -125,6 +135,9 @@ pub struct LauncherMetrics {
 /// The appearance shared by every shell surface.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
+    /// The accent color of Windows that the colors were derived from, if
+    /// they were, so that they can be derived again when it changes.
+    pub accent: Option<[u8; 3]>,
     pub colors: ColorRoles,
     pub shape: Shape,
     pub spacing: Spacing,
@@ -141,6 +154,7 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
+            accent: None,
             colors: ColorRoles {
                 surface_container: rgb(0x1e211a).into(),
                 surface_container_highest: rgb(0x33362e).into(),
@@ -226,12 +240,24 @@ impl Theme {
         let Some(name) = name else {
             return theme;
         };
+        if name == ACCENT_THEME {
+            theme.follow_accent();
+            return theme;
+        }
         if name.contains(['/', '\\', ':']) || name.starts_with('.') {
             eprintln!("tessera: `{name}` is not a theme name, the built-in theme is used");
             return theme;
         }
         match read_user_file::<ThemeFile>(&theme_file(name)) {
             Some(file) => {
+                match file.seed.as_deref() {
+                    None => {}
+                    Some(ACCENT_SEED) => theme.follow_accent(),
+                    Some(seed) => match parse_rgb(seed) {
+                        Ok(seed) => theme.colors = tonal::dark_roles(seed),
+                        Err(error) => eprintln!("tessera: theme `{name}`: {error:#}"),
+                    },
+                }
                 if let Err(error) = file.colors.apply_to(&mut theme.colors) {
                     eprintln!("tessera: theme `{name}` is only partly applied: {error:#}");
                 }
@@ -240,12 +266,33 @@ impl Theme {
         }
         theme
     }
+
+    /// Derives the colors from the accent color of Windows. If Windows
+    /// does not tell it, that is reported and the colors stay.
+    fn follow_accent(&mut self) {
+        match accent_color() {
+            Some(accent) => {
+                self.accent = Some(accent);
+                self.colors = tonal::dark_roles(accent);
+            }
+            None => eprintln!("tessera: Windows does not tell its accent color"),
+        }
+    }
+
+    /// Whether the colors were derived from an accent color that Windows
+    /// has changed since.
+    pub fn is_stale(&self) -> bool {
+        self.accent.is_some() && accent_color() != self.accent
+    }
 }
 
 /// A user theme: values to replace in the built-in theme.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ThemeFile {
+    /// A color, `#rrggbb`, to derive every role from, or `accent` for the
+    /// accent color of Windows. The roles of `colors` are applied over it.
+    seed: Option<String>,
     #[serde(default)]
     colors: ColorOverrides,
 }
@@ -289,11 +336,18 @@ impl ColorOverrides {
 }
 
 fn parse_color(text: &str) -> anyhow::Result<Hsla> {
+    let [red, green, blue] = parse_rgb(text)?.map(u32::from);
+    Ok(rgb(red << 16 | green << 8 | blue).into())
+}
+
+/// `#rrggbb` as `[red, green, blue]`.
+fn parse_rgb(text: &str) -> anyhow::Result<[u8; 3]> {
     let digits = text.strip_prefix('#').unwrap_or_default();
     if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("`{text}` is not a color of the form #rrggbb");
     }
-    Ok(rgb(u32::from_str_radix(digits, 16)?).into())
+    let [_, red, green, blue] = u32::from_str_radix(digits, 16)?.to_be_bytes();
+    Ok([red, green, blue])
 }
 
 #[cfg(test)]
@@ -306,6 +360,15 @@ mod tests {
         for invalid in ["add28e", "#add", "#add28eff", "#+dd28e", ""] {
             assert!(parse_color(invalid).is_err(), "{invalid:?} was accepted");
         }
+    }
+
+    #[test]
+    fn a_theme_file_may_name_a_seed() {
+        let file: ThemeFile = toml::from_str("seed = \"#0078d4\"\n").unwrap();
+        assert_eq!(
+            parse_rgb(file.seed.as_deref().unwrap()).unwrap(),
+            [0x00, 0x78, 0xd4]
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 #![allow(unsafe_code)]
 
+mod accent;
 mod app_windows;
 mod audio;
 mod icon;
@@ -16,6 +17,7 @@ mod system;
 mod taskbar;
 mod tray;
 
+pub use accent::accent_color;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
