@@ -12,6 +12,7 @@ use gpui::{
     Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
 use crate::platform::{Notification, Notifications};
@@ -236,7 +237,10 @@ impl NotificationList {
             Some(&mut item.dismiss)
         });
 
-        let caption = match (notification.app.as_str(), age(now - notification.posted)) {
+        let caption = match (
+            notification.app.as_str(),
+            age(now - notification.posted, Language::of(cx)),
+        ) {
             ("", age) => age,
             (app, age) => format!("{app} · {age}"),
         };
@@ -295,21 +299,22 @@ impl NotificationList {
 }
 
 /// How long ago something happened `seconds` ago, in a few characters.
-fn age(seconds: i64) -> String {
+fn age(seconds: i64, language: Language) -> String {
     const MINUTE: i64 = 60;
     const HOUR: i64 = 60 * MINUTE;
     const DAY: i64 = 24 * HOUR;
     match seconds {
-        ..MINUTE => "now".to_owned(),
-        MINUTE..HOUR => format!("{} min", seconds / MINUTE),
-        HOUR..DAY => format!("{} h", seconds / HOUR),
-        _ => format!("{} d", seconds / DAY),
+        ..MINUTE => language.say("now").to_owned(),
+        MINUTE..HOUR => format!("{} {}", seconds / MINUTE, language.say("min")),
+        HOUR..DAY => format!("{} {}", seconds / HOUR, language.say("h")),
+        _ => format!("{} {}", seconds / DAY, language.say("d")),
     }
 }
 
 impl Render for NotificationList {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let now = DateTime::<Local>::from(std::time::SystemTime::now()).timestamp();
         let cards: Vec<AnyElement> = self
             .items
@@ -331,7 +336,7 @@ impl Render for NotificationList {
             .text_color(theme.colors.primary)
             .bg(state_layer(&theme, theme.colors.surface_container, state))
             .on_click(cx.listener(|this, _, _, cx| this.clear(cx)))
-            .child("Clear all");
+            .child(language.say("Clear all"));
         let clear = Interaction::track(clear, cx, |this: &mut Self| Some(&mut this.clear));
         let header = div()
             .h(theme.bar.pill_height)
@@ -340,7 +345,7 @@ impl Render for NotificationList {
             .items_center()
             .justify_between()
             .text_color(theme.colors.on_surface)
-            .child("Notifications")
+            .child(language.say("Notifications"))
             .children((waiting > 0).then_some(clear));
 
         let note = |text: SharedString| {
@@ -355,7 +360,7 @@ impl Render for NotificationList {
         };
         let list = match (&self.error, cards.is_empty()) {
             (Some(error), _) => note(SharedString::from(error.clone())),
-            (None, true) => note("No notifications".into()),
+            (None, true) => note(language.say("No notifications").into()),
             (None, false) => div()
                 .id("notification-list")
                 .flex_1()
@@ -381,11 +386,13 @@ mod tests {
 
     #[test]
     fn an_age_is_told_in_the_largest_fitting_unit() {
+        let age = |seconds| age(seconds, Language::English);
         assert_eq!(age(-5), "now");
         assert_eq!(age(59), "now");
         assert_eq!(age(60), "1 min");
         assert_eq!(age(3_599), "59 min");
         assert_eq!(age(7_200), "2 h");
         assert_eq!(age(3 * 86_400 + 5), "3 d");
+        assert_eq!(super::age(7_200, Language::Russian), "2 ч");
     }
 }

@@ -9,6 +9,7 @@ use gpui::{
     Render, StatefulInteractiveElement, Styled, Window, div,
 };
 
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::Interaction;
 use crate::theme::Theme;
@@ -129,6 +130,7 @@ impl Render for Calendar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         let today = Local::now().date_naive();
+        let language = Language::of(cx);
         let first = first_shown(self.month, self.week_start);
         let row = || div().flex().justify_between();
 
@@ -138,7 +140,7 @@ impl Render for Calendar {
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(self.month.format("%B %Y").to_string()),
+                    .child(language.month(self.month)),
             )
             .child(self.step_button(1, "›", 1, &theme, window, cx));
         let weekdays = row()
@@ -148,7 +150,7 @@ impl Render for Calendar {
                     .w(theme.calendar.cell_size)
                     .flex()
                     .justify_center()
-                    .child((first + Days::new(day)).format("%a").to_string())
+                    .child(language.weekday((first + Days::new(day)).weekday()))
             }));
         let weeks = (0..WEEKS).map(|week| {
             row().children(

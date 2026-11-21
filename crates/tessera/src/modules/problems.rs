@@ -14,6 +14,7 @@ use gpui::{
 };
 
 use crate::config::{PopupConfig, WidgetSpec};
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
 use crate::report::{self, Report};
@@ -214,7 +215,7 @@ impl Render for List {
             .text_color(theme.colors.primary)
             .bg(state_layer(&theme, theme.colors.surface_container, state))
             .on_click(cx.listener(|_, _, _, _| report::clear()))
-            .child("Clear all");
+            .child(Language::of(cx).say("Clear all"));
         let clear = Interaction::track(clear, cx, |this: &mut Self| Some(&mut this.clear));
         let header = div()
             .h(theme.bar.pill_height)
@@ -223,7 +224,7 @@ impl Render for List {
             .items_center()
             .justify_between()
             .text_color(theme.colors.on_surface)
-            .child("Problems")
+            .child(Language::of(cx).say("Problems"))
             .children((!self.reports.is_empty()).then_some(clear));
         let count = self.reports.len();
         let rows: Vec<AnyElement> = self
@@ -238,7 +239,7 @@ impl Render for List {
                 .top(px(ROW_TRAVEL * (1. - arrival)))
                 .opacity(arrival)
                 .text_color(theme.colors.on_surface_variant)
-                .child("No problem is on record")
+                .child(Language::of(cx).say("No problem is on record"))
         });
         div()
             .size_full()

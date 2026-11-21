@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The language Tessera speaks in its settings and its marketplace. Texts
+//! The language Tessera speaks in its settings, its marketplace and its
+//! popups. Texts
 //! are written in English where they are used; a table gives them in the
 //! other languages, and a text it lacks stays English.
 
+use chrono::{Datelike, NaiveDate, Weekday};
 use gpui::{App, Global};
 use serde::Deserialize;
 
@@ -54,9 +56,55 @@ impl Language {
         let found = table.iter().find(|(english, _)| *english == text);
         found.map_or(text, |&(_, said)| said)
     }
+
+    /// The month `date` is in and its year, as a calendar is headed.
+    pub fn month(self, date: NaiveDate) -> String {
+        match self {
+            Self::English => date.format("%B %Y").to_string(),
+            Self::Russian => {
+                format!("{} {}", RUSSIAN_MONTHS[date.month0() as usize], date.year())
+            }
+        }
+    }
+
+    /// A day of the week in a few letters.
+    pub fn weekday(self, day: Weekday) -> String {
+        match self {
+            Self::English => day.to_string(),
+            Self::Russian => RUSSIAN_WEEKDAYS[day.num_days_from_monday() as usize].to_owned(),
+        }
+    }
 }
 
+const RUSSIAN_MONTHS: [&str; 12] = [
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+];
+
+/// From Monday on.
+const RUSSIAN_WEEKDAYS: [&str; 7] = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
 const RUSSIAN: &[(&str, &str)] = &[
+    // The notifications and the problems.
+    ("Notifications", "Уведомления"),
+    ("No notifications", "Уведомлений нет"),
+    ("Clear all", "Очистить"),
+    ("Problems", "Проблемы"),
+    ("No problem is on record", "Проблем не записано"),
+    ("now", "сейчас"),
+    ("min", "мин"),
+    ("h", "ч"),
+    ("d", "д"),
     // The connections.
     ("Connections", "Подключения"),
     ("Nothing is connected", "Нет подключений"),
