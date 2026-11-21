@@ -14,22 +14,18 @@ mod motion;
 mod panel;
 mod platform;
 mod popup;
+mod shell;
 mod surface;
 mod theme;
 mod ui;
 
 use std::time::Duration;
 
-use gpui::{App, Application, AsyncApp, px};
+use gpui::{App, Application, AsyncApp};
 
-use crate::config::{Config, Displays};
-use crate::icons::AppIcons;
-use crate::module::WidgetRegistry;
-use crate::panel::Panel;
+use crate::config::Config;
 use crate::platform::Taskbar;
-use crate::popup::Popups;
-use crate::surface::EdgeSurface;
-use crate::theme::Theme;
+use crate::shell::Shell;
 
 /// How often the taskbar is checked for having been shown again.
 const TASKBAR_CHECK_INTERVAL: Duration = Duration::from_secs(1);
@@ -40,10 +36,6 @@ fn main() {
     }
     let config = Config::load();
     Application::new().run(move |cx: &mut App| {
-        cx.set_global(Theme::load(config.theme.as_deref()));
-        cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
-        cx.set_global(Popups::new(&config.popups));
-        cx.set_global(AppIcons::new(&config.icons));
         match Taskbar::hide_until_exit() {
             Ok(()) => cx
                 .spawn(async move |cx: &mut AsyncApp| {
@@ -55,27 +47,9 @@ fn main() {
                 .detach(),
             Err(error) => eprintln!("tessera: the Windows taskbar stays visible: {error:#}"),
         }
-        if let Err(error) = open_surfaces(&config, cx) {
-            eprintln!("tessera: the shell surfaces could not be opened: {error:#}");
+        if let Err(error) = Shell::start(config, cx) {
+            eprintln!("tessera: the shell does not start: {error:#}");
             cx.quit();
         }
     });
-}
-
-/// Opens the configured surfaces on the displays each one asks for.
-fn open_surfaces(config: &Config, cx: &mut App) -> anyhow::Result<()> {
-    let primary = cx.primary_display().map(|display| display.id());
-    for display in cx.displays() {
-        for layout in &config.surfaces {
-            if layout.displays == Displays::Primary && Some(display.id()) != primary {
-                continue;
-            }
-            let surface = EdgeSurface {
-                edge: layout.edge,
-                thickness: px(layout.thickness),
-            };
-            surface.open(&display, cx, |display, cx| Panel::new(layout, display, cx))?;
-        }
-    }
-    Ok(())
 }

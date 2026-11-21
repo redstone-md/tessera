@@ -7,12 +7,20 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use serde::Deserialize;
 
 use crate::platform::ScreenEdge;
 
 const DEFAULT: &str = include_str!("default_config.toml");
+
+const CONFIG_FILE: &str = "config.toml";
+
+/// Where the theme `name` is kept in the configuration directory.
+pub fn theme_file(name: &str) -> String {
+    format!("themes/{name}.toml")
+}
 
 /// The environment variable that names another configuration directory.
 const DIRECTORY_VARIABLE: &str = "TESSERA_CONFIG_DIR";
@@ -26,22 +34,53 @@ pub fn config_dir() -> Option<PathBuf> {
     }
 }
 
+/// What reading a file of the configuration directory came to.
+enum UserFile<T> {
+    Missing,
+    /// It is unreadable or invalid, which was reported.
+    Unusable,
+    Read(T),
+}
+
+fn read<T: for<'de> Deserialize<'de>>(file: &str) -> UserFile<T> {
+    let Some(path) = config_dir().map(|directory| directory.join(file)) else {
+        return UserFile::Missing;
+    };
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return UserFile::Missing,
+        Err(error) => {
+            eprintln!("tessera: {} is ignored: {error}", path.display());
+            return UserFile::Unusable;
+        }
+    };
+    match toml::from_str(&text) {
+        Ok(value) => UserFile::Read(value),
+        Err(error) => {
+            eprintln!("tessera: {} is ignored: {error}", path.display());
+            UserFile::Unusable
+        }
+    }
+}
+
 /// Reads `file` from the configuration directory. A missing file is `None`;
 /// an unreadable or invalid one is reported and also `None`.
 pub fn read_user_file<T: for<'de> Deserialize<'de>>(file: &str) -> Option<T> {
-    let path = config_dir()?.join(file);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return None,
-        Err(error) => {
-            eprintln!("tessera: {} is ignored: {error}", path.display());
-            return None;
-        }
-    };
-    toml::from_str(&text)
-        .inspect_err(|error| eprintln!("tessera: {} is ignored: {error}", path.display()))
-        .ok()
+    match read(file) {
+        UserFile::Read(value) => Some(value),
+        UserFile::Missing | UserFile::Unusable => None,
+    }
 }
+
+/// When a file of the configuration directory was last written; `None` if
+/// it is missing.
+fn modified(file: &str) -> Option<SystemTime> {
+    fs::metadata(config_dir()?.join(file)).ok()?.modified().ok()
+}
+
+/// When the files a configuration is made of were last written. It differs
+/// after any of them was written, created or deleted.
+pub type Stamp = [Option<SystemTime>; 2];
 
 /// Which displays a surface appears on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -97,7 +136,7 @@ impl From<WidgetSpecText> for WidgetSpec {
 }
 
 /// A floating panel of widgets that a click on a widget opens.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PopupConfig {
     pub name: String,
@@ -110,7 +149,7 @@ pub struct PopupConfig {
 }
 
 /// One strip docked to a screen edge, and the widgets in its slots.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SurfaceConfig {
     pub edge: ScreenEdge,
@@ -127,7 +166,7 @@ pub struct SurfaceConfig {
 }
 
 /// Everything the user can configure.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Name of the theme file to apply over the built-in theme.
@@ -149,7 +188,27 @@ impl Config {
     /// The user's configuration, or the built-in one when there is none or
     /// it cannot be used.
     pub fn load() -> Self {
-        read_user_file("config.toml").unwrap_or_else(Self::builtin)
+        Self::reload().unwrap_or_else(Self::builtin)
+    }
+
+    /// The user's configuration, or the built-in one when there is none;
+    /// `None` when the user's cannot be used.
+    pub fn reload() -> Option<Self> {
+        match read(CONFIG_FILE) {
+            UserFile::Read(config) => Some(config),
+            UserFile::Missing => Some(Self::builtin()),
+            UserFile::Unusable => None,
+        }
+    }
+
+    /// The state of the files this configuration is read from: the layout
+    /// and the theme it names.
+    pub fn stamp(&self) -> Stamp {
+        let theme = self
+            .theme
+            .as_deref()
+            .and_then(|name| modified(&theme_file(name)));
+        [modified(CONFIG_FILE), theme]
     }
 
     fn builtin() -> Self {

@@ -55,8 +55,9 @@ impl EdgeSurface {
                 })
                 .ok();
             cx.new(|cx| EdgeSurfaceView {
+                surface: self,
                 content: cx.new(|cx| build(display, cx)),
-                _reservation: reservation,
+                reservation,
             })
         })
     }
@@ -76,16 +77,54 @@ impl EdgeSurface {
     fn dock(self, window: &Window) -> anyhow::Result<EdgeReservation> {
         let surface = NativeSurface::of(window)?;
         surface.adopt_as_shell_surface()?;
-        let thickness = (self.thickness / px(1.) * window.scale_factor()).round() as i32;
-        surface.reserve_edge(self.edge, thickness)
+        surface.reserve_edge(self.edge, self.depth(window))
+    }
+
+    /// The thickness in physical pixels of `window`'s display.
+    fn depth(self, window: &Window) -> i32 {
+        (self.thickness / px(1.) * window.scale_factor()).round() as i32
     }
 }
 
 /// The root view of an edge surface: a transparent strip around its content.
 pub struct EdgeSurfaceView<V> {
+    surface: EdgeSurface,
     content: Entity<V>,
     /// Held so maximized windows keep clear of the surface while it exists.
-    _reservation: Option<EdgeReservation>,
+    reservation: Option<EdgeReservation>,
+}
+
+impl<V: Render> EdgeSurfaceView<V> {
+    /// Makes the strip `thickness` thick and replaces its content with the
+    /// view `build` returns. The window and its reservation of the screen
+    /// edge are kept.
+    pub fn refill(
+        &mut self,
+        thickness: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+        build: impl FnOnce(Option<DisplayKey>, &mut Context<V>) -> V,
+    ) {
+        if thickness != self.surface.thickness || self.reservation.is_none() {
+            self.surface.thickness = thickness;
+            let docked = match &self.reservation {
+                Some(reservation) => reservation
+                    .occupy(self.surface.edge, self.surface.depth(window))
+                    .map(|()| None),
+                None => self.surface.dock(window).map(Some),
+            };
+            match docked {
+                Ok(Some(reservation)) => self.reservation = Some(reservation),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("tessera: a surface is not docked to its screen edge: {error:#}");
+                }
+            }
+        }
+        let display = NativeSurface::of(window).ok().map(NativeSurface::display);
+        self.content = cx.new(|cx| build(display, cx));
+        cx.notify();
+    }
 }
 
 impl<V: Render> Render for EdgeSurfaceView<V> {

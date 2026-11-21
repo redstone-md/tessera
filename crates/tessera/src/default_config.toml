@@ -1,5 +1,5 @@
 # The layout Tessera uses when %APPDATA%\tessera\config.toml does not exist.
-# Copy this file there to change it; Tessera reads it once at startup.
+# Copy this file there to change it; Tessera applies it again whenever it is written.
 
 # Name of a theme file, %APPDATA%\tessera\themes\<name>.toml. Optional.
 # theme = "example"

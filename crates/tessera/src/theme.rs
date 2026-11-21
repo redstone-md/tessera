@@ -7,7 +7,7 @@ use anyhow::bail;
 use gpui::{Global, Hsla, Pixels, px, rgb};
 use serde::Deserialize;
 
-use crate::config::read_user_file;
+use crate::config::{read_user_file, theme_file};
 use crate::motion::SpringSpec;
 
 /// Material 3 color roles used by shell surfaces.
@@ -230,7 +230,7 @@ impl Theme {
             eprintln!("tessera: `{name}` is not a theme name, the built-in theme is used");
             return theme;
         }
-        match read_user_file::<ThemeFile>(&format!("themes/{name}.toml")) {
+        match read_user_file::<ThemeFile>(&theme_file(name)) {
             Some(file) => {
                 if let Err(error) = file.colors.apply_to(&mut theme.colors) {
                     eprintln!("tessera: theme `{name}` is only partly applied: {error:#}");

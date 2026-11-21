@@ -227,48 +227,16 @@ impl NativeSurface {
     pub fn reserve_edge(self, edge: ScreenEdge, thickness: i32) -> Result<EdgeReservation> {
         let mut data = self.appbar_data();
         data.uCallbackMessage = EDGE_NOTIFICATION;
-        data.uEdge = edge.as_appbar_edge();
-
-        // SAFETY: `data` and `monitor` are correctly sized structures that
-        // outlive every call, and `hwnd` is a live window owned by this thread.
-        unsafe {
-            let mut monitor = MONITORINFO {
-                cbSize: size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
-            let display = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
-            if !GetMonitorInfoW(display, &mut monitor).as_bool() {
-                bail!("the surface's display could not be read");
-            }
-            if SHAppBarMessage(ABM_NEW, &mut data) == 0 {
-                bail!("the system refused to register the surface as an edge bar");
-            }
-            let reservation = EdgeReservation { surface: self };
-
-            data.rc = monitor.rcMonitor;
-            SHAppBarMessage(ABM_QUERYPOS, &mut data);
-            edge.clamp(&mut data.rc, thickness);
-            SHAppBarMessage(ABM_SETPOS, &mut data);
-
-            let RECT {
-                left,
-                top,
-                right,
-                bottom,
-            } = data.rc;
-            SetWindowPos(
-                self.hwnd,
-                None,
-                left,
-                top,
-                right - left,
-                bottom - top,
-                SWP_NOACTIVATE | SWP_NOZORDER,
-            )
-            .context("the surface could not be moved into its reserved area")?;
-            Ok(reservation)
+        // SAFETY: `data` is a correctly sized APPBARDATA that outlives the
+        // call, and `hwnd` is a live window owned by this thread.
+        if unsafe { SHAppBarMessage(ABM_NEW, &mut data) } == 0 {
+            bail!("the system refused to register the surface as an edge bar");
         }
+        let reservation = EdgeReservation { surface: self };
+        reservation.occupy(edge, thickness)?;
+        Ok(reservation)
     }
+
     fn appbar_data(self) -> APPBARDATA {
         APPBARDATA {
             cbSize: size_of::<APPBARDATA>() as u32,
@@ -282,6 +250,50 @@ impl NativeSurface {
 #[derive(Debug)]
 pub struct EdgeReservation {
     surface: NativeSurface,
+}
+
+impl EdgeReservation {
+    /// Makes the reserved strip `thickness` physical pixels deep at `edge`
+    /// of the surface's display and moves the surface into it.
+    pub fn occupy(&self, edge: ScreenEdge, thickness: i32) -> Result<()> {
+        let hwnd = self.surface.hwnd;
+        let mut data = self.surface.appbar_data();
+        data.uEdge = edge.as_appbar_edge();
+
+        // SAFETY: `data` and `monitor` are correctly sized structures that
+        // outlive every call, and `hwnd` is a live window owned by this thread.
+        unsafe {
+            let mut monitor = MONITORINFO {
+                cbSize: size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let display = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if !GetMonitorInfoW(display, &mut monitor).as_bool() {
+                bail!("the surface's display could not be read");
+            }
+            data.rc = monitor.rcMonitor;
+            SHAppBarMessage(ABM_QUERYPOS, &mut data);
+            edge.clamp(&mut data.rc, thickness);
+            SHAppBarMessage(ABM_SETPOS, &mut data);
+
+            let RECT {
+                left,
+                top,
+                right,
+                bottom,
+            } = data.rc;
+            SetWindowPos(
+                hwnd,
+                None,
+                left,
+                top,
+                right - left,
+                bottom - top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+            .context("the surface could not be moved into its reserved area")
+        }
+    }
 }
 
 impl Drop for EdgeReservation {
