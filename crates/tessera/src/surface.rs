@@ -106,6 +106,9 @@ impl EdgeSurface {
     fn dock(self, window: &Window) -> anyhow::Result<EdgeReservation> {
         let surface = NativeSurface::of(window)?;
         surface.adopt_as_shell_surface()?;
+        // Windows may leave the first window of a program hidden when it
+        // was started that way.
+        surface.reveal(false);
         surface.reserve_edge(self.edge, self.depth(window))
     }
 

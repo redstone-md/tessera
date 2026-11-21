@@ -28,8 +28,18 @@ const CLOSE_DELAY: Duration = Duration::from_millis(90);
 /// The height of a tip, in logical pixels.
 const HEIGHT: f32 = 28.;
 
-/// The widest a tip gets; a longer text is cut.
+/// The widest a tip gets; a longer text goes on over more lines.
 const WIDEST: f32 = 360.;
+
+/// The height of each line of a tip after its first.
+const LINE: f32 = 18.;
+
+/// The most lines a tip has; what does not fit them is cut.
+const MOST_LINES: usize = 4;
+
+/// The part of a line that words fill on average when a text is broken
+/// between them.
+const FILLED: f32 = 0.9;
 
 /// Tells what a tip is about: the kind of thing and its number there.
 pub type TipKey = (&'static str, u64);
@@ -130,17 +140,33 @@ impl Tips {
             floating_window(rough, anchor.display_id, false),
             |window, cx| {
                 let theme = *cx.global::<Theme>();
-                let placed = NativeSurface::of(window).and_then(|native| {
-                    native.adopt_as_overlay()?;
-                    native.place(anchor.frame(width(&text, &theme, window), HEIGHT))
-                });
-                if let Err(error) = placed {
-                    report!("a tip is not where it belongs: {error:#}");
+                let (width, lines) = extent(&text, &theme, window);
+                let frame = anchor.frame(width, height(lines));
+                let native = NativeSurface::of(window)
+                    .and_then(|native| native.adopt_as_shell_surface().map(|()| native));
+                match native {
+                    // The window learns its size only if it is given while
+                    // nothing of the user interface is being worked on, so
+                    // it is placed and shown right after this. It lets the
+                    // pointer through once it is shown.
+                    Ok(native) => cx
+                        .spawn(async move |_| {
+                            let shown = native.place(frame).and_then(|()| {
+                                native.reveal(false);
+                                native.adopt_as_overlay()
+                            });
+                            if let Err(error) = shown {
+                                report!("a tip is not where it belongs: {error:#}");
+                            }
+                        })
+                        .detach(),
+                    Err(error) => report!("a tip is not where it belongs: {error:#}"),
                 }
                 let mut visibility = Spring::new(theme.motion.spatial, 0.);
                 visibility.animate_to(1.);
                 cx.new(|_| TipView {
                     text,
+                    lines,
                     edge: anchor.edge,
                     visibility,
                     closing: false,
@@ -150,17 +176,37 @@ impl Tips {
     }
 }
 
-/// The logical width of the tip that says `text`.
-fn width(text: &SharedString, theme: &Theme, window: &Window) -> f32 {
+/// The logical width of the tip that says `text`, and how many lines it
+/// takes.
+fn extent(text: &SharedString, theme: &Theme, window: &Window) -> (f32, usize) {
     let typography = theme.typography;
     let text = text_width(text, typography.family, typography.label_size, window) / px(1.);
+    let padding = theme.spacing.medium / px(1.) * 2.;
     // A pixel more than measured, so that rounding cuts nothing.
-    (text.ceil() + 1. + theme.spacing.medium / px(1.) * 2.).min(WIDEST)
+    let text = text.ceil() + 1.;
+    let room = WIDEST - padding;
+    (text.min(room) + padding, lines(text, room))
+}
+
+/// How many lines a text `text` wide takes where a line has `room`.
+fn lines(text: f32, room: f32) -> usize {
+    if text <= room {
+        1
+    } else {
+        ((text / (room * FILLED)).ceil() as usize).clamp(2, MOST_LINES)
+    }
+}
+
+/// The logical height of a tip of `lines` lines.
+fn height(lines: usize) -> f32 {
+    HEIGHT + LINE * lines.saturating_sub(1) as f32
 }
 
 /// The root view of a tip: one line of text in a pill.
 pub struct TipView {
     text: SharedString,
+    /// How many lines the text takes.
+    lines: usize,
     /// The edge the tip's surface is docked to; it moves in from there.
     edge: ScreenEdge,
     /// 0 while hidden, 1 when fully open.
@@ -178,7 +224,8 @@ impl TipView {
         cx: &mut Context<Self>,
     ) {
         let theme = *cx.global::<Theme>();
-        let frame = anchor.frame(width(&text, &theme, window), HEIGHT);
+        let (width, lines) = extent(&text, &theme, window);
+        let frame = anchor.frame(width, height(lines));
         match NativeSurface::of(window) {
             // The window learns its new size only if it is given while
             // nothing of the user interface is being worked on, as it is
@@ -193,6 +240,7 @@ impl TipView {
             Err(error) => report!("a tip is not where it belongs: {error:#}"),
         }
         self.text = text;
+        self.lines = lines;
         self.edge = anchor.edge;
         self.closing = false;
         self.visibility.animate_to(1.);
@@ -223,9 +271,17 @@ impl Render for TipView {
             .items_center()
             .justify_center()
             .overflow_hidden()
-            .rounded(theme.shape.full)
-            .bg(theme.colors.surface_container_highest)
-            .child(one_line(self.text.clone()));
+            .bg(theme.colors.surface_container_highest);
+        let pill = if self.lines > 1 {
+            let text: SharedString = self.text.replace(['\n', '\r'], " ").into();
+            pill.rounded(theme.shape.medium)
+                .line_height(px(LINE))
+                .text_center()
+                .child(div().w_full().child(text))
+        } else {
+            pill.rounded(theme.shape.full)
+                .child(one_line(self.text.clone()))
+        };
         div()
             .size_full()
             .p(px(MARGIN))
@@ -234,5 +290,21 @@ impl Render for TipView {
             .text_color(theme.colors.on_surface)
             .opacity(visibility.clamp(0., 1.))
             .child(pill)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_tip_goes_on_over_more_lines() {
+        assert_eq!(lines(120., 300.), 1);
+        assert_eq!(lines(300., 300.), 1);
+        assert_eq!(lines(301., 300.), 2);
+        assert_eq!(lines(700., 300.), 3);
+        assert_eq!(lines(9000., 300.), MOST_LINES);
+        assert_eq!(height(1), HEIGHT);
+        assert_eq!(height(3), HEIGHT + LINE * 2.);
     }
 }

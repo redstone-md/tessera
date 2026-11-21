@@ -115,7 +115,8 @@ impl PopupAnchor {
 
 /// The options of a floating window on the display `display_id`. GPUI sizes
 /// the window for a frame that adopting it removes, so `rough` only picks
-/// the display, and the window is to be placed once it is open. `focus`
+/// the display. The window opens hidden: it is to be adopted, placed and
+/// then revealed, or it is seen for a moment with its frame. `focus`
 /// says whether it takes the keyboard.
 pub fn floating_window(
     rough: Bounds<Pixels>,
@@ -127,7 +128,7 @@ pub fn floating_window(
         // See `EdgeSurface::open` for why a title bar is requested.
         titlebar: Some(TitlebarOptions::default()),
         focus,
-        show: true,
+        show: false,
         kind: WindowKind::PopUp,
         is_movable: false,
         is_resizable: false,
@@ -276,7 +277,7 @@ impl Popups {
                     PopupPlace::Surface => None,
                     PopupPlace::Center => Some(Veil::open(screen, native)?),
                 };
-                native.activate();
+                native.reveal(true);
                 Ok(veil)
             });
             let veil = adopted.unwrap_or_else(|error| {

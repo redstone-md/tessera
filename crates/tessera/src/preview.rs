@@ -172,7 +172,9 @@ impl Previews {
                 let (width, height) = extent(picture, padding);
                 let placed = native.and_then(|native| {
                     native.adopt_as_shell_surface()?;
-                    native.place(anchor.frame(width, height))
+                    native.place(anchor.frame(width, height))?;
+                    native.reveal(false);
+                    Ok(())
                 });
                 if let Err(error) = placed {
                     report!("a preview is not where it belongs: {error:#}");

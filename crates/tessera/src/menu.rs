@@ -82,7 +82,7 @@ impl Menus {
                 let adopted = NativeSurface::of(window).and_then(|native| {
                     native.adopt_as_popup()?;
                     native.place(frame)?;
-                    native.activate();
+                    native.reveal(true);
                     Ok(())
                 });
                 if let Err(error) = adopted {

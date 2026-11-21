@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gpui::{
     AnyView, App, AppContext, AsyncApp, Bounds, Context, IntoElement, ParentElement, Pixels,
-    Render, Window, WindowHandle, WindowOptions, px, size,
+    Render, Window, WindowHandle, px, size,
 };
 use serde::Deserialize;
 
@@ -150,16 +150,15 @@ impl Cards {
                 // It is shown once it is a card, without taking the
                 // keyboard. A window that is not shown is not put at its
                 // bounds either, so the card does that itself.
-                let options = WindowOptions {
-                    show: false,
-                    ..floating_window(rough, Some(display.id()), false)
-                };
+                let options = floating_window(rough, Some(display.id()), false);
                 let opened = cx.open_window(options, |window, cx| {
                     let scale = window.scale_factor();
                     let native = NativeSurface::of(window)
                         .and_then(|native| {
                             native.place(physical(rough, scale))?;
-                            native.adopt_as_card().map(|()| native)
+                            native.adopt_as_card()?;
+                            native.reveal(false);
+                            Ok(native)
                         })
                         .inspect_err(|error| report!("a card is not on the desktop: {error:#}"))
                         .ok();
