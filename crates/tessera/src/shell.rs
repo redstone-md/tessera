@@ -49,6 +49,9 @@ pub struct Shell {
     extensions: u64,
 }
 
+/// How long after the bars the cards are opened when the shell starts.
+const CARDS_AFTER_BARS: Duration = Duration::from_millis(3500);
+
 impl Global for Shell {}
 
 impl Shell {
@@ -70,14 +73,13 @@ impl Shell {
             bail!("the layout opened no surface");
         }
         Wallpaper::start(&config.wallpaper, cx);
-        let mut cards = Cards::default();
-        cards.show(&config.cards, cx);
         cx.set_global(Self {
             config,
             surfaces,
-            cards,
+            cards: Cards::default(),
             extensions,
         });
+        Self::show_cards_later(cx);
         Self::watch(cx);
         Self::answer_windows_key(cx);
         Ok(())
@@ -266,6 +268,21 @@ impl Shell {
         Self::arrange(&config, cx);
         Self::show_cards(cx);
         cx.refresh_windows();
+    }
+
+    /// Opens the cards once what the bars took to be made has been let
+    /// go. Every window is charged with some megabytes more for about
+    /// three seconds after it is made; bars and cards made together took
+    /// the shell above the memory it is to stay under for that long.
+    fn show_cards_later(cx: &mut App) {
+        if cx.global::<Self>().config.cards.is_empty() {
+            return;
+        }
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            cx.background_executor().timer(CARDS_AFTER_BARS).await;
+            cx.update(Self::show_cards).ok();
+        })
+        .detach();
     }
 
     /// Opens the cards of the configuration in use in place of the open
