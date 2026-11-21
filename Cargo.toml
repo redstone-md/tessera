@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/tessera"]
+resolver = "3"
+
+[workspace.package]
+version = "0.2.0-dev"
+edition = "2024"
+repository = "https://github.com/redstone-md/tessera"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+gpui = "0.2.2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+
+# Full debug info for the dependency graph costs gigabytes of linker and
+# compiler memory and is rarely needed while iterating on the shell.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 1

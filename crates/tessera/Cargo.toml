@@ -1,0 +1,16 @@
+[package]
+name = "tessera"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "A modular native desktop shell for Windows"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+gpui.workspace = true
+
+[lints]
+workspace = true
