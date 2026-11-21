@@ -14,9 +14,16 @@ use crate::platform::ScreenEdge;
 
 const DEFAULT: &str = include_str!("default_config.toml");
 
-/// The directory user configuration is read from, when the system has one.
+/// The environment variable that names another configuration directory.
+const DIRECTORY_VARIABLE: &str = "TESSERA_CONFIG_DIR";
+
+/// The directory user configuration is read from, when the system has one:
+/// the one `TESSERA_CONFIG_DIR` names, or else the `tessera` directory in `%APPDATA%`.
 pub fn config_dir() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("APPDATA")?).join("tessera"))
+    match std::env::var_os(DIRECTORY_VARIABLE) {
+        Some(directory) if !directory.is_empty() => Some(PathBuf::from(directory)),
+        _ => Some(PathBuf::from(std::env::var_os("APPDATA")?).join("tessera")),
+    }
 }
 
 /// Reads `file` from the configuration directory. A missing file is `None`;
