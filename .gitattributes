@@ -1,0 +1,3 @@
+# The checksums in registry.toml are those of these exact bytes.
+registry/** -text
+*.sh text eol=lf

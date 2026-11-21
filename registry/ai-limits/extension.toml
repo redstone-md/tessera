@@ -1,0 +1,28 @@
+# Layouts refer to the widgets below as "ai-limits.summary" and
+# "ai-limits.details".
+id = "ai-limits"
+
+# One line for a bar: the tightest limit of each service.
+[[widget]]
+name = "summary"
+refresh_seconds = 30
+
+# Every limit with its plan and reset time, for a popup.
+[[widget]]
+name = "details"
+refresh_seconds = 30
+
+[permissions]
+# The services asked for usage; nothing else can be contacted.
+network = [
+    "api.anthropic.com",
+    "chatgpt.com",
+    "openrouter.ai",
+    "api.deepseek.com",
+]
+# The sign-ins of Claude Code and Codex, read to ask for the usage of the
+# signed-in account. They are sent only to the service they belong to.
+files = [
+    "~/.claude/.credentials.json",
+    "~/.codex/auth.json",
+]

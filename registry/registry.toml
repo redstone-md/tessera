@@ -1,0 +1,23 @@
+# The extensions Tessera offers to install unless its configuration names
+# other registries. Written by update.sh; see the README for the format.
+name = "Tessera"
+
+[[extension]]
+id = "counter"
+name = "Counter"
+description = "An example: counts presses of its buttons, in a bar and in a popup of its own."
+version = "0.1.0"
+manifest = "counter/extension.toml"
+manifest_sha256 = "80a8698094b015324983e9d7d082adfc3937c805ad73dd4955de924d9dd99063"
+wasm = "counter/extension.wasm"
+wasm_sha256 = "be51c0525fc49f736c19a63151906f11a72b394d4ede8d56ba6193f885f8975d"
+
+[[extension]]
+id = "ai-limits"
+name = "AI limits"
+description = "What is left of the usage limits of Claude, Codex, OpenRouter and DeepSeek, and when they reset."
+version = "0.1.0"
+manifest = "ai-limits/extension.toml"
+manifest_sha256 = "756bc4cf6c8b17373ed2050a17a9f5072c2ea853fbc21f67531e132729ea4758"
+wasm = "ai-limits/extension.wasm"
+wasm_sha256 = "c719859d39a19acbd4bb8be3179f5af4a41eb6292a2ab0a7969ba997fa3b4be3"

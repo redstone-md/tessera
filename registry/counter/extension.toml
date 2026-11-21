@@ -1,0 +1,25 @@
+# Layouts refer to the widgets below as "counter.clicks", "counter.total"
+# and "counter.controls".
+id = "counter"
+
+# The count with a button, for a bar.
+[[widget]]
+name = "clicks"
+
+# The count alone. A click on it opens the popup below, unless the layout
+# names another popup for it.
+[[widget]]
+name = "total"
+popup = "panel"
+
+# Buttons that change the count, for a popup.
+[[widget]]
+name = "controls"
+
+# Layouts refer to this popup as "counter.panel". A popup of that name in
+# the layout replaces it.
+[[popup]]
+name = "panel"
+width = 260
+height = 96
+content = ["controls"]
