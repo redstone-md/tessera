@@ -71,10 +71,11 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
-    IsWindowVisible, LWA_ALPHA, PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+    IsWindowVisible, LWA_ALPHA, PostMessageW, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    WindowFromPoint,
 };
 
 /// Classes of windows that cover a display without being an application
@@ -214,6 +215,14 @@ impl NativeSurface {
     /// below every other window, not listed among application windows, and
     /// clicks on it neither take keyboard focus nor raise it.
     pub fn adopt_as_card(self) -> Result<()> {
+        // The window was opened without being shown: shown the usual way
+        // it would take the keyboard from the window that has it. It is
+        // shown before its styles say it is visible, which would make the
+        // call do nothing.
+        // SAFETY: `hwnd` belongs to a live window owned by this thread.
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        }
         self.adopt(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)?;
         self.keep_above(false);
         Ok(())

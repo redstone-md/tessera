@@ -8,7 +8,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value, value};
 
 use super::{CONFIG_FILE, Config, DEFAULT, config_dir};
 
@@ -27,6 +27,63 @@ pub const LAYOUTS: [(&str, &str); 3] = [
     ("Windows", include_str!("../layouts/windows.toml")),
     ("Void", include_str!("../layouts/void.toml")),
 ];
+
+/// A length of a card on the desktop that the settings change by steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CardLength {
+    Width,
+    Height,
+    X,
+    Y,
+}
+
+impl CardLength {
+    pub const ALL: [Self; 4] = [Self::Width, Self::Height, Self::X, Self::Y];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Width => "width",
+            Self::Height => "height",
+            Self::X => "x",
+            Self::Y => "y",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Width => "Width",
+            Self::Height => "Height",
+            Self::X => "Horizontal distance",
+            Self::Y => "Vertical distance",
+        }
+    }
+
+    /// The least, the most and the step of the length.
+    fn range(self) -> (i64, i64, i64) {
+        match self {
+            Self::Width => (120, 1200, 20),
+            Self::Height => (60, 1200, 20),
+            Self::X | Self::Y => (0, 2000, 12),
+        }
+    }
+
+    /// What the length is taken to be where the file does not say.
+    fn unwritten(self) -> f64 {
+        match self {
+            Self::Width => 260.,
+            Self::Height => 150.,
+            Self::X | Self::Y => 24.,
+        }
+    }
+
+    /// The length a step above `now`, or below, within its range.
+    fn stepped(self, now: f64, up: bool) -> i64 {
+        let (least, most, step) = self.range();
+        let now = now.round() as i64;
+        let next = if up { now + step } else { now - step };
+        next.clamp(least, most)
+    }
+}
 
 /// The names as a list of the file.
 fn list(names: &[String]) -> Option<Value> {
@@ -200,6 +257,134 @@ impl ConfigFile {
         };
         let index = index.unwrap_or(widgets.len()).min(widgets.len());
         widgets.insert(index, widget);
+        widgets.fmt();
+        true
+    }
+
+    /// A card of the desktop.
+    fn card(&mut self, card: usize) -> Option<&mut Table> {
+        let cards = self.document.get_mut("card")?.as_array_of_tables_mut()?;
+        cards.get_mut(card)
+    }
+
+    /// The widgets of a card, a list that is created if the card lacks it.
+    fn card_content(&mut self, card: usize) -> Option<&mut Array> {
+        let item = self
+            .card(card)?
+            .entry("content")
+            .or_insert_with(|| Item::Value(Value::Array(Array::new())));
+        item.as_array_mut()
+    }
+
+    /// Appends a card with the clock to the desktop.
+    pub fn add_card(&mut self) -> bool {
+        let item = self
+            .document
+            .entry("card")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(cards) = item.as_array_of_tables_mut() else {
+            return false;
+        };
+        let mut content = Array::new();
+        content.push("clock");
+        let mut card = Table::new();
+        card.insert("corner", value("top-right"));
+        card.insert("width", value(CardLength::Width.unwritten() as i64));
+        card.insert("height", value(CardLength::Height.unwritten() as i64));
+        card.insert("content", value(content));
+        cards.push(card);
+        true
+    }
+
+    /// Takes a card off the desktop.
+    pub fn remove_card(&mut self, card: usize) -> bool {
+        let cards = self.document.get_mut("card");
+        let Some(cards) = cards.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        if card >= cards.len() {
+            return false;
+        }
+        cards.remove(card);
+        if cards.is_empty() {
+            self.document.remove("card");
+        }
+        true
+    }
+
+    /// Sets a key of a card, or takes it out with `None`.
+    pub fn set_card(&mut self, card: usize, key: &str, to: Option<Value>) -> bool {
+        let Some(card) = self.card(card) else {
+            return false;
+        };
+        match to {
+            Some(to) => {
+                card.insert(key, Item::Value(to));
+            }
+            None => {
+                card.remove(key);
+            }
+        }
+        true
+    }
+
+    /// Makes a length of a card a step longer, or shorter. Whether it
+    /// changed is returned.
+    pub fn step_card(&mut self, card: usize, length: CardLength, up: bool) -> bool {
+        let Some(card) = self.card(card) else {
+            return false;
+        };
+        let written = card.get(length.key()).and_then(|item| {
+            let whole = || item.as_integer().map(|number| number as f64);
+            item.as_float().or_else(whole)
+        });
+        let next = length.stepped(written.unwrap_or(length.unwritten()), up);
+        if written == Some(next as f64) {
+            return false;
+        }
+        card.insert(length.key(), value(next));
+        true
+    }
+
+    /// Appends the widget `widget` to a card.
+    pub fn add_to_card(&mut self, card: usize, widget: &str) -> bool {
+        let Some(widgets) = self.card_content(card) else {
+            return false;
+        };
+        widgets.push(widget);
+        widgets.fmt();
+        true
+    }
+
+    /// Takes the widget at `index` out of a card.
+    pub fn remove_from_card(&mut self, card: usize, index: usize) -> bool {
+        let Some(widgets) = self.card_content(card) else {
+            return false;
+        };
+        if index >= widgets.len() {
+            return false;
+        }
+        widgets.remove(index);
+        widgets.fmt();
+        true
+    }
+
+    /// Moves the widget at `index` of a card past the one below it, or
+    /// past the one above.
+    pub fn shift_in_card(&mut self, card: usize, index: usize, forward: bool) -> bool {
+        let Some(widgets) = self.card_content(card) else {
+            return false;
+        };
+        let to = if forward {
+            index + 1
+        } else {
+            index.wrapping_sub(1)
+        };
+        if index >= widgets.len() || to >= widgets.len() {
+            return false;
+        }
+        let widget = widgets.remove(index);
+        widgets.insert(to, widget);
         widgets.fmt();
         true
     }
@@ -452,6 +637,57 @@ center = ["windows"]
         assert!(!file.shift(place(0, Slot::End, 0), true));
         assert!(!file.shift(place(0, Slot::End, 7), true));
         assert!(!file.shift(place(5, Slot::End, 0), true));
+    }
+
+    #[test]
+    fn cards_are_added_changed_and_taken_away() {
+        use crate::desk::Corner;
+
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        assert!(!file.remove_card(0));
+        assert!(!file.step_card(0, CardLength::Width, true));
+        assert!(file.add_card());
+        assert!(file.add_card());
+        assert!(file.set_card(1, "corner", Some("bottom-left".into())));
+        assert!(file.set_card(1, "displays", Some("primary".into())));
+        assert!(file.step_card(1, CardLength::Width, true));
+        assert!(file.step_card(1, CardLength::Y, false));
+        assert!(file.add_to_card(1, "cpu"));
+        assert!(file.add_to_card(1, "memory"));
+        assert!(file.shift_in_card(1, 0, true));
+        assert!(!file.shift_in_card(1, 2, true));
+        assert!(!file.shift_in_card(1, 0, false));
+        assert!(file.remove_from_card(1, 2));
+        assert!(!file.remove_from_card(1, 2));
+        let config = file.config().expect("the cards are usable");
+        assert_eq!(config.surfaces.len(), 2);
+        assert_eq!(config.cards.len(), 2);
+        assert_eq!(config.cards[0].corner, Corner::TopRight);
+        let card = &config.cards[1];
+        assert_eq!(card.corner, Corner::BottomLeft);
+        assert_eq!(card.displays, crate::config::Displays::Primary);
+        assert_eq!(
+            (card.width, card.height, card.x, card.y),
+            (280., 150., 24., 12.)
+        );
+        let names: Vec<_> = card.content.iter().map(|spec| &spec.widget).collect();
+        assert_eq!(names, ["cpu", "clock"]);
+
+        assert!(file.set_card(1, "displays", None));
+        assert!(file.remove_card(0));
+        assert!(file.remove_card(0));
+        let config = file.config().expect("the layout stays usable");
+        assert!(config.cards.is_empty());
+        assert!(file.document.to_string().starts_with("# Mine."));
+        assert!(!file.document.to_string().contains("card"));
+    }
+
+    #[test]
+    fn a_length_of_a_card_stays_within_its_range() {
+        assert_eq!(CardLength::Width.stepped(259.6, true), 280);
+        assert_eq!(CardLength::Width.stepped(120., false), 120);
+        assert_eq!(CardLength::Height.stepped(1195., true), 1200);
+        assert_eq!(CardLength::X.stepped(6., false), 0);
     }
 
     #[test]

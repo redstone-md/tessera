@@ -15,8 +15,9 @@ use gpui::{
     img, px,
 };
 
-use crate::config::edit::{ConfigFile, LAYOUTS, Place, Slot};
+use crate::config::edit::{CardLength, ConfigFile, LAYOUTS, Place, Slot};
 use crate::config::{Config, Displays, SurfaceConfig, WidgetSpec, config_dir};
+use crate::desk::{CardConfig, Corner};
 use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
@@ -84,6 +85,7 @@ const MARKET_COLUMNS: i64 = 2;
 enum Section {
     General,
     Bars,
+    Desktop,
     Widgets,
     Dock,
     Tray,
@@ -93,9 +95,10 @@ enum Section {
 }
 
 impl Section {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::General,
         Self::Bars,
+        Self::Desktop,
         Self::Widgets,
         Self::Dock,
         Self::Tray,
@@ -108,6 +111,7 @@ impl Section {
         match self {
             Self::General => "General",
             Self::Bars => "Bars",
+            Self::Desktop => "Desktop",
             Self::Widgets => "Widgets",
             Self::Dock => "Dock",
             Self::Tray => "Tray",
@@ -121,6 +125,7 @@ impl Section {
         match self {
             Self::General => "\u{e713}",
             Self::Bars => "\u{e700}",
+            Self::Desktop => "\u{e7f4}",
             Self::Widgets => "\u{e71d}",
             Self::Dock => "\u{e7c4}",
             Self::Tray => "\u{e712}",
@@ -465,16 +470,39 @@ enum Control {
     /// Moves a widget toward the end of its surface, or toward the start.
     Shift(Place, bool),
     Remove(Place),
-    /// Opens or closes the list of widgets to add to a slot.
-    Adding(usize, Slot),
-    /// Adds the widget at this place of the list to the slot being added to.
+    /// Opens or closes the list of widgets to add to a slot or a card.
+    Adding(Holder),
+    /// Adds the widget at this place of the list to what is being added to.
     Add(usize),
+    /// Lays another card on the desktop.
+    NewCard,
+    /// Counts the cards of the desktop.
+    DropCard(usize),
+    /// Puts a card at this one of the corners.
+    CardCorner(usize, usize),
+    /// Shows a card on the primary display only, or on all of them.
+    CardDisplays(usize, bool),
+    /// Takes a length of a card a step up, or down.
+    CardStep(usize, CardLength, bool),
+    /// Moves the widget at this place of a card down, or up.
+    CardShift(usize, usize, bool),
+    /// Takes the widget at this place out of a card.
+    CardTake(usize, usize),
     /// Counts the pinned applications.
     Unpin(usize),
     /// Counts the running applications that are offered for pinning.
     Pin(usize),
     /// Counts the theme files; `None` is the built-in theme.
     Theme(Option<usize>),
+}
+
+/// What widgets are added to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Holder {
+    /// A slot of the surface at this place.
+    Slot(usize, Slot),
+    /// The card at this place.
+    Card(usize),
 }
 
 /// How a control looks.
@@ -589,7 +617,7 @@ struct Settings {
     running: Vec<PathBuf>,
     themes: Vec<String>,
     /// The slot whose list of widgets to add is open, kept while it closes.
-    adding: Option<(usize, Slot)>,
+    adding: Option<Holder>,
     /// 1 while that list is open, 0 while it is closed.
     add_list: Spring,
     interactions: HashMap<Control, Interaction>,
@@ -788,26 +816,56 @@ impl Settings {
             }
             Control::Shift(place, forward) => self.change(cx, |file| file.shift(place, forward)),
             Control::Remove(place) => self.change(cx, |file| file.remove(place)),
-            Control::Adding(surface, slot) => {
+            Control::Adding(holder) => {
                 let open = self.add_list.target() > 0.;
-                if open && self.adding == Some((surface, slot)) {
+                if open && self.adding == Some(holder) {
                     self.add_list.animate_to(0.);
                 } else {
-                    if self.adding != Some((surface, slot)) {
+                    if self.adding != Some(holder) {
                         self.add_list.jump_to(0.);
                     }
-                    self.adding = Some((surface, slot));
+                    self.adding = Some(holder);
                     self.add_list.animate_to(1.);
                 }
                 cx.notify();
             }
             Control::Add(index) => {
-                let (Some((surface, slot)), Some(widget)) =
+                let (Some(holder), Some(widget)) =
                     (self.adding, self.available.get(index).cloned())
                 else {
                     return;
                 };
-                self.change(cx, |file| file.add(surface, slot, &widget));
+                self.change(cx, |file| match holder {
+                    Holder::Slot(surface, slot) => file.add(surface, slot, &widget),
+                    Holder::Card(card) => file.add_to_card(card, &widget),
+                });
+            }
+            Control::NewCard => self.change(cx, ConfigFile::add_card),
+            Control::DropCard(card) => {
+                // The cards after it are counted anew.
+                if matches!(self.adding, Some(Holder::Card(_))) {
+                    self.adding = None;
+                }
+                self.change(cx, |file| file.remove_card(card));
+            }
+            Control::CardCorner(card, corner) => {
+                if let Some(corner) = Corner::ALL.get(corner) {
+                    let name = corner.name();
+                    self.change(cx, |file| file.set_card(card, "corner", Some(name.into())));
+                }
+            }
+            Control::CardDisplays(card, primary) => {
+                let displays = primary.then(|| "primary".into());
+                self.change(cx, |file| file.set_card(card, "displays", displays));
+            }
+            Control::CardStep(card, length, up) => {
+                self.change(cx, |file| file.step_card(card, length, up));
+            }
+            Control::CardShift(card, index, forward) => {
+                self.change(cx, |file| file.shift_in_card(card, index, forward));
+            }
+            Control::CardTake(card, index) => {
+                self.change(cx, |file| file.remove_from_card(card, index));
             }
             Control::Unpin(index) => {
                 let Some(mut pins) = self.config.as_ref().and_then(Config::pinned) else {
@@ -890,20 +948,22 @@ impl Settings {
         .into_any_element()
     }
 
-    /// A widget of the layout: its name, and buttons to move and remove it.
+    /// A widget of the layout: its name, and buttons that move it back,
+    /// move it forward and remove it, which is what `controls` do.
     fn widget_chip(
         &mut self,
-        place: Place,
+        controls: [Control; 3],
         spec: &WidgetSpec,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let known = self.available.contains(&spec.widget);
+        let [back, forward, remove] = controls;
         let buttons = [
-            (Control::Shift(place, false), ICON_BACK),
-            (Control::Shift(place, true), ICON_FORWARD),
-            (Control::Remove(place), ICON_REMOVE),
+            (back, ICON_BACK),
+            (forward, ICON_FORWARD),
+            (remove, ICON_REMOVE),
         ]
         .map(|(control, glyph)| self.control(control, Face::Glyph(glyph), window, cx));
         div()
@@ -940,7 +1000,6 @@ impl Settings {
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
-        let add_list = self.add_list.value(window);
         let mut section = card(&theme, surface_title(surface, language));
         for slot in Slot::ALL {
             let specs = match slot {
@@ -948,7 +1007,7 @@ impl Settings {
                 Slot::Center => &surface.center,
                 Slot::End => &surface.end,
             };
-            let adding = self.adding == Some((index, slot));
+            let holder = Holder::Slot(index, slot);
             let mut chips = Vec::new();
             for (at, spec) in specs.iter().enumerate() {
                 let place = Place {
@@ -956,17 +1015,14 @@ impl Settings {
                     slot,
                     index: at,
                 };
-                chips.push(self.widget_chip(place, spec, window, cx));
+                let controls = [
+                    Control::Shift(place, false),
+                    Control::Shift(place, true),
+                    Control::Remove(place),
+                ];
+                chips.push(self.widget_chip(controls, spec, window, cx));
             }
-            chips.push(self.control(
-                Control::Adding(index, slot),
-                Face::Chip {
-                    text: language.say("Add").into(),
-                    selected: adding && self.add_list.target() > 0.,
-                },
-                window,
-                cx,
-            ));
+            chips.push(self.add_chip(holder, window, cx));
             section = section.child(
                 div()
                     .flex()
@@ -984,26 +1040,179 @@ impl Settings {
                     )
                     .child(wrap(&theme).flex_1().children(chips)),
             );
-            if adding && add_list > 0. {
-                let mut offers = Vec::new();
-                for at in 0..self.available.len() {
-                    let face = Face::Chip {
-                        text: self.available[at].clone().into(),
-                        selected: true,
-                    };
-                    offers.push(self.control(Control::Add(at), face, window, cx));
-                }
-                section = section.child(
-                    div()
-                        .pl(SLOT_LABEL_WIDTH + theme.spacing.small)
-                        .max_h(ADD_LIST_HEIGHT * add_list.max(0.))
-                        .opacity(add_list.clamp(0., 1.))
-                        .overflow_hidden()
-                        .child(wrap(&theme).children(offers)),
-                );
-            }
+            let offers = self.offers(holder, window, cx);
+            section = section
+                .children(offers.map(|offers| offers.pl(SLOT_LABEL_WIDTH + theme.spacing.small)));
         }
         section.into_any_element()
+    }
+
+    /// The chip that opens the list of widgets to add to `holder`.
+    fn add_chip(
+        &mut self,
+        holder: Holder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let face = Face::Chip {
+            text: Language::of(cx).say("Add").into(),
+            selected: self.adding == Some(holder) && self.add_list.target() > 0.,
+        };
+        self.control(Control::Adding(holder), face, window, cx)
+    }
+
+    /// The list of widgets to add to `holder`, while it is open there.
+    fn offers(
+        &mut self,
+        holder: Holder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let theme = *cx.global::<Theme>();
+        let add_list = self.add_list.value(window);
+        if self.adding != Some(holder) || add_list <= 0. {
+            return None;
+        }
+        let mut offers = Vec::new();
+        for at in 0..self.available.len() {
+            let face = Face::Chip {
+                text: self.available[at].clone().into(),
+                selected: true,
+            };
+            offers.push(self.control(Control::Add(at), face, window, cx));
+        }
+        Some(
+            div()
+                .max_h(ADD_LIST_HEIGHT * add_list)
+                .opacity(add_list.clamp(0., 1.))
+                .overflow_hidden()
+                .child(wrap(&theme).children(offers)),
+        )
+    }
+
+    /// What the cards of the desktop are, and the button that lays
+    /// another one.
+    fn desk(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let about = "Panels of widgets that lie on the desktop, below every window.";
+        let face = Face::Chip {
+            text: language.say("Add a card").into(),
+            selected: true,
+        };
+        let add = self.control(Control::NewCard, face, window, cx);
+        card(&theme, language.say("Cards"))
+            .child(note(&theme, language.say(about)))
+            .child(div().flex().child(add))
+            .into_any_element()
+    }
+
+    /// A card of the desktop: where it is, how large, and its widgets.
+    fn desk_card(
+        &mut self,
+        index: usize,
+        config: &CardConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let line = |title: &'static str, chooser: AnyElement| {
+            div()
+                .min_h(CHIP_HEIGHT)
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(theme.spacing.small)
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.colors.on_surface_variant)
+                        .child(language.say(title)),
+                )
+                .child(chooser)
+        };
+        let title = format!("{} {}", language.say("Card"), index + 1);
+        let mut section = card(&theme, title);
+
+        let mut corners = Vec::new();
+        for (at, corner) in Corner::ALL.into_iter().enumerate() {
+            let face = Face::Chip {
+                text: language.say(corner.label()).into(),
+                selected: config.corner == corner,
+            };
+            corners.push(self.control(Control::CardCorner(index, at), face, window, cx));
+        }
+        let corners = wrap(&theme).justify_end().children(corners);
+        section = section.child(line("Place", corners.into_any_element()));
+
+        let mut displays = Vec::new();
+        for (label, primary) in [("All displays", false), ("Primary display", true)] {
+            let face = Face::Chip {
+                text: language.say(label).into(),
+                selected: (config.displays == Displays::Primary) == primary,
+            };
+            displays.push(self.control(Control::CardDisplays(index, primary), face, window, cx));
+        }
+        let displays = wrap(&theme).justify_end().children(displays);
+        section = section.child(line("Displays", displays.into_any_element()));
+
+        for length in CardLength::ALL {
+            let now = match length {
+                CardLength::Width => config.width,
+                CardLength::Height => config.height,
+                CardLength::X => config.x,
+                CardLength::Y => config.y,
+            };
+            let [less, more] = [(false, ICON_LESS), (true, ICON_MORE)].map(|(up, glyph)| {
+                let control = Control::CardStep(index, length, up);
+                self.control(control, Face::Glyph(glyph), window, cx)
+            });
+            let stepper = div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(theme.spacing.tiny)
+                .child(less)
+                .child(
+                    div()
+                        .w(COUNT_WIDTH)
+                        .flex()
+                        .justify_center()
+                        .child(format!("{}", now.round() as i64)),
+                )
+                .child(more);
+            section = section.child(line(length.label(), stepper.into_any_element()));
+        }
+
+        let holder = Holder::Card(index);
+        let mut chips = Vec::new();
+        for (at, spec) in config.content.iter().enumerate() {
+            let controls = [
+                Control::CardShift(index, at, false),
+                Control::CardShift(index, at, true),
+                Control::CardTake(index, at),
+            ];
+            chips.push(self.widget_chip(controls, spec, window, cx));
+        }
+        chips.push(self.add_chip(holder, window, cx));
+        section = section
+            .child(
+                div()
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(language.say("Widgets of the card")),
+            )
+            .child(wrap(&theme).children(chips))
+            .children(self.offers(holder, window, cx));
+
+        let face = Face::Chip {
+            text: language.say("Remove the card").into(),
+            selected: false,
+        };
+        let remove = self.control(Control::DropCard(index), face, window, cx);
+        section
+            .child(div().flex().justify_end().child(remove))
+            .into_any_element()
     }
 
     fn pins(&mut self, pins: &[String], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1418,6 +1627,12 @@ impl Settings {
             Section::Bars => {
                 for (index, surface) in config.surfaces.iter().enumerate() {
                     wide.push(self.surface(index, surface, window, cx));
+                }
+            }
+            Section::Desktop => {
+                wide.push(self.desk(window, cx));
+                for (index, card) in config.cards.iter().enumerate() {
+                    wide.push(self.desk_card(index, card, window, cx));
                 }
             }
             Section::Dock => wide.push(match config.pinned() {

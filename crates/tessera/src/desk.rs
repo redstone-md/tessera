@@ -6,8 +6,8 @@
 use std::time::Duration;
 
 use gpui::{
-    AnyView, App, AppContext, AsyncApp, Bounds, Context, IntoElement, ParentElement, Render,
-    Window, WindowHandle, px, size,
+    AnyView, App, AppContext, AsyncApp, Bounds, Context, IntoElement, ParentElement, Pixels,
+    Render, Window, WindowHandle, WindowOptions, px, size,
 };
 use serde::Deserialize;
 
@@ -33,6 +33,38 @@ pub enum Corner {
     BottomLeft,
     BottomRight,
     Center,
+}
+
+impl Corner {
+    pub const ALL: [Self; 5] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+        Self::Center,
+    ];
+
+    /// How the configuration writes the corner.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::TopLeft => "top-left",
+            Self::TopRight => "top-right",
+            Self::BottomLeft => "bottom-left",
+            Self::BottomRight => "bottom-right",
+            Self::Center => "center",
+        }
+    }
+
+    /// What the settings call the corner.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+            Self::Center => "In the center",
+        }
+    }
 }
 
 /// A panel of widgets on the desktop.
@@ -115,10 +147,20 @@ impl Cards {
                     origin: display.bounds().origin,
                     size: size(px(config.width), px(config.height)),
                 };
-                let options = floating_window(rough, Some(display.id()), false);
+                // It is shown once it is a card, without taking the
+                // keyboard. A window that is not shown is not put at its
+                // bounds either, so the card does that itself.
+                let options = WindowOptions {
+                    show: false,
+                    ..floating_window(rough, Some(display.id()), false)
+                };
                 let opened = cx.open_window(options, |window, cx| {
+                    let scale = window.scale_factor();
                     let native = NativeSurface::of(window)
-                        .and_then(|native| native.adopt_as_card().map(|()| native))
+                        .and_then(|native| {
+                            native.place(physical(rough, scale))?;
+                            native.adopt_as_card().map(|()| native)
+                        })
                         .inspect_err(|error| report!("a card is not on the desktop: {error:#}"))
                         .ok();
                     let key = native.map(NativeSurface::display);
@@ -127,7 +169,6 @@ impl Cards {
                         .iter()
                         .filter_map(|spec| WidgetRegistry::build(spec, key, cx))
                         .collect();
-                    let scale = window.scale_factor();
                     cx.new(|cx| CardView::new(config.clone(), native, scale, content, cx))
                 });
                 match opened {
@@ -136,6 +177,19 @@ impl Cards {
                 }
             }
         }
+    }
+}
+
+/// The bounds of a window in physical pixels, where a logical pixel is
+/// `scale` of them.
+fn physical(bounds: Bounds<Pixels>, scale: f32) -> ScreenRect {
+    let physical = |length: Pixels| (f32::from(length) * scale).round() as i32;
+    let (left, top) = (physical(bounds.origin.x), physical(bounds.origin.y));
+    ScreenRect {
+        left,
+        top,
+        right: left + physical(bounds.size.width),
+        bottom: top + physical(bounds.size.height),
     }
 }
 
@@ -246,6 +300,23 @@ mod tests {
     fn a_card_is_measured_in_the_pixels_of_its_display() {
         let frame = card(Corner::TopLeft).frame(ROOM, 1.5);
         assert_eq!(sides(frame), (1018, 76, 1504, 412));
+    }
+
+    #[test]
+    fn the_bounds_of_a_window_are_measured_in_physical_pixels() {
+        let bounds = Bounds {
+            origin: gpui::point(px(-100.), px(20.)),
+            size: size(px(260.), px(150.)),
+        };
+        assert_eq!(sides(physical(bounds, 1.5)), (-150, 30, 240, 255));
+    }
+
+    #[test]
+    fn a_corner_is_read_by_the_name_it_is_written_with() {
+        for corner in Corner::ALL {
+            let text = format!("corner = \"{}\"\nwidth = 1\nheight = 1", corner.name());
+            assert_eq!(toml::from_str::<CardConfig>(&text).unwrap().corner, corner);
+        }
     }
 
     #[test]
