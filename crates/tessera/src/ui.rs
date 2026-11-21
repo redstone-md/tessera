@@ -6,8 +6,8 @@
 use std::f32::consts::TAU;
 
 use gpui::{
-    Bounds, Div, Hsla, IntoElement, ParentElement, PathBuilder, Pixels, SharedString, Styled,
-    Window, canvas, div, point, px,
+    Bounds, Canvas, Div, Hsla, IntoElement, ParentElement, PathBuilder, Pixels, SharedString,
+    Styled, Window, canvas, div, point, px,
 };
 
 use crate::motion::{InteractionState, mix};
@@ -54,15 +54,22 @@ pub fn icon(theme: &Theme, glyph: impl Into<SharedString>) -> Div {
 /// A line that is wavy up to `level`, from 0 to 1, and straight after it.
 /// The wave travels as the level changes.
 pub fn wave_meter(theme: &Theme, level: f32) -> impl IntoElement + use<> {
+    wave_line(theme, level).w(theme.meter.width).flex_none()
+}
+
+/// The line of [`wave_meter`], as wide as the place it is put in.
+pub fn wave_bar(theme: &Theme, level: f32) -> impl IntoElement + use<> {
+    wave_line(theme, level).w_full()
+}
+
+fn wave_line(theme: &Theme, level: f32) -> Canvas<()> {
     let theme = *theme;
     let metrics = theme.meter;
     canvas(
         |_, _, _| {},
         move |bounds, (), window, _| paint_wave(bounds, level.clamp(0., 1.), &theme, window),
     )
-    .w(metrics.width)
     .h(metrics.amplitude * 2. + metrics.stroke)
-    .flex_none()
 }
 
 fn paint_wave(bounds: Bounds<Pixels>, level: f32, theme: &Theme, window: &mut Window) {

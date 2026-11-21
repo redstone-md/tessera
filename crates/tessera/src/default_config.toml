@@ -129,7 +129,7 @@ content = ["settings"]
 [[popup]]
 name = "media"
 width = 320
-height = 132
+height = 164
 content = ["media-controls"]
 
 [[popup]]

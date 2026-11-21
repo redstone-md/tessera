@@ -24,7 +24,7 @@ pub use accent::{accent_color, light_mode};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
-pub use media::{Media, MediaCommand, NowPlaying};
+pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use network::{Link, Network};
 pub use notifications::{Notification, Notifications};
 pub use packaged::{app_id_in, app_path};

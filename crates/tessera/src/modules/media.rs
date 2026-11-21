@@ -19,9 +19,9 @@ use crate::icons::{Icon, image_of_bytes};
 
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{Media, MediaCommand, NowPlaying};
+use crate::platform::{Media, MediaCommand, NowPlaying, Position};
 use crate::theme::Theme;
-use crate::ui::{icon, pill, state_layer};
+use crate::ui::{icon, pill, state_layer, wave_bar};
 
 /// How often it is read what is playing.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -34,6 +34,9 @@ const COVER_READS: u8 = 4;
 /// enough for 200% scaling.
 const COVER_SIZE: Pixels = px(44.);
 const COVER_SOURCE: u32 = 96;
+
+/// The size of the times beside the line that shows the position.
+const TIME_SIZE: Pixels = px(11.);
 
 /// How wide the readout gets unless the layout says otherwise.
 const READOUT_WIDTH: f32 = 260.;
@@ -319,6 +322,8 @@ struct Controls {
     /// The picture shown, and how much of it: it fades in when it changes.
     cover: Icon,
     cover_presence: Spring,
+    /// How far into the piece it is, from 0 to 1.
+    position: Spring,
     buttons: [Interaction; 3],
     _changes: Subscription,
 }
@@ -334,6 +339,7 @@ impl Controls {
             playing: Spring::new(motion.spatial_fast, if playing { 1. } else { 0. }),
             cover,
             cover_presence: Spring::new(motion.effects, 1.),
+            position: Spring::new(motion.effects, 0.),
             buttons: [Interaction::new(&motion); 3],
         }
     }
@@ -347,6 +353,28 @@ impl Controls {
             self.cover_presence.animate_to(1.);
         }
         cx.notify();
+    }
+
+    /// How far into the piece it is: the times and a line between them.
+    fn timeline(&mut self, position: Position, theme: &Theme, window: &mut Window) -> gpui::Div {
+        let level = position.elapsed as f32 / position.length as f32;
+        self.position.animate_to(level);
+        let level = self.position.value(window).clamp(0., 1.);
+        let time = |seconds| {
+            div()
+                .flex_none()
+                .text_size(TIME_SIZE)
+                .text_color(theme.colors.on_surface_variant)
+                .child(SharedString::from(clock_time(seconds)))
+        };
+        div()
+            .pt(theme.spacing.small)
+            .flex()
+            .items_center()
+            .gap(theme.spacing.small)
+            .child(time(position.elapsed))
+            .child(div().flex_1().child(wave_bar(theme, level)))
+            .child(time(position.length))
     }
 
     /// The picture, or a note in its place while there is none.
@@ -509,6 +537,10 @@ impl Render for Controls {
                     .child(self.picture(&theme, window))
                     .child(names),
             )
+            .children(
+                now.position
+                    .map(|position| self.timeline(position, &theme, window)),
+            )
             .child(
                 div()
                     .pt(theme.spacing.small)
@@ -518,6 +550,17 @@ impl Render for Controls {
                     .gap(theme.spacing.small)
                     .children(buttons),
             )
+    }
+}
+
+/// `seconds` as a player shows them: minutes and seconds, with hours in
+/// front once there are any.
+fn clock_time(seconds: u32) -> String {
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
     }
 }
 
@@ -542,7 +585,15 @@ mod tests {
             can_toggle: true,
             can_previous: true,
             can_next: true,
+            position: None,
         }
+    }
+
+    #[test]
+    fn a_time_shows_hours_only_when_there_are_any() {
+        assert_eq!(clock_time(0), "0:00");
+        assert_eq!(clock_time(65), "1:05");
+        assert_eq!(clock_time(3600 + 125), "1:02:05");
     }
 
     #[test]
