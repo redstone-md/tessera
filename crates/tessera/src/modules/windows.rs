@@ -21,7 +21,8 @@ use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{
-    AppWindow, AppWindowId, DisplayKey, Shortcut, WindowEvents, app_id_in, app_path,
+    AppWindow, AppWindowId, DisplayKey, RecentDocument, Shortcut, WindowEvents, app_id_in,
+    app_id_of_program, app_path,
 };
 use crate::popup::PopupAnchor;
 use crate::preview::Previews;
@@ -44,7 +45,12 @@ const HOVER_GROWTH: f32 = 0.12;
 /// How much a pressed icon shrinks, as a share of its size.
 const PRESS_SHRINK: f32 = 0.16;
 
+/// How many of the documents an application opened lately its menu
+/// offers.
+const RECENT_SHOWN: u32 = 5;
+
 const ICON_CLOSE: &str = "\u{e8bb}";
+const ICON_DOCUMENT: &str = "\u{e8a5}";
 const ICON_NEW_WINDOW: &str = "\u{e78b}";
 const ICON_PIN: &str = "\u{e718}";
 const ICON_UNPIN: &str = "\u{e77a}";
@@ -196,6 +202,43 @@ fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
     }
 }
 
+/// The documents the application of `item` opened lately, each to be
+/// opened again by it.
+fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
+    let window = item.window.as_ref();
+    let pin = item.pin.as_ref();
+    let packaged = window
+        .and_then(|window| window.app_id.clone())
+        .or_else(|| pin.and_then(|pin| pin.app.clone()));
+    // A packaged application has no program file to hand a document to.
+    let program = match packaged {
+        Some(_) => None,
+        None => window
+            .and_then(|window| window.executable.clone())
+            .or_else(|| pin.and_then(|pin| pin.program.clone())),
+    };
+    let app = packaged
+        .or_else(|| window.and_then(|window| window.id.stated_app_id()))
+        .or_else(|| program.as_deref().map(app_id_of_program));
+    let Some(app) = app else {
+        return Vec::new();
+    };
+    let documents = RecentDocument::of_app(&app, RECENT_SHOWN);
+    let entries = documents.into_iter().map(|document| {
+        let program = program.clone();
+        let label = document.name.clone();
+        MenuEntry::new(ICON_DOCUMENT, label, move |_| match &program {
+            Some(program) => document.open_with(program),
+            None => Shortcut {
+                name: document.name.clone(),
+                path: document.path.clone(),
+            }
+            .launch(),
+        })
+    });
+    entries.collect()
+}
+
 /// One button and the motion it is in.
 struct DockItem {
     /// Identifies the button for as long as it is shown.
@@ -310,14 +353,15 @@ impl WindowList {
         }
     }
 
-    /// What the menu of the button `key` offers: closing its window,
-    /// another window of its program, and pinning or unpinning it.
+    /// What the menu of the button `key` offers: the documents its
+    /// application opened lately, another window of its program, pinning
+    /// or unpinning it, and closing its window.
     fn menu_entries(&self, key: usize) -> Vec<MenuEntry> {
         let shown = |item: &&DockItem| item.key == key && !item.leaving;
         let Some(item) = self.items.iter().find(shown) else {
             return Vec::new();
         };
-        let mut entries = Vec::new();
+        let mut entries = recent_entries(item);
         let executable = item.window.as_ref().and_then(AppWindow::program);
         let launched = match (&item.pin, &executable) {
             (Some(pin), _) => Some(pin.shortcut.clone()),

@@ -56,7 +56,7 @@ fn is_packaged(id: &str) -> bool {
 }
 
 /// The string Windows allocated at `text`, which is freed.
-fn take(text: PWSTR) -> Option<String> {
+pub(super) fn take(text: PWSTR) -> Option<String> {
     if text.is_null() {
         return None;
     }
