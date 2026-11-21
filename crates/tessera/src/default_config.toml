@@ -63,7 +63,8 @@
 #               connected, and the charge of those that report one
 #   "volume"    the output volume, as an icon and a percentage
 #   "workspaces"  a numbered button for each virtual desktop of Windows,
-#               the shown one standing out; a click goes to that desktop
+#               or for each workspace of [workspaces], the shown one
+#               standing out; a click goes there
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume
