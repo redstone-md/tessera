@@ -13,7 +13,7 @@ use gpui::{Global, RenderImage};
 use image::imageops::FilterType;
 
 use crate::config::config_dir;
-use crate::platform::IconPixels;
+use crate::platform::{IconPixels, Shortcut};
 
 /// Pixel size icons are prepared at; large enough for 200% scaling.
 const SOURCE_SIZE: u32 = 64;
@@ -25,7 +25,8 @@ pub type Icon = Option<Arc<RenderImage>>;
 pub struct AppIcons {
     /// Image files by lowercase executable file name.
     replacements: HashMap<String, PathBuf>,
-    /// Icons by executable, including executables known to have none.
+    /// Icons by the file they were asked for, including files known to
+    /// have none.
     cache: RefCell<HashMap<PathBuf, Icon>>,
 }
 
@@ -48,16 +49,34 @@ impl AppIcons {
     /// The icon to show for `executable`: the configured replacement, or
     /// else the one embedded in the file.
     pub fn of_executable(&self, executable: &Path) -> Icon {
-        if let Some(icon) = self.cache.borrow().get(executable) {
+        self.cached(executable, || {
+            self.replacement(executable)
+                .or_else(|| embedded(executable, 0))
+        })
+    }
+
+    /// The icon to show for `shortcut`: the replacement configured for the
+    /// file it opens, or else the icon it asks for, or else that file's.
+    pub fn of_shortcut(&self, shortcut: &Shortcut) -> Icon {
+        self.cached(&shortcut.path, || {
+            let link = shortcut.link();
+            let target = link.target.as_deref();
+            target
+                .and_then(|target| self.replacement(target))
+                .or_else(|| link.icon.and_then(|(file, index)| embedded(&file, index)))
+                .or_else(|| target.and_then(|target| embedded(target, 0)))
+        })
+    }
+
+    /// The icon remembered for `file`, found with `find` the first time.
+    fn cached(&self, file: &Path, find: impl FnOnce() -> Icon) -> Icon {
+        if let Some(icon) = self.cache.borrow().get(file) {
             return icon.clone();
         }
-        let icon = self.replacement(executable).or_else(|| {
-            let pixels = IconPixels::of_executable(executable, SOURCE_SIZE)?;
-            render_image(pixels.width, pixels.height, pixels.bgra)
-        });
+        let icon = find();
         self.cache
             .borrow_mut()
-            .insert(executable.to_owned(), icon.clone());
+            .insert(file.to_owned(), icon.clone());
         icon
     }
 
@@ -87,6 +106,12 @@ fn load_image(path: &Path) -> anyhow::Result<Icon> {
     }
     let (width, height) = pixels.dimensions();
     Ok(render_image(width, height, pixels.into_raw()))
+}
+
+/// The icon at `index` inside `file`.
+fn embedded(file: &Path, index: i32) -> Icon {
+    let pixels = IconPixels::of_file(file, index, SOURCE_SIZE)?;
+    render_image(pixels.width, pixels.height, pixels.bgra)
 }
 
 fn render_image(width: u32, height: u32, bgra: Vec<u8>) -> Icon {

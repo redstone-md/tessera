@@ -163,6 +163,7 @@ mod tests {
             specs.iter().map(|spec| spec.widget.clone()).collect()
         };
         assert_eq!(names(&bar.center), ["clock"]);
+        assert_eq!(names(&bar.start), ["label"]);
         assert_eq!(names(&bar.end), ["volume", "quit"]);
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);

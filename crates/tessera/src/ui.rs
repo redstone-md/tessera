@@ -3,7 +3,7 @@
 
 //! Building blocks shared by shell surfaces.
 
-use gpui::{Div, Hsla, ParentElement, Styled, div};
+use gpui::{Div, Hsla, ParentElement, SharedString, Styled, div};
 
 use crate::motion::{InteractionState, mix};
 use crate::theme::Theme;
@@ -23,11 +23,11 @@ pub fn pill(theme: &Theme) -> Div {
 }
 
 /// An icon: `glyph` is a character of the theme's icon font.
-pub fn icon(theme: &Theme, glyph: &'static str) -> Div {
+pub fn icon(theme: &Theme, glyph: impl Into<SharedString>) -> Div {
     div()
         .font_family(theme.typography.icon_family)
         .text_size(theme.typography.icon_size)
-        .child(glyph)
+        .child(glyph.into())
 }
 
 /// How much of the content color covers a hovered control.

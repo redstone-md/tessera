@@ -5,6 +5,8 @@
 
 mod calendar;
 mod clock;
+mod label;
+mod launcher;
 mod session;
 mod sound;
 mod windows;
@@ -17,6 +19,8 @@ pub fn builtin() -> Vec<Box<dyn Module>> {
     vec![
         Box::new(clock::ClockModule),
         Box::new(calendar::CalendarModule),
+        Box::new(label::LabelModule),
+        Box::new(launcher::LauncherModule),
         Box::new(session::SessionModule),
         Box::new(sound::SoundModule),
         Box::new(windows::WindowsModule),

@@ -23,11 +23,13 @@ pub struct IconPixels {
 }
 
 impl IconPixels {
-    /// Extracts the first icon of `executable`, scaled to `size` pixels.
-    /// Returns `None` when the file has no icon or cannot be read.
-    pub fn of_executable(executable: &Path, size: u32) -> Option<Self> {
+    /// Extracts an icon of `file`, an executable, a library or an icon
+    /// file, scaled to `size` pixels. `index` counts the icons in the file
+    /// from zero; a negative one is a resource identifier. Returns `None`
+    /// when the file has no such icon or cannot be read.
+    pub fn of_file(file: &Path, index: i32, size: u32) -> Option<Self> {
         let mut path = [0u16; 260];
-        let wide: Vec<u16> = executable.as_os_str().encode_wide().collect();
+        let wide: Vec<u16> = file.as_os_str().encode_wide().collect();
         if wide.len() >= path.len() {
             return None;
         }
@@ -39,7 +41,7 @@ impl IconPixels {
         let extracted = unsafe {
             PrivateExtractIconsW(
                 &path,
-                0,
+                index,
                 size as i32,
                 size as i32,
                 Some(&mut icons),

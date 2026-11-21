@@ -8,11 +8,13 @@
 mod app_windows;
 mod audio;
 mod icon;
+mod shortcuts;
 mod taskbar;
 
 pub use app_windows::{AppWindow, AppWindowId};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
+pub use shortcuts::Shortcut;
 pub use taskbar::Taskbar;
 
 use std::ffi::c_void;
@@ -30,8 +32,9 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos,
-    WINDOW_EX_STYLE, WM_APP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, WINDOW_EX_STYLE, WM_APP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// Message the system posts to a window that reserves a screen edge.
@@ -175,6 +178,16 @@ impl NativeSurface {
             )
         }
         .context("the window could not be moved")
+    }
+
+    /// Asks for keyboard input to go to the window. The system grants that
+    /// to the process that received the last input, as it has after a
+    /// click on one of its windows.
+    pub fn activate(self) {
+        // SAFETY: `hwnd` belongs to a live window owned by this thread.
+        unsafe {
+            let _ = SetForegroundWindow(self.hwnd);
+        }
     }
 
     /// Removes the caption and frame, adds `extended_style` and raises the

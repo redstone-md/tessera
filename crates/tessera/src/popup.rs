@@ -72,11 +72,11 @@ impl Popups {
     /// Opens the popup `name` at `anchor`, or closes it when it is open.
     /// Any other open popup closes.
     pub fn toggle(name: &str, anchor: PopupAnchor, cx: &mut App) {
-        if let Some((open, window)) = cx.global_mut::<Self>().open.take() {
-            window.update(cx, |view, _, cx| view.close(cx)).ok();
-            if open == name {
-                return;
-            }
+        let open = cx.global::<Self>().open.as_ref();
+        let reopened = open.is_some_and(|(open, _)| open == name);
+        Self::close(cx);
+        if reopened {
+            return;
         }
         let this = cx.global::<Self>();
         if let Some((closed, at)) = &this.closed
@@ -92,6 +92,13 @@ impl Popups {
         match Self::open(&config, &anchor, cx) {
             Ok(window) => cx.global_mut::<Self>().open = Some((config.name, window)),
             Err(error) => eprintln!("tessera: the popup `{name}` did not open: {error:#}"),
+        }
+    }
+
+    /// Closes the open popup, if there is one.
+    pub fn close(cx: &mut App) {
+        if let Some((_, window)) = cx.global_mut::<Self>().open.take() {
+            window.update(cx, |view, _, cx| view.close(cx)).ok();
         }
     }
 
@@ -128,7 +135,9 @@ impl Popups {
         cx.open_window(options, |window, cx| {
             let adopted = NativeSurface::of(window).and_then(|native| {
                 native.adopt_as_popup()?;
-                native.place(frame)
+                native.place(frame)?;
+                native.activate();
+                Ok(())
             });
             if let Err(error) = adopted {
                 eprintln!("tessera: a popup is not where it belongs: {error:#}");

@@ -100,6 +100,14 @@ pub struct CalendarMetrics {
     pub cell_size: Pixels,
 }
 
+/// Sizes of the application launcher.
+#[derive(Clone, Copy, Debug)]
+pub struct LauncherMetrics {
+    pub field_height: Pixels,
+    pub row_height: Pixels,
+    pub icon_size: Pixels,
+}
+
 /// The appearance shared by every shell surface.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -112,6 +120,7 @@ pub struct Theme {
     pub dock: DockMetrics,
     pub calendar: CalendarMetrics,
     pub slider: SliderMetrics,
+    pub launcher: LauncherMetrics,
 }
 
 impl Default for Theme {
@@ -175,6 +184,11 @@ impl Default for Theme {
                 handle_gap: px(6.),
                 inner_radius: px(2.),
                 value_width: px(44.),
+            },
+            launcher: LauncherMetrics {
+                field_height: px(44.),
+                row_height: px(44.),
+                icon_size: px(28.),
             },
         }
     }

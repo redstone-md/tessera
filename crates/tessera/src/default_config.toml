@@ -21,10 +21,15 @@
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "windows"   a button for each open window of the display
 #   "quit"      closes Tessera
+#   "label"     fixed content; options text and icon, a character of the
+#               Segoe Fluent Icons font such as "\uE71D"
+#   "launcher"  a search field over the applications of the Start menu;
+#               option placeholder, the hint in the empty field
 
 [[surface]]
 edge = "top"
 thickness = 48
+start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }]
 center = [{ widget = "clock", popup = "calendar" }]
 end = [{ widget = "volume", popup = "sound" }, "quit"]
 
@@ -37,6 +42,12 @@ center = ["windows"]
 #   name           what widgets refer to
 #   width, height  size in logical pixels
 #   content        widgets, stacked from the top
+
+[[popup]]
+name = "launcher"
+width = 420
+height = 520
+content = ["launcher"]
 
 [[popup]]
 name = "calendar"
