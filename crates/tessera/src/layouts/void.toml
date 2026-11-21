@@ -1,0 +1,61 @@
+[[surface]]
+edge = "top"
+thickness = 36
+start = [{ widget = "cpu", style = "text" }, { widget = "memory", style = "text" }, { widget = "media", popup = "media" }]
+center = ["workspaces", { widget = "clock", popup = "calendar" }]
+end = ["problems", "tray", "keyboard", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
+
+[[surface]]
+edge = "bottom"
+thickness = 64
+center = ["windows", { widget = "label", icon = "", popup = "launcher" }]
+
+# Each [[popup]] is a floating panel that opens next to the surface.
+#   name           what widgets refer to
+#   width, height  size in logical pixels
+#   place          "surface" (default): at the widget that opened it;
+#                  "center": in the middle of the display, the rest dimmed
+#   content        widgets, stacked from the top
+
+[[popup]]
+name = "launcher"
+width = 420
+height = 640
+content = ["apps", "launcher", "power"]
+
+[[popup]]
+name = "calendar"
+width = 300
+height = 720
+content = ["calendar", "notifications"]
+
+[[popup]]
+name = "settings"
+place = "center"
+width = 1000
+height = 700
+content = ["settings"]
+
+[[popup]]
+name = "media"
+width = 320
+height = 164
+content = ["media-controls"]
+
+[[popup]]
+name = "network"
+width = 320
+height = 300
+content = ["wifi"]
+
+[[popup]]
+name = "bluetooth"
+width = 320
+height = 260
+content = ["bluetooth"]
+
+[[popup]]
+name = "sound"
+width = 340
+height = 76
+content = ["volume-slider"]

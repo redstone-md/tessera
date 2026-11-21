@@ -10,6 +10,7 @@ mod report;
 
 mod config;
 mod extension;
+mod i18n;
 mod icons;
 mod menu;
 mod module;

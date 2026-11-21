@@ -7,12 +7,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, DisplayId, Div, Global, IntoElement, ParentElement,
-    Pixels, Render, Styled, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
+    AnyElement, AnyView, App, AppContext, Bounds, Context, DisplayId, Div, Global,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, Styled,
+    Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, black, div, point, px, size,
 };
 
-use crate::config::PopupConfig;
+use crate::config::{PopupConfig, PopupPlace};
 use crate::module::WidgetRegistry;
 use crate::motion::Spring;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect};
@@ -27,6 +28,12 @@ pub const MARGIN: f32 = 12.;
 /// click that asks to close an open popup first takes focus from it, which
 /// closes it; without this the same click would then reopen it.
 const REOPEN_GUARD: Duration = Duration::from_millis(250);
+
+/// How dark the veil behind a popup in the middle of the display is.
+const VEIL: f32 = 0.42;
+
+/// How far below its place such a popup starts, in logical pixels.
+const RISE: f32 = 28.;
 
 /// Where a floating window should appear. Positions are in physical pixels.
 #[derive(Clone, Copy)]
@@ -229,7 +236,11 @@ impl Popups {
         anchor: &PopupAnchor,
         cx: &mut App,
     ) -> anyhow::Result<WindowHandle<PopupView>> {
-        let frame = anchor.frame(config.width, config.height);
+        // A popup in the middle of the display takes all of it, for its veil.
+        let frame = match config.place {
+            PopupPlace::Surface => anchor.frame(config.width, config.height),
+            PopupPlace::Center => anchor.screen,
+        };
         let rough = Bounds {
             origin: point(
                 px(frame.left as f32 / anchor.scale),
@@ -254,7 +265,11 @@ impl Popups {
                 .iter()
                 .filter_map(|spec| WidgetRegistry::build(spec, display, cx))
                 .collect();
-            cx.new(|cx| PopupView::new(config.name.clone(), edge, content, window, cx))
+            let extent = match config.place {
+                PopupPlace::Surface => None,
+                PopupPlace::Center => Some(size(px(config.width), px(config.height))),
+            };
+            cx.new(|cx| PopupView::new(config.name.clone(), edge, extent, content, window, cx))
         })
     }
 }
@@ -264,6 +279,9 @@ pub struct PopupView {
     name: String,
     /// The edge the popup's surface is docked to; it moves in from there.
     edge: ScreenEdge,
+    /// The size of the panel when it stands in the middle of a window that
+    /// covers the display; `None` when the window is the panel.
+    extent: Option<gpui::Size<Pixels>>,
     content: Vec<AnyView>,
     /// 0 while hidden, 1 when fully open.
     visibility: Spring,
@@ -278,6 +296,7 @@ impl PopupView {
     fn new(
         name: String,
         edge: ScreenEdge,
+        extent: Option<gpui::Size<Pixels>>,
         content: Vec<AnyView>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -294,6 +313,7 @@ impl PopupView {
         Self {
             name,
             edge,
+            extent,
             content,
             visibility,
             closing: false,
@@ -330,9 +350,60 @@ impl Render for PopupView {
         if self.closing && self.visibility.is_settled() {
             window.remove_window();
         }
-        floating_panel(&theme, self.edge, visibility, |panel| {
-            panel.children(self.content.iter().cloned())
-        })
+        let Some(extent) = self.extent else {
+            return floating_panel(&theme, self.edge, visibility, |panel| {
+                panel.children(self.content.iter().cloned())
+            })
+            .into_any_element();
+        };
+        self.centered(extent, &theme, visibility, window, cx)
+    }
+}
+
+impl PopupView {
+    /// The panel in the middle of a veil over the display. It rises into
+    /// place, and a click on the veil closes it.
+    fn centered(
+        &self,
+        extent: gpui::Size<Pixels>,
+        theme: &Theme,
+        visibility: f32,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let room = window.viewport_size();
+        let shown = visibility.clamp(0., 1.);
+        let panel = div()
+            .w(extent.width.min(room.width - px(MARGIN * 2.)))
+            .h(extent.height.min(room.height - px(MARGIN * 2.)))
+            .relative()
+            .top(px(RISE * (1. - visibility)))
+            .p(theme.spacing.medium)
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.medium)
+            .overflow_hidden()
+            .rounded(theme.shape.large)
+            .bg(theme.colors.surface_container)
+            .opacity(shown)
+            // A click on the panel is not one on the veil under it.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(self.content.iter().cloned());
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .font_family(theme.typography.family)
+            .text_size(theme.typography.label_size)
+            .text_color(theme.colors.on_surface)
+            .bg(black().opacity(VEIL * shown))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.close(cx)),
+            )
+            .child(panel)
+            .into_any_element()
     }
 }
 

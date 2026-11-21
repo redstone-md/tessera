@@ -10,6 +10,10 @@
 #   [colors]            single roles as "#rrggbb", applied last
 # theme = "example"
 
+# The language of the settings and the marketplace: "en" (default) or "ru".
+# What the widgets of the bars say stays English.
+# language = "ru"
+
 # The registries the "marketplace" widget reads: https addresses or absolute
 # paths of registry files. Without the key it is the registry of the Tessera
 # repository; an empty list reads none.
@@ -48,8 +52,11 @@
 #               for a cable, Wi-Fi or a mobile network with its signal, and
 #               the name of the network; option show, "name" (default) or
 #               "icon" for the icon alone
-#   "settings"  the layout, the pinned applications and the theme, to change
-#               by clicking; it rewrites this file and keeps its comments
+#   "settings"  what this file holds, to change by clicking: the
+#               arrangement, the language, the widgets and their options,
+#               the pinned applications, tiling, the theme and the
+#               extensions. It rewrites this file and keeps its comments;
+#               made for a popup with place = "center"
 #   "media"     what is playing, on one line; absent while no application
 #               offers anything; option width, the most it takes, in pixels
 #   "media-controls"  what is playing, with its picture and buttons to skip and pause
@@ -105,30 +112,28 @@
 #               "restart" and "shut-down" to offer, in that order
 #   "marketplace"  the extensions the registries offer, to install, update
 #               and remove; contacts the registries when it is shown. Fills
-#               the height left in its popup and scrolls
+#               the height left in its popup and scrolls. Option show,
+#               "extensions" (default) or "themes" for the themes they
+#               offer; option columns, 1 (default) to 4
 
 [[surface]]
 edge = "top"
 thickness = 48
-start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, { widget = "label", icon = "\uE713", popup = "settings" }, "cpu", "memory", "battery"]
+start = ["workspaces", "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
-end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, "quit"]
+end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
 
 [[surface]]
 edge = "bottom"
 thickness = 76
-center = ["windows"]
+center = [{ widget = "label", icon = "", popup = "launcher" }, "windows"]
 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to
 #   width, height  size in logical pixels
+#   place          "surface" (default): at the widget that opened it;
+#                  "center": in the middle of the display, the rest dimmed
 #   content        widgets, stacked from the top
-
-[[popup]]
-name = "extensions"
-width = 420
-height = 520
-content = ["marketplace"]
 
 [[popup]]
 name = "launcher"
@@ -144,8 +149,9 @@ content = ["calendar", "notifications"]
 
 [[popup]]
 name = "settings"
-width = 480
-height = 680
+place = "center"
+width = 1000
+height = 700
 content = ["settings"]
 
 [[popup]]

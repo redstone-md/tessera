@@ -43,6 +43,7 @@ impl Module for ProblemsModule {
         widgets.register("problems", |_, cx| cx.new(Indicator::new).into())?;
         widgets.register("problem-list", |_, cx| cx.new(List::new).into())?;
         widgets.register_popup(PopupConfig {
+            place: Default::default(),
             name: POPUP.to_owned(),
             width: 380.,
             height: 320.,

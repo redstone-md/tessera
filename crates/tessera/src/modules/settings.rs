@@ -1,23 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The layout, the pinned applications and the theme, changed without
-//! editing the configuration file by hand. Widget: `settings`.
+//! What the configuration file holds, changed without editing it by hand:
+//! a rail of parts on the left, and the cards of the part chosen on the
+//! right. Widget: `settings`, made for a popup in the middle of the display.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, img, px,
+    AnyElement, AnyView, AppContext, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    img, px,
 };
 
-use crate::config::edit::{ConfigFile, Place, Slot};
+use crate::config::edit::{ConfigFile, LAYOUTS, Place, Slot};
 use crate::config::{Config, Displays, SurfaceConfig, WidgetSpec, config_dir};
+use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, Spring};
+use crate::modules::marketplace::{Changed, Marketplace};
+use crate::motion::{Interaction, Spring, mix, staggered};
 use crate::platform::{AppWindow, ScreenEdge};
 use crate::shell::Shell;
 use crate::theme::{ACCENT_THEME, Theme};
@@ -30,15 +34,376 @@ const THEMES_DIRECTORY: &str = "themes";
 const CHIP_HEIGHT: Pixels = px(28.);
 const SMALL_BUTTON: Pixels = px(20.);
 
+/// How much of the content color a chip that holds buttons has, to stand
+/// out from its card.
+const CHIP_TINT: f32 = 0.07;
+
 /// The width kept for the name of a slot.
 const SLOT_LABEL_WIDTH: Pixels = px(52.);
 
 /// The most a list of widgets to add takes while it opens.
 const ADD_LIST_HEIGHT: Pixels = px(240.);
 
+/// The width of the rail of parts, and the height of a part in it.
+const RAIL_WIDTH: Pixels = px(196.);
+const RAIL_ITEM: Pixels = px(40.);
+const RAIL_GAP: Pixels = px(4.);
+
+/// The size of the title over the rail.
+const TITLE_SIZE: Pixels = px(20.);
+
+/// How far below its place a card starts when its part is chosen.
+const CARD_RISE: f32 = 18.;
+
+/// A switch, and the dot that crosses it.
+const SWITCH_WIDTH: f32 = 44.;
+const SWITCH_HEIGHT: f32 = 24.;
+const SWITCH_DOT: f32 = 16.;
+
+/// The width kept for the number between the buttons that change it.
+const COUNT_WIDTH: Pixels = px(64.);
+
 const ICON_BACK: &str = "\u{e76b}";
 const ICON_FORWARD: &str = "\u{e76c}";
 const ICON_REMOVE: &str = "\u{e711}";
+const ICON_LESS: &str = "\u{e738}";
+const ICON_MORE: &str = "\u{e710}";
+const ICON_QUIT: &str = "\u{e7e8}";
+
+/// The widget that offers what the registries hold, and its option that
+/// says what of it.
+const MARKETPLACE_WIDGET: &str = "marketplace";
+const MARKETPLACE_SHOWS: &str = "show";
+const MARKETPLACE_COLUMNS: &str = "columns";
+
+/// In how many columns the marketplace of the settings stands.
+const MARKET_COLUMNS: i64 = 2;
+
+/// The parts the settings are divided into, in the order of the rail.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Section {
+    General,
+    Bars,
+    Widgets,
+    Dock,
+    Tray,
+    Windows,
+    Themes,
+    Extensions,
+}
+
+impl Section {
+    const ALL: [Self; 8] = [
+        Self::General,
+        Self::Bars,
+        Self::Widgets,
+        Self::Dock,
+        Self::Tray,
+        Self::Windows,
+        Self::Themes,
+        Self::Extensions,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Bars => "Bars",
+            Self::Widgets => "Widgets",
+            Self::Dock => "Dock",
+            Self::Tray => "Tray",
+            Self::Windows => "Windows",
+            Self::Themes => "Themes",
+            Self::Extensions => "Extensions",
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match self {
+            Self::General => "\u{e713}",
+            Self::Bars => "\u{e700}",
+            Self::Widgets => "\u{e71d}",
+            Self::Dock => "\u{e7c4}",
+            Self::Tray => "\u{e712}",
+            Self::Windows => "\u{e8a7}",
+            Self::Themes => "\u{e790}",
+            Self::Extensions => "\u{e719}",
+        }
+    }
+
+    /// What the marketplace shows in this part, if it has one.
+    fn market(self) -> Option<&'static str> {
+        match self {
+            Self::Themes => Some("themes"),
+            Self::Extensions => Some("extensions"),
+            _ => None,
+        }
+    }
+}
+
+/// Where a setting is written in the file.
+#[derive(Clone, Copy)]
+enum Target {
+    /// An option of every widget of this name.
+    Widget(&'static str, &'static str),
+    /// A key at the top of the file.
+    Key(&'static str),
+    /// A key of a table.
+    Table(&'static str, &'static str),
+}
+
+/// What a setting can be set to.
+#[derive(Clone, Copy, PartialEq)]
+enum Answer {
+    /// The key is not in the file.
+    Unset,
+    Text(&'static str),
+    Number(i64),
+    Flag(bool),
+}
+
+impl Answer {
+    /// Whether the file holding `current` holds this answer.
+    fn is(self, current: Option<&toml::Value>) -> bool {
+        match (self, current) {
+            (Self::Unset, None) => true,
+            (Self::Text(text), Some(value)) => value.as_str() == Some(text),
+            (Self::Number(number), Some(value)) => value.as_integer() == Some(number),
+            (Self::Flag(flag), Some(value)) => value.as_bool() == Some(flag),
+            _ => false,
+        }
+    }
+
+    fn value(self) -> Option<toml_edit::Value> {
+        match self {
+            Self::Unset => None,
+            Self::Text(text) => Some(text.into()),
+            Self::Number(number) => Some(number.into()),
+            Self::Flag(flag) => Some(flag.into()),
+        }
+    }
+}
+
+/// How a setting is chosen.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// One of a few answers, each with what its chip says.
+    Choice(&'static [(&'static str, Answer)]),
+    /// A number from `min` to `max` that buttons change by `step`. One
+    /// step under `min` the key leaves the file, which `unset` describes;
+    /// a step up from there gives `start`.
+    Count {
+        min: i64,
+        max: i64,
+        step: i64,
+        start: i64,
+        unset: &'static str,
+    },
+    /// On or off.
+    Switch { on: Answer, off: Answer },
+}
+
+impl Kind {
+    /// Whether a switch between `on` and `off` is on in a file that holds
+    /// `current`.
+    fn is_on(on: Answer, off: Answer, current: Option<&toml::Value>) -> bool {
+        if off == Answer::Unset {
+            on.is(current)
+        } else {
+            !off.is(current)
+        }
+    }
+
+    /// The answer one step from `current`, up or down.
+    fn stepped(self, current: Option<i64>, up: bool) -> Option<Answer> {
+        let Self::Count {
+            min,
+            max,
+            step,
+            start,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        Some(match (current, up) {
+            (None, true) => Answer::Number(start),
+            (None, false) => Answer::Unset,
+            (Some(number), true) => Answer::Number((number + step).clamp(min, max)),
+            (Some(number), false) if number - step < min => Answer::Unset,
+            (Some(number), false) => Answer::Number((number - step).min(max)),
+        })
+    }
+}
+
+/// One line of a card: something of the file, and how it is chosen.
+struct Setting {
+    section: Section,
+    /// The card it stands on; settings of one card follow each other.
+    card: &'static str,
+    title: &'static str,
+    target: Target,
+    kind: Kind,
+}
+
+const STYLES: Kind = Kind::Choice(&[("Wave", Answer::Unset), ("Text", Answer::Text("text"))]);
+
+const SETTINGS: &[Setting] = &[
+    Setting {
+        section: Section::General,
+        card: "Windows key",
+        title: "Opens the launcher",
+        target: Target::Key("windows_key"),
+        kind: Kind::Switch {
+            on: Answer::Text("launcher"),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Clock",
+        title: "Format",
+        target: Target::Widget("clock", "format"),
+        kind: Kind::Choice(&[
+            ("Default", Answer::Unset),
+            ("14:05", Answer::Text("%H:%M")),
+            ("2:05 PM", Answer::Text("%-I:%M %p")),
+            ("14:05  21.11.2026", Answer::Text("%H:%M  %d.%m.%Y")),
+            ("Sat, 21 Nov  14:05", Answer::Text("%a, %-d %b  %H:%M")),
+        ]),
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Calendar",
+        title: "Week starts on",
+        target: Target::Widget("calendar", "week_start"),
+        kind: Kind::Choice(&[
+            ("Monday", Answer::Unset),
+            ("Sunday", Answer::Text("sunday")),
+        ]),
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Processor",
+        title: "Style",
+        target: Target::Widget("cpu", "style"),
+        kind: STYLES,
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Memory",
+        title: "Style",
+        target: Target::Widget("memory", "style"),
+        kind: STYLES,
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Memory",
+        title: "Shows",
+        target: Target::Widget("memory", "show"),
+        kind: Kind::Choice(&[
+            ("Percent", Answer::Unset),
+            ("Gigabytes", Answer::Text("used")),
+        ]),
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Battery",
+        title: "Style",
+        target: Target::Widget("battery", "style"),
+        kind: STYLES,
+    },
+    Setting {
+        section: Section::Widgets,
+        card: "Network",
+        title: "Shows",
+        target: Target::Widget("network", "show"),
+        kind: Kind::Choice(&[("Name", Answer::Unset), ("Icon", Answer::Text("icon"))]),
+    },
+    Setting {
+        section: Section::Dock,
+        card: "Start menu",
+        title: "Columns",
+        target: Target::Widget("apps", "columns"),
+        kind: Kind::Count {
+            min: 3,
+            max: 8,
+            step: 1,
+            start: 6,
+            unset: "Default",
+        },
+    },
+    Setting {
+        section: Section::Tray,
+        card: "Tray",
+        title: "Icons shown",
+        target: Target::Widget("tray", "limit"),
+        kind: Kind::Count {
+            min: 1,
+            max: 30,
+            step: 1,
+            start: 6,
+            unset: "All",
+        },
+    },
+    Setting {
+        section: Section::Tray,
+        card: "Tray",
+        title: "Descriptions under the pointer",
+        target: Target::Widget("tray", "tips"),
+        kind: Kind::Switch {
+            on: Answer::Unset,
+            off: Answer::Flag(false),
+        },
+    },
+    Setting {
+        section: Section::Windows,
+        card: "Tiling",
+        title: "Tile windows",
+        target: Target::Table("tiling", "enabled"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
+        section: Section::Windows,
+        card: "Tiling",
+        title: "Layout",
+        target: Target::Table("tiling", "layout"),
+        kind: Kind::Choice(&[
+            ("Master", Answer::Unset),
+            ("Columns", Answer::Text("columns")),
+            ("Rows", Answer::Text("rows")),
+            ("Grid", Answer::Text("grid")),
+        ]),
+    },
+    Setting {
+        section: Section::Windows,
+        card: "Tiling",
+        title: "Gap",
+        target: Target::Table("tiling", "gap"),
+        kind: Kind::Count {
+            min: 0,
+            max: 48,
+            step: 4,
+            start: 0,
+            unset: "Default",
+        },
+    },
+    Setting {
+        section: Section::Windows,
+        card: "Workspaces",
+        title: "Own workspaces",
+        target: Target::Table("workspaces", "own"),
+        kind: Kind::Count {
+            min: 2,
+            max: 9,
+            step: 1,
+            start: 2,
+            unset: "Off",
+        },
+    },
+];
 
 pub struct SettingsModule;
 
@@ -52,9 +417,39 @@ impl Module for SettingsModule {
     }
 }
 
+/// A card of a part: how much room it is taken to need, in lines, and
+/// what it shows.
+type Card = (usize, AnyElement);
+
+/// The cards in the two columns they are laid out in: each goes, in
+/// order, where less stands so far, and is given with its place in that
+/// order.
+fn masonry<T>(cards: Vec<(usize, T)>) -> [Vec<(usize, T)>; 2] {
+    let mut columns = [Vec::new(), Vec::new()];
+    let mut heights = [0; 2];
+    for (index, (weight, card)) in cards.into_iter().enumerate() {
+        let column = usize::from(heights[1] < heights[0]);
+        heights[column] += weight;
+        columns[column].push((index, card));
+    }
+    columns
+}
+
 /// Something to click, which also names its pointer feedback.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Control {
+    /// Shows a part.
+    Section(Section),
+    Quit,
+    /// Counts the arrangements Tessera comes with.
+    Layout(usize),
+    Language(Language),
+    /// Gives the setting at this place this one of its answers.
+    Set(usize, usize),
+    /// Takes the number of the setting at this place a step up, or down.
+    Step(usize, bool),
+    /// Switches the setting at this place.
+    Toggle(usize),
     /// Moves a widget toward the end of its surface, or toward the start.
     Shift(Place, bool),
     Remove(Place),
@@ -88,16 +483,25 @@ fn widget_title(spec: &WidgetSpec) -> String {
 }
 
 /// What a surface is called.
-fn surface_title(surface: &SurfaceConfig) -> String {
+fn surface_title(surface: &SurfaceConfig, language: Language) -> String {
     let edge = match surface.edge {
-        ScreenEdge::Top => "Top",
-        ScreenEdge::Bottom => "Bottom",
+        ScreenEdge::Top => "Top bar",
+        ScreenEdge::Bottom => "Bottom bar",
     };
     let displays = match surface.displays {
         Displays::All => "every display",
         Displays::Primary => "the primary display",
     };
-    format!("{edge} edge, on {displays}")
+    format!("{} \u{b7} {}", language.say(edge), language.say(displays))
+}
+
+/// What tells the arrangements apart: the edges of the bars and how thick
+/// they are.
+fn outline(config: &Config) -> Vec<(ScreenEdge, f32)> {
+    let surfaces = config.surfaces.iter();
+    surfaces
+        .map(|surface| (surface.edge, surface.thickness))
+        .collect()
 }
 
 /// A path the way it is compared and written to the file.
@@ -138,9 +542,9 @@ fn themes() -> Vec<String> {
 }
 
 /// What the chip of the theme `name` says.
-fn theme_title(name: &str) -> SharedString {
+fn theme_title(name: &str, language: Language) -> SharedString {
     if name == ACCENT_THEME {
-        "Windows accent".into()
+        language.say("Windows accent").into()
     } else {
         SharedString::new(name)
     }
@@ -150,6 +554,21 @@ fn theme_title(name: &str) -> SharedString {
 struct Settings {
     /// What the file held when it was last read; `None` if it is unusable.
     config: Option<Config>,
+    /// The same as a table, for the keys looked up one by one.
+    table: Option<toml::Table>,
+    /// The part shown.
+    section: Section,
+    /// The place of that part in the rail, which the mark behind it
+    /// travels to.
+    mark: Spring,
+    /// 0 when a part is chosen, 1 once its cards have arrived.
+    arrival: Spring,
+    /// 1 for each switch that is on, by the place of its setting.
+    switches: HashMap<usize, Spring>,
+    /// The outlines of the arrangements Tessera comes with.
+    layouts: Vec<Vec<(ScreenEdge, f32)>>,
+    /// The marketplaces of the parts that have one, made when first shown.
+    markets: HashMap<Section, AnyView>,
     /// Why the last change was not made, or the file not read.
     failure: Option<SharedString>,
     /// The widgets a layout can name.
@@ -167,8 +586,21 @@ struct Settings {
 impl Settings {
     fn new(cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
+        let layouts = LAYOUTS.iter().map(|(_, layout)| {
+            let layout = toml::from_str::<Config>(layout);
+            layout.map(|layout| outline(&layout)).unwrap_or_default()
+        });
+        let mut arrival = Spring::new(motion.spatial, 0.);
+        arrival.animate_to(1.);
         let mut this = Self {
             config: None,
+            table: None,
+            section: Section::General,
+            mark: Spring::new(motion.spatial_fast, 0.),
+            arrival,
+            switches: HashMap::new(),
+            layouts: layouts.collect(),
+            markets: HashMap::new(),
             failure: None,
             available: Vec::new(),
             running: Vec::new(),
@@ -177,8 +609,8 @@ impl Settings {
             add_list: Spring::new(motion.spatial_fast, 0.),
             interactions: HashMap::new(),
         };
-        match ConfigFile::open().and_then(|file| file.config()) {
-            Ok(config) => this.config = Some(config),
+        match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
+            Ok((config, table)) => (this.config, this.table) = (Some(config), table),
             Err(error) => this.failure = Some(error.into()),
         }
         this.look_around(cx);
@@ -217,11 +649,12 @@ impl Settings {
                 return Err("the configuration has changed in the meantime".to_owned());
             }
             file.save()?;
-            file.config()
+            Ok((file.config()?, file.table()))
         });
         match changed {
-            Ok(config) => {
+            Ok((config, table)) => {
                 self.config = Some(config);
+                self.table = table;
                 self.failure = None;
                 // The controls now stand for other things.
                 self.interactions.clear();
@@ -236,8 +669,111 @@ impl Settings {
         cx.notify();
     }
 
+    /// What the file holds at `target`.
+    fn current(&self, target: Target) -> Option<&toml::Value> {
+        match target {
+            Target::Widget(widget, key) => self.config.as_ref()?.option(widget, key),
+            Target::Key(key) => self.table.as_ref()?.get(key),
+            Target::Table(table, key) => self.table.as_ref()?.get(table)?.get(key),
+        }
+    }
+
+    /// Writes `answer` at `target`.
+    fn put(&mut self, target: Target, answer: Answer, cx: &mut Context<Self>) {
+        let value = answer.value();
+        self.change(cx, |file| match target {
+            Target::Widget(widget, key) => file.set_option(widget, key, value),
+            Target::Table(table, key) => file.set_in(table, key, value),
+            Target::Key(key) => {
+                file.set_key(key, value);
+                true
+            }
+        });
+    }
+
+    /// Shows `section`: its cards arrive, and its marketplace is made.
+    fn show(&mut self, section: Section, cx: &mut Context<Self>) {
+        if self.section == section {
+            return;
+        }
+        self.section = section;
+        let place = Section::ALL.iter().position(|other| *other == section);
+        self.mark.animate_to(place.unwrap_or_default() as f32);
+        self.arrival.jump_to(0.);
+        self.arrival.animate_to(1.);
+        if let Some(shown) = section.market()
+            && !self.markets.contains_key(&section)
+        {
+            let mut options = toml::Table::new();
+            options.insert(MARKETPLACE_SHOWS.to_owned(), shown.into());
+            options.insert(MARKETPLACE_COLUMNS.to_owned(), MARKET_COLUMNS.into());
+            let spec = WidgetSpec {
+                widget: MARKETPLACE_WIDGET.to_owned(),
+                popup: None,
+                options,
+            };
+            if let Some(market) = WidgetRegistry::build(&spec, None, cx) {
+                // A theme that was installed or removed is one to choose
+                // or one no more.
+                if let Ok(market) = market.clone().downcast::<Marketplace>() {
+                    let changed = |this: &mut Self, _, _: &Changed, cx: &mut Context<Self>| {
+                        this.themes = themes();
+                        cx.notify();
+                    };
+                    cx.subscribe(&market, changed).detach();
+                }
+                self.markets.insert(section, market);
+            }
+        }
+        cx.notify();
+    }
+
     fn act(&mut self, control: &Control, cx: &mut Context<Self>) {
         match *control {
+            Control::Section(section) => self.show(section, cx),
+            Control::Quit => cx.quit(),
+            Control::Layout(index) => {
+                if let Some((_, layout)) = LAYOUTS.get(index) {
+                    self.change(cx, |file| file.set_layout(layout));
+                }
+            }
+            Control::Language(language) => {
+                let answer = if language == Language::default() {
+                    Answer::Unset
+                } else {
+                    Answer::Text(language.code())
+                };
+                self.put(Target::Key("language"), answer, cx);
+            }
+            Control::Set(index, choice) => {
+                let Some(setting) = SETTINGS.get(index) else {
+                    return;
+                };
+                if let Kind::Choice(answers) = setting.kind
+                    && let Some(&(_, answer)) = answers.get(choice)
+                {
+                    self.put(setting.target, answer, cx);
+                }
+            }
+            Control::Step(index, up) => {
+                let Some(setting) = SETTINGS.get(index) else {
+                    return;
+                };
+                let current = self.current(setting.target);
+                let current = current.and_then(toml::Value::as_integer);
+                if let Some(answer) = setting.kind.stepped(current, up) {
+                    self.put(setting.target, answer, cx);
+                }
+            }
+            Control::Toggle(index) => {
+                let Some(setting) = SETTINGS.get(index) else {
+                    return;
+                };
+                if let Kind::Switch { on, off } = setting.kind {
+                    let is_on = Kind::is_on(on, off, self.current(setting.target));
+                    self.put(setting.target, if is_on { off } else { on }, cx);
+                }
+            }
             Control::Shift(place, forward) => self.change(cx, |file| file.shift(place, forward)),
             Control::Remove(place) => self.change(cx, |file| file.remove(place)),
             Control::Adding(surface, slot) => {
@@ -317,21 +853,14 @@ impl Settings {
         let button = match face {
             Face::Glyph(glyph) => button
                 .size(SMALL_BUTTON)
-                .bg(state_layer(
-                    &theme,
-                    theme.colors.surface_container_highest,
-                    state,
-                ))
+                .bg(state_layer(&theme, theme.colors.surface_container, state))
                 .text_color(theme.colors.on_surface_variant)
                 .child(icon(&theme, glyph).text_size(theme.typography.label_size)),
             Face::Chip { text, selected } => {
                 let (base, color) = if selected {
                     (theme.colors.secondary_container, theme.colors.primary)
                 } else {
-                    (
-                        theme.colors.surface_container_highest,
-                        theme.colors.on_surface,
-                    )
+                    (theme.colors.surface_container, theme.colors.on_surface)
                 };
                 button
                     .h(CHIP_HEIGHT)
@@ -374,7 +903,11 @@ impl Settings {
             .items_center()
             .gap(theme.spacing.tiny)
             .rounded(theme.shape.full)
-            .bg(theme.colors.surface_container_highest)
+            .bg(mix(
+                theme.colors.surface_container_highest,
+                theme.colors.on_surface,
+                CHIP_TINT,
+            ))
             // A widget no module provides is shown, but dimmed.
             .text_color(if known {
                 theme.colors.on_surface
@@ -394,12 +927,9 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let add_list = self.add_list.value(window);
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.small)
-            .child(heading(&theme, surface_title(surface)));
+        let mut section = card(&theme, surface_title(surface, language));
         for slot in Slot::ALL {
             let specs = match slot {
                 Slot::Start => &surface.start,
@@ -419,7 +949,7 @@ impl Settings {
             chips.push(self.control(
                 Control::Adding(index, slot),
                 Face::Chip {
-                    text: "Add".into(),
+                    text: language.say("Add").into(),
                     selected: adding && self.add_list.target() > 0.,
                 },
                 window,
@@ -438,7 +968,7 @@ impl Settings {
                             .flex()
                             .items_center()
                             .text_color(theme.colors.on_surface_variant)
-                            .child(slot.label()),
+                            .child(language.say(slot.label())),
                     )
                     .child(wrap(&theme).flex_1().children(chips)),
             );
@@ -466,6 +996,7 @@ impl Settings {
 
     fn pins(&mut self, pins: &[String], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let mut pinned = Vec::new();
         for (index, pin) in pins.iter().enumerate() {
             let remove = self.control(Control::Unpin(index), Face::Glyph(ICON_REMOVE), window, cx);
@@ -480,7 +1011,11 @@ impl Settings {
                     .items_center()
                     .gap(theme.spacing.tiny + theme.spacing.tiny)
                     .rounded(theme.shape.full)
-                    .bg(theme.colors.surface_container_highest)
+                    .bg(mix(
+                        theme.colors.surface_container_highest,
+                        theme.colors.on_surface,
+                        CHIP_TINT,
+                    ))
                     .children(image.map(|image| img(image).size(SMALL_BUTTON).flex_none()))
                     .child(pin_title(pin))
                     .child(remove),
@@ -495,17 +1030,16 @@ impl Settings {
             };
             offers.push(self.control(Control::Pin(index), face, window, cx));
         }
-        div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.small)
-            .child(heading(&theme, "Pinned applications"))
+        card(&theme, language.say("Pinned applications"))
             .child(if pinned.is_empty() {
-                note(&theme, "Nothing is pinned.").into_any_element()
+                note(&theme, language.say("Nothing is pinned.")).into_any_element()
             } else {
                 wrap(&theme).children(pinned).into_any_element()
             })
-            .children((!offers.is_empty()).then(|| note(&theme, "Running now, click to pin:")))
+            .children(
+                (!offers.is_empty())
+                    .then(|| note(&theme, language.say("Running now, click to pin:"))),
+            )
             .children((!offers.is_empty()).then(|| wrap(&theme).children(offers)))
             .into_any_element()
     }
@@ -517,10 +1051,11 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let mut choices = vec![self.control(
             Control::Theme(None),
             Face::Chip {
-                text: "Built-in".into(),
+                text: language.say("Built-in").into(),
                 selected: current.is_none(),
             },
             window,
@@ -528,25 +1063,379 @@ impl Settings {
         )];
         for index in 0..self.themes.len() {
             let face = Face::Chip {
-                text: theme_title(&self.themes[index]),
+                text: theme_title(&self.themes[index], language),
                 selected: current == Some(self.themes[index].as_str()),
             };
             choices.push(self.control(Control::Theme(Some(index)), face, window, cx));
         }
-        div()
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.small)
-            .child(heading(&theme, "Theme"))
+        card(&theme, language.say("Theme"))
             .child(wrap(&theme).children(choices))
             .children((self.themes.len() == 1).then(|| {
                 note(
                     &theme,
-                    "Theme files are looked for in the themes directory of the configuration directory.",
+                    language.say("Theme files are looked for in the themes directory of the configuration directory."),
                 )
             }))
             .into_any_element()
     }
+
+    /// The arrangements Tessera comes with, the one in use marked.
+    fn arrangements(
+        &mut self,
+        config: &Config,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Card {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let now = outline(config);
+        let mut choices = Vec::new();
+        for (index, (name, _)) in LAYOUTS.iter().enumerate() {
+            let face = Face::Chip {
+                text: (*name).into(),
+                selected: self.layouts.get(index) == Some(&now),
+            };
+            choices.push(self.control(Control::Layout(index), face, window, cx));
+        }
+        let remark = "Replaces the bars and popups of the layout; pinned applications stay.";
+        let card = card(&theme, language.say("Arrangement"))
+            .child(wrap(&theme).children(choices))
+            .child(note(&theme, language.say(remark)));
+        (4, card.into_any_element())
+    }
+
+    /// The languages the settings speak.
+    fn languages(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Card {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let mut choices = Vec::new();
+        for other in Language::ALL {
+            let face = Face::Chip {
+                text: other.name().into(),
+                selected: other == language,
+            };
+            choices.push(self.control(Control::Language(other), face, window, cx));
+        }
+        let card = card(&theme, language.say("Language"))
+            .child(wrap(&theme).children(choices))
+            .child(note(
+                &theme,
+                language.say("Of the settings and the marketplace."),
+            ));
+        (3, card.into_any_element())
+    }
+
+    /// What chooses the setting at `index`.
+    fn chooser(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let setting = &SETTINGS[index];
+        let current = self.current(setting.target).cloned();
+        match setting.kind {
+            Kind::Choice(answers) => {
+                let mut chips = Vec::new();
+                for (choice, &(label, answer)) in answers.iter().enumerate() {
+                    let face = Face::Chip {
+                        text: language.say(label).into(),
+                        selected: answer.is(current.as_ref()),
+                    };
+                    chips.push(self.control(Control::Set(index, choice), face, window, cx));
+                }
+                wrap(&theme)
+                    .justify_end()
+                    .children(chips)
+                    .into_any_element()
+            }
+            Kind::Count { unset, .. } => {
+                let number = current.as_ref().and_then(toml::Value::as_integer);
+                let shown: SharedString = match number {
+                    Some(number) => number.to_string().into(),
+                    None => language.say(unset).into(),
+                };
+                let less = self.control(
+                    Control::Step(index, false),
+                    Face::Glyph(ICON_LESS),
+                    window,
+                    cx,
+                );
+                let more = self.control(
+                    Control::Step(index, true),
+                    Face::Glyph(ICON_MORE),
+                    window,
+                    cx,
+                );
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.tiny)
+                    .child(less)
+                    .child(div().w(COUNT_WIDTH).flex().justify_center().child(shown))
+                    .child(more)
+                    .into_any_element()
+            }
+            Kind::Switch { on, off } => {
+                let is_on = f32::from(u8::from(Kind::is_on(on, off, current.as_ref())));
+                let spring = self
+                    .switches
+                    .entry(index)
+                    .or_insert_with(|| Spring::new(theme.motion.spatial_fast, is_on));
+                if spring.target() != is_on {
+                    spring.animate_to(is_on);
+                }
+                let travel = spring.value(window);
+                let shown = travel.clamp(0., 1.);
+                let control = Control::Toggle(index);
+                let state = self
+                    .interactions
+                    .entry(control.clone())
+                    .or_insert_with(|| Interaction::new(&theme.motion))
+                    .state(window);
+                let track = mix(theme.colors.surface_container, theme.colors.primary, shown);
+                let dot = mix(theme.colors.outline, theme.colors.surface_container, shown);
+                let inset = (SWITCH_HEIGHT - SWITCH_DOT) / 2.;
+                let way = SWITCH_WIDTH - SWITCH_DOT - inset * 2.;
+                let action = control.clone();
+                let switch = div()
+                    .id(SharedString::from(format!("{control:?}")))
+                    .flex_none()
+                    .relative()
+                    .w(px(SWITCH_WIDTH))
+                    .h(px(SWITCH_HEIGHT))
+                    .rounded(theme.shape.full)
+                    .bg(state_layer(&theme, track, state))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(inset))
+                            .left(px(inset + way * travel))
+                            .size(px(SWITCH_DOT))
+                            .rounded(theme.shape.full)
+                            .bg(dot),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.act(&action, cx)));
+                Interaction::track(switch, cx, move |this: &mut Self| {
+                    this.interactions.get_mut(&control)
+                })
+                .into_any_element()
+            }
+        }
+    }
+
+    /// The cards of the settings of `section`: those that follow each
+    /// other with the same card stand on one.
+    fn setting_cards(
+        &mut self,
+        section: Section,
+        config: &Config,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Card> {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let mut cards: Vec<(&'static str, usize, gpui::Div)> = Vec::new();
+        for (index, setting) in SETTINGS.iter().enumerate() {
+            if setting.section != section {
+                continue;
+            }
+            if cards.last().is_none_or(|(name, ..)| *name != setting.card) {
+                cards.push((setting.card, 1, card(&theme, language.say(setting.card))));
+            }
+            let missing = match setting.target {
+                Target::Widget(widget, _) => config.widget(widget).is_none(),
+                _ => false,
+            };
+            let line = if missing {
+                // Said once for the card, however many settings it has.
+                let said = cards.last().is_some_and(|(_, weight, _)| *weight > 1);
+                (!said).then(|| note(&theme, language.say("Not in the layout")))
+            } else {
+                let chooser = self.chooser(index, window, cx);
+                Some(
+                    div()
+                        .min_h(CHIP_HEIGHT)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(theme.spacing.small)
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(theme.colors.on_surface_variant)
+                                .child(language.say(setting.title)),
+                        )
+                        .child(chooser),
+                )
+            };
+            let Some((_, weight, card)) = cards.pop() else {
+                continue;
+            };
+            let wide = matches!(setting.kind, Kind::Choice(answers) if answers.len() > 3);
+            let weight = weight + usize::from(line.is_some()) + usize::from(wide);
+            cards.push((setting.card, weight, card.children(line)));
+        }
+        let cards = cards.into_iter();
+        cards
+            .map(|(_, weight, card)| (weight, card.into_any_element()))
+            .collect()
+    }
+
+    /// The rail: the title, the parts with a mark behind the one shown,
+    /// and at its end the button that closes Tessera.
+    fn rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let mark = self.mark.value(window);
+        let mut parts = Vec::new();
+        for section in Section::ALL {
+            parts.push(self.rail_item(
+                Control::Section(section),
+                section.glyph(),
+                language.say(section.title()),
+                section == self.section,
+                window,
+                cx,
+            ));
+        }
+        let quit = self.rail_item(
+            Control::Quit,
+            ICON_QUIT,
+            language.say("Quit"),
+            false,
+            window,
+            cx,
+        );
+        div()
+            .flex_none()
+            .w(RAIL_WIDTH)
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.medium)
+            .child(
+                div()
+                    .px(theme.spacing.small)
+                    .text_size(TITLE_SIZE)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(language.say("Settings")),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap(RAIL_GAP)
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(0.))
+                            .right(px(0.))
+                            .top((RAIL_ITEM + RAIL_GAP) * mark)
+                            .h(RAIL_ITEM)
+                            .rounded(theme.shape.full)
+                            .bg(theme.colors.secondary_container),
+                    )
+                    .children(parts),
+            )
+            .child(div().flex_1())
+            .child(quit)
+            .into_any_element()
+    }
+
+    /// A line of the rail: an icon and a text.
+    fn rail_item(
+        &mut self,
+        control: Control,
+        glyph: &'static str,
+        text: &'static str,
+        chosen: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let state = self
+            .interactions
+            .entry(control.clone())
+            .or_insert_with(|| Interaction::new(&theme.motion))
+            .state(window);
+        let color = if chosen {
+            theme.colors.primary
+        } else {
+            theme.colors.on_surface_variant
+        };
+        let layer = crate::ui::HOVER_LAYER * state.hover + crate::ui::PRESS_LAYER * state.press;
+        let action = control.clone();
+        let item = div()
+            .id(SharedString::from(format!("{control:?}")))
+            .relative()
+            .h(RAIL_ITEM)
+            .px(theme.spacing.medium)
+            .flex()
+            .items_center()
+            .gap(theme.spacing.small + theme.spacing.tiny)
+            .rounded(theme.shape.full)
+            // The mark behind the part shown is seen through it.
+            .bg(theme.colors.on_surface.opacity(layer.clamp(0., 1.)))
+            .text_color(color)
+            .child(icon(&theme, glyph))
+            .child(text)
+            .on_click(cx.listener(move |this, _, _, cx| this.act(&action, cx)));
+        Interaction::track(item, cx, move |this: &mut Self| {
+            this.interactions.get_mut(&control)
+        })
+        .into_any_element()
+    }
+
+    /// The cards of the part shown: those as wide as the page, and those
+    /// that share it.
+    fn cards(
+        &mut self,
+        config: &Config,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Vec<AnyElement>, Vec<Card>) {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let section = self.section;
+        let mut wide = Vec::new();
+        let mut shared = Vec::new();
+        match section {
+            Section::General => {
+                shared.push(self.arrangements(config, window, cx));
+                shared.push(self.languages(window, cx));
+            }
+            Section::Bars => {
+                for (index, surface) in config.surfaces.iter().enumerate() {
+                    wide.push(self.surface(index, surface, window, cx));
+                }
+            }
+            Section::Dock => wide.push(match config.pinned() {
+                Some(pins) => self.pins(&pins, window, cx),
+                None => {
+                    let lacking =
+                        "Applications are pinned to the `windows` widget, which the layout lacks.";
+                    card(&theme, language.say("Pinned applications"))
+                        .child(note(&theme, language.say(lacking)))
+                        .into_any_element()
+                }
+            }),
+            Section::Themes => wide.push(self.themes(config.theme.as_deref(), window, cx)),
+            Section::Widgets | Section::Tray | Section::Windows | Section::Extensions => {}
+        }
+        shared.extend(self.setting_cards(section, config, window, cx));
+        (wide, shared)
+    }
+}
+
+/// A card: a rounded field with the title of what it holds.
+fn card(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .p(theme.spacing.medium)
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.small + theme.spacing.tiny)
+        .rounded(theme.shape.large)
+        .bg(theme.colors.surface_container_highest)
+        .child(heading(theme, title))
 }
 
 /// The title of a part of the settings.
@@ -576,36 +1465,71 @@ fn wrap(theme: &Theme) -> gpui::Div {
 impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
+        let rail = self.rail(window, cx);
+        let arrival = self.arrival.value(window);
+        // A card comes up into its place, each a little after the one before.
+        let arriving = move |index: usize, count: usize, card: AnyElement| {
+            let along = staggered(arrival, index, count);
+            div()
+                .relative()
+                .top(px(CARD_RISE * (1. - along)))
+                .opacity(along.clamp(0., 1.))
+                .child(card)
+        };
         let mut page = div()
-            .id("settings")
+            .id(SharedString::from(format!("{:?}", self.section)))
             .flex_1()
+            .min_w(px(0.))
             .min_h(px(0.))
             .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap(theme.spacing.medium)
             .children(self.failure.clone().map(|failure| note(&theme, failure)));
-        let Some(config) = self.config.clone() else {
-            return page;
-        };
-        for (index, surface) in config.surfaces.iter().enumerate() {
-            page = page.child(self.surface(index, surface, window, cx));
+        if let Some(config) = self.config.clone() {
+            let (wide, shared) = self.cards(&config, window, cx);
+            let count = wide.len() + shared.len() + 1;
+            let before = wide.len();
+            let wide = wide.into_iter().enumerate();
+            page = page.children(wide.map(|(index, card)| arriving(index, count, card)));
+            if !shared.is_empty() {
+                let columns = masonry(shared).map(|column| {
+                    let cards = column.into_iter();
+                    let cards = cards.map(|(index, card)| arriving(before + index, count, card));
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .gap(theme.spacing.medium)
+                        .children(cards)
+                });
+                page = page.child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(theme.spacing.medium)
+                        .children(columns),
+                );
+            }
+            // The marketplace scrolls by itself in the room that is left.
+            if let Some(market) = self.markets.get(&self.section).cloned() {
+                page = page.child(
+                    arriving(count - 1, count, market.into_any_element())
+                        .flex_1()
+                        .min_h(px(0.))
+                        .flex()
+                        .flex_col(),
+                );
+            }
         }
-        page = match config.pinned() {
-            Some(pins) => page.child(self.pins(&pins, window, cx)),
-            None => page.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(theme.spacing.small)
-                    .child(heading(&theme, "Pinned applications"))
-                    .child(note(
-                        &theme,
-                        "Applications are pinned to the `windows` widget, which the layout lacks.",
-                    )),
-            ),
-        };
-        page.child(self.themes(config.theme.as_deref(), window, cx))
+        div()
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .gap(theme.spacing.medium)
+            .child(rail)
+            .child(page)
     }
 }
 
@@ -618,6 +1542,58 @@ mod tests {
         assert_eq!(pin_title("C:/Windows/System32/charmap.exe"), "charmap");
         assert_eq!(pin_title("Command Prompt"), "Command Prompt");
         assert_eq!(pin_title("notes.v2"), "notes.v2");
+    }
+
+    #[test]
+    fn cards_go_where_less_stands() {
+        let [left, right] = masonry(vec![(4, 'a'), (2, 'b'), (2, 'c'), (1, 'd'), (3, 'e')]);
+        assert_eq!(left, [(0, 'a'), (3, 'd')]);
+        assert_eq!(right, [(1, 'b'), (2, 'c'), (4, 'e')]);
+    }
+
+    #[test]
+    fn a_number_leaves_the_file_a_step_under_its_least() {
+        let count = Kind::Count {
+            min: 2,
+            max: 4,
+            step: 1,
+            start: 3,
+            unset: "Off",
+        };
+        assert!(count.stepped(None, true) == Some(Answer::Number(3)));
+        assert!(count.stepped(Some(4), true) == Some(Answer::Number(4)));
+        assert!(count.stepped(Some(3), false) == Some(Answer::Number(2)));
+        assert!(count.stepped(Some(2), false) == Some(Answer::Unset));
+        assert!(count.stepped(None, false) == Some(Answer::Unset));
+    }
+
+    #[test]
+    fn a_switch_is_on_by_what_the_file_holds() {
+        let (shown, hidden) = (Answer::Unset, Answer::Flag(false));
+        assert!(Kind::is_on(shown, hidden, None));
+        assert!(Kind::is_on(shown, hidden, Some(&"left".into())));
+        assert!(!Kind::is_on(shown, hidden, Some(&false.into())));
+        let (tiled, left_alone) = (Answer::Flag(true), Answer::Unset);
+        assert!(!Kind::is_on(tiled, left_alone, None));
+        assert!(!Kind::is_on(tiled, left_alone, Some(&false.into())));
+        assert!(Kind::is_on(tiled, left_alone, Some(&true.into())));
+    }
+
+    #[test]
+    fn every_setting_stands_on_one_card() {
+        for (index, setting) in SETTINGS.iter().enumerate() {
+            let card = (setting.section, setting.card);
+            let before = &SETTINGS[..index];
+            let last = before.last().map(|last| (last.section, last.card));
+            let earlier = before
+                .iter()
+                .any(|other| (other.section, other.card) == card);
+            assert!(
+                !earlier || last == Some(card),
+                "`{}` is split",
+                setting.card
+            );
+        }
     }
 
     #[test]

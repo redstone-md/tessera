@@ -12,6 +12,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::extension::registry::OFFICIAL_REGISTRY;
+use crate::i18n::Language;
 use crate::platform::ScreenEdge;
 use crate::tiling::TilingConfig;
 use crate::wallpaper::WallpaperConfig;
@@ -141,11 +142,24 @@ impl From<WidgetSpecText> for WidgetSpec {
     }
 }
 
+/// Where a popup opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PopupPlace {
+    /// Next to the surface, at the widget that opened it.
+    #[default]
+    Surface,
+    /// In the middle of the display, over a veil that dims the rest.
+    Center,
+}
+
 /// A floating panel of widgets that a click on a widget opens.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PopupConfig {
     pub name: String,
+    #[serde(default)]
+    pub place: PopupPlace,
     /// Size of the panel, in logical pixels.
     pub width: f32,
     pub height: f32,
@@ -185,6 +199,9 @@ impl SurfaceConfig {
 pub struct Config {
     /// Name of the theme file to apply over the built-in theme.
     pub theme: Option<String>,
+    /// The language of the settings and the marketplace.
+    #[serde(default)]
+    pub language: Language,
     #[serde(default, rename = "surface")]
     pub surfaces: Vec<SurfaceConfig>,
     #[serde(default, rename = "popup")]
@@ -260,6 +277,19 @@ impl Config {
         Some(listed.map(names).unwrap_or_default())
     }
 
+    /// The option `key` of the first widget `name`, on a surface or in a
+    /// popup.
+    pub fn option(&self, name: &str, key: &str) -> Option<&toml::Value> {
+        self.widget(name)?.options.get(key)
+    }
+
+    /// The first widget `name`, on a surface or in a popup.
+    pub fn widget(&self, name: &str) -> Option<&WidgetSpec> {
+        let placed = self.surfaces.iter().flat_map(SurfaceConfig::widgets);
+        let shown = self.popups.iter().flat_map(|popup| &popup.content);
+        placed.chain(shown).find(|spec| spec.widget == name)
+    }
+
     fn builtin() -> Self {
         toml::from_str(DEFAULT).expect("the built-in configuration is valid")
     }
@@ -283,18 +313,22 @@ mod tests {
         assert_eq!(names(&bar.center), ["clock"]);
         assert_eq!(
             names(&bar.start),
-            ["label", "label", "label", "cpu", "memory", "battery"]
+            ["workspaces", "cpu", "memory", "battery"]
         );
         assert_eq!(config.registries(), [OFFICIAL_REGISTRY]);
         assert_eq!(
             names(&bar.end),
             [
-                "problems", "media", "tray", "label", "network", "volume", "quit"
+                "problems", "media", "tray", "label", "network", "volume", "label"
             ]
         );
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);
-        assert_eq!(names(&dock.center), ["windows"]);
+        assert_eq!(names(&dock.center), ["label", "windows"]);
+        assert_eq!(config.language, Language::English);
+        let settings = config.popups.iter().find(|popup| popup.name == "settings");
+        assert_eq!(settings.map(|popup| popup.place), Some(PopupPlace::Center));
+        assert!(config.option("windows", "pinned").is_none());
 
         let popup = bar.center[0]
             .popup

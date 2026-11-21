@@ -50,6 +50,7 @@ impl Shell {
     /// Applies `config`, opens its surfaces and starts watching its files.
     pub fn start(config: Config, cx: &mut App) -> anyhow::Result<()> {
         cx.set_global(Theme::load(config.theme.as_deref()));
+        cx.set_global(config.language);
         Tiler::start(&config.tiling, cx);
         Workspaces::start(&config.workspaces, cx);
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
@@ -176,6 +177,7 @@ impl Shell {
             return;
         };
         cx.set_global(Theme::load(config.theme.as_deref()));
+        cx.set_global(config.language);
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
         Wallpaper::configure(&config.wallpaper, cx);

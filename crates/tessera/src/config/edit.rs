@@ -8,7 +8,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
 use super::{CONFIG_FILE, Config, DEFAULT, config_dir};
 
@@ -16,6 +16,23 @@ use super::{CONFIG_FILE, Config, DEFAULT, config_dir};
 /// dock, and the one whose `pinned` option lists those of the Start menu.
 pub(super) const WINDOWS_WIDGET: &str = "windows";
 const APPS_WIDGET: &str = "apps";
+
+/// The option of both that lists the pinned applications.
+const PINNED: &str = "pinned";
+
+/// The arrangements that come with Tessera, by name: the surfaces and
+/// popups of a layout. The first is the built-in one.
+pub const LAYOUTS: [(&str, &str); 3] = [
+    ("macOS", include_str!("../layouts/macos.toml")),
+    ("Windows", include_str!("../layouts/windows.toml")),
+    ("Void", include_str!("../layouts/void.toml")),
+];
+
+/// The names as a list of the file.
+fn list(names: &[String]) -> Option<Value> {
+    let list: Array = names.iter().map(String::as_str).collect();
+    (!names.is_empty()).then_some(Value::Array(list))
+}
 
 /// The parts a surface is divided into along its length.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -191,6 +208,12 @@ impl ConfigFile {
     /// the `pinned` option of each `windows` widget. Whether the layout
     /// has such a widget is returned.
     pub fn set_pinned(&mut self, pinned: &[String]) -> bool {
+        self.on_surfaces(WINDOWS_WIDGET, PINNED, list(pinned).as_ref())
+    }
+
+    /// Sets the option `key` of every widget `name` on a surface; `None`
+    /// takes it away. Whether there is such a widget is returned.
+    fn on_surfaces(&mut self, name: &str, key: &str, value: Option<&Value>) -> bool {
         let surfaces = self
             .document
             .get("surface")
@@ -208,7 +231,7 @@ impl ConfigFile {
                     continue;
                 };
                 for widget in widgets.iter_mut() {
-                    found |= Self::pin(widget, WINDOWS_WIDGET, pinned);
+                    found |= Self::option(widget, name, key, value);
                 }
                 widgets.fmt();
             }
@@ -220,6 +243,12 @@ impl ConfigFile {
     /// option of each `apps` widget of a popup. Whether a popup has such a
     /// widget is returned.
     pub fn set_start_pinned(&mut self, pinned: &[String]) -> bool {
+        self.in_popups(APPS_WIDGET, PINNED, list(pinned).as_ref())
+    }
+
+    /// Sets the option `key` of every widget `name` in a popup; `None`
+    /// takes it away. Whether there is such a widget is returned.
+    fn in_popups(&mut self, name: &str, key: &str, value: Option<&Value>) -> bool {
         let popups = self.document.get_mut("popup");
         let Some(popups) = popups.and_then(Item::as_array_of_tables_mut) else {
             return false;
@@ -231,15 +260,104 @@ impl ConfigFile {
                 continue;
             };
             for widget in widgets.iter_mut() {
-                found |= Self::pin(widget, APPS_WIDGET, pinned);
+                found |= Self::option(widget, name, key, value);
             }
             widgets.fmt();
         }
         found
     }
 
-    /// Sets the option on `widget` if it is the widget `name`.
-    fn pin(widget: &mut Value, name: &str, pinned: &[String]) -> bool {
+    /// Sets the option `key` of every widget `name`, wherever it is placed;
+    /// `None` takes it away. Whether there is such a widget is returned.
+    pub fn set_option(&mut self, name: &str, key: &str, value: Option<Value>) -> bool {
+        let placed = self.on_surfaces(name, key, value.as_ref());
+        let shown = self.in_popups(name, key, value.as_ref());
+        placed || shown
+    }
+
+    /// Sets `key` at the top of the file; `None` takes it away.
+    pub fn set_key(&mut self, key: &str, value: Option<Value>) {
+        match value {
+            Some(value) => self.document[key] = Item::Value(value),
+            None => {
+                self.document.remove(key);
+            }
+        }
+    }
+
+    /// Sets `key` of the table `table`, which is created for it and taken
+    /// away with its last key; `None` takes the key away. Whether `table`
+    /// is something keys can be set in is returned.
+    pub fn set_in(&mut self, table: &str, key: &str, value: Option<Value>) -> bool {
+        if value.is_none() && self.document.get(table).is_none() {
+            return true;
+        }
+        let item = self.document.entry(table);
+        let item = item.or_insert_with(|| Item::Table(Table::new()));
+        let Some(entries) = item.as_table_like_mut() else {
+            return false;
+        };
+        match value {
+            Some(value) => {
+                entries.insert(key, Item::Value(value));
+            }
+            None => {
+                entries.remove(key);
+            }
+        }
+        if entries.is_empty() {
+            self.document.remove(table);
+        }
+        true
+    }
+
+    /// Replaces the surfaces and popups by those `layout` holds. The
+    /// applications pinned to the dock and the Start menu stay pinned, and
+    /// what is written above the first surface stays written.
+    pub fn set_layout(&mut self, layout: &str) -> bool {
+        let Ok(layout) = layout.parse::<DocumentMut>() else {
+            return false;
+        };
+        let config = self.config().ok();
+        let kept = [WINDOWS_WIDGET, APPS_WIDGET].map(|name| {
+            let pinned = config.as_ref()?.option(name, PINNED)?;
+            pinned.to_string().parse::<Value>().ok()
+        });
+        let first = |document: &DocumentMut| {
+            let surfaces = document.get("surface")?.as_array_of_tables()?;
+            Some(surfaces.get(0)?.decor().prefix()?.clone())
+        };
+        let above = first(&self.document);
+        for key in ["surface", "popup"] {
+            match layout.get(key) {
+                Some(item) => self.document[key] = item.clone(),
+                None => {
+                    self.document.remove(key);
+                }
+            }
+        }
+        let surfaces = self.document.get_mut("surface");
+        let surfaces = surfaces.and_then(Item::as_array_of_tables_mut);
+        if let (Some(above), Some(surface)) = (above, surfaces.and_then(|all| all.get_mut(0))) {
+            surface.decor_mut().set_prefix(above);
+        }
+        let [dock, start] = kept;
+        if dock.is_some() {
+            self.on_surfaces(WINDOWS_WIDGET, PINNED, dock.as_ref());
+        }
+        if start.is_some() {
+            self.in_popups(APPS_WIDGET, PINNED, start.as_ref());
+        }
+        true
+    }
+
+    /// The file as a table, to look single keys up in.
+    pub fn table(&self) -> Option<toml::Table> {
+        toml::from_str(&self.document.to_string()).ok()
+    }
+
+    /// Sets the option `key` on `widget` if it is the widget `name`.
+    fn option(widget: &mut Value, name: &str, key: &str, value: Option<&Value>) -> bool {
         if widget.as_str() == Some(name) {
             let mut table = InlineTable::new();
             table.insert("widget", name.into());
@@ -251,11 +369,13 @@ impl ConfigFile {
         if table.get("widget").and_then(Value::as_str) != Some(name) {
             return false;
         }
-        if pinned.is_empty() {
-            table.remove("pinned");
-        } else {
-            let list: Array = pinned.iter().map(String::as_str).collect();
-            table.insert("pinned", Value::Array(list));
+        match value {
+            Some(value) => {
+                table.insert(key, value.clone());
+            }
+            None => {
+                table.remove(key);
+            }
         }
         // Otherwise the new option keeps the spacing of the brace it
         // displaced.
@@ -408,6 +528,83 @@ content = ["apps"]
         assert_eq!(file.config().unwrap().theme.as_deref(), Some("night"));
         file.set_theme(None);
         assert_eq!(file.config().unwrap().theme, None);
+    }
+
+    #[test]
+    fn an_option_is_set_wherever_the_widget_is_and_taken_away_again() {
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        assert!(file.set_option("clock", "format", Some("%H".into())));
+        assert!(file.set_option("windows", "limit", Some(3.into())));
+        assert!(!file.set_option("tray", "limit", Some(3.into())));
+        let config = file.config().unwrap();
+        assert_eq!(
+            config.option("clock", "format").unwrap().as_str(),
+            Some("%H")
+        );
+        assert_eq!(
+            config.option("windows", "limit").unwrap().as_integer(),
+            Some(3)
+        );
+        assert!(file.set_option("clock", "format", None));
+        assert!(file.set_option("windows", "limit", None));
+        assert_eq!(file.document.to_string(), LAYOUT);
+    }
+
+    #[test]
+    fn keys_are_set_at_the_top_and_in_tables_of_their_own() {
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        file.set_key("language", Some("ru".into()));
+        assert!(file.set_in("tiling", "enabled", Some(true.into())));
+        assert!(file.set_in("tiling", "gap", Some(12.into())));
+        let config = file.config().expect("it stays usable");
+        assert_eq!(config.language, crate::i18n::Language::Russian);
+        assert!(config.tiling.enabled);
+        let table = file.table().unwrap();
+        assert_eq!(table["tiling"]["gap"].as_integer(), Some(12));
+
+        file.set_key("language", None);
+        assert!(file.set_in("tiling", "enabled", None));
+        assert!(file.set_in("tiling", "gap", None));
+        assert!(file.set_in("workspaces", "own", None));
+        assert_eq!(file.document.to_string(), LAYOUT);
+    }
+
+    #[test]
+    fn an_arrangement_replaces_the_bars_and_keeps_the_pins() {
+        let mut file = ConfigFile::parse(DEFAULT).unwrap();
+        assert!(file.set_pinned(&["Paint".to_owned()]));
+        assert!(file.set_start_pinned(&["Notepad".to_owned()]));
+        file.set_key("theme", Some("night".into()));
+        let (_, windows) = LAYOUTS[1];
+        assert!(file.set_layout(windows));
+        let config = file.config().expect("it stays usable");
+        assert_eq!(config.surfaces.len(), 1);
+        assert_eq!(config.theme.as_deref(), Some("night"));
+        let pinned = |name| config.option(name, "pinned").unwrap().as_array().unwrap()[0].clone();
+        assert_eq!(pinned("windows").as_str(), Some("Paint"));
+        assert_eq!(pinned("apps").as_str(), Some("Notepad"));
+        let text = file.document.to_string();
+        assert!(text.contains("# Built-in widgets:"));
+        assert!(text.contains("# [tiling] puts"));
+
+        let (_, first) = LAYOUTS[0];
+        assert!(file.set_layout(first));
+        assert_eq!(file.config().unwrap().surfaces.len(), 2);
+        assert!(!file.set_layout("[[surface"));
+    }
+
+    #[test]
+    fn the_built_in_configuration_is_the_first_arrangement() {
+        let (_, first) = LAYOUTS[0];
+        let layout: Config = toml::from_str(first).unwrap();
+        let builtin: Config = toml::from_str(DEFAULT).unwrap();
+        assert_eq!(layout.surfaces, builtin.surfaces);
+        assert_eq!(layout.popups, builtin.popups);
+        for (name, layout) in LAYOUTS {
+            let layout: Config = toml::from_str(layout).unwrap();
+            let settings = layout.popups.iter().any(|popup| popup.name == "settings");
+            assert!(settings, "{name} cannot be left again");
+        }
     }
 
     #[test]

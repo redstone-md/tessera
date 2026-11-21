@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Registries: lists of extensions that can be installed. A registry can
-//! name further registries, whose extensions are offered along with its
-//! own.
+//! Registries: lists of extensions and themes that can be installed. A
+//! registry can name further registries, whose offers are made along with
+//! its own.
 
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{DeviceKind, MANIFEST_FILE, Manifest, STATE_FILE, WASM_FILE, http, is_identifier};
+use crate::theme::Theme;
 
 /// The registry that is read when the configuration names none.
 pub const OFFICIAL_REGISTRY: &str =
@@ -24,10 +25,26 @@ pub const OFFICIAL_REGISTRY: &str =
 /// Written next to an extension that was installed from a registry.
 const RECEIPT_FILE: &str = "installed.toml";
 
-/// The most that is read of a registry, a manifest and a WebAssembly file.
+/// What the file of a theme ends in, and the file written next to one
+/// that was installed from a registry.
+const THEME_EXTENSION: &str = "toml";
+const THEME_RECEIPT_EXTENSION: &str = "installed";
+
+/// The most that is read of a registry, a manifest, a WebAssembly file
+/// and a theme.
 const REGISTRY_LIMIT: u64 = 1 << 20;
 const MANIFEST_LIMIT: u64 = 64 << 10;
 const WASM_LIMIT: u64 = 32 << 20;
+const THEME_LIMIT: u64 = 64 << 10;
+
+/// What a registry offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// Code that adds widgets; kept in a directory of its own.
+    Extension,
+    /// A theme file.
+    Theme,
+}
 
 /// How many registries are read at most, and through how many registries
 /// one may be reached from those of the configuration.
@@ -115,8 +132,21 @@ struct Registry {
     name: String,
     #[serde(default, rename = "extension")]
     extensions: Vec<Entry>,
+    #[serde(default, rename = "theme")]
+    themes: Vec<ThemeEntry>,
     #[serde(default, rename = "registry")]
     registries: Vec<Link>,
+}
+
+#[derive(Deserialize)]
+struct ThemeEntry {
+    id: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    version: String,
+    file: String,
+    sha256: String,
 }
 
 #[derive(Deserialize)]
@@ -173,7 +203,14 @@ impl Download {
     }
 }
 
-/// An extension a registry offers.
+/// The files of an offer.
+#[derive(Clone, Debug)]
+enum Files {
+    Extension { manifest: Download, wasm: Download },
+    Theme(Download),
+}
+
+/// An extension or a theme a registry offers.
 #[derive(Clone, Debug)]
 pub struct Offer {
     pub id: String,
@@ -182,8 +219,7 @@ pub struct Offer {
     pub version: String,
     /// The name of the registry that offers it.
     pub registry: String,
-    manifest: Download,
-    wasm: Download,
+    files: Files,
 }
 
 impl Offer {
@@ -196,8 +232,10 @@ impl Offer {
                 .with_context(|| format!("the extension `{}` is left out", entry.id))
         };
         Ok(Self {
-            manifest: download(&entry.manifest, &entry.manifest_sha256)?,
-            wasm: download(&entry.wasm, &entry.wasm_sha256)?,
+            files: Files::Extension {
+                manifest: download(&entry.manifest, &entry.manifest_sha256)?,
+                wasm: download(&entry.wasm, &entry.wasm_sha256)?,
+            },
             id: entry.id,
             name: entry.name,
             description: entry.description,
@@ -206,12 +244,55 @@ impl Offer {
         })
     }
 
-    /// Downloads the extension and checks it against what the registry
-    /// lists. Nothing is installed yet.
+    fn theme(entry: ThemeEntry, registry: &str, location: &Location) -> anyhow::Result<Self> {
+        if !is_identifier(&entry.id) {
+            bail!("`{}` is not a name made of a-z, 0-9 and `-`", entry.id);
+        }
+        let file = Download::new(location, &entry.file, &entry.sha256)
+            .with_context(|| format!("the theme `{}` is left out", entry.id))?;
+        Ok(Self {
+            files: Files::Theme(file),
+            id: entry.id,
+            name: entry.name,
+            description: entry.description,
+            version: entry.version,
+            registry: registry.to_owned(),
+        })
+    }
+
+    pub fn kind(&self) -> Kind {
+        match self.files {
+            Files::Extension { .. } => Kind::Extension,
+            Files::Theme(_) => Kind::Theme,
+        }
+    }
+
+    /// Downloads the offer and checks it against what the registry lists.
+    /// Nothing is installed yet.
     pub fn fetch(&self) -> anyhow::Result<Package> {
-        let manifest = String::from_utf8(self.manifest.fetch(MANIFEST_LIMIT)?)
+        let receipt = Receipt {
+            version: self.version.clone(),
+            registry: self.registry.clone(),
+        };
+        let (manifest, wasm) = match &self.files {
+            Files::Extension { manifest, wasm } => (manifest, wasm),
+            Files::Theme(file) => {
+                let theme =
+                    String::from_utf8(file.fetch(THEME_LIMIT)?).context("the theme is not text")?;
+                Theme::check(&theme).context("the theme is invalid")?;
+                return Ok(Package {
+                    id: self.id.clone(),
+                    receipt,
+                    network: Vec::new(),
+                    files: Vec::new(),
+                    devices: Vec::new(),
+                    content: Content::Theme(theme),
+                });
+            }
+        };
+        let manifest = String::from_utf8(manifest.fetch(MANIFEST_LIMIT)?)
             .context("the manifest is not text")?;
-        let wasm = self.wasm.fetch(WASM_LIMIT)?;
+        let wasm = wasm.fetch(WASM_LIMIT)?;
         let parsed = Manifest::parse(&manifest).context("the manifest is invalid")?;
         if parsed.id != self.id {
             bail!(
@@ -222,15 +303,11 @@ impl Offer {
         }
         Ok(Package {
             id: self.id.clone(),
-            receipt: Receipt {
-                version: self.version.clone(),
-                registry: self.registry.clone(),
-            },
+            receipt,
             network: parsed.permissions.network().to_vec(),
             files: parsed.permissions.files().to_vec(),
             devices: parsed.permissions.devices().to_vec(),
-            manifest,
-            wasm,
+            content: Content::Extension { manifest, wasm },
         })
     }
 }
@@ -243,8 +320,8 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Reads the registries at `roots` and those they name. An extension
-    /// that several registries offer is taken from the one read first:
+    /// Reads the registries at `roots` and those they name. What
+    /// several registries offer is taken from the one read first:
     /// `roots` in their order, then the registries they name.
     pub fn browse(roots: &[String]) -> Self {
         let mut catalog = Self::default();
@@ -290,10 +367,18 @@ impl Catalog {
     /// registries it names.
     fn add(&mut self, location: &Location, text: &str) -> anyhow::Result<Vec<Location>> {
         let registry: Registry = toml::from_str(text)?;
-        for entry in registry.extensions {
-            match Offer::new(entry, &registry.name, location) {
-                Ok(offer) if self.offers.iter().any(|known| known.id == offer.id) => {}
-                Ok(offer) => self.offers.push(offer),
+        let extensions = registry.extensions.into_iter();
+        let extensions = extensions.map(|entry| Offer::new(entry, &registry.name, location));
+        let themes = registry.themes.into_iter();
+        let themes = themes.map(|entry| Offer::theme(entry, &registry.name, location));
+        for offer in extensions.chain(themes).collect::<Vec<_>>() {
+            match offer {
+                Ok(offer) => {
+                    let same = |known: &Offer| known.kind() == offer.kind() && known.id == offer.id;
+                    if !self.offers.iter().any(same) {
+                        self.offers.push(offer);
+                    }
+                }
                 Err(error) => self.problems.push(format!("{location}: {error:#}")),
             }
         }
@@ -315,7 +400,23 @@ struct Receipt {
     registry: String,
 }
 
-/// A downloaded extension that matches what its registry lists.
+/// What a package holds.
+#[derive(Debug)]
+enum Content {
+    Extension { manifest: String, wasm: Vec<u8> },
+    Theme(String),
+}
+
+/// A file complete before it takes the place of the one at `file`.
+fn replace(file: &Path, content: &[u8]) -> anyhow::Result<()> {
+    let mut part = file.as_os_str().to_owned();
+    part.push(".part");
+    fs::write(&part, content)
+        .and_then(|()| fs::rename(&part, file))
+        .with_context(|| format!("cannot write {}", file.display()))
+}
+
+/// A downloaded extension or theme that matches what its registry lists.
 #[derive(Debug)]
 pub struct Package {
     id: String,
@@ -326,8 +427,7 @@ pub struct Package {
     pub files: Vec<String>,
     /// The kinds of devices the extension asks to be told of.
     pub devices: Vec<DeviceKind>,
-    manifest: String,
-    wasm: Vec<u8>,
+    content: Content,
 }
 
 impl Package {
@@ -344,16 +444,36 @@ impl Package {
             network,
             files,
             devices,
-            manifest: String::new(),
-            wasm: Vec::new(),
+            content: Content::Extension {
+                manifest: String::new(),
+                wasm: Vec::new(),
+            },
         }
     }
 
-    /// Puts the extension into the directory `extensions`, in place of an
-    /// earlier version from a registry. An extension that someone put
-    /// there by hand is not replaced.
-    pub fn install(&self, extensions: &Path) -> anyhow::Result<()> {
-        let directory = extensions.join(&self.id);
+    /// Puts the package into `directory`, that of the extensions or that
+    /// of the themes, in place of an earlier version from a registry.
+    /// What someone put there by hand is not replaced.
+    pub fn install(&self, directory: &Path) -> anyhow::Result<()> {
+        let receipt = toml::to_string(&self.receipt)?;
+        let (manifest, wasm) = match &self.content {
+            Content::Extension { manifest, wasm } => (manifest, wasm),
+            Content::Theme(theme) => {
+                let file = directory.join(&self.id).with_extension(THEME_EXTENSION);
+                let proof = file.with_extension(THEME_RECEIPT_EXTENSION);
+                if file.exists() && !proof.exists() {
+                    bail!(
+                        "{} exists and was not installed from a registry",
+                        file.display()
+                    );
+                }
+                fs::create_dir_all(directory)
+                    .with_context(|| format!("cannot create {}", directory.display()))?;
+                replace(&proof, receipt.as_bytes())?;
+                return replace(&file, theme.as_bytes());
+            }
+        };
+        let directory = directory.join(&self.id);
         if directory.exists() && !directory.join(RECEIPT_FILE).exists() {
             bail!(
                 "{} exists and was not installed from a registry",
@@ -362,32 +482,30 @@ impl Package {
         }
         fs::create_dir_all(&directory)
             .with_context(|| format!("cannot create {}", directory.display()))?;
-        let receipt = toml::to_string(&self.receipt)?;
         let files: [(&str, &[u8]); 3] = [
-            (WASM_FILE, &self.wasm),
-            (MANIFEST_FILE, self.manifest.as_bytes()),
+            (WASM_FILE, wasm),
+            (MANIFEST_FILE, manifest.as_bytes()),
             (RECEIPT_FILE, receipt.as_bytes()),
         ];
         for (name, content) in files {
-            // A file is complete before it takes the place of the old one.
-            let (file, part) = (directory.join(name), directory.join(format!("{name}.part")));
-            fs::write(&part, content)
-                .and_then(|()| fs::rename(&part, &file))
-                .with_context(|| format!("cannot write {}", file.display()))?;
+            replace(&directory.join(name), content)?;
         }
         Ok(())
     }
 }
 
-/// An extension in the extensions directory.
+/// An extension in the extensions directory, or a theme in that of the
+/// themes.
 #[derive(Debug)]
 pub struct Installed {
     pub id: String,
-    /// Its widgets as layouts know them.
+    /// The widgets of an extension as layouts know them.
     pub widgets: Vec<String>,
     /// The version a registry gave it; `None` if it was put there by hand.
     pub version: Option<String>,
-    directory: PathBuf,
+    /// The directory of an extension, or the file of a theme.
+    place: PathBuf,
+    kind: Kind,
 }
 
 impl Installed {
@@ -409,28 +527,56 @@ impl Installed {
                     .collect(),
                 id: manifest.id,
                 version: receipt.map(|receipt| receipt.version),
-                directory,
+                place: directory,
+                kind: Kind::Extension,
             })
         });
         installed.collect()
     }
 
-    /// Deletes the extension and what it remembered. Only one that came
-    /// from a registry is deleted, and only the files Tessera put there.
+    /// The themes in the directory `themes`.
+    pub fn themes(themes: &Path) -> Vec<Self> {
+        let entries = fs::read_dir(themes).into_iter().flatten().flatten();
+        let installed = entries.filter_map(|entry| {
+            let file = entry.path();
+            if file.extension()? != THEME_EXTENSION {
+                return None;
+            }
+            let receipt = fs::read_to_string(file.with_extension(THEME_RECEIPT_EXTENSION)).ok();
+            let receipt = receipt.and_then(|text| toml::from_str::<Receipt>(&text).ok());
+            Some(Self {
+                id: file.file_stem()?.to_str()?.to_owned(),
+                widgets: Vec::new(),
+                version: receipt.map(|receipt| receipt.version),
+                place: file,
+                kind: Kind::Theme,
+            })
+        });
+        installed.collect()
+    }
+
+    /// Deletes the extension and what it remembered, or the theme. Only
+    /// what came from a registry is deleted, and only the files Tessera
+    /// put there.
     pub fn remove(&self) -> anyhow::Result<()> {
         if self.version.is_none() {
             bail!("`{}` was not installed from a registry", self.id);
         }
-        for name in [WASM_FILE, MANIFEST_FILE, STATE_FILE, RECEIPT_FILE] {
-            match fs::remove_file(self.directory.join(name)) {
-                Err(error) if error.kind() != ErrorKind::NotFound => {
-                    return Err(error).context(format!("cannot delete {name}"));
-                }
-                _ => {}
+        let delete = |file: PathBuf| match fs::remove_file(&file) {
+            Err(error) if error.kind() != ErrorKind::NotFound => {
+                Err(error).context(format!("cannot delete {}", file.display()))
             }
+            _ => Ok(()),
+        };
+        if self.kind == Kind::Theme {
+            delete(self.place.with_extension(THEME_RECEIPT_EXTENSION))?;
+            return delete(self.place.clone());
         }
-        fs::remove_dir(&self.directory)
-            .with_context(|| format!("cannot delete {}", self.directory.display()))
+        for name in [WASM_FILE, MANIFEST_FILE, STATE_FILE, RECEIPT_FILE] {
+            delete(self.place.join(name))?;
+        }
+        fs::remove_dir(&self.place)
+            .with_context(|| format!("cannot delete {}", self.place.display()))
     }
 }
 
@@ -559,6 +705,63 @@ mod tests {
 
         installed.remove().unwrap();
         assert!(!extensions.join("lights").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_theme_is_installed_and_removed() {
+        const THEME: &str = "seed = \"#336699\"\n[bar]\nflat = true\n";
+        let root = scratch("theme");
+        let themes = root.join("themes");
+        fs::create_dir_all(root.join("offered")).unwrap();
+        fs::write(root.join("offered/night.toml"), THEME).unwrap();
+        fs::write(root.join("offered/broken.toml"), "sead = 1\n").unwrap();
+        let entry = |id: &str, content: &str| {
+            format!(
+                concat!(
+                    "[[theme]]\nid = \"{id}\"\nname = \"{id}\"\nversion = \"2\"\n",
+                    "file = \"offered/{id}.toml\"\nsha256 = \"{sum}\"\n"
+                ),
+                id = id,
+                sum = checksum(content.as_bytes())
+            )
+        };
+        let rest = entry("night", THEME) + &entry("broken", "sead = 1\n");
+        let catalog = Catalog::browse(&[registry(&root, "Local", &rest)]);
+        assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
+        let kinds: Vec<_> = catalog.offers.iter().map(Offer::kind).collect();
+        assert_eq!(kinds, [Kind::Extension, Kind::Theme, Kind::Theme]);
+
+        // What is not a theme file is not installed.
+        assert!(catalog.offers[2].fetch().is_err());
+        let package = catalog.offers[1].fetch().unwrap();
+        assert!(package.network.is_empty());
+        package.install(&themes).unwrap();
+        package.install(&themes).unwrap();
+        assert_eq!(
+            fs::read_to_string(themes.join("night.toml")).unwrap(),
+            THEME
+        );
+
+        // A theme someone wrote stays, and so does its name.
+        fs::write(themes.join("own.toml"), THEME).unwrap();
+        let mut installed = Installed::themes(&themes);
+        installed.sort_by(|a, b| a.id.cmp(&b.id));
+        let [night, own] = &installed[..] else {
+            panic!("{installed:?}");
+        };
+        assert_eq!(
+            (night.id.as_str(), night.version.as_deref()),
+            ("night", Some("2"))
+        );
+        assert_eq!((own.id.as_str(), own.version.as_deref()), ("own", None));
+        assert!(own.remove().is_err());
+        night.remove().unwrap();
+        let left: Vec<_> = fs::read_dir(&themes).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "{left:?}");
+
+        fs::rename(themes.join("own.toml"), themes.join("night.toml")).unwrap();
+        assert!(package.install(&themes).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
