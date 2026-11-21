@@ -75,7 +75,8 @@
 #               `start`); without the option no descriptions are shown.
 #               Option limit, a number: only that many icons are shown,
 #               and a button unrolls the strip to the others
-#   "windows"   a button for each open window of the display; option pinned,
+#   "windows"   a button for each application with windows on the display,
+#               which a click goes through; option pinned,
 #               applications that keep a button whether they run or not:
 #               paths of programs or shortcuts, names the Start menu gives
 #               applications, or "shell:AppsFolder/" and the identifier of

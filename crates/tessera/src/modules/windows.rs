@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! One button per pinned application and per open application window.
+//! One button per pinned application and per application with open
+//! windows; the windows of one application share a button.
 //! Widget: `windows`.
 
 use std::cell::Cell;
@@ -55,6 +56,11 @@ const ICON_TASK: &str = "\u{e945}";
 const ICON_NEW_WINDOW: &str = "\u{e78b}";
 const ICON_PIN: &str = "\u{e718}";
 const ICON_UNPIN: &str = "\u{e77a}";
+const ICON_WINDOW: &str = "\u{e7c4}";
+
+/// How many dots a button shows besides the first, one for each further
+/// window of its application.
+const MORE_DOTS: u8 = 2;
 
 pub struct WindowsModule;
 
@@ -154,6 +160,37 @@ impl Pin {
     }
 }
 
+/// What tells the application of a window from other applications, the
+/// way the taskbar of Windows groups windows: the packaged application,
+/// or the identifier the application states for the window, or else its
+/// program file. `None` when nothing of it is known.
+fn group(
+    packaged: Option<&str>,
+    stated: Option<&str>,
+    executable: Option<&Path>,
+) -> Option<String> {
+    if let Some(app) = packaged {
+        return Some(format!("app:{}", app.to_lowercase()));
+    }
+    if let Some(id) = stated {
+        return Some(format!("id:{}", id.to_lowercase()));
+    }
+    let executable = executable?.to_string_lossy().to_lowercase();
+    Some(format!("program:{executable}"))
+}
+
+fn group_of(window: &AppWindow) -> Option<String> {
+    let stated = match window.app_id {
+        Some(_) => None,
+        None => window.id.stated_app_id(),
+    };
+    group(
+        window.app_id.as_deref(),
+        stated.as_deref(),
+        window.executable.as_deref(),
+    )
+}
+
 fn is_link(path: &Path) -> bool {
     let extension = path.extension();
     extension.is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
@@ -206,7 +243,7 @@ fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
 /// The documents the application of `item` opened lately, each to be
 /// opened again by it, and then the tasks it put in its jump list.
 fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
-    let window = item.window.as_ref();
+    let window = item.front();
     let pin = item.pin.as_ref();
     let packaged = window
         .and_then(|window| window.app_id.clone())
@@ -251,11 +288,17 @@ struct DockItem {
     /// The pinned application the button stands for. Such a button stays
     /// when its window closes.
     pin: Option<Pin>,
-    /// The window the button switches to; a button without one is that of
-    /// a pinned application that does not run on this display.
-    window: Option<AppWindow>,
+    /// The application of the windows, as [`group_of`] tells it; `None`
+    /// for a pinned application and for a window nothing is known of.
+    group: Option<String>,
+    /// The windows of the application the button stands for, the one used
+    /// last first; a button without one is that of a pinned application
+    /// that does not run on this display.
+    windows: Vec<AppWindow>,
     /// 1 while there is a window, 0 while there is none.
     running: Spring,
+    /// How many windows there are besides the first, up to [`MORE_DOTS`].
+    more: Spring,
     /// 0 while absent, 1 when fully shown.
     presence: Spring,
     /// 1 while the window is the foreground window.
@@ -268,8 +311,37 @@ struct DockItem {
     leaving: bool,
 }
 
-/// Lists the pinned applications and the application windows of one display,
-/// starts the former and switches between the latter.
+impl DockItem {
+    /// The window of the application that was used last.
+    fn front(&self) -> Option<&AppWindow> {
+        self.windows.first()
+    }
+
+    fn holds(&self, id: AppWindowId) -> bool {
+        self.windows.iter().any(|window| window.id == id)
+    }
+}
+
+/// Brings a window of an application forward: its only window, or
+/// minimizes that one if it is in front already; of several the one used
+/// last, or, when that one is in front, the one used longest ago, so that
+/// click after click goes through them all.
+fn switch_to(windows: &[AppWindowId]) {
+    match windows {
+        [] => {}
+        [only] => only.activate_or_minimize(),
+        [front, .., last] => {
+            if AppWindowId::foreground() == Some(*front) {
+                last.activate();
+            } else {
+                front.activate();
+            }
+        }
+    }
+}
+
+/// Lists the pinned applications and the applications with windows on one
+/// display, starts the former and switches between the windows of each.
 struct WindowList {
     /// The display whose windows are listed; every window when unknown.
     display: Option<DisplayKey>,
@@ -315,22 +387,30 @@ impl WindowList {
             next_key: 0,
         };
         for pin in pins {
-            list.add(Some(pin), None, cx);
+            list.add(Some(pin), None, Vec::new(), cx);
         }
         list.refresh(cx);
         list
     }
 
     /// Appends a button, which grows in.
-    fn add(&mut self, pin: Option<Pin>, window: Option<AppWindow>, cx: &Context<Self>) {
+    fn add(
+        &mut self,
+        pin: Option<Pin>,
+        group: Option<String>,
+        windows: Vec<AppWindow>,
+        cx: &Context<Self>,
+    ) {
         let motion = cx.global::<Theme>().motion;
         let mut presence = Spring::new(motion.spatial, 0.);
         presence.animate_to(1.);
         self.items.push(DockItem {
             key: self.next_key,
             pin,
-            window,
+            group,
+            windows,
             running: Spring::new(motion.spatial, 0.),
+            more: Spring::new(motion.spatial, 0.),
             presence,
             active: Spring::new(motion.spatial, 0.),
             interaction: Interaction::new(&motion),
@@ -346,7 +426,7 @@ impl WindowList {
         let item = self.items.iter().find(|item| item.key == key);
         let target = item
             .filter(|item| !item.leaving)
-            .and_then(|item| Some((item.window.as_ref()?.id, item.middle.get()?)));
+            .and_then(|item| Some((item.front()?.id, item.middle.get()?)));
         let Some((id, middle)) = target.filter(|_| hovered) else {
             let left = target.filter(|_| !hovered).map(|(id, _)| id);
             Previews::leave(left, cx);
@@ -359,15 +439,22 @@ impl WindowList {
     }
 
     /// What the menu of the button `key` offers: the documents its
-    /// application opened lately, another window of its program, pinning
-    /// or unpinning it, and closing its window.
+    /// application opened lately, its windows if it has several, another
+    /// window of its program, pinning or unpinning it, and closing its
+    /// windows.
     fn menu_entries(&self, key: usize) -> Vec<MenuEntry> {
         let shown = |item: &&DockItem| item.key == key && !item.leaving;
         let Some(item) = self.items.iter().find(shown) else {
             return Vec::new();
         };
         let mut entries = recent_entries(item);
-        let executable = item.window.as_ref().and_then(AppWindow::program);
+        if item.windows.len() > 1 {
+            entries.extend(item.windows.iter().map(|window| {
+                let id = window.id;
+                MenuEntry::new(ICON_WINDOW, id.title(), move |_| id.activate())
+            }));
+        }
+        let executable = item.front().and_then(AppWindow::program);
         let launched = match (&item.pin, &executable) {
             (Some(pin), _) => Some(pin.shortcut.clone()),
             (None, Some(executable)) => Some(Shortcut {
@@ -377,7 +464,7 @@ impl WindowList {
             (None, None) => None,
         };
         if let Some(shortcut) = launched {
-            let label = if item.window.is_some() {
+            let label = if item.front().is_some() {
                 "New window"
             } else {
                 "Open"
@@ -401,10 +488,17 @@ impl WindowList {
             }
             (None, None) => {}
         }
-        if let Some(id) = item.window.as_ref().map(|window| window.id) {
-            entries.push(MenuEntry::new(ICON_CLOSE, "Close window", move |_| {
+        let ids: Vec<AppWindowId> = item.windows.iter().map(|window| window.id).collect();
+        match ids.as_slice() {
+            [] => {}
+            &[id] => entries.push(MenuEntry::new(ICON_CLOSE, "Close window", move |_| {
                 id.close();
-            }));
+            })),
+            _ => entries.push(MenuEntry::new(ICON_CLOSE, "Close all windows", move |_| {
+                for id in &ids {
+                    id.close();
+                }
+            })),
         }
         entries
     }
@@ -423,51 +517,68 @@ impl WindowList {
     }
 
     /// Re-reads the window list and repaints only when it changed. Known
-    /// windows keep their place, new ones are appended, and closed ones
-    /// start leaving. A pinned application takes one of its windows; the
-    /// buttons of pinned applications come first, so they choose first.
+    /// applications keep their place, new ones are appended, and those
+    /// whose last window closed start leaving. A pinned application takes
+    /// its windows; the buttons of pinned applications come first, so they
+    /// choose first.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let mut windows = AppWindow::enumerate();
         windows.retain(|window| self.display.is_none_or(|display| window.display == display));
+        let mut windows: Vec<(Option<String>, AppWindow)> = windows
+            .into_iter()
+            .map(|window| (group_of(&window), window))
+            .collect();
         let foreground = AppWindowId::foreground();
         let mut changed = foreground != self.foreground;
         self.foreground = foreground;
         let shows = |items: &[DockItem], id| {
-            let shown =
-                |item: &DockItem| !item.leaving && item.window.as_ref().map(|w| w.id) == Some(id);
+            let shown = |item: &DockItem| !item.leaving && item.holds(id);
             items.iter().any(shown)
         };
         let previewed = Previews::shown(cx).filter(|&id| shows(&self.items, id));
 
+        // An application may say what it is only after its window opened:
+        // the button of the window then goes on as that application.
         for item in &mut self.items {
-            let held = item.window.as_ref().map(|window| window.id);
-            let mut found = windows.iter().position(|window| Some(window.id) == held);
-            let Some(pin) = &item.pin else {
-                let present = found.is_some();
-                if let Some(window) = found.map(|index| windows.remove(index))
-                    && Some(&window) != item.window.as_ref()
-                {
-                    item.window = Some(window);
-                    changed = true;
-                }
-                if item.leaving == present {
-                    item.leaving = !present;
-                    item.presence.animate_to(if present { 1. } else { 0. });
-                    changed = true;
-                }
-                continue;
-            };
-            if found.is_none() {
-                found = windows.iter().position(|window| pin.owns(window));
+            let held = windows.iter().find(|(_, window)| item.holds(window.id));
+            if let (None, Some((group, _))) = (&item.pin, held) {
+                item.group.clone_from(group);
             }
-            let window = found.map(|index| windows.remove(index));
-            if window != item.window {
-                item.window = window;
+        }
+        for item in &mut self.items {
+            let mut mine = Vec::new();
+            windows.retain(|(group, window)| {
+                let owned = match (&item.pin, &item.group, group) {
+                    (Some(pin), _, _) => pin.owns(window) || item.holds(window.id),
+                    (None, Some(one), Some(other)) => one == other,
+                    (None, _, _) => item.holds(window.id),
+                };
+                if owned {
+                    mine.push(window.clone());
+                }
+                !owned
+            });
+            let present = !mine.is_empty();
+            // The button of an application that left keeps its windows
+            // for the icon it shrinks away with.
+            if (present || item.pin.is_some()) && mine != item.windows {
+                item.windows = mine;
+                changed = true;
+            }
+            if item.pin.is_none() && item.leaving == present {
+                item.leaving = !present;
+                item.presence.animate_to(if present { 1. } else { 0. });
                 changed = true;
             }
         }
-        for window in windows {
-            self.add(None, Some(window), cx);
+        for (group, window) in windows {
+            let same = |item: &&mut DockItem| {
+                item.pin.is_none() && !item.leaving && group.is_some() && item.group == group
+            };
+            match self.items.iter_mut().find(same) {
+                Some(item) => item.windows.push(window),
+                None => self.add(None, group, vec![window], cx),
+            }
             changed = true;
         }
         // A preview does not outlive its window.
@@ -475,11 +586,13 @@ impl WindowList {
             Previews::close(cx);
         }
         for item in &mut self.items {
-            let shown = item.window.as_ref().filter(|_| !item.leaving);
-            let is_foreground = shown.is_some_and(|window| foreground == Some(window.id));
+            let is_foreground = !item.leaving && foreground.is_some_and(|id| item.holds(id));
             item.active.animate_to(if is_foreground { 1. } else { 0. });
-            let runs = item.window.is_some();
+            let runs = !item.windows.is_empty();
             item.running.animate_to(if runs { 1. } else { 0. });
+            let more = item.windows.len().saturating_sub(1);
+            let more = u8::try_from(more).unwrap_or(u8::MAX).min(MORE_DOTS);
+            item.more.animate_to(f32::from(more));
         }
         if changed {
             cx.notify();
@@ -496,9 +609,10 @@ impl WindowList {
         let presence = item.presence.value(window);
         let active = item.active.value(window);
         let running = item.running.value(window);
+        let more = item.more.value(window);
         let state = item.interaction.state(window);
         let key = item.key;
-        let id = item.window.as_ref().map(|window| window.id);
+        let ids: Vec<AppWindowId> = item.windows.iter().map(|window| window.id).collect();
         let shortcut = item.pin.as_ref().map(|pin| pin.shortcut.clone());
 
         let icon_size =
@@ -526,10 +640,9 @@ impl WindowList {
             .on_click(move |_, _, cx| {
                 Previews::close(cx);
                 Menus::close(cx);
-                match (id, &shortcut) {
-                    (Some(id), _) => id.activate_or_minimize(),
-                    (None, Some(shortcut)) => shortcut.launch(),
-                    (None, None) => {}
+                match &shortcut {
+                    Some(shortcut) if ids.is_empty() => shortcut.launch(),
+                    _ => switch_to(&ids),
                 }
             })
             .child({
@@ -548,7 +661,7 @@ impl WindowList {
                     .bg(theme.colors.outline)
                     .into_any_element(),
             })
-            .child(Self::render_indicator(active, running, theme));
+            .child(Self::render_indicator(active, running, more, theme));
         let button = Interaction::track_hover(
             button,
             cx,
@@ -574,18 +687,36 @@ impl WindowList {
             .into_any_element()
     }
 
-    /// A dot under every window; it grows into a pill for the foreground
-    /// one. `running` is 0 under an application without a window, which
-    /// has no dot.
-    fn render_indicator(active: f32, running: f32, theme: Theme) -> AnyElement {
+    /// A dot under every application with a window, which grows into a
+    /// pill while one of its windows is in front, and up to [`MORE_DOTS`]
+    /// dots beside it, `more` of them, for its further windows. `running`
+    /// is 0 under an application without a window, which has no dot.
+    fn render_indicator(active: f32, running: f32, more: f32, theme: Theme) -> AnyElement {
         let dot = theme.dock.indicator_height;
         let growth = theme.dock.indicator_active_width - dot;
+        let color = mix(theme.colors.outline, theme.colors.primary, active);
+        let further = (0..MORE_DOTS).map(|index| {
+            let shown = (more - f32::from(index)).clamp(0., 1.);
+            div()
+                .h(dot)
+                .w(dot * shown)
+                .ml(dot / 2. * shown)
+                .rounded(theme.shape.full)
+                .opacity(shown)
+                .bg(color)
+        });
         div()
-            .h(dot)
-            .w(dot + growth * active.max(0.))
-            .rounded(theme.shape.full)
+            .flex()
+            .items_center()
             .opacity(running.clamp(0., 1.))
-            .bg(mix(theme.colors.outline, theme.colors.primary, active))
+            .child(
+                div()
+                    .h(dot)
+                    .w(dot + growth * active.max(0.))
+                    .rounded(theme.shape.full)
+                    .bg(color),
+            )
+            .children(further)
             .into_any_element()
     }
 }
@@ -598,7 +729,7 @@ impl Render for WindowList {
             .iter_mut()
             .map(|item| {
                 let icons = cx.global::<AppIcons>();
-                let icon = match (&item.pin, &item.window) {
+                let icon = match (&item.pin, item.front()) {
                     (Some(pin), _) => pin.icon(icons),
                     (None, Some(window)) => {
                         let program = window.program();
@@ -651,6 +782,24 @@ mod tests {
             ["Notepad", "c:/apps/APP.exe"]
         );
         assert_eq!(without(&pins, "notepad"), ["C:/Apps/app.exe"]);
+    }
+
+    #[test]
+    fn windows_are_grouped_by_what_the_application_states_first() {
+        let program = Path::new("C:/Programs/Editor.exe");
+        assert_eq!(
+            group(Some("Vendor.App!Main"), Some("stated"), Some(program)).as_deref(),
+            Some("app:vendor.app!main")
+        );
+        assert_eq!(
+            group(None, Some("Vendor.Profile1"), Some(program)).as_deref(),
+            Some("id:vendor.profile1")
+        );
+        assert_eq!(
+            group(None, None, Some(program)),
+            group(None, None, Some(Path::new("C:/programs/editor.EXE")))
+        );
+        assert_eq!(group(None, None, None), None);
     }
 
     #[test]
