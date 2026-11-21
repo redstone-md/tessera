@@ -87,6 +87,13 @@ impl Spring {
         self.value
     }
 
+    /// The value at `now`, for what moves without a window of the shell
+    /// to ask for frames.
+    pub fn value_at(&mut self, now: Instant) -> f32 {
+        self.advance_to(now);
+        self.value
+    }
+
     fn advance_to(&mut self, now: Instant) {
         if self.is_settled() {
             self.value = self.target;

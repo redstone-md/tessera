@@ -19,6 +19,7 @@ mod settings;
 mod sound;
 mod start;
 mod system;
+mod tiling;
 mod tray;
 mod wifi;
 mod windows;
@@ -48,6 +49,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(start::StartModule),
         Box::new(sound::SoundModule),
         Box::new(system::SystemModule),
+        Box::new(tiling::TilingModule),
         Box::new(tray::TrayModule),
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),

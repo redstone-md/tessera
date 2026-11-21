@@ -23,7 +23,7 @@ mod tray;
 mod wifi;
 
 pub use accent::{accent_color, light_mode};
-pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
+pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_held};
 pub use audio::AudioOutput;
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use icon::IconPixels;
@@ -47,7 +47,7 @@ use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
@@ -118,6 +118,19 @@ pub struct NativeSurface {
 pub struct DisplayKey(isize);
 
 impl DisplayKey {
+    /// The part of the display that the surfaces at its edges leave to
+    /// windows.
+    pub fn work_area(self) -> Option<ScreenRect> {
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `info` is correctly sized, and a display that is gone
+        // makes the call fail.
+        let read = unsafe { GetMonitorInfoW(HMONITOR(self.0 as *mut c_void), &raw mut info) };
+        read.as_bool().then(|| info.rcWork.into())
+    }
+
     /// The display that holds most of `hwnd`, or the nearest one.
     fn of_window(hwnd: HWND) -> Self {
         // SAFETY: the call only reads window state and tolerates a handle

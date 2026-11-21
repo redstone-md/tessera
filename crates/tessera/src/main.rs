@@ -22,6 +22,7 @@ mod preview;
 mod shell;
 mod surface;
 mod theme;
+mod tiling;
 mod ui;
 
 use std::time::Duration;

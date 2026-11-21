@@ -69,6 +69,8 @@
 #               applications, or "shell:AppsFolder/" and the identifier of
 #               a packaged (Store) application, such as
 #               ["C:/Windows/notepad.exe", "Paint"]
+#   "tiling"    whether and how windows are tiled; a click goes on to the
+#               next layout, and after the last one to no tiling
 #   "quit"      closes Tessera
 #   "label"     fixed content; options text and icon, a character of the
 #               Segoe Fluent Icons font such as "\uE71D"
@@ -157,6 +159,20 @@ name = "sound"
 width = 340
 height = 76
 content = ["volume-slider"]
+
+# [tiling] puts the windows of each display side by side in the space the
+# bars leave. layout is "master" (one window on the left half, the others
+# stacked on the right), "columns", "rows" or "grid"; gap is the distance
+# between tiles in pixels. only and except list programs by the file name of
+# their executable: the only ones whose windows are tiled, and the ones whose
+# windows are left alone. Windows go back to where they were when tiling is
+# switched off or Tessera quits.
+#
+# [tiling]
+# enabled = true
+# layout = "master"
+# gap = 8
+# except = ["taskmgr.exe"]
 
 # [icons] replaces application icons. Each key is the file name of an
 # executable, each value an image file (PNG, JPEG or ICO); a relative path is

@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::platform::ScreenEdge;
+use crate::tiling::TilingConfig;
 
 pub mod edit;
 
@@ -196,6 +197,9 @@ pub struct Config {
     /// Where the registries are that offer extensions to install; the
     /// official one when the key is missing.
     registries: Option<Vec<String>>,
+    /// Whether and how windows are arranged side by side.
+    #[serde(default)]
+    pub tiling: TilingConfig,
 }
 
 impl Config {

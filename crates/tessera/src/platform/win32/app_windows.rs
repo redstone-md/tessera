@@ -8,14 +8,17 @@ use std::path::PathBuf;
 use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
-use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE,
     EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, OBJID_WINDOW,
@@ -23,13 +26,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, PostMessageW, SW_MINIMIZE, SW_RESTORE,
-    SetForegroundWindow, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, PostMessageW, SW_MINIMIZE,
+    SW_RESTORE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW,
+    WS_THICKFRAME,
 };
 use windows::core::{BOOL, PWSTR};
 
-use super::DisplayKey;
+use super::{DisplayKey, ScreenRect};
 
 /// Identifies a top-level window for as long as it exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -89,6 +94,61 @@ impl AppWindowId {
         }
     }
 
+    /// What is seen of the window on the screen, without the invisible
+    /// border Windows gives windows to be resized by.
+    pub fn frame(self) -> Option<ScreenRect> {
+        let mut frame = RECT::default();
+        // SAFETY: `frame` is as large as the call is told, and a window
+        // that has since been destroyed makes the call fail.
+        let read = unsafe {
+            DwmGetWindowAttribute(
+                self.hwnd(),
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                (&raw mut frame).cast(),
+                size_of::<RECT>() as u32,
+            )
+        };
+        read.ok().map(|()| frame.into())
+    }
+
+    /// Whether the window can be given a place among tiles: it is neither
+    /// minimized nor maximized, and its border resizes it.
+    pub fn is_tileable(self) -> bool {
+        let hwnd = self.hwnd();
+        // SAFETY: the calls only read window state and tolerate a handle
+        // whose window has since been destroyed.
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+            !IsIconic(hwnd).as_bool() && !IsZoomed(hwnd).as_bool() && style & WS_THICKFRAME.0 != 0
+        }
+    }
+
+    /// Asks the window to move and resize so that what is seen of it
+    /// covers `frame`, without bringing it forward. Whether Windows took
+    /// the request is returned; the application may still keep another
+    /// size, and a window of an elevated process is not moved at all.
+    pub fn place(self, frame: ScreenRect) -> bool {
+        let hwnd = self.hwnd();
+        let Some(seen) = self.frame() else {
+            return false;
+        };
+        let mut whole = RECT::default();
+        // SAFETY: `whole` outlives the calls, which tolerate a handle
+        // whose window has since been destroyed.
+        unsafe {
+            if GetWindowRect(hwnd, &raw mut whole).is_err() {
+                return false;
+            }
+            // The invisible border stays as wide as it is.
+            let left = frame.left - (seen.left - whole.left);
+            let top = frame.top - (seen.top - whole.top);
+            let right = frame.right + (whole.right - seen.right);
+            let bottom = frame.bottom + (whole.bottom - seen.bottom);
+            let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+            SetWindowPos(hwnd, None, left, top, right - left, bottom - top, flags).is_ok()
+        }
+    }
+
     /// What the window's title bar says; empty if Windows does not tell.
     pub fn title(self) -> String {
         let mut buffer = [0u16; 512];
@@ -97,6 +157,16 @@ impl AppWindowId {
         let length = unsafe { GetWindowTextW(self.hwnd(), &mut buffer) };
         String::from_utf16_lossy(&buffer[..length.max(0) as usize])
     }
+}
+
+/// Whether a button of the pointer is held down, as while a window is
+/// dragged.
+pub fn pointer_held() -> bool {
+    let held = |key: u16| {
+        // SAFETY: the call takes a key and only reads its state.
+        unsafe { GetAsyncKeyState(key.into()) < 0 }
+    };
+    held(VK_LBUTTON.0) || held(VK_RBUTTON.0)
 }
 
 /// Counts what happened to windows since `WindowEvents::watch`.

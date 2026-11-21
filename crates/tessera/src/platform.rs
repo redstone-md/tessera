@@ -10,5 +10,5 @@ pub use win32::{
     IconPixels, Link, Media, MediaCommand, MemoryLoad, NativeSurface, Network, Notification,
     Notifications, NowPlaying, PairedDevice, Position, PowerAction, ProcessorLoad, ScreenEdge,
     ScreenRect, Shortcut, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Wifi, WifiNetwork,
-    WifiReach, WindowEvents, accent_color, app_id_in, app_path, light_mode,
+    WifiReach, WindowEvents, accent_color, app_id_in, app_path, light_mode, pointer_held,
 };

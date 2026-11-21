@@ -21,6 +21,7 @@ use crate::popup::Popups;
 use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::theme::Theme;
+use crate::tiling::Tiler;
 
 /// How often the configuration files are checked for changes. A change is
 /// applied once the files have stayed the same for one interval, so that a
@@ -46,6 +47,7 @@ impl Shell {
     /// Applies `config`, opens its surfaces and starts watching its files.
     pub fn start(config: Config, cx: &mut App) -> anyhow::Result<()> {
         cx.set_global(Theme::load(config.theme.as_deref()));
+        Tiler::start(&config.tiling, cx);
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
         cx.set_global(Previews::default());
@@ -109,6 +111,7 @@ impl Shell {
             return;
         };
         cx.set_global(Theme::load(config.theme.as_deref()));
+        Tiler::configure(&config.tiling, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =
