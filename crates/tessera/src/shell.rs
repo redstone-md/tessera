@@ -307,7 +307,7 @@ impl Shell {
         let primary = cx.primary_display().map(|display| display.id());
         let mut surfaces = Vec::new();
         for display in cx.displays() {
-            for layout in &config.surfaces {
+            for (index, layout) in config.surfaces.iter().enumerate() {
                 if layout.displays == Displays::Primary && Some(display.id()) != primary {
                     continue;
                 }
@@ -319,7 +319,7 @@ impl Shell {
                     .filter(|surface| {
                         let refilled = surface.window.update(cx, |view, window, cx| {
                             view.refill(thickness, window, cx, |display, cx| {
-                                Panel::new(layout, display, cx)
+                                Panel::new(index, layout, display, cx)
                             });
                         });
                         refilled.is_ok()
@@ -328,8 +328,9 @@ impl Shell {
                     surfaces.push(surface);
                     continue;
                 }
-                let opened = EdgeSurface { edge, thickness }
-                    .open(&display, cx, |display, cx| Panel::new(layout, display, cx));
+                let opened = EdgeSurface { edge, thickness }.open(&display, cx, |display, cx| {
+                    Panel::new(index, layout, display, cx)
+                });
                 match opened {
                     Ok(window) => surfaces.push(Surface {
                         display: display.id(),

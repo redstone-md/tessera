@@ -23,7 +23,9 @@ use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::marketplace::{Changed, Marketplace};
 use crate::motion::{Interaction, Spring, mix, staggered};
+use crate::panel::Arranging;
 use crate::platform::{AppWindow, ScreenEdge};
+use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::{ACCENT_THEME, Theme};
 use crate::ui::{icon, state_layer, switch};
@@ -455,6 +457,8 @@ enum Control {
     Quit,
     /// Counts the arrangements Tessera comes with.
     Layout(usize),
+    /// Starts arranging the widgets on the bars themselves.
+    Arrange,
     Language(Language),
     /// Gives the setting at this place this one of its answers.
     Set(usize, usize),
@@ -771,6 +775,12 @@ impl Settings {
                 if let Some((_, layout)) = LAYOUTS.get(index) {
                     self.change(cx, |file| file.set_layout(layout));
                 }
+            }
+            Control::Arrange => {
+                Arranging::set(true, cx);
+                // The settings give way to the bars; this window cannot
+                // be told to close while it handles the click.
+                cx.defer(Popups::close);
             }
             Control::Language(language) => {
                 let answer = if language == Language::default() {
@@ -1295,6 +1305,22 @@ impl Settings {
             .into_any_element()
     }
 
+    /// The way to arrange the widgets on the bars themselves.
+    fn arranging(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let face = Face::Chip {
+            text: language.say("Arrange on the bars").into(),
+            selected: true,
+        };
+        let start = self.control(Control::Arrange, face, window, cx);
+        let remark = "Drag a widget to another place of its bar, or off the bar to take it out; the plus adds one.";
+        card(&theme, language.say("By hand"))
+            .child(wrap(&theme).child(start))
+            .child(note(&theme, language.say(remark)))
+            .into_any_element()
+    }
+
     /// The arrangements Tessera comes with, the one in use marked.
     fn arrangements(
         &mut self,
@@ -1600,6 +1626,7 @@ impl Settings {
                 shared.push(self.languages(window, cx));
             }
             Section::Bars => {
+                wide.push(self.arranging(window, cx));
                 for (index, surface) in config.surfaces.iter().enumerate() {
                     wide.push(self.surface(index, surface, window, cx));
                 }

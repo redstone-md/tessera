@@ -24,6 +24,9 @@ const WIDTH: f32 = 208.;
 /// The height of an entry.
 const ROW_HEIGHT: f32 = 36.;
 
+/// How many entries a menu shows at once; the others are scrolled to.
+const ROWS_SHOWN: usize = 12;
+
 /// Something a menu offers.
 #[derive(Clone)]
 pub struct MenuEntry {
@@ -109,7 +112,7 @@ impl Menus {
 /// The logical width and height of the panel of a menu of `rows` entries,
 /// `gap` apart and `padding` from its border.
 fn extent(rows: usize, padding: f32, gap: f32) -> (f32, f32) {
-    let rows = rows as f32;
+    let rows = rows.min(ROWS_SHOWN) as f32;
     let height = rows * ROW_HEIGHT + (rows - 1.).max(0.) * gap + padding * 2.;
     (WIDTH, height)
 }
@@ -212,10 +215,16 @@ impl Render for MenuView {
             })
             .collect();
         floating_panel(&theme, self.edge, visibility, |panel| {
-            panel
-                .p(theme.spacing.small)
-                .gap(theme.spacing.tiny)
-                .children(rows)
+            panel.p(theme.spacing.small).child(
+                div()
+                    .id("menu-entries")
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .gap(theme.spacing.tiny)
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
         })
     }
 }
@@ -228,5 +237,6 @@ mod tests {
     fn a_menu_is_as_tall_as_its_entries_and_what_is_between_them() {
         assert_eq!(extent(1, 8., 4.), (WIDTH, 52.));
         assert_eq!(extent(3, 8., 4.), (WIDTH, 132.));
+        assert_eq!(extent(40, 8., 4.), extent(ROWS_SHOWN, 8., 4.));
     }
 }

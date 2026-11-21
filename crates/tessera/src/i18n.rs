@@ -161,6 +161,14 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Приложения закрепляются в виджете `windows`, которого нет в раскладке.",
     ),
     ("Add", "Добавить"),
+    // Arranging the widgets on the bars.
+    ("Done", "Готово"),
+    ("By hand", "Вручную"),
+    ("Arrange on the bars", "Расставить на панелях"),
+    (
+        "Drag a widget to another place of its bar, or off the bar to take it out; the plus adds one.",
+        "Перетащите виджет на другое место его панели или за панель, чтобы убрать; плюс добавляет новый.",
+    ),
     ("Start", "Начало"),
     ("Center", "Центр"),
     ("End", "Конец"),

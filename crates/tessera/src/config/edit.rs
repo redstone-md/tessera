@@ -223,6 +223,28 @@ impl ConfigFile {
         Some(widget)
     }
 
+    /// Moves the widget at `from` to stand before what is at `index` of
+    /// `slot` of the same surface now, or last in that slot when `index`
+    /// is past its end.
+    pub fn relocate(&mut self, from: Place, slot: Slot, index: usize) -> bool {
+        let Some(widget) = self.take(from) else {
+            return false;
+        };
+        // What stood after it in its own slot has moved up by one.
+        let index = if slot == from.slot && index > from.index {
+            index - 1
+        } else {
+            index
+        };
+        let Some(widgets) = self.slot(from.surface, slot) else {
+            return false;
+        };
+        let index = index.min(widgets.len());
+        widgets.insert(index, widget);
+        widgets.fmt();
+        true
+    }
+
     /// Moves the widget at `place` one step toward the end of its surface,
     /// or toward the start: past its neighbor, or into the next slot when
     /// it is the last of its own.
@@ -688,6 +710,34 @@ center = ["windows"]
         assert_eq!(CardLength::Width.stepped(120., false), 120);
         assert_eq!(CardLength::Height.stepped(1195., true), 1200);
         assert_eq!(CardLength::X.stepped(6., false), 0);
+    }
+
+    #[test]
+    fn a_widget_is_put_before_another_one_anywhere_in_its_surface() {
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        assert!(file.add(0, Slot::End, "volume"));
+        assert!(file.add(0, Slot::End, "cpu"));
+        // Toward the end of its own slot, and to the very end of it.
+        assert!(file.relocate(place(0, Slot::End, 0), Slot::End, 2));
+        assert_eq!(names(&file, 0, Slot::End), ["volume", "quit", "cpu"]);
+        assert!(file.relocate(place(0, Slot::End, 0), Slot::End, 9));
+        assert_eq!(names(&file, 0, Slot::End), ["quit", "cpu", "volume"]);
+        // Toward the start of it.
+        assert!(file.relocate(place(0, Slot::End, 2), Slot::End, 0));
+        assert_eq!(names(&file, 0, Slot::End), ["volume", "quit", "cpu"]);
+        // Into another slot, also one the file does not have yet.
+        assert!(file.relocate(place(0, Slot::End, 1), Slot::Start, 1));
+        assert_eq!(names(&file, 0, Slot::Start), ["clock", "quit", "label"]);
+        assert!(file.relocate(place(0, Slot::Start, 2), Slot::Center, 0));
+        assert_eq!(names(&file, 0, Slot::Center), ["label"]);
+        assert_eq!(names(&file, 0, Slot::End), ["volume", "cpu"]);
+        assert!(
+            file.document
+                .to_string()
+                .contains(r#"{ widget = "label", text = "Hi" }"#)
+        );
+        assert!(!file.relocate(place(0, Slot::End, 5), Slot::Start, 0));
+        assert!(!file.relocate(place(4, Slot::End, 0), Slot::Start, 0));
     }
 
     #[test]
