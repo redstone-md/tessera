@@ -5,4 +5,6 @@
 
 mod win32;
 
-pub use win32::{AppWindow, AppWindowId, EdgeReservation, IconPixels, NativeSurface, ScreenEdge};
+pub use win32::{
+    AppWindow, AppWindowId, EdgeReservation, IconPixels, NativeSurface, ScreenEdge, Taskbar,
+};

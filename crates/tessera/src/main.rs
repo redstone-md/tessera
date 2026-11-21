@@ -12,17 +12,36 @@ mod platform;
 mod surface;
 mod theme;
 
-use gpui::{App, Application};
+use std::time::Duration;
+
+use gpui::{App, Application, AsyncApp};
 
 use crate::bar::Bar;
 use crate::dock::Dock;
-use crate::platform::ScreenEdge;
+use crate::platform::{ScreenEdge, Taskbar};
 use crate::surface::EdgeSurface;
 use crate::theme::Theme;
 
+/// How often the taskbar is checked for having been shown again.
+const TASKBAR_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
 fn main() {
+    if Taskbar::run_watchdog_if_requested(std::env::args().skip(1)) {
+        return;
+    }
     Application::new().run(|cx: &mut App| {
         cx.set_global(Theme::default());
+        match Taskbar::hide_until_exit() {
+            Ok(()) => cx
+                .spawn(async move |cx: &mut AsyncApp| {
+                    loop {
+                        cx.background_executor().timer(TASKBAR_CHECK_INTERVAL).await;
+                        Taskbar::keep_hidden();
+                    }
+                })
+                .detach(),
+            Err(error) => eprintln!("tessera: the Windows taskbar stays visible: {error:#}"),
+        }
         if let Err(error) = open_surfaces(cx) {
             eprintln!("tessera: the shell surfaces could not be opened: {error:#}");
             cx.quit();

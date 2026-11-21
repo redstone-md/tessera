@@ -11,7 +11,12 @@ What exists today, on every display:
 - A top bar with a clock and a **Quit Tessera** button.
 - A dock with one button per open application window. Clicking a button brings its window to the foreground, or minimizes it if it already is there. The window list is polled twice a second. Packaged (Store) apps show a placeholder instead of their icon, and windows of elevated processes may ignore clicks.
 
-While Tessera runs, both surfaces stay above other windows and reserve their screen edge, so maximized windows stop at them; Windows releases that space when Tessera exits. The Windows taskbar is not hidden yet, so the dock sits directly above it. Tessera registers no hooks and changes no persistent system setting.
+While Tessera runs:
+
+- Both surfaces stay above other windows and reserve their screen edge, so maximized windows stop at them. Windows releases that space when Tessera exits.
+- The Windows taskbar is hidden. To stop it reserving space, Tessera switches it to auto-hide, which is a persistent Explorer setting. A second `tessera` process waits for the shell to exit — normally, by crashing or by being terminated — and then restores the previous auto-hide setting and shows the taskbar again. If that watchdog process is itself terminated first, the taskbar stays hidden until you turn off "Automatically hide the taskbar" in Windows Settings or restart Explorer.
+
+Tessera registers no hooks. Anything the taskbar provided that is not listed above — Start button, system tray, notifications, pinned apps — has no replacement yet; the Start menu still opens with the Windows key.
 
 The previous Slint-based implementation was removed. Its source and test builds remain available at the [`v0.1.0-alpha.22`](https://github.com/redstone-md/tessera/releases/tag/v0.1.0-alpha.22) tag; it is unmaintained.
 

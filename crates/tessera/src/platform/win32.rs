@@ -7,9 +7,11 @@
 
 mod app_windows;
 mod icon;
+mod taskbar;
 
 pub use app_windows::{AppWindow, AppWindowId};
 pub use icon::IconPixels;
+pub use taskbar::Taskbar;
 
 use std::ffi::c_void;
 use std::mem::size_of;
