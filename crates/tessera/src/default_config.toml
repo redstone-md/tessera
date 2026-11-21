@@ -62,6 +62,8 @@
 #   "bluetooth" the paired Bluetooth devices, for a popup: which are
 #               connected, and the charge of those that report one
 #   "volume"    the output volume, as an icon and a percentage
+#   "keyboard"  the language the window in front is typed in, as two
+#               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
 #               or "right": the end of the strip where the description of
