@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::config::{read_user_file, theme_file};
 use crate::motion::SpringSpec;
-use crate::platform::accent_color;
+use crate::platform::{accent_color, light_mode};
 
 mod tonal;
 
@@ -19,6 +19,29 @@ pub const ACCENT_THEME: &str = "accent";
 
 /// What a theme file writes as its seed to follow the accent color.
 const ACCENT_SEED: &str = "accent";
+
+/// The seed of the built-in colors, for the schemes derived from it.
+const BUILT_IN_SEED: [u8; 3] = [0xad, 0xd2, 0x8e];
+
+/// Whether surfaces are dark or light.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Scheme {
+    #[default]
+    Dark,
+    Light,
+    /// As the Windows settings say for the taskbar.
+    System,
+}
+
+/// What of the Windows settings the colors were derived from, so that
+/// they can be derived again when it changes. `None` for what they do not
+/// depend on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Followed {
+    accent: Option<[u8; 3]>,
+    light: Option<bool>,
+}
 
 /// Material 3 color roles used by shell surfaces.
 #[derive(Clone, Copy, Debug)]
@@ -135,9 +158,7 @@ pub struct LauncherMetrics {
 /// The appearance shared by every shell surface.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
-    /// The accent color of Windows that the colors were derived from, if
-    /// they were, so that they can be derived again when it changes.
-    pub accent: Option<[u8; 3]>,
+    pub followed: Followed,
     pub colors: ColorRoles,
     pub shape: Shape,
     pub spacing: Spacing,
@@ -154,7 +175,7 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            accent: None,
+            followed: Followed::default(),
             colors: ColorRoles {
                 surface_container: rgb(0x1e211a).into(),
                 surface_container_highest: rgb(0x33362e).into(),
@@ -241,7 +262,7 @@ impl Theme {
             return theme;
         };
         if name == ACCENT_THEME {
-            theme.follow_accent();
+            theme.derive(Some(ACCENT_SEED), Scheme::System, name);
             return theme;
         }
         if name.contains(['/', '\\', ':']) || name.starts_with('.') {
@@ -250,14 +271,7 @@ impl Theme {
         }
         match read_user_file::<ThemeFile>(&theme_file(name)) {
             Some(file) => {
-                match file.seed.as_deref() {
-                    None => {}
-                    Some(ACCENT_SEED) => theme.follow_accent(),
-                    Some(seed) => match parse_rgb(seed) {
-                        Ok(seed) => theme.colors = tonal::dark_roles(seed),
-                        Err(error) => eprintln!("tessera: theme `{name}`: {error:#}"),
-                    },
-                }
+                theme.derive(file.seed.as_deref(), file.scheme, name);
                 if let Err(error) = file.colors.apply_to(&mut theme.colors) {
                     eprintln!("tessera: theme `{name}` is only partly applied: {error:#}");
                 }
@@ -267,22 +281,50 @@ impl Theme {
         theme
     }
 
-    /// Derives the colors from the accent color of Windows. If Windows
-    /// does not tell it, that is reported and the colors stay.
-    fn follow_accent(&mut self) {
-        match accent_color() {
-            Some(accent) => {
-                self.accent = Some(accent);
-                self.colors = tonal::dark_roles(accent);
+    /// Derives the colors of the theme `name` from `seed`, a color or
+    /// [`ACCENT_SEED`], as `scheme` says. What Windows does not tell or the
+    /// file gets wrong is reported and replaced by what is built in. A dark
+    /// theme without a seed keeps the built-in colors.
+    fn derive(&mut self, seed: Option<&str>, scheme: Scheme, name: &str) {
+        let light = match scheme {
+            Scheme::Dark => false,
+            Scheme::Light => true,
+            Scheme::System => {
+                let light = light_mode();
+                if light.is_none() {
+                    eprintln!("tessera: Windows does not tell whether it is light or dark");
+                }
+                // Remembered even if untold, so that it is noticed once
+                // Windows tells.
+                self.followed.light = Some(light.unwrap_or(false));
+                light.unwrap_or(false)
             }
-            None => eprintln!("tessera: Windows does not tell its accent color"),
+        };
+        let seed = match seed {
+            None => None,
+            Some(ACCENT_SEED) => {
+                let accent = accent_color();
+                if accent.is_none() {
+                    eprintln!("tessera: Windows does not tell its accent color");
+                }
+                self.followed.accent = Some(accent.unwrap_or(BUILT_IN_SEED));
+                accent
+            }
+            Some(seed) => parse_rgb(seed)
+                .inspect_err(|error| eprintln!("tessera: theme `{name}`: {error:#}"))
+                .ok(),
+        };
+        if seed.is_some() || light {
+            self.colors = tonal::roles(seed.unwrap_or(BUILT_IN_SEED), light);
         }
     }
 
-    /// Whether the colors were derived from an accent color that Windows
-    /// has changed since.
+    /// Whether the colors were derived from settings of Windows that have
+    /// changed since.
     pub fn is_stale(&self) -> bool {
-        self.accent.is_some() && accent_color() != self.accent
+        let Followed { accent, light } = self.followed;
+        accent.is_some_and(|accent| accent_color().unwrap_or(BUILT_IN_SEED) != accent)
+            || light.is_some_and(|light| light_mode().unwrap_or(false) != light)
     }
 }
 
@@ -293,6 +335,10 @@ struct ThemeFile {
     /// A color, `#rrggbb`, to derive every role from, or `accent` for the
     /// accent color of Windows. The roles of `colors` are applied over it.
     seed: Option<String>,
+    /// Whether the derived colors are `dark`, `light` or, with `system`,
+    /// what the Windows settings say for the taskbar.
+    #[serde(default)]
+    scheme: Scheme,
     #[serde(default)]
     colors: ColorOverrides,
 }
@@ -369,6 +415,19 @@ mod tests {
             parse_rgb(file.seed.as_deref().unwrap()).unwrap(),
             [0x00, 0x78, 0xd4]
         );
+    }
+
+    #[test]
+    fn a_theme_file_may_name_a_scheme() {
+        let file: ThemeFile = toml::from_str("scheme = \"light\"\n").unwrap();
+        assert_eq!(file.scheme, Scheme::Light);
+        let mut theme = Theme::default();
+        let dark = theme.colors;
+        theme.derive(None, Scheme::Dark, "test");
+        assert_eq!(theme.colors.on_surface, dark.on_surface);
+        theme.derive(None, Scheme::Light, "test");
+        assert!(theme.colors.surface_container.l > theme.colors.on_surface.l);
+        assert_eq!(theme.followed, Followed::default());
     }
 
     #[test]

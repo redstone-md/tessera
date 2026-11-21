@@ -21,8 +21,9 @@ const NEUTRAL_VARIANT_CHROMA: f32 = 0.022;
 /// A seed less colorful than this has no hue to follow, and gives grays.
 const GRAY_SEED: f32 = 0.01;
 
-/// The roles of a dark scheme for the seed `[red, green, blue]`.
-pub fn dark_roles(seed: [u8; 3]) -> ColorRoles {
+/// The roles for the seed `[red, green, blue]`: light text on dark
+/// surfaces, or, if `light`, dark text on light surfaces.
+pub fn roles(seed: [u8; 3], light: bool) -> ColorRoles {
     let [_, a, b] = oklab(seed.map(|channel| linear(f32::from(channel) / 255.)));
     let colorful = a.hypot(b) >= GRAY_SEED;
     let hue = b.atan2(a);
@@ -30,14 +31,16 @@ pub fn dark_roles(seed: [u8; 3]) -> ColorRoles {
         let chroma = if colorful { chroma } else { 0. };
         rgb(color(hue, chroma, tone)).into()
     };
+    // The tones of the Material 3 schemes.
+    let tone = |dark: f32, in_light: f32| if light { in_light } else { dark };
     ColorRoles {
-        surface_container: role(NEUTRAL_CHROMA, 12.),
-        surface_container_highest: role(NEUTRAL_CHROMA, 22.),
-        on_surface: role(NEUTRAL_CHROMA, 90.),
-        on_surface_variant: role(NEUTRAL_VARIANT_CHROMA, 80.),
-        outline: role(NEUTRAL_VARIANT_CHROMA, 60.),
-        primary: role(PRIMARY_CHROMA, 80.),
-        secondary_container: role(SECONDARY_CHROMA, 30.),
+        surface_container: role(NEUTRAL_CHROMA, tone(12., 94.)),
+        surface_container_highest: role(NEUTRAL_CHROMA, tone(22., 90.)),
+        on_surface: role(NEUTRAL_CHROMA, tone(90., 10.)),
+        on_surface_variant: role(NEUTRAL_VARIANT_CHROMA, tone(80., 30.)),
+        outline: role(NEUTRAL_VARIANT_CHROMA, tone(60., 50.)),
+        primary: role(PRIMARY_CHROMA, tone(80., 40.)),
+        secondary_container: role(SECONDARY_CHROMA, tone(30., 90.)),
     }
 }
 
@@ -178,16 +181,25 @@ mod tests {
 
     #[test]
     fn the_roles_follow_the_seed() {
-        let blue = dark_roles([0x00, 0x78, 0xd4]);
-        let red = dark_roles([0xe8, 0x11, 0x23]);
+        let blue = roles([0x00, 0x78, 0xd4], false);
+        let red = roles([0xe8, 0x11, 0x23], false);
         assert_ne!(blue.primary, red.primary);
         assert_ne!(blue.surface_container, red.surface_container);
         // Text stands out from the surface it is on.
         assert!(blue.on_surface.l > blue.surface_container.l + 0.5);
         assert!(blue.primary.l > blue.secondary_container.l + 0.3);
 
-        let gray = dark_roles([0x80, 0x80, 0x80]);
+        let gray = roles([0x80, 0x80, 0x80], false);
         assert_eq!(gray.primary.s, 0.);
         assert_eq!(gray.surface_container.s, 0.);
+    }
+
+    #[test]
+    fn a_light_scheme_puts_dark_text_on_light_surfaces() {
+        let light = roles([0x00, 0x78, 0xd4], true);
+        assert!(light.surface_container.l > light.on_surface.l + 0.5);
+        assert!(light.surface_container.l > light.primary.l + 0.3);
+        assert!(light.surface_container.l > light.surface_container_highest.l);
+        assert!(light.secondary_container.l > light.primary.l + 0.3);
     }
 }

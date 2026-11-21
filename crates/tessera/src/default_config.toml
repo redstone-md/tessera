@@ -3,7 +3,11 @@
 
 # Name of a theme file, %APPDATA%\tessera\themes\<name>.toml. Optional.
 # The name "accent" is no file: it derives the colors from the accent color
-# of the Windows settings and follows it when it changes.
+# of the Windows settings, dark or light as those settings say for the
+# taskbar, and follows both when they change. A theme file may hold
+#   seed = "#rrggbb"    a color to derive all colors from, or "accent"
+#   scheme = "light"    "dark" (default), "light" or "system"
+#   [colors]            single roles as "#rrggbb", applied last
 # theme = "example"
 
 # The registries the "marketplace" widget reads: https addresses or absolute

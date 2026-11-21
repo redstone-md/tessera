@@ -18,7 +18,7 @@ mod system;
 mod taskbar;
 mod tray;
 
-pub use accent::accent_color;
+pub use accent::{accent_color, light_mode};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
