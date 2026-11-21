@@ -10,7 +10,7 @@ use std::panic::Location;
 use gpui::{
     App, AvailableSpace, Bounds, Canvas, Div, Element, ElementId, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, LayoutId, ParentElement, PathBuilder, Pixels, ShapedLine,
-    SharedString, Size, Style, Styled, Window, canvas, div, point, px,
+    SharedString, Size, Style, Styled, TextRun, Window, canvas, div, font, point, px,
 };
 
 use crate::motion::{InteractionState, mix};
@@ -151,6 +151,27 @@ const CUT: &str = "\u{2026}";
 /// How far over its room a text may be before it is cut; shaping a text
 /// twice does not give the same width to the last fraction.
 const CUT_SLACK: f32 = 0.5;
+
+/// How wide `text` is on one line in the font `family` at `size`.
+pub fn text_width(
+    text: &SharedString,
+    family: &'static str,
+    size: Pixels,
+    window: &Window,
+) -> Pixels {
+    let run = TextRun {
+        len: text.len(),
+        font: font(family),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = window
+        .text_system()
+        .shape_line(text.clone(), size, &[run], None);
+    line.width
+}
 
 /// `text` on one line in the text style around it, as wide as the text
 /// and no wider than the room it gets, its end cut off and marked where

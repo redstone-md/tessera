@@ -42,6 +42,17 @@ impl WidgetContext {
         text
     }
 
+    /// The yes-or-no option `key`. A value of another type is reported and
+    /// treated as absent.
+    pub fn flag(&self, key: &str) -> Option<bool> {
+        let value = self.options.get(key)?;
+        let flag = value.as_bool();
+        if flag.is_none() {
+            report!("the widget option `{key}` must be true or false, `{value}` is ignored");
+        }
+        flag
+    }
+
     /// The number option `key`. A value of another type is reported and
     /// treated as absent.
     pub fn number(&self, key: &str) -> Option<f64> {

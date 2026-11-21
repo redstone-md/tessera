@@ -22,6 +22,7 @@ use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::theme::Theme;
 use crate::tiling::Tiler;
+use crate::tip::Tips;
 use crate::wallpaper::Wallpaper;
 use crate::workspaces::Workspaces;
 
@@ -54,6 +55,7 @@ impl Shell {
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
         cx.set_global(Previews::default());
+        cx.set_global(Tips::default());
         cx.set_global(Menus::default());
         cx.set_global(AppIcons::new(&config.icons));
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);

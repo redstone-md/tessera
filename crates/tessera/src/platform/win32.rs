@@ -55,7 +55,7 @@ use std::mem::size_of;
 use anyhow::{Context as _, Result, bail};
 use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
@@ -64,10 +64,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, PostMessageW,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+    GetWindowRect, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, LWA_ALPHA,
+    PostMessageW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
+    WINDOW_EX_STYLE, WM_APP, WM_MOUSEMOVE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
 
 /// Classes of windows that cover a display without being an application
@@ -183,6 +184,17 @@ impl NativeSurface {
     /// from the active application.
     pub fn adopt_as_shell_surface(self) -> Result<()> {
         self.adopt(WS_EX_NOACTIVATE)
+    }
+
+    /// Turns the window into something the shell lays over the screen: no
+    /// caption or frame, above ordinary windows, never in front, and the
+    /// pointer goes through it to what is beneath.
+    pub fn adopt_as_overlay(self) -> Result<()> {
+        self.adopt(WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT)?;
+        // SAFETY: `hwnd` belongs to a live window owned by this thread. A
+        // layered window is drawn once it is told how opaque it is.
+        unsafe { SetLayeredWindowAttributes(self.hwnd, COLORREF(0), 255, LWA_ALPHA) }
+            .context("the window could not be made to let the pointer through")
     }
 
     /// Turns the window into a popup of the shell: no caption or frame,

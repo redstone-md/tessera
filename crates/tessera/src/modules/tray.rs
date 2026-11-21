@@ -3,19 +3,23 @@
 
 //! The icons applications keep in the notification area. Widget: `tray`.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, deferred, div, img, px, relative,
+    AnyElement, App, AppContext, AsyncApp, Bounds, Context, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, WeakEntity,
+    Window, canvas, div, img, px,
 };
 
 use crate::icons::{Icon, icon_of_pixels};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{Tray, TrayButton, TrayIcon};
+use crate::platform::{NativeSurface, ScreenRect, Tray, TrayButton, TrayIcon};
+use crate::popup::PopupAnchor;
 use crate::theme::Theme;
+use crate::tip::Tips;
 use crate::ui::{icon, state_layer};
 
 /// How often the icons are checked for changes.
@@ -30,11 +34,11 @@ const ICON_MORE: &str = "\u{e712}";
 /// How much a pressed icon shrinks, as a share of its size.
 const PRESS_SHRINK: f32 = 0.16;
 
-/// The widest the description of the icon under the pointer gets.
-const TIP_WIDTH: Pixels = px(260.);
-
 /// The longest description shown, in characters.
-const TIP_LENGTH: usize = 48;
+const TIP_LENGTH: usize = 64;
+
+/// What the tips of the icons are told apart from other tips by.
+const TIP_KIND: &str = "tray";
 
 pub struct TrayModule;
 
@@ -45,30 +49,14 @@ impl Module for TrayModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("tray", |context, cx| {
-            let tips = match context.text("tips") {
-                None => None,
-                Some("left") => Some(TipSide::Left),
-                Some("right") => Some(TipSide::Right),
-                Some(other) => {
-                    report!(
-                        "the `tips` of a tray must be \"left\" or \"right\", `{other}` is ignored"
-                    );
-                    None
-                }
-            };
+            // Earlier the option named the side the description unrolled
+            // at; a layout that still does wants descriptions.
+            let named_side = context.options.get("tips").is_some_and(toml::Value::is_str);
+            let tips = named_side || context.flag("tips").unwrap_or(true);
             let limit = context.number("limit").map(|limit| limit.max(0.) as usize);
             cx.new(|cx| TrayStrip::new(tips, limit, cx)).into()
         })
     }
-}
-
-/// The end of the strip at which the description of the icon under the
-/// pointer unrolls. It must be the end that can grow without moving the
-/// icons, or they would slide away from the pointer.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TipSide {
-    Left,
-    Right,
 }
 
 /// One icon and the motion it is in.
@@ -80,6 +68,8 @@ struct TrayItem {
     interaction: Interaction,
     /// The application removed the icon and it is shrinking away.
     leaving: bool,
+    /// Where the icon was drawn in its surface, once it has been.
+    drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 /// Shows the notification area and passes clicks on to the applications.
@@ -88,8 +78,8 @@ struct TrayStrip {
     items: Vec<TrayItem>,
     /// The state of the notification area the items were taken from.
     generation: Option<u64>,
-    /// Where descriptions are shown, if at all.
-    tips: Option<TipSide>,
+    /// Whether the description of the icon under the pointer is shown.
+    tips: bool,
     /// How many icons are shown at all times; the others only while the
     /// strip is unrolled. Without it every icon is.
     limit: Option<usize>,
@@ -102,7 +92,7 @@ struct TrayStrip {
 }
 
 impl TrayStrip {
-    fn new(tips: Option<TipSide>, limit: Option<usize>, cx: &mut Context<Self>) -> Self {
+    fn new(tips: bool, limit: Option<usize>, cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
         match Tray::start() {
             Ok(()) => cx
@@ -161,14 +151,42 @@ impl TrayStrip {
                 presence,
                 interaction: Interaction::new(&motion),
                 leaving: false,
+                drawn: Rc::default(),
             });
         }
         cx.notify();
     }
 
+    /// The pointer came onto the icon `id`, or left it: its description
+    /// comes out of the bar under it after a moment, or goes.
+    fn tip(&self, id: u64, hovered: bool, window: &Window, cx: &mut Context<Self>) {
+        let key = (TIP_KIND, id);
+        let item = self.items.iter().find(|item| item.icon.id == id);
+        let target = item
+            .filter(|item| hovered && !item.leaving)
+            .and_then(|item| Some((tip_line(&item.icon.tip), item.drawn.get()?)));
+        let Some((tip, drawn)) = target else {
+            Tips::leave(key, cx);
+            return;
+        };
+        // The strip of every display shows the icon; the application is
+        // told the place in the one the pointer is on.
+        if let Some(place) = SurfacePlace::of_window(window) {
+            let (frame, menu) = place.of(drawn);
+            Tray::locate(id, frame, menu);
+        }
+        let middle = drawn.origin.x + drawn.size.width / 2.;
+        match PopupAnchor::at(window, middle, cx) {
+            Ok(anchor) if self.tips => Tips::request(key, tip.into(), anchor, cx),
+            Ok(_) => {}
+            Err(error) => report!("a description has nowhere to open: {error:#}"),
+        }
+    }
+
     fn render_item(
         item: &mut TrayItem,
         shown: f32,
+        place: Option<SurfacePlace>,
         theme: Theme,
         window: &Window,
         cx: &mut Context<Self>,
@@ -189,9 +207,25 @@ impl TrayStrip {
             .justify_center()
             .rounded(theme.shape.full)
             .bg(state_layer(&theme, theme.colors.surface_container, state))
-            .on_click(move |_, _, _| Tray::press(id, TrayButton::Left))
-            .on_mouse_up(MouseButton::Right, move |_, _, _| {
+            .on_click(move |_, _, cx| {
+                Tips::close(cx);
+                Tray::press(id, TrayButton::Left);
+            })
+            .on_mouse_up(MouseButton::Right, move |_, _, cx| {
+                Tips::close(cx);
                 Tray::press(id, TrayButton::Right);
+            })
+            .child({
+                let drawn = item.drawn.clone();
+                let measure = move |bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
+                    if drawn.replace(Some(bounds)) != Some(bounds)
+                        && let Some(place) = place
+                    {
+                        let (frame, menu) = place.of(bounds);
+                        Tray::locate(id, frame, menu);
+                    }
+                };
+                canvas(measure, |_, (), _, _| {}).absolute().size_full()
             })
             .child(match item.image.clone() {
                 Some(image) => img(image).size(icon_side).into_any_element(),
@@ -201,10 +235,15 @@ impl TrayStrip {
                     .bg(theme.colors.outline)
                     .into_any_element(),
             });
-        let button = Interaction::track(button, cx, move |this: &mut Self| {
-            let item = this.items.iter_mut().find(|item| item.icon.id == id)?;
-            Some(&mut item.interaction)
-        });
+        let button = Interaction::track_hover(
+            button,
+            cx,
+            move |this: &mut Self| {
+                let item = this.items.iter_mut().find(|item| item.icon.id == id)?;
+                Some(&mut item.interaction)
+            },
+            move |this, hovered, window, cx| this.tip(id, hovered, window, cx),
+        );
 
         // The slot includes the spacing between icons, so that an icon that
         // comes or goes moves its neighbors smoothly.
@@ -262,46 +301,47 @@ impl TrayStrip {
             .child(button)
             .into_any_element()
     }
+}
 
-    /// The description of the icon the pointer is on, as wide as the
-    /// pointer has settled there. It lies beside the strip, over what is
-    /// there, so that nothing on the bar moves for it.
-    fn render_tip(&mut self, theme: Theme, window: &Window) -> Option<AnyElement> {
-        let side = self.tips?;
-        let (reveal, item) = self
-            .items
-            .iter_mut()
-            .map(|item| (item.interaction.state(window).hover.clamp(0., 1.), &*item))
-            .max_by(|a, b| a.0.total_cmp(&b.0))?;
-        let tip = tip_line(&item.icon.tip);
-        if tip.is_empty() || reveal < 0.01 {
-            return None;
-        }
-        let label = div()
-            .max_w(TIP_WIDTH * reveal)
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_size(theme.typography.label_size)
-            .text_color(theme.colors.on_surface_variant)
-            .child(SharedString::from(tip));
-        let pill = div()
-            .absolute()
-            .top_0()
-            .h_full()
-            .px(theme.spacing.medium * reveal)
-            .flex()
-            .items_center()
-            .overflow_hidden()
-            .rounded(theme.shape.full)
-            .bg(theme.colors.surface_container)
-            .opacity(reveal)
-            .child(label);
-        let pill = match side {
-            TipSide::Left => pill.right(relative(1.)).mr(theme.spacing.tiny),
-            TipSide::Right => pill.left(relative(1.)).ml(theme.spacing.tiny),
+/// Where the surface of a strip is on the screen, to tell where its icons
+/// are there.
+#[derive(Clone, Copy)]
+struct SurfacePlace {
+    surface: ScreenRect,
+    /// Whether the surface is in the upper half of its display.
+    at_top: bool,
+    /// Physical pixels per logical one.
+    scale: f32,
+}
+
+impl SurfacePlace {
+    fn of_window(window: &Window) -> Option<Self> {
+        let native = NativeSurface::of(window).ok()?;
+        let (surface, display) = (native.frame().ok()?, native.display_frame().ok()?);
+        Some(Self {
+            surface,
+            at_top: surface.top + surface.bottom < display.top + display.bottom,
+            scale: window.scale_factor(),
+        })
+    }
+
+    /// The frame on the screen of what was drawn at `bounds` in the
+    /// surface, and the point where a menu of it belongs: under its
+    /// middle, at the edge of the surface that faces the display.
+    fn of(self, bounds: Bounds<Pixels>) -> (ScreenRect, (i32, i32)) {
+        let physical = |length: Pixels| (length / px(1.) * self.scale).round() as i32;
+        let frame = ScreenRect {
+            left: self.surface.left + physical(bounds.origin.x),
+            top: self.surface.top + physical(bounds.origin.y),
+            right: self.surface.left + physical(bounds.origin.x + bounds.size.width),
+            bottom: self.surface.top + physical(bounds.origin.y + bounds.size.height),
         };
-        // Drawn after the rest of the bar, so that it is on top of it.
-        Some(deferred(pill).into_any_element())
+        let below = if self.at_top {
+            self.surface.bottom
+        } else {
+            self.surface.top
+        };
+        (frame, (i32::midpoint(frame.left, frame.right), below))
     }
 }
 
@@ -327,13 +367,14 @@ impl Render for TrayStrip {
         self.crowded
             .animate_to(if staying > limit { 1. } else { 0. });
         let unrolled = self.unrolled.value(window).max(0.);
+        let place = SurfacePlace::of_window(window);
         let mut elements: Vec<AnyElement> = self
             .items
             .iter_mut()
             .enumerate()
             .map(|(index, item)| {
                 let shown = if index < limit { 1. } else { unrolled };
-                Self::render_item(item, shown, theme, window, cx)
+                Self::render_item(item, shown, place, theme, window, cx)
             })
             .collect();
         if self.limit.is_some() && !elements.is_empty() {
@@ -346,9 +387,7 @@ impl Render for TrayStrip {
         if elements.is_empty() {
             return div();
         }
-        let tip = self.render_tip(theme, window);
         div()
-            .relative()
             .h(theme.bar.pill_height)
             .px(theme.spacing.small - theme.spacing.tiny / 2.)
             .flex()
@@ -356,7 +395,6 @@ impl Render for TrayStrip {
             .rounded(theme.shape.full)
             .bg(theme.colors.surface_container)
             .children(elements)
-            .children(tip)
     }
 }
 
@@ -377,6 +415,6 @@ Speakers"
         let long = "word ".repeat(20);
         let shown = tip_line(&long);
         assert_eq!(shown.chars().count(), TIP_LENGTH);
-        assert!(shown.ends_with("wo…"), "got {shown:?}");
+        assert!(shown.ends_with("wor…"), "got {shown:?}");
     }
 }

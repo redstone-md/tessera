@@ -23,6 +23,7 @@ mod shell;
 mod surface;
 mod theme;
 mod tiling;
+mod tip;
 mod ui;
 mod wallpaper;
 mod workspaces;

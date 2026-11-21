@@ -68,10 +68,10 @@
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume
-#   "tray"      the notification icons of applications; option tips, "left"
-#               or "right": the side of the strip where the description of
-#               the icon under the pointer unrolls, over what is there;
-#               without the option no descriptions are shown.
+#   "tray"      the notification icons of applications; option tips, true
+#               or false: whether the description of the icon under the
+#               pointer comes out of the bar under it. Without the option
+#               it does.
 #               Option limit, a number: only that many icons are shown,
 #               and a button unrolls the strip to the others
 #   "windows"   a button for each application with windows on the display,
@@ -112,7 +112,7 @@ edge = "top"
 thickness = 48
 start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, { widget = "label", icon = "\uE713", popup = "settings" }, "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
-end = ["problems", { widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, "quit"]
+end = ["problems", { widget = "media", popup = "media" }, "tray", { widget = "label", icon = "", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, "quit"]
 
 [[surface]]
 edge = "bottom"
