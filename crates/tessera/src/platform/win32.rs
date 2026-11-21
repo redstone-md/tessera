@@ -10,6 +10,7 @@ mod audio;
 mod icon;
 mod notifications;
 mod shortcuts;
+mod system;
 mod taskbar;
 mod tray;
 
@@ -18,6 +19,7 @@ pub use audio::AudioOutput;
 pub use icon::IconPixels;
 pub use notifications::{Notification, Notifications};
 pub use shortcuts::Shortcut;
+pub use system::{Battery, MemoryLoad, ProcessorLoad};
 pub use taskbar::Taskbar;
 pub use tray::{Tray, TrayButton, TrayIcon};
 

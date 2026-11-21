@@ -93,6 +93,20 @@ pub struct SliderMetrics {
     pub value_width: Pixels,
 }
 
+/// Measurements of the wavy line that shows a level.
+#[derive(Clone, Copy, Debug)]
+pub struct MeterMetrics {
+    pub width: Pixels,
+    /// The thickness of the line.
+    pub stroke: Pixels,
+    /// How far the wave swings to each side of the line.
+    pub amplitude: Pixels,
+    /// The length of one wave.
+    pub wavelength: Pixels,
+    /// Space between the wave and the rest of the line.
+    pub gap: Pixels,
+}
+
 /// Calendar measurements.
 #[derive(Clone, Copy, Debug)]
 pub struct CalendarMetrics {
@@ -120,6 +134,7 @@ pub struct Theme {
     pub dock: DockMetrics,
     pub calendar: CalendarMetrics,
     pub slider: SliderMetrics,
+    pub meter: MeterMetrics,
     pub launcher: LauncherMetrics,
 }
 
@@ -184,6 +199,13 @@ impl Default for Theme {
                 handle_gap: px(6.),
                 inner_radius: px(2.),
                 value_width: px(44.),
+            },
+            meter: MeterMetrics {
+                width: px(44.),
+                stroke: px(3.),
+                amplitude: px(2.5),
+                wavelength: px(14.),
+                gap: px(4.),
             },
             launcher: LauncherMetrics {
                 field_height: px(44.),

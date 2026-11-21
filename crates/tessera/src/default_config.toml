@@ -20,6 +20,12 @@
 #   "notifications"  the notifications of the Windows notification center,
 #               each with a button that dismisses it; fills the height left
 #               in its popup and scrolls
+#   "cpu"       how busy the processors are, as a wavy line and a percentage;
+#               option style, "wave" (default) or "text" for the value alone
+#   "memory"    the physical memory in use; option style as for "cpu", and
+#               option show, "percent" (default) or "used" for gigabytes
+#   "battery"   the charge of the battery, with option style as for "cpu";
+#               shows nothing on a machine without a battery
 #   "volume"    the output volume, as an icon and a percentage
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
@@ -37,7 +43,7 @@
 [[surface]]
 edge = "top"
 thickness = 48
-start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }]
+start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
 end = [{ widget = "tray", tips = "left" }, { widget = "volume", popup = "sound" }, "quit"]
 

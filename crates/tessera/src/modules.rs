@@ -10,6 +10,7 @@ mod launcher;
 mod notifications;
 mod session;
 mod sound;
+mod system;
 mod tray;
 mod windows;
 
@@ -27,6 +28,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(notifications::NotificationsModule),
         Box::new(session::SessionModule),
         Box::new(sound::SoundModule),
+        Box::new(system::SystemModule),
         Box::new(tray::TrayModule),
         Box::new(windows::WindowsModule),
         Box::new(ExtensionsModule {
