@@ -858,6 +858,7 @@ impl Render for Panel {
                 .child(Ghost::pill(&theme, name, false))
         });
         // The outlines keep breathing.
+        crate::platform::Pace::quicken();
         window.request_animation_frame();
         let chrome = self.chrome.value(window);
         let [start, center, end] =

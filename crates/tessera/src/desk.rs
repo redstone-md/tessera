@@ -472,6 +472,7 @@ impl Render for CardView {
         let chrome = self.chrome.value(window);
         if arranging {
             // The outline breathes for as long as the card can be dragged.
+            crate::platform::Pace::quicken();
             window.request_animation_frame();
         }
         let handle = (chrome > 0.).then(|| self.handle(chrome, &theme, cx));

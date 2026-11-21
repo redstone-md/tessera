@@ -82,6 +82,7 @@ impl Spring {
     pub fn value(&mut self, window: &Window) -> f32 {
         self.advance_to(Instant::now());
         if !self.is_settled() {
+            crate::platform::Pace::quicken();
             window.request_animation_frame();
         }
         self.value

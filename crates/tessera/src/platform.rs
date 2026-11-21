@@ -9,7 +9,7 @@ pub use win32::{
     AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, Connection, DesktopBackdrop, DisplayKey, EdgeReservation, Hotkey, Hotkeys,
     IconPixels, InputLanguage, JumpTask, Link, Media, MediaCommand, MemoryLoad, Modifiers,
-    NativeSurface, Network, Notification, Notifications, NowPlaying, PairedDevice, Passage,
+    NativeSurface, Network, Notification, Notifications, NowPlaying, Pace, PairedDevice, Passage,
     Position, PowerAction, ProcessorLoad, RecentDocument, ScreenBrightness, ScreenEdge, ScreenRect,
     Shortcut, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil, VirtualDesktops, Vpn,
     VpnState, Wifi, WifiNetwork, WifiReach, WindowEvents, WindowsKey, Wireless, accent_color,

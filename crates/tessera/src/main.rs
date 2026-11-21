@@ -45,6 +45,7 @@ fn main() {
     if Taskbar::run_watchdog_if_requested(std::env::args().skip(1)) {
         return;
     }
+    platform::Pace::keep();
     let config = Config::load();
     Application::new().run(move |cx: &mut App| {
         match Taskbar::hide_until_exit() {

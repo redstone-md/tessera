@@ -371,6 +371,7 @@ impl Wallpaper {
         let mut shown = 0.;
         while shown < 1. {
             cx.background_executor().timer(FRAME).await;
+            crate::platform::Pace::quicken();
             let mut now = presence.value_at(Instant::now()).clamp(shown, 1.);
             if presence.is_settled() {
                 now = 1.;
