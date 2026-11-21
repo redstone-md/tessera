@@ -8,6 +8,7 @@
 mod app_windows;
 mod audio;
 mod icon;
+mod media;
 mod notifications;
 mod shortcuts;
 mod system;
@@ -17,6 +18,7 @@ mod tray;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents};
 pub use audio::AudioOutput;
 pub use icon::IconPixels;
+pub use media::{Media, MediaCommand, NowPlaying};
 pub use notifications::{Notification, Notifications};
 pub use shortcuts::Shortcut;
 pub use system::{Battery, MemoryLoad, ProcessorLoad};

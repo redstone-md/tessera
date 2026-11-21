@@ -25,6 +25,7 @@ windows = { version = "0.61", features = [
     "ApplicationModel",
     "Foundation",
     "Foundation_Collections",
+    "Media_Control",
     "UI_Notifications",
     "UI_Notifications_Management",
     "Win32_Foundation",

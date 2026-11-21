@@ -33,6 +33,9 @@
 #               option show, "percent" (default) or "used" for gigabytes
 #   "battery"   the charge of the battery, with option style as for "cpu";
 #               shows nothing on a machine without a battery
+#   "media"     what is playing, on one line; absent while no application
+#               offers anything; option width, the most it takes, in pixels
+#   "media-controls"  what is playing, with buttons to skip and pause
 #   "volume"    the output volume, as an icon and a percentage
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "tray"      the notification icons of applications; option tips, "left"
@@ -64,7 +67,7 @@ edge = "top"
 thickness = 48
 start = [{ widget = "label", icon = "\uE71D", text = "Apps", popup = "launcher" }, { widget = "label", icon = "\uE719", text = "Extensions", popup = "extensions" }, "cpu", "memory", "battery"]
 center = [{ widget = "clock", popup = "calendar" }]
-end = [{ widget = "tray", tips = "left" }, { widget = "volume", popup = "sound" }, "quit"]
+end = [{ widget = "media", popup = "media" }, { widget = "tray", tips = "left" }, { widget = "volume", popup = "sound" }, "quit"]
 
 [[surface]]
 edge = "bottom"
@@ -93,6 +96,12 @@ name = "calendar"
 width = 300
 height = 720
 content = ["calendar", "notifications"]
+
+[[popup]]
+name = "media"
+width = 320
+height = 132
+content = ["media-controls"]
 
 [[popup]]
 name = "sound"
