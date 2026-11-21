@@ -94,6 +94,9 @@ impl Level {
 struct Sound {
     /// `None` while there is no output to control.
     level: Option<Level>,
+    /// How many times the level was read at once, as it is after a widget
+    /// sets it. A reading asked for before that is older and is dropped.
+    asked: usize,
 }
 
 struct SharedSound(Entity<Sound>);
@@ -110,7 +113,19 @@ impl Sound {
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor().timer(POLL_INTERVAL).await;
-                    if this.update(cx, Self::refresh).is_err() {
+                    // Asking Windows takes a while each time, and nothing
+                    // is drawn meanwhile if the thread of the windows asks.
+                    let Ok(asked) = this.read_with(cx, |sound, _| sound.asked) else {
+                        break;
+                    };
+                    let level = cx.background_executor().spawn(async { Self::read() });
+                    let level = level.await;
+                    let taken = this.update(cx, |sound, cx| {
+                        if sound.asked == asked {
+                            sound.take(level, cx);
+                        }
+                    });
+                    if taken.is_err() {
                         break;
                     }
                 }
@@ -118,6 +133,7 @@ impl Sound {
             .detach();
             Self {
                 level: Self::read(),
+                asked: 0,
             }
         });
         cx.set_global(SharedSound(sound.clone()));
@@ -133,7 +149,11 @@ impl Sound {
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let level = Self::read();
+        self.asked += 1;
+        self.take(Self::read(), cx);
+    }
+
+    fn take(&mut self, level: Option<Level>, cx: &mut Context<Self>) {
         if level != self.level {
             self.level = level;
             cx.notify();
@@ -150,6 +170,8 @@ struct Mixer {
     microphone: Option<Level>,
     programs: Vec<AppSound>,
     outputs: Vec<AudioDevice>,
+    /// As [`Sound::asked`].
+    asked: usize,
 }
 
 struct SharedMixer(WeakEntity<Mixer>);
@@ -167,7 +189,17 @@ impl Mixer {
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor().timer(POLL_INTERVAL).await;
-                    if this.update(cx, Self::refresh).is_err() {
+                    let Ok(asked) = this.read_with(cx, |mixer, _| mixer.asked) else {
+                        break;
+                    };
+                    let read = cx.background_executor().spawn(async { Self::read() });
+                    let read = read.await;
+                    let taken = this.update(cx, |mixer, cx| {
+                        if mixer.asked == asked {
+                            mixer.take(read, cx);
+                        }
+                    });
+                    if taken.is_err() {
                         break;
                     }
                 }
@@ -190,11 +222,17 @@ impl Mixer {
             microphone,
             programs: AppSound::all().unwrap_or_default(),
             outputs: AudioDevice::outputs().unwrap_or_default(),
+            asked: 0,
         }
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let read = Self::read();
+        self.asked += 1;
+        self.take(Self::read(), cx);
+    }
+
+    fn take(&mut self, mut read: Self, cx: &mut Context<Self>) {
+        read.asked = self.asked;
         if read != *self {
             *self = read;
             cx.notify();
@@ -648,6 +686,7 @@ mod tests {
                 volume: 0.3,
                 muted: false,
             }),
+            asked: 0,
         };
         let mixer = Mixer {
             microphone: Some(Level {
@@ -660,6 +699,7 @@ mod tests {
                 muted: false,
             }],
             outputs: Vec::new(),
+            asked: 0,
         };
         let volume =
             |channel: Channel, mixer| channel.level(&sound, mixer).map(|level| level.volume);
