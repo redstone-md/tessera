@@ -5,8 +5,9 @@
 
 use std::ffi::c_void;
 use std::path::PathBuf;
-use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, Once, PoisonError};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -313,6 +314,9 @@ pub struct AppWindow {
     pub app_id: Option<String>,
 }
 
+/// For how long a list of the windows is given again.
+const LIST_KEPT: Duration = Duration::from_millis(100);
+
 impl AppWindow {
     /// What starts another window of the window's application and names
     /// it when it is pinned: the packaged application, or else the program
@@ -323,7 +327,27 @@ impl AppWindow {
     }
 
     /// Lists application windows in z-order, topmost first.
+    ///
+    /// Every bar asks at the same moment, when something happened to a
+    /// window, and the answer costs a look into each process. The list
+    /// read last is therefore given again for a tenth of a second, unless
+    /// something has happened to a window since.
     pub fn enumerate() -> Vec<Self> {
+        static LAST: Mutex<Option<(u64, Instant, Vec<AppWindow>)>> = Mutex::new(None);
+        let generation = WindowEvents::generation();
+        let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((read_at, read, windows)) = last.as_ref()
+            && *read_at == generation
+            && read.elapsed() < LIST_KEPT
+        {
+            return windows.clone();
+        }
+        let windows = Self::read();
+        *last = Some((generation, Instant::now(), windows.clone()));
+        windows
+    }
+
+    fn read() -> Vec<Self> {
         let mut handles: Vec<HWND> = Vec::new();
         // SAFETY: `collect` receives the pointer to `handles`, which outlives
         // the synchronous enumeration.
