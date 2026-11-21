@@ -61,7 +61,7 @@ fn open_surfaces(cx: &mut App) -> anyhow::Result<()> {
         thickness: theme.dock.height,
     };
     for display in cx.displays() {
-        bar.open(&display, cx, Bar::new)?;
+        bar.open(&display, cx, |_, cx| Bar::new(cx))?;
         dock.open(&display, cx, Dock::new)?;
     }
     Ok(())

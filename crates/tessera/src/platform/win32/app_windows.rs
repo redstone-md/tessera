@@ -8,16 +8,20 @@ use std::path::PathBuf;
 
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SW_MINIMIZE,
-    SW_RESTORE, SetForegroundWindow, ShowWindowAsync, WS_EX_TOOLWINDOW,
+    GetWindowPlacement, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync, WINDOWPLACEMENT,
+    WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
+
+use super::DisplayKey;
 
 /// Identifies a top-level window for as long as it exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -61,6 +65,8 @@ impl AppWindowId {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppWindow {
     pub id: AppWindowId,
+    /// The display the window is on, or would return to when restored.
+    pub display: DisplayKey,
     /// The image of the owning process, when the system allows reading it.
     pub executable: Option<PathBuf>,
 }
@@ -108,6 +114,7 @@ impl AppWindow {
             }
             Some(Self {
                 id: AppWindowId(hwnd.0 as isize),
+                display: display_of(hwnd),
                 executable: executable_of(process),
             })
         }
@@ -119,6 +126,26 @@ unsafe extern "system" fn collect(hwnd: HWND, state: LPARAM) -> BOOL {
     let handles = unsafe { &mut *(state.0 as *mut Vec<HWND>) };
     handles.push(hwnd);
     true.into()
+}
+
+fn display_of(hwnd: HWND) -> DisplayKey {
+    // SAFETY: `placement` is correctly sized, and the calls only read window
+    // state and tolerate a handle whose window has since been destroyed.
+    unsafe {
+        let mut placement = WINDOWPLACEMENT {
+            length: size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        // A minimized window is parked off-screen; use where it restores to.
+        if IsIconic(hwnd).as_bool() && GetWindowPlacement(hwnd, &raw mut placement).is_ok() {
+            let display = MonitorFromRect(
+                &raw const placement.rcNormalPosition,
+                MONITOR_DEFAULTTONEAREST,
+            );
+            return DisplayKey(display.0 as isize);
+        }
+    }
+    DisplayKey::of_window(hwnd)
 }
 
 fn executable_of(process: u32) -> Option<PathBuf> {

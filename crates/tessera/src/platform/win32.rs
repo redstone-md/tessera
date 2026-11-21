@@ -65,7 +65,25 @@ pub struct NativeSurface {
     hwnd: HWND,
 }
 
+/// Identifies a display for as long as the display configuration is unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DisplayKey(isize);
+
+impl DisplayKey {
+    /// The display that holds most of `hwnd`, or the nearest one.
+    fn of_window(hwnd: HWND) -> Self {
+        // SAFETY: the call only reads window state and tolerates a handle
+        // whose window has since been destroyed.
+        Self(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) }.0 as isize)
+    }
+}
+
 impl NativeSurface {
+    /// The display the surface is on.
+    pub fn display(self) -> DisplayKey {
+        DisplayKey::of_window(self.hwnd)
+    }
+
     /// Resolves the native window of a GPUI window.
     pub fn of(window: &Window) -> Result<Self> {
         let handle = HasWindowHandle::window_handle(window)

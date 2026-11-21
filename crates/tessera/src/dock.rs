@@ -13,7 +13,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, img,
 };
 
-use crate::platform::{AppWindow, AppWindowId, IconPixels};
+use crate::platform::{AppWindow, AppWindowId, DisplayKey, IconPixels};
 use crate::theme::Theme;
 
 /// How often the window list is re-read.
@@ -24,8 +24,10 @@ const ICON_SOURCE_SIZE: u32 = 64;
 
 type Icon = Option<Arc<RenderImage>>;
 
-/// Lists open application windows and switches between them.
+/// Lists the application windows of one display and switches between them.
 pub struct Dock {
+    /// The display whose windows are listed; every window when unknown.
+    display: Option<DisplayKey>,
     windows: Vec<AppWindow>,
     foreground: Option<AppWindowId>,
     /// Icons by executable, including executables known to have none.
@@ -33,7 +35,7 @@ pub struct Dock {
 }
 
 impl Dock {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(display: Option<DisplayKey>, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(REFRESH_INTERVAL).await;
@@ -45,6 +47,7 @@ impl Dock {
         .detach();
 
         let mut dock = Self {
+            display,
             windows: Vec::new(),
             foreground: None,
             icons: HashMap::new(),
@@ -56,6 +59,7 @@ impl Dock {
     /// Re-reads the window list and repaints only when it changed.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let mut windows = AppWindow::enumerate();
+        windows.retain(|window| self.display.is_none_or(|display| window.display == display));
         // Keep a stable order: known windows stay put, new ones append.
         windows.sort_by_key(|window| {
             self.windows

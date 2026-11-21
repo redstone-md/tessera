@@ -11,7 +11,7 @@ use gpui::{
     WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 
-use crate::platform::{EdgeReservation, NativeSurface, ScreenEdge};
+use crate::platform::{DisplayKey, EdgeReservation, NativeSurface, ScreenEdge};
 use crate::theme::Theme;
 
 /// Describes a strip along one edge of a display.
@@ -23,11 +23,12 @@ pub struct EdgeSurface {
 
 impl EdgeSurface {
     /// Opens the strip on `display` and fills it with the view `build` returns.
+    /// `build` is told which display the strip ended up on, when known.
     pub fn open<V: Render>(
         self,
         display: &Rc<dyn PlatformDisplay>,
         cx: &mut App,
-        build: impl FnOnce(&mut Context<V>) -> V,
+        build: impl FnOnce(Option<DisplayKey>, &mut Context<V>) -> V,
     ) -> anyhow::Result<WindowHandle<EdgeSurfaceView<V>>> {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(self.bounds_on(display.bounds()))),
@@ -46,6 +47,7 @@ impl EdgeSurface {
             ..Default::default()
         };
         cx.open_window(options, |window, cx| {
+            let display = NativeSurface::of(window).ok().map(NativeSurface::display);
             let reservation = self
                 .dock(window)
                 .inspect_err(|error| {
@@ -53,7 +55,7 @@ impl EdgeSurface {
                 })
                 .ok();
             cx.new(|cx| EdgeSurfaceView {
-                content: cx.new(build),
+                content: cx.new(|cx| build(display, cx)),
                 _reservation: reservation,
             })
         })
