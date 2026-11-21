@@ -11,6 +11,7 @@ use std::time::SystemTime;
 
 use serde::Deserialize;
 
+use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::i18n::Language;
 use crate::platform::ScreenEdge;
@@ -206,6 +207,9 @@ pub struct Config {
     pub surfaces: Vec<SurfaceConfig>,
     #[serde(default, rename = "popup")]
     pub popups: Vec<PopupConfig>,
+    /// Panels of widgets that lie on the desktop.
+    #[serde(default, rename = "card")]
+    pub cards: Vec<CardConfig>,
     /// Image files to show instead of the icons of applications, by the
     /// file name of the executable.
     #[serde(default)]

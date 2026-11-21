@@ -225,6 +225,18 @@ content = ["volume-slider"]
 # images = ["C:/Users/me/Pictures/Wallpapers"]
 # interval = 600
 
+# Each [[card]] is a panel of widgets that lies on the desktop, below every
+# window. corner is top-left, top-right (the default), bottom-left,
+# bottom-right or center; x and y are the distances of the panel from the two
+# sides of that corner (24 each; in the center they shift it right and down);
+# displays is "all" or "primary"; content lists widgets as a popup does.
+#
+# [[card]]
+# corner = "top-right"
+# width = 260
+# height = 150
+# content = [{ widget = "clock", format = "%H:%M" }, "cpu", "memory"]
+
 # [icons] replaces application icons. Each key is the file name of an
 # executable, each value an image file (PNG, JPEG or ICO); a relative path is
 # looked up in %APPDATA%\tessera.

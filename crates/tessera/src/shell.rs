@@ -11,6 +11,7 @@ use anyhow::bail;
 use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
 use crate::config::{Config, Displays};
+use crate::desk::Cards;
 use crate::icons::AppIcons;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
@@ -42,6 +43,7 @@ pub struct Shell {
     /// The configuration the open surfaces were made from.
     config: Config,
     surfaces: Vec<Surface>,
+    cards: Cards,
 }
 
 impl Global for Shell {}
@@ -64,7 +66,13 @@ impl Shell {
             bail!("the layout opened no surface");
         }
         Wallpaper::start(&config.wallpaper, cx);
-        cx.set_global(Self { config, surfaces });
+        let mut cards = Cards::default();
+        cards.show(&config.cards, cx);
+        cx.set_global(Self {
+            config,
+            surfaces,
+            cards,
+        });
         Self::watch(cx);
         Self::answer_windows_key(cx);
         Ok(())
@@ -187,6 +195,7 @@ impl Shell {
             old.extensions != config.extensions || old.registries() != config.registries();
         let icons = old.icons != config.icons;
         let surfaces = old.surfaces != config.surfaces;
+        let cards = old.cards != config.cards;
         // An open popup stays while it is still what the configuration
         // describes, so that the settings do not close at every change.
         if extensions || icons || (old.popups != config.popups && !written_here) {
@@ -208,6 +217,10 @@ impl Shell {
             config.surfaces = cx.global::<Self>().config.surfaces.clone();
         }
         cx.global_mut::<Self>().config = config;
+        // Widgets keep what they were built with, here as on the surfaces.
+        if extensions || icons || cards {
+            Self::show_cards(cx);
+        }
         Self::take_windows_key(cx);
         cx.refresh_windows();
     }
@@ -224,7 +237,17 @@ impl Shell {
         let config = cx.global::<Self>().config.clone();
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         Self::arrange(&config, cx);
+        Self::show_cards(cx);
         cx.refresh_windows();
+    }
+
+    /// Opens the cards of the configuration in use in place of the open
+    /// ones.
+    fn show_cards(cx: &mut App) {
+        let mut cards = mem::take(&mut cx.global_mut::<Self>().cards);
+        let configs = cx.global::<Self>().config.cards.clone();
+        cards.show(&configs, cx);
+        cx.global_mut::<Self>().cards = cards;
     }
 
     /// Makes the open surfaces those of `config`. A surface that stays at

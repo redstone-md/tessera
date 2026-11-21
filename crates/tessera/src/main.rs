@@ -9,6 +9,7 @@
 mod report;
 
 mod config;
+mod desk;
 mod extension;
 mod i18n;
 mod icons;

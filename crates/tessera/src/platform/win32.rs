@@ -210,6 +210,15 @@ impl NativeSurface {
         self.adopt(WS_EX_TOOLWINDOW)
     }
 
+    /// Turns the window into a card on the desktop: no caption or frame,
+    /// below every other window, not listed among application windows, and
+    /// clicks on it neither take keyboard focus nor raise it.
+    pub fn adopt_as_card(self) -> Result<()> {
+        self.adopt(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)?;
+        self.keep_above(false);
+        Ok(())
+    }
+
     /// The window's bounds on the screen.
     pub fn frame(self) -> Result<ScreenRect> {
         let mut rect = RECT::default();
