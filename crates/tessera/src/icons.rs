@@ -92,7 +92,7 @@ impl AppIcons {
         let name = executable.file_name()?.to_str()?.to_lowercase();
         let path = self.replacements.get(&name)?;
         load_image(path)
-            .inspect_err(|error| eprintln!("tessera: the icon for `{name}` is ignored: {error:#}"))
+            .inspect_err(|error| report!("the icon for `{name}` is ignored: {error:#}"))
             .ok()
             .flatten()
     }

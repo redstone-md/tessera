@@ -46,9 +46,7 @@ impl Module for NetworkModule {
                 None | Some("name") => true,
                 Some("icon") => false,
                 Some(other) => {
-                    eprintln!(
-                        "tessera: `show` must be `name` or `icon`, `{other}` is taken as `name`"
-                    );
+                    report!("`show` must be `name` or `icon`, `{other}` is taken as `name`");
                     true
                 }
             };
@@ -92,7 +90,7 @@ impl Connection {
         let patience = if Network::watch() {
             CHECKS_WATCHED
         } else {
-            eprintln!("tessera: Windows does not report network changes, so they are polled");
+            report!("Windows does not report network changes, so they are polled");
             1
         };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {

@@ -100,7 +100,7 @@ impl Shortcut {
         let shortcut = self.clone();
         thread::spawn(move || {
             if let Err(error) = shortcut.open() {
-                eprintln!("tessera: {error:#}");
+                report!("{error:#}");
             }
         });
     }

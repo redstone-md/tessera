@@ -108,7 +108,7 @@ impl Pin {
                 start_menu.iter().find(known).cloned()
             };
             if shortcut.is_none() {
-                eprintln!("tessera: nothing to pin is called `{name}`");
+                report!("nothing to pin is called `{name}`");
             }
             shortcut.map(Self::of)
         });
@@ -192,7 +192,7 @@ fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
     });
     match changed {
         Ok(()) => cx.defer(Shell::config_changed),
-        Err(error) => eprintln!("tessera: {error}"),
+        Err(error) => report!("{error}"),
     }
 }
 
@@ -236,7 +236,7 @@ impl WindowList {
         let patience = if WindowEvents::watch() {
             CHECKS_WATCHED
         } else {
-            eprintln!("tessera: Windows does not report window changes, so they are polled");
+            report!("Windows does not report window changes, so they are polled");
             CHECKS_UNWATCHED
         };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -306,7 +306,7 @@ impl WindowList {
         };
         match PopupAnchor::at(window, middle, cx) {
             Ok(anchor) => Previews::request(id, anchor, cx),
-            Err(error) => eprintln!("tessera: a preview has nowhere to open: {error:#}"),
+            Err(error) => report!("a preview has nowhere to open: {error:#}"),
         }
     }
 
@@ -369,7 +369,7 @@ impl WindowList {
         };
         match PopupAnchor::at(window, middle, cx) {
             Ok(anchor) => Menus::open(self.menu_entries(key), anchor, cx),
-            Err(error) => eprintln!("tessera: a menu has nowhere to open: {error:#}"),
+            Err(error) => report!("a menu has nowhere to open: {error:#}"),
         }
     }
 

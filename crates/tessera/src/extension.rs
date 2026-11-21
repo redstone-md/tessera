@@ -65,8 +65,8 @@ impl Module for ExtensionsModule {
                 continue;
             }
             if let Err(error) = self.load(&runtime, &path, widgets) {
-                eprintln!(
-                    "tessera: the extension in {} is not loaded: {error:#}",
+                report!(
+                    "the extension in {} is not loaded: {error:#}",
                     path.display()
                 );
             }

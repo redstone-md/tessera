@@ -86,14 +86,14 @@ impl Menus {
                     Ok(())
                 });
                 if let Err(error) = adopted {
-                    eprintln!("tessera: a menu is not where it belongs: {error:#}");
+                    report!("a menu is not where it belongs: {error:#}");
                 }
                 cx.new(|cx| MenuView::new(entries, edge, window, cx))
             },
         );
         match opened {
             Ok(window) => cx.global_mut::<Self>().open = Some(window),
-            Err(error) => eprintln!("tessera: a menu did not open: {error:#}"),
+            Err(error) => report!("a menu did not open: {error:#}"),
         }
     }
 

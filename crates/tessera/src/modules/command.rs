@@ -56,9 +56,7 @@ impl Module for CommandModule {
         widgets.register("command", |context, cx| {
             let command = context.texts("command").unwrap_or_default();
             if command.is_empty() {
-                eprintln!(
-                    "tessera: a `command` widget needs `command`, a program and its arguments"
-                );
+                report!("a `command` widget needs `command`, a program and its arguments");
             }
             let interval = context
                 .number("interval")
@@ -181,7 +179,7 @@ impl Output {
             return;
         }
         if let Err(error) = &result {
-            eprintln!("tessera: a `command` widget shows no output: {error}");
+            report!("a `command` widget shows no output: {error}");
         }
         self.result = Some(result);
         self.fade = Spring::new(cx.global::<Theme>().motion.effects, 0.);

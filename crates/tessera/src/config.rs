@@ -53,14 +53,14 @@ fn read<T: for<'de> Deserialize<'de>>(file: &str) -> UserFile<T> {
         Ok(text) => text,
         Err(error) if error.kind() == ErrorKind::NotFound => return UserFile::Missing,
         Err(error) => {
-            eprintln!("tessera: {} is ignored: {error}", path.display());
+            report!("{} is ignored: {error}", path.display());
             return UserFile::Unusable;
         }
     };
     match toml::from_str(&text) {
         Ok(value) => UserFile::Read(value),
         Err(error) => {
-            eprintln!("tessera: {} is ignored: {error}", path.display());
+            report!("{} is ignored: {error}", path.display());
             UserFile::Unusable
         }
     }
@@ -272,7 +272,9 @@ mod tests {
         assert_eq!(config.registries(), [OFFICIAL_REGISTRY]);
         assert_eq!(
             names(&bar.end),
-            ["media", "tray", "label", "network", "volume", "quit"]
+            [
+                "problems", "media", "tray", "label", "network", "volume", "quit"
+            ]
         );
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);

@@ -37,7 +37,7 @@ impl WidgetContext {
         let value = self.options.get(key)?;
         let text = value.as_str();
         if text.is_none() {
-            eprintln!("tessera: the widget option `{key}` must be text, `{value}` is ignored");
+            report!("the widget option `{key}` must be text, `{value}` is ignored");
         }
         text
     }
@@ -50,7 +50,7 @@ impl WidgetContext {
             .as_float()
             .or_else(|| value.as_integer().map(|whole| whole as f64));
         if number.is_none() {
-            eprintln!("tessera: the widget option `{key}` must be a number, `{value}` is ignored");
+            report!("the widget option `{key}` must be a number, `{value}` is ignored");
         }
         number
     }
@@ -66,9 +66,7 @@ impl WidgetContext {
                 .collect::<Option<Vec<String>>>()
         });
         if texts.is_none() {
-            eprintln!(
-                "tessera: the widget option `{key}` must be a list of texts, `{value}` is ignored"
-            );
+            report!("the widget option `{key}` must be a list of texts, `{value}` is ignored");
         }
         texts
     }
@@ -94,10 +92,7 @@ impl WidgetRegistry {
         let mut registry = Self::default();
         for module in modules {
             if let Err(error) = module.register(&mut registry) {
-                eprintln!(
-                    "tessera: module `{}` is not fully loaded: {error:#}",
-                    module.name()
-                );
+                report!("module `{}` is not fully loaded: {error:#}", module.name());
             }
         }
         registry
@@ -158,7 +153,7 @@ impl WidgetRegistry {
     /// `display`. A name no module provides is reported.
     pub fn build(spec: &WidgetSpec, display: Option<DisplayKey>, cx: &mut App) -> Option<AnyView> {
         let Some(factory) = cx.global::<Self>().factories.get(&spec.widget).cloned() else {
-            eprintln!("tessera: no module provides the widget `{}`", spec.widget);
+            report!("no module provides the widget `{}`", spec.widget);
             return None;
         };
         let context = WidgetContext {

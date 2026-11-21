@@ -105,7 +105,7 @@ impl Shell {
     /// used is reported, as when starting, and changes nothing.
     fn reload(cx: &mut App, written_here: bool) {
         let Some(mut config) = Config::reload() else {
-            eprintln!("tessera: the configuration in use stays");
+            report!("the configuration in use stays");
             return;
         };
         cx.set_global(Theme::load(config.theme.as_deref()));
@@ -162,7 +162,7 @@ impl Shell {
         let mut old = mem::take(&mut cx.global_mut::<Self>().surfaces);
         let new = Self::open_surfaces(config, &mut old, cx);
         if new.is_empty() {
-            eprintln!("tessera: the new layout opened no surface, the previous surfaces stay");
+            report!("the new layout opened no surface, the previous surfaces stay");
             cx.global_mut::<Self>().surfaces = old;
             return false;
         }
@@ -214,7 +214,7 @@ impl Shell {
                         edge,
                         window,
                     }),
-                    Err(error) => eprintln!("tessera: a surface did not open: {error:#}"),
+                    Err(error) => report!("a surface did not open: {error:#}"),
                 }
             }
         }

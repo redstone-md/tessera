@@ -35,7 +35,7 @@ impl PowerAction {
     pub fn perform(self) {
         thread::spawn(move || {
             if let Err(error) = self.run() {
-                eprintln!("tessera: {error:#}");
+                report!("{error:#}");
             }
         });
     }

@@ -132,7 +132,7 @@ impl Sound {
         cx: &mut Context<Self>,
     ) {
         if let Err(error) = AudioOutput::default_device().and_then(|output| change(&output)) {
-            eprintln!("tessera: {error:#}");
+            report!("{error:#}");
         }
         self.refresh(cx);
     }

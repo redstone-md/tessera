@@ -114,7 +114,7 @@ impl Cover {
             Ok((digest, image)) => Self { digest, image },
             Err(error) => {
                 if !error.is_empty() {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                 }
                 Self::default()
             }
@@ -217,7 +217,7 @@ impl Player {
             }
             Err(error) => {
                 if self.error.as_ref() != Some(&error) {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                     self.error = Some(error);
                 }
             }
@@ -236,7 +236,7 @@ impl Player {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let sent = cx.background_executor().spawn(async move {
                 if let Err(error) = Media::send(command) {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                 }
             });
             sent.await;

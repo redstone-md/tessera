@@ -94,7 +94,7 @@ impl WifiList {
                 reads += 1;
                 let read = cx.background_executor().spawn(async move {
                     if scan && let Err(error) = Wifi::scan() {
-                        eprintln!("tessera: {error}");
+                        report!("{error}");
                     }
                     Wifi::reach()
                 });
@@ -162,7 +162,7 @@ impl WifiList {
                 .await;
             if let Err(error) = joined {
                 let _ = this.update(cx, |this, cx| {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                     this.joining = None;
                     this.failure = Some(error);
                     cx.notify();

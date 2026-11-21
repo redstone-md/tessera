@@ -67,7 +67,7 @@ impl Panel {
     fn open_popup(&self, name: &str, window: &Window, cx: &mut App) {
         match PopupAnchor::at(window, window.mouse_position().x, cx) {
             Ok(anchor) => Popups::toggle(name, anchor, cx),
-            Err(error) => eprintln!("tessera: the popup `{name}` has nowhere to open: {error:#}"),
+            Err(error) => report!("the popup `{name}` has nowhere to open: {error:#}"),
         }
     }
 

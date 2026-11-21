@@ -72,7 +72,7 @@ impl Previews {
             Self::close(cx);
             match Self::open(target, &anchor, cx) {
                 Ok(window) => cx.global_mut::<Self>().open = Some((target, window)),
-                Err(error) => eprintln!("tessera: a preview did not open: {error:#}"),
+                Err(error) => report!("a preview did not open: {error:#}"),
             }
         });
     }
@@ -175,7 +175,7 @@ impl Previews {
                     native.place(anchor.frame(width, height))
                 });
                 if let Err(error) = placed {
-                    eprintln!("tessera: a preview is not where it belongs: {error:#}");
+                    report!("a preview is not where it belongs: {error:#}");
                 }
                 let theme = cx.global::<Theme>();
                 let mut visibility = Spring::new(theme.motion.spatial, 0.);

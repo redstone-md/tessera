@@ -61,8 +61,8 @@ fn one_of(context: &WidgetContext, key: &str, choices: &[&str]) -> usize {
         .iter()
         .position(|choice| *choice == chosen)
         .unwrap_or_else(|| {
-            eprintln!(
-                "tessera: `{key}` must be one of {choices:?}, `{chosen}` is taken as `{}`",
+            report!(
+                "`{key}` must be one of {choices:?}, `{chosen}` is taken as `{}`",
                 choices[0]
             );
             0

@@ -48,7 +48,7 @@ struct HostState {
 
 impl bindings::ExtensionImports for HostState {
     fn log(&mut self, message: String) {
-        eprintln!("tessera: [{}] {message}", self.id);
+        report!("[{}] {message}", self.id);
     }
 
     fn now(&mut self) -> u64 {

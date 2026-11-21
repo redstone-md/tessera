@@ -96,7 +96,7 @@ impl NotificationList {
             }
             Err(error) => {
                 if self.error.as_ref() != Some(&error) {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                     self.error = Some(error);
                     cx.notify();
                 }
@@ -164,7 +164,7 @@ impl NotificationList {
         cx.background_executor()
             .spawn(async move {
                 if let Err(error) = Notifications::dismiss(id) {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                 }
             })
             .detach();
@@ -180,7 +180,7 @@ impl NotificationList {
         cx.background_executor()
             .spawn(async {
                 if let Err(error) = Notifications::clear() {
-                    eprintln!("tessera: {error}");
+                    report!("{error}");
                 }
             })
             .detach();

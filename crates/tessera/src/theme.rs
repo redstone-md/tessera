@@ -266,17 +266,17 @@ impl Theme {
             return theme;
         }
         if name.contains(['/', '\\', ':']) || name.starts_with('.') {
-            eprintln!("tessera: `{name}` is not a theme name, the built-in theme is used");
+            report!("`{name}` is not a theme name, the built-in theme is used");
             return theme;
         }
         match read_user_file::<ThemeFile>(&theme_file(name)) {
             Some(file) => {
                 theme.derive(file.seed.as_deref(), file.scheme, name);
                 if let Err(error) = file.colors.apply_to(&mut theme.colors) {
-                    eprintln!("tessera: theme `{name}` is only partly applied: {error:#}");
+                    report!("theme `{name}` is only partly applied: {error:#}");
                 }
             }
-            None => eprintln!("tessera: theme `{name}` is not loaded, the built-in theme is used"),
+            None => report!("theme `{name}` is not loaded, the built-in theme is used"),
         }
         theme
     }
@@ -292,7 +292,7 @@ impl Theme {
             Scheme::System => {
                 let light = light_mode();
                 if light.is_none() {
-                    eprintln!("tessera: Windows does not tell whether it is light or dark");
+                    report!("Windows does not tell whether it is light or dark");
                 }
                 // Remembered even if untold, so that it is noticed once
                 // Windows tells.
@@ -305,13 +305,13 @@ impl Theme {
             Some(ACCENT_SEED) => {
                 let accent = accent_color();
                 if accent.is_none() {
-                    eprintln!("tessera: Windows does not tell its accent color");
+                    report!("Windows does not tell its accent color");
                 }
                 self.followed.accent = Some(accent.unwrap_or(BUILT_IN_SEED));
                 accent
             }
             Some(seed) => parse_rgb(seed)
-                .inspect_err(|error| eprintln!("tessera: theme `{name}`: {error:#}"))
+                .inspect_err(|error| report!("theme `{name}`: {error:#}"))
                 .ok(),
         };
         if seed.is_some() || light {

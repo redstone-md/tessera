@@ -70,7 +70,7 @@ impl Host {
                 Some(value)
             }
             Err(error) => {
-                eprintln!("tessera: the extension `{}` stopped: {error:#}", self.id);
+                report!("the extension `{}` stopped: {error:#}", self.id);
                 self.instance = None;
                 cx.notify();
                 None

@@ -30,7 +30,7 @@ impl Module for ClockModule {
                 .filter(|format| {
                     let valid = is_valid_format(format);
                     if !valid {
-                        eprintln!("tessera: `{format}` is not a clock format, the default is used");
+                        report!("`{format}` is not a clock format, the default is used");
                     }
                     valid
                 })

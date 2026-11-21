@@ -148,7 +148,7 @@ impl Pins {
                 cx.defer(Shell::config_changed);
             }
             Err(error) => {
-                eprintln!("tessera: {error}");
+                report!("{error}");
                 self.shown = false;
             }
         }
@@ -304,7 +304,7 @@ const ACTIONS: [(PowerAction, &str, &str, &str); 5] = [
 fn action_named(name: &str) -> Option<PowerAction> {
     let known = ACTIONS.iter().find(|(_, known, ..)| *known == name);
     if known.is_none() {
-        eprintln!("tessera: `{name}` is not something the `power` widget does");
+        report!("`{name}` is not something the `power` widget does");
     }
     known.map(|&(action, ..)| action)
 }

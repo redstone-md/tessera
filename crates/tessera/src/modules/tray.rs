@@ -47,8 +47,8 @@ impl Module for TrayModule {
                 Some("left") => Some(TipSide::Left),
                 Some("right") => Some(TipSide::Right),
                 Some(other) => {
-                    eprintln!(
-                        "tessera: the `tips` of a tray must be \"left\" or \"right\",                          `{other}` is ignored"
+                    report!(
+                        "the `tips` of a tray must be \"left\" or \"right\",                          `{other}` is ignored"
                     );
                     None
                 }
@@ -101,7 +101,7 @@ impl TrayStrip {
                     }
                 })
                 .detach(),
-            Err(error) => eprintln!("tessera: the notification area stays empty: {error}"),
+            Err(error) => report!("the notification area stays empty: {error}"),
         }
         Self {
             items: Vec::new(),

@@ -83,7 +83,7 @@ impl Shortcut {
             return apps.clone();
         }
         let apps = Self::read_packaged().unwrap_or_else(|error| {
-            eprintln!("tessera: packaged applications are not listed: {error}");
+            report!("packaged applications are not listed: {error}");
             Vec::new()
         });
         *listed = Some((Instant::now(), apps.clone()));

@@ -5,6 +5,9 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+#[macro_use]
+mod report;
+
 mod config;
 mod extension;
 mod icons;
@@ -47,10 +50,10 @@ fn main() {
                     }
                 })
                 .detach(),
-            Err(error) => eprintln!("tessera: the Windows taskbar stays visible: {error:#}"),
+            Err(error) => report!("the Windows taskbar stays visible: {error:#}"),
         }
         if let Err(error) = Shell::start(config, cx) {
-            eprintln!("tessera: the shell does not start: {error:#}");
+            report!("the shell does not start: {error:#}");
             cx.quit();
         }
     });

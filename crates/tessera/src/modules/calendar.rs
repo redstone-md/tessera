@@ -30,7 +30,7 @@ impl Module for CalendarModule {
                 None | Some("monday") => Weekday::Mon,
                 Some("sunday") => Weekday::Sun,
                 Some(other) => {
-                    eprintln!("tessera: a week starts on monday or sunday, not `{other}`");
+                    report!("a week starts on monday or sunday, not `{other}`");
                     Weekday::Mon
                 }
             };

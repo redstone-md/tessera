@@ -167,8 +167,8 @@ impl Popups {
         let mut known = HashMap::new();
         for config in configs {
             if known.insert(config.name.clone(), config.clone()).is_some() {
-                eprintln!(
-                    "tessera: several popups are named `{}`, the last one is used",
+                report!(
+                    "several popups are named `{}`, the last one is used",
                     config.name
                 );
             }
@@ -208,12 +208,12 @@ impl Popups {
             .get(name)
             .or_else(|| cx.global::<WidgetRegistry>().popup(name));
         let Some(config) = known.cloned() else {
-            eprintln!("tessera: there is no popup named `{name}`");
+            report!("there is no popup named `{name}`");
             return;
         };
         match Self::open(&config, &anchor, cx) {
             Ok(window) => cx.global_mut::<Self>().open = Some((config.name, window)),
-            Err(error) => eprintln!("tessera: the popup `{name}` did not open: {error:#}"),
+            Err(error) => report!("the popup `{name}` did not open: {error:#}"),
         }
     }
 
@@ -247,7 +247,7 @@ impl Popups {
                 Ok(())
             });
             if let Err(error) = adopted {
-                eprintln!("tessera: a popup is not where it belongs: {error:#}");
+                report!("a popup is not where it belongs: {error:#}");
             }
             let content = config
                 .content

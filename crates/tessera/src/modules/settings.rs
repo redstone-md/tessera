@@ -228,7 +228,7 @@ impl Settings {
                 cx.defer(Shell::config_changed);
             }
             Err(error) => {
-                eprintln!("tessera: {error}");
+                report!("{error}");
                 self.failure = Some(error.into());
             }
         }

@@ -52,7 +52,7 @@ impl EdgeSurface {
             let reservation = self
                 .dock(window)
                 .inspect_err(|error| {
-                    eprintln!("tessera: a surface is not docked to its screen edge: {error:#}");
+                    report!("a surface is not docked to its screen edge: {error:#}");
                 })
                 .ok();
             cx.new(|cx| EdgeSurfaceView {
@@ -118,7 +118,7 @@ impl<V: Render> EdgeSurfaceView<V> {
                 Ok(Some(reservation)) => self.reservation = Some(reservation),
                 Ok(None) => {}
                 Err(error) => {
-                    eprintln!("tessera: a surface is not docked to its screen edge: {error:#}");
+                    report!("a surface is not docked to its screen edge: {error:#}");
                 }
             }
         }
