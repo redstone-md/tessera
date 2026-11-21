@@ -8,10 +8,10 @@ A modular, native desktop shell for Windows 11, written in Rust with [GPUI](http
 
 What exists today, by default on every display:
 
-- A top bar with a clock and a **Quit Tessera** button, drawn as floating rounded pills.
+- A top bar with a clock and a **Quit Tessera** button, drawn as floating rounded pills. Clicking the clock opens a popup with a calendar to page through by month; it closes when clicked again or when another window takes focus. The calendar shows dates only: no events and no notifications.
 - A dock with one button per application window on that display; a minimized window counts for the display it restores to. Clicking a button brings its window to the foreground, or minimizes it if it already is there. The window list is polled twice a second. Packaged (Store) apps show a placeholder instead of their icon, and windows of elevated processes may ignore clicks.
 
-Motion is driven by springs: surfaces slide in from their edge at startup, dock buttons grow in and shrink away as windows open and close, the foreground indicator stretches, and buttons respond to hover and press. Nothing else is animated yet: text changes, the clock and extension content switch instantly, and surfaces do not animate out on exit.
+Motion is driven by springs: surfaces slide in from their edge at startup, dock buttons grow in and shrink away as windows open and close, the foreground indicator stretches, popups fade and slide in and out, and buttons respond to hover and press. Nothing else is animated yet: text changes, the clock and extension content switch instantly, and surfaces do not animate out on exit.
 
 While Tessera runs:
 
@@ -22,9 +22,9 @@ Tessera registers no hooks. Anything the taskbar provided that is not listed abo
 
 ## Configuration
 
-Everything a surface shows is a widget provided by a module. Three modules are compiled in, providing the widgets `clock`, `quit` and `windows`; extensions add more.
+Everything a surface shows is a widget provided by a module. The compiled-in modules provide the widgets `clock`, `calendar`, `quit` and `windows`; extensions add more.
 
-The layout is read once at startup from `%APPDATA%\tessera\config.toml`. It lists the surfaces — screen edge, thickness, all displays or only the primary one — and the widgets in the start, center and end of each. Without that file the [built-in layout](crates/tessera/src/default_config.toml) is used; it documents the format. A file that fails to parse is ignored as a whole, and an unknown widget name is skipped; both are reported on standard error, which only a debug build started from a terminal shows.
+The layout is read once at startup from `%APPDATA%\tessera\config.toml`. It lists the surfaces — screen edge, thickness, all displays or only the primary one — and the widgets in the start, center and end of each. A widget is written as its name, or as a table that adds options the widget understands (the clock takes a `format`, the calendar a `week_start`) and a `popup` to open when the widget is clicked. Popups are declared in the same file as a name, a size and a list of widgets, so any widget, including one from an extension, can open a popup or be placed in one. One popup is open at a time, and popups cannot be scrolled or resized. Without that file the [built-in layout](crates/tessera/src/default_config.toml) is used; it documents the format. A file that fails to parse is ignored as a whole, and an unknown widget name is skipped; both are reported on standard error, which only a debug build started from a terminal shows.
 
 `theme = "name"` in that file applies `%APPDATA%\tessera\themes\name.toml` over the built-in theme. A theme can replace colors only, as `#rrggbb` under `[colors]`, using the role names `surface_container`, `surface_container_highest`, `on_surface`, `on_surface_variant`, `outline`, `primary` and `secondary_container`. Shapes, sizes, fonts and motion are not themeable yet.
 

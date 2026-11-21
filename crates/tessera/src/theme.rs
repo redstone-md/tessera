@@ -75,6 +75,13 @@ pub struct DockMetrics {
     pub indicator_active_width: Pixels,
 }
 
+/// Calendar measurements.
+#[derive(Clone, Copy, Debug)]
+pub struct CalendarMetrics {
+    /// Width and height of one day.
+    pub cell_size: Pixels,
+}
+
 /// The appearance shared by every shell surface.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -85,6 +92,7 @@ pub struct Theme {
     pub motion: Motion,
     pub bar: BarMetrics,
     pub dock: DockMetrics,
+    pub calendar: CalendarMetrics,
 }
 
 impl Default for Theme {
@@ -138,6 +146,7 @@ impl Default for Theme {
                 indicator_height: px(4.),
                 indicator_active_width: px(16.),
             },
+            calendar: CalendarMetrics { cell_size: px(36.) },
         }
     }
 }

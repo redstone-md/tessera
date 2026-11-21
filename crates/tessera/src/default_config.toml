@@ -8,17 +8,36 @@
 #   edge       "top" or "bottom"
 #   thickness  reserved screen space, in logical pixels
 #   displays   "all" (default) or "primary"
-#   start, center, end  widgets to place, by name
+#   start, center, end  widgets to place
 #
-# Built-in widgets: "clock", "quit", "windows".
+# A widget is its name, or a table: { widget = "name", popup = "name", ... }.
+#   popup   the [[popup]] a click on the widget opens; any widget can have one
+#   other keys are options of that widget
+#
+# Built-in widgets:
+#   "clock"     date and time; option format, a strftime pattern
+#   "calendar"  a month to page through; option week_start, "monday" or "sunday"
+#   "windows"   a button for each open window of the display
+#   "quit"      closes Tessera
 
 [[surface]]
 edge = "top"
 thickness = 48
-center = ["clock"]
+center = [{ widget = "clock", popup = "calendar" }]
 end = ["quit"]
 
 [[surface]]
 edge = "bottom"
 thickness = 76
 center = ["windows"]
+
+# Each [[popup]] is a floating panel that opens next to the surface.
+#   name           what widgets refer to
+#   width, height  size in logical pixels
+#   content        widgets, stacked from the top
+
+[[popup]]
+name = "calendar"
+width = 300
+height = 348
+content = ["calendar"]

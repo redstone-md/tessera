@@ -9,6 +9,7 @@ use std::rc::Rc;
 use anyhow::bail;
 use gpui::{AnyView, App, Global};
 
+use crate::config::WidgetSpec;
 use crate::platform::DisplayKey;
 
 /// A unit of shell functionality. Everything a surface shows comes from one.
@@ -20,11 +21,26 @@ pub trait Module {
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()>;
 }
 
-/// Where a widget instance is being placed.
-#[derive(Clone, Copy, Debug)]
+/// Where and how a widget instance is being placed.
+#[derive(Clone, Debug)]
 pub struct WidgetContext {
     /// The display of the hosting surface, when known.
     pub display: Option<DisplayKey>,
+    /// What the layout says about this instance, beyond its name.
+    pub options: toml::Table,
+}
+
+impl WidgetContext {
+    /// The text option `key`. A value of another type is reported and
+    /// treated as absent.
+    pub fn text(&self, key: &str) -> Option<&str> {
+        let value = self.options.get(key)?;
+        let text = value.as_str();
+        if text.is_none() {
+            eprintln!("tessera: the widget option `{key}` must be text, `{value}` is ignored");
+        }
+        text
+    }
 }
 
 type WidgetFactory = Rc<dyn Fn(&WidgetContext, &mut App) -> AnyView>;
@@ -64,10 +80,18 @@ impl WidgetRegistry {
         Ok(())
     }
 
-    /// Builds a new instance of the widget `id`, if any module provides it.
-    pub fn build(id: &str, context: &WidgetContext, cx: &mut App) -> Option<AnyView> {
-        let factory = cx.global::<Self>().factories.get(id).cloned()?;
-        Some(factory(context, cx))
+    /// Builds a new instance of the widget `spec` names for a surface on
+    /// `display`. A name no module provides is reported.
+    pub fn build(spec: &WidgetSpec, display: Option<DisplayKey>, cx: &mut App) -> Option<AnyView> {
+        let Some(factory) = cx.global::<Self>().factories.get(&spec.widget).cloned() else {
+            eprintln!("tessera: no module provides the widget `{}`", spec.widget);
+            return None;
+        };
+        let context = WidgetContext {
+            display,
+            options: spec.options.clone(),
+        };
+        Some(factory(&context, cx))
     }
 }
 

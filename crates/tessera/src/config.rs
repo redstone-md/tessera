@@ -44,6 +44,63 @@ pub enum Displays {
     Primary,
 }
 
+/// A widget to place: its name, the popup a click on it opens, and the
+/// options its module understands. Written either as the bare name or as a
+/// table with a `widget` key.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(from = "WidgetSpecText")]
+pub struct WidgetSpec {
+    pub widget: String,
+    pub popup: Option<String>,
+    pub options: toml::Table,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WidgetSpecText {
+    Name(String),
+    Detailed {
+        widget: String,
+        popup: Option<String>,
+        #[serde(flatten)]
+        options: toml::Table,
+    },
+}
+
+impl From<WidgetSpecText> for WidgetSpec {
+    fn from(text: WidgetSpecText) -> Self {
+        match text {
+            WidgetSpecText::Name(widget) => Self {
+                widget,
+                popup: None,
+                options: toml::Table::new(),
+            },
+            WidgetSpecText::Detailed {
+                widget,
+                popup,
+                options,
+            } => Self {
+                widget,
+                popup,
+                options,
+            },
+        }
+    }
+}
+
+/// A floating panel of widgets that a click on a widget opens.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PopupConfig {
+    pub name: String,
+    /// Size of the panel, in logical pixels.
+    pub width: f32,
+    pub height: f32,
+    /// Widgets, stacked from the top.
+    #[serde(default)]
+    pub content: Vec<WidgetSpec>,
+}
+
 /// One strip docked to a screen edge, and the widgets in its slots.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,11 +111,11 @@ pub struct SurfaceConfig {
     #[serde(default)]
     pub displays: Displays,
     #[serde(default)]
-    pub start: Vec<String>,
+    pub start: Vec<WidgetSpec>,
     #[serde(default)]
-    pub center: Vec<String>,
+    pub center: Vec<WidgetSpec>,
     #[serde(default)]
-    pub end: Vec<String>,
+    pub end: Vec<WidgetSpec>,
 }
 
 /// Everything the user can configure.
@@ -69,6 +126,8 @@ pub struct Config {
     pub theme: Option<String>,
     #[serde(default, rename = "surface")]
     pub surfaces: Vec<SurfaceConfig>,
+    #[serde(default, rename = "popup")]
+    pub popups: Vec<PopupConfig>,
 }
 
 impl Config {
@@ -95,11 +154,34 @@ mod tests {
             panic!("expected two surfaces, got {}", config.surfaces.len());
         };
         assert_eq!(bar.edge, ScreenEdge::Top);
-        assert_eq!(bar.center, ["clock"]);
-        assert_eq!(bar.end, ["quit"]);
+        let names = |specs: &[WidgetSpec]| -> Vec<String> {
+            specs.iter().map(|spec| spec.widget.clone()).collect()
+        };
+        assert_eq!(names(&bar.center), ["clock"]);
+        assert_eq!(names(&bar.end), ["quit"]);
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);
-        assert_eq!(dock.center, ["windows"]);
+        assert_eq!(names(&dock.center), ["windows"]);
+
+        let popup = bar.center[0]
+            .popup
+            .as_deref()
+            .expect("the clock opens a popup");
+        assert!(config.popups.iter().any(|known| known.name == popup));
+    }
+
+    #[test]
+    fn a_widget_is_a_name_or_a_table_with_options() {
+        #[derive(Deserialize)]
+        struct Slot {
+            slot: Vec<WidgetSpec>,
+        }
+        let text = "slot = [\"quit\", { widget = \"clock\", popup = \"agenda\", format = \"%H\" }]";
+        let slot = toml::from_str::<Slot>(text).unwrap().slot;
+        assert_eq!(slot[0].widget, "quit");
+        assert_eq!(slot[0].popup, None);
+        assert_eq!(slot[1].popup.as_deref(), Some("agenda"));
+        assert_eq!(slot[1].options["format"].as_str(), Some("%H"));
     }
 
     #[test]

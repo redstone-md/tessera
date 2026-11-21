@@ -3,6 +3,7 @@
 
 //! The modules the shell is assembled from.
 
+mod calendar;
 mod clock;
 mod session;
 mod windows;
@@ -14,6 +15,7 @@ use crate::module::Module;
 pub fn builtin() -> Vec<Box<dyn Module>> {
     vec![
         Box::new(clock::ClockModule),
+        Box::new(calendar::CalendarModule),
         Box::new(session::SessionModule),
         Box::new(windows::WindowsModule),
         Box::new(ExtensionsModule),

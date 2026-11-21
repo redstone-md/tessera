@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use chrono::format::{Item, StrftimeItems};
 use chrono::{Local, Timelike};
 use gpui::{
     AppContext, AsyncApp, Context, FontWeight, IntoElement, ParentElement, Render, Styled,
@@ -23,15 +24,38 @@ impl Module for ClockModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("clock", |_, cx| cx.new(Clock::new).into())
+        widgets.register("clock", |context, cx| {
+            let format = context
+                .text("format")
+                .filter(|format| {
+                    let valid = is_valid_format(format);
+                    if !valid {
+                        eprintln!("tessera: `{format}` is not a clock format, the default is used");
+                    }
+                    valid
+                })
+                .unwrap_or(DEFAULT_FORMAT)
+                .to_owned();
+            cx.new(|cx| Clock::new(format, cx)).into()
+        })
     }
 }
 
-/// Displays the local date and time to minute precision.
-struct Clock;
+const DEFAULT_FORMAT: &str = "%a %-d %b  %H:%M";
+
+/// Whether `format` is a `strftime` pattern that can be displayed.
+fn is_valid_format(format: &str) -> bool {
+    !StrftimeItems::new(format).any(|item| item == Item::Error)
+}
+
+/// Displays the local date and time to minute precision, in the `strftime`
+/// pattern the `format` option gives.
+struct Clock {
+    format: String,
+}
 
 impl Clock {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(format: String, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor()
@@ -43,7 +67,7 @@ impl Clock {
             }
         })
         .detach();
-        Self
+        Self { format }
     }
 
     /// Time left until the displayed minute changes.
@@ -58,6 +82,18 @@ impl Render for Clock {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         pill(cx.global::<Theme>())
             .font_weight(FontWeight::MEDIUM)
-            .child(Local::now().format("%a %-d %b  %H:%M").to_string())
+            .child(Local::now().format(&self.format).to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_with_unknown_specifiers_are_rejected() {
+        assert!(is_valid_format(DEFAULT_FORMAT));
+        assert!(is_valid_format("%H:%M:%S"));
+        assert!(!is_valid_format("%Q"));
     }
 }

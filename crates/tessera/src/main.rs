@@ -12,6 +12,7 @@ mod modules;
 mod motion;
 mod panel;
 mod platform;
+mod popup;
 mod surface;
 mod theme;
 mod ui;
@@ -21,9 +22,10 @@ use std::time::Duration;
 use gpui::{App, Application, AsyncApp, px};
 
 use crate::config::{Config, Displays};
-use crate::module::{WidgetContext, WidgetRegistry};
+use crate::module::WidgetRegistry;
 use crate::panel::Panel;
 use crate::platform::Taskbar;
+use crate::popup::Popups;
 use crate::surface::EdgeSurface;
 use crate::theme::Theme;
 
@@ -38,6 +40,7 @@ fn main() {
     Application::new().run(move |cx: &mut App| {
         cx.set_global(Theme::load(config.theme.as_deref()));
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin()));
+        cx.set_global(Popups::new(&config.popups));
         match Taskbar::hide_until_exit() {
             Ok(()) => cx
                 .spawn(async move |cx: &mut AsyncApp| {
@@ -68,9 +71,7 @@ fn open_surfaces(config: &Config, cx: &mut App) -> anyhow::Result<()> {
                 edge: layout.edge,
                 thickness: px(layout.thickness),
             };
-            surface.open(&display, cx, |display, cx| {
-                Panel::new(layout, WidgetContext { display }, cx)
-            })?;
+            surface.open(&display, cx, |display, cx| Panel::new(layout, display, cx))?;
         }
     }
     Ok(())

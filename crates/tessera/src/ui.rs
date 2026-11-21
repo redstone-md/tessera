@@ -23,10 +23,10 @@ pub fn pill(theme: &Theme) -> Div {
 }
 
 /// How much of the content color covers a hovered control.
-const HOVER_LAYER: f32 = 0.08;
+pub const HOVER_LAYER: f32 = 0.08;
 
 /// How much more of it covers a pressed one.
-const PRESS_LAYER: f32 = 0.10;
+pub const PRESS_LAYER: f32 = 0.10;
 
 /// `base` as it looks under the pointer: tinted toward the content color.
 pub fn state_layer(theme: &Theme, base: Hsla, state: InteractionState) -> Hsla {

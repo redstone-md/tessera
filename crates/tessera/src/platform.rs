@@ -7,5 +7,5 @@ mod win32;
 
 pub use win32::{
     AppWindow, AppWindowId, DisplayKey, EdgeReservation, IconPixels, NativeSurface, ScreenEdge,
-    Taskbar,
+    ScreenRect, Taskbar,
 };

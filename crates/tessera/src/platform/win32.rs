@@ -27,9 +27,9 @@ use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WM_APP,
-    WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+    GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos,
+    WINDOW_EX_STYLE, WM_APP, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
 };
 
 /// Message the system posts to a window that reserves a screen edge.
@@ -56,6 +56,26 @@ impl ScreenEdge {
         match self {
             Self::Top => area.bottom = area.top + thickness,
             Self::Bottom => area.top = area.bottom - thickness,
+        }
+    }
+}
+
+/// A rectangle on the virtual screen, in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl From<RECT> for ScreenRect {
+    fn from(rect: RECT) -> Self {
+        Self {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
         }
     }
 }
@@ -101,16 +121,69 @@ impl NativeSurface {
     /// ordinary windows, and clicks on it do not take keyboard focus away
     /// from the active application.
     pub fn adopt_as_shell_surface(self) -> Result<()> {
+        self.adopt(WS_EX_NOACTIVATE)
+    }
+
+    /// Turns the window into a popup of the shell: no caption or frame,
+    /// above ordinary windows, and not listed among application windows.
+    /// Unlike a surface it can take keyboard focus.
+    pub fn adopt_as_popup(self) -> Result<()> {
+        self.adopt(WS_EX_TOOLWINDOW)
+    }
+
+    /// The window's bounds on the screen.
+    pub fn frame(self) -> Result<ScreenRect> {
+        let mut rect = RECT::default();
+        // SAFETY: `rect` outlives the call, which only reads window state.
+        unsafe { GetWindowRect(self.hwnd, &mut rect) }
+            .context("the window bounds could not be read")?;
+        Ok(rect.into())
+    }
+
+    /// The bounds of the display the window is on.
+    pub fn display_frame(self) -> Result<ScreenRect> {
+        let mut monitor = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `monitor` is a correctly sized structure that outlives
+        // the calls, which only read window and display state.
+        let read = unsafe {
+            let display = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            GetMonitorInfoW(display, &mut monitor).as_bool()
+        };
+        if !read {
+            bail!("the window's display could not be read");
+        }
+        Ok(monitor.rcMonitor.into())
+    }
+
+    /// Moves and resizes the window without activating it.
+    pub fn place(self, frame: ScreenRect) -> Result<()> {
+        // SAFETY: `hwnd` belongs to a live window owned by this thread.
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                None,
+                frame.left,
+                frame.top,
+                frame.right - frame.left,
+                frame.bottom - frame.top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+        }
+        .context("the window could not be moved")
+    }
+
+    /// Removes the caption and frame, adds `extended_style` and raises the
+    /// window above ordinary ones.
+    fn adopt(self, extended_style: WINDOW_EX_STYLE) -> Result<()> {
         // SAFETY: `hwnd` belongs to a live window owned by this thread, and
         // the calls only change its styles and z-order.
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE).0 as isize);
             let extended = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(
-                self.hwnd,
-                GWL_EXSTYLE,
-                extended | WS_EX_NOACTIVATE.0 as isize,
-            );
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, extended | extended_style.0 as isize);
             SetWindowPos(
                 self.hwnd,
                 Some(HWND_TOPMOST),
@@ -121,7 +194,7 @@ impl NativeSurface {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             )
         }
-        .context("the surface styles could not be applied")
+        .context("the window styles could not be applied")
     }
 
     /// Reserves a strip `thickness` physical pixels deep at `edge` of the
