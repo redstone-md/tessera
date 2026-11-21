@@ -16,7 +16,7 @@ use gpui::{
 use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
 use crate::module::WidgetRegistry;
 use crate::motion::Spring;
-use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect, Veil};
+use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect, SmallBirth, Veil};
 use crate::theme::Theme;
 use crate::ui::release_hover;
 
@@ -137,6 +137,70 @@ pub fn floating_window(
         display_id,
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
+    }
+}
+
+/// How many closed floating windows wait, hidden, to be opened again: a
+/// popup or a menu and the tip over it.
+const SPARES_KEPT: usize = 2;
+
+/// Floating windows that closed and wait, hidden, to be opened again with
+/// another view: showing a window takes less than making one.
+#[derive(Default)]
+struct Spares {
+    kept: Vec<AnyWindowHandle>,
+}
+
+impl Global for Spares {}
+
+/// Opens a floating window whose root view `build` makes: one that waits
+/// is taken if there is one, and a window is made otherwise. `build`
+/// adopts, places and reveals the window either way, and a window that
+/// was another kind of floating window before is adopted anew by that.
+pub fn open_floating<V: Render + 'static>(
+    rough: Bounds<Pixels>,
+    display_id: Option<DisplayId>,
+    focus: bool,
+    cx: &mut App,
+    build: impl FnOnce(&mut Window, &mut Context<V>) -> V,
+) -> anyhow::Result<WindowHandle<V>> {
+    let mut build = Some(build);
+    while let Some(spare) = cx.default_global::<Spares>().kept.pop() {
+        // A window that is gone does not run this, and `build` is kept.
+        let taken = spare.update(cx, |_, window, cx| {
+            if let Some(build) = build.take() {
+                window.replace_root(cx, build);
+            }
+        });
+        if taken.is_ok() {
+            return Ok(WindowHandle::new(spare.window_id()));
+        }
+    }
+    let Some(build) = build else {
+        anyhow::bail!("the view of a floating window was given away");
+    };
+    let _small = SmallBirth::begin();
+    cx.open_window(floating_window(rough, display_id, focus), |window, cx| {
+        cx.new(|cx| build(window, cx))
+    })
+}
+
+/// Puts away the floating window `window`, whose view has closed: it is
+/// hidden to wait for [`open_floating`], or removed when enough wait. The
+/// view lets go of what it holds before.
+pub fn retire_floating(window: &mut Window, cx: &mut App) {
+    let handle = window.window_handle();
+    let native = NativeSurface::of(window);
+    let kept = &mut cx.default_global::<Spares>().kept;
+    if kept.contains(&handle) {
+        return;
+    }
+    match native {
+        Ok(native) if kept.len() < SPARES_KEPT => {
+            native.conceal();
+            kept.push(handle);
+        }
+        _ => window.remove_window(),
     }
 }
 
@@ -287,9 +351,8 @@ impl Popups {
             ),
             size: size(px(config.width), px(config.height)),
         };
-        let options = floating_window(rough, anchor.display_id, true);
         let (edge, display) = (anchor.edge, anchor.display);
-        cx.open_window(options, |window, cx| {
+        open_floating(rough, anchor.display_id, true, cx, |window, cx| {
             let adopted = NativeSurface::of(window).and_then(|native| {
                 native.adopt_as_popup()?;
                 native.place(frame)?;
@@ -313,12 +376,10 @@ impl Popups {
             };
             let (content, side) = (built(&config.content), built(&config.side));
             let centered = place == PopupPlace::Center;
-            cx.new(|cx| {
-                let mut view = PopupView::new(config.name.clone(), edge, content, window, cx);
-                (view.centered, view.veil) = (centered, veil);
-                view.side = side;
-                view
-            })
+            let mut view = PopupView::new(config.name.clone(), edge, content, window, cx);
+            (view.centered, view.veil) = (centered, veil);
+            view.side = side;
+            view
         })
     }
 }
@@ -402,7 +463,12 @@ impl Render for PopupView {
         let theme = *cx.global::<Theme>();
         let visibility = self.visibility.value(window);
         if self.closing && self.visibility.is_settled() {
-            window.remove_window();
+            // What the popup showed goes now, not when the window is
+            // opened again.
+            self.veil = None;
+            self.content.clear();
+            self.side.clear();
+            retire_floating(window, cx);
         }
         if let Some(veil) = &self.veil {
             veil.darken(VEIL * visibility);

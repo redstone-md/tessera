@@ -16,7 +16,9 @@ use crate::config::{Displays, WidgetSpec};
 use crate::module::WidgetRegistry;
 use crate::motion::Spring;
 use crate::panel::{Arranging, BREATH, HANDLE_FILL, OUTLINE_REST, OUTLINE_SWING, rewrite};
-use crate::platform::{NativeSurface, ScreenEdge, ScreenRect, pointer_at, pointer_held};
+use crate::platform::{
+    NativeSurface, ScreenEdge, ScreenRect, SmallBirth, pointer_at, pointer_held,
+};
 use crate::popup::{MARGIN, floating_panel, floating_window};
 use crate::theme::Theme;
 use crate::ui::release_hover;
@@ -239,6 +241,7 @@ impl Cards {
                 // keyboard. A window that is not shown is not put at its
                 // bounds either, so the card does that itself.
                 let options = floating_window(rough, Some(display.id()), false);
+                let _small = SmallBirth::begin();
                 let opened = cx.open_window(options, |window, cx| {
                     let scale = window.scale_factor();
                     let native = NativeSurface::of(window)

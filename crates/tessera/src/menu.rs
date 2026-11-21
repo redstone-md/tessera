@@ -7,14 +7,14 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext, Bounds, Context, Global, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, WindowHandle,
-    div, point, px, size,
+    App, Bounds, Context, Global, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, WindowHandle, div,
+    point, px, size,
 };
 
 use crate::motion::{Interaction, Spring};
 use crate::platform::{NativeSurface, ScreenEdge};
-use crate::popup::{PopupAnchor, floating_panel, floating_window};
+use crate::popup::{PopupAnchor, floating_panel, open_floating, retire_floating};
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, release_hover, state_layer};
 
@@ -79,21 +79,18 @@ impl Menus {
             size: size(px(width), px(height)),
         };
         let edge = anchor.edge;
-        let opened = cx.open_window(
-            floating_window(rough, anchor.display_id, true),
-            |window, cx| {
-                let adopted = NativeSurface::of(window).and_then(|native| {
-                    native.adopt_as_popup()?;
-                    native.place(frame)?;
-                    native.reveal(true);
-                    Ok(())
-                });
-                if let Err(error) = adopted {
-                    report!("a menu is not where it belongs: {error:#}");
-                }
-                cx.new(|cx| MenuView::new(entries, edge, window, cx))
-            },
-        );
+        let opened = open_floating(rough, anchor.display_id, true, cx, |window, cx| {
+            let adopted = NativeSurface::of(window).and_then(|native| {
+                native.adopt_as_popup()?;
+                native.place(frame)?;
+                native.reveal(true);
+                Ok(())
+            });
+            if let Err(error) = adopted {
+                report!("a menu is not where it belongs: {error:#}");
+            }
+            MenuView::new(entries, edge, window, cx)
+        });
         match opened {
             Ok(window) => cx.global_mut::<Self>().open = Some(window),
             Err(error) => report!("a menu did not open: {error:#}"),
@@ -175,7 +172,7 @@ impl Render for MenuView {
         let theme = *cx.global::<Theme>();
         let visibility = self.visibility.value(window);
         if self.closing && self.visibility.is_settled() {
-            window.remove_window();
+            retire_floating(window, cx);
         }
         let rows: Vec<_> = self
             .entries

@@ -8,13 +8,13 @@
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, Global, IntoElement, ParentElement, Render,
-    SharedString, Styled, Window, WindowHandle, div, point, px, size,
+    App, AsyncApp, Bounds, Context, Global, IntoElement, ParentElement, Render, SharedString,
+    Styled, Window, WindowHandle, div, point, px, size,
 };
 
 use crate::motion::Spring;
 use crate::platform::{NativeSurface, ScreenEdge};
-use crate::popup::{MARGIN, PopupAnchor, floating_travel, floating_window};
+use crate::popup::{MARGIN, PopupAnchor, floating_travel, open_floating, retire_floating};
 use crate::theme::Theme;
 use crate::ui::{one_line, text_width};
 
@@ -136,43 +136,40 @@ impl Tips {
             ),
             size: size(px(WIDEST), px(HEIGHT)),
         };
-        cx.open_window(
-            floating_window(rough, anchor.display_id, false),
-            |window, cx| {
-                let theme = *cx.global::<Theme>();
-                let (width, lines) = extent(&text, &theme, window);
-                let frame = anchor.frame(width, height(lines));
-                let native = NativeSurface::of(window)
-                    .and_then(|native| native.adopt_as_shell_surface().map(|()| native));
-                match native {
-                    // The window learns its size only if it is given while
-                    // nothing of the user interface is being worked on, so
-                    // it is placed and shown right after this. It lets the
-                    // pointer through once it is shown.
-                    Ok(native) => cx
-                        .spawn(async move |_| {
-                            let shown = native.place(frame).and_then(|()| {
-                                native.reveal(false);
-                                native.adopt_as_overlay()
-                            });
-                            if let Err(error) = shown {
-                                report!("a tip is not where it belongs: {error:#}");
-                            }
-                        })
-                        .detach(),
-                    Err(error) => report!("a tip is not where it belongs: {error:#}"),
-                }
-                let mut visibility = Spring::new(theme.motion.spatial, 0.);
-                visibility.animate_to(1.);
-                cx.new(|_| TipView {
-                    text,
-                    lines,
-                    edge: anchor.edge,
-                    visibility,
-                    closing: false,
-                })
-            },
-        )
+        open_floating(rough, anchor.display_id, false, cx, |window, cx| {
+            let theme = *cx.global::<Theme>();
+            let (width, lines) = extent(&text, &theme, window);
+            let frame = anchor.frame(width, height(lines));
+            let native = NativeSurface::of(window)
+                .and_then(|native| native.adopt_as_shell_surface().map(|()| native));
+            match native {
+                // The window learns its size only if it is given while
+                // nothing of the user interface is being worked on, so
+                // it is placed and shown right after this. It lets the
+                // pointer through once it is shown.
+                Ok(native) => cx
+                    .spawn(async move |_, _| {
+                        let shown = native.place(frame).and_then(|()| {
+                            native.reveal(false);
+                            native.adopt_as_overlay()
+                        });
+                        if let Err(error) = shown {
+                            report!("a tip is not where it belongs: {error:#}");
+                        }
+                    })
+                    .detach(),
+                Err(error) => report!("a tip is not where it belongs: {error:#}"),
+            }
+            let mut visibility = Spring::new(theme.motion.spatial, 0.);
+            visibility.animate_to(1.);
+            TipView {
+                text,
+                lines,
+                edge: anchor.edge,
+                visibility,
+                closing: false,
+            }
+        })
     }
 }
 
@@ -260,7 +257,7 @@ impl Render for TipView {
         let theme = *cx.global::<Theme>();
         let visibility = self.visibility.value(window);
         if self.closing && self.visibility.is_settled() {
-            window.remove_window();
+            retire_floating(window, cx);
         }
         let pill = div()
             .size_full()

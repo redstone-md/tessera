@@ -11,8 +11,8 @@ pub use win32::{
     IconPixels, InputLanguage, JumpTask, Link, Media, MediaCommand, MemoryLoad, Modifiers,
     NativeSurface, Network, Notification, Notifications, NowPlaying, Pace, PairedDevice, Passage,
     Position, PowerAction, ProcessorLoad, RecentDocument, ScreenBrightness, ScreenEdge, ScreenRect,
-    Shortcut, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil, VirtualDesktops, Vpn,
-    VpnState, Wifi, WifiNetwork, WifiReach, WindowEvents, WindowsKey, Wireless, accent_color,
-    app_id_in, app_id_of_program, app_path, desktop_look, desktop_pixels, display_frames,
-    light_mode, pointer_at, pointer_held, read_desktop_if_requested,
+    Shortcut, SmallBirth, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil,
+    VirtualDesktops, Vpn, VpnState, Wifi, WifiNetwork, WifiReach, WindowEvents, WindowsKey,
+    Wireless, accent_color, app_id_in, app_id_of_program, app_path, desktop_look, desktop_pixels,
+    display_frames, light_mode, pointer_at, pointer_held, read_desktop_if_requested,
 };

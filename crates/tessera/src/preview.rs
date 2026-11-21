@@ -7,14 +7,15 @@
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, Global, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, WindowHandle,
-    div, point, px, size,
+    App, AsyncApp, Bounds, Context, Global, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window, WindowHandle, div, point, px, size,
 };
 
 use crate::motion::{Interaction, Spring};
 use crate::platform::{AppWindowId, NativeSurface, ScreenEdge, ScreenRect, Thumbnail};
-use crate::popup::{MARGIN, PopupAnchor, floating_panel, floating_travel, floating_window};
+use crate::popup::{
+    MARGIN, PopupAnchor, floating_panel, floating_travel, open_floating, retire_floating,
+};
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, release_hover, state_layer};
 
@@ -159,42 +160,39 @@ impl Previews {
             ),
             size: size(px(PICTURE_WIDTH), px(PICTURE_HEIGHT)),
         };
-        cx.open_window(
-            floating_window(rough, anchor.display_id, false),
-            |window, cx| {
-                let native = NativeSurface::of(window);
-                let thumbnail = native
-                    .as_ref()
-                    .ok()
-                    .and_then(|native| Thumbnail::of(target, *native).ok());
-                let source = thumbnail.as_ref().and_then(Thumbnail::source_size);
-                let picture = source.map(|source| fit(source, scale));
-                let (width, height) = extent(picture, padding);
-                let placed = native.and_then(|native| {
-                    native.adopt_as_shell_surface()?;
-                    native.place(anchor.frame(width, height))?;
-                    native.reveal(false);
-                    Ok(())
-                });
-                if let Err(error) = placed {
-                    report!("a preview is not where it belongs: {error:#}");
-                }
-                let theme = cx.global::<Theme>();
-                let mut visibility = Spring::new(theme.motion.spatial, 0.);
-                visibility.animate_to(1.);
-                let close_button = Interaction::new(&theme.motion);
-                cx.new(|_| PreviewView {
-                    target,
-                    title: target.title().into(),
-                    thumbnail: thumbnail.filter(|_| picture.is_some()),
-                    picture: picture.unwrap_or_default(),
-                    edge,
-                    visibility,
-                    closing: false,
-                    close_button,
-                })
-            },
-        )
+        open_floating(rough, anchor.display_id, false, cx, |window, cx| {
+            let native = NativeSurface::of(window);
+            let thumbnail = native
+                .as_ref()
+                .ok()
+                .and_then(|native| Thumbnail::of(target, *native).ok());
+            let source = thumbnail.as_ref().and_then(Thumbnail::source_size);
+            let picture = source.map(|source| fit(source, scale));
+            let (width, height) = extent(picture, padding);
+            let placed = native.and_then(|native| {
+                native.adopt_as_shell_surface()?;
+                native.place(anchor.frame(width, height))?;
+                native.reveal(false);
+                Ok(())
+            });
+            if let Err(error) = placed {
+                report!("a preview is not where it belongs: {error:#}");
+            }
+            let theme = cx.global::<Theme>();
+            let mut visibility = Spring::new(theme.motion.spatial, 0.);
+            visibility.animate_to(1.);
+            let close_button = Interaction::new(&theme.motion);
+            PreviewView {
+                target,
+                title: target.title().into(),
+                thumbnail: thumbnail.filter(|_| picture.is_some()),
+                picture: picture.unwrap_or_default(),
+                edge,
+                visibility,
+                closing: false,
+                close_button,
+            }
+        })
     }
 }
 
@@ -264,7 +262,10 @@ impl Render for PreviewView {
         let theme = *cx.global::<Theme>();
         let visibility = self.visibility.value(window);
         if self.closing && self.visibility.is_settled() {
-            window.remove_window();
+            // The picture of the window goes with the preview, not when
+            // its window is opened again.
+            self.thumbnail = None;
+            retire_floating(window, cx);
         }
         if let Some(thumbnail) = &self.thumbnail {
             thumbnail.place(self.picture_area(&theme, visibility, window), visibility);

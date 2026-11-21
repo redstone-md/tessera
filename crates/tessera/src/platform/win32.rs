@@ -70,18 +70,23 @@ use std::mem::size_of;
 use anyhow::{Context as _, Result, bail};
 use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
+    CBT_CREATEWNDW, CallNextHookEx, HCBT_CREATEWND, HHOOK, SetWindowsHookExW, UnhookWindowsHookEx,
+    WH_CBT,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
-    IsWindowVisible, LWA_ALPHA, PostMessageW, SW_SHOW, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
+    IsWindowVisible, LWA_ALPHA, PostMessageW, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
     WM_APP, WM_MOUSEMOVE, WM_SIZE, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
@@ -185,6 +190,67 @@ impl DisplayKey {
         // whose window has since been destroyed.
         Self(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) }.0 as isize)
     }
+}
+
+/// The side of a window that is made while a [`SmallBirth`] lives, in
+/// pixels.
+const BORN_SIDE: i32 = 64;
+
+/// While it lives, the windows this thread makes are made small.
+///
+/// GPUI has Windows choose how large a window is made, which is most of
+/// a display, and what draws the window holds pictures of that size from
+/// then: some fifty megabytes the process is charged with until the
+/// window has been given its size and they were let go, seconds later.
+/// A window of the shell is given its place right after it is made, and
+/// so nothing is lost by making it small.
+pub struct SmallBirth(HHOOK);
+
+impl SmallBirth {
+    /// Begins to have windows made small. `None` where Windows refuses,
+    /// and windows are then made as large as before.
+    pub fn begin() -> Option<Self> {
+        // SAFETY: the hook is for this thread alone and is taken away
+        // when the value is dropped, on this thread.
+        let hook =
+            unsafe { SetWindowsHookExW(WH_CBT, Some(born_small), None, GetCurrentThreadId()) };
+        hook.ok().map(Self)
+    }
+}
+
+impl Drop for SmallBirth {
+    fn drop(&mut self) {
+        // SAFETY: the hook is the one `begin` set.
+        unsafe {
+            let _ = UnhookWindowsHookEx(self.0);
+        }
+    }
+}
+
+/// The class of the windows GPUI makes for the application.
+const GPUI_WINDOW: &str = "Zed::Window";
+
+/// Has a window of GPUI that is about to be made be made [`BORN_SIDE`]
+/// wide and high. Other windows, as the one that dims a display, are
+/// made as they ask.
+unsafe extern "system" fn born_small(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HCBT_CREATEWND as i32 {
+        // SAFETY: for this code Windows gives what the window is made
+        // with, which may be changed, for as long as the call lasts.
+        unsafe {
+            let mut name = [0u16; 64];
+            let window = HWND(wparam.0 as *mut c_void);
+            let length = GetClassNameW(window, &mut name).max(0) as usize;
+            let made = (lparam.0 as *const CBT_CREATEWNDW).as_ref();
+            if String::from_utf16_lossy(&name[..length]) == GPUI_WINDOW
+                && let Some(how) = made.and_then(|made| made.lpcs.as_mut())
+            {
+                (how.cx, how.cy) = (BORN_SIDE, BORN_SIDE);
+            }
+        }
+    }
+    // SAFETY: what was given is passed on as it is.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 impl NativeSurface {
@@ -316,6 +382,14 @@ impl NativeSurface {
         }
     }
 
+    /// Hides the window, which stays what it is.
+    pub fn conceal(self) {
+        // SAFETY: `hwnd` belongs to a live window owned by this thread.
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+    }
+
     /// Asks for keyboard input to go to the window. The system grants that
     /// to the process that received the last input, as it has after a
     /// click on one of its windows.
@@ -404,8 +478,10 @@ impl NativeSurface {
         }
     }
 
-    /// Removes the caption and frame, adds `extended_style` and raises the
-    /// window above ordinary ones.
+    /// Removes the caption and frame, has `extended_style` be what the
+    /// window has of the styles the shell gives, and raises the window above
+    /// ordinary ones. A window that was adopted as something else before is
+    /// what it is adopted as now.
     fn adopt(self, extended_style: WINDOW_EX_STYLE) -> Result<()> {
         // SAFETY: `hwnd` belongs to a live window owned by this thread, and
         // the calls only change its styles and z-order.
@@ -414,7 +490,8 @@ impl NativeSurface {
             // it is visible would not be shown when asked to.
             let shown = GetWindowLongPtrW(self.hwnd, GWL_STYLE) & WS_VISIBLE.0 as isize;
             SetWindowLongPtrW(self.hwnd, GWL_STYLE, WS_POPUP.0 as isize | shown);
-            let extended = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            let given = WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT;
+            let extended = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) & !(given.0 as isize);
             SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, extended | extended_style.0 as isize);
             SetWindowPos(
                 self.hwnd,

@@ -12,7 +12,7 @@ use gpui::{
     WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 
-use crate::platform::{DisplayKey, EdgeReservation, NativeSurface, ScreenEdge};
+use crate::platform::{DisplayKey, EdgeReservation, NativeSurface, ScreenEdge, SmallBirth};
 use crate::theme::Theme;
 use crate::ui::release_hover;
 
@@ -51,6 +51,7 @@ impl EdgeSurface {
             window_background: WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
+        let _small = SmallBirth::begin();
         cx.open_window(options, |window, cx| {
             let display = NativeSurface::of(window).ok().map(NativeSurface::display);
             let reservation = self
