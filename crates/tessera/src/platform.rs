@@ -5,4 +5,4 @@
 
 mod win32;
 
-pub use win32::{EdgeReservation, NativeSurface, ScreenEdge};
+pub use win32::{AppWindow, AppWindowId, EdgeReservation, IconPixels, NativeSurface, ScreenEdge};

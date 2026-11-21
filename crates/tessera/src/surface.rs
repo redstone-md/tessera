@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Tessera contributors.
+
+//! Shell surfaces: borderless windows docked to a display edge.
+
+use std::rc::Rc;
+
+use gpui::{
+    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Pixels, PlatformDisplay,
+    Render, Styled, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, div, point, px, size,
+};
+
+use crate::platform::{EdgeReservation, NativeSurface, ScreenEdge};
+use crate::theme::Theme;
+
+/// Describes a strip along one edge of a display.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgeSurface {
+    pub edge: ScreenEdge,
+    pub thickness: Pixels,
+}
+
+impl EdgeSurface {
+    /// Opens the strip on `display` and fills it with the view `build` returns.
+    pub fn open<V: Render>(
+        self,
+        display: &Rc<dyn PlatformDisplay>,
+        cx: &mut App,
+        build: impl FnOnce(&mut Context<V>) -> V,
+    ) -> anyhow::Result<WindowHandle<EdgeSurfaceView<V>>> {
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(self.bounds_on(display.bounds()))),
+            // GPUI insets the client area of windows without a title bar by the
+            // system frame thickness. Asking for an opaque title bar disables
+            // that; the caption itself is removed when the surface is adopted.
+            titlebar: Some(TitlebarOptions::default()),
+            focus: false,
+            show: true,
+            kind: WindowKind::PopUp,
+            is_movable: false,
+            is_resizable: false,
+            is_minimizable: false,
+            display_id: Some(display.id()),
+            window_background: WindowBackgroundAppearance::Transparent,
+            ..Default::default()
+        };
+        cx.open_window(options, |window, cx| {
+            let reservation = self
+                .dock(window)
+                .inspect_err(|error| {
+                    eprintln!("tessera: a surface is not docked to its screen edge: {error:#}");
+                })
+                .ok();
+            cx.new(|cx| EdgeSurfaceView {
+                content: cx.new(build),
+                _reservation: reservation,
+            })
+        })
+    }
+
+    fn bounds_on(self, display: Bounds<Pixels>) -> Bounds<Pixels> {
+        let offset = match self.edge {
+            ScreenEdge::Top => px(0.),
+            ScreenEdge::Bottom => display.size.height - self.thickness,
+        };
+        Bounds {
+            origin: display.origin + point(px(0.), offset),
+            size: size(display.size.width, self.thickness),
+        }
+    }
+
+    /// Makes the window a shell surface and reserves its screen edge.
+    fn dock(self, window: &Window) -> anyhow::Result<EdgeReservation> {
+        let surface = NativeSurface::of(window)?;
+        surface.adopt_as_shell_surface()?;
+        let thickness = (self.thickness / px(1.) * window.scale_factor()).round() as i32;
+        surface.reserve_edge(self.edge, thickness)
+    }
+}
+
+/// The root view of an edge surface: a themed backdrop around its content.
+pub struct EdgeSurfaceView<V> {
+    content: Entity<V>,
+    /// Held so maximized windows keep clear of the surface while it exists.
+    _reservation: Option<EdgeReservation>,
+}
+
+impl<V: Render> Render for EdgeSurfaceView<V> {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .bg(cx.global::<Theme>().colors.surface_container)
+            .child(self.content.clone())
+    }
+}

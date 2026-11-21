@@ -5,6 +5,12 @@
 
 #![allow(unsafe_code)]
 
+mod app_windows;
+mod icon;
+
+pub use app_windows::{AppWindow, AppWindowId};
+pub use icon::IconPixels;
+
 use std::ffi::c_void;
 use std::mem::size_of;
 
@@ -16,7 +22,7 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::UI::Shell::{
-    ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
+    ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetWindowLongPtrW, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
@@ -31,12 +37,14 @@ const EDGE_NOTIFICATION: u32 = WM_APP + 1;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScreenEdge {
     Top,
+    Bottom,
 }
 
 impl ScreenEdge {
     fn as_appbar_edge(self) -> u32 {
         match self {
             Self::Top => ABE_TOP,
+            Self::Bottom => ABE_BOTTOM,
         }
     }
 
@@ -44,6 +52,7 @@ impl ScreenEdge {
     fn clamp(self, area: &mut RECT, thickness: i32) {
         match self {
             Self::Top => area.bottom = area.top + thickness,
+            Self::Bottom => area.top = area.bottom - thickness,
         }
     }
 }

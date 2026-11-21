@@ -11,6 +11,7 @@ publish = false
 anyhow.workspace = true
 chrono.workspace = true
 gpui.workspace = true
+image.workspace = true
 raw-window-handle.workspace = true
 windows.workspace = true
 

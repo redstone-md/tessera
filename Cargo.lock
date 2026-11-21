@@ -5373,6 +5373,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "gpui",
+ "image",
  "raw-window-handle",
  "windows 0.61.3",
 ]
