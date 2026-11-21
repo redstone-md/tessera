@@ -13,14 +13,23 @@
 //!
 //! The window is a plain one that copies a bitmap to the screen itself: a
 //! picture then costs its pixels once for each display, and nothing of
-//! what a window of the user interface takes for drawing.
+//! what a window of the user interface takes for drawing. The pixels lie
+//! in a temporary file that Windows maps into memory, where it can be
+//! had: they are needed only when the window is asked to paint, which is
+//! seldom, and so they need not stay in the memory of the shell.
 
 use std::cell::Cell;
 use std::ffi::c_void;
+use std::fs::File;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::{Context as _, Result, bail};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, CloseHandle, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BLENDFUNCTION, BeginPaint, BitBlt,
     CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
@@ -30,6 +39,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Memory::{CreateFileMappingW, PAGE_READWRITE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, FindWindowW, GWLP_USERDATA,
     GetWindowLongPtrW, GetWindowRect, LWA_ALPHA, RegisterClassW, SMTO_NORMAL, SW_SHOWNA,
@@ -121,6 +131,7 @@ pub fn desktop_pixels(frame: ScreenRect) -> Option<(usize, Vec<u8>)> {
             context,
             bitmap,
             before,
+            _backing: None,
         };
         // The window draws itself from its own corner: the corner is put
         // where it is seen from `frame`.
@@ -186,6 +197,69 @@ struct Held {
     bitmap: HBITMAP,
     /// What the context held before the bitmap, to give back.
     before: HGDIOBJ,
+    /// The file the pixels lie in, where there is one. Declared last: it
+    /// goes after the bitmap that uses it.
+    _backing: Option<Backing>,
+}
+
+/// A temporary file of the size of a picture, mapped for a bitmap to lie
+/// in. The file is gone when it is closed.
+struct Backing {
+    section: HANDLE,
+    _file: File,
+}
+
+impl Backing {
+    /// A file of `length` bytes. `None` where it cannot be made: the
+    /// bitmap then lies in the memory of the shell.
+    fn new(length: usize) -> Option<Self> {
+        /// Windows deletes the file when its last handle is closed, and
+        /// is in no hurry to write it out.
+        const DELETE_ON_CLOSE: u32 = 0x0400_0000;
+        const TEMPORARY: u32 = 0x100;
+        static MADE: AtomicU32 = AtomicU32::new(0);
+        let name = format!(
+            "tessera-wallpaper-{}-{}.bin",
+            std::process::id(),
+            MADE.fetch_add(1, Ordering::Relaxed)
+        );
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .custom_flags(DELETE_ON_CLOSE)
+            .attributes(TEMPORARY)
+            .open(std::env::temp_dir().join(name))
+            .ok()?;
+        file.set_len(length as u64).ok()?;
+        // SAFETY: the handle is that of `file`, which is kept for as long
+        // as the mapping.
+        let section = unsafe {
+            CreateFileMappingW(
+                HANDLE(file.as_raw_handle()),
+                None,
+                PAGE_READWRITE,
+                0,
+                0,
+                None,
+            )
+        }
+        .ok()?;
+        Some(Self {
+            section,
+            _file: file,
+        })
+    }
+}
+
+impl Drop for Backing {
+    fn drop(&mut self) {
+        // SAFETY: the handle was made by `new` and is closed once.
+        unsafe {
+            let _ = CloseHandle(self.section);
+        }
+    }
 }
 
 impl Drop for Held {
@@ -350,15 +424,36 @@ impl DesktopBackdrop {
         // it; the handles are kept in `Held`, which releases them.
         unsafe {
             let mut bits: *mut c_void = ptr::null_mut();
-            let bitmap = CreateDIBSection(
-                None,
-                &raw const info,
-                DIB_RGB_COLORS,
-                &raw mut bits,
-                None,
-                0,
-            )
-            .context("there is no memory for the wallpaper")?;
+            let mut backing = Backing::new(picture.pixels.len());
+            let mut made = backing.as_ref().and_then(|backing| {
+                CreateDIBSection(
+                    None,
+                    &raw const info,
+                    DIB_RGB_COLORS,
+                    &raw mut bits,
+                    Some(backing.section),
+                    0,
+                )
+                .ok()
+                .filter(|_| !bits.is_null())
+            });
+            if made.is_none() {
+                backing = None;
+                bits = ptr::null_mut();
+                let bitmap = CreateDIBSection(
+                    None,
+                    &raw const info,
+                    DIB_RGB_COLORS,
+                    &raw mut bits,
+                    None,
+                    0,
+                )
+                .context("there is no memory for the wallpaper")?;
+                made = Some(bitmap);
+            }
+            let Some(bitmap) = made else {
+                bail!("there is no memory for the wallpaper");
+            };
             if bits.is_null() {
                 let _ = DeleteObject(bitmap.into());
                 bail!("there is no memory for the wallpaper");
@@ -374,6 +469,7 @@ impl DesktopBackdrop {
                 context,
                 bitmap,
                 before,
+                _backing: backing,
             });
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, Box::into_raw(held) as isize);
         }
