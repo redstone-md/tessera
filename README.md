@@ -17,6 +17,7 @@ What exists today, by default on every display:
   - Tessera creates an invisible window of the taskbar's class above Explorer's, which is where applications deliver their icons, and passes every message on to Explorer, so Explorer's own notification area stays complete. Edge bars, Tessera's own surfaces among them, talk to Explorer through the same window, so their requests are passed on too. At startup it broadcasts `TaskbarCreated`, the message Explorer sends after a restart, so that running applications add their icons again; an application that ignores it shows up only once it changes its icon.
   - Tried on one machine: the icons of about fifteen applications and of Windows itself (volume, microphone, Bluetooth, security, safe removal) appeared with their descriptions, and a right click opened the menu of ShareX. A right click on the volume and Bluetooth icons, which belong to Explorer, opened nothing. Left clicks are sent the same way but have not been tried.
   - The network, battery and clock items of the Windows 11 taskbar are not notification icons and do not appear. There are no balloon notifications, no overflow area, no reordering and no hiding of icons, and an application running as administrator does not receive clicks from a Tessera that does not.
+- An **Extensions** button in the top bar that lists the extensions of the configured registries and installs, updates and removes them; see [Registries](#registries) for what that does and does not check.
 - A dock with one button per application window on that display; a minimized window counts for the display it restores to. Clicking a button brings its window to the foreground, or minimizes it if it already is there. The window list is polled twice a second. Packaged (Store) apps show a placeholder instead of their icon, and windows of elevated processes may ignore clicks. The `[icons]` table of the configuration replaces the icon of an application, chosen by the file name of its executable, with a PNG, JPEG or ICO file. The image files are read once: replacing one needs a restart.
 
 Motion is driven by springs: surfaces slide in from their edge at startup, dock buttons, notification icons and notifications grow in and shrink away as they come and go, the foreground indicator stretches, the wavy lines of the meters travel as their level changes, the output of a `command` fades in when it changes, popups fade and slide in and out, and buttons respond to hover and press. Nothing else is animated yet: text changes and the clock switch instantly, as does extension content other than its progress bars, and surfaces do not animate out on exit.
@@ -54,15 +55,55 @@ Besides drawing, an extension can:
 
 The limits of that:
 
-- Permissions are granted by the manifest alone. Tessera does not ask before loading an extension and shows nowhere what an extension is permitted, so read `extension.toml` before installing one: an extension with a file and a host permitted can send that file to that host.
+- Permissions are granted by the manifest alone. The `marketplace` widget shows what an extension asks for before it installs it; an extension copied in by hand is loaded without a question, and nothing shows what an installed extension is permitted, so read `extension.toml`: an extension with a file and a host permitted can send that file to that host.
 - Settings, API keys included, are plain text in `config.toml`.
 - It still cannot reach devices, Bluetooth, other processes or anything else of Windows, so an extension that shows a mouse's battery level cannot be written yet.
 - It adds widgets and popups made of widgets. Its manifest can list `[[popup]]` entries, written as in a layout, and name one of them as the `popup` of a widget: a click on that widget then opens it without anything in `config.toml`. A layout knows such a popup as `<id>.<popup name>`; a `[[popup]]` of that name in the layout replaces it, a `popup` given to the widget in the layout opens that one instead, and `popup = ""` opens none. A popup of an extension can hold widgets of the shell and of other extensions too. An extension cannot open or close a popup from its code, cannot add a surface or a screen of another kind, and has no icons, images, text input or scrolling.
 - Each call into an extension is limited in computation, and an extension is limited to 64 MiB of memory. A widget whose extension exceeds a limit or crashes shows "stopped working" until Tessera restarts.
-- Extensions are loaded once at startup. A widget placed on several displays shares one extension instance.
-- There is no marketplace, registry, installer, signing or update mechanism. Installing means copying files by hand.
+- Extensions are loaded at startup, and again when the `marketplace` widget installs or removes one; all of them start anew then. Files changed by hand are not noticed until a restart. A widget placed on several displays shares one extension instance.
+- Nothing is signed and nobody reviews what a registry offers; see below.
 
-To install one, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id`, its widgets and its permissions. A layout then refers to a widget as `<id>.<widget name>`. Build an example with:
+### Registries
+
+The `marketplace` widget lists the extensions that registries offer and installs, updates and removes them. The built-in layout opens it from the `Extensions` button. It contacts the registries when it is shown and when `Refresh` is pressed, not before.
+
+`registries` in `config.toml` lists the registries to read, each an `https://` address or an absolute path of a file on this machine. Without the key it is the [registry of this repository](registry/registry.toml); `registries = []` reads none. A registry is a TOML file:
+
+```toml
+name = "Mine"
+
+[[extension]]
+id = "lights"
+name = "Lights"
+description = "Shown under the name."
+version = "1.2.0"
+manifest = "lights/extension.toml"
+manifest_sha256 = "…"
+wasm = "lights/extension.wasm"
+wasm_sha256 = "…"
+
+[[registry]]
+url = "https://example.org/more/registry.toml"
+```
+
+`manifest`, `wasm` and `url` are `https://` addresses or paths relative to the registry file, which cannot lead out of its directory; a registry on the web cannot name files of this machine. A registry can name further registries, and those are read as well, down to three steps from a listed one and at most 16 registries in all; each is read once. When two registries offer the same `id`, the one read first wins, and the listed ones are read before those they name.
+
+What this does and does not guard:
+
+- Both files are checked against the SHA-256 sums in the registry, and the `id` in the manifest has to be the offered one. That catches a damaged or swapped download; it says nothing about the author, because whoever controls a registry controls the sums too. There are no signatures and no review.
+- Before installing or updating, the widget names the hosts and files the manifest asks for and waits for `Allow and install`. Nothing else of the extension is inspected.
+- Installing writes `extension.wasm`, `extension.toml` and `installed.toml` (the version and the registry it came from) to `%APPDATA%\tessera\extensions\<id>\`. It does not change the layout: the widget lists the names to put into `config.toml`, such as `counter.total`, and that is still done by hand.
+- `Update` is offered when the version of the registry differs from the installed one; nothing checks for updates on its own.
+- `Remove` deletes those files and the extension's `state.txt`. An extension without `installed.toml` was copied in by hand and is neither replaced nor removed.
+- A registry or an offer that cannot be used is listed at the top of the widget with the reason.
+
+Tried on a running shell: listing, installing and removing the `counter` example from a registry file on disk, with the widgets appearing in and leaving the bar. `Update`, failed downloads and nested registries are covered by tests only.
+
+[`registry/update.sh`](registry/update.sh) rebuilds the examples and rewrites the registry of this repository.
+
+### By hand
+
+To install one without a registry, create `%APPDATA%\tessera\extensions\<any name>\` with two files: `extension.wasm` and an `extension.toml` manifest that gives the extension `id`, its widgets and its permissions. A layout then refers to a widget as `<id>.<widget name>`. Build an example with:
 
 ```sh
 rustup target add wasm32-unknown-unknown

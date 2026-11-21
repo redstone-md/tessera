@@ -14,6 +14,7 @@ gpui.workspace = true
 image.workspace = true
 raw-window-handle.workspace = true
 serde.workspace = true
+sha2.workspace = true
 toml.workspace = true
 ureq.workspace = true
 wasmtime.workspace = true

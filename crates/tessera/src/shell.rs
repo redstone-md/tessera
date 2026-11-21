@@ -95,11 +95,12 @@ impl Shell {
         cx.set_global(Popups::new(&config.popups));
 
         let old = &cx.global::<Self>().config;
-        let extensions = old.extensions != config.extensions;
+        let extensions =
+            old.extensions != config.extensions || old.registries() != config.registries();
         let icons = old.icons != config.icons;
         let surfaces = old.surfaces != config.surfaces;
         // Widgets keep what they were built with, so new settings of
-        // extensions and new icons need new widgets as well.
+        // extensions, new registries and new icons need new widgets as well.
         if extensions {
             cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         }
@@ -110,6 +111,15 @@ impl Shell {
             config.surfaces = cx.global::<Self>().config.surfaces.clone();
         }
         cx.global_mut::<Self>().config = config;
+        cx.refresh_windows();
+    }
+
+    /// Loads the extensions again and builds the widgets again, after an
+    /// extension was installed or removed.
+    pub fn extensions_changed(cx: &mut App) {
+        let config = cx.global::<Self>().config.clone();
+        cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
+        Self::arrange(&config, cx);
         cx.refresh_windows();
     }
 

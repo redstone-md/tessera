@@ -6,6 +6,7 @@
 mod access;
 mod host;
 mod http;
+pub mod registry;
 mod runtime;
 mod widget;
 
@@ -13,7 +14,7 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -32,6 +33,11 @@ const MANIFEST_FILE: &str = "extension.toml";
 const WASM_FILE: &str = "extension.wasm";
 const STATE_FILE: &str = "state.txt";
 
+/// The directory extensions are installed in.
+pub fn extensions_dir() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("extensions"))
+}
+
 /// Loads every extension in the `extensions` configuration directory. Each
 /// one is a directory holding a manifest and a WebAssembly file.
 pub struct ExtensionsModule {
@@ -45,7 +51,7 @@ impl Module for ExtensionsModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        let Some(root) = config_dir().map(|dir| dir.join("extensions")) else {
+        let Some(root) = extensions_dir() else {
             return Ok(());
         };
         let entries = match fs::read_dir(&root) {

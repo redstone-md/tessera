@@ -28,6 +28,16 @@ pub struct Permissions {
 }
 
 impl Permissions {
+    /// The hosts the extension asks to contact.
+    pub fn network(&self) -> &[String] {
+        &self.network
+    }
+
+    /// The files the extension asks to read.
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
     /// Whether a request to `url` is permitted.
     pub fn check_url(&self, url: &str) -> Result<(), String> {
         let host =

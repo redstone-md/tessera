@@ -8,6 +8,7 @@ mod clock;
 mod command;
 mod label;
 mod launcher;
+mod marketplace;
 mod notifications;
 mod session;
 mod sound;
@@ -27,6 +28,9 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(command::CommandModule),
         Box::new(label::LabelModule),
         Box::new(launcher::LauncherModule),
+        Box::new(marketplace::MarketplaceModule {
+            registries: config.registries(),
+        }),
         Box::new(notifications::NotificationsModule),
         Box::new(session::SessionModule),
         Box::new(sound::SoundModule),

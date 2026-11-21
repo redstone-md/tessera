@@ -11,6 +11,7 @@ use std::time::SystemTime;
 
 use serde::Deserialize;
 
+use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::platform::ScreenEdge;
 
 const DEFAULT: &str = include_str!("default_config.toml");
@@ -182,9 +183,18 @@ pub struct Config {
     /// Settings of extensions, by extension identifier.
     #[serde(default, rename = "extension")]
     pub extensions: HashMap<String, toml::Table>,
+    /// Where the registries are that offer extensions to install; the
+    /// official one when the key is missing.
+    registries: Option<Vec<String>>,
 }
 
 impl Config {
+    /// Where the registries are that offer extensions to install.
+    pub fn registries(&self) -> Vec<String> {
+        let official = || vec![OFFICIAL_REGISTRY.to_owned()];
+        self.registries.clone().unwrap_or_else(official)
+    }
+
     /// The user's configuration, or the built-in one when there is none or
     /// it cannot be used.
     pub fn load() -> Self {
@@ -232,7 +242,11 @@ mod tests {
             specs.iter().map(|spec| spec.widget.clone()).collect()
         };
         assert_eq!(names(&bar.center), ["clock"]);
-        assert_eq!(names(&bar.start), ["label", "cpu", "memory", "battery"]);
+        assert_eq!(
+            names(&bar.start),
+            ["label", "label", "cpu", "memory", "battery"]
+        );
+        assert_eq!(config.registries(), [OFFICIAL_REGISTRY]);
         assert_eq!(names(&bar.end), ["tray", "volume", "quit"]);
         assert_eq!(dock.edge, ScreenEdge::Bottom);
         assert_eq!(dock.displays, Displays::All);

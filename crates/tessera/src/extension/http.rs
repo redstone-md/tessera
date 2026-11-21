@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Sends the HTTPS requests of extensions.
+//! Sends the HTTPS requests of extensions and downloads extensions.
 
 use std::time::Duration;
 
@@ -14,6 +14,9 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The most of a response body that is read.
 const BODY_LIMIT: u64 = 1 << 20;
+
+/// How many redirects a download follows.
+const DOWNLOAD_REDIRECTS: u32 = 5;
 
 #[derive(Clone, Debug)]
 pub struct HttpRequest {
@@ -34,20 +37,7 @@ pub struct HttpResponse {
 /// another one. Servers are verified by Windows, against its
 /// certificate store.
 pub fn send(request: &HttpRequest) -> Result<HttpResponse, String> {
-    let agent: Agent = Agent::config_builder()
-        .https_only(true)
-        .max_redirects(0)
-        .http_status_as_error(false)
-        .timeout_global(Some(TIMEOUT))
-        .tls_config(
-            TlsConfig::builder()
-                .provider(TlsProvider::NativeTls)
-                .root_certs(RootCerts::PlatformVerifier)
-                .build(),
-        )
-        .user_agent("tessera")
-        .build()
-        .into();
+    let agent = agent(0);
 
     let mut builder = Request::builder()
         .method(request.method.as_str())
@@ -76,6 +66,43 @@ pub fn send(request: &HttpRequest) -> Result<HttpResponse, String> {
         status: response.status().as_u16(),
         body,
     })
+}
+
+/// What is at the address `url`, if it is no longer than `limit`.
+/// Redirects to other HTTPS addresses are followed.
+pub fn download(url: &str, limit: u64) -> Result<Vec<u8>, String> {
+    let mut response = agent(DOWNLOAD_REDIRECTS)
+        .get(url)
+        .call()
+        .map_err(describe)?;
+    if !response.status().is_success() {
+        return Err(format!("the server answered {}", response.status()));
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()
+        .map_err(describe)
+}
+
+/// A client that speaks HTTPS only and follows up to `redirects`
+/// redirects.
+fn agent(redirects: u32) -> Agent {
+    Agent::config_builder()
+        .https_only(true)
+        .max_redirects(redirects)
+        .http_status_as_error(false)
+        .timeout_global(Some(TIMEOUT))
+        .tls_config(
+            TlsConfig::builder()
+                .provider(TlsProvider::NativeTls)
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .user_agent("tessera")
+        .build()
+        .into()
 }
 
 fn describe(error: impl std::fmt::Display) -> String {
