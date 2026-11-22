@@ -369,6 +369,31 @@ fn stepped(share: f32, wider: bool) -> f32 {
     (share + step).clamp(least, most)
 }
 
+/// The share of the width the first window of `master` takes once the
+/// border between it and the stacked windows was dragged: `frame` is the
+/// window that was resized and `tile` its place, in `area` with tiles
+/// `gap` apart; `first` says whether it is the first window. `None` unless
+/// that border alone was moved.
+fn share_dragged(
+    area: ScreenRect,
+    gap: i32,
+    first: bool,
+    frame: ScreenRect,
+    tile: ScreenRect,
+) -> Option<f32> {
+    if frame.top != tile.top || frame.bottom != tile.bottom {
+        return None;
+    }
+    let edge = match first {
+        true if frame.left == tile.left && frame.right != tile.right => frame.right,
+        false if frame.right == tile.right && frame.left != tile.left => frame.left - gap,
+        _ => return None,
+    };
+    let room = (area.right - area.left - 3 * gap).max(2);
+    let (least, most) = SHARE_RANGE;
+    Some(((edge - area.left - gap) as f32 / room as f32).clamp(least, most))
+}
+
 /// The window whose border is colored.
 struct Marked {
     id: AppWindowId,
@@ -679,10 +704,20 @@ impl Tiler {
         let mut places = Self::places(&self.order, &windows, layout, gap, self.share);
         // Windows a key combination had trade places are on their way to
         // their tiles, not dropped on them.
-        let dropped = match std::mem::take(&mut self.carried) {
+        let carried = std::mem::take(&mut self.carried);
+        let dropped = match carried {
             true => None,
             false => self.traded(&places),
         };
+        // A border dragged between the first window and the others gives
+        // the first window another share.
+        let resized = (!carried && dropped.is_none() && layout == TileLayout::Master)
+            .then(|| self.resized(&places, &windows, gap))
+            .flatten();
+        if let Some(share) = resized {
+            self.share = share;
+            places = Self::places(&self.order, &windows, layout, gap, share);
+        }
         if let Some((dragged, onto)) = dropped {
             let place = |id| self.order.iter().position(|&listed| listed == id);
             if let (Some(first), Some(second)) = (place(dragged), place(onto)) {
@@ -748,6 +783,32 @@ impl Tiler {
             places.extend(ids.into_iter().zip(tiles));
         }
         places
+    }
+
+    /// The share the first window of `master` is to take, if the window
+    /// in front was resized by the border between it and the others.
+    fn resized(
+        &self,
+        places: &[(AppWindowId, ScreenRect)],
+        windows: &[AppWindow],
+        gap: i32,
+    ) -> Option<f32> {
+        let front = AppWindowId::foreground()?;
+        if self.moves.contains_key(&front) {
+            return None;
+        }
+        let frame = front.frame()?;
+        // An application that keeps a size of its own was not resized.
+        if matches!(self.sent.get(&front), Some(&(_, Some(kept))) if kept == frame) {
+            return None;
+        }
+        let &(_, tile) = places.iter().find(|(id, _)| *id == front)?;
+        let display = |id| Some(windows.iter().find(|window| window.id == id)?.display);
+        let home = display(front)?;
+        let mut there = { self.order.iter() }.filter(|&&id| display(id) == Some(home));
+        let first = there.next()? == &front;
+        there.next()?;
+        share_dragged(home.work_area()?, gap, first, frame, tile)
     }
 
     /// The window in front, if it was dropped on the tile of another
@@ -968,6 +1029,56 @@ mod tests {
             .collect();
         expected.push((false, TileLayout::ALL[0]));
         assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn a_dragged_border_gives_the_first_window_another_share() {
+        let area = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 1024,
+            bottom: 600,
+        };
+        let tiles = TileLayout::Master.shared(area, 3, 8, 0.5);
+        let (first, second) = (tiles[0], tiles[1]);
+        let wider = ScreenRect {
+            right: first.right + 250,
+            ..first
+        };
+        let share = share_dragged(area, 8, true, wider, first).unwrap();
+        // The tiles of the new share put the border where it was dragged.
+        let again = TileLayout::Master.shared(area, 3, 8, share);
+        assert!((again[0].right - wider.right).abs() <= 1);
+        // The border dragged from the other side gives the same share.
+        let narrower = ScreenRect {
+            left: second.left + 250,
+            ..second
+        };
+        let other = share_dragged(area, 8, false, narrower, second).unwrap();
+        assert!((other - share).abs() < 0.01);
+        // A window in its tile, one resized at another border and one
+        // that was moved were not resized at that border.
+        assert_eq!(share_dragged(area, 8, true, first, first), None);
+        let taller = ScreenRect {
+            bottom: first.bottom - 40,
+            ..wider
+        };
+        assert_eq!(share_dragged(area, 8, true, taller, first), None);
+        let moved = ScreenRect {
+            left: first.left + 30,
+            right: first.right + 30,
+            ..first
+        };
+        assert_eq!(share_dragged(area, 8, true, moved, first), None);
+        // The share stays within what it may be.
+        let most = ScreenRect {
+            right: 1020,
+            ..first
+        };
+        assert_eq!(
+            share_dragged(area, 8, true, most, first),
+            Some(SHARE_RANGE.1)
+        );
     }
 
     #[test]
