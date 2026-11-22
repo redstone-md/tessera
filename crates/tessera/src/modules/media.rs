@@ -5,14 +5,16 @@
 //! while an application offers something, and `media-controls`, the title
 //! with its picture and buttons to skip and pause.
 
+use std::cell::Cell;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ObjectFit, ParentElement, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage, Subscription, WeakEntity, Window, div, img,
-    px,
+    AnyElement, App, AppContext, AsyncApp, Bounds, Context, CursorStyle, Entity, FontWeight,
+    Global, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ObjectFit, ParentElement,
+    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Subscription,
+    WeakEntity, Window, canvas, div, img, px,
 };
 
 use crate::icons::{Icon, image_of_bytes};
@@ -233,6 +235,12 @@ impl Player {
             now.playing = !now.playing;
             cx.notify();
         }
+        if let MediaCommand::Seek(seconds) = command
+            && let Some(position) = self.now.as_mut().and_then(|now| now.position.as_mut())
+        {
+            position.elapsed = seconds.min(position.length);
+            cx.notify();
+        }
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let sent = cx.background_executor().spawn(async move {
                 if let Err(error) = Media::send(command) {
@@ -325,6 +333,8 @@ struct Controls {
     cover_presence: Spring,
     /// How far into the piece it is, from 0 to 1.
     position: Spring,
+    /// Where the line of the position was last drawn.
+    line: Rc<Cell<Bounds<Pixels>>>,
     buttons: [Interaction; 3],
     _changes: Subscription,
 }
@@ -341,6 +351,7 @@ impl Controls {
             cover,
             cover_presence: Spring::new(motion.effects, 1.),
             position: Spring::new(motion.effects, 0.),
+            line: Rc::default(),
             buttons: [Interaction::new(&motion); 3],
         }
     }
@@ -357,7 +368,16 @@ impl Controls {
     }
 
     /// How far into the piece it is: the times and a line between them.
-    fn timeline(&mut self, position: Position, theme: &Theme, window: &mut Window) -> gpui::Div {
+    /// Where the player lets the position be set, a press on the line goes
+    /// to that place of the piece.
+    fn timeline(
+        &mut self,
+        position: Position,
+        seeks: bool,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let level = position.elapsed as f32 / position.length as f32;
         self.position.animate_to(level);
         let level = self.position.value(window).clamp(0., 1.);
@@ -374,8 +394,46 @@ impl Controls {
             .items_center()
             .gap(theme.spacing.small)
             .child(time(position.elapsed))
-            .child(div().flex_1().child(wave_bar(theme, level)))
+            .child(self.line(position.length, seeks, level, theme, cx))
             .child(time(position.length))
+    }
+
+    /// The line of the position, which takes a press where `seeks`.
+    fn line(
+        &self,
+        length: u32,
+        seeks: bool,
+        level: f32,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let drawn = self.line.clone();
+        let line = div()
+            .flex_1()
+            .relative()
+            .child(wave_bar(theme, level))
+            .child(
+                canvas(move |bounds, _, _| drawn.set(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            );
+        if !seeks {
+            return line;
+        }
+        line.cursor(CursorStyle::PointingHand).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                let line = this.line.get();
+                let to = second_at(
+                    f32::from(event.position.x),
+                    f32::from(line.origin.x),
+                    f32::from(line.size.width),
+                    length,
+                );
+                this.player
+                    .update(cx, |player, cx| player.send(MediaCommand::Seek(to), cx));
+            }),
+        )
     }
 
     /// The picture, or a note in its place while there is none.
@@ -419,7 +477,8 @@ impl Controls {
         let slot = match command {
             MediaCommand::Previous => 0,
             MediaCommand::Toggle => 1,
-            MediaCommand::Next => 2,
+            // Going to a place of the piece has no button.
+            MediaCommand::Next | MediaCommand::Seek(_) => 2,
         };
         let state = self.buttons[slot].state(window);
         let (base, color, width, radius) = match emphasis {
@@ -540,7 +599,7 @@ impl Render for Controls {
             )
             .children(
                 now.position
-                    .map(|position| self.timeline(position, &theme, window)),
+                    .map(|position| self.timeline(position, now.can_seek, &theme, window, cx)),
             )
             .child(
                 div()
@@ -552,6 +611,16 @@ impl Render for Controls {
                     .children(buttons),
             )
     }
+}
+
+/// The second of a piece `length` seconds long that lies under a pointer
+/// at `x`, on a line that starts at `left` and is `width` wide.
+fn second_at(x: f32, left: f32, width: f32, length: u32) -> u32 {
+    if width <= 0. {
+        return 0;
+    }
+    let share = ((x - left) / width).clamp(0., 1.);
+    (share * length as f32).round() as u32
 }
 
 /// `seconds` as a player shows them: minutes and seconds, with hours in
@@ -586,8 +655,20 @@ mod tests {
             can_toggle: true,
             can_previous: true,
             can_next: true,
+            can_seek: false,
             position: None,
         }
+    }
+
+    #[test]
+    fn a_press_on_the_line_names_a_second_of_the_piece() {
+        assert_eq!(second_at(100., 100., 200., 240), 0);
+        assert_eq!(second_at(200., 100., 200., 240), 120);
+        assert_eq!(second_at(300., 100., 200., 240), 240);
+        // Beyond the ends is the first and the last second.
+        assert_eq!(second_at(50., 100., 200., 240), 0);
+        assert_eq!(second_at(900., 100., 200., 240), 240);
+        assert_eq!(second_at(10., 0., 0., 240), 0);
     }
 
     #[test]

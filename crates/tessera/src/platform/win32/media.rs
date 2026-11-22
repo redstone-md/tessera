@@ -34,6 +34,8 @@ pub struct NowPlaying {
     pub can_toggle: bool,
     pub can_previous: bool,
     pub can_next: bool,
+    /// Whether it lets the position be set.
+    pub can_seek: bool,
     /// How far into the piece it is, when the application tells.
     pub position: Option<Position>,
 }
@@ -91,6 +93,8 @@ pub enum MediaCommand {
     /// Pause if playing, play otherwise.
     Toggle,
     Next,
+    /// Go to this many seconds into the piece.
+    Seek(u32),
 }
 
 /// The media applications of the signed-in user.
@@ -126,6 +130,7 @@ impl Media {
                 can_toggle: controls.IsPlayPauseToggleEnabled()?,
                 can_previous: controls.IsPreviousEnabled()?,
                 can_next: controls.IsNextEnabled()?,
+                can_seek: controls.IsPlaybackPositionEnabled()?,
             }))
         };
         read().map_err(|error| format!("what is playing could not be read: {error}"))
@@ -169,6 +174,11 @@ impl Media {
                 MediaCommand::Previous => session.TrySkipPreviousAsync()?.get()?,
                 MediaCommand::Toggle => session.TryTogglePlayPauseAsync()?.get()?,
                 MediaCommand::Next => session.TrySkipNextAsync()?.get()?,
+                MediaCommand::Seek(seconds) => {
+                    let start = session.GetTimelineProperties()?.StartTime()?.Duration;
+                    let position = start + i64::from(seconds) * TICKS;
+                    session.TryChangePlaybackPositionAsync(position)?.get()?
+                }
             };
             Ok(())
         };
