@@ -15,13 +15,20 @@ use gpui::{
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Spring, staggered};
-use crate::platform::{Bluetooth, PairedDevice};
+use crate::platform::{Bluetooth, PairedDevice, Wireless};
 use crate::theme::Theme;
 use crate::ui::{icon, list_row, pill, wave_bar};
 
 /// How often the machine is asked whether it has Bluetooth: an adapter may
 /// be plugged in and pulled out.
 const PRESENCE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How often the icon asks whether the radio is on.
+const RADIO_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How many times the radio is asked for each time the machine is asked
+/// whether it has Bluetooth.
+const RADIO_READS: u32 = (PRESENCE_INTERVAL.as_secs() / RADIO_INTERVAL.as_secs()) as u32;
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(5);
@@ -50,33 +57,44 @@ impl Module for BluetoothModule {
     }
 }
 
-/// The Bluetooth icon, on a machine that has Bluetooth.
+/// The Bluetooth icon, on a machine that has Bluetooth; paler while the
+/// radio is off.
 struct Button {
     /// 0 while the machine has no Bluetooth, 1 while the icon is shown.
     presence: Spring,
+    /// 0 while the radio is off, 1 while it is on.
+    power: Spring,
 }
 
 impl Button {
     fn new(cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            loop {
-                let present = cx
-                    .background_executor()
-                    .spawn(async { Bluetooth::present() })
-                    .await;
+            let mut present = false;
+            for round in 0u32.. {
+                let ask = round % RADIO_READS == 0;
+                let read = cx.background_executor().spawn(async move {
+                    let present = if ask { Bluetooth::present() } else { present };
+                    // A radio that does not say is shown as one that is on.
+                    (present, Wireless::Bluetooth.is_on() != Some(false))
+                });
+                let on;
+                (present, on) = read.await;
                 let shown = this.update(cx, |this, cx| {
                     this.presence.animate_to(if present { 1. } else { 0. });
+                    this.power.animate_to(if on { 1. } else { 0. });
                     cx.notify();
                 });
                 if shown.is_err() {
                     break;
                 }
-                cx.background_executor().timer(PRESENCE_INTERVAL).await;
+                cx.background_executor().timer(RADIO_INTERVAL).await;
             }
         })
         .detach();
+        let motion = cx.global::<Theme>().motion;
         Self {
-            presence: Spring::new(cx.global::<Theme>().motion.spatial, 0.),
+            presence: Spring::new(motion.spatial, 0.),
+            power: Spring::new(motion.spatial, 1.),
         }
     }
 }
@@ -88,9 +106,14 @@ impl Render for Button {
         if presence == 0. {
             return div().into_any_element();
         }
+        let power = self.power.value(window).clamp(0., 1.);
         pill(&theme)
             .opacity(presence)
-            .child(icon(&theme, ICON_BLUETOOTH))
+            .child(
+                div()
+                    .opacity(AWAY_OPACITY + (1. - AWAY_OPACITY) * power)
+                    .child(icon(&theme, ICON_BLUETOOTH)),
+            )
             .into_any_element()
     }
 }
