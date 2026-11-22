@@ -203,6 +203,13 @@
 #               start-icon, the character it shows
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
+#   "appearance" a sun while Windows is light and a moon while it is
+#               dark, read every three seconds; a click makes Windows
+#               and its applications the other, as the page Colors of
+#               the settings does
+#   "desktop"   a click shows the desktop by putting all windows aside,
+#               and the next one brings them back; it asks the taskbar
+#               of Windows, which stays hidden
 #   "plan"      the power plan of Windows that is in use, read every five
 #               seconds; a click puts the next plan in use, the first
 #               after the last. Option name, false to show the icon alone

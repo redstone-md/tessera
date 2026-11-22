@@ -16,5 +16,5 @@ pub use win32::{
     VideoState, VirtualDesktops, Vpn, VpnState, Wifi, WifiNetwork, WifiReach, WindowEvents,
     WindowsKey, Wireless, accent_color, app_id_in, app_id_of_program, app_path, desktop_look,
     desktop_pixels, display_frames, light_mode, memory_held, pointer_at, pointer_held,
-    pointer_on_own_window, read_desktop_if_requested,
+    pointer_on_own_window, read_desktop_if_requested, set_light_mode,
 };

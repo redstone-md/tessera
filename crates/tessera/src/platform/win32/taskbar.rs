@@ -12,7 +12,7 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{Context as _, Result, bail};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, GetCurrentProcessId, INFINITE, OpenProcess, PROCESS_SYNCHRONIZE,
     WaitForSingleObject,
@@ -21,10 +21,14 @@ use windows::Win32::UI::Shell::{
     ABM_GETSTATE, ABM_SETSTATE, ABS_AUTOHIDE, APPBARDATA, SHAppBarMessage,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, SW_HIDE, SW_SHOWNOACTIVATE,
-    ShowWindow,
+    FindWindowExW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SW_HIDE,
+    SW_SHOWNOACTIVATE, ShowWindow, WM_COMMAND,
 };
 use windows::core::{PCWSTR, w};
+
+/// The command of the taskbar that shows the desktop or brings the
+/// windows back.
+const TOGGLE_DESKTOP: usize = 407;
 
 /// Command-line flag that turns the process into the restore watchdog.
 const WATCHDOG_FLAG: &str = "--restore-taskbar-after";
@@ -60,6 +64,21 @@ impl Taskbar {
     }
 
     /// Hides taskbar windows again if Explorer has shown them.
+    /// Shows the desktop by putting all windows aside, or brings them
+    /// back if that was done last, as the corner of the taskbar does.
+    /// Says whether there was a taskbar to ask.
+    pub fn toggle_desktop() -> bool {
+        let Some(taskbar) = Self::windows_of_class(w!("Shell_TrayWnd"))
+            .into_iter()
+            .next()
+        else {
+            return false;
+        };
+        // SAFETY: posting a message to a window of another program.
+        unsafe { PostMessageW(Some(taskbar), WM_COMMAND, WPARAM(TOGGLE_DESKTOP), LPARAM(0)) }
+            .is_ok()
+    }
+
     pub fn keep_hidden() {
         for window in Self::windows() {
             // SAFETY: the calls tolerate a window that has been destroyed.

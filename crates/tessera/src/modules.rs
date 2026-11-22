@@ -13,6 +13,7 @@ mod focused;
 mod keyboard;
 mod label;
 mod launcher;
+mod look;
 mod marketplace;
 mod media;
 mod network;
@@ -63,6 +64,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
+        Box::new(look::LookModule),
         Box::new(plan::PlanModule),
         Box::new(trash::TrashModule),
         Box::new(update::UpdateModule),
