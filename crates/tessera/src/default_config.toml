@@ -351,10 +351,20 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # 1920x1080 with H.264 stayed under that where it was tried, 3840x2160
 # did not.
 #
+# Each [[wallpaper.display]] gives one display pictures of its own in place
+# of images: number says which, the displays being counted from the left
+# (and from the top where two begin equally far left), the first being 1.
+# A display whose entry has no images gets no wallpaper of Tessera and shows
+# the one of Windows. A video still plays on every display.
+#
 # [wallpaper]
 # images = ["C:/Users/me/Pictures/Wallpapers"]
 # interval = 600
 # video = "C:/Users/me/Videos/wallpaper.mp4"
+#
+# [[wallpaper.display]]
+# number = 2
+# images = ["C:/Users/me/Pictures/second.jpg"]
 
 # Each [[card]] is a panel of widgets that lies on the desktop, below every
 # window. corner is top-left, top-right (the default), bottom-left,

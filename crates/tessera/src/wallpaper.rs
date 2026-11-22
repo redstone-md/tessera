@@ -91,6 +91,59 @@ pub struct WallpaperConfig {
     /// A video file to play instead of the pictures, which are shown
     /// where it cannot be played.
     video: Option<PathBuf>,
+    /// The pictures of single displays, in place of `images` there.
+    #[serde(default, rename = "display")]
+    displays: Vec<DisplayWallpaper>,
+}
+
+/// What the configuration says about the wallpaper of one display.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplayWallpaper {
+    /// Which display: they are counted from the left, and from the top
+    /// where two begin equally far left, the first being 1.
+    number: usize,
+    /// Picture files and directories, as `images` of the wallpaper.
+    /// Without any, Tessera draws no wallpaper on the display.
+    #[serde(default)]
+    images: Vec<PathBuf>,
+}
+
+/// The pictures each display goes through.
+#[derive(Debug, Default, PartialEq)]
+struct Playlists {
+    /// Those of a display that has none of its own.
+    all: Vec<PathBuf>,
+    /// Those of single displays, by their number.
+    own: Vec<(usize, Vec<PathBuf>)>,
+}
+
+impl Playlists {
+    /// The pictures of the display with the number `number`.
+    fn of(&self, number: usize) -> &[PathBuf] {
+        let own = self.own.iter().find(|(of, _)| *of == number);
+        own.map_or(&self.all, |(_, pictures)| pictures)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.all.is_empty() && self.own.iter().all(|(_, pictures)| pictures.is_empty())
+    }
+
+    /// Whether a display has more than one picture to go through.
+    fn change(&self) -> bool {
+        self.all.len() > 1 || self.own.iter().any(|(_, pictures)| pictures.len() > 1)
+    }
+}
+
+/// The number of each of the displays with the bounds `frames`: they are
+/// counted from the left, and from the top where two begin equally far
+/// left, the first being 1.
+fn numbers(frames: &[ScreenRect]) -> Vec<usize> {
+    let before = |frame: &ScreenRect| {
+        let earlier = |other: &&ScreenRect| (other.left, other.top) < (frame.left, frame.top);
+        frames.iter().filter(earlier).count()
+    };
+    frames.iter().map(|frame| before(frame) + 1).collect()
 }
 
 impl WallpaperConfig {
@@ -104,32 +157,43 @@ impl WallpaperConfig {
         Duration::from_secs(seconds.max(SHORTEST_INTERVAL))
     }
 
-    /// The picture files the configuration names, those of a directory in
-    /// the order of their names. What cannot be read is reported.
-    fn pictures(&self) -> Vec<PathBuf> {
-        let mut pictures = Vec::new();
-        for path in &self.images {
-            if !path.is_dir() {
-                pictures.push(path.clone());
-                continue;
-            }
-            match std::fs::read_dir(path) {
-                Ok(entries) => {
-                    let mut found: Vec<PathBuf> = entries
-                        .filter_map(|entry| Some(entry.ok()?.path()))
-                        .filter(|path| is_picture(path))
-                        .collect();
-                    found.sort();
-                    pictures.extend(found);
-                }
-                Err(error) => report!(
-                    "the wallpaper directory {} cannot be read: {error}",
-                    path.display()
-                ),
-            }
+    /// The pictures the configuration has each display go through.
+    fn playlists(&self) -> Playlists {
+        let own = self.displays.iter();
+        Playlists {
+            all: pictures(&self.images),
+            own: own
+                .map(|display| (display.number, pictures(&display.images)))
+                .collect(),
         }
-        pictures
     }
+}
+
+/// The picture files `named` are, those of a directory in the order of
+/// their names. What cannot be read is reported.
+fn pictures(named: &[PathBuf]) -> Vec<PathBuf> {
+    let mut pictures = Vec::new();
+    for path in named {
+        if !path.is_dir() {
+            pictures.push(path.clone());
+            continue;
+        }
+        match std::fs::read_dir(path) {
+            Ok(entries) => {
+                let mut found: Vec<PathBuf> = entries
+                    .filter_map(|entry| Some(entry.ok()?.path()))
+                    .filter(|path| is_picture(path))
+                    .collect();
+                found.sort();
+                pictures.extend(found);
+            }
+            Err(error) => report!(
+                "the wallpaper directory {} cannot be read: {error}",
+                path.display()
+            ),
+        }
+    }
+    pictures
 }
 
 /// Whether the name of `path` ends as a picture file's does.
@@ -273,7 +337,8 @@ fn hidden(frame: ScreenRect, windows: &[ScreenRect]) -> bool {
 /// The wallpaper windows and the pictures they go through.
 pub struct Wallpaper {
     config: WallpaperConfig,
-    backdrops: Vec<DesktopBackdrop>,
+    /// The windows of the pictures, each with the number of its display.
+    backdrops: Vec<(usize, DesktopBackdrop)>,
     /// The video, where one plays.
     video: Option<DesktopVideo>,
     /// The displays the windows were opened for.
@@ -308,14 +373,13 @@ impl Wallpaper {
         this.config = config.clone();
         this.task += 1;
         let task = this.task;
-        let pictures = config.pictures();
+        let pictures = config.playlists();
         let video = config.video.clone();
-        if this.video.is_some() != video.is_some() || pictures.is_empty() {
-            // The windows of the other kind go, or all of them.
-            this.video = None;
-            this.backdrops.clear();
-            this.frames.clear();
-        }
+        // The windows go: those of the other kind, and those of displays
+        // that may have other pictures now or none.
+        this.video = None;
+        this.backdrops.clear();
+        this.frames.clear();
         if pictures.is_empty() && video.is_none() {
             return;
         }
@@ -341,18 +405,17 @@ impl Wallpaper {
             }
             let mut next = 0;
             loop {
-                let Ok(Some(sizes)) = cx.update(|cx| Self::sizes(task, cx)) else {
+                let Ok(Some(sizes)) = cx.update(|cx| Self::sizes(task, &pictures, cx)) else {
                     return;
                 };
-                let path = &pictures[next % pictures.len()];
-                match Self::show(task, path, &sizes, fade, cx).await {
+                match Self::show(task, &pictures, next, &sizes, fade, cx).await {
                     Ok(true) => {}
                     Ok(false) => return,
                     Err(error) => report!("a wallpaper picture is left out: {error:#}"),
                 }
                 // The picture stays, unless the displays change: then the
                 // windows are opened anew and get the same picture.
-                let until = (pictures.len() > 1).then(|| Instant::now() + interval);
+                let until = pictures.change().then(|| Instant::now() + interval);
                 loop {
                     cx.background_executor().timer(DISPLAY_CHECK).await;
                     match cx.update(|cx| Self::displays_changed(task, cx)) {
@@ -505,10 +568,11 @@ impl Wallpaper {
         (this.task == task).then(|| this.frames != display_frames())
     }
 
-    /// The sizes of the wallpaper windows, which are opened anew first if
-    /// the displays changed. Nothing if `task` is not the current one or
-    /// no display takes a window.
-    fn sizes(task: usize, cx: &mut App) -> Option<Vec<(u32, u32)>> {
+    /// The windows of the wallpaper, which are opened anew first if the
+    /// displays changed: for each the number of its display and its size.
+    /// Only a display `playlists` has pictures for gets one. Nothing if
+    /// `task` is not the current one or no display takes a window.
+    fn sizes(task: usize, playlists: &Playlists, cx: &mut App) -> Option<Vec<(usize, u32, u32)>> {
         let this = cx.global_mut::<Self>();
         if this.task != task {
             return None;
@@ -517,45 +581,73 @@ impl Wallpaper {
         if this.frames != frames {
             // The old windows go first, and their pictures with them.
             this.backdrops.clear();
-            this.backdrops = frames
-                .iter()
-                .filter_map(|frame| {
+            this.backdrops = numbers(&frames)
+                .into_iter()
+                .zip(&frames)
+                .filter(|(number, _)| !playlists.of(*number).is_empty())
+                .filter_map(|(number, frame)| {
                     DesktopBackdrop::open(*frame)
                         .inspect_err(|error| report!("a display gets no wallpaper: {error:#}"))
                         .ok()
+                        .map(|backdrop| (number, backdrop))
                 })
                 .collect();
             this.frames = frames;
         }
-        (!this.backdrops.is_empty())
-            .then(|| this.backdrops.iter().map(DesktopBackdrop::size).collect())
+        (!this.backdrops.is_empty()).then(|| {
+            let sized = this.backdrops.iter().map(|(number, backdrop)| {
+                let (width, height) = backdrop.size();
+                (*number, width, height)
+            });
+            sized.collect()
+        })
     }
 
-    /// Reads the picture at `path` and fades every window, of the `sizes`
-    /// given, over to it. Says whether `task` was the current one to the
-    /// end.
+    /// Fades every window over to the picture that is the `turn`th of
+    /// its display's in `playlists`; `sizes` is what [`Self::sizes`]
+    /// gave. A picture that cannot be read is reported and its display
+    /// keeps what it shows. Says whether `task` was the current one to
+    /// the end.
     async fn show(
         task: usize,
-        path: &Path,
-        sizes: &[(u32, u32)],
+        playlists: &Playlists,
+        turn: usize,
+        sizes: &[(usize, u32, u32)],
         fade: SpringSpec,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<bool> {
-        let file = path.to_path_buf();
-        let image = cx
-            .background_executor()
-            .spawn(async move { read(&file) })
-            .await?;
-        let image = Arc::new(image);
-        // Displays of one size share the scaled picture.
-        let mut fitted: Option<Arc<BackdropPicture>> = None;
-        for (index, &(width, height)) in sizes.iter().enumerate() {
+        // Displays that show the same file share what was read, and those
+        // of one size the scaled picture as well.
+        let mut read_last: Option<(PathBuf, Arc<RgbImage>)> = None;
+        let mut fitted: Option<(PathBuf, Arc<BackdropPicture>)> = None;
+        for (index, &(number, width, height)) in sizes.iter().enumerate() {
+            let pictures = playlists.of(number);
+            let Some(path) = pictures.get(turn % pictures.len().max(1)) else {
+                continue;
+            };
             let picture = match fitted.take() {
-                Some(picture) if picture.size() == (width, height) => picture,
+                Some((of, picture)) if of == *path && picture.size() == (width, height) => picture,
                 // The one of another size is let go of before the next
                 // is made.
                 _ => {
-                    let image = image.clone();
+                    let image = match read_last.take() {
+                        Some((of, image)) if of == *path => image,
+                        _ => {
+                            let file = path.clone();
+                            let image = cx
+                                .background_executor()
+                                .spawn(async move { read(&file) })
+                                .await;
+                            match image {
+                                Ok(image) => Arc::new(image),
+                                Err(error) => {
+                                    report!("a wallpaper picture is left out: {error:#}");
+                                    continue;
+                                }
+                            }
+                        }
+                    };
+                    read_last = Some((path.clone(), image.clone()));
                     let scaled = cx
                         .background_executor()
                         .spawn(async move { fit(&image, width, height) })
@@ -566,7 +658,7 @@ impl Wallpaper {
             let taken = cx.update(|cx| {
                 let this = cx.global::<Self>();
                 (this.task == task).then(|| match this.backdrops.get(index) {
-                    Some(backdrop) => backdrop.set(&picture),
+                    Some((_, backdrop)) => backdrop.set(&picture),
                     None => Ok(()),
                 })
             })?;
@@ -574,10 +666,10 @@ impl Wallpaper {
                 Some(taken) => taken?,
                 None => return Ok(false),
             }
-            fitted = Some(picture);
+            fitted = Some((path.clone(), picture));
         }
         drop(fitted);
-        drop(image);
+        drop(read_last);
 
         let mut presence = Spring::new(fade, 0.);
         presence.animate_to(1.);
@@ -594,7 +686,7 @@ impl Wallpaper {
                 if this.task != task {
                     return false;
                 }
-                for backdrop in &this.backdrops {
+                for (_, backdrop) in &this.backdrops {
                     backdrop.advance(shown, now);
                 }
                 true
@@ -695,6 +787,44 @@ mod tests {
     }
 
     #[test]
+    fn displays_are_counted_from_the_left_and_then_from_the_top() {
+        let frame = |left, top| ScreenRect {
+            left,
+            top,
+            right: left + 100,
+            bottom: top + 100,
+        };
+        let frames = [
+            frame(0, 0),
+            frame(-100, 50),
+            frame(100, 0),
+            frame(-100, -50),
+        ];
+        assert_eq!(numbers(&frames), [3, 2, 4, 1]);
+    }
+
+    #[test]
+    fn a_display_with_pictures_of_its_own_does_not_take_the_others() {
+        let config: WallpaperConfig = toml::from_str(
+            r#"
+            images = ['C:\all.png']
+            [[display]]
+            number = 2
+            images = ['C:\two.png', 'C:\more.png']
+            [[display]]
+            number = 3
+            "#,
+        )
+        .unwrap();
+        let playlists = config.playlists();
+        assert_eq!(playlists.of(1), [PathBuf::from(r"C:\all.png")]);
+        assert_eq!(playlists.of(2).len(), 2);
+        assert!(playlists.of(3).is_empty());
+        assert!(playlists.change());
+        assert!(!playlists.is_empty());
+    }
+
+    #[test]
     fn a_directory_gives_its_pictures_in_the_order_of_their_names() {
         let directory =
             std::env::temp_dir().join(format!("tessera-wallpaper-{}", std::process::id()));
@@ -703,12 +833,7 @@ mod tests {
             std::fs::write(directory.join(name), []).unwrap();
         }
         let single = PathBuf::from(r"C:\elsewhere\one.png");
-        let config = WallpaperConfig {
-            images: vec![single.clone(), directory.clone()],
-            interval: None,
-            video: None,
-        };
-        let pictures = config.pictures();
+        let pictures = pictures(&[single.clone(), directory.clone()]);
         std::fs::remove_dir_all(&directory).unwrap();
         assert_eq!(
             pictures,
