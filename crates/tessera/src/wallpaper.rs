@@ -45,6 +45,14 @@ const DISPLAY_CHECK: Duration = Duration::from_secs(2);
 /// How often a video is asked how far it has come while it is read.
 const VIDEO_CHECK: Duration = Duration::from_millis(50);
 
+/// How long Tessera has run before a video is opened. Starting takes
+/// memory for a few seconds that is given back after, and so does opening
+/// a video: one after the other stays under what both at once take.
+const VIDEO_AFTER_START: Duration = Duration::from_secs(8);
+
+/// When the wallpaper was first asked for, which is as Tessera starts.
+static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
 /// How long a video may take to have its first frame.
 const VIDEO_PATIENCE: Duration = Duration::from_secs(15);
 
@@ -260,6 +268,7 @@ impl Global for Wallpaper {}
 impl Wallpaper {
     /// Draws the wallpaper `config` asks for, if it asks for one.
     pub fn start(config: &WallpaperConfig, cx: &mut App) {
+        STARTED.get_or_init(Instant::now);
         cx.set_global(Self {
             config: WallpaperConfig::default(),
             backdrops: Vec::new(),
@@ -351,6 +360,10 @@ impl Wallpaper {
         fade: SpringSpec,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<()> {
+        let early = VIDEO_AFTER_START.saturating_sub(STARTED.get_or_init(Instant::now).elapsed());
+        if !early.is_zero() {
+            cx.background_executor().timer(early).await;
+        }
         loop {
             // The windows are opened for the displays there are.
             let opened = cx.update(|cx| {
