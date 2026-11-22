@@ -94,7 +94,10 @@ pub fn switch(
     state: InteractionState,
 ) -> Stateful<Div> {
     let shown = travel.clamp(0., 1.);
-    let track = mix(theme.colors.surface_container, theme.colors.primary, shown);
+    // The track of a switch that is off stands out from the surface the
+    // switch lies on.
+    let off = theme.colors.surface_container_highest;
+    let track = mix(off, theme.colors.primary, shown);
     let dot = mix(theme.colors.outline, theme.colors.surface_container, shown);
     let inset = (SWITCH_HEIGHT - SWITCH_DOT) / 2.;
     let way = SWITCH_WIDTH - SWITCH_DOT - inset * 2.;
