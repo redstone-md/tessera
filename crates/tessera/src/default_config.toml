@@ -55,7 +55,9 @@
 #           the display the pointer is on, with the windows of all displays,
 #           the one used last first; each further press while the keys to
 #           hold stay down goes one window on (or back), and letting them go
-#           brings the chosen window in front. Windows gives alt+tab to
+#           brings the chosen window in front. The arrow keys move the
+#           choice as well, Enter takes it and Esc closes the switcher
+#           with nothing brought in front. Windows gives alt+tab to
 #           no program, so Tessera takes keys it is refused from the keyboard
 #           itself, and the switcher of Windows no longer opens for them
 #

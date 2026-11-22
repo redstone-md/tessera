@@ -66,7 +66,7 @@ pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};
 pub use wifi::{Wifi, WifiNetwork, WifiReach};
-pub use windows_key::{TakenKeys, WindowsKey};
+pub use windows_key::{ChoiceKey, TakenKeys, WindowsKey};
 
 use std::ffi::c_void;
 use std::mem::size_of;

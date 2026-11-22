@@ -88,6 +88,8 @@ static TAKEN: Mutex<Vec<Hotkey>> = Mutex::new(Vec::new());
 /// The key of a taken combination that went down and was not passed on,
 /// so that its going up is not passed on either; zero when there is none.
 static SWALLOWED: AtomicU32 = AtomicU32::new(0);
+/// Whether the keys of [`ChoiceKey`] are taken, whatever else is held.
+static CHOOSING: AtomicBool = AtomicBool::new(false);
 /// The thread that has the hook, or zero while there is no hook.
 static WATCHER: AtomicU32 = AtomicU32::new(0);
 static PRESSED: OnceLock<(Sender<()>, Receiver<()>)> = OnceLock::new();
@@ -122,6 +124,37 @@ fn taken_presses() -> &'static (Sender<u32>, Receiver<u32>) {
     PRESSED.get_or_init(|| async_channel::bounded(8))
 }
 
+/// A key that moves through a choice on the screen, confirms it or calls
+/// it off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChoiceKey {
+    Escape,
+    Enter,
+    Left,
+    Up,
+    Right,
+    Down,
+}
+
+impl ChoiceKey {
+    fn of(key: u16) -> Option<Self> {
+        Some(match key {
+            0x1B => Self::Escape,
+            0x0D => Self::Enter,
+            0x25 => Self::Left,
+            0x26 => Self::Up,
+            0x27 => Self::Right,
+            0x28 => Self::Down,
+            _ => return None,
+        })
+    }
+}
+
+fn choice_presses() -> &'static (Sender<ChoiceKey>, Receiver<ChoiceKey>) {
+    static PRESSED: OnceLock<(Sender<ChoiceKey>, Receiver<ChoiceKey>)> = OnceLock::new();
+    PRESSED.get_or_init(|| async_channel::bounded(8))
+}
+
 /// Key combinations Windows keeps to itself, taken from it.
 pub struct TakenKeys;
 
@@ -130,6 +163,20 @@ impl TakenKeys {
     /// pressed.
     pub fn presses() -> Receiver<u32> {
         taken_presses().1.clone()
+    }
+
+    /// Where a key of [`ChoiceKey`] arrives whenever it is pressed while
+    /// those are taken.
+    pub fn choice_presses() -> Receiver<ChoiceKey> {
+        choice_presses().1.clone()
+    }
+
+    /// Takes the keys of [`ChoiceKey`] from every program if `taken`,
+    /// whatever else is held, and gives them back otherwise. They are to
+    /// be taken only while a choice is on the screen.
+    pub fn take_choice(taken: bool) -> anyhow::Result<()> {
+        CHOOSING.store(taken, Ordering::Relaxed);
+        watch_while_needed()
     }
 
     /// Takes the combinations `keys` from Windows, and gives back the ones
@@ -145,8 +192,9 @@ impl TakenKeys {
 
 /// Sets the hook while something needs it and removes it otherwise.
 fn watch_while_needed() -> anyhow::Result<()> {
-    let needed =
-        WINDOWS_KEY.load(Ordering::Relaxed) || TAKEN.lock().is_ok_and(|taken| !taken.is_empty());
+    let needed = WINDOWS_KEY.load(Ordering::Relaxed)
+        || CHOOSING.load(Ordering::Relaxed)
+        || TAKEN.lock().is_ok_and(|taken| !taken.is_empty());
     let watcher = WATCHER.load(Ordering::Relaxed);
     match (needed, watcher != 0) {
         (true, false) => {
@@ -186,6 +234,13 @@ fn taken_key(key: VIRTUAL_KEY, down: bool) -> bool {
     if !down {
         let swallowed = SWALLOWED.compare_exchange(code, 0, Ordering::Relaxed, Ordering::Relaxed);
         return swallowed.is_ok();
+    }
+    if CHOOSING.load(Ordering::Relaxed)
+        && let Some(choice) = ChoiceKey::of(key.0)
+    {
+        SWALLOWED.store(code, Ordering::Relaxed);
+        choice_presses().0.try_send(choice).ok();
+        return true;
     }
     let Ok(taken) = TAKEN.lock() else {
         return false;
@@ -301,6 +356,13 @@ mod tests {
         assert_eq!(completed(&taken, 0x09, held("ctrl+alt")), None);
         assert_eq!(completed(&taken, 0x09, Modifiers::default()), None);
         assert_eq!(completed(&taken, 0x20, held("alt")), None);
+    }
+
+    #[test]
+    fn only_the_keys_of_a_choice_are_such() {
+        assert_eq!(ChoiceKey::of(0x1B), Some(ChoiceKey::Escape));
+        assert_eq!(ChoiceKey::of(0x28), Some(ChoiceKey::Down));
+        assert_eq!(ChoiceKey::of(0x09), None);
     }
 
     #[test]

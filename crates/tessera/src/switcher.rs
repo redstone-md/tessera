@@ -15,7 +15,9 @@ use gpui::{
 
 use crate::icons::{AppIcons, Icon};
 use crate::motion::{Spring, mix, staggered};
-use crate::platform::{AppWindow, AppWindowId, Modifiers, NativeSurface, ScreenEdge};
+use crate::platform::{
+    AppWindow, AppWindowId, ChoiceKey, Modifiers, NativeSurface, ScreenEdge, TakenKeys,
+};
 use crate::popup::{floating_panel, open_floating, retire_floating};
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -41,6 +43,8 @@ const RELEASE_CHECK: Duration = Duration::from_millis(15);
 #[derive(Default)]
 pub struct Switcher {
     open: Option<WindowHandle<SwitcherView>>,
+    /// Whether the keys that move through the tiles are listened for.
+    listening: bool,
 }
 
 impl Global for Switcher {}
@@ -109,9 +113,51 @@ impl Switcher {
             SwitcherView::new(entries, chosen, columns, held, window, cx)
         });
         match opened {
-            Ok(window) => cx.global_mut::<Self>().open = Some(window),
+            Ok(window) => {
+                cx.global_mut::<Self>().open = Some(window);
+                Self::take_keys(cx);
+            }
             Err(error) => report!("the window switcher did not open: {error:#}"),
         }
+    }
+
+    /// Takes the arrow keys, Enter and Esc from the keyboard for the open
+    /// switcher; its view gives them back when it closes.
+    fn take_keys(cx: &mut App) {
+        if let Err(error) = TakenKeys::take_choice(true) {
+            report!("the arrow keys do not reach the window switcher: {error:#}");
+            return;
+        }
+        if std::mem::replace(&mut cx.global_mut::<Self>().listening, true) {
+            return;
+        }
+        let presses = TakenKeys::choice_presses();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(key) = presses.recv().await {
+                let pressed = cx.update(|cx| {
+                    if let Some(open) = cx.global::<Self>().open {
+                        open.update(cx, |view, _, cx| view.key(key, cx)).ok();
+                    }
+                });
+                if pressed.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+/// Where the choice goes from `at` of `count` tiles, `columns` in a row,
+/// with an arrow key: to the tile beside it, around the ends of the list,
+/// or to the one above or below it, where there is one.
+fn moved(at: usize, count: usize, columns: usize, key: ChoiceKey) -> usize {
+    match key {
+        ChoiceKey::Left => stepped(at, count, true),
+        ChoiceKey::Right => stepped(at, count, false),
+        ChoiceKey::Up if at >= columns => at - columns,
+        ChoiceKey::Down if at + columns < count => at + columns,
+        _ => at,
     }
 }
 
@@ -223,11 +269,33 @@ impl SwitcherView {
         if self.closing {
             return false;
         }
-        self.chosen = stepped(self.chosen, self.entries.len(), back);
+        self.mark(stepped(self.chosen, self.entries.len(), back), cx);
+        true
+    }
+
+    /// Has the entry at `chosen` be the chosen one.
+    fn mark(&mut self, chosen: usize, cx: &mut Context<Self>) {
+        self.chosen = chosen;
         self.column.animate_to((self.chosen % self.columns) as f32);
         self.row.animate_to((self.chosen / self.columns) as f32);
         cx.notify();
-        true
+    }
+
+    /// Takes a key pressed while the switcher is open: an arrow moves the
+    /// choice, Enter takes it and Esc closes without bringing a window in
+    /// front.
+    fn key(&mut self, key: ChoiceKey, cx: &mut Context<Self>) {
+        if self.closing {
+            return;
+        }
+        match key {
+            ChoiceKey::Escape => self.close(cx),
+            ChoiceKey::Enter => self.choose(self.chosen, cx),
+            arrow => self.mark(
+                moved(self.chosen, self.entries.len(), self.columns, arrow),
+                cx,
+            ),
+        }
     }
 
     /// Brings the window of the entry at `index` in front and closes.
@@ -243,9 +311,26 @@ impl SwitcherView {
 
     /// Starts closing; the window goes away once the motion has finished.
     fn close(&mut self, cx: &mut Context<Self>) {
+        give_keys_back();
         self.closing = true;
         self.visibility.animate_to(0.);
         cx.notify();
+    }
+}
+
+/// Gives the keys taken for the open switcher back to the programs.
+fn give_keys_back() {
+    if let Err(error) = TakenKeys::take_choice(false) {
+        report!("the arrow keys stay with the window switcher: {error:#}");
+    }
+}
+
+impl Drop for SwitcherView {
+    /// However the view goes, the keys do not stay taken.
+    fn drop(&mut self) {
+        if !self.closing {
+            give_keys_back();
+        }
     }
 }
 
@@ -346,6 +431,16 @@ mod tests {
         assert_eq!(first_choice(3, None, false), 0);
         assert_eq!(first_choice(3, None, true), 0);
         assert_eq!(first_choice(1, Some(0), false), 0);
+    }
+
+    #[test]
+    fn arrows_go_beside_and_to_the_row_above_or_below() {
+        assert_eq!(moved(0, 11, 8, ChoiceKey::Left), 10);
+        assert_eq!(moved(10, 11, 8, ChoiceKey::Right), 0);
+        assert_eq!(moved(1, 11, 8, ChoiceKey::Down), 9);
+        assert_eq!(moved(5, 11, 8, ChoiceKey::Down), 5);
+        assert_eq!(moved(9, 11, 8, ChoiceKey::Up), 1);
+        assert_eq!(moved(1, 11, 8, ChoiceKey::Up), 1);
     }
 
     #[test]
