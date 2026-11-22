@@ -24,6 +24,7 @@ mod popup;
 mod preview;
 mod shell;
 mod surface;
+mod switcher;
 mod theme;
 mod tiling;
 mod tip;

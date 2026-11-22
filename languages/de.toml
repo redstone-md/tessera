@@ -217,6 +217,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Move" = "Verschieben"
 "Program" = "Programm"
 "Next" = "Nächstes"
+"Previous" = "Vorheriges"
 "Left" = "Nach links"
 "Right" = "Nach rechts"
 "Up" = "Nach oben"

@@ -200,6 +200,9 @@ pub struct KeyConfig {
     /// The side toward which the window in front trades tiles.
     #[serde(rename = "move")]
     pub carry: Option<String>,
+    /// `next` or `previous`: the window switcher goes that way through
+    /// the windows while the keys to hold stay down.
+    pub switch: Option<String>,
 }
 
 /// When a surface goes away.

@@ -15,8 +15,8 @@ use async_channel::{Receiver, Sender};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
-    UnregisterHotKey,
+    GetAsyncKeyState, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+    RegisterHotKey, UnregisterHotKey, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, WM_HOTKEY, WM_QUIT,
@@ -50,6 +50,33 @@ impl Modifiers {
             *held = true;
         }
         Some(modifiers)
+    }
+
+    /// The keys that are down at this moment.
+    pub fn down_now() -> Self {
+        let down = |key: u16| {
+            // SAFETY: the call takes a key and only reads its state.
+            unsafe { GetAsyncKeyState(key.into()) < 0 }
+        };
+        Self {
+            alt: down(VK_MENU.0),
+            control: down(VK_CONTROL.0),
+            shift: down(VK_SHIFT.0),
+            windows: down(VK_LWIN.0) || down(VK_RWIN.0),
+        }
+    }
+
+    /// Whether one of these keys is down at this moment.
+    pub fn any_down(self) -> bool {
+        self.shares(Self::down_now())
+    }
+
+    /// Whether one of these keys is among `others`.
+    fn shares(self, others: Self) -> bool {
+        (self.alt && others.alt)
+            || (self.control && others.control)
+            || (self.shift && others.shift)
+            || (self.windows && others.windows)
     }
 
     fn flags(self) -> HOT_KEY_MODIFIERS {
@@ -205,6 +232,15 @@ fn watch(keys: &[Hotkey], ready: &mpsc::Sender<(u32, Vec<u32>)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_keys_share_a_key_or_none() {
+        let held = Modifiers::parse("alt+shift").unwrap();
+        assert!(held.shares(Modifiers::parse("alt").unwrap()));
+        assert!(held.shares(Modifiers::parse("ctrl+shift").unwrap()));
+        assert!(!held.shares(Modifiers::parse("ctrl+win").unwrap()));
+        assert!(!held.shares(Modifiers::default()));
+    }
 
     #[test]
     fn modifiers_are_named_joined_by_plus() {

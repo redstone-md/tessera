@@ -139,7 +139,7 @@ pub struct Place {
 }
 
 /// What a `[[key]]` has one of.
-pub const DEEDS: [&str; 5] = ["popup", "tiling", "focus", "move", "run"];
+pub const DEEDS: [&str; 6] = ["popup", "tiling", "focus", "move", "switch", "run"];
 
 /// The configuration file, open for changing.
 pub struct ConfigFile {

@@ -51,6 +51,13 @@
 #           covers, tiled or not
 #   move    one of those sides: the window in front trades tiles with the
 #           window on that side of it on its display, while tiling is on
+#   switch  "next" or "previous": the window switcher opens in the middle of
+#           the display the pointer is on, with the windows of all displays,
+#           the one used last first; each further press while the keys to
+#           hold stay down goes one window on (or back), and letting them go
+#           brings the chosen window in front. Windows gives alt+tab to
+#           no program, so Tessera takes keys it is refused from the keyboard
+#           itself, and the switcher of Windows no longer opens for them
 #
 # [[key]]
 # press = "ctrl+alt+space"
@@ -71,6 +78,14 @@
 # [[key]]
 # press = "alt+shift+left"
 # move = "left"
+#
+# [[key]]
+# press = "alt+tab"
+# switch = "next"
+#
+# [[key]]
+# press = "alt+shift+tab"
+# switch = "previous"
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"

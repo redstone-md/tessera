@@ -10,16 +10,22 @@
 //! a key nothing listens to pressed inside it, which is what keeps Windows
 //! from opening its menu.
 //!
+//! The same hook takes the key combinations Windows keeps to itself, such
+//! as Alt+Tab, which it gives to no program that asks for them: the key
+//! that completes one is not passed on, and the combination is reported.
+//!
 //! The hook has a thread of its own: Windows passes a key on without
 //! asking when the thread of a hook is busy for a fraction of a second,
 //! and the thread that draws sometimes is.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread;
 
 use anyhow::{Context, anyhow};
 use async_channel::{Receiver, Sender};
+
+use super::hotkeys::{Hotkey, Modifiers};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -75,7 +81,14 @@ static PRESS: Mutex<LonePress> = Mutex::new(LonePress {
     held: false,
     alone: false,
 });
-/// The thread that has the hook, or zero while the key is with Windows.
+/// Whether the Windows key is taken over.
+static WINDOWS_KEY: AtomicBool = AtomicBool::new(false);
+/// The combinations taken from Windows.
+static TAKEN: Mutex<Vec<Hotkey>> = Mutex::new(Vec::new());
+/// The key of a taken combination that went down and was not passed on,
+/// so that its going up is not passed on either; zero when there is none.
+static SWALLOWED: AtomicU32 = AtomicU32::new(0);
+/// The thread that has the hook, or zero while there is no hook.
 static WATCHER: AtomicU32 = AtomicU32::new(0);
 static PRESSED: OnceLock<(Sender<()>, Receiver<()>)> = OnceLock::new();
 
@@ -96,32 +109,97 @@ impl WindowsKey {
     /// Takes the key over if `taken`, and gives it back to Windows
     /// otherwise.
     pub fn take_over(taken: bool) -> anyhow::Result<()> {
-        let watcher = WATCHER.load(Ordering::Relaxed);
-        match (taken, watcher != 0) {
-            (true, false) => {
-                let (ready, started) = mpsc::channel();
-                thread::Builder::new()
-                    .name("windows key".to_owned())
-                    .spawn(move || watch(&ready))
-                    .context("the thread that watches the keyboard did not start")?;
-                let watcher = started
-                    .recv()
-                    .map_err(|_| anyhow!("the thread that watches the keyboard ended"))??;
-                WATCHER.store(watcher, Ordering::Relaxed);
-            }
-            (false, true) => {
-                WATCHER.store(0, Ordering::Relaxed);
-                if let Ok(mut press) = PRESS.lock() {
-                    *press = LonePress::default();
-                }
-                // SAFETY: posting to a thread that has ended fails without
-                // side effects.
-                unsafe { PostThreadMessageW(watcher, WM_QUIT, WPARAM(0), LPARAM(0)) }?;
-            }
-            _ => {}
+        WINDOWS_KEY.store(taken, Ordering::Relaxed);
+        if !taken && let Ok(mut press) = PRESS.lock() {
+            *press = LonePress::default();
         }
-        Ok(())
+        watch_while_needed()
     }
+}
+
+fn taken_presses() -> &'static (Sender<u32>, Receiver<u32>) {
+    static PRESSED: OnceLock<(Sender<u32>, Receiver<u32>)> = OnceLock::new();
+    PRESSED.get_or_init(|| async_channel::bounded(8))
+}
+
+/// Key combinations Windows keeps to itself, taken from it.
+pub struct TakenKeys;
+
+impl TakenKeys {
+    /// Where the number of a taken combination arrives whenever it is
+    /// pressed.
+    pub fn presses() -> Receiver<u32> {
+        taken_presses().1.clone()
+    }
+
+    /// Takes the combinations `keys` from Windows, and gives back the ones
+    /// taken before that are not among them.
+    pub fn set(keys: Vec<Hotkey>) -> anyhow::Result<()> {
+        match TAKEN.lock() {
+            Ok(mut taken) => *taken = keys,
+            Err(_) => return Err(anyhow!("the taken keys are out of reach")),
+        }
+        watch_while_needed()
+    }
+}
+
+/// Sets the hook while something needs it and removes it otherwise.
+fn watch_while_needed() -> anyhow::Result<()> {
+    let needed =
+        WINDOWS_KEY.load(Ordering::Relaxed) || TAKEN.lock().is_ok_and(|taken| !taken.is_empty());
+    let watcher = WATCHER.load(Ordering::Relaxed);
+    match (needed, watcher != 0) {
+        (true, false) => {
+            let (ready, started) = mpsc::channel();
+            thread::Builder::new()
+                .name("keyboard".to_owned())
+                .spawn(move || watch(&ready))
+                .context("the thread that watches the keyboard did not start")?;
+            let watcher = started
+                .recv()
+                .map_err(|_| anyhow!("the thread that watches the keyboard ended"))??;
+            WATCHER.store(watcher, Ordering::Relaxed);
+        }
+        (false, true) => {
+            WATCHER.store(0, Ordering::Relaxed);
+            // SAFETY: posting to a thread that has ended fails without
+            // side effects.
+            unsafe { PostThreadMessageW(watcher, WM_QUIT, WPARAM(0), LPARAM(0)) }?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The taken combination among `taken` that `key` completes while `held`
+/// are down: the keys to hold are those and no others.
+fn completed(taken: &[Hotkey], key: u16, held: Modifiers) -> Option<u32> {
+    let complete = |hotkey: &&Hotkey| u16::from(hotkey.key) == key && hotkey.modifiers == held;
+    taken.iter().find(complete).map(|hotkey| hotkey.id)
+}
+
+/// Whether the key that went down or up belongs to a taken combination
+/// and is not to be passed on; a combination that is completed is
+/// reported.
+fn taken_key(key: VIRTUAL_KEY, down: bool) -> bool {
+    let code = u32::from(key.0);
+    if !down {
+        let swallowed = SWALLOWED.compare_exchange(code, 0, Ordering::Relaxed, Ordering::Relaxed);
+        return swallowed.is_ok();
+    }
+    let Ok(taken) = TAKEN.lock() else {
+        return false;
+    };
+    if taken.is_empty() {
+        return false;
+    }
+    let Some(id) = completed(&taken, key.0, Modifiers::down_now()) else {
+        return false;
+    };
+    SWALLOWED.store(code, Ordering::Relaxed);
+    // Presses that still wait to be answered are enough.
+    taken_presses().0.try_send(id).ok();
+    true
 }
 
 /// Sets the hook, tells `ready` which thread this is or why there is no
@@ -160,7 +238,7 @@ fn modifier_held() -> bool {
 /// Presses and releases the key nothing listens to. Windows takes it in
 /// before the key that is being handled, so the Windows key is no longer
 /// alone when it comes up.
-fn press_unassigned_key() {
+pub(super) fn press_unassigned_key() {
     let event = |flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -188,10 +266,14 @@ unsafe extern "system" fn key_event(code: i32, wparam: WPARAM, lparam: LPARAM) -
             let key = VIRTUAL_KEY(event.vkCode as u16);
             let windows = key == VK_LWIN || key == VK_RWIN;
             let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+            if taken_key(key, down) {
+                return LRESULT(1);
+            }
             let modified = windows && down && modifier_held();
-            let alone = PRESS
-                .lock()
-                .is_ok_and(|mut press| press.key(windows, down, modified));
+            let alone = WINDOWS_KEY.load(Ordering::Relaxed)
+                && PRESS
+                    .lock()
+                    .is_ok_and(|mut press| press.key(windows, down, modified));
             if alone {
                 press_unassigned_key();
                 // A press that is still waiting to be answered is enough.
@@ -206,6 +288,20 @@ unsafe extern "system" fn key_event(code: i32, wparam: WPARAM, lparam: LPARAM) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_taken_combination_is_completed_with_exactly_its_keys_held() {
+        let taken = [
+            Hotkey::parse(7, "alt+tab").unwrap(),
+            Hotkey::parse(8, "alt+shift+tab").unwrap(),
+        ];
+        let held = |text| Modifiers::parse(text).unwrap();
+        assert_eq!(completed(&taken, 0x09, held("alt")), Some(7));
+        assert_eq!(completed(&taken, 0x09, held("alt+shift")), Some(8));
+        assert_eq!(completed(&taken, 0x09, held("ctrl+alt")), None);
+        assert_eq!(completed(&taken, 0x09, Modifiers::default()), None);
+        assert_eq!(completed(&taken, 0x20, held("alt")), None);
+    }
 
     #[test]
     fn the_key_by_itself_is_a_lone_press() {

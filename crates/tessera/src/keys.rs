@@ -6,15 +6,16 @@
 //! Every combination Tessera holds is reported in one place. The ones of
 //! the workspaces are passed on to them; the others are the `[[key]]`
 //! entries of the configuration, each of which opens a popup, changes the
-//! tiling or starts a program.
+//! tiling, starts a program or goes through the windows.
 
 use std::process::{Command, Stdio};
 
 use gpui::{App, AsyncApp, Global};
 
 use crate::config::KeyConfig;
-use crate::platform::{Hotkey, Hotkeys, Modifiers};
+use crate::platform::{Hotkey, Hotkeys, Modifiers, TakenKeys};
 use crate::shell::Shell;
+use crate::switcher::Switcher;
 use crate::tiling::{TileLayout, Tiler, TilingMode, Toward};
 use crate::workspaces::Workspaces;
 
@@ -116,6 +117,12 @@ enum Deed {
     Run(Vec<String>),
     Focus(Toward),
     Carry(Toward),
+    /// Go through the windows, backwards with `back`, until none of
+    /// `held` is down.
+    Switch {
+        back: bool,
+        held: Modifiers,
+    },
 }
 
 impl Deed {
@@ -136,11 +143,16 @@ impl Deed {
             }),
             key.focus.as_ref().map(|name| side(name).map(Self::Focus)),
             key.carry.as_ref().map(|name| side(name).map(Self::Carry)),
+            key.switch
+                .as_deref()
+                .map(|name| Self::switch(name, &key.press)),
         ];
         let mut deeds = deeds.into_iter().flatten();
         match (deeds.next(), deeds.next()) {
             (Some(deed), None) => deed,
-            _ => Err("it needs one of `popup`, `tiling`, `run`, `focus` and `move`".to_owned()),
+            _ => Err(
+                "it needs one of `popup`, `tiling`, `run`, `focus`, `move` and `switch`".to_owned(),
+            ),
         }
     }
 
@@ -159,8 +171,22 @@ impl Deed {
         }
     }
 
+    fn switch(name: &str, press: &str) -> Result<Self, String> {
+        let back = match name {
+            "next" => false,
+            "previous" => true,
+            _ => return Err(format!("`switch` is `next` or `previous`, not `{name}`")),
+        };
+        let press = Press::parse(press).ok_or("its keys are no combination")?;
+        Ok(Self::Switch {
+            back,
+            held: press.held,
+        })
+    }
+
     fn done(&self, cx: &mut App) {
         match self {
+            Self::Switch { back, held } => Switcher::step(*back, *held, cx),
             Self::Popup(name) => Shell::toggle_popup(name, cx),
             Self::Tiling(mode) => {
                 let mode = mode.unwrap_or_else(|| cx.global::<TilingMode>().next());
@@ -211,6 +237,16 @@ impl Shortcuts {
             }
         })
         .detach();
+        let taken = TakenKeys::presses();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(pressed) = taken.recv().await {
+                let index = pressed.saturating_sub(FIRST) as usize;
+                if cx.update(|cx| Self::pressed(index, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self::configure(keys, cx);
     }
 
@@ -223,16 +259,30 @@ impl Shortcuts {
         }
         this.config = keys.to_vec();
         let (deeds, hotkeys) = Self::read(keys);
-        this.deeds = deeds;
-        match Hotkeys::set("keys", hotkeys) {
-            Ok(refused) => {
-                for id in refused {
-                    let press = &keys[(id - FIRST) as usize].press;
-                    report!("Windows did not give the keys `{press}`: they are held already");
-                }
-            }
-            Err(error) => report!("the `[[key]]` entries have no keys: {error:#}"),
+        // Windows keeps Alt+Tab and its like to itself. The keys of the
+        // window switcher that it refuses are taken from it; a refused
+        // combination of anything else is left to whoever holds it.
+        let switches = |id: u32| {
+            let deed = deeds.get((id - FIRST) as usize);
+            matches!(deed, Some(Some(Deed::Switch { .. })))
+        };
+        let refused = Hotkeys::set("keys", hotkeys.clone()).unwrap_or_else(|error| {
+            report!("the `[[key]]` entries have no keys: {error:#}");
+            hotkeys.iter().map(|hotkey| hotkey.id).collect()
+        });
+        let (taken, refused): (Vec<u32>, Vec<u32>) =
+            refused.into_iter().partition(|&id| switches(id));
+        for id in refused {
+            let press = &keys[(id - FIRST) as usize].press;
+            report!("Windows did not give the keys `{press}`: they are held already");
         }
+        let taken = hotkeys
+            .into_iter()
+            .filter(|hotkey| taken.contains(&hotkey.id));
+        if let Err(error) = TakenKeys::set(taken.collect()) {
+            report!("the keys of the window switcher stay with Windows: {error:#}");
+        }
+        cx.global_mut::<Self>().deeds = deeds;
     }
 
     /// What each entry does and the combination of each one that can be
@@ -307,7 +357,19 @@ mod tests {
             run: run.map(|run| run.iter().map(|&part| part.to_owned()).collect()),
             focus: None,
             carry: None,
+            switch: None,
         }
+    }
+
+    #[test]
+    fn a_key_that_switches_windows_knows_the_keys_held_with_it() {
+        let mut switching = key(None, None, None);
+        switching.press = "alt+shift+tab".to_owned();
+        switching.switch = Some("previous".to_owned());
+        let held = Modifiers::parse("alt+shift").unwrap();
+        assert_eq!(Deed::of(&switching), Ok(Deed::Switch { back: true, held }));
+        switching.switch = Some("sideways".to_owned());
+        assert!(Deed::of(&switching).is_err());
     }
 
     #[test]

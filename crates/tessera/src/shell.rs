@@ -120,6 +120,44 @@ impl Shell {
     /// that opens it with a click, on the display the pointer is on if it
     /// has one, and in the middle of a surface when no widget does.
     pub fn toggle_popup(name: &str, cx: &mut App) {
+        let mut anywhere = None;
+        for surface in Self::surfaces_nearest_first(cx) {
+            let found = surface.update(cx, |view, window, cx| {
+                let middle = view.content().read(cx).popup_middle(name);
+                let middle = middle.or_else(|| Popups::standing(name, window, cx));
+                let x = middle.unwrap_or(window.viewport_size().width / 2.);
+                (middle.is_some(), PopupAnchor::at(window, x, cx))
+            });
+            match found {
+                Ok((true, Ok(anchor))) => return Popups::toggle(name, anchor, cx),
+                Ok((false, Ok(anchor))) => {
+                    anywhere.get_or_insert(anchor);
+                }
+                _ => {}
+            }
+        }
+        match anywhere {
+            Some(anchor) => Popups::toggle(name, anchor, cx),
+            None => report!("the popup `{name}` has nowhere to open"),
+        }
+    }
+
+    /// Where a window opens that stands in the middle of a display: on
+    /// the display the pointer is on if it has a surface.
+    pub fn middle_anchor(cx: &mut App) -> Option<PopupAnchor> {
+        Self::surfaces_nearest_first(cx)
+            .into_iter()
+            .find_map(|surface| {
+                let anchor = surface.update(cx, |_, window, cx| {
+                    PopupAnchor::at(window, window.viewport_size().width / 2., cx)
+                });
+                anchor.ok()?.ok()
+            })
+    }
+
+    /// The surfaces, those of the display the pointer is on first, then
+    /// those of the primary one.
+    fn surfaces_nearest_first(cx: &mut App) -> Vec<WindowHandle<EdgeSurfaceView<Panel>>> {
         let this = cx.global::<Self>();
         // The display the pointer is on comes first, then the primary one.
         let primary = cx.primary_display().map(|display| display.id());
@@ -142,26 +180,7 @@ impl Shell {
             })
             .collect();
         surfaces.sort_by_key(|&(order, _)| order);
-        let mut anywhere = None;
-        for (_, surface) in surfaces {
-            let found = surface.update(cx, |view, window, cx| {
-                let middle = view.content().read(cx).popup_middle(name);
-                let middle = middle.or_else(|| Popups::standing(name, window, cx));
-                let x = middle.unwrap_or(window.viewport_size().width / 2.);
-                (middle.is_some(), PopupAnchor::at(window, x, cx))
-            });
-            match found {
-                Ok((true, Ok(anchor))) => return Popups::toggle(name, anchor, cx),
-                Ok((false, Ok(anchor))) => {
-                    anywhere.get_or_insert(anchor);
-                }
-                _ => {}
-            }
-        }
-        match anywhere {
-            Some(anchor) => Popups::toggle(name, anchor, cx),
-            None => report!("the popup `{name}` has nowhere to open"),
-        }
+        surfaces.into_iter().map(|(_, surface)| surface).collect()
     }
 
     fn watch(cx: &mut App) {

@@ -529,14 +529,21 @@ enum Control {
 
 /// The deeds of a key combination as they are shown, in the order of
 /// [`DEEDS`]. The last one is not chosen here: it takes a text.
-const DEED_TITLES: [&str; 5] = ["Popup", "Tiling", "Focus", "Move", "Program"];
-const DEED_RUN: usize = 4;
+const DEED_TITLES: [&str; 6] = ["Popup", "Tiling", "Focus", "Move", "Windows", "Program"];
+const DEED_RUN: usize = 5;
 const SIDES: [&str; 4] = ["left", "right", "up", "down"];
 
 /// Which of [`DEEDS`] a key combination does, and with what.
 fn deed_of(key: &KeyConfig) -> Option<(usize, String)> {
     let run = key.run.as_ref().map(|run| run.join(" "));
-    let deeds = [&key.popup, &key.tiling, &key.focus, &key.carry, &run];
+    let deeds = [
+        &key.popup,
+        &key.tiling,
+        &key.focus,
+        &key.carry,
+        &key.switch,
+        &run,
+    ];
     let mut deeds = deeds.into_iter().enumerate();
     deeds.find_map(|(kind, deed)| Some((kind, deed.clone()?)))
 }
@@ -546,6 +553,7 @@ fn answer_title(answer: &str, language: Language) -> SharedString {
     let title = match answer {
         "next" => "Next",
         "off" => "Off",
+        "previous" => "Previous",
         "left" => "Left",
         "right" => "Right",
         "up" => "Up",
@@ -1442,6 +1450,7 @@ impl Settings {
                 .chain(layouts)
                 .collect(),
             Some(&"focus" | &"move") => SIDES.map(str::to_owned).to_vec(),
+            Some(&"switch") => ["next", "previous"].map(str::to_owned).to_vec(),
             _ => Vec::new(),
         }
     }
