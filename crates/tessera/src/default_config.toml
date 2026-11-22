@@ -51,7 +51,9 @@
 #           the first window of "master" a twentieth of the width more or
 #           less, between a fifth and four fifths, until Tessera exits;
 #           the first window of "columns" and "rows" grows and shrinks
-#           against the others likewise
+#           against the others likewise, and with another window of
+#           those two layouts in front it is that window that grows and
+#           shrinks against the others after the first
 #   run     a program to start and its arguments, a list
 #   focus   "left", "right", "up" or "down": the window on that side of the
 #           window in front comes in front, among the windows [tiling]
