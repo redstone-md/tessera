@@ -269,3 +269,5 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Up" = "Угору"
 "Down" = "Униз"
 "The program is written in the file by hand." = "Програму вписують у файл вручну."
+"Empty" = "Порожньо"
+"Tessera keeps no workspaces of its own" = "Власних робочих столів Tessera не веде"

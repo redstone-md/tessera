@@ -268,3 +268,5 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Up" = "Nach oben"
 "Down" = "Nach unten"
 "The program is written in the file by hand." = "Das Programm wird von Hand in die Datei geschrieben."
+"Empty" = "Leer"
+"Tessera keeps no workspaces of its own" = "Tessera führt keine eigenen Arbeitsbereiche"

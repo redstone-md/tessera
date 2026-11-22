@@ -172,6 +172,9 @@
 #   "workspaces"  a numbered button for each virtual desktop of Windows,
 #               or for each workspace of [workspaces], the shown one
 #               standing out; a click goes there
+#   "overview"  a card for each workspace of [workspaces] with the icons
+#               of its windows, for a popup; a click on a card goes to
+#               that workspace, a click on an icon to that window
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume

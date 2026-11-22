@@ -18,6 +18,7 @@ mod marketplace;
 mod media;
 mod network;
 mod notifications;
+mod overview;
 mod plan;
 mod problems;
 mod session;
@@ -73,6 +74,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
         Box::new(workspaces::WorkspacesModule),
+        Box::new(overview::OverviewModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),

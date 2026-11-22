@@ -441,6 +441,11 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     ("Wi-Fi is switched off", "Wi-Fi выключен"),
     ("No network is in reach", "Сетей поблизости нет"),
+    ("Empty", "Пусто"),
+    (
+        "Tessera keeps no workspaces of its own",
+        "Своих рабочих столов Tessera не ведёт",
+    ),
     ("Looking for devices", "Поиск устройств"),
     (
         "No Bluetooth device is paired",

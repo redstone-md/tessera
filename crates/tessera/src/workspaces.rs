@@ -143,6 +143,14 @@ struct Homes {
     fronts: Vec<Option<AppWindowId>>,
 }
 
+/// A window as an overview of the workspaces shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Resident {
+    pub id: AppWindowId,
+    /// What the icon of the window is taken from, where it is known.
+    pub program: Option<PathBuf>,
+}
+
 /// What is to be done to the windows after a change.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Change {
@@ -201,6 +209,28 @@ impl Homes {
             *front = front.filter(|&id| exists(id));
         }
         hidden != self.hidden.len()
+    }
+
+    /// The windows of every workspace, each list in an order that stays.
+    fn residents(&self) -> Vec<Vec<AppWindowId>> {
+        let mut residents = vec![Vec::new(); self.count];
+        for (&id, &home) in &self.home {
+            if let Some(windows) = residents.get_mut(home) {
+                windows.push(id);
+            }
+        }
+        for windows in &mut residents {
+            windows.sort_by_key(|id| id.raw());
+        }
+        residents
+    }
+
+    /// Makes `id` the window in front on its workspace, and says which
+    /// workspace that is.
+    fn bring(&mut self, id: AppWindowId) -> Option<usize> {
+        let home = *self.home.get(&id)?;
+        *self.fronts.get_mut(home)? = Some(id);
+        Some(home)
     }
 
     /// Goes to the workspace at `index`.
@@ -266,6 +296,9 @@ pub struct Workspaces {
     /// What the buttons of the workspaces say, where it is not a number.
     names: Vec<String>,
     homes: Homes,
+    /// What the icon of each window is taken from; a hidden window is
+    /// not asked, so it is kept from when the window was seen.
+    programs: HashMap<AppWindowId, PathBuf>,
     /// Counts the tasks that were started to watch the windows; only the
     /// latest goes on.
     task: u64,
@@ -282,6 +315,7 @@ impl Workspaces {
             config: WorkspacesConfig::default(),
             names: Vec::new(),
             homes: Homes::default(),
+            programs: HashMap::new(),
             task: 0,
         });
         cx.on_app_quit(|cx| {
@@ -409,9 +443,44 @@ impl Workspaces {
         this.apply(change);
     }
 
+    /// The windows of every workspace of Tessera's own, the first list for
+    /// the first workspace; `None` when Tessera keeps none, as Windows
+    /// does not tell which window is on which of its desktops.
+    pub fn residents(cx: &App) -> Option<Vec<Vec<Resident>>> {
+        let this = cx.global::<Self>();
+        if this.homes.count == 0 {
+            return None;
+        }
+        let resident = |id: AppWindowId| Resident {
+            id,
+            program: this.programs.get(&id).cloned(),
+        };
+        let residents = this.homes.residents().into_iter();
+        Some(
+            residents
+                .map(|windows| windows.into_iter().map(resident).collect())
+                .collect(),
+        )
+    }
+
+    /// Goes to the workspace of the window `id` and brings it forward.
+    pub fn show_window(id: AppWindowId, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        this.look();
+        let Some(home) = this.homes.bring(id) else {
+            return;
+        };
+        if home == this.homes.current {
+            id.activate();
+            return;
+        }
+        let change = this.homes.go(home, Instant::now());
+        this.apply(change);
+    }
+
     /// Takes in what windows there are.
     fn look(&mut self) {
-        let seen: Vec<AppWindowId> = AppWindow::enumerate()
+        let windows: Vec<AppWindow> = AppWindow::enumerate()
             .into_iter()
             .filter(|window| {
                 listed(
@@ -420,8 +489,14 @@ impl Workspaces {
                     window.executable.as_deref(),
                 )
             })
-            .map(|window| window.id)
             .collect();
+        let seen: Vec<AppWindowId> = windows.iter().map(|window| window.id).collect();
+        self.programs.retain(|&id, _| id.exists());
+        for window in &windows {
+            if let Some(program) = window.program() {
+                self.programs.insert(window.id, program);
+            }
+        }
         let mut changed = self.homes.forget(AppWindowId::exists);
         changed |= self
             .homes
@@ -511,6 +586,28 @@ mod tests {
     fn sorted(mut ids: Vec<AppWindowId>) -> Vec<isize> {
         ids.sort_by_key(|id| id.raw());
         ids.into_iter().map(AppWindowId::raw).collect()
+    }
+
+    #[test]
+    fn the_windows_are_listed_workspace_by_workspace() {
+        let start = Instant::now();
+        let mut homes = Homes::new(3);
+        homes.see(&[id(7), id(3)], Some(id(3)), start);
+        homes.go(2, start);
+        homes.see(&[id(5)], Some(id(5)), start);
+        let listed: Vec<Vec<isize>> = homes.residents().into_iter().map(sorted).collect();
+        assert_eq!(listed, [vec![3, 7], vec![], vec![5]]);
+    }
+
+    #[test]
+    fn a_window_brought_forward_is_in_front_where_it_lives() {
+        let start = Instant::now();
+        let mut homes = Homes::new(2);
+        homes.see(&[id(1), id(2)], Some(id(1)), start);
+        homes.go(1, start);
+        assert_eq!(homes.bring(id(2)), Some(0));
+        assert_eq!(homes.go(0, start).front, Some(id(2)));
+        assert_eq!(homes.bring(id(9)), None);
     }
 
     #[test]
