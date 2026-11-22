@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
+    DWMWA_BORDER_COLOR, DWMWA_CLOAKED, DWMWA_COLOR_DEFAULT, DWMWA_EXTENDED_FRAME_BOUNDS,
+    DwmGetWindowAttribute, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
@@ -171,6 +172,24 @@ impl AppWindowId {
             )
         };
         read.ok().map(|()| frame.into())
+    }
+
+    /// Has Windows draw the thin border of the window in `color`, as
+    /// 0x00BBGGRR, or in its own color again when there is none. Whether
+    /// Windows took the request is returned.
+    pub fn set_border(self, color: Option<u32>) -> bool {
+        let color = color.unwrap_or(DWMWA_COLOR_DEFAULT);
+        // SAFETY: `color` is as large as the call is told and outlives
+        // it, and a window that has since been destroyed makes it fail.
+        let set = unsafe {
+            DwmSetWindowAttribute(
+                self.hwnd(),
+                DWMWA_BORDER_COLOR,
+                (&raw const color).cast(),
+                size_of::<u32>() as u32,
+            )
+        };
+        set.is_ok()
     }
 
     /// Whether the window can be given a place among tiles: it is neither

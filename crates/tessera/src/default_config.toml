@@ -303,12 +303,17 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # between tiles in pixels. only and except list programs by the file name of
 # their executable: the only ones whose windows are tiled, and the ones whose
 # windows are left alone. Windows go back to where they were when tiling is
-# switched off or Tessera quits.
+# switched off or Tessera quits. border = true has Windows draw the thin
+# border of the tiled window in front in the primary color of the theme;
+# the window gets its own border back when another comes in front, tiling
+# is switched off or Tessera quits, but keeps the color if Tessera is
+# terminated. Needs Windows 11.
 #
 # [tiling]
 # enabled = true
 # layout = "master"
 # gap = 8
+# border = true
 # except = ["taskmgr.exe"]
 
 # [workspaces] makes the "workspaces" widget show workspaces of Tessera's

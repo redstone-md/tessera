@@ -11,15 +11,18 @@
 //! side; another combination brings the window on that side in front. When
 //! tiling is switched off, and when the shell quits, every window goes
 //! back to where it was before it was first tiled.
+//!
+//! The tiled window in front can be told apart by its border, which
+//! Windows draws in a color of the theme while it is asked to.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use gpui::{App, AsyncApp, Global};
+use gpui::{App, AsyncApp, Global, Hsla};
 use serde::Deserialize;
 
-use crate::motion::{Spring, SpringSpec};
+use crate::motion::{Spring, SpringSpec, mix};
 use crate::platform::{AppWindow, AppWindowId, DisplayKey, ScreenRect, WindowEvents, pointer_held};
 use crate::theme::Theme;
 
@@ -237,6 +240,9 @@ pub struct TilingConfig {
     /// The programs whose windows are left alone.
     #[serde(default)]
     except: Vec<String>,
+    /// Whether the border of the tiled window in front is colored.
+    #[serde(default)]
+    border: bool,
 }
 
 impl TilingConfig {
@@ -315,6 +321,23 @@ struct Move {
     progress: Spring,
 }
 
+/// The window whose border is colored.
+struct Marked {
+    id: AppWindowId,
+    /// From 0, the color borders have otherwise, to 1, the color that
+    /// tells the window apart.
+    shown: Spring,
+    /// The color Windows was last asked for.
+    painted: Option<u32>,
+}
+
+/// `color` as Windows takes the color of a border: 0x00BBGGRR.
+fn border_color(color: Hsla) -> u32 {
+    let color = color.to_rgb();
+    let part = |part: f32| (part.clamp(0., 1.) * 255.).round() as u32;
+    part(color.b) << 16 | part(color.g) << 8 | part(color.r)
+}
+
 /// A tile a window was sent to, and what was seen of the window once it
 /// was looked at again without having got there: an application may keep
 /// a size of its own, and is not asked again until something changes.
@@ -331,6 +354,7 @@ pub struct Tiler {
     sent: HashMap<AppWindowId, Sent>,
     /// The windows taken out of the tiles, which stay where they are put.
     floating: HashSet<AppWindowId>,
+    marked: Option<Marked>,
     /// Whether the order was changed by a key combination, so that the
     /// window in front lies on a tile that is no longer its own without
     /// having been dropped there.
@@ -352,6 +376,7 @@ impl Tiler {
             before: HashMap::new(),
             sent: HashMap::new(),
             floating: HashSet::new(),
+            marked: None,
             carried: false,
             task: 0,
         });
@@ -403,6 +428,8 @@ impl Tiler {
             loop {
                 let moving = cx.update(|cx| {
                     let mode = *cx.global::<TilingMode>();
+                    let theme = *cx.global::<Theme>();
+                    let fade = (theme.colors.outline, theme.colors.primary);
                     let this = cx.global_mut::<Self>();
                     if this.task != task {
                         return None;
@@ -415,7 +442,8 @@ impl Tiler {
                         this.arrange(mode.layout, spring);
                     }
                     this.step(Instant::now());
-                    let moving = !this.moves.is_empty();
+                    let fading = this.mark(mode.enabled, fade, theme.motion.effects);
+                    let moving = fading || !this.moves.is_empty();
                     (mode.enabled || moving).then_some(moving)
                 });
                 let pause = match moving {
@@ -516,6 +544,47 @@ impl Tiler {
             this.order.swap(first, second);
             this.carried = true;
             this.arrange(mode.layout, spring);
+        }
+    }
+
+    /// Colors the border of the tiled window in front, if the
+    /// configuration asks for it and windows are tiled, fading from the
+    /// first color of `fade` to the second, and gives the window that was
+    /// in front before its own border back. Whether the color still
+    /// changes is returned.
+    fn mark(&mut self, enabled: bool, (from, to): (Hsla, Hsla), spring: SpringSpec) -> bool {
+        let front = (enabled && self.config.border)
+            .then(AppWindowId::foreground)
+            .flatten()
+            .filter(|id| self.order.contains(id));
+        if self.marked.as_ref().map(|marked| marked.id) != front {
+            self.unmark();
+            self.marked = front.map(|id| {
+                let mut shown = Spring::new(spring, 0.);
+                shown.animate_to(1.);
+                Marked {
+                    id,
+                    shown,
+                    painted: None,
+                }
+            });
+        }
+        let Some(marked) = &mut self.marked else {
+            return false;
+        };
+        let shown = marked.shown.value_at(Instant::now()).clamp(0., 1.);
+        let color = border_color(mix(from, to, shown));
+        if marked.painted != Some(color) {
+            marked.id.set_border(Some(color));
+            marked.painted = Some(color);
+        }
+        !marked.shown.is_settled()
+    }
+
+    /// Gives the window whose border is colored its own border back.
+    fn unmark(&mut self) {
+        if let Some(marked) = self.marked.take() {
+            marked.id.set_border(None);
         }
     }
 
@@ -648,6 +717,7 @@ impl Tiler {
 
     /// Sends every window back to where it was before it was tiled.
     fn put_back(&mut self) {
+        self.unmark();
         let spring = self.moves.values().next().map(|moving| moving.progress);
         self.order.clear();
         self.sent.clear();
@@ -670,6 +740,7 @@ impl Tiler {
     /// Puts every window back where it was before it was tiled, without
     /// taking time over it.
     fn put_back_at_once(&mut self) {
+        self.unmark();
         self.moves.clear();
         for (id, frame) in std::mem::take(&mut self.before) {
             if id.is_tileable() {
@@ -830,6 +901,15 @@ mod tests {
             .collect();
         expected.push((false, TileLayout::ALL[0]));
         assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn a_border_color_is_blue_green_red() {
+        assert_eq!(border_color(gpui::rgb(0x112233).into()), 0x0033_2211);
+        assert_eq!(border_color(gpui::rgb(0xffffff).into()), 0x00ff_ffff);
+        let config: TilingConfig = toml::from_str("border = true").unwrap();
+        assert!(config.border);
+        assert!(!TilingConfig::default().border);
     }
 
     #[test]
