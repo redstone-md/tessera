@@ -46,7 +46,9 @@
 #   tiling  "next" for the tiling mode after the one in use, "off", a
 #           layout of [tiling], or "float", which takes the window in front
 #           out of the tiles, back to where it was, and puts it in again
-#           when pressed once more
+#           when pressed once more, or "wider" or "narrower", which give
+#           the first window of "master" a twentieth of the width more or
+#           less, between a fifth and four fifths, until Tessera exits
 #   run     a program to start and its arguments, a list
 #   focus   "left", "right", "up" or "down": the window on that side of the
 #           window in front comes in front, among the windows [tiling]

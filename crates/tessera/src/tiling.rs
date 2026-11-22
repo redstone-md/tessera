@@ -41,6 +41,13 @@ const FRAME: Duration = Duration::from_millis(8);
 const DEFAULT_GAP: f32 = 8.;
 const WIDEST_GAP: f32 = 200.;
 
+/// The share of the width the first window of `master` takes when nothing
+/// changed it, how much a key combination changes it by, and the least
+/// and the most it may be.
+const EVEN_SHARE: f32 = 0.5;
+const SHARE_STEP: f32 = 0.05;
+const SHARE_RANGE: (f32, f32) = (0.2, 0.8);
+
 /// How the windows of a display share it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,8 +88,17 @@ impl TileLayout {
     }
 
     /// The places of `count` windows in `area`, `gap` apart from each
-    /// other and from the border of the area.
+    /// other and from the border of the area, the first window of
+    /// `master` taking half the width.
+    #[cfg(test)]
     pub fn tiles(self, area: ScreenRect, count: usize, gap: i32) -> Vec<ScreenRect> {
+        self.shared(area, count, gap, EVEN_SHARE)
+    }
+
+    /// The places of `count` windows in `area`, `gap` apart from each
+    /// other and from the border of the area. In `master` the first
+    /// window takes `share` of the width, from 0 to 1.
+    pub fn shared(self, area: ScreenRect, count: usize, gap: i32, share: f32) -> Vec<ScreenRect> {
         if count == 0 {
             return Vec::new();
         }
@@ -114,10 +130,15 @@ impl TileLayout {
             Self::Monocle => vec![area; count],
             Self::Master if count == 1 => vec![area],
             Self::Master => {
-                let halves = across(2);
-                let mut tiles = vec![column(halves[0], whole_height)];
+                let room = (area.right - area.left - gap).max(2);
+                let first = ((room as f32 * share) as i32).clamp(1, room - 1);
+                let sides = [
+                    (area.left, area.left + first),
+                    (area.left + first + gap, area.right),
+                ];
+                let mut tiles = vec![column(sides[0], whole_height)];
                 let stacked = down(count - 1);
-                tiles.extend(stacked.into_iter().map(|span| column(halves[1], span)));
+                tiles.extend(stacked.into_iter().map(|span| column(sides[1], span)));
                 tiles
             }
             Self::Grid => {
@@ -321,6 +342,13 @@ struct Move {
     progress: Spring,
 }
 
+/// `share` a step larger, or smaller, within what it may be.
+fn stepped(share: f32, wider: bool) -> f32 {
+    let step = if wider { SHARE_STEP } else { -SHARE_STEP };
+    let (least, most) = SHARE_RANGE;
+    (share + step).clamp(least, most)
+}
+
 /// The window whose border is colored.
 struct Marked {
     id: AppWindowId,
@@ -354,6 +382,8 @@ pub struct Tiler {
     sent: HashMap<AppWindowId, Sent>,
     /// The windows taken out of the tiles, which stay where they are put.
     floating: HashSet<AppWindowId>,
+    /// The share of the width the first window of `master` takes.
+    share: f32,
     marked: Option<Marked>,
     /// Whether the order was changed by a key combination, so that the
     /// window in front lies on a tile that is no longer its own without
@@ -376,6 +406,7 @@ impl Tiler {
             before: HashMap::new(),
             sent: HashMap::new(),
             floating: HashSet::new(),
+            share: EVEN_SHARE,
             marked: None,
             carried: false,
             task: 0,
@@ -530,6 +561,21 @@ impl Tiler {
         this.arrange(mode.layout, spring);
     }
 
+    /// Gives the first window of `master` more of the width, or less,
+    /// while windows are tiled; the other layouts stay as they are.
+    pub fn resize(wider: bool, cx: &mut App) {
+        let mode = *cx.global::<TilingMode>();
+        if !mode.enabled {
+            return;
+        }
+        let spring = cx.global::<Theme>().motion.spatial;
+        let this = cx.global_mut::<Self>();
+        this.share = stepped(this.share, wider);
+        // The windows are on their way to new tiles, not dropped on them.
+        this.carried = true;
+        this.arrange(mode.layout, spring);
+    }
+
     /// Has the window in front trade tiles with the one on the side
     /// `toward` of it on the same display, while windows are tiled.
     pub fn carry(toward: Toward, cx: &mut App) {
@@ -610,7 +656,7 @@ impl Tiler {
         }
 
         let gap = self.config.gap();
-        let mut places = Self::places(&self.order, &windows, layout, gap);
+        let mut places = Self::places(&self.order, &windows, layout, gap, self.share);
         // Windows a key combination had trade places are on their way to
         // their tiles, not dropped on them.
         let dropped = match std::mem::take(&mut self.carried) {
@@ -621,7 +667,7 @@ impl Tiler {
             let place = |id| self.order.iter().position(|&listed| listed == id);
             if let (Some(first), Some(second)) = (place(dragged), place(onto)) {
                 self.order.swap(first, second);
-                places = Self::places(&self.order, &windows, layout, gap);
+                places = Self::places(&self.order, &windows, layout, gap, self.share);
             }
         }
 
@@ -661,6 +707,7 @@ impl Tiler {
         windows: &[AppWindow],
         layout: TileLayout,
         gap: i32,
+        share: f32,
     ) -> Vec<(AppWindowId, ScreenRect)> {
         let mut displays: Vec<(DisplayKey, Vec<AppWindowId>)> = Vec::new();
         for &id in order {
@@ -677,7 +724,7 @@ impl Tiler {
             let Some(area) = display.work_area() else {
                 continue;
             };
-            let tiles = layout.tiles(area, ids.len(), gap);
+            let tiles = layout.shared(area, ids.len(), gap, share);
             places.extend(ids.into_iter().zip(tiles));
         }
         places
@@ -901,6 +948,27 @@ mod tests {
             .collect();
         expected.push((false, TileLayout::ALL[0]));
         assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn the_first_window_of_master_takes_its_share() {
+        let area = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 1010,
+            bottom: 500,
+        };
+        let even = TileLayout::Master.shared(area, 2, 10, EVEN_SHARE);
+        assert_eq!(even, TileLayout::Master.tiles(area, 2, 10));
+        let wide = TileLayout::Master.shared(area, 2, 10, 0.75);
+        assert_eq!((wide[0].left, wide[0].right), (10, 745));
+        assert_eq!((wide[1].left, wide[1].right), (755, 1000));
+        let columns = TileLayout::Columns;
+        assert_eq!(columns.shared(area, 2, 10, 0.7), columns.tiles(area, 2, 10));
+
+        assert!((stepped(0.5, true) - 0.55).abs() < 1e-6);
+        assert!((stepped(0.78, true) - 0.8).abs() < 1e-6);
+        assert!((stepped(0.2, false) - 0.2).abs() < 1e-6);
     }
 
     #[test]

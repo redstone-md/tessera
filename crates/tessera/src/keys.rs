@@ -171,6 +171,9 @@ enum Deed {
     Tiling(Option<TilingMode>),
     /// Take the window in front out of the tiles, or put it in again.
     Float,
+    /// Gives the first window of the `master` layout more of the width,
+    /// or less.
+    Resize(bool),
     Run(Vec<String>),
     Focus(Toward),
     Carry(Toward),
@@ -222,9 +225,11 @@ impl Deed {
             ("next", _) => Ok(Self::Tiling(None)),
             ("off", _) => Ok(mode(false, TileLayout::ALL[0])),
             ("float", _) => Ok(Self::Float),
+            ("wider", _) => Ok(Self::Resize(true)),
+            ("narrower", _) => Ok(Self::Resize(false)),
             (_, Some(&layout)) => Ok(mode(true, layout)),
             _ => Err(format!(
-                "`tiling` is `next`, `off`, `float` or a layout, not `{name}`"
+                "`tiling` is `next`, `off`, `float`, `wider`, `narrower` or a layout, not `{name}`"
             )),
         }
     }
@@ -251,6 +256,7 @@ impl Deed {
                 Tiler::set_mode(mode, cx);
             }
             Self::Float => Tiler::float(cx),
+            Self::Resize(wider) => Tiler::resize(*wider, cx),
             Self::Focus(toward) => Tiler::focus(*toward, cx),
             Self::Carry(toward) => Tiler::carry(*toward, cx),
             Self::Run(command) => {
@@ -485,6 +491,14 @@ mod tests {
             Ok(Deed::Tiling(Some(grid)))
         );
         assert_eq!(Deed::of(&key(None, Some("float"), None)), Ok(Deed::Float));
+        assert_eq!(
+            Deed::of(&key(None, Some("wider"), None)),
+            Ok(Deed::Resize(true))
+        );
+        assert_eq!(
+            Deed::of(&key(None, Some("narrower"), None)),
+            Ok(Deed::Resize(false))
+        );
         let off = Deed::of(&key(None, Some("off"), None));
         assert!(matches!(off, Ok(Deed::Tiling(Some(mode))) if !mode.enabled));
         assert_eq!(
