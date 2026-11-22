@@ -369,7 +369,13 @@ impl Launcher {
                 .child(one_line(SharedString::new(folder)))
         });
         let size = theme.launcher.icon_size;
-        let image = match cx.global::<AppIcons>().of_shortcut(shortcut) {
+        let icons = cx.global::<AppIcons>();
+        let image = if self.matches[row] >= self.apps {
+            icons.of_file(&shortcut.path)
+        } else {
+            icons.of_shortcut(shortcut)
+        };
+        let image = match image {
             Some(image) => img(image).size(size).flex_none().into_any_element(),
             None => div()
                 .size(size)

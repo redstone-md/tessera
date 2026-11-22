@@ -166,7 +166,14 @@ impl IconPixels {
     /// The icon of the application `id` as the shell draws it, `size`
     /// pixels wide and high; `None` if the shell has none.
     pub fn of_app(id: &str, size: u32) -> Option<Self> {
-        let name = HSTRING::from(app_path(id).as_os_str());
+        Self::of_item(&app_path(id), size)
+    }
+
+    /// The icon the shell draws for the file or folder at `path`, `size`
+    /// pixels wide and high; `None` if the shell has none.
+    pub fn of_item(path: &Path, size: u32) -> Option<Self> {
+        // The shell takes no path written with forward slashes.
+        let name = HSTRING::from(path.to_string_lossy().replace('/', "\\"));
         let side = size as i32;
         // SAFETY: COM is initialized on the calling thread, and the bitmap
         // is deleted once its pixels are copied.

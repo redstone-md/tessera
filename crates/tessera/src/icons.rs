@@ -74,6 +74,15 @@ impl AppIcons {
         })
     }
 
+    /// The icon the shell draws for the file or folder at `path`. Files
+    /// of a kind share one, but for those that carry their own.
+    pub fn of_file(&self, path: &Path) -> Icon {
+        self.cached(&kind_of(path), || {
+            let pixels = IconPixels::of_item(path, SOURCE_SIZE)?;
+            render_image(pixels.width, pixels.height, pixels.bgra)
+        })
+    }
+
     /// The icon remembered for `file`, found with `find` the first time.
     fn cached(&self, file: &Path, find: impl FnOnce() -> Icon) -> Icon {
         if let Some(icon) = self.cache.borrow().get(file) {
@@ -135,6 +144,21 @@ fn embedded(file: &Path, index: i32) -> Icon {
     render_image(pixels.width, pixels.height, pixels.bgra)
 }
 
+/// The kinds of files that each have an icon of their own.
+const OWN_ICONS: [&str; 5] = ["exe", "lnk", "ico", "url", "scr"];
+
+/// What the icon of the file at `path` is remembered under: the file for
+/// a folder and for a kind with icons of its own, or else its kind alone.
+fn kind_of(path: &Path) -> PathBuf {
+    let kind = path.extension().and_then(|kind| kind.to_str());
+    match kind.map(str::to_lowercase) {
+        Some(kind) if !OWN_ICONS.contains(&kind.as_str()) && !path.is_dir() => {
+            PathBuf::from(format!("*.{kind}"))
+        }
+        _ => path.to_owned(),
+    }
+}
+
 /// The icon of the packaged application `id`.
 fn of_app(id: &str) -> Icon {
     let pixels = IconPixels::of_app(id, SOURCE_SIZE)?;
@@ -149,6 +173,20 @@ fn render_image(width: u32, height: u32, bgra: Vec<u8>) -> Icon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_of_a_kind_share_an_icon() {
+        assert_eq!(kind_of(Path::new("C:/a/One.TXT")), PathBuf::from("*.txt"));
+        assert_eq!(kind_of(Path::new("C:/b/two.txt")), PathBuf::from("*.txt"));
+        assert_eq!(
+            kind_of(Path::new("C:/a/tool.exe")),
+            PathBuf::from("C:/a/tool.exe")
+        );
+        assert_eq!(
+            kind_of(Path::new("C:/a/plain")),
+            PathBuf::from("C:/a/plain")
+        );
+    }
 
     #[test]
     fn a_replacement_is_found_by_file_name_in_any_case() {
