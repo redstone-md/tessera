@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! The Bluetooth devices paired with the machine. Widgets: `bluetooth`, a
-//! list for a popup, and `bluetooth-button`, an icon that is there only on
-//! a machine with Bluetooth.
+//! list for a popup, in which a click connects or disconnects a device
+//! that sound goes through, and `bluetooth-button`, an icon that is there
+//! only on a machine with Bluetooth.
 
 use std::time::Duration;
 
@@ -14,10 +15,10 @@ use gpui::{
 
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Spring, staggered};
+use crate::motion::{Interaction, Spring, mix, staggered};
 use crate::platform::{Bluetooth, PairedDevice, Wireless};
 use crate::theme::Theme;
-use crate::ui::{icon, list_row, pill, wave_bar};
+use crate::ui::{icon, list_row, pill, state_layer, wave_bar};
 
 /// How often the machine is asked whether it has Bluetooth: an adapter may
 /// be plugged in and pulled out.
@@ -32,6 +33,17 @@ const RADIO_READS: u32 = (PRESENCE_INTERVAL.as_secs() / RADIO_INTERVAL.as_secs()
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often the list is read while a device was asked to connect or to
+/// disconnect and has not done so yet.
+const ASKED_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How many readings a device that was asked is waited for.
+const READS_TO_ANSWER: u32 = 20;
+
+/// How far the row of a device that was asked goes towards the color of a
+/// connected one while it is waited for.
+const ASKED_TINT: f32 = 0.5;
 
 /// How far below its place a row starts when the list arrives.
 const ROW_TRAVEL: f32 = 10.;
@@ -118,12 +130,14 @@ impl Render for Button {
     }
 }
 
-/// What a row says under the name of `device`.
-fn note(device: &PairedDevice, language: Language) -> String {
-    let state = language.say(if device.connected {
-        "Connected"
-    } else {
-        "Not connected"
+/// What a row says under the name of `device`; `asked` is what the device
+/// was asked for and has not done yet: to connect, or to disconnect.
+fn note(device: &PairedDevice, asked: Option<bool>, language: Language) -> String {
+    let state = language.say(match (asked, device.connected) {
+        (Some(true), false) => "Connecting",
+        (Some(false), true) => "Disconnecting",
+        (_, true) => "Connected",
+        (_, false) => "Not connected",
     });
     match (device.battery, device.connected) {
         (Some(charge), true) => format!("{state}, {charge}%"),
@@ -133,11 +147,25 @@ fn note(device: &PairedDevice, language: Language) -> String {
 }
 
 /// Lists the devices and follows them while it is shown.
+/// A device that was asked to connect or to disconnect and has not yet.
+struct Asked {
+    /// What Windows holds the device together by.
+    container: u128,
+    connect: bool,
+    /// How many readings it has been waited for.
+    reads: u32,
+}
+
 struct Devices {
     /// `None` until the first reading.
     devices: Option<Result<Vec<PairedDevice>, String>>,
     /// 0 when what is shown changes in kind, 1 once it is in place.
     arrival: Spring,
+    /// One for each row.
+    rows: Vec<Interaction>,
+    asked: Option<Asked>,
+    /// 1 while a device is waited for, 0 otherwise.
+    waiting: Spring,
 }
 
 impl Devices {
@@ -148,23 +176,85 @@ impl Devices {
                     .background_executor()
                     .spawn(async { Bluetooth::devices() })
                     .await;
-                if this.update(cx, |this, cx| this.take(read, cx)).is_err() {
+                let Ok(waiting) = this.update(cx, |this, cx| {
+                    this.take(read, cx);
+                    this.asked.is_some()
+                }) else {
                     break;
-                }
-                cx.background_executor().timer(READ_INTERVAL).await;
+                };
+                let interval = match waiting {
+                    true => ASKED_INTERVAL,
+                    false => READ_INTERVAL,
+                };
+                cx.background_executor().timer(interval).await;
             }
         })
         .detach();
+        let motion = cx.global::<Theme>().motion;
         Self {
             devices: None,
-            arrival: Spring::new(cx.global::<Theme>().motion.spatial, 0.),
+            arrival: Spring::new(motion.spatial, 0.),
+            rows: Vec::new(),
+            asked: None,
+            waiting: Spring::new(motion.effects, 0.),
         }
     }
 
+    /// Asks `device` to connect if it is not connected, and to disconnect
+    /// if it is.
+    fn clicked(&mut self, device: &PairedDevice, cx: &mut Context<Self>) {
+        let Some(container) = device.audio else {
+            return;
+        };
+        if self.asked.is_some() {
+            return;
+        }
+        let connect = !device.connected;
+        self.asked = Some(Asked {
+            container,
+            connect,
+            reads: 0,
+        });
+        self.waiting.animate_to(1.);
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let asked = cx
+                .background_executor()
+                .spawn(async move { Bluetooth::link(container, connect) })
+                .await;
+            if let Err(error) = asked {
+                report!("a Bluetooth device was not asked: {error}");
+                let _ = this.update(cx, |this, cx| this.answered(cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Stops waiting for the device that was asked.
+    fn answered(&mut self, cx: &mut Context<Self>) {
+        self.asked = None;
+        self.waiting.animate_to(0.);
+        cx.notify();
+    }
+
     fn take(&mut self, read: Result<Vec<PairedDevice>, String>, cx: &mut Context<Self>) {
+        if let Some(asked) = &mut self.asked {
+            asked.reads += 1;
+            let listed = read.as_deref().unwrap_or_default();
+            let device = listed
+                .iter()
+                .find(|device| device.audio == Some(asked.container));
+            let done = device.is_none_or(|device| device.connected == asked.connect);
+            if done || asked.reads >= READS_TO_ANSWER {
+                self.answered(cx);
+            }
+        }
         if self.devices.as_ref() == Some(&read) {
             return;
         }
+        let count = read.as_ref().map_or(0, Vec::len);
+        let motion = cx.global::<Theme>().motion;
+        self.rows.resize_with(count, || Interaction::new(&motion));
         // Devices that come and go within a list do not start it over.
         let kind = |devices: &Option<Result<Vec<PairedDevice>, String>>| match devices {
             None => 0,
@@ -198,18 +288,42 @@ impl Devices {
         count: usize,
         device: &PairedDevice,
         theme: &Theme,
-        language: Language,
         window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = Language::of(cx);
         let arrived = staggered(self.arrival.value(window).clamp(0., 1.), index, count);
-        let presence = if device.connected { 1. } else { AWAY_OPACITY };
-        list_row(
+        let asked = self.asked.as_ref();
+        let asked = asked.filter(|asked| device.audio == Some(asked.container));
+        let asked = asked.map(|asked| asked.connect);
+        let waiting = match asked {
+            Some(_) => self.waiting.value(window).clamp(0., 1.),
+            None => 0.,
+        };
+        let presence = if device.connected {
+            1.
+        } else {
+            AWAY_OPACITY + (1. - AWAY_OPACITY) * waiting
+        };
+        let colors = theme.colors;
+        let base = if device.connected {
+            colors.secondary_container
+        } else {
+            let tint = ASKED_TINT * waiting;
+            mix(
+                colors.surface_container_highest,
+                colors.secondary_container,
+                tint,
+            )
+        };
+        let row = list_row(
             theme,
             ICON_BLUETOOTH,
             device.connected,
             device.name.clone(),
-            note(device, language),
+            note(device, asked, language),
         )
+        .id(("bluetooth-row", index))
         .relative()
         .top(px(ROW_TRAVEL * (1. - arrived)))
         .opacity(arrived * presence)
@@ -220,8 +334,18 @@ impl Devices {
                 .flex_none()
                 .w(CHARGE_WIDTH)
                 .child(wave_bar(theme, level))
-        }))
-        .into_any_element()
+        }));
+        if device.audio.is_none() {
+            return row.into_any_element();
+        }
+        let row = match self.rows.get_mut(index) {
+            Some(interaction) => row.bg(state_layer(theme, base, interaction.state(window))),
+            None => row,
+        };
+        let row = Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index));
+        let clicked = device.clone();
+        row.on_click(cx.listener(move |this, _, _, cx| this.clicked(&clicked, cx)))
+            .into_any_element()
     }
 }
 
@@ -254,7 +378,7 @@ impl Render for Devices {
         let rows: Vec<AnyElement> = devices
             .iter()
             .enumerate()
-            .map(|(index, device)| self.row(index, count, device, &theme, language, window))
+            .map(|(index, device)| self.row(index, count, device, &theme, window, cx))
             .collect();
         frame.children(rows)
     }
@@ -269,27 +393,49 @@ mod tests {
             name: "Mouse".to_owned(),
             connected,
             battery,
+            audio: None,
         }
     }
 
     #[test]
     fn a_row_says_whether_it_is_connected_and_how_charged() {
-        assert_eq!(note(&device(true, None), Language::English), "Connected");
         assert_eq!(
-            note(&device(false, None), Language::English),
+            note(&device(true, None), None, Language::English),
+            "Connected"
+        );
+        assert_eq!(
+            note(&device(false, None), None, Language::English),
             "Not connected"
         );
         assert_eq!(
-            note(&device(true, Some(80)), Language::English),
+            note(&device(true, Some(80)), None, Language::English),
             "Connected, 80%"
         );
         assert_eq!(
-            note(&device(false, Some(80)), Language::English),
+            note(&device(false, Some(80)), None, Language::English),
             "Not connected, was 80%"
         );
         assert_eq!(
-            note(&device(false, Some(80)), Language::Russian),
+            note(&device(false, Some(80)), None, Language::Russian),
             "Не подключено, было 80%"
+        );
+    }
+
+    #[test]
+    fn a_row_says_what_its_device_was_asked_for_until_it_does_it() {
+        let english = Language::English;
+        assert_eq!(
+            note(&device(false, None), Some(true), english),
+            "Connecting"
+        );
+        assert_eq!(note(&device(true, None), Some(true), english), "Connected");
+        assert_eq!(
+            note(&device(true, Some(80)), Some(false), english),
+            "Disconnecting, 80%"
+        );
+        assert_eq!(
+            note(&device(false, None), Some(false), english),
+            "Not connected"
         );
     }
 }

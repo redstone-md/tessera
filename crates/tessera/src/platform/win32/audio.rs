@@ -64,7 +64,7 @@ fn use_com() {
     });
 }
 
-fn enumerator() -> Result<IMMDeviceEnumerator> {
+pub(super) fn enumerator() -> Result<IMMDeviceEnumerator> {
     use_com();
     // SAFETY: a COM call that creates an object of a registered class.
     unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }

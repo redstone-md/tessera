@@ -320,6 +320,7 @@ mod tests {
             name: name.to_owned(),
             connected,
             battery,
+            audio: None,
         };
         let access = |permitted: bool, device_setting: Option<&str>| Access {
             permissions: if permitted {

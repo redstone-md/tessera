@@ -182,6 +182,7 @@ mod tests {
             name: "Mouse".to_owned(),
             connected: true,
             battery: Some(80),
+            audio: None,
         };
         let mut access = Access {
             bluetooth: Some(vec![device.clone()]),

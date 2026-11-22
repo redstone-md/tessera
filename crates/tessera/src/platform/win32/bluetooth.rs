@@ -6,7 +6,9 @@
 //! Every call waits for Windows to answer, so none belongs on the thread
 //! that draws.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::mem::size_of;
+use std::ptr::null_mut;
 
 use windows::Devices::Bluetooth::{BluetoothAdapter, BluetoothDevice, BluetoothLEDevice};
 use windows::Devices::Enumeration::DeviceInformation;
@@ -17,13 +19,37 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Locate_DevNodeW, CR_SUCCESS,
 };
 use windows::Win32::Devices::Properties::{DEVPROP_TYPE_BYTE, DEVPROPTYPE};
-use windows::Win32::Foundation::DEVPROPKEY;
+use windows::Win32::Foundation::{DEVPROPKEY, PROPERTYKEY};
+use windows::Win32::Media::Audio::{
+    DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_UNPLUGGED, IDeviceTopology, IMMDevice, eAll,
+};
+use windows::Win32::Media::KernelStreaming::{
+    IKsControl, KSIDENTIFIER, KSIDENTIFIER_0, KSIDENTIFIER_0_0, KSPROPERTY_ONESHOT_DISCONNECT,
+    KSPROPERTY_ONESHOT_RECONNECT, KSPROPERTY_TYPE_GET, KSPROPSETID_BtAudio,
+};
+use windows::Win32::System::Com::StructuredStorage::PropVariantToGUID;
+use windows::Win32::System::Com::{CLSCTX_ALL, STGM_READ};
 use windows::core::{GUID, HSTRING, Interface, PCWSTR, Result as WindowsResult};
 use windows_collections::IIterable;
+
+use super::audio::enumerator;
+use super::packaged::take;
 
 /// The properties asked for along with each device.
 const IS_CONNECTED: &str = "System.Devices.Aep.IsConnected";
 const ADDRESS: &str = "System.Devices.Aep.DeviceAddress";
+const CONTAINER: &str = "System.Devices.Aep.ContainerId";
+
+/// The container of the device an audio endpoint belongs to: what Windows
+/// holds the parts of one physical device together by.
+const ENDPOINT_CONTAINER: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x8c7ed206_3f8a_4827_b3ab_ae9e1faefc6c),
+    pid: 2,
+};
+
+/// How the name of the device behind an audio endpoint goes on when that
+/// device is a Bluetooth one.
+const BLUETOOTH_PATH: &str = "\\\\?\\bth";
 
 /// Where Windows keeps the charge a Bluetooth device reported, in percent.
 const BATTERY: DEVPROPKEY = DEVPROPKEY {
@@ -42,6 +68,10 @@ pub struct PairedDevice {
     pub connected: bool,
     /// Its charge in percent, when it reported one to Windows.
     pub battery: Option<u8>,
+    /// What Windows holds the device together by, for a device Windows
+    /// plays or records sound through: only such a device can be told to
+    /// connect and to disconnect.
+    pub audio: Option<u128>,
 }
 
 /// The Bluetooth of the machine.
@@ -66,13 +96,126 @@ impl Bluetooth {
         };
         let devices = read()
             .map_err(|error| format!("the Bluetooth devices could not be listed: {error}"))?;
-        Ok(arranged(devices, &batteries()))
+        let mut devices = arranged(devices, &batteries());
+        let sounding: HashSet<u128> = links()
+            .into_iter()
+            .map(|(container, _)| container)
+            .collect();
+        for device in &mut devices {
+            device.audio = device
+                .audio
+                .filter(|container| sounding.contains(container));
+        }
+        Ok(devices)
     }
+
+    /// Asks the sound device held together by `container` to connect, or
+    /// to disconnect. The answer says only that the device driver took the
+    /// request: whether the device then connects shows in `devices`.
+    pub fn link(container: u128, connect: bool) -> Result<(), String> {
+        let wish = match connect {
+            true => KSPROPERTY_ONESHOT_RECONNECT,
+            false => KSPROPERTY_ONESHOT_DISCONNECT,
+        };
+        let property = KSIDENTIFIER {
+            Anonymous: KSIDENTIFIER_0 {
+                Anonymous: KSIDENTIFIER_0_0 {
+                    Set: KSPROPSETID_BtAudio,
+                    Id: wish.0 as u32,
+                    Flags: KSPROPERTY_TYPE_GET,
+                },
+            },
+        };
+        let mut taken = false;
+        let mut failure = None;
+        for (_, device) in links().into_iter().filter(|(of, _)| *of == container) {
+            let mut returned = 0;
+            // SAFETY: COM calls on a device that was just listed; the
+            // property outlives the call and says its own size, and the
+            // request carries no data.
+            let asked = unsafe {
+                device
+                    .Activate::<IKsControl>(CLSCTX_ALL, None)
+                    .and_then(|control| {
+                        control.KsProperty(
+                            &raw const property,
+                            size_of::<KSIDENTIFIER>() as u32,
+                            null_mut(),
+                            0,
+                            &raw mut returned,
+                        )
+                    })
+            };
+            match asked {
+                Ok(()) => taken = true,
+                Err(error) => failure = Some(error),
+            }
+        }
+        match (taken, failure) {
+            (true, _) => Ok(()),
+            (false, Some(error)) => Err(format!("the device did not take the request: {error}")),
+            (false, None) => Err("the device has no sound to connect by".to_owned()),
+        }
+    }
+}
+
+/// The Bluetooth devices behind the audio endpoints, those in use and
+/// those that wait for their device, each with the container of its
+/// device. One device may be there several times: for playing, for
+/// recording and for calls.
+fn links() -> Vec<(u128, IMMDevice)> {
+    let Ok(devices) = enumerator() else {
+        return Vec::new();
+    };
+    let mut links = Vec::new();
+    // SAFETY: plain COM calls; each value read is owned here, and `take`
+    // frees the string that is allocated for the caller.
+    unsafe {
+        let Ok(found) = devices.EnumAudioEndpoints(
+            eAll,
+            DEVICE_STATE(DEVICE_STATE_ACTIVE.0 | DEVICE_STATE_UNPLUGGED.0),
+        ) else {
+            return links;
+        };
+        for index in 0..found.GetCount().unwrap_or(0) {
+            let Ok(endpoint) = found.Item(index) else {
+                continue;
+            };
+            let container = endpoint
+                .OpenPropertyStore(STGM_READ)
+                .and_then(|store| store.GetValue(&ENDPOINT_CONTAINER))
+                .and_then(|value| PropVariantToGUID(&raw const value));
+            let behind = endpoint
+                .Activate::<IDeviceTopology>(CLSCTX_ALL, None)
+                .and_then(|topology| topology.GetConnector(0))
+                .and_then(|connector| connector.GetDeviceIdConnectedTo())
+                .ok()
+                .and_then(take);
+            let (Ok(container), Some(behind)) = (container, behind) else {
+                continue;
+            };
+            if !is_bluetooth(&behind) {
+                continue;
+            }
+            if let Ok(device) = devices.GetDevice(&HSTRING::from(behind)) {
+                links.push((container.to_u128(), device));
+            }
+        }
+    }
+    links
+}
+
+/// Whether `id`, which names the device behind an audio endpoint, names a
+/// Bluetooth one.
+fn is_bluetooth(id: &str) -> bool {
+    id.to_lowercase().contains(BLUETOOTH_PATH)
 }
 
 /// The paired devices `selector` picks, each with its address if it has one.
 fn paired(selector: &HSTRING) -> WindowsResult<Vec<(Option<u64>, PairedDevice)>> {
-    let wanted = vec![HSTRING::from(IS_CONNECTED), HSTRING::from(ADDRESS)];
+    let wanted = [IS_CONNECTED, ADDRESS, CONTAINER]
+        .map(HSTRING::from)
+        .to_vec();
     let wanted = IIterable::<HSTRING>::from(wanted);
     let found = DeviceInformation::FindAllAsyncAqsFilterAndAdditionalProperties(selector, &wanted)?
         .get()?;
@@ -87,12 +230,14 @@ fn paired(selector: &HSTRING) -> WindowsResult<Vec<(Option<u64>, PairedDevice)>>
         };
         let connected = property(IS_CONNECTED).and_then(|value| value.GetBoolean().ok());
         let address = property(ADDRESS).and_then(|value| value.GetString().ok());
+        let container = property(CONTAINER).and_then(|value| value.GetGuid().ok());
         devices.push((
             address.and_then(|address| address_of(&address.to_string())),
             PairedDevice {
                 name: device.Name()?.to_string(),
                 connected: connected.unwrap_or(false),
                 battery: None,
+                audio: container.map(|container| container.to_u128()),
             },
         ));
     }
@@ -114,7 +259,10 @@ fn arranged(
             None => other.is_none() && kept.name == device.name,
         });
         match twin {
-            Some((_, twin)) => twin.connected |= device.connected,
+            Some((_, twin)) => {
+                twin.connected |= device.connected;
+                twin.audio = twin.audio.or(device.audio);
+            }
             None => kept.push((address, device)),
         }
     }
@@ -212,7 +360,24 @@ mod tests {
             name: name.to_owned(),
             connected,
             battery: None,
+            audio: None,
         }
+    }
+
+    #[test]
+    fn a_bluetooth_device_behind_an_endpoint_is_told_by_its_name() {
+        let sink = "{2}.\\\\?\\bthenum#{0000110b-0000-1000-8000-00805f9b34fb}_vid&0001004c#7&2f1a&0&\
+                    aabbccddeeff_c00000000#{6994ad04-93ef-11d0-a3cc-00a0c9223196}\\snk";
+        assert!(is_bluetooth(sink));
+        assert!(is_bluetooth(
+            "{2}.\\\\?\\BTHHFENUM#BthHFPAudio#8&1b2c&0&97#{guid}\\wave"
+        ));
+        assert!(!is_bluetooth(
+            "{2}.\\\\?\\usb#vid_046d&pid_0a8f&mi_00#7&1b2c&0&0000#{guid}\\wave"
+        ));
+        assert!(!is_bluetooth(
+            "{2}.\\\\?\\hdaudio#func_01&ven_10ec#5&1b2c&0&0001#{guid}\\speaker"
+        ));
     }
 
     #[test]
@@ -265,14 +430,16 @@ mod tests {
                 println!("{} devices", devices.len());
                 for device in devices {
                     println!(
-                        "name_chars={} connected={} battery={:?}",
+                        "name_chars={} connected={} battery={:?} audio={}",
                         device.name.chars().count(),
                         device.connected,
-                        device.battery
+                        device.battery,
+                        device.audio.is_some()
                     );
                 }
             }
             Err(error) => println!("error: {error}"),
         }
+        println!("{} sound links", links().len());
     }
 }
