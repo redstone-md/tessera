@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/tessera"]
-exclude = ["extensions"]
+exclude = ["extensions", "vendor"]
 resolver = "3"
 
 [workspace.package]
@@ -76,6 +76,10 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# GPUI as published, with smaller atlas textures: see vendor/gpui/Cargo.toml.
+[patch.crates-io]
+gpui = { path = "vendor/gpui" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
