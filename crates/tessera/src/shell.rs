@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::bail;
 use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
+use crate::banners::Banners;
 use crate::config::{Config, Displays};
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
@@ -75,6 +76,7 @@ impl Shell {
             bail!("the layout opened no surface");
         }
         Wallpaper::start(&config.wallpaper, cx);
+        Banners::configure(&config.notifications, cx);
         cx.set_global(Self {
             config,
             surfaces,
@@ -253,6 +255,7 @@ impl Shell {
         Workspaces::configure(&config.workspaces, cx);
         Shortcuts::configure(&config.keys, cx);
         Wallpaper::configure(&config.wallpaper, cx);
+        Banners::configure(&config.notifications, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

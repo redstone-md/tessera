@@ -12,10 +12,13 @@ use gpui::{
     Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
+use crate::banners::Banners;
+use crate::config::edit::ConfigFile;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, Spring};
+use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{Notification, Notifications};
+use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, state_layer};
 
@@ -31,6 +34,9 @@ const CAPTION_SHARE: f32 = 0.85;
 
 /// The glyph of the button that dismisses a notification.
 const DISMISS_GLYPH: &str = "\u{E711}";
+
+/// The glyph of the button that holds banners back.
+const QUIET_GLYPH: &str = "\u{E708}";
 
 pub struct NotificationsModule;
 
@@ -63,6 +69,9 @@ struct NotificationList {
     /// Why there is nothing to show, if reading failed.
     error: Option<String>,
     clear: Interaction,
+    quiet: Interaction,
+    /// How far the button that holds banners back is switched on.
+    quietness: Spring,
 }
 
 impl NotificationList {
@@ -80,10 +89,14 @@ impl NotificationList {
             }
         })
         .detach();
+        let motion = cx.global::<Theme>().motion;
+        let (_, quiet) = Banners::state(cx);
         Self {
             items: Vec::new(),
             error: None,
-            clear: Interaction::new(&cx.global::<Theme>().motion),
+            clear: Interaction::new(&motion),
+            quiet: Interaction::new(&motion),
+            quietness: Spring::new(motion.effects, if quiet { 1. } else { 0. }),
         }
     }
 
@@ -198,6 +211,21 @@ impl NotificationList {
         }
         Self::remove(cx, Notifications::clear);
         cx.notify();
+    }
+
+    /// Writes into the configuration whether banners are held back.
+    fn set_quiet(quiet: bool, cx: &mut Context<Self>) {
+        let written = ConfigFile::open().and_then(|mut file| {
+            let value = quiet.then_some(toml_edit::Value::from(true));
+            if !file.set_in("notifications", "quiet", value) {
+                return Err("`notifications` in the configuration is no table".to_owned());
+            }
+            file.save()
+        });
+        match written {
+            Ok(()) => cx.defer(Shell::config_changed),
+            Err(error) => report!("{error}"),
+        }
     }
 
     fn render_item(
@@ -338,15 +366,42 @@ impl Render for NotificationList {
             .on_click(cx.listener(|this, _, _, cx| this.clear(cx)))
             .child(language.say("Clear all"));
         let clear = Interaction::track(clear, cx, |this: &mut Self| Some(&mut this.clear));
+        // Banners are held back with a button here, where there are any.
+        let (banners, quiet) = Banners::state(cx);
+        self.quietness.animate_to(if quiet { 1. } else { 0. });
+        let quietness = self.quietness.value(window).clamp(0., 1.);
+        let state = self.quiet.state(window);
+        let ground = mix(
+            theme.colors.surface_container,
+            theme.colors.secondary_container,
+            quietness,
+        );
+        let hold = icon(&theme, QUIET_GLYPH)
+            .id("quiet-notifications")
+            .size(theme.bar.pill_height - theme.spacing.tiny)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.full)
+            .text_color(mix(
+                theme.colors.on_surface_variant,
+                theme.colors.on_surface,
+                quietness,
+            ))
+            .bg(state_layer(&theme, ground, state))
+            .on_click(cx.listener(move |_, _, _, cx| Self::set_quiet(!quiet, cx)));
+        let hold = Interaction::track(hold, cx, |this: &mut Self| Some(&mut this.quiet));
         let header = div()
             .h(theme.bar.pill_height)
             .flex_none()
             .flex()
             .items_center()
-            .justify_between()
+            .gap(theme.spacing.small)
             .text_color(theme.colors.on_surface)
-            .child(language.say("Notifications"))
-            .children((waiting > 0).then_some(clear));
+            .child(div().flex_1().child(language.say("Notifications")))
+            .children((waiting > 0).then_some(clear))
+            .children(banners.then_some(hold));
 
         let note = |text: SharedString| {
             div()

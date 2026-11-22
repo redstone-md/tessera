@@ -277,6 +277,39 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        section: Section::General,
+        card: "Notifications",
+        title: "Banners",
+        target: Target::Table("notifications", "banners"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
+        section: Section::General,
+        card: "Notifications",
+        title: "Do not disturb",
+        target: Target::Table("notifications", "quiet"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
+        section: Section::General,
+        card: "Notifications",
+        title: "Seconds shown",
+        target: Target::Table("notifications", "seconds"),
+        kind: Kind::Count {
+            min: 2,
+            max: 30,
+            step: 2,
+            start: 6,
+            unset: "Default",
+        },
+    },
+    Setting {
         section: Section::Widgets,
         card: "Clock",
         title: "Format",

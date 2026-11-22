@@ -8,6 +8,7 @@
 #[macro_use]
 mod report;
 
+mod banners;
 mod config;
 mod desk;
 mod extension;

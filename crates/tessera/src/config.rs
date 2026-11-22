@@ -11,6 +11,7 @@ use std::time::SystemTime;
 
 use serde::Deserialize;
 
+use crate::banners::NotificationsConfig;
 use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::i18n::Language;
@@ -322,6 +323,9 @@ pub struct Config {
     /// The pictures Tessera draws behind the icons of the desktop.
     #[serde(default)]
     pub wallpaper: WallpaperConfig,
+    /// Whether notifications that arrive are shown as banners.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

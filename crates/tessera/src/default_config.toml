@@ -321,6 +321,21 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # keys = "alt"
 # except = ["taskmgr.exe"]
 
+# [notifications] has Tessera show a notification that arrives as a banner,
+# in the upper right corner of the display the pointer is on, for seconds
+# seconds (6, between 2 and 60); the pointer on the banners keeps them, a
+# click on one puts it away, and the notification stays in the notification
+# center either way. quiet = true holds the banners back: do not disturb.
+# The button with the moon in the "notifications" widget writes quiet too.
+# Tessera learns of a notification by reading the notification center every
+# two seconds, so a banner may come that much late, and Windows shows a
+# banner of its own as well unless its settings tell it not to.
+#
+# [notifications]
+# banners = true
+# quiet = false
+# seconds = 6
+
 # [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
 # every display, each scaled to cover it. images lists picture files (.jpg,
 # .png) and directories, whose pictures are taken in the order of their
