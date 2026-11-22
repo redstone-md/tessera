@@ -59,7 +59,7 @@ pub use packaged::{app_id_in, app_path};
 pub use passage::Passage;
 pub use power::PowerAction;
 pub use shortcuts::Shortcut;
-pub use system::{Battery, MemoryLoad, ProcessorLoad};
+pub use system::{Battery, MemoryLoad, ProcessorLoad, memory_held};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};

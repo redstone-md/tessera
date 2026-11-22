@@ -24,7 +24,7 @@ use serde::Deserialize;
 use crate::motion::{Spring, SpringSpec};
 use crate::platform::{
     AppWindow, BackdropPicture, DesktopBackdrop, DesktopVideo, ScreenRect, VideoState,
-    display_frames,
+    display_frames, memory_held,
 };
 use crate::theme::Theme;
 
@@ -52,6 +52,25 @@ const VIDEO_AFTER_START: Duration = Duration::from_secs(8);
 
 /// When the wallpaper was first asked for, which is as Tessera starts.
 static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// The memory Tessera may hold with a video, in bytes. A video takes
+/// memory by its size and by how Windows decodes it, which is known only
+/// once it plays: one that takes more is left out.
+const VIDEO_MEMORY: u64 = 200 * 1024 * 1024;
+
+/// Fails where Tessera holds more memory with the video of `path` than
+/// it may.
+fn video_fits(path: &Path) -> anyhow::Result<()> {
+    match memory_held() {
+        Some(held) if held > VIDEO_MEMORY => anyhow::bail!(
+            "{} has Tessera hold {} MB, more than the {} MB it stays under",
+            path.display(),
+            held / (1024 * 1024),
+            VIDEO_MEMORY / (1024 * 1024)
+        ),
+        _ => Ok(()),
+    }
+}
 
 /// How long a video may take to have its first frame.
 const VIDEO_PATIENCE: Duration = Duration::from_secs(15);
@@ -397,6 +416,7 @@ impl Wallpaper {
                     Some(VideoState::Playing) => break,
                     Some(VideoState::Loading) => {}
                 }
+                video_fits(path)?;
                 if began.elapsed() > VIDEO_PATIENCE {
                     anyhow::bail!("{} did not begin to play", path.display());
                 }
@@ -424,11 +444,19 @@ impl Wallpaper {
                 }
                 shown = now;
             }
+            video_fits(path)?;
 
             // The video goes on where it is seen, until the displays
             // change: then the windows are opened anew.
+            let mut weighed = false;
             loop {
                 cx.background_executor().timer(DISPLAY_CHECK).await;
+                if !weighed {
+                    // Once more when it has played a while; what Tessera
+                    // holds later for other things is not laid to it.
+                    video_fits(path)?;
+                    weighed = true;
+                }
                 let windows = cx
                     .background_executor()
                     .spawn(async {

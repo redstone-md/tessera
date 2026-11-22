@@ -14,6 +14,6 @@ pub use win32::{
     ScreenEdge, ScreenRect, Shortcut, SmallBirth, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon,
     Typing, Veil, VideoState, VirtualDesktops, Vpn, VpnState, Wifi, WifiNetwork, WifiReach,
     WindowEvents, WindowsKey, Wireless, accent_color, app_id_in, app_id_of_program, app_path,
-    desktop_look, desktop_pixels, display_frames, light_mode, pointer_at, pointer_held,
-    pointer_on_own_window, read_desktop_if_requested,
+    desktop_look, desktop_pixels, display_frames, light_mode, memory_held, pointer_at,
+    pointer_held, pointer_on_own_window, read_desktop_if_requested,
 };

@@ -7,8 +7,11 @@ use std::mem::size_of;
 
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+use windows::Win32::System::ProcessStatus::{
+    K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-use windows::Win32::System::Threading::GetSystemTimes;
+use windows::Win32::System::Threading::{GetCurrentProcess, GetSystemTimes};
 
 /// The `BatteryFlag` bit that says the machine has no battery.
 const NO_BATTERY: u8 = 128;
@@ -36,6 +39,25 @@ impl ProcessorLoad {
         let previous = self.previous.replace(now)?;
         share(previous, now)
     }
+}
+
+/// The bytes of memory that are this process's alone, as Windows counts
+/// them. `None` where Windows does not tell.
+pub fn memory_held() -> Option<u64> {
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `counters` is of the size it says and outlives the call; the
+    // handle of the process itself needs no closing.
+    let told = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+            counters.cb,
+        )
+    };
+    told.as_bool().then_some(counters.PrivateUsage as u64)
 }
 
 /// The busy share of the time between two `(busy, total)` readings.
