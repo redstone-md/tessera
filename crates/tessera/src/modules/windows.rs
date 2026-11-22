@@ -649,6 +649,15 @@ impl WindowList {
         let key = item.key;
         let ids: Vec<AppWindowId> = item.windows.iter().map(|window| window.id).collect();
         let shortcut = item.pin.as_ref().map(|pin| pin.shortcut.clone());
+        // What the middle button starts: the pinned application, or the
+        // program of the window in front, as `New window` of the menu does.
+        let another = shortcut.clone().or_else(|| {
+            let executable = item.front().and_then(AppWindow::program)?;
+            Some(Shortcut {
+                name: pin_name(&executable),
+                path: executable,
+            })
+        });
 
         let icon_size =
             theme.dock.icon_size * (1. + HOVER_GROWTH * state.hover - PRESS_SHRINK * state.press);
@@ -672,6 +681,13 @@ impl WindowList {
                 MouseButton::Right,
                 cx.listener(move |this, _, window, cx| this.menu(key, window, cx)),
             )
+            .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
+                Previews::close(cx);
+                Menus::close(cx);
+                if let Some(another) = &another {
+                    another.launch();
+                }
+            })
             .on_click(move |_, _, cx| {
                 Previews::close(cx);
                 Menus::close(cx);

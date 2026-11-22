@@ -160,7 +160,8 @@
 #               of Windows is among them. Without the option it is not: the
 #               widgets below show Bluetooth
 #   "windows"   a button for each application with windows on the display,
-#               which a click goes through; option pinned,
+#               which a click goes through and a click with the middle
+#               button starts once more; option pinned,
 #               applications that keep a button whether they run or not:
 #               paths of programs or shortcuts, names the Start menu gives
 #               applications, or "shell:AppsFolder/" and the identifier of
