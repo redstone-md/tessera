@@ -479,6 +479,8 @@ enum Control {
     /// Moves a widget toward the end of its surface, or toward the start.
     Shift(Place, bool),
     Remove(Place),
+    /// Has a surface hide while the pointer is elsewhere, or stay.
+    SurfaceHide(usize, bool),
     /// Opens or closes the list of widgets to add to a slot or a card.
     Adding(Holder),
     /// Adds the widget at this place of the list to what is being added to.
@@ -869,6 +871,10 @@ impl Settings {
                     self.change(cx, |file| file.set_card(card, "corner", Some(name.into())));
                 }
             }
+            Control::SurfaceHide(surface, hide) => {
+                let hide = hide.then(|| true.into());
+                self.change(cx, |file| file.set_surface(surface, "hide", hide));
+            }
             Control::CardDisplays(card, primary) => {
                 let displays = primary.then(|| "primary".into());
                 self.change(cx, |file| file.set_card(card, "displays", displays));
@@ -1059,6 +1065,31 @@ impl Settings {
             section = section
                 .children(offers.map(|offers| offers.pl(SLOT_LABEL_WIDTH + theme.spacing.small)));
         }
+        let mut hiding = Vec::new();
+        for (label, hide) in [("Always shown", false), ("Hides by itself", true)] {
+            let face = Face::Chip {
+                text: language.say(label).into(),
+                selected: surface.hide == hide,
+            };
+            hiding.push(self.control(Control::SurfaceHide(index, hide), face, window, cx));
+        }
+        section = section.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(theme.spacing.small)
+                .child(
+                    div()
+                        .flex_none()
+                        .w(SLOT_LABEL_WIDTH)
+                        .h(CHIP_HEIGHT)
+                        .flex()
+                        .items_center()
+                        .text_color(theme.colors.on_surface_variant)
+                        .child(language.say("Hiding")),
+                )
+                .child(wrap(&theme).flex_1().children(hiding)),
+        );
         section.into_any_element()
     }
 

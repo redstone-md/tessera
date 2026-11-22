@@ -188,6 +188,26 @@ impl ConfigFile {
         fs::rename(&draft, &path).map_err(failed)
     }
 
+    /// Sets a key of a surface, or takes it out with `None`.
+    pub fn set_surface(&mut self, surface: usize, key: &str, to: Option<Value>) -> bool {
+        let surfaces = self.document.get_mut("surface");
+        let Some(surface) = surfaces
+            .and_then(Item::as_array_of_tables_mut)
+            .and_then(|surfaces| surfaces.get_mut(surface))
+        else {
+            return false;
+        };
+        match to {
+            Some(to) => {
+                surface.insert(key, Item::Value(to));
+            }
+            None => {
+                surface.remove(key);
+            }
+        }
+        true
+    }
+
     /// The widgets of one slot, which is created if the surface lacks it.
     fn slot(&mut self, surface: usize, slot: Slot) -> Option<&mut Array> {
         let surfaces = self.document.get_mut("surface")?.as_array_of_tables_mut()?;
