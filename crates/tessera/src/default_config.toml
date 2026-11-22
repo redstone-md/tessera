@@ -315,6 +315,9 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # without its sound; the formats are the ones Windows plays, such as .mp4.
 # The pictures are then shown only where the video cannot be played. A
 # video that windows hide on every display is held still.
+# A video with which Tessera holds more than 200 MB of memory is left out:
+# 1920x1080 with H.264 stayed under that where it was tried, 3840x2160
+# did not.
 #
 # [wallpaper]
 # images = ["C:/Users/me/Pictures/Wallpapers"]
