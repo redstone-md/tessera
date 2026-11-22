@@ -49,7 +49,9 @@
 #           out of the tiles, back to where it was, and puts it in again
 #           when pressed once more, or "wider" or "narrower", which give
 #           the first window of "master" a twentieth of the width more or
-#           less, between a fifth and four fifths, until Tessera exits
+#           less, between a fifth and four fifths, until Tessera exits;
+#           the first window of "columns" and "rows" grows and shrinks
+#           against the others likewise
 #   run     a program to start and its arguments, a list
 #   focus   "left", "right", "up" or "down": the window on that side of the
 #           window in front comes in front, among the windows [tiling]
