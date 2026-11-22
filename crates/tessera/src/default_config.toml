@@ -43,8 +43,10 @@
 # Tessera holds it, and one that Windows or another program holds already is
 # reported and does nothing. Each [[key]] has one of:
 #   popup   the [[popup]] to open, or to close when it is open
-#   tiling  "next" for the tiling mode after the one in use, "off", or a
-#           layout of [tiling]
+#   tiling  "next" for the tiling mode after the one in use, "off", a
+#           layout of [tiling], or "float", which takes the window in front
+#           out of the tiles, back to where it was, and puts it in again
+#           when pressed once more
 #   run     a program to start and its arguments, a list
 #   focus   "left", "right", "up" or "down": the window on that side of the
 #           window in front comes in front, among the windows [tiling]
@@ -294,7 +296,10 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 
 # [tiling] puts the windows of each display side by side in the space the
 # bars leave. layout is "master" (one window on the left half, the others
-# stacked on the right), "columns", "rows" or "grid"; gap is the distance
+# stacked on the right), "columns", "rows", "grid" or "monocle" (every
+# window takes the whole space, one over the other, and the focus keys go
+# through them: right and down to the next, left and up to the one before);
+# gap is the distance
 # between tiles in pixels. only and except list programs by the file name of
 # their executable: the only ones whose windows are tiled, and the ones whose
 # windows are left alone. Windows go back to where they were when tiling is

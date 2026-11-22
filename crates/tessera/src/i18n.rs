@@ -514,6 +514,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Master", "Главное окно"),
     ("Rows", "Строки"),
     ("Grid", "Сетка"),
+    ("Monocle", "Одно окно"),
     ("Gap", "Отступ"),
     ("Workspaces", "Рабочие столы"),
     ("Own workspaces", "Свои рабочие столы"),

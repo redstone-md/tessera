@@ -114,6 +114,8 @@ enum Deed {
     Popup(String),
     /// The tiling mode to take; `None` for the one after the mode in use.
     Tiling(Option<TilingMode>),
+    /// Take the window in front out of the tiles, or put it in again.
+    Float,
     Run(Vec<String>),
     Focus(Toward),
     Carry(Toward),
@@ -164,9 +166,10 @@ impl Deed {
         match (name, layout) {
             ("next", _) => Ok(Self::Tiling(None)),
             ("off", _) => Ok(mode(false, TileLayout::ALL[0])),
+            ("float", _) => Ok(Self::Float),
             (_, Some(&layout)) => Ok(mode(true, layout)),
             _ => Err(format!(
-                "`tiling` is `next`, `off` or a layout, not `{name}`"
+                "`tiling` is `next`, `off`, `float` or a layout, not `{name}`"
             )),
         }
     }
@@ -192,6 +195,7 @@ impl Deed {
                 let mode = mode.unwrap_or_else(|| cx.global::<TilingMode>().next());
                 Tiler::set_mode(mode, cx);
             }
+            Self::Float => Tiler::float(cx),
             Self::Focus(toward) => Tiler::focus(*toward, cx),
             Self::Carry(toward) => Tiler::carry(*toward, cx),
             Self::Run(command) => {
@@ -390,6 +394,7 @@ mod tests {
             Deed::of(&key(None, Some("grid"), None)),
             Ok(Deed::Tiling(Some(grid)))
         );
+        assert_eq!(Deed::of(&key(None, Some("float"), None)), Ok(Deed::Float));
         let off = Deed::of(&key(None, Some("off"), None));
         assert!(matches!(off, Ok(Deed::Tiling(Some(mode))) if !mode.enabled));
         assert_eq!(

@@ -426,6 +426,7 @@ const SETTINGS: &[Setting] = &[
             ("Columns", Answer::Text("columns")),
             ("Rows", Answer::Text("rows")),
             ("Grid", Answer::Text("grid")),
+            ("Monocle", Answer::Text("monocle")),
         ]),
     },
     Setting {

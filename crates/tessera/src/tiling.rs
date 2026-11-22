@@ -12,7 +12,7 @@
 //! tiling is switched off, and when the shell quits, every window goes
 //! back to where it was before it was first tiled.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -53,10 +53,18 @@ pub enum TileLayout {
     /// Rows of equally many windows; the last row may hold fewer, wider
     /// ones.
     Grid,
+    /// Every window takes the whole space, one over the other.
+    Monocle,
 }
 
 impl TileLayout {
-    pub const ALL: [Self; 4] = [Self::Master, Self::Columns, Self::Rows, Self::Grid];
+    pub const ALL: [Self; 5] = [
+        Self::Master,
+        Self::Columns,
+        Self::Rows,
+        Self::Grid,
+        Self::Monocle,
+    ];
 
     /// What the layout is called where it is shown.
     pub fn name(self) -> &'static str {
@@ -65,6 +73,7 @@ impl TileLayout {
             Self::Columns => "Columns",
             Self::Rows => "Rows",
             Self::Grid => "Grid",
+            Self::Monocle => "Monocle",
         }
     }
 
@@ -99,6 +108,7 @@ impl TileLayout {
                 .into_iter()
                 .map(|span| column(whole_width, span))
                 .collect(),
+            Self::Monocle => vec![area; count],
             Self::Master if count == 1 => vec![area],
             Self::Master => {
                 let halves = across(2);
@@ -197,6 +207,15 @@ fn between(from: ScreenRect, to: ScreenRect, amount: f32) -> ScreenRect {
         // A window keeps a size it can be drawn at.
         right: mix(from.right, to.right).max(left + 1),
         bottom: mix(from.bottom, to.bottom).max(top + 1),
+    }
+}
+
+/// The place after `at` among `count` in a ring, or before it with
+/// `back`.
+fn around(at: usize, count: usize, back: bool) -> usize {
+    match back {
+        true => (at + count - 1) % count,
+        false => (at + 1) % count,
     }
 }
 
@@ -310,6 +329,8 @@ pub struct Tiler {
     /// Where each window was before it was first tiled.
     before: HashMap<AppWindowId, ScreenRect>,
     sent: HashMap<AppWindowId, Sent>,
+    /// The windows taken out of the tiles, which stay where they are put.
+    floating: HashSet<AppWindowId>,
     /// Whether the order was changed by a key combination, so that the
     /// window in front lies on a tile that is no longer its own without
     /// having been dropped there.
@@ -330,6 +351,7 @@ impl Tiler {
             moves: HashMap::new(),
             before: HashMap::new(),
             sent: HashMap::new(),
+            floating: HashSet::new(),
             carried: false,
             task: 0,
         });
@@ -427,12 +449,57 @@ impl Tiler {
         Some((front, other, display(other) == Some(home)))
     }
 
+    /// The tiled window after the one in front on its display, in the
+    /// order of the tiles, or the one before it with `back`.
+    fn following(&self, back: bool) -> Option<AppWindowId> {
+        let front = AppWindowId::foreground()?;
+        let windows = AppWindow::enumerate();
+        let display = |id| Some(windows.iter().find(|window| window.id == id)?.display);
+        let home = display(front)?;
+        let there = |id: &AppWindowId| display(*id) == Some(home);
+        let ids: Vec<AppWindowId> = self.order.iter().copied().filter(there).collect();
+        let at = ids.iter().position(|&id| id == front)?;
+        let other = ids[around(at, ids.len(), back)];
+        (other != front).then_some(other)
+    }
+
     /// Brings the window on the side `toward` of the window in front, in
-    /// front itself.
+    /// front itself. Where every window takes the whole space there are
+    /// no sides: right and down are the next window then, left and up
+    /// the one before.
     pub fn focus(toward: Toward, cx: &mut App) {
-        if let Some((_, other, _)) = cx.global::<Self>().beside(toward) {
+        let mode = *cx.global::<TilingMode>();
+        let this = cx.global::<Self>();
+        let stacked = mode.enabled && mode.layout == TileLayout::Monocle;
+        let back = matches!(toward, Toward::Left | Toward::Up);
+        let other = stacked.then(|| this.following(back)).flatten();
+        let other = other.or_else(|| Some(this.beside(toward)?.1));
+        if let Some(other) = other {
             other.activate();
         }
+    }
+
+    /// Takes the window in front out of the tiles, back to where it was
+    /// before it was tiled, or puts it among them again.
+    pub fn float(cx: &mut App) {
+        let mode = *cx.global::<TilingMode>();
+        let spring = cx.global::<Theme>().motion.spatial;
+        let this = cx.global_mut::<Self>();
+        let Some(front) = AppWindowId::foreground().filter(|_| mode.enabled) else {
+            return;
+        };
+        if !this.floating.remove(&front) {
+            if !this.order.contains(&front) {
+                return;
+            }
+            this.floating.insert(front);
+            this.order.retain(|&id| id != front);
+            this.sent.remove(&front);
+            if let (Some(to), Some(from)) = (this.before.remove(&front), front.frame()) {
+                this.send(front, from, to, spring);
+            }
+        }
+        this.arrange(mode.layout, spring);
     }
 
     /// Has the window in front trade tiles with the one on the side
@@ -463,11 +530,12 @@ impl Tiler {
         self.order.retain(present);
         self.moves.retain(|id, _| present(id));
         self.sent.retain(|id, _| present(id));
+        self.floating.retain(present);
         // Where a window was is remembered while the window exists, also
         // while it is minimized or maximized.
         self.before.retain(|id, _| id.frame().is_some());
         for window in &windows {
-            if !self.order.contains(&window.id) {
+            if !self.order.contains(&window.id) && !self.floating.contains(&window.id) {
                 self.order.push(window.id);
             }
         }
@@ -583,6 +651,7 @@ impl Tiler {
         let spring = self.moves.values().next().map(|moving| moving.progress);
         self.order.clear();
         self.sent.clear();
+        self.floating.clear();
         for (id, frame) in std::mem::take(&mut self.before) {
             if !id.is_tileable() {
                 continue;
@@ -667,7 +736,8 @@ mod tests {
 
     #[test]
     fn tiles_fill_the_area_without_overlapping() {
-        for layout in TileLayout::ALL {
+        let apart = |layout: &TileLayout| *layout != TileLayout::Monocle;
+        for layout in TileLayout::ALL.into_iter().filter(apart) {
             for count in 1..=9 {
                 let tiles = layout.tiles(AREA, count, 10);
                 assert_eq!(tiles.len(), count, "{layout:?} of {count}");
@@ -725,6 +795,22 @@ mod tests {
                 tile(0, 300, 1000, 600)
             ]
         );
+    }
+
+    #[test]
+    fn stacked_windows_each_take_the_whole_space() {
+        let tiles = TileLayout::Monocle.tiles(AREA, 3, 10);
+        assert_eq!(tiles.len(), 3);
+        assert!(tiles.iter().all(|&tile| tile == tiles[0]));
+        assert_eq!(tiles[0].left, AREA.left + 10);
+        assert_eq!(tiles[0].bottom, AREA.bottom - 10);
+    }
+
+    #[test]
+    fn a_ring_goes_on_past_its_ends() {
+        assert_eq!(around(2, 3, false), 0);
+        assert_eq!(around(0, 3, true), 2);
+        assert_eq!(around(0, 1, false), 0);
     }
 
     #[test]
