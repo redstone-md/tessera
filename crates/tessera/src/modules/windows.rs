@@ -19,7 +19,7 @@ use gpui::{
 
 use crate::badges::{Badges, Owner};
 use crate::config::edit::ConfigFile;
-use crate::icons::{AppIcons, Icon};
+use crate::icons::{AppIcons, Icon, is_link};
 use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
@@ -210,11 +210,6 @@ fn group_of(window: &AppWindow) -> Option<String> {
         stated.as_deref(),
         window.executable.as_deref(),
     )
-}
-
-fn is_link(path: &Path) -> bool {
-    let extension = path.extension();
-    extension.is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
 }
 
 /// Whether two paths as Windows writes them name one file: it ignores case

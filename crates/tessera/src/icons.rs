@@ -60,13 +60,15 @@ impl AppIcons {
 
     /// The icon to show for `shortcut`: the replacement configured for the
     /// file it opens, or else the icon it asks for, or else that file's.
+    /// A shortcut that is a program file itself opens that file.
     pub fn of_shortcut(&self, shortcut: &Shortcut) -> Icon {
         if app_id_in(&shortcut.path).is_some() {
             return self.of_executable(&shortcut.path);
         }
         self.cached(&shortcut.path, || {
             let link = shortcut.link();
-            let target = link.target.as_deref();
+            let own = (!is_link(&shortcut.path)).then_some(shortcut.path.as_path());
+            let target = link.target.as_deref().or(own);
             target
                 .and_then(|target| self.replacement(target))
                 .or_else(|| link.icon.and_then(|(file, index)| embedded(&file, index)))
@@ -136,6 +138,12 @@ fn prepared(mut image: image::DynamicImage, size: u32) -> Icon {
 /// An image of `pixels`, ready to draw.
 pub fn icon_of_pixels(pixels: &IconPixels) -> Icon {
     render_image(pixels.width, pixels.height, pixels.bgra.clone())
+}
+
+/// Whether `path` names a shortcut file, which points at what it opens.
+pub fn is_link(path: &Path) -> bool {
+    let extension = path.extension();
+    extension.is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
 }
 
 /// The icon at `index` inside `file`.
