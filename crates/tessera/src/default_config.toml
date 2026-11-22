@@ -201,7 +201,12 @@
 #               ["C:/Windows/notepad.exe", "Paint"]; option start, the
 #               name of a popup: a button before the applications, drawn
 #               like theirs, opens it, the way a Start button does; option
-#               start-icon, the character it shows
+#               start-icon, the character it shows; option badges, true
+#               or false: whether a button counts the notifications of
+#               its application that wait in the notification center
+#               (it does without the option). An application is told by
+#               the identifier it posts under, or by the name of its
+#               program file where Windows made that identifier up
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
 #   "appearance" a sun while Windows is light and a moon while it is

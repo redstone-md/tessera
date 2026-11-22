@@ -482,6 +482,7 @@ mod tests {
         Notification {
             id,
             app: String::new(),
+            app_id: String::new(),
             title: String::new(),
             body: String::new(),
             posted,

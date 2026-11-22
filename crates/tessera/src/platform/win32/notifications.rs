@@ -25,6 +25,9 @@ pub struct Notification {
     pub id: u32,
     /// The name of the application; empty if Windows does not tell.
     pub app: String,
+    /// The identifier the application posts under; empty if Windows does
+    /// not tell.
+    pub app_id: String,
     /// The first line; may be empty.
     pub title: String,
     /// The remaining lines.
@@ -108,6 +111,11 @@ fn read(item: &UserNotification) -> WindowsResult<Notification> {
         .and_then(|info| info.DisplayName())
         .map(|name| name.to_string())
         .unwrap_or_default();
+    let app_id = item
+        .AppInfo()
+        .and_then(|app| app.AppUserModelId())
+        .map(|id| id.to_string())
+        .unwrap_or_default();
     let binding = item
         .Notification()?
         .Visual()?
@@ -122,6 +130,7 @@ fn read(item: &UserNotification) -> WindowsResult<Notification> {
     Ok(Notification {
         id: item.Id()?,
         app,
+        app_id,
         title,
         body,
         posted: unix_seconds(item.CreationTime()?.UniversalTime),

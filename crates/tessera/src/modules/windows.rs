@@ -17,6 +17,7 @@ use gpui::{
     WeakEntity, Window, canvas, div, img, px,
 };
 
+use crate::badges::{Badges, Owner};
 use crate::config::edit::ConfigFile;
 use crate::icons::{AppIcons, Icon};
 use crate::menu::{MenuEntry, Menus};
@@ -70,6 +71,12 @@ const ICON_WINDOW: &str = "\u{e7c4}";
 /// window of its application.
 const MORE_DOTS: u8 = 2;
 
+/// The most a badge counts to; beyond it the badge says so with a plus.
+const BADGE_MOST: usize = 9;
+
+/// How large a badge is, as a part of the button it sits on.
+const BADGE_SIZE: f32 = 0.36;
+
 pub struct WindowsModule;
 
 impl Module for WindowsModule {
@@ -85,7 +92,8 @@ impl Module for WindowsModule {
                 let glyph = context.text("start-icon").unwrap_or(ICON_START);
                 (popup.to_owned(), SharedString::from(glyph.to_owned()))
             });
-            cx.new(|cx| WindowList::new(display, pins, start, cx))
+            let badges = context.flag("badges").unwrap_or(true);
+            cx.new(|cx| WindowList::new(display, pins, start, badges, cx))
                 .into()
         })
     }
@@ -322,9 +330,47 @@ struct DockItem {
     middle: Rc<Cell<Option<Pixels>>>,
     /// The window is gone and its button is shrinking away.
     leaving: bool,
+    /// How many notifications of the application wait; what it was last
+    /// while the badge shrinks away.
+    waiting: usize,
+    /// 1 while notifications wait, 0 while none does.
+    badge: Spring,
+    /// Whether the badge is shown or on its way there.
+    badged: bool,
 }
 
 impl DockItem {
+    /// How many notifications `badges` counts for the application of the
+    /// button: for the pinned application, or for the application that
+    /// has the windows.
+    fn waiting(&self, badges: &Badges) -> usize {
+        let pinned = self.pin.as_ref().map(|pin| Owner {
+            app: pin.app.as_deref(),
+            program: pin.program.as_deref(),
+        });
+        let grouped = self.group.as_deref().and_then(|group| {
+            let (kind, name) = group.split_once(':')?;
+            Some(match kind {
+                "program" => Owner {
+                    app: None,
+                    program: Some(Path::new(name)),
+                },
+                _ => Owner {
+                    app: Some(name),
+                    program: None,
+                },
+            })
+        });
+        // The program of a window tells of it where nothing else does.
+        let front = self.front().map(|window| Owner {
+            app: window.app_id.as_deref(),
+            program: window.executable.as_deref(),
+        });
+        let owners = [pinned, grouped, front];
+        let counts = owners.iter().flatten().map(|owner| badges.of(owner));
+        counts.max().unwrap_or(0)
+    }
+
     /// The window of the application that was used last.
     fn front(&self) -> Option<&AppWindow> {
         self.windows.first()
@@ -408,6 +454,8 @@ struct WindowList {
     items: Vec<DockItem>,
     foreground: Option<AppWindowId>,
     next_key: usize,
+    /// Whether the buttons count the waiting notifications.
+    badges: bool,
 }
 
 impl WindowList {
@@ -415,8 +463,13 @@ impl WindowList {
         display: Option<DisplayKey>,
         pins: Vec<Pin>,
         start: Option<(String, SharedString)>,
+        badges: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        if badges {
+            Badges::watch(cx);
+            cx.observe_global::<Badges>(Self::refresh).detach();
+        }
         let patience = if WindowEvents::watch() {
             CHECKS_WATCHED
         } else {
@@ -458,6 +511,7 @@ impl WindowList {
             items: Vec::new(),
             foreground: None,
             next_key: 0,
+            badges,
         };
         for pin in pins {
             list.add(Some(pin), None, Vec::new(), cx);
@@ -504,6 +558,9 @@ impl WindowList {
             interaction: Interaction::new(&motion),
             middle: Rc::default(),
             leaving: false,
+            waiting: 0,
+            badge: Spring::new(motion.spatial_fast, 0.),
+            badged: false,
         });
         self.next_key += 1;
     }
@@ -682,6 +739,20 @@ impl WindowList {
             let more = u8::try_from(more).unwrap_or(u8::MAX).min(MORE_DOTS);
             item.more.animate_to(f32::from(more));
         }
+        if let Some(badges) = cx.try_global::<Badges>().filter(|_| self.badges) {
+            for item in &mut self.items {
+                let waiting = item.waiting(badges);
+                if waiting > 0 && waiting != item.waiting {
+                    item.waiting = waiting;
+                    changed = true;
+                }
+                if (waiting > 0) != item.badged {
+                    item.badged = waiting > 0;
+                    item.badge.animate_to(if item.badged { 1. } else { 0. });
+                    changed = true;
+                }
+            }
+        }
         if changed {
             cx.notify();
         }
@@ -698,6 +769,8 @@ impl WindowList {
         let active = item.active.value(window);
         let running = item.running.value(window);
         let more = item.more.value(window);
+        let badge = item.badge.value(window).clamp(0., 1.2);
+        let waiting = item.waiting;
         let state = item.interaction.state(window);
         let key = item.key;
         let ids: Vec<AppWindowId> = item.windows.iter().map(|window| window.id).collect();
@@ -765,7 +838,8 @@ impl WindowList {
                     .bg(theme.colors.outline)
                     .into_any_element(),
             })
-            .child(Self::render_indicator(active, running, more, theme));
+            .child(Self::render_indicator(active, running, more, theme))
+            .children((badge > 0.01).then(|| Self::render_badge(waiting, badge, theme)));
         let button = Interaction::track_hover(
             button,
             cx,
@@ -860,6 +934,36 @@ impl WindowList {
     /// pill while one of its windows is in front, and up to [`MORE_DOTS`]
     /// dots beside it, `more` of them, for its further windows. `running`
     /// is 0 under an application without a window, which has no dot.
+    fn render_badge(waiting: usize, shown: f32, theme: Theme) -> AnyElement {
+        let size = theme.dock.item_size * BADGE_SIZE;
+        let text = if waiting > BADGE_MOST {
+            format!("{BADGE_MOST}+")
+        } else {
+            waiting.to_string()
+        };
+        // The badge grows out of its middle.
+        let inset = size * (1. - shown) / 2.;
+        div()
+            .absolute()
+            .top(inset)
+            .right(inset)
+            .h(size * shown)
+            .min_w(size * shown)
+            .px(size * shown / 4.)
+            .flex()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .rounded(theme.shape.full)
+            .bg(theme.colors.primary)
+            .text_color(theme.colors.surface_container)
+            .text_size(size * 0.62 * shown.min(1.))
+            .font_weight(gpui::FontWeight::BOLD)
+            .opacity(shown.min(1.))
+            .child(SharedString::from(text))
+            .into_any_element()
+    }
+
     fn render_indicator(active: f32, running: f32, more: f32, theme: Theme) -> AnyElement {
         let dot = theme.dock.indicator_height;
         let growth = theme.dock.indicator_active_width - dot;
