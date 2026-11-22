@@ -271,3 +271,4 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "The program is written in the file by hand." = "Le programme s'écrit à la main dans le fichier."
 "Empty" = "Vide"
 "Tessera keeps no workspaces of its own" = "Tessera ne tient pas d'espaces de travail à elle"
+"Updating" = "Mise à jour"

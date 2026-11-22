@@ -232,7 +232,10 @@
 #               a click has Explorer open the bin. It does not empty it
 #   "update"    nothing until github.com lists a release of Tessera newer
 #               than the one running, then its name; a click opens its
-#               page in the browser. Nothing is downloaded or installed.
+#               page in the browser, or with install = true downloads
+#               tessera.exe of that release, checks it against the
+#               tessera.exe.sha256 beside it, puts it in the place of
+#               the running program and starts it (not tried yet).
 #               It asks 20 seconds after the start and then every hours
 #               (24, at least 1); previews = true counts releases that
 #               are previews; repository names another place than

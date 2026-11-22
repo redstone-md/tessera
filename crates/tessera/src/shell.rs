@@ -7,7 +7,7 @@
 use std::mem;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{Context as _, bail};
 use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
 use crate::banners::Banners;
@@ -21,7 +21,7 @@ use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::panel::Panel;
-use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, WindowsKey};
+use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
@@ -415,5 +415,17 @@ impl Shell {
             }
         }
         surfaces
+    }
+}
+
+/// Ends this Tessera and starts the program again, as it is on the disk
+/// by then.
+pub fn restart(cx: &mut App) {
+    let started = std::env::current_exe()
+        .context("the Tessera executable could not be located")
+        .and_then(|executable| Taskbar::start_successor(&executable));
+    match started {
+        Ok(()) => cx.quit(),
+        Err(error) => report!("Tessera does not start again: {error:#}"),
     }
 }

@@ -86,6 +86,21 @@ pub fn download(url: &str, limit: u64) -> Result<Vec<u8>, String> {
         .map_err(describe)
 }
 
+/// Writes what is at the address `url` to `sink` as it arrives, if it is
+/// no longer than `limit`, and says how long it was. Redirects to other
+/// HTTPS addresses are followed.
+pub fn download_into(url: &str, limit: u64, sink: &mut impl std::io::Write) -> Result<u64, String> {
+    let mut response = agent(DOWNLOAD_REDIRECTS)
+        .get(url)
+        .call()
+        .map_err(describe)?;
+    if !response.status().is_success() {
+        return Err(format!("the server answered {}", response.status()));
+    }
+    let mut body = response.body_mut().with_config().limit(limit).reader();
+    std::io::copy(&mut body, sink).map_err(describe)
+}
+
 /// A client that speaks HTTPS only and follows up to `redirects`
 /// redirects.
 fn agent(redirects: u32) -> Agent {

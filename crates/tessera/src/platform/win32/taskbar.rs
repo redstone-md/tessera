@@ -9,7 +9,9 @@
 //! shell to exit for any reason, including a crash or being terminated.
 
 use std::os::windows::process::CommandExt;
+use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use anyhow::{Context as _, Result, bail};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
@@ -33,6 +35,25 @@ const TOGGLE_DESKTOP: usize = 407;
 /// Command-line flag that turns the process into the restore watchdog.
 const WATCHDOG_FLAG: &str = "--restore-taskbar-after";
 
+/// Command-line flag of a shell that starts only once the processes
+/// whose numbers follow it are gone.
+const SUCCESSOR_FLAG: &str = "--start-after";
+
+/// The watchdog this shell started.
+static WATCHDOG: OnceLock<u32> = OnceLock::new();
+
+/// Waits until the process with the number `process` is gone.
+fn wait_for(process: u32) {
+    // SAFETY: the handle is only waited on and then closed. A process that
+    // is already gone cannot be opened and the wait is skipped.
+    unsafe {
+        if let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, process) {
+            WaitForSingleObject(process, INFINITE);
+            let _ = CloseHandle(process);
+        }
+    }
+}
+
 /// The Explorer taskbar on every display.
 pub struct Taskbar;
 
@@ -50,17 +71,46 @@ impl Taskbar {
             std::env::current_exe().context("the Tessera executable could not be located")?;
         // SAFETY: the call takes no arguments and cannot fail.
         let shell = unsafe { GetCurrentProcessId() };
-        Command::new(executable)
+        let watchdog = Command::new(executable)
             .arg(WATCHDOG_FLAG)
             .arg(shell.to_string())
             .arg(state.to_string())
             .creation_flags(CREATE_NO_WINDOW.0)
             .spawn()
             .context("the taskbar restore watchdog could not be started")?;
+        let _ = WATCHDOG.set(watchdog.id());
 
         Self::set_state(primary, state | ABS_AUTOHIDE);
         Self::keep_hidden();
         Ok(())
+    }
+
+    /// Starts `executable` as the shell that takes over from this one. It
+    /// waits for this shell and for its watchdog to be gone, so that it
+    /// finds the taskbar as Windows had it and the keys free.
+    pub fn start_successor(executable: &Path) -> Result<()> {
+        // SAFETY: the call takes no arguments and cannot fail.
+        let shell = unsafe { GetCurrentProcessId() };
+        let mut command = Command::new(executable);
+        command.arg(SUCCESSOR_FLAG).arg(shell.to_string());
+        if let Some(watchdog) = WATCHDOG.get() {
+            command.arg(watchdog.to_string());
+        }
+        command
+            .spawn()
+            .context("the next shell could not be started")?;
+        Ok(())
+    }
+
+    /// Waits for the shell this one takes over from, if the arguments
+    /// name one.
+    pub fn wait_for_predecessor(mut arguments: impl Iterator<Item = String>) {
+        if arguments.next().as_deref() != Some(SUCCESSOR_FLAG) {
+            return;
+        }
+        for process in arguments.filter_map(|value| value.parse::<u32>().ok()) {
+            wait_for(process);
+        }
     }
 
     /// Hides taskbar windows again if Explorer has shown them.
@@ -99,14 +149,7 @@ impl Taskbar {
         let shell = arguments.next().and_then(|value| value.parse::<u32>().ok());
         let state = arguments.next().and_then(|value| value.parse::<u32>().ok());
         if let (Some(shell), Some(state)) = (shell, state) {
-            // SAFETY: the handle is only waited on and then closed. When the
-            // shell is already gone it cannot be opened and the wait is skipped.
-            unsafe {
-                if let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, shell) {
-                    WaitForSingleObject(process, INFINITE);
-                    let _ = CloseHandle(process);
-                }
-            }
+            wait_for(shell);
             Self::restore(state);
         }
         true

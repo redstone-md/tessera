@@ -271,3 +271,4 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "The program is written in the file by hand." = "Програму вписують у файл вручну."
 "Empty" = "Порожньо"
 "Tessera keeps no workspaces of its own" = "Власних робочих столів Tessera не веде"
+"Updating" = "Оновлення"

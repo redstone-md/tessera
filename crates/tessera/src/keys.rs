@@ -111,7 +111,9 @@ const FIRST: u32 = 1 << 16;
 
 /// The words a start of the program may begin with to hand them to the
 /// Tessera that runs already.
-const COMMANDS: [&str; 6] = ["popup", "tiling", "focus", "move", "dock", "quit"];
+const COMMANDS: [&str; 7] = [
+    "popup", "tiling", "focus", "move", "dock", "quit", "restart",
+];
 
 /// What separates the words on their way.
 const BETWEEN: char = '\n';
@@ -132,6 +134,7 @@ pub fn send_if_requested(words: impl Iterator<Item = String>) -> Option<bool> {
 #[derive(Debug, PartialEq)]
 enum Asked {
     Quit,
+    Restart,
     Deed(Deed),
 }
 
@@ -152,6 +155,7 @@ impl Asked {
         };
         match words[..] {
             ["quit"] => return Ok(Self::Quit),
+            ["restart"] => return Ok(Self::Restart),
             ["popup", name] => key.popup = said(name),
             ["tiling", name] => key.tiling = said(name),
             ["focus", side] => key.focus = said(side),
@@ -338,6 +342,7 @@ impl Shortcuts {
             while let Ok(text) = commands.recv().await {
                 let answered = cx.update(|cx| match Asked::of(&text) {
                     Ok(Asked::Quit) => cx.quit(),
+                    Ok(Asked::Restart) => crate::shell::restart(cx),
                     Ok(Asked::Deed(deed)) => deed.done(cx),
                     Err(why) => report!("a command does nothing: {why}"),
                 });
@@ -452,6 +457,7 @@ mod tests {
     #[test]
     fn handed_words_ask_for_what_a_key_does() {
         assert_eq!(Asked::of("quit"), Ok(Asked::Quit));
+        assert_eq!(Asked::of("restart"), Ok(Asked::Restart));
         assert_eq!(
             Asked::of("popup\nlauncher"),
             Ok(Asked::Deed(Deed::Popup("launcher".to_owned())))
