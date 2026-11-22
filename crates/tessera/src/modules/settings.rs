@@ -627,6 +627,8 @@ struct Settings {
     /// The programs with an open window that are not pinned.
     running: Vec<PathBuf>,
     themes: Vec<String>,
+    /// The languages there are to choose.
+    languages: Vec<Language>,
     /// The slot whose list of widgets to add is open, kept while it closes.
     adding: Option<Holder>,
     /// 1 while that list is open, 0 while it is closed.
@@ -656,6 +658,7 @@ impl Settings {
             available: Vec::new(),
             running: Vec::new(),
             themes: Vec::new(),
+            languages: Vec::new(),
             adding: None,
             add_list: Spring::new(motion.spatial_fast, 0.),
             interactions: HashMap::new(),
@@ -672,6 +675,7 @@ impl Settings {
     fn look_around(&mut self, cx: &mut Context<Self>) {
         self.available = cx.global::<WidgetRegistry>().names();
         self.themes = themes();
+        self.languages = Language::installed();
         let pins = self
             .config
             .as_ref()
@@ -1400,7 +1404,7 @@ impl Settings {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
         let mut choices = Vec::new();
-        for other in Language::ALL {
+        for other in self.languages.clone() {
             let face = Face::Chip {
                 text: other.name().into(),
                 selected: other == language,
