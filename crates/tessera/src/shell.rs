@@ -25,6 +25,7 @@ use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
+use crate::switcher::Switcher;
 use crate::theme::Theme;
 use crate::tiling::Tiler;
 use crate::tip::Tips;
@@ -79,6 +80,7 @@ impl Shell {
         Wallpaper::start(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);
+        Switcher::configure(&config.switcher, cx);
         cx.set_global(Self {
             config,
             surfaces,
@@ -259,6 +261,7 @@ impl Shell {
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);
+        Switcher::configure(&config.switcher, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

@@ -17,6 +17,7 @@ use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
 use crate::platform::ScreenEdge;
+use crate::switcher::SwitcherConfig;
 use crate::tiling::TilingConfig;
 use crate::wallpaper::WallpaperConfig;
 use crate::workspaces::WorkspacesConfig;
@@ -330,6 +331,9 @@ pub struct Config {
     /// Whether a change of the volume is shown for a moment.
     #[serde(default)]
     pub flyout: FlyoutConfig,
+    /// How the window switcher looks.
+    #[serde(default)]
+    pub switcher: SwitcherConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

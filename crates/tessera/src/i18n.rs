@@ -518,6 +518,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Monocle", "Одно окно"),
     ("Gap", "Отступ"),
     ("Border of the window in front", "Рамка активного окна"),
+    ("Window switcher", "Переключатель окон"),
+    ("Window previews", "Миниатюры окон"),
     ("Workspaces", "Рабочие столы"),
     ("Own workspaces", "Свои рабочие столы"),
     ("Keys with a digit", "Клавиши с цифрой"),

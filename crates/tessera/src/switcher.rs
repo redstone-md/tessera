@@ -4,6 +4,9 @@
 //! The window switcher: the application windows as tiles in the middle of
 //! a display, gone through with a key combination while its keys to hold
 //! stay down, and the chosen one brought in front once they are let go.
+//!
+//! Where the configuration asks for it, a tile shows a picture of its
+//! window, which Windows draws and keeps up to date.
 
 use std::time::Duration;
 
@@ -13,12 +16,15 @@ use gpui::{
     Subscription, WeakEntity, Window, WindowHandle, div, img, point, px, size,
 };
 
+use serde::Deserialize;
+
 use crate::icons::{AppIcons, Icon};
 use crate::motion::{Spring, mix, staggered};
 use crate::platform::{
-    AppWindow, AppWindowId, ChoiceKey, Modifiers, NativeSurface, ScreenEdge, TakenKeys,
+    AppWindow, AppWindowId, ChoiceKey, Modifiers, NativeSurface, ScreenEdge, ScreenRect, TakenKeys,
+    Thumbnail,
 };
-use crate::popup::{floating_panel, open_floating, retire_floating};
+use crate::popup::{MARGIN, floating_panel, floating_travel, open_floating, retire_floating};
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{one_line, release_hover};
@@ -33,6 +39,61 @@ const ICON: f32 = 48.;
 /// How many tiles stand in a row at most.
 const COLUMNS: usize = 8;
 
+/// The width and the height of a tile with a picture of its window, the
+/// room the picture has in it, and what is under the picture: the height
+/// of the line with the name and the length of the sides of its icon.
+const PICTURE_TILE: (f32, f32) = (208., 172.);
+const PICTURE: (f32, f32) = (192., 120.);
+const NAME_HEIGHT: f32 = 28.;
+const SMALL_ICON: f32 = 20.;
+
+/// How many tiles with pictures stand in a row at most.
+const PICTURE_COLUMNS: usize = 6;
+
+/// What `[switcher]` of the configuration says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwitcherConfig {
+    /// Whether a tile shows a picture of its window.
+    #[serde(default)]
+    previews: bool,
+}
+
+/// The measures of the tiles of a switcher.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tiles {
+    width: f32,
+    height: f32,
+    /// How many stand in a row at most.
+    columns: usize,
+    /// Whether they show pictures of their windows.
+    pictures: bool,
+}
+
+impl Tiles {
+    fn of(pictures: bool) -> Self {
+        let ((width, height), columns) = match pictures {
+            true => (PICTURE_TILE, PICTURE_COLUMNS),
+            false => ((TILE_WIDTH, TILE_HEIGHT), COLUMNS),
+        };
+        Self {
+            width,
+            height,
+            columns,
+            pictures,
+        }
+    }
+}
+
+/// The logical size of the picture of a window of `source` physical
+/// pixels on a display of `scale`: as large as its room in a tile allows,
+/// never enlarged.
+fn fitted((width, height): (i32, i32), scale: f32) -> (f32, f32) {
+    let (width, height) = (width as f32 / scale, height as f32 / scale);
+    let factor = (PICTURE.0 / width).min(PICTURE.1 / height).min(1.);
+    (width * factor, height * factor)
+}
+
 /// How many windows are offered at most: the ones used last.
 const SHOWN: usize = 40;
 
@@ -45,11 +106,18 @@ pub struct Switcher {
     open: Option<WindowHandle<SwitcherView>>,
     /// Whether the keys that move through the tiles are listened for.
     listening: bool,
+    /// Whether the tiles show pictures of their windows.
+    previews: bool,
 }
 
 impl Global for Switcher {}
 
 impl Switcher {
+    /// Takes in the configuration; a switcher that is open stays as it is.
+    pub fn configure(config: &SwitcherConfig, cx: &mut App) {
+        cx.default_global::<Self>().previews = config.previews;
+    }
+
     /// Goes one window on in the open switcher, or back with `back`; opens
     /// it when it is not open, with the window used before the one in
     /// front chosen. The choice is taken once none of `held` is down.
@@ -76,8 +144,9 @@ impl Switcher {
         let front = AppWindowId::foreground();
         let front = windows.iter().position(|window| Some(window.id) == front);
         let chosen = first_choice(windows.len(), front, back);
+        let tiles = Tiles::of(cx.global::<Self>().previews);
         let icons = cx.global::<AppIcons>();
-        let entries: Vec<_> = windows
+        let mut entries: Vec<_> = windows
             .iter()
             .map(|window| Entry {
                 id: window.id,
@@ -85,13 +154,15 @@ impl Switcher {
                 icon: window
                     .program()
                     .and_then(|program| icons.of_executable(&program)),
+                picture: None,
             })
             .collect();
         let theme = *cx.global::<Theme>();
-        let (columns, rows) = grid(entries.len());
+        let (columns, rows) = grid(entries.len(), tiles.columns);
         let gap = theme.spacing.small / px(1.);
         let padding = theme.spacing.medium / px(1.);
-        let (width, height) = extent(columns, rows, gap, padding);
+        let (width, height) = extent(columns, rows, gap, padding, tiles);
+        let scale = anchor.scale;
         let frame = anchor.middle(width, height);
         let rough = Bounds {
             origin: point(
@@ -101,7 +172,17 @@ impl Switcher {
             size: size(px(width), px(height)),
         };
         let opened = open_floating(rough, anchor.display_id, true, cx, |window, cx| {
-            let adopted = NativeSurface::of(window).and_then(|native| {
+            let native = NativeSurface::of(window);
+            if let (true, Ok(native)) = (tiles.pictures, &native) {
+                for entry in &mut entries {
+                    let thumbnail = Thumbnail::of(entry.id, *native).ok();
+                    entry.picture = thumbnail.and_then(|thumbnail| {
+                        let source = thumbnail.source_size()?;
+                        Some((thumbnail, fitted(source, scale)))
+                    });
+                }
+            }
+            let adopted = native.and_then(|native| {
                 native.adopt_as_popup()?;
                 native.place(frame)?;
                 native.reveal(true);
@@ -110,7 +191,7 @@ impl Switcher {
             if let Err(error) = adopted {
                 report!("the window switcher is not where it belongs: {error:#}");
             }
-            SwitcherView::new(entries, chosen, columns, held, window, cx)
+            SwitcherView::new(entries, chosen, (columns, tiles), held, window, cx)
         });
         match opened {
             Ok(window) => {
@@ -176,19 +257,20 @@ fn stepped(at: usize, count: usize, back: bool) -> usize {
     (at + step) % count
 }
 
-/// In how many columns and rows `count` tiles stand.
-fn grid(count: usize) -> (usize, usize) {
-    let columns = count.clamp(1, COLUMNS);
+/// In how many columns and rows `count` tiles stand, at most `most` in
+/// a row.
+fn grid(count: usize, most: usize) -> (usize, usize) {
+    let columns = count.clamp(1, most.max(1));
     (columns, count.max(1).div_ceil(columns))
 }
 
 /// The logical width and height of the panel around `columns` by `rows`
-/// tiles, `gap` apart and `padding` from its border.
-fn extent(columns: usize, rows: usize, gap: f32, padding: f32) -> (f32, f32) {
+/// of `tiles`, `gap` apart and `padding` from its border.
+fn extent(columns: usize, rows: usize, gap: f32, padding: f32, tiles: Tiles) -> (f32, f32) {
     let along = |tiles: usize, length: f32| {
         tiles as f32 * length + tiles.saturating_sub(1) as f32 * gap + padding * 2.
     };
-    (along(columns, TILE_WIDTH), along(rows, TILE_HEIGHT))
+    (along(columns, tiles.width), along(rows, tiles.height))
 }
 
 /// A window to switch to.
@@ -196,6 +278,9 @@ struct Entry {
     id: AppWindowId,
     title: SharedString,
     icon: Icon,
+    /// The picture of the window and its logical size, where the tiles
+    /// show pictures and Windows gives one.
+    picture: Option<(Thumbnail, (f32, f32))>,
 }
 
 /// The root view of the switcher window.
@@ -204,6 +289,7 @@ pub struct SwitcherView {
     /// Which entry is brought in front when the keys are let go.
     chosen: usize,
     columns: usize,
+    tiles: Tiles,
     /// The column and the row of the mark behind the chosen tile, which
     /// travels from tile to tile.
     column: Spring,
@@ -221,7 +307,7 @@ impl SwitcherView {
     fn new(
         entries: Vec<Entry>,
         chosen: usize,
-        columns: usize,
+        (columns, tiles): (usize, Tiles),
         held: Modifiers,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -256,6 +342,7 @@ impl SwitcherView {
             entries,
             chosen,
             columns,
+            tiles,
             visibility,
             closing: false,
             was_active: false,
@@ -343,10 +430,11 @@ impl Render for SwitcherView {
             retire_floating(window, cx);
         }
         let gap = theme.spacing.small / px(1.);
+        let tiles = self.tiles;
         let place = |column: f32, row: f32| {
             (
-                px(column * (TILE_WIDTH + gap)),
-                px(row * (TILE_HEIGHT + gap)),
+                px(column * (tiles.width + gap)),
+                px(row * (tiles.height + gap)),
             )
         };
         let (left, top) = place(self.column.value(window), self.row.value(window));
@@ -354,31 +442,59 @@ impl Render for SwitcherView {
             .absolute()
             .left(left)
             .top(top)
-            .w(px(TILE_WIDTH))
-            .h(px(TILE_HEIGHT))
+            .w(px(tiles.width))
+            .h(px(tiles.height))
             .rounded(theme.shape.large)
             .bg(theme.colors.secondary_container);
         let count = self.entries.len();
-        let tiles: Vec<_> = self
+        // Where the tiles begin, in logical pixels of the window.
+        let padding = theme.spacing.medium / px(1.);
+        let travel = floating_travel(ScreenEdge::Top, visibility) / px(1.);
+        let (first_left, first_top) = (MARGIN + padding, MARGIN + travel + padding);
+        let scale = window.scale_factor();
+        let physical = |length: f32| (length * scale).round() as i32;
+        let elements: Vec<_> = self
             .entries
             .iter()
             .enumerate()
             .map(|(index, entry)| {
-                let (left, top) =
-                    place((index % self.columns) as f32, (index / self.columns) as f32);
+                let (column, row) = (index % self.columns, index / self.columns);
+                let (left, top) = place(column as f32, row as f32);
                 let arrival = staggered(visibility, index, count);
+                let rise = 8. * (1. - arrival);
                 let chosen = index == self.chosen;
                 let color = match chosen {
                     true => theme.colors.on_surface,
                     false => theme.colors.on_surface_variant,
                 };
-                div()
+                if let Some((thumbnail, (width, height))) = &entry.picture {
+                    let left = first_left + left / px(1.) + (tiles.width - width) / 2.;
+                    let top = first_top + top / px(1.) + rise + gap + (PICTURE.1 - height) / 2.;
+                    let area = ScreenRect {
+                        left: physical(left),
+                        top: physical(top),
+                        right: physical(left + width),
+                        bottom: physical(top + height),
+                    };
+                    thumbnail.place(area, arrival * visibility.clamp(0., 1.));
+                }
+                let icon = |side: f32| match entry.icon.clone() {
+                    Some(icon) => img(icon).size(px(side)).flex_none().into_any_element(),
+                    None => div()
+                        .size(px(side))
+                        .flex_none()
+                        .rounded(theme.shape.small)
+                        .bg(theme.colors.outline)
+                        .into_any_element(),
+                };
+                let title = div().max_w_full().child(one_line(entry.title.clone()));
+                let tile = div()
                     .id(("switcher-tile", index))
                     .absolute()
                     .left(left)
-                    .top(top + px(8. * (1. - arrival)))
-                    .w(px(TILE_WIDTH))
-                    .h(px(TILE_HEIGHT))
+                    .top(top + px(rise))
+                    .w(px(tiles.width))
+                    .h(px(tiles.height))
                     .px(theme.spacing.small)
                     .flex()
                     .flex_col()
@@ -389,18 +505,32 @@ impl Render for SwitcherView {
                     .cursor(CursorStyle::PointingHand)
                     .text_color(mix(theme.colors.on_surface_variant, color, visibility))
                     .when_weight(chosen)
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)))
-                    .child(match entry.icon.clone() {
-                        Some(icon) => img(icon).size(px(ICON)).into_any_element(),
-                        None => div()
-                            .size(px(ICON))
-                            .rounded(theme.shape.small)
-                            .bg(theme.colors.outline)
-                            .into_any_element(),
-                    })
-                    .child(div().max_w_full().child(one_line(entry.title.clone())))
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
+                if !tiles.pictures {
+                    return tile.child(icon(ICON)).child(title);
+                }
+                // Windows draws the picture over this room; a window it
+                // gives none of shows its icon there.
+                let room = div()
+                    .w(px(PICTURE.0))
+                    .h(px(PICTURE.1))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .children(entry.picture.is_none().then(|| icon(ICON)));
+                let name = div()
+                    .max_w_full()
+                    .h(px(NAME_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.small)
+                    .child(icon(SMALL_ICON))
+                    .child(div().min_w_0().child(one_line(entry.title.clone())));
+                tile.child(room).child(name)
             })
             .collect();
+        let tiles = elements;
         floating_panel(&theme, ScreenEdge::Top, visibility, |panel| {
             panel.child(div().relative().size_full().child(mark).children(tiles))
         })
@@ -454,10 +584,31 @@ mod tests {
 
     #[test]
     fn tiles_fill_a_row_before_another_one_begins() {
-        assert_eq!(grid(1), (1, 1));
-        assert_eq!(grid(8), (8, 1));
-        assert_eq!(grid(9), (8, 2));
-        assert_eq!(grid(40), (8, 5));
-        assert_eq!(extent(2, 1, 8., 12.), (2. * 136. + 8. + 24., 112. + 24.));
+        assert_eq!(grid(1, COLUMNS), (1, 1));
+        assert_eq!(grid(8, COLUMNS), (8, 1));
+        assert_eq!(grid(9, COLUMNS), (8, 2));
+        assert_eq!(grid(40, COLUMNS), (8, 5));
+        assert_eq!(grid(9, PICTURE_COLUMNS), (6, 2));
+        let plain = Tiles::of(false);
+        assert_eq!(
+            extent(2, 1, 8., 12., plain),
+            (2. * 136. + 8. + 24., 112. + 24.)
+        );
+        let pictured = Tiles::of(true);
+        assert_eq!(
+            extent(2, 1, 8., 12., pictured),
+            (2. * 208. + 8. + 24., 172. + 24.)
+        );
+    }
+
+    #[test]
+    fn a_picture_fills_its_room_and_is_never_enlarged() {
+        assert_eq!(fitted((1920, 1080), 1.), (192., 108.));
+        assert_eq!(fitted((600, 1200), 1.), (60., 120.));
+        assert_eq!(fitted((100, 50), 1.), (100., 50.));
+        assert_eq!(fitted((200, 100), 2.), (100., 50.));
+        let config: SwitcherConfig = toml::from_str("previews = true").unwrap();
+        assert!(config.previews);
+        assert!(!SwitcherConfig::default().previews);
     }
 }

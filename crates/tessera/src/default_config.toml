@@ -360,6 +360,15 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # quiet = false
 # seconds = 6
 
+# [switcher] with previews = true has each tile of the window switcher (see
+# switch of [[key]] above) show a picture of its window, which Windows
+# draws and keeps up to date, with the icon and the title under it; the
+# tiles are larger then, six in a row. A window Windows gives no picture
+# of shows its icon.
+#
+# [switcher]
+# previews = true
+
 # [flyout] with volume = true has Tessera show the volume of the default
 # audio output for a moment whenever it changes, whoever changed it: a pill
 # with a wavy line and the number, at the lower side of the display the

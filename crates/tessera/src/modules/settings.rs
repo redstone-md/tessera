@@ -464,6 +464,16 @@ const SETTINGS: &[Setting] = &[
     },
     Setting {
         section: Section::Windows,
+        card: "Window switcher",
+        title: "Window previews",
+        target: Target::Table("switcher", "previews"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
+        section: Section::Windows,
         card: "Workspaces",
         title: "Own workspaces",
         target: Target::Table("workspaces", "own"),
