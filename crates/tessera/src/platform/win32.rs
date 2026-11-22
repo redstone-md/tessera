@@ -31,6 +31,7 @@ mod taskbar;
 mod thumbnail;
 mod tray;
 mod veil;
+mod video;
 mod wifi;
 mod windows_key;
 
@@ -63,6 +64,7 @@ pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
+pub use video::{DesktopVideo, VideoState};
 pub use wifi::{Wifi, WifiNetwork, WifiReach};
 pub use windows_key::WindowsKey;
 

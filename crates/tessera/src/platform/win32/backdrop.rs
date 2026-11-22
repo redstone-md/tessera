@@ -53,7 +53,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SystemParametersInfoW, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_CHILD,
     WS_EX_LAYERED, WS_EX_NOACTIVATE,
 };
-use windows::core::{BOOL, w};
+use windows::core::{BOOL, PCWSTR, w};
 
 use super::ScreenRect;
 
@@ -391,94 +391,12 @@ impl DesktopBackdrop {
     /// Opens the window over the display at `frame`, not yet to be seen.
     /// Fails where the desktop is not laid out as Windows 11 24H2 does.
     pub fn open(frame: ScreenRect) -> Result<Self> {
-        let width = frame.right - frame.left;
-        let height = frame.bottom - frame.top;
-        // SAFETY: the calls look windows up by class, send one message
-        // with a time limit, and make and place a window of this thread;
-        // `corner` outlives the call that maps it.
-        unsafe {
-            let desktop = FindWindowW(w!("Progman"), None).context("there is no desktop window")?;
-            let parts = |desktop: HWND| {
-                let icons =
-                    FindWindowExW(Some(desktop), None, w!("SHELLDLL_DefView"), None).ok()?;
-                FindWindowExW(Some(desktop), None, w!("WorkerW"), None).ok()?;
-                Some(icons)
-            };
-            let icons = match parts(desktop) {
-                Some(icons) => icons,
-                None => {
-                    SendMessageTimeoutW(
-                        desktop,
-                        RAISE_DESKTOP,
-                        WPARAM(RAISE_DESKTOP_W),
-                        LPARAM(RAISE_DESKTOP_L),
-                        SMTO_NORMAL,
-                        ANSWER_TIME,
-                        None,
-                    );
-                    let Some(icons) = parts(desktop) else {
-                        bail!("the desktop of this Windows is not laid out in a way Tessera knows");
-                    };
-                    icons
-                }
-            };
-
-            let module = GetModuleHandleW(None).context("the program has no module")?;
-            let class = WNDCLASSW {
-                lpfnWndProc: Some(respond),
-                hInstance: module.into(),
-                lpszClassName: w!("TesseraBackdrop"),
-                ..Default::default()
-            };
-            // Fails when the class is there already, which is as good.
-            RegisterClassW(&raw const class);
-
-            // A child is placed in the coordinates of its parent.
-            let mut corner = [POINT {
-                x: frame.left,
-                y: frame.top,
-            }];
-            MapWindowPoints(None, Some(desktop), &mut corner);
-            // Windows makes and draws a layered child only for a program
-            // whose manifest says it is written for Windows 8 or later,
-            // as that of Tessera does.
-            let hwnd = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_NOACTIVATE,
-                class.lpszClassName,
-                w!(""),
-                WS_CHILD,
-                corner[0].x,
-                corner[0].y,
-                width,
-                height,
-                Some(desktop),
-                None,
-                Some(module.into()),
-                None,
-            )
-            .context("the wallpaper window could not be made")?;
-            let backdrop = Self {
-                hwnd,
-                width,
-                height,
-                revealed: Cell::new(false),
-            };
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA)
-                .context("the window could not be made a layer of the desktop")?;
-            // After the icons in the order of the children is below them,
-            // and the wallpaper stays the last.
-            SetWindowPos(
-                hwnd,
-                Some(icons),
-                corner[0].x,
-                corner[0].y,
-                width,
-                height,
-                SWP_NOACTIVATE | SWP_FRAMECHANGED,
-            )
-            .context("the window could not be put behind the icons")?;
-            Ok(backdrop)
-        }
+        Ok(Self {
+            hwnd: open_behind_icons(frame, w!("TesseraBackdrop"), respond)?,
+            width: frame.right - frame.left,
+            height: frame.bottom - frame.top,
+            revealed: Cell::new(false),
+        })
     }
 
     /// The size of the window, which a picture for it must have.
@@ -654,6 +572,110 @@ impl Drop for DesktopBackdrop {
         }
         BACKDROPS_CHANGED.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Makes a window of the class `name`, which `respond` is the procedure
+/// of, behind the icons of the desktop over the display at `frame`: a
+/// layer of the desktop of which nothing is seen yet. Fails where the
+/// desktop is not laid out as Windows 11 24H2 does.
+pub(super) fn open_behind_icons(
+    frame: ScreenRect,
+    name: PCWSTR,
+    respond: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+) -> Result<HWND> {
+    let width = frame.right - frame.left;
+    let height = frame.bottom - frame.top;
+    // SAFETY: the calls look windows up by class, send one message
+    // with a time limit, and make and place a window of this thread;
+    // `corner` outlives the call that maps it.
+    unsafe {
+        let desktop = FindWindowW(w!("Progman"), None).context("there is no desktop window")?;
+        let parts = |desktop: HWND| {
+            let icons = FindWindowExW(Some(desktop), None, w!("SHELLDLL_DefView"), None).ok()?;
+            FindWindowExW(Some(desktop), None, w!("WorkerW"), None).ok()?;
+            Some(icons)
+        };
+        let icons = match parts(desktop) {
+            Some(icons) => icons,
+            None => {
+                SendMessageTimeoutW(
+                    desktop,
+                    RAISE_DESKTOP,
+                    WPARAM(RAISE_DESKTOP_W),
+                    LPARAM(RAISE_DESKTOP_L),
+                    SMTO_NORMAL,
+                    ANSWER_TIME,
+                    None,
+                );
+                let Some(icons) = parts(desktop) else {
+                    bail!("the desktop of this Windows is not laid out in a way Tessera knows");
+                };
+                icons
+            }
+        };
+
+        let module = GetModuleHandleW(None).context("the program has no module")?;
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(respond),
+            hInstance: module.into(),
+            lpszClassName: name,
+            ..Default::default()
+        };
+        // Fails when the class is there already, which is as good.
+        RegisterClassW(&raw const class);
+
+        // A child is placed in the coordinates of its parent.
+        let mut corner = [POINT {
+            x: frame.left,
+            y: frame.top,
+        }];
+        MapWindowPoints(None, Some(desktop), &mut corner);
+        // Windows makes and draws a layered child only for a program
+        // whose manifest says it is written for Windows 8 or later,
+        // as that of Tessera does.
+        let hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_NOACTIVATE,
+            class.lpszClassName,
+            w!(""),
+            WS_CHILD,
+            corner[0].x,
+            corner[0].y,
+            width,
+            height,
+            Some(desktop),
+            None,
+            Some(module.into()),
+            None,
+        )
+        .context("the wallpaper window could not be made")?;
+        let placed = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA)
+            .context("the window could not be made a layer of the desktop")
+            .and_then(|()| {
+                // After the icons in the order of the children is
+                // below them, and the wallpaper stays the last.
+                SetWindowPos(
+                    hwnd,
+                    Some(icons),
+                    corner[0].x,
+                    corner[0].y,
+                    width,
+                    height,
+                    SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                )
+                .context("the window could not be put behind the icons")
+            });
+        if let Err(error) = placed {
+            let _ = DestroyWindow(hwnd);
+            return Err(error);
+        }
+        Ok(hwnd)
+    }
+}
+
+/// Has [`desktop_look`] give another number: a wallpaper of Tessera came
+/// or went.
+pub(super) fn backdrops_changed() {
+    BACKDROPS_CHANGED.fetch_add(1, Ordering::Relaxed);
 }
 
 /// The window procedure of a backdrop: paints the bitmap, or black

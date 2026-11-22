@@ -2,12 +2,14 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! A wallpaper of Tessera's own: pictures shown behind the icons of the
-//! desktop on every display, one fading into the next.
+//! desktop on every display, one fading into the next, or a video that
+//! plays there again and again.
 //!
 //! The wallpaper of Windows is left as it is and shows again when Tessera
 //! exits, because the pictures are drawn in windows of Tessera that sit
 //! over it. Those are plain windows, not ones of the user interface: a
-//! picture is kept once for each display, at the size of the display.
+//! picture is kept once for each display, at the size of the display, and
+//! a video is drawn by Windows.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -20,7 +22,10 @@ use image::RgbImage;
 use serde::Deserialize;
 
 use crate::motion::{Spring, SpringSpec};
-use crate::platform::{BackdropPicture, DesktopBackdrop, ScreenRect, display_frames};
+use crate::platform::{
+    AppWindow, BackdropPicture, DesktopBackdrop, DesktopVideo, ScreenRect, VideoState,
+    display_frames,
+};
 use crate::theme::Theme;
 
 /// How long a picture stays unless the configuration says, in seconds.
@@ -37,6 +42,12 @@ const FRAME: Duration = Duration::from_millis(16);
 /// stays.
 const DISPLAY_CHECK: Duration = Duration::from_secs(2);
 
+/// How often a video is asked how far it has come while it is read.
+const VIDEO_CHECK: Duration = Duration::from_millis(50);
+
+/// How long a video may take to have its first frame.
+const VIDEO_PATIENCE: Duration = Duration::from_secs(15);
+
 /// The kinds of file taken from a directory, by extension.
 const KINDS: [&str; 3] = ["jpg", "jpeg", "png"];
 
@@ -50,6 +61,9 @@ pub struct WallpaperConfig {
     images: Vec<PathBuf>,
     /// How many seconds a picture stays before the next one.
     interval: Option<u64>,
+    /// A video file to play instead of the pictures, which are shown
+    /// where it cannot be played.
+    video: Option<PathBuf>,
 }
 
 impl WallpaperConfig {
@@ -211,10 +225,30 @@ fn covering_part(
     }
 }
 
+/// Whether one of `windows` hides a display at `frame`: lies over nine
+/// tenths of it or more.
+fn hidden(frame: ScreenRect, windows: &[ScreenRect]) -> bool {
+    let area = |frame: ScreenRect| {
+        let wide = i64::from((frame.right - frame.left).max(0));
+        wide * i64::from((frame.bottom - frame.top).max(0))
+    };
+    windows.iter().any(|window| {
+        let shared = ScreenRect {
+            left: window.left.max(frame.left),
+            top: window.top.max(frame.top),
+            right: window.right.min(frame.right),
+            bottom: window.bottom.min(frame.bottom),
+        };
+        area(shared) * 10 >= area(frame) * 9 && area(frame) > 0
+    })
+}
+
 /// The wallpaper windows and the pictures they go through.
 pub struct Wallpaper {
     config: WallpaperConfig,
     backdrops: Vec<DesktopBackdrop>,
+    /// The video, where one plays.
+    video: Option<DesktopVideo>,
     /// The displays the windows were opened for.
     frames: Vec<ScreenRect>,
     /// Counts configurations, so that the task of an earlier one stops.
@@ -229,6 +263,7 @@ impl Wallpaper {
         cx.set_global(Self {
             config: WallpaperConfig::default(),
             backdrops: Vec::new(),
+            video: None,
             frames: Vec::new(),
             task: 0,
         });
@@ -246,14 +281,36 @@ impl Wallpaper {
         this.task += 1;
         let task = this.task;
         let pictures = config.pictures();
-        if pictures.is_empty() {
+        let video = config.video.clone();
+        if this.video.is_some() != video.is_some() || pictures.is_empty() {
+            // The windows of the other kind go, or all of them.
+            this.video = None;
             this.backdrops.clear();
             this.frames.clear();
+        }
+        if pictures.is_empty() && video.is_none() {
             return;
         }
         let interval = config.interval();
         let fade = cx.global::<Theme>().motion.effects;
         cx.spawn(async move |cx: &mut AsyncApp| {
+            if let Some(video) = video {
+                match Self::play(task, &video, fade, cx).await {
+                    Ok(()) => return,
+                    Err(error) => report!("the wallpaper video is left out: {error:#}"),
+                }
+                let current = cx.update(|cx| {
+                    let this = cx.global_mut::<Self>();
+                    if this.task == task {
+                        this.video = None;
+                        this.frames.clear();
+                    }
+                    this.task == task
+                });
+                if !matches!(current, Ok(true)) || pictures.is_empty() {
+                    return;
+                }
+            }
             let mut next = 0;
             loop {
                 let Ok(Some(sizes)) = cx.update(|cx| Self::sizes(task, cx)) else {
@@ -283,6 +340,121 @@ impl Wallpaper {
             }
         })
         .detach();
+    }
+
+    /// Plays the video in the file at `path` on every display until the
+    /// wallpaper is configured anew, and returns then. Fails where the
+    /// video cannot be played.
+    async fn play(
+        task: usize,
+        path: &Path,
+        fade: SpringSpec,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<()> {
+        loop {
+            // The windows are opened for the displays there are.
+            let opened = cx.update(|cx| {
+                let this = cx.global_mut::<Self>();
+                if this.task != task {
+                    return Ok(false);
+                }
+                this.video = None;
+                let frames = display_frames();
+                this.video = Some(DesktopVideo::open(&frames, path)?);
+                this.frames = frames;
+                anyhow::Ok(true)
+            })??;
+            if !opened {
+                return Ok(());
+            }
+
+            let began = Instant::now();
+            loop {
+                cx.background_executor().timer(VIDEO_CHECK).await;
+                let state = cx.update(|cx| {
+                    let this = cx.global::<Self>();
+                    let video = this.video.as_ref().filter(|_| this.task == task);
+                    video.map(DesktopVideo::state)
+                })?;
+                match state {
+                    None => return Ok(()),
+                    Some(VideoState::Failed(why)) => {
+                        anyhow::bail!("{} cannot be played: {why}", path.display())
+                    }
+                    Some(VideoState::Playing) => break,
+                    Some(VideoState::Loading) => {}
+                }
+                if began.elapsed() > VIDEO_PATIENCE {
+                    anyhow::bail!("{} did not begin to play", path.display());
+                }
+            }
+
+            let mut presence = Spring::new(fade, 0.);
+            presence.animate_to(1.);
+            let mut shown = 0.;
+            while shown < 1. {
+                cx.background_executor().timer(FRAME).await;
+                crate::platform::Pace::quicken();
+                let mut now = presence.value_at(Instant::now()).clamp(shown, 1.);
+                if presence.is_settled() {
+                    now = 1.;
+                }
+                let current = cx.update(|cx| {
+                    let this = cx.global::<Self>();
+                    if let Some(video) = this.video.as_ref().filter(|_| this.task == task) {
+                        video.advance(now);
+                    }
+                    this.task == task
+                })?;
+                if !current {
+                    return Ok(());
+                }
+                shown = now;
+            }
+
+            // The video goes on where it is seen, until the displays
+            // change: then the windows are opened anew.
+            loop {
+                cx.background_executor().timer(DISPLAY_CHECK).await;
+                let windows = cx
+                    .background_executor()
+                    .spawn(async {
+                        let windows = AppWindow::enumerate();
+                        let shown = windows.iter().filter(|window| window.id.is_shown());
+                        shown
+                            .filter_map(|window| window.id.frame())
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                let failed = cx.update(|cx| {
+                    let this = cx.global::<Self>();
+                    if this.task != task {
+                        return None;
+                    }
+                    if this.frames != display_frames() {
+                        return Some(Ok(true));
+                    }
+                    let video = this.video.as_ref()?;
+                    if let VideoState::Failed(why) = video.state() {
+                        return Some(Err(why));
+                    }
+                    let mut displays = 0;
+                    for (index, frame) in this.frames.iter().enumerate().take(32) {
+                        if hidden(*frame, &windows) {
+                            displays |= 1 << index;
+                        }
+                    }
+                    video.hide(displays);
+                    Some(Ok(false))
+                })?;
+                match failed {
+                    None => return Ok(()),
+                    Some(Ok(true)) => break,
+                    Some(Ok(false)) => {}
+                    Some(Err(why)) => anyhow::bail!("{} stopped playing: {why}", path.display()),
+                }
+            }
+        }
     }
 
     /// Whether the displays are no longer the ones the windows were
@@ -449,6 +621,31 @@ mod tests {
     }
 
     #[test]
+    fn a_display_is_hidden_by_a_window_over_nearly_all_of_it() {
+        let frame = ScreenRect {
+            left: 100,
+            top: 0,
+            right: 1100,
+            bottom: 1000,
+        };
+        let window = |left, top, right, bottom| ScreenRect {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        // A maximized window under a bar, and one that reaches past the display.
+        assert!(hidden(frame, &[window(100, 40, 1100, 1000)]));
+        assert!(hidden(frame, &[window(0, -8, 3000, 1008)]));
+        assert!(!hidden(
+            frame,
+            &[window(100, 0, 600, 1000), window(600, 0, 1100, 1000)]
+        ));
+        assert!(!hidden(frame, &[window(1100, 0, 2100, 1000)]));
+        assert!(!hidden(frame, &[]));
+    }
+
+    #[test]
     fn pictures_are_known_by_their_extension_in_any_case() {
         assert!(is_picture(Path::new(r"C:\Pictures\sea.JPG")));
         assert!(is_picture(Path::new("hill.png")));
@@ -468,6 +665,7 @@ mod tests {
         let config = WallpaperConfig {
             images: vec![single.clone(), directory.clone()],
             interval: None,
+            video: None,
         };
         let pictures = config.pictures();
         std::fs::remove_dir_all(&directory).unwrap();
