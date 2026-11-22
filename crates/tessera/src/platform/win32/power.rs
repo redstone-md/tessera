@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Locking the session, putting the computer to sleep and ending the
-//! session.
+//! Locking the session, putting the computer to sleep or into
+//! hibernation and ending the session.
 
 use std::env;
 use std::os::windows::process::CommandExt;
@@ -22,6 +22,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub enum PowerAction {
     Lock,
     Sleep,
+    Hibernate,
     SignOut,
     Restart,
     ShutDown,
@@ -50,6 +51,15 @@ impl PowerAction {
                 // leaves wake events on.
                 if !unsafe { SetSuspendState(false, false, false) } {
                     bail!("the computer did not go to sleep");
+                }
+                Ok(())
+            }
+            Self::Hibernate => {
+                // SAFETY: the call has no preconditions. It asks for
+                // hibernation, lets applications object, and leaves wake
+                // events on.
+                if !unsafe { SetSuspendState(true, false, false) } {
+                    bail!("the computer did not hibernate");
                 }
                 Ok(())
             }

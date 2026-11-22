@@ -201,7 +201,8 @@
 #   "power"     buttons that lock the session, put the computer to sleep, sign
 #               out, restart and shut down; all but locking ask for a second
 #               click. Option actions, which of "lock", "sleep", "sign-out",
-#               "restart" and "shut-down" to offer, in that order
+#               "restart" and "shut-down" to offer, in that order;
+#               "hibernate" is offered only when named here
 #   "marketplace"  the extensions the registries offer, to install, update
 #               and remove; contacts the registries when it is shown. Fills
 #               the height left in its popup and scrolls. Option show,

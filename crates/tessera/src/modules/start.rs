@@ -68,7 +68,13 @@ impl Module for StartModule {
             let named = context.texts("actions");
             let actions = match named {
                 Some(names) => names.iter().filter_map(|name| action_named(name)).collect(),
-                None => ACTIONS.iter().map(|&(action, ..)| action).collect(),
+                // Hibernation is switched off on many machines, so it is
+                // offered only where a layout asks for it.
+                None => ACTIONS
+                    .iter()
+                    .map(|&(action, ..)| action)
+                    .filter(|&action| action != PowerAction::Hibernate)
+                    .collect(),
             };
             cx.new(|_| Power::new(actions)).into()
         })
@@ -294,9 +300,15 @@ impl Render for Apps {
 
 /// The actions in the order their buttons stand, each with the name a
 /// layout calls it by, its icon and what it asks before it acts.
-const ACTIONS: [(PowerAction, &str, &str, &str); 5] = [
+const ACTIONS: [(PowerAction, &str, &str, &str); 6] = [
     (PowerAction::Lock, "lock", "\u{e72e}", ""),
     (PowerAction::Sleep, "sleep", "\u{e708}", "Sleep?"),
+    (
+        PowerAction::Hibernate,
+        "hibernate",
+        "\u{e74e}",
+        "Hibernate?",
+    ),
     (PowerAction::SignOut, "sign-out", "\u{f3b1}", "Sign out?"),
     (PowerAction::Restart, "restart", "\u{e777}", "Restart?"),
     (PowerAction::ShutDown, "shut-down", "\u{e7e8}", "Shut down?"),
@@ -487,6 +499,7 @@ mod tests {
     #[test]
     fn a_layout_names_the_actions() {
         assert_eq!(action_named("sign-out"), Some(PowerAction::SignOut));
+        assert_eq!(action_named("hibernate"), Some(PowerAction::Hibernate));
         assert_eq!(action_named("explode"), None);
     }
 }
