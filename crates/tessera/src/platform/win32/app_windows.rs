@@ -125,6 +125,12 @@ impl AppWindowId {
 
     /// Brings the window to the foreground, restoring it if minimized.
     /// Windows may refuse, as for [`Self::activate_or_minimize`].
+    ///
+    /// Windows lets a program put a window in front only when the last
+    /// input went to that program, which a key combination answered
+    /// without a window in front is not. When it refuses, a key nothing
+    /// listens to is pressed from here, which counts as such input, and
+    /// the window is asked for again.
     pub fn activate(self) {
         let hwnd = self.hwnd();
         // SAFETY: every call tolerates a handle whose window has since been
@@ -133,7 +139,10 @@ impl AppWindowId {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindowAsync(hwnd, SW_RESTORE);
             }
-            let _ = SetForegroundWindow(hwnd);
+            if !SetForegroundWindow(hwnd).as_bool() {
+                super::windows_key::press_unassigned_key();
+                let _ = SetForegroundWindow(hwnd);
+            }
         }
     }
 
