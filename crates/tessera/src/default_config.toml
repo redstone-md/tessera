@@ -304,8 +304,10 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # gap is the distance
 # between tiles in pixels. only and except list programs by the file name of
 # their executable: the only ones whose windows are tiled, and the ones whose
-# windows are left alone. Windows go back to where they were when tiling is
-# switched off or Tessera quits. border = true has Windows draw the thin
+# windows are left alone. except_titles lists pieces of titles: a window
+# whose title has one of them in it, in letters of any case, is left alone
+# as well, from the moment it has that title. Windows go back to where they
+# were when tiling is switched off or Tessera quits. border = true has Windows draw the thin
 # border of the tiled window in front in the primary color of the theme;
 # the window gets its own border back when another comes in front, tiling
 # is switched off or Tessera quits, but keeps the color if Tessera is
@@ -317,6 +319,7 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # gap = 8
 # border = true
 # except = ["taskmgr.exe"]
+# except_titles = ["Picture-in-picture"]
 
 # [workspaces] makes the "workspaces" widget show workspaces of Tessera's
 # own instead of the virtual desktops of Windows: own is how many, 2 to 9.

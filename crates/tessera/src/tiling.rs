@@ -261,6 +261,10 @@ pub struct TilingConfig {
     /// The programs whose windows are left alone.
     #[serde(default)]
     except: Vec<String>,
+    /// Pieces of titles: a window whose title has one of them in it is
+    /// left alone, whatever the case of the letters.
+    #[serde(default)]
+    except_titles: Vec<String>,
     /// Whether the border of the tiled window in front is colored.
     #[serde(default)]
     border: bool,
@@ -284,6 +288,13 @@ impl TilingConfig {
     fn covers(&self, executable: Option<&Path>) -> bool {
         listed(&self.only, &self.except, executable)
     }
+
+    /// Whether `window` is one to tile: its program is covered and its
+    /// title, read only when titles are named, has none of their pieces.
+    fn takes(&self, window: &AppWindow) -> bool {
+        self.covers(window.executable.as_deref())
+            && (self.except_titles.is_empty() || !titled(&self.except_titles, &window.id.title()))
+    }
 }
 
 /// Whether the program at `executable` is one of `only`, or `only` is
@@ -296,6 +307,15 @@ pub fn listed(only: &[String], except: &[String], executable: Option<&Path>) -> 
     let name = name.to_string_lossy();
     let among = |names: &[String]| names.iter().any(|one| one.eq_ignore_ascii_case(&name));
     (only.is_empty() || among(only)) && !among(except)
+}
+
+/// Whether `title` has one of `pieces` in it, whatever the case of the
+/// letters. A piece without letters is in no title.
+fn titled(pieces: &[String], title: &str) -> bool {
+    let title = title.to_lowercase();
+    { pieces.iter() }
+        .filter(|piece| !piece.trim().is_empty())
+        .any(|piece| title.contains(&piece.to_lowercase()))
 }
 
 /// Whether windows are tiled right now, and how. It starts as the
@@ -495,7 +515,7 @@ impl Tiler {
         let front = AppWindowId::foreground()?;
         let windows: Vec<AppWindow> = AppWindow::enumerate()
             .into_iter()
-            .filter(|window| self.config.covers(window.executable.as_deref()))
+            .filter(|window| self.config.takes(window))
             .filter(|window| window.id.is_tileable())
             .collect();
         let display = |id| Some(windows.iter().find(|window| window.id == id)?.display);
@@ -638,7 +658,7 @@ impl Tiler {
     fn arrange(&mut self, layout: TileLayout, spring: SpringSpec) {
         let windows: Vec<AppWindow> = AppWindow::enumerate()
             .into_iter()
-            .filter(|window| self.config.covers(window.executable.as_deref()))
+            .filter(|window| self.config.takes(window))
             .filter(|window| window.id.is_tileable())
             .collect();
         let present = |id: &AppWindowId| windows.iter().any(|window| window.id == *id);
@@ -969,6 +989,17 @@ mod tests {
         assert!((stepped(0.5, true) - 0.55).abs() < 1e-6);
         assert!((stepped(0.78, true) - 0.8).abs() < 1e-6);
         assert!((stepped(0.2, false) - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_piece_of_a_title_leaves_a_window_alone() {
+        let pieces = ["Picture-in-Picture".to_owned(), " ".to_owned()];
+        assert!(titled(&pieces, "picture-in-picture"));
+        assert!(titled(&pieces, "Video - Picture-in-Picture - Browser"));
+        assert!(!titled(&pieces, "Two words"));
+        assert!(!titled(&[], "Anything"));
+        let config: TilingConfig = toml::from_str("except_titles = [\"Find\"]").unwrap();
+        assert_eq!(config.except_titles, ["Find"]);
     }
 
     #[test]
