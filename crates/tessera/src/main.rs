@@ -50,6 +50,9 @@ fn main() {
     {
         return;
     }
+    if let Some(handed) = keys::send_if_requested(std::env::args().skip(1)) {
+        std::process::exit(if handed { 0 } else { 1 });
+    }
     platform::Pace::keep();
     let config = Config::load();
     Application::new().run(move |cx: &mut App| {

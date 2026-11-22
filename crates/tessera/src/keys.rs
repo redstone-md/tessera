@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use gpui::{App, AsyncApp, Global};
 
 use crate::config::KeyConfig;
-use crate::platform::{Hotkey, Hotkeys, Modifiers, TakenKeys};
+use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys};
 use crate::shell::Shell;
 use crate::switcher::Switcher;
 use crate::tiling::{TileLayout, Tiler, TilingMode, Toward};
@@ -107,6 +107,61 @@ pub fn key_label(key: &str) -> String {
 /// The number the first `[[key]]` is reported by; the workspaces have the
 /// numbers below it.
 const FIRST: u32 = 1 << 16;
+
+/// The words a start of the program may begin with to hand them to the
+/// Tessera that runs already.
+const COMMANDS: [&str; 5] = ["popup", "tiling", "focus", "move", "quit"];
+
+/// What separates the words on their way.
+const BETWEEN: char = '\n';
+
+/// Hands `words` to the running Tessera if they begin with a command.
+/// Says whether that worked; nothing if they are no command.
+pub fn send_if_requested(words: impl Iterator<Item = String>) -> Option<bool> {
+    let words: Vec<String> = words.collect();
+    let first = words.first()?;
+    if !COMMANDS.contains(&first.as_str()) {
+        return None;
+    }
+    let text = words.join(&BETWEEN.to_string());
+    Some(Commands::send(&text).is_ok())
+}
+
+/// What words handed to the running Tessera ask for.
+#[derive(Debug, PartialEq)]
+enum Asked {
+    Quit,
+    Deed(Deed),
+}
+
+impl Asked {
+    /// What `text` asks for, or why it asks for nothing.
+    fn of(text: &str) -> Result<Self, String> {
+        let words: Vec<&str> = text.split(BETWEEN).collect();
+        let said = |word: &str| Some(word.to_owned());
+        let mut key = KeyConfig {
+            press: String::new(),
+            popup: None,
+            tiling: None,
+            run: None,
+            focus: None,
+            carry: None,
+            switch: None,
+        };
+        match words[..] {
+            ["quit"] => return Ok(Self::Quit),
+            ["popup", name] => key.popup = said(name),
+            ["tiling", name] => key.tiling = said(name),
+            ["focus", side] => key.focus = said(side),
+            ["move", side] => key.carry = said(side),
+            _ => {
+                let why = "it is `quit`, or one of `popup`, `tiling`, `focus` and `move` with one word after it";
+                return Err(why.to_owned());
+            }
+        }
+        Deed::of(&key).map(Self::Deed)
+    }
+}
 
 /// What a `[[key]]` does.
 #[derive(Clone, Debug, PartialEq)]
@@ -251,7 +306,29 @@ impl Shortcuts {
             }
         })
         .detach();
+        Self::listen(cx);
         Self::configure(keys, cx);
+    }
+
+    /// Answers the commands other starts of the program hand over.
+    fn listen(cx: &mut App) {
+        let commands = match Commands::listen() {
+            Ok(commands) => commands,
+            Err(error) => return report!("commands do not reach Tessera: {error:#}"),
+        };
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(text) = commands.recv().await {
+                let answered = cx.update(|cx| match Asked::of(&text) {
+                    Ok(Asked::Quit) => cx.quit(),
+                    Ok(Asked::Deed(deed)) => deed.done(cx),
+                    Err(why) => report!("a command does nothing: {why}"),
+                });
+                if answered.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Takes over the entries of a configuration that was read again, if
@@ -351,6 +428,19 @@ mod tests {
         }
         assert_eq!(key_label("space"), "Space");
         assert_eq!(key_label("a"), "A");
+    }
+
+    #[test]
+    fn handed_words_ask_for_what_a_key_does() {
+        assert_eq!(Asked::of("quit"), Ok(Asked::Quit));
+        assert_eq!(
+            Asked::of("popup\nlauncher"),
+            Ok(Asked::Deed(Deed::Popup("launcher".to_owned())))
+        );
+        assert_eq!(Asked::of("tiling\nfloat"), Ok(Asked::Deed(Deed::Float)));
+        assert!(Asked::of("focus\nsideways").is_err());
+        assert!(Asked::of("run\ncmd.exe").is_err());
+        assert!(Asked::of("popup").is_err());
     }
 
     fn key(popup: Option<&str>, tiling: Option<&str>, run: Option<&[&str]>) -> KeyConfig {

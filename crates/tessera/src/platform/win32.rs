@@ -12,6 +12,7 @@ mod audio;
 mod backdrop;
 mod bluetooth;
 mod brightness;
+mod commands;
 mod connections;
 mod desktops;
 mod hotkeys;
@@ -45,6 +46,7 @@ pub use backdrop::{
 };
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use brightness::ScreenBrightness;
+pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
