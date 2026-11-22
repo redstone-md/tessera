@@ -265,6 +265,10 @@ pub struct TilingConfig {
     /// left alone, whatever the case of the letters.
     #[serde(default)]
     except_titles: Vec<String>,
+    /// Pieces of window class names: a window whose class has one of them
+    /// in it is left alone, whatever the case of the letters.
+    #[serde(default)]
+    except_classes: Vec<String>,
     /// Whether the border of the tiled window in front is colored.
     #[serde(default)]
     border: bool,
@@ -294,6 +298,7 @@ impl TilingConfig {
     fn takes(&self, window: &AppWindow) -> bool {
         self.covers(window.executable.as_deref())
             && (self.except_titles.is_empty() || !titled(&self.except_titles, &window.id.title()))
+            && (self.except_classes.is_empty() || !titled(&self.except_classes, &window.id.class()))
     }
 }
 
@@ -309,8 +314,9 @@ pub fn listed(only: &[String], except: &[String], executable: Option<&Path>) -> 
     (only.is_empty() || among(only)) && !among(except)
 }
 
-/// Whether `title` has one of `pieces` in it, whatever the case of the
-/// letters. A piece without letters is in no title.
+/// Whether `title`, or another name of a window, has one of `pieces` in
+/// it, whatever the case of the letters. A piece without letters is in no
+/// title.
 fn titled(pieces: &[String], title: &str) -> bool {
     let title = title.to_lowercase();
     { pieces.iter() }
@@ -1111,6 +1117,8 @@ mod tests {
         assert!(!titled(&[], "Anything"));
         let config: TilingConfig = toml::from_str("except_titles = [\"Find\"]").unwrap();
         assert_eq!(config.except_titles, ["Find"]);
+        let config: TilingConfig = toml::from_str("except_classes = [\"#32770\"]").unwrap();
+        assert_eq!(config.except_classes, ["#32770"]);
     }
 
     #[test]

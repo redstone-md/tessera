@@ -22,12 +22,12 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow,
-    GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-    PostMessageW, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE,
-    WS_CHILD, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    BringWindowToTop, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClassNameW,
+    GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNA,
+    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
+    ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE,
@@ -266,6 +266,16 @@ impl AppWindowId {
         // SAFETY: the buffer outlives the call, which writes no more than
         // its length.
         let length = unsafe { GetWindowTextW(self.hwnd(), &mut buffer) };
+        String::from_utf16_lossy(&buffer[..length.max(0) as usize])
+    }
+
+    /// The name of the window class the program made the window of;
+    /// empty if Windows does not tell.
+    pub fn class(self) -> String {
+        let mut buffer = [0u16; 256];
+        // SAFETY: the buffer outlives the call, which writes no more than
+        // its length.
+        let length = unsafe { GetClassNameW(self.hwnd(), &mut buffer) };
         String::from_utf16_lossy(&buffer[..length.max(0) as usize])
     }
 }
