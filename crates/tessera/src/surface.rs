@@ -12,9 +12,11 @@ use gpui::{
     WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 
+use crate::config::Hiding;
 use crate::motion::Spring;
 use crate::platform::{
-    DisplayKey, EdgeReservation, NativeSurface, ScreenEdge, SmallBirth, pointer_on_own_window,
+    AppWindow, DisplayKey, EdgeReservation, NativeSurface, ScreenEdge, SmallBirth,
+    pointer_on_own_window,
 };
 use crate::popup::Popups;
 use crate::theme::Theme;
@@ -44,9 +46,8 @@ const CALLING_EDGE: i32 = 2;
 pub struct EdgeSurface {
     pub edge: ScreenEdge,
     pub thickness: Pixels,
-    /// Whether the strip goes away while the pointer is elsewhere; it then
-    /// reserves no screen space.
-    pub hide: bool,
+    /// When the strip goes away; one that does reserves no screen space.
+    pub hide: Hiding,
 }
 
 impl EdgeSurface {
@@ -167,7 +168,7 @@ impl EdgeSurface {
 
     /// Docks the window, or floats it when the surface is one that hides.
     fn settle(self, window: &Window) -> anyhow::Result<Option<EdgeReservation>> {
-        if self.hide {
+        if self.hide.hides() {
             self.float(window).map(|()| None)
         } else {
             self.dock(window).map(Some)
@@ -208,18 +209,18 @@ impl<V: Render> EdgeSurfaceView<V> {
     pub fn refill(
         &mut self,
         thickness: Pixels,
-        hide: bool,
+        hide: Hiding,
         window: &Window,
         cx: &mut Context<Self>,
         build: impl FnOnce(Option<DisplayKey>, &mut Context<V>) -> V,
     ) {
         let changed = thickness != self.surface.thickness || hide != self.surface.hide;
-        if changed || (self.reservation.is_none() && !hide) {
+        if changed || (self.reservation.is_none() && !hide.hides()) {
             self.surface.thickness = thickness;
             self.surface.hide = hide;
             self.depth = self.surface.depth(window);
             let docked = match &self.reservation {
-                Some(reservation) if !hide => reservation
+                Some(reservation) if !hide.hides() => reservation
                     .occupy(self.surface.edge, self.depth)
                     .map(|()| None),
                 _ => {
@@ -246,7 +247,7 @@ impl<V: Render> EdgeSurfaceView<V> {
     /// Has the surface go or come back by where the pointer is, and says
     /// how long to wait before looking again.
     fn follow(&mut self, native: NativeSurface, cx: &mut Context<Self>) -> Duration {
-        if !self.surface.hide {
+        if !self.surface.hide.hides() {
             if self.concealed || self.shown.target() != 1. {
                 self.come_back(native, cx);
             }
@@ -259,7 +260,12 @@ impl<V: Render> EdgeSurfaceView<V> {
         } else {
             native.pointer_in_strip(edge, self.depth) || pointer_on_own_window()
         };
-        if wanted || Popups::is_open(cx) {
+        // A surface that goes only under windows stays while none lies in
+        // its place.
+        let clear = self.surface.hide == Hiding::Overlap
+            && !native.display_is_filled()
+            && !Self::covered(native, edge, self.depth);
+        if wanted || clear || Popups::is_open(cx) {
             self.away = None;
             if self.concealed || self.shown.target() != 1. {
                 self.come_back(native, cx);
@@ -276,6 +282,24 @@ impl<V: Render> EdgeSurfaceView<V> {
             native.conceal();
         }
         POINTER_CHECK
+    }
+
+    /// Whether a window of an application lies in the strip of the surface.
+    fn covered(native: NativeSurface, edge: ScreenEdge, depth: i32) -> bool {
+        let Ok(strip) = native.strip(edge, depth) else {
+            return false;
+        };
+        let meets = |window: &AppWindow| {
+            // A minimized window is far off the screen.
+            window.id.is_shown()
+                && window.id.frame().is_some_and(|frame| {
+                    frame.left < strip.right
+                        && strip.left < frame.right
+                        && frame.top < strip.bottom
+                        && strip.top < frame.bottom
+                })
+        };
+        AppWindow::enumerate().iter().any(meets)
     }
 
     fn come_back(&mut self, native: NativeSurface, cx: &mut Context<Self>) {

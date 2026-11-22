@@ -77,7 +77,9 @@
 #   displays   "all" (default) or "primary"
 #   hide       true to have the strip slide away while the pointer is
 #              elsewhere and come back when the pointer reaches that edge
-#              of the display; it then reserves no screen space
+#              of the display; "overlap" to have it do so only while a
+#              window lies where the strip would be. Either way it reserves
+#              no screen space
 #   start, center, end  widgets to place
 #
 # A widget is its name, or a table: { widget = "name", popup = "name", ... }.

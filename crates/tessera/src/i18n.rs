@@ -294,6 +294,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Hiding", "Скрытие"),
     ("Always shown", "Всегда видна"),
     ("Hides by itself", "Скрывается сама"),
+    ("Hides under windows", "Скрывается под окнами"),
     ("every display", "все экраны"),
     ("the primary display", "основной экран"),
     ("Not in the layout", "Нет в раскладке"),

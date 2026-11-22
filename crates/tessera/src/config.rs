@@ -202,6 +202,50 @@ pub struct KeyConfig {
     pub carry: Option<String>,
 }
 
+/// When a surface goes away.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(try_from = "HidingName")]
+pub enum Hiding {
+    /// Never: the surface keeps its screen edge.
+    #[default]
+    Never,
+    /// While the pointer is elsewhere; `true` in the configuration.
+    Pointer,
+    /// While the pointer is elsewhere and a window lies where the surface
+    /// would be; `"overlap"` in the configuration.
+    Overlap,
+}
+
+impl Hiding {
+    /// Whether the surface ever goes away.
+    pub fn hides(self) -> bool {
+        self != Self::Never
+    }
+}
+
+/// What the configuration says of hiding: a yes or no, or a name.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum HidingName {
+    Flag(bool),
+    Name(String),
+}
+
+impl TryFrom<HidingName> for Hiding {
+    type Error = String;
+
+    fn try_from(name: HidingName) -> Result<Self, String> {
+        match name {
+            HidingName::Flag(false) => Ok(Self::Never),
+            HidingName::Flag(true) => Ok(Self::Pointer),
+            HidingName::Name(name) if name == "overlap" => Ok(Self::Overlap),
+            HidingName::Name(name) => {
+                Err(format!("`hide` is true, false or `overlap`, not `{name}`"))
+            }
+        }
+    }
+}
+
 /// One strip docked to a screen edge, and the widgets in its slots.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -211,10 +255,9 @@ pub struct SurfaceConfig {
     pub thickness: f32,
     #[serde(default)]
     pub displays: Displays,
-    /// Whether the strip goes away while the pointer is elsewhere and
-    /// reserves no screen space.
+    /// When the strip goes away; one that does reserves no screen space.
     #[serde(default)]
-    pub hide: bool,
+    pub hide: Hiding,
     #[serde(default)]
     pub start: Vec<WidgetSpec>,
     #[serde(default)]

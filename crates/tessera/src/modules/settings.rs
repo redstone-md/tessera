@@ -16,7 +16,7 @@ use gpui::{
 };
 
 use crate::config::edit::{CardLength, ConfigFile, LAYOUTS, Place, Slot};
-use crate::config::{Config, Displays, SurfaceConfig, WidgetSpec, config_dir};
+use crate::config::{Config, Displays, Hiding, SurfaceConfig, WidgetSpec, config_dir};
 use crate::desk::{CardConfig, Corner};
 use crate::i18n::Language;
 use crate::icons::AppIcons;
@@ -479,8 +479,8 @@ enum Control {
     /// Moves a widget toward the end of its surface, or toward the start.
     Shift(Place, bool),
     Remove(Place),
-    /// Has a surface hide while the pointer is elsewhere, or stay.
-    SurfaceHide(usize, bool),
+    /// Says when a surface hides.
+    SurfaceHide(usize, Hiding),
     /// Opens or closes the list of widgets to add to a slot or a card.
     Adding(Holder),
     /// Adds the widget at this place of the list to what is being added to.
@@ -872,7 +872,11 @@ impl Settings {
                 }
             }
             Control::SurfaceHide(surface, hide) => {
-                let hide = hide.then(|| true.into());
+                let hide = match hide {
+                    Hiding::Never => None,
+                    Hiding::Pointer => Some(true.into()),
+                    Hiding::Overlap => Some("overlap".into()),
+                };
                 self.change(cx, |file| file.set_surface(surface, "hide", hide));
             }
             Control::CardDisplays(card, primary) => {
@@ -1066,7 +1070,11 @@ impl Settings {
                 .children(offers.map(|offers| offers.pl(SLOT_LABEL_WIDTH + theme.spacing.small)));
         }
         let mut hiding = Vec::new();
-        for (label, hide) in [("Always shown", false), ("Hides by itself", true)] {
+        for (label, hide) in [
+            ("Always shown", Hiding::Never),
+            ("Hides by itself", Hiding::Pointer),
+            ("Hides under windows", Hiding::Overlap),
+        ] {
             let face = Face::Chip {
                 text: language.say(label).into(),
                 selected: surface.hide == hide,
