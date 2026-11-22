@@ -14,6 +14,7 @@ use gpui::{
     Subscription, WeakEntity, Window, div, px,
 };
 
+use crate::flyout::volume_icon;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
@@ -24,8 +25,6 @@ use crate::ui::{ROW_HEIGHT, Slider, icon, list_row, list_title, one_line, pill, 
 /// How often changes made outside Tessera are picked up.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-const ICON_MUTED: &str = "\u{e74f}";
-const ICON_LEVELS: [&str; 4] = ["\u{e992}", "\u{e993}", "\u{e994}", "\u{e995}"];
 const ICON_MICROPHONE: &str = "\u{e720}";
 const ICON_MICROPHONE_OFF: &str = "\u{ec54}";
 const ICON_OUTPUT: &str = "\u{e7f5}";
@@ -78,11 +77,7 @@ struct Level {
 
 impl Level {
     fn icon(self) -> &'static str {
-        if self.muted {
-            return ICON_MUTED;
-        }
-        let step = (self.volume * 3.).ceil().clamp(0., 3.) as usize;
-        ICON_LEVELS[step]
+        volume_icon(self.volume, self.muted)
     }
 
     fn percent(self) -> String {
@@ -657,6 +652,7 @@ impl Render for AudioOutputs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flyout::{ICON_LEVELS, ICON_MUTED};
 
     #[test]
     fn the_icon_follows_the_level() {

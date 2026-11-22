@@ -14,6 +14,7 @@ use crate::banners::Banners;
 use crate::config::{Config, Displays};
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
+use crate::flyout::Flyouts;
 use crate::icons::AppIcons;
 use crate::keys::Shortcuts;
 use crate::menu::Menus;
@@ -77,6 +78,7 @@ impl Shell {
         }
         Wallpaper::start(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
+        Flyouts::configure(&config.flyout, cx);
         cx.set_global(Self {
             config,
             surfaces,
@@ -256,6 +258,7 @@ impl Shell {
         Shortcuts::configure(&config.keys, cx);
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
+        Flyouts::configure(&config.flyout, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

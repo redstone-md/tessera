@@ -310,6 +310,16 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        section: Section::General,
+        card: "Notifications",
+        title: "Volume flyout",
+        target: Target::Table("flyout", "volume"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
         section: Section::Widgets,
         card: "Clock",
         title: "Format",

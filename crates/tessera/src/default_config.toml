@@ -347,6 +347,16 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # quiet = false
 # seconds = 6
 
+# [flyout] with volume = true has Tessera show the volume of the default
+# audio output for a moment whenever it changes, whoever changed it: a pill
+# with a wavy line and the number, at the lower side of the display the
+# pointer is on. Nothing is shown while a popup of Tessera is open. Tessera
+# reads the volume four times a second for this, and Windows shows its own
+# indicator as well when the volume keys are pressed.
+#
+# [flyout]
+# volume = true
+
 # [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
 # every display, each scaled to cover it. images lists picture files (.jpg,
 # .png) and directories, whose pictures are taken in the order of their

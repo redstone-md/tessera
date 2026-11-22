@@ -12,6 +12,7 @@ mod banners;
 mod config;
 mod desk;
 mod extension;
+mod flyout;
 mod i18n;
 mod icons;
 mod keys;

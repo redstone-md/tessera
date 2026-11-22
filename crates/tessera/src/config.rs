@@ -14,6 +14,7 @@ use serde::Deserialize;
 use crate::banners::NotificationsConfig;
 use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
+use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
 use crate::platform::ScreenEdge;
 use crate::tiling::TilingConfig;
@@ -326,6 +327,9 @@ pub struct Config {
     /// Whether notifications that arrive are shown as banners.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    /// Whether a change of the volume is shown for a moment.
+    #[serde(default)]
+    pub flyout: FlyoutConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

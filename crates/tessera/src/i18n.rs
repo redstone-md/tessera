@@ -331,6 +331,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Banners", "Баннеры"),
     ("Do not disturb", "Не беспокоить"),
     ("Seconds shown", "Секунд на экране"),
+    ("Volume flyout", "Индикатор громкости"),
     ("Problems", "Проблемы"),
     ("No problem is on record", "Проблем не записано"),
     ("now", "сейчас"),
