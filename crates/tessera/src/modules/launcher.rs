@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Finds and starts applications from the Start menu. Widget: `launcher`.
+//! Finds and starts applications from the Start menu, and opens the files
+//! of the folders its `folders` option names. Widget: `launcher`.
 
+use std::fs;
 use std::ops::Range;
+use std::os::windows::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, AppContext, Bounds, Context, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, UTF16Selection, Window,
-    canvas, div, img, point, px,
+    AnyElement, AppContext, AsyncApp, Bounds, Context, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
+    Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    UTF16Selection, WeakEntity, Window, canvas, div, img, point, px,
 };
 
 use crate::icons::AppIcons;
@@ -33,6 +37,20 @@ const DEFAULT_PLACEHOLDER: &str = "Search applications";
 /// Rows prepared before the height of the list is known.
 const ROWS_BEFORE_LAYOUT: usize = 16;
 
+/// How many letters the search needs before it looks among the files,
+/// and how many files it shows at most.
+const LETTERS_FOR_FILES: usize = 2;
+const FILES_SHOWN: usize = 30;
+
+/// How deep under a folder files are looked for, the folder itself being
+/// the first level, and how many are remembered at most.
+const FOLDER_DEPTH: usize = 4;
+const FILES_KEPT: usize = 20_000;
+
+/// The attributes of a file or folder that is hidden or belongs to the
+/// system.
+const HIDDEN_OR_SYSTEM: u32 = 0x2 | 0x4;
+
 pub struct LauncherModule;
 
 impl Module for LauncherModule {
@@ -44,7 +62,9 @@ impl Module for LauncherModule {
         widgets.register("launcher", |context, cx| {
             let placeholder = context.text("placeholder").unwrap_or(DEFAULT_PLACEHOLDER);
             let placeholder = SharedString::new(placeholder);
-            cx.new(|cx| Launcher::new(placeholder, cx)).into()
+            let folders = context.texts("folders").unwrap_or_default();
+            let folders = folders.iter().map(|folder| folder_named(folder)).collect();
+            cx.new(|cx| Launcher::new(placeholder, folders, cx)).into()
         })
     }
 }
@@ -75,6 +95,58 @@ fn search<'a>(names: impl Iterator<Item = &'a str>, query: &str) -> Vec<usize> {
     found.into_iter().map(|(_, index)| index).collect()
 }
 
+/// The folder `name` stands for: a `~` it begins with is the folder of
+/// the user.
+fn folder_named(name: &str) -> PathBuf {
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    match (name.strip_prefix('~'), home) {
+        (Some(rest), Some(home)) => home.join(rest.trim_start_matches(['/', '\\'])),
+        _ => PathBuf::from(name),
+    }
+}
+
+/// The files and folders under `folders`, each with its name, down to
+/// [`FOLDER_DEPTH`] and at most [`FILES_KEPT`] of them; hidden ones, those
+/// of the system and those whose names begin with a dot are left out with
+/// all that is in them. The nearest to a folder come first.
+fn files_under(folders: &[PathBuf]) -> Vec<Shortcut> {
+    let mut found = Vec::new();
+    let mut level: Vec<PathBuf> = folders.to_vec();
+    for _ in 0..FOLDER_DEPTH {
+        let mut deeper = Vec::new();
+        for folder in &level {
+            let Ok(entries) = fs::read_dir(folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || metadata.file_attributes() & HIDDEN_OR_SYSTEM != 0 {
+                    continue;
+                }
+                if found.len() == FILES_KEPT {
+                    return found;
+                }
+                let path = entry.path();
+                if metadata.is_dir() {
+                    deeper.push(path.clone());
+                }
+                found.push(Shortcut { name, path });
+            }
+        }
+        level = deeper;
+    }
+    found
+}
+
+/// What the row of a file says beside its name: the folder it lies in.
+fn folder_of(path: &Path) -> Option<String> {
+    let folder = path.parent()?.file_name()?;
+    Some(folder.to_string_lossy().into_owned())
+}
+
 /// The first of `count` rows of height `row` to draw and how many, for a
 /// list scrolled down by `scrolled` that is `viewport` high.
 fn visible_rows(count: usize, row: f32, scrolled: f32, viewport: f32) -> (usize, usize) {
@@ -86,9 +158,13 @@ fn visible_rows(count: usize, row: f32, scrolled: f32, viewport: f32) -> (usize,
     (first, shown.min(count - first))
 }
 
-/// A search field over the list of Start menu shortcuts.
+/// A search field over the list of Start menu shortcuts and the files of
+/// the folders that are searched.
 struct Launcher {
+    /// The applications, and after them the files.
     shortcuts: Vec<Shortcut>,
+    /// How many of `shortcuts` are applications.
+    apps: usize,
     query: String,
     /// Text an input method is still composing; it follows the query.
     composing: String,
@@ -107,13 +183,31 @@ struct Launcher {
 }
 
 impl Launcher {
-    fn new(placeholder: SharedString, cx: &mut Context<Self>) -> Self {
+    fn new(placeholder: SharedString, folders: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
         let shortcuts = Shortcut::start_menu();
         let pins = Pins::shared(cx);
         cx.observe(&pins, |_, _, cx| cx.notify()).detach();
+        if !folders.is_empty() {
+            // Folders are read aside: there may be many files in them.
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let files = cx
+                    .background_executor()
+                    .spawn(async move { files_under(&folders) });
+                let files = files.await;
+                this.update(cx, |this, cx| {
+                    this.shortcuts.truncate(this.apps);
+                    this.shortcuts.extend(files);
+                    this.find();
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
         Self {
             pins,
             matches: (0..shortcuts.len()).collect(),
+            apps: shortcuts.len(),
             shortcuts,
             query: String::new(),
             composing: String::new(),
@@ -134,10 +228,31 @@ impl Launcher {
     fn set_query(&mut self, query: String, composing: &str, cx: &mut Context<Self>) {
         self.query = query;
         composing.clone_into(&mut self.composing);
-        self.matches = search(self.shortcuts.iter().map(|s| s.name.as_str()), &self.text());
+        self.find();
         self.scroll.set_offset(point(px(0.), px(0.)));
         self.select(0, cx);
         cx.notify();
+    }
+
+    /// Looks for what the field asks for: among the applications always,
+    /// and among the files once enough letters are written. The files
+    /// come after the applications.
+    fn find(&mut self) {
+        let text = self.text();
+        let (apps, files) = self.shortcuts.split_at(self.apps);
+        fn names(shortcuts: &[Shortcut]) -> impl Iterator<Item = &str> {
+            shortcuts.iter().map(|shortcut| shortcut.name.as_str())
+        }
+        let mut matches = search(names(apps), &text);
+        if text.trim().chars().count() >= LETTERS_FOR_FILES {
+            let files = search(names(files), &text);
+            let files = files.into_iter().take(FILES_SHOWN);
+            matches.extend(files.map(|index| index + self.apps));
+        }
+        self.matches = matches;
+        if self.selected >= self.matches.len() {
+            self.selected = self.matches.len().saturating_sub(1);
+        }
     }
 
     fn select(&mut self, row: usize, cx: &mut Context<Self>) {
@@ -241,6 +356,18 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let shortcut = &self.shortcuts[self.matches[row]];
+        // A file says where it lies.
+        let folder = (self.matches[row] >= self.apps)
+            .then(|| folder_of(&shortcut.path))
+            .flatten();
+        let folder = folder.map(|folder| {
+            div()
+                .flex_none()
+                .max_w(px(160.))
+                .text_size(theme.typography.label_size)
+                .text_color(theme.colors.on_surface_variant)
+                .child(one_line(SharedString::new(folder)))
+        });
         let size = theme.launcher.icon_size;
         let image = match cx.global::<AppIcons>().of_shortcut(shortcut) {
             Some(image) => img(image).size(size).flex_none().into_any_element(),
@@ -268,6 +395,7 @@ impl Launcher {
                     .min_w_0()
                     .child(one_line(SharedString::new(shortcut.name.as_str()))),
             )
+            .children(folder)
             .children(self.render_pin(row, theme, cx))
             .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))
             .on_click(cx.listener(move |this, _, _, cx| this.launch(row, cx)))
@@ -278,6 +406,10 @@ impl Launcher {
     /// unpins it. It is there on the selected row and on pinned ones, and
     /// only if something shows the pins.
     fn render_pin(&self, row: usize, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        // Only applications are pinned.
+        if self.matches[row] >= self.apps {
+            return None;
+        }
         let name = self.shortcuts[self.matches[row]].name.clone();
         let pins = self.pins.read(cx);
         let pinned = pins.holds(&name);
@@ -475,6 +607,42 @@ mod tests {
         assert_eq!(found, [3, 2, 1]);
         assert_eq!(search(names.into_iter(), "").len(), 4);
         assert!(search(names.into_iter(), "xyz").is_empty());
+    }
+
+    #[test]
+    fn files_are_found_under_a_folder_without_the_hidden_ones() {
+        let folder = std::env::temp_dir().join(format!("tessera-files-{}", std::process::id()));
+        let inner = folder.join("one").join("two").join("three").join("four");
+        fs::create_dir_all(&inner).unwrap();
+        fs::create_dir_all(folder.join(".git")).unwrap();
+        fs::write(folder.join("Report.txt"), "").unwrap();
+        fs::write(folder.join(".git").join("config"), "").unwrap();
+        fs::write(folder.join("one").join("notes.md"), "").unwrap();
+        fs::write(inner.join("deep.txt"), "").unwrap();
+        let found = files_under(std::slice::from_ref(&folder));
+        fs::remove_dir_all(&folder).unwrap();
+        let mut names: Vec<&str> = found.iter().map(|file| file.name.as_str()).collect();
+        // The first level comes before what lies deeper.
+        assert!(names[..2].contains(&"Report.txt") && names[..2].contains(&"one"));
+        names.sort_unstable();
+        // What is in `four` lies too deep, and `.git` is left out.
+        assert_eq!(
+            names,
+            ["Report.txt", "four", "notes.md", "one", "three", "two"]
+        );
+        let notes = found.iter().find(|file| file.name == "notes.md").unwrap();
+        assert_eq!(folder_of(&notes.path).as_deref(), Some("one"));
+    }
+
+    #[test]
+    fn a_folder_may_be_named_from_the_folder_of_the_user() {
+        assert_eq!(folder_named("D:/music"), PathBuf::from("D:/music"));
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            assert_eq!(
+                folder_named("~/Documents"),
+                PathBuf::from(home).join("Documents")
+            );
+        }
     }
 
     #[test]

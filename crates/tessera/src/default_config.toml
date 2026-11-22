@@ -227,7 +227,13 @@
 #               for "label". The program is expected to print UTF-8 and to
 #               finish within 10 seconds.
 #   "launcher"  a search field over the applications of the Start menu;
-#               option placeholder, the hint in the empty field
+#               options placeholder, the hint in the empty field, and
+#               folders, the folders whose files and folders the search
+#               finds by their names as well, once two letters are
+#               written, such as folders = ["~/Documents", "D:/music"]; a
+#               ~ at the start is the folder of the user. They are read
+#               four levels deep when the launcher opens, without what is
+#               hidden, and the first 20000 are kept
 #   "apps"      the applications pinned to the Start menu, as a grid; options
 #               pinned, their names as the search shows them, and columns,
 #               how many stand in a row (5). The search pins and unpins
