@@ -272,3 +272,4 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Empty" = "Vacío"
 "Tessera keeps no workspaces of its own" = "Tessera no lleva espacios de trabajo propios"
 "Updating" = "Actualizando"
+"Restart Tessera" = "Reiniciar Tessera"

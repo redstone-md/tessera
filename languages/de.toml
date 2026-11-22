@@ -271,3 +271,4 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Empty" = "Leer"
 "Tessera keeps no workspaces of its own" = "Tessera führt keine eigenen Arbeitsbereiche"
 "Updating" = "Aktualisierung"
+"Restart Tessera" = "Tessera neu starten"

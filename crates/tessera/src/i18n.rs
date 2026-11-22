@@ -496,6 +496,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Themes", "Темы"),
     ("Extensions", "Расширения"),
     ("Quit", "Выйти"),
+    ("Restart Tessera", "Перезапустить Tessera"),
     ("Updating", "Обновление"),
     ("Settings", "Настройки"),
     // Settings: the cards.

@@ -272,3 +272,4 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Empty" = "Vide"
 "Tessera keeps no workspaces of its own" = "Tessera ne tient pas d'espaces de travail à elle"
 "Updating" = "Mise à jour"
+"Restart Tessera" = "Redémarrer Tessera"

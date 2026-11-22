@@ -69,6 +69,7 @@ const ICON_REMOVE: &str = "\u{e711}";
 const ICON_LESS: &str = "\u{e738}";
 const ICON_MORE: &str = "\u{e710}";
 const ICON_QUIT: &str = "\u{e7e8}";
+const ICON_RESTART: &str = "\u{e72c}";
 
 /// The widget that offers what the registries hold, and its option that
 /// says what of it.
@@ -535,6 +536,8 @@ enum Control {
     /// Shows a part.
     Section(Section),
     Quit,
+    /// Ends Tessera and starts it again.
+    Restart,
     /// Counts the arrangements Tessera comes with.
     Layout(usize),
     /// Starts arranging the widgets on the bars themselves.
@@ -950,6 +953,7 @@ impl Settings {
         match *control {
             Control::Section(section) => self.show(section, cx),
             Control::Quit => cx.quit(),
+            Control::Restart => crate::shell::restart(cx),
             Control::Layout(index) => {
                 if let Some((_, layout)) = LAYOUTS.get(index) {
                     self.change(cx, |file| file.set_layout(layout));
@@ -1942,7 +1946,7 @@ impl Settings {
     }
 
     /// The rail: the title, the parts with a mark behind the one shown,
-    /// and at its end the button that closes Tessera.
+    /// and at its end the buttons that start Tessera again and close it.
     fn rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
@@ -1958,6 +1962,14 @@ impl Settings {
                 cx,
             ));
         }
+        let restart = self.rail_item(
+            Control::Restart,
+            ICON_RESTART,
+            language.say("Restart Tessera"),
+            false,
+            window,
+            cx,
+        );
         let quit = self.rail_item(
             Control::Quit,
             ICON_QUIT,
@@ -1998,6 +2010,7 @@ impl Settings {
                     .children(parts),
             )
             .child(div().flex_1())
+            .child(restart)
             .child(quit)
             .into_any_element()
     }

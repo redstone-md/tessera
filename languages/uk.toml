@@ -272,3 +272,4 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Empty" = "Порожньо"
 "Tessera keeps no workspaces of its own" = "Власних робочих столів Tessera не веде"
 "Updating" = "Оновлення"
+"Restart Tessera" = "Перезапустити Tessera"
