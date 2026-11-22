@@ -94,6 +94,46 @@ pub struct WallpaperConfig {
     /// The pictures of single displays, in place of `images` there.
     #[serde(default, rename = "display")]
     displays: Vec<DisplayWallpaper>,
+    /// How a picture that has not the shape of its display is fitted.
+    #[serde(default)]
+    fit: Fit,
+}
+
+/// A part of a picture or of a display: its left, top, width and height.
+type Part = (u32, u32, u32, u32);
+
+/// How a picture that has not the shape of its display is fitted to it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Fit {
+    /// Scaled until it covers the display; what sticks out is cut off.
+    #[default]
+    Cover,
+    /// Scaled until all of it is seen; the rest of the display is black.
+    Contain,
+    /// Scaled to the display in both directions, which changes its shape.
+    Stretch,
+}
+
+impl Fit {
+    /// The part of a picture of `width` by `height` pixels that is shown
+    /// on a display of `over_width` by `over_height`, and the part of the
+    /// display it is shown in, each as left, top, width and height.
+    fn parts(
+        self,
+        (width, height): (u32, u32),
+        (over_width, over_height): (u32, u32),
+    ) -> (Part, Part) {
+        let whole = (0, 0, width, height);
+        let all = (0, 0, over_width, over_height);
+        match self {
+            Self::Cover => (covering_part(width, height, over_width, over_height), all),
+            Self::Stretch => (whole, all),
+            // The part of the display with the shape of the picture is
+            // found as the part of a picture with the shape of a display.
+            Self::Contain => (whole, covering_part(over_width, over_height, width, height)),
+        }
+    }
 }
 
 /// What the configuration says about the wallpaper of one display.
@@ -116,6 +156,7 @@ struct Playlists {
     all: Vec<PathBuf>,
     /// Those of single displays, by their number.
     own: Vec<(usize, Vec<PathBuf>)>,
+    fit: Fit,
 }
 
 impl Playlists {
@@ -165,6 +206,7 @@ impl WallpaperConfig {
             own: own
                 .map(|display| (display.number, pictures(&display.images)))
                 .collect(),
+            fit: self.fit,
         }
     }
 }
@@ -243,26 +285,31 @@ fn shares(from: u32, to: u32) -> Vec<(usize, Vec<f32>)> {
         .collect()
 }
 
-/// `image` scaled so that it just covers `width` by `height` pixels, and
-/// what then sticks out cut off evenly at both sides.
+/// `image` as a picture of `width` by `height` pixels, fitted as `how`
+/// says: what sticks out is cut off evenly at both sides, and what the
+/// picture does not reach is black, evenly at both sides too.
 ///
 /// The scaling is done here, a few rows at a time: that of the `image`
 /// crate first makes a copy of the whole picture that is four times its
 /// size in memory.
-fn fit(image: &RgbImage, width: u32, height: u32) -> BackdropPicture {
-    let (left, top, wide, high) = covering_part(image.width(), image.height(), width, height);
-    let across = shares(wide, width);
-    let down = shares(high, height);
+fn fit(image: &RgbImage, width: u32, height: u32, how: Fit) -> BackdropPicture {
+    let (part, place) = how.parts((image.width(), image.height()), (width, height));
+    let (left, top, wide, high) = part;
+    let (place_left, place_top, place_wide, place_high) = place;
+    let across = shares(wide, place_wide);
+    let down = shares(high, place_high);
     let source = image.as_raw();
     let source_row = image.width() as usize * 3;
-    let row = width as usize * 3;
+    let row = place_wide as usize * 3;
     let stride = BackdropPicture::stride(width);
     let mut pixels = vec![0; stride * height as usize];
+    let rows = pixels.chunks_exact_mut(stride).skip(place_top as usize);
+    let rows = rows.map(|row| &mut row[place_left as usize * 3..]);
     // Rows of the source scaled across, with their number, kept as long
     // as a row of the picture is still mixed from them.
     let mut scaled: VecDeque<(usize, Vec<f32>)> = VecDeque::new();
     let mut mixed = vec![0.; row];
-    for ((first, shares), out) in down.iter().zip(pixels.chunks_exact_mut(stride)) {
+    for ((first, shares), out) in down.iter().zip(rows) {
         while scaled.front().is_some_and(|(number, _)| number < first) {
             scaled.pop_front();
         }
@@ -620,6 +667,7 @@ impl Wallpaper {
         // of one size the scaled picture as well.
         let mut read_last: Option<(PathBuf, Arc<RgbImage>)> = None;
         let mut fitted: Option<(PathBuf, Arc<BackdropPicture>)> = None;
+        let how = playlists.fit;
         for (index, &(number, width, height)) in sizes.iter().enumerate() {
             let pictures = playlists.of(number);
             let Some(path) = pictures.get(turn % pictures.len().max(1)) else {
@@ -650,7 +698,7 @@ impl Wallpaper {
                     read_last = Some((path.clone(), image.clone()));
                     let scaled = cx
                         .background_executor()
-                        .spawn(async move { fit(&image, width, height) })
+                        .spawn(async move { fit(&image, width, height, how) })
                         .await;
                     Arc::new(scaled)
                 }
@@ -728,10 +776,43 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_is_cut_shown_whole_or_stretched() {
+        // Twice as wide as high, on a square display.
+        let image = RgbImage::from_fn(8, 4, |x, _| image::Rgb([if x < 4 { 40 } else { 200 }; 3]));
+        assert_eq!(
+            Fit::Cover.parts((8, 4), (4, 4)),
+            ((2, 0, 4, 4), (0, 0, 4, 4))
+        );
+        assert_eq!(
+            Fit::Contain.parts((8, 4), (4, 4)),
+            ((0, 0, 8, 4), (0, 1, 4, 2))
+        );
+        assert_eq!(
+            Fit::Stretch.parts((8, 4), (4, 4)),
+            ((0, 0, 8, 4), (0, 0, 4, 4))
+        );
+
+        let whole = fit(&image, 4, 4, Fit::Contain);
+        let rows: Vec<&[u8]> = whole.pixels().chunks(12).collect();
+        assert_eq!(rows[0], [0; 12]);
+        assert_eq!(rows[1][..3], [40; 3]);
+        assert_eq!(rows[1][9..], [200; 3]);
+        assert_eq!(rows[2], rows[1]);
+        assert_eq!(rows[3], [0; 12]);
+
+        let stretched = fit(&image, 4, 4, Fit::Stretch);
+        assert!(stretched.pixels().chunks(12).all(|row| row == rows[1]));
+
+        let config: WallpaperConfig = toml::from_str("fit = \"contain\"").unwrap();
+        assert_eq!(config.playlists().fit, Fit::Contain);
+        assert_eq!(WallpaperConfig::default().fit, Fit::Cover);
+    }
+
+    #[test]
     fn a_picture_scaled_down_keeps_its_halves() {
         // Left half dark, right half bright.
         let image = RgbImage::from_fn(8, 4, |x, _| image::Rgb([if x < 4 { 0 } else { 200 }; 3]));
-        let picture = fit(&image, 4, 2);
+        let picture = fit(&image, 4, 2, Fit::Cover);
         let row = &picture.pixels()[..12];
         assert_eq!(row[..3], [0, 0, 0]);
         assert_eq!(row[9..], [200, 200, 200]);
@@ -743,7 +824,7 @@ mod tests {
         for pixel in image.pixels_mut() {
             pixel.0 = [10, 20, 30];
         }
-        let picture = fit(&image, 3, 3);
+        let picture = fit(&image, 3, 3, Fit::Cover);
         assert_eq!(picture.size(), (3, 3));
         // Three pixels take nine bytes, a row twelve.
         assert_eq!(BackdropPicture::stride(3), 12);

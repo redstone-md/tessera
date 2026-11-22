@@ -371,8 +371,13 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # every display, each scaled to cover it. images lists picture files (.jpg,
 # .png) and directories, whose pictures are taken in the order of their
 # names; with several pictures, each stays interval seconds (600, at least
-# 5) and fades into the next. The wallpaper of Windows is not changed and
-# shows again when Tessera exits. Needs Windows 11 24H2 or later.
+# 5) and fades into the next. fit is "cover" (the picture is scaled until
+# it covers the display and cut where it sticks out, which is what happens
+# without it), "contain" (all of the picture is seen and the rest of the
+# display is black) or "stretch" (the picture takes the shape of the
+# display); it is not for the video. The wallpaper of Windows is not
+# changed and shows again when Tessera exits. Needs Windows 11 24H2 or
+# later.
 #
 # video names a video file that plays there instead, again and again and
 # without its sound; the formats are the ones Windows plays, such as .mp4.
