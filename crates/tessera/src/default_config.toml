@@ -311,9 +311,15 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # 5) and fades into the next. The wallpaper of Windows is not changed and
 # shows again when Tessera exits. Needs Windows 11 24H2 or later.
 #
+# video names a video file that plays there instead, again and again and
+# without its sound; the formats are the ones Windows plays, such as .mp4.
+# The pictures are then shown only where the video cannot be played. A
+# video that windows hide on every display is held still.
+#
 # [wallpaper]
 # images = ["C:/Users/me/Pictures/Wallpapers"]
 # interval = 600
+# video = "C:/Users/me/Videos/wallpaper.mp4"
 
 # Each [[card]] is a panel of widgets that lies on the desktop, below every
 # window. corner is top-left, top-right (the default), bottom-left,
