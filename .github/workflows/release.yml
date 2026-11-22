@@ -1,0 +1,37 @@
+# Builds Tessera for a tag that names a version and publishes the files a
+# release carries: the archive, and the program with its checksum, which
+# the `update` widget installs.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release --locked
+      - name: Gather the files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/tessera | Out-Null
+          Copy-Item target/release/tessera.exe, LICENSE, README.md dist/tessera/
+          Copy-Item -Recurse themes, languages dist/tessera/
+          Compress-Archive -Path dist/tessera -DestinationPath dist/tessera-win64.zip
+          Copy-Item target/release/tessera.exe dist/tessera.exe
+          $sum = (Get-FileHash dist/tessera.exe -Algorithm SHA256).Hash.ToLower()
+          Set-Content -NoNewline -Path dist/tessera.exe.sha256 -Value "$sum  tessera.exe"
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          dist/tessera-win64.zip dist/tessera.exe dist/tessera.exe.sha256
+          --title "${{ github.ref_name }}" --generate-notes
