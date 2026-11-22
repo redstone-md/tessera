@@ -8,7 +8,7 @@ mod win32;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,
-    EdgeReservation, Hotkey, Hotkeys, IconPixels, InputLanguage, JumpTask, Link, Media,
+    EdgeReservation, Hdr, Hotkey, Hotkeys, IconPixels, InputLanguage, JumpTask, Link, Media,
     MediaCommand, MemoryLoad, Modifiers, NativeSurface, Network, Notification, Notifications,
     NowPlaying, Pace, PairedDevice, Passage, Place, Position, PowerAction, PowerPlan,
     ProcessorLoad, RecentDocument, RecycleBin, ScreenBrightness, ScreenEdge, ScreenRect, Shortcut,

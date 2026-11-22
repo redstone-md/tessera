@@ -10,6 +10,7 @@ mod clock;
 mod command;
 mod connections;
 mod focused;
+mod hdr;
 mod keyboard;
 mod label;
 mod launcher;
@@ -66,6 +67,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
         Box::new(look::LookModule),
+        Box::new(hdr::HdrModule),
         Box::new(plan::PlanModule),
         Box::new(trash::TrashModule),
         Box::new(update::UpdateModule),
