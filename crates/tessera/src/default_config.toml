@@ -171,6 +171,17 @@
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
 #   "quit"      closes Tessera
+#   "user"      the picture of the account that is signed in, or the first
+#               letter of its name where it has none, and its name; option
+#               name, false to show the picture alone. A click opens a popup
+#               of "profile", "places" and "power" unless popup names
+#               another
+#   "profile"   that picture, larger, with the full name and the name of the
+#               account, for a popup
+#   "places"    the folders of the account, for a popup; a click opens one.
+#               Option show, which of "home", "desktop", "documents",
+#               "downloads", "pictures", "music" and "videos" to list, in
+#               that order (all but the first two)
 #   "label"     fixed content; options text and icon, a character of the
 #               Segoe Fluent Icons font such as "\uE71D"
 #   "command"   the first line a program prints, run again and again without

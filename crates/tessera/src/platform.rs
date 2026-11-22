@@ -6,12 +6,12 @@
 mod win32;
 
 pub use win32::{
-    AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
+    Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, Connection, DesktopBackdrop, DisplayKey, EdgeReservation, Hotkey, Hotkeys,
     IconPixels, InputLanguage, JumpTask, Link, Media, MediaCommand, MemoryLoad, Modifiers,
     NativeSurface, Network, Notification, Notifications, NowPlaying, Pace, PairedDevice, Passage,
-    Position, PowerAction, ProcessorLoad, RecentDocument, ScreenBrightness, ScreenEdge, ScreenRect,
-    Shortcut, SmallBirth, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil,
+    Place, Position, PowerAction, ProcessorLoad, RecentDocument, ScreenBrightness, ScreenEdge,
+    ScreenRect, Shortcut, SmallBirth, Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil,
     VirtualDesktops, Vpn, VpnState, Wifi, WifiNetwork, WifiReach, WindowEvents, WindowsKey,
     Wireless, accent_color, app_id_in, app_id_of_program, app_path, desktop_look, desktop_pixels,
     display_frames, light_mode, pointer_at, pointer_held, pointer_on_own_window,

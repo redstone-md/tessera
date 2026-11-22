@@ -211,6 +211,12 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("General", "Общие"),
     ("Bars", "Панели"),
     ("Desktop", "Рабочий стол"),
+    ("Home", "Домашняя папка"),
+    ("Documents", "Документы"),
+    ("Downloads", "Загрузки"),
+    ("Pictures", "Изображения"),
+    ("Music", "Музыка"),
+    ("Videos", "Видео"),
     (
         "This display does not let its brightness be set",
         "Этот экран не даёт менять яркость",
