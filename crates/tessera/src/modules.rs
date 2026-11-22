@@ -26,6 +26,7 @@ mod system;
 mod tiling;
 mod trash;
 mod tray;
+mod update;
 mod user;
 mod wifi;
 pub mod windows;
@@ -62,6 +63,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
         Box::new(trash::TrashModule),
+        Box::new(update::UpdateModule),
         Box::new(tray::TrayModule),
         Box::new(user::UserModule),
         Box::new(wifi::WifiModule),

@@ -7,7 +7,7 @@
 mod access;
 mod devices;
 mod host;
-mod http;
+pub mod http;
 pub mod registry;
 mod runtime;
 mod widget;
