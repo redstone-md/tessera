@@ -7,10 +7,11 @@
 //! The windows lie where a [`DesktopBackdrop`](super::DesktopBackdrop)
 //! does, one over each display. The media engine of Windows reads the
 //! file and decodes it once, with the graphics card where that can; a
-//! thread of its own has each frame scaled into every window by the
-//! graphics card. Nothing of a frame passes through the memory of
-//! Tessera, and a video on three displays is decoded as often as one on
-//! one.
+//! thread of its own has each frame drawn once by the graphics card, at
+//! the size of the video or less, and the compositor of Windows scales
+//! that one picture over every window. Nothing of a frame passes through
+//! the memory of Tessera, and a video on three displays is decoded and
+//! drawn as often as one on one.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -27,8 +28,8 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11Multithread, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice, IDCompositionDevice, IDCompositionEffectGroup, IDCompositionTarget,
-    IDCompositionVisual,
+    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR, DCompositionCreateDevice, IDCompositionDevice,
+    IDCompositionEffectGroup, IDCompositionTarget, IDCompositionTransform, IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -45,7 +46,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MEDIA_ENGINE_CALLBACK, MF_MEDIA_ENGINE_DXGI_MANAGER, MF_MEDIA_ENGINE_EVENT_ERROR,
     MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA, MF_MEDIA_ENGINE_FORCEMUTE,
     MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT, MF_VERSION, MFARGB, MFCreateAttributes,
-    MFCreateDXGIDeviceManager, MFSTARTUP_LITE, MFStartup, MFVideoNormalizedRect,
+    MFCreateDXGIDeviceManager, MFSTARTUP_LITE, MFStartup,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
@@ -123,21 +124,38 @@ pub enum VideoState {
     Failed(String),
 }
 
-/// The part of a video of `width` by `height` that covers a window of
-/// `over_width` by `over_height` when scaled, the rest cut off evenly on
-/// two sides: its left, top, right and bottom as shares of the video.
-fn covering_share(width: u32, height: u32, over_width: u32, over_height: u32) -> [f32; 4] {
+/// The size of the frames kept for a video of `width` by `height` that
+/// is shown over displays of the sizes `over`: that of the video, or less
+/// where no display shows it as large.
+fn kept_size(width: u32, height: u32, over: &[(u32, u32)]) -> (u32, u32) {
     let (wide, high) = (f64::from(width.max(1)), f64::from(height.max(1)));
-    let (over_wide, over_high) = (f64::from(over_width.max(1)), f64::from(over_height.max(1)));
-    let (shape, over_shape) = (wide / high, over_wide / over_high);
-    if shape > over_shape {
-        // Wider in shape: the sides go.
-        let cut = ((1. - over_shape / shape) / 2.) as f32;
-        [cut, 0., 1. - cut, 1.]
-    } else {
-        let cut = ((1. - shape / over_shape) / 2.) as f32;
-        [0., cut, 1., 1. - cut]
+    let most = over
+        .iter()
+        .map(|&(over_wide, over_high)| placed(width, height, over_wide, over_high).0)
+        .fold(0_f32, f32::max);
+    if most <= 0. || most >= 1. {
+        return (width.max(1), height.max(1));
     }
+    let most = f64::from(most);
+    (
+        ((wide * most).ceil() as u32).max(1),
+        ((high * most).ceil() as u32).max(1),
+    )
+}
+
+/// How frames of `width` by `height` lie in a window of `over_width` by
+/// `over_height` that they cover, what does not fit cut off evenly on two
+/// sides: how many times as large they are drawn, and where their left
+/// and top sides are from those of the window.
+fn placed(width: u32, height: u32, over_width: u32, over_height: u32) -> (f32, f32, f32) {
+    let (wide, high) = (width.max(1) as f32, height.max(1) as f32);
+    let (over_wide, over_high) = (over_width.max(1) as f32, over_height.max(1) as f32);
+    let scale = (over_wide / wide).max(over_high / high);
+    (
+        scale,
+        (over_wide - wide * scale) / 2.,
+        (over_high - high * scale) / 2.,
+    )
 }
 
 /// Whether the media library of Windows could be started, which is done
@@ -157,16 +175,106 @@ struct Target {
     height: i32,
 }
 
-/// What the thread that draws keeps for a window.
-struct Screen {
+/// What the frames are made with, and where they go.
+struct Stage<'a> {
+    device: ID3D11Device,
+    factory: IDXGIFactory2,
+    composition: IDCompositionDevice,
+    /// One for all the windows: they come into sight together.
+    fade: IDCompositionEffectGroup,
+    targets: &'a [Target],
+}
+
+/// The frames of the video, kept once and shown in every window.
+struct Frames {
     chain: IDXGISwapChain1,
     buffer: ID3D11Texture2D,
-    /// What binds the frames to the window, kept for as long as they
+    /// All of the frames.
+    whole: RECT,
+    /// What binds the frames to the windows, kept for as long as they
     /// are shown.
-    _bound: (IDCompositionTarget, IDCompositionVisual),
-    target: Target,
-    /// The part of the video shown, once the size of the video is known.
-    part: Option<MFVideoNormalizedRect>,
+    _bound: Vec<(IDCompositionTarget, IDCompositionVisual)>,
+}
+
+impl Stage<'_> {
+    /// Makes the frames for a video of `width` by `height` and lays them
+    /// over each window, scaled to cover it.
+    ///
+    /// # Safety
+    ///
+    /// The windows of the targets are alive.
+    unsafe fn frames(&self, width: u32, height: u32) -> Result<Frames> {
+        let sizes: Vec<_> = self
+            .targets
+            .iter()
+            .map(|target| (target.width.unsigned_abs(), target.height.unsigned_abs()))
+            .collect();
+        let (wide, high) = kept_size(width, height, &sizes);
+        let description = DXGI_SWAP_CHAIN_DESC1 {
+            Width: wide,
+            Height: high,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: 2,
+            Scaling: DXGI_SCALING_STRETCH,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+            AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+            ..Default::default()
+        };
+        // SAFETY: the arguments outlive the calls; see the function.
+        unsafe {
+            let chain = self
+                .factory
+                .CreateSwapChainForComposition(
+                    &self.device,
+                    &raw const description,
+                    None::<&IDXGIOutput>,
+                )
+                .context("the graphics card gives no frames for the wallpaper")?;
+            let mut bound = Vec::new();
+            for (target, &(over_wide, over_high)) in self.targets.iter().zip(&sizes) {
+                let window = self
+                    .composition
+                    .CreateTargetForHwnd(HWND(target.window as *mut _), true)
+                    .context("a wallpaper window takes no frames of the compositor")?;
+                let (scale, left, top) = placed(wide, high, over_wide, over_high);
+                let scaled = self.composition.CreateScaleTransform()?;
+                scaled.SetScaleX2(scale)?;
+                scaled.SetScaleY2(scale)?;
+                let moved = self.composition.CreateTranslateTransform()?;
+                moved.SetOffsetX2(left)?;
+                moved.SetOffsetY2(top)?;
+                let lies = self.composition.CreateTransformGroup(&[
+                    Some(scaled.cast::<IDCompositionTransform>()?),
+                    Some(moved.cast::<IDCompositionTransform>()?),
+                ])?;
+                let visual = self.composition.CreateVisual()?;
+                visual.SetContent(&chain)?;
+                visual.SetTransform(&lies)?;
+                visual.SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR)?;
+                visual.SetEffect(&self.fade)?;
+                window.SetRoot(&visual)?;
+                bound.push((window, visual));
+            }
+            self.composition.Commit()?;
+            let buffer: ID3D11Texture2D = chain.GetBuffer(0)?;
+            Ok(Frames {
+                chain,
+                buffer,
+                whole: RECT {
+                    left: 0,
+                    top: 0,
+                    right: wide as i32,
+                    bottom: high as i32,
+                },
+                _bound: bound,
+            })
+        }
+    }
 }
 
 /// Plays the video in the file `path` into the windows of `targets` until
@@ -210,50 +318,15 @@ fn draw(targets: &[Target], path: &Path, told: &Arc<Told>) -> Result<()> {
         // directly.
         let composition: IDCompositionDevice = DCompositionCreateDevice(&shared)
             .context("the compositor of Windows takes no frames")?;
-        // One for all the windows: they come into sight together.
         let fade = composition.CreateEffectGroup()?;
         fade.SetOpacity2(0.)?;
-        let mut screens = Vec::new();
-        for &target in targets {
-            let description = DXGI_SWAP_CHAIN_DESC1 {
-                Width: target.width.unsigned_abs(),
-                Height: target.height.unsigned_abs(),
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                BufferCount: 2,
-                Scaling: DXGI_SCALING_STRETCH,
-                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-                AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-                ..Default::default()
-            };
-            let chain = factory
-                .CreateSwapChainForComposition(
-                    &device,
-                    &raw const description,
-                    None::<&IDXGIOutput>,
-                )
-                .context("the graphics card gives no frames for a wallpaper window")?;
-            let bound = composition
-                .CreateTargetForHwnd(HWND(target.window as *mut _), true)
-                .context("a wallpaper window takes no frames of the compositor")?;
-            let visual = composition.CreateVisual()?;
-            visual.SetContent(&chain)?;
-            visual.SetEffect(&fade)?;
-            bound.SetRoot(&visual)?;
-            let buffer: ID3D11Texture2D = chain.GetBuffer(0)?;
-            screens.push(Screen {
-                chain,
-                buffer,
-                _bound: (bound, visual),
-                target,
-                part: None,
-            });
-        }
-        composition.Commit()?;
+        let stage = Stage {
+            device,
+            factory,
+            composition,
+            fade,
+            targets,
+        };
 
         let classes: IMFMediaEngineClassFactory =
             CoCreateInstance(&CLSID_MFMediaEngineClassFactory, None, CLSCTX_INPROC_SERVER)
@@ -272,26 +345,20 @@ fn draw(targets: &[Target], path: &Path, told: &Arc<Told>) -> Result<()> {
         let engine = classes
             .CreateInstance(MF_MEDIA_ENGINE_FORCEMUTE.0 as u32, &attributes)
             .context("the media engine could not be made")?;
-        let played = play(&engine, &mut screens, (&composition, &fade), path, told);
+        let played = play(&engine, &stage, path, told);
         let _ = engine.Shutdown();
         played
     }
 }
 
-/// Has `engine` play the file `path` and draws its frames into `screens`
-/// until told to stop or the engine gives up, and has `fade` show as
+/// Has `engine` play the file `path` and draws its frames for the windows
+/// of `stage` until told to stop or the engine gives up, and shows as
 /// much of them as was asked for.
 ///
 /// # Safety
 ///
-/// The windows of `screens` are alive.
-unsafe fn play(
-    engine: &IMFMediaEngine,
-    screens: &mut [Screen],
-    fade: (&IDCompositionDevice, &IDCompositionEffectGroup),
-    path: &Path,
-    told: &Told,
-) -> Result<()> {
+/// The windows of the targets of `stage` are alive.
+unsafe fn play(engine: &IMFMediaEngine, stage: &Stage, path: &Path, told: &Told) -> Result<()> {
     let black = MFARGB {
         rgbBlue: 0,
         rgbGreen: 0,
@@ -305,7 +372,8 @@ unsafe fn play(
         engine.SetAutoPlay(true)?;
         engine.SetSource(&BSTR::from(path.to_string_lossy().as_ref()))?;
 
-        let all = u32::MAX >> (32 - screens.len().clamp(1, 32));
+        let all = u32::MAX >> (32 - stage.targets.len().clamp(1, 32));
+        let mut frames: Option<Frames> = None;
         let mut paused = false;
         let mut faded = 0;
         while !told.stop.load(Ordering::Relaxed) {
@@ -313,14 +381,13 @@ unsafe fn play(
                 return Ok(());
             }
             let shown = told.shown.load(Ordering::Relaxed);
-            if shown != faded {
-                let (composition, group) = fade;
-                if group.SetOpacity2(shown as f32 / 255.).is_ok() && composition.Commit().is_ok() {
-                    faded = shown;
-                }
+            if shown != faded
+                && stage.fade.SetOpacity2(shown as f32 / 255.).is_ok()
+                && stage.composition.Commit().is_ok()
+            {
+                faded = shown;
             }
-            let hidden = told.hidden.load(Ordering::Relaxed);
-            if hidden & all == all {
+            if told.hidden.load(Ordering::Relaxed) & all == all {
                 // Nobody sees the video: it is not decoded.
                 if !paused {
                     paused = engine.Pause().is_ok();
@@ -340,47 +407,24 @@ unsafe fn play(
                 &raw mut time,
             );
             if tick == S_OK {
-                let mut drawn = false;
-                for (index, screen) in screens.iter_mut().enumerate() {
-                    if hidden & (1 << index.min(31)) != 0 {
-                        continue;
-                    }
-                    let Target { width, height, .. } = screen.target;
-                    if screen.part.is_none() {
-                        let (mut wide, mut high) = (0, 0);
-                        let size =
-                            engine.GetNativeVideoSize(Some(&raw mut wide), Some(&raw mut high));
-                        if size.is_err() || wide == 0 || high == 0 {
-                            continue;
-                        }
-                        let [left, top, right, bottom] =
-                            covering_share(wide, high, width.unsigned_abs(), height.unsigned_abs());
-                        screen.part = Some(MFVideoNormalizedRect {
-                            left,
-                            top,
-                            right,
-                            bottom,
-                        });
-                    }
-                    let part = screen.part.as_ref().map(|part| part as *const _);
-                    let window = RECT {
-                        left: 0,
-                        top: 0,
-                        right: width,
-                        bottom: height,
-                    };
-                    let moved = engine.TransferVideoFrame(
-                        &screen.buffer,
-                        part,
-                        &raw const window,
-                        Some(&raw const black),
-                    );
-                    if moved.is_ok() && screen.chain.Present(0, DXGI_PRESENT(0)).is_ok() {
-                        drawn = true;
+                if frames.is_none() {
+                    // The size of the video is known with its first frame.
+                    let (mut wide, mut high) = (0, 0);
+                    let size = engine.GetNativeVideoSize(Some(&raw mut wide), Some(&raw mut high));
+                    if size.is_ok() && wide != 0 && high != 0 {
+                        frames = Some(stage.frames(wide, high)?);
                     }
                 }
-                if drawn {
-                    told.events.fetch_or(SHOWING, Ordering::Relaxed);
+                if let Some(frames) = &frames {
+                    let moved = engine.TransferVideoFrame(
+                        &frames.buffer,
+                        None,
+                        &raw const frames.whole,
+                        Some(&raw const black),
+                    );
+                    if moved.is_ok() && frames.chain.Present(0, DXGI_PRESENT(0)).is_ok() {
+                        told.events.fetch_or(SHOWING, Ordering::Relaxed);
+                    }
                 }
             }
             // Until the compositor has shown what there is: a frame of
@@ -487,8 +531,8 @@ impl DesktopVideo {
     }
 
     /// Says which displays, counted by bits in the order they were given
-    /// in, show nothing of the video: no frame is drawn there, and where
-    /// that is all of them, the video is held still and not decoded.
+    /// in, show nothing of the video: where that is all of them, the video
+    /// is held still and not decoded.
     pub fn hide(&self, displays: u32) {
         self.told.hidden.store(displays, Ordering::Relaxed);
     }
@@ -527,11 +571,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_video_is_cut_evenly_to_the_shape_of_the_display() {
-        assert_eq!(covering_share(1920, 1080, 2560, 1440), [0., 0., 1., 1.]);
-        // A display twice as wide in shape keeps the middle half of the rows.
-        assert_eq!(covering_share(1000, 1000, 2000, 1000), [0., 0.25, 1., 0.75]);
-        assert_eq!(covering_share(2000, 1000, 1000, 1000), [0.25, 0., 0.75, 1.]);
-        assert_eq!(covering_share(0, 0, 0, 0), [0., 0., 1., 1.]);
+    fn frames_cover_a_window_and_are_cut_evenly() {
+        assert_eq!(placed(1920, 1080, 2560, 1440), (2560. / 1920., 0., 0.));
+        // A window twice as wide in shape keeps the middle half of the rows.
+        assert_eq!(placed(1000, 1000, 2000, 1000), (2., 0., -500.));
+        assert_eq!(placed(2000, 1000, 1000, 1000), (1., -500., 0.));
+        assert_eq!(placed(0, 0, 0, 0), (1., 0., 0.));
+    }
+
+    #[test]
+    fn frames_are_kept_no_larger_than_they_are_shown() {
+        // Shown larger than it is: kept as it is.
+        assert_eq!(
+            kept_size(1920, 1080, &[(3440, 1440), (2560, 1440)]),
+            (1920, 1080)
+        );
+        // Shown at half its size at most: kept at half.
+        assert_eq!(
+            kept_size(3840, 2160, &[(1920, 1080), (1280, 720)]),
+            (1920, 1080)
+        );
+        assert_eq!(kept_size(3840, 2160, &[]), (3840, 2160));
     }
 }
