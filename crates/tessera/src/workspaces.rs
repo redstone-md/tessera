@@ -233,6 +233,35 @@ impl Homes {
         Some(home)
     }
 
+    /// Has the window `id` live on the workspace at `index` from now on:
+    /// it is hidden when it leaves the workspace shown and shown when it
+    /// comes there.
+    fn settle(&mut self, id: AppWindowId, index: usize, now: Instant) -> Change {
+        let Some(&home) = self.home.get(&id) else {
+            return Change::default();
+        };
+        if index >= self.count || home == index {
+            return Change::default();
+        }
+        self.home.insert(id, index);
+        if self.fronts[home] == Some(id) {
+            self.fronts[home] = None;
+        }
+        if self.fronts[index].is_none() {
+            self.fronts[index] = Some(id);
+        }
+        let mut change = Change::default();
+        if index == self.current {
+            self.hidden.remove(&id);
+            change.show.push(id);
+        } else if home == self.current {
+            self.hidden.insert(id, now);
+            change.hide.push(id);
+            change.onward = index < self.current;
+        }
+        change
+    }
+
     /// Goes to the workspace at `index`.
     fn go(&mut self, index: usize, now: Instant) -> Change {
         if index >= self.count || index == self.current {
@@ -478,6 +507,15 @@ impl Workspaces {
         this.apply(change);
     }
 
+    /// Has the window `id` live on the workspace at `index`, without going
+    /// there.
+    pub fn move_window(id: AppWindowId, index: usize, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        this.look();
+        let change = this.homes.settle(id, index, Instant::now());
+        this.apply(change);
+    }
+
     /// Takes in what windows there are.
     fn look(&mut self) {
         let windows: Vec<AppWindow> = AppWindow::enumerate()
@@ -608,6 +646,31 @@ mod tests {
         assert_eq!(homes.bring(id(2)), Some(0));
         assert_eq!(homes.go(0, start).front, Some(id(2)));
         assert_eq!(homes.bring(id(9)), None);
+    }
+
+    #[test]
+    fn a_window_settles_on_another_workspace() {
+        let start = Instant::now();
+        let mut homes = Homes::new(3);
+        homes.see(&[id(1), id(2)], Some(id(1)), start);
+        // Away from the workspace shown it is hidden.
+        let away = homes.settle(id(1), 2, start);
+        assert_eq!(sorted(away.hide), [1]);
+        assert!(away.show.is_empty());
+        assert_eq!(homes.fronts, [None, None, Some(id(1))]);
+        // Between two workspaces that are not shown nothing is seen.
+        let aside = homes.settle(id(1), 1, start);
+        assert!(aside.hide.is_empty() && aside.show.is_empty());
+        // Back to the workspace shown it is shown.
+        let back = homes.settle(id(1), 0, start);
+        assert_eq!(sorted(back.show), [1]);
+        assert!(!homes.hidden.contains_key(&id(1)));
+        // Where it is, and where there is nothing, nothing changes.
+        assert!(homes.settle(id(1), 0, start).show.is_empty());
+        assert!(homes.settle(id(1), 7, start).hide.is_empty());
+        assert!(homes.settle(id(9), 1, start).hide.is_empty());
+        let listed: Vec<Vec<isize>> = homes.residents().into_iter().map(sorted).collect();
+        assert_eq!(listed, [vec![1, 2], vec![], vec![]]);
     }
 
     #[test]

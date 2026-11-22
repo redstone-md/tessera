@@ -3,20 +3,24 @@
 
 //! The `overview` widget, for a popup: a card for each workspace of
 //! Tessera's own with the icons of the windows that live there. A click
-//! on a card goes to that workspace, a click on an icon to its window.
+//! on a card goes to that workspace, a click on an icon to its window, and
+//! an icon dragged onto another card has its window live there.
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    div, img, px,
+    ParentElement, Render, RenderImage, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, div, img, px,
 };
 
 use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix, staggered};
+use crate::platform::AppWindowId;
 use crate::theme::Theme;
 use crate::ui::{one_line, state_layer};
 use crate::workspaces::{Resident, Workspaces as Kept};
@@ -36,6 +40,35 @@ impl Module for OverviewModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("overview", |_, cx| cx.new(Overview::new).into())
+    }
+}
+
+/// A window on its way to another workspace, and what follows the
+/// pointer meanwhile.
+#[derive(Clone)]
+struct Carried {
+    id: AppWindowId,
+    picture: Option<Arc<RenderImage>>,
+}
+
+impl Render for Carried {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        let size = theme.launcher.icon_size;
+        div()
+            .p(theme.spacing.tiny)
+            .rounded(theme.shape.small)
+            .bg(theme.colors.surface_container_highest)
+            .border_1()
+            .border_color(theme.colors.primary)
+            .child(match self.picture.clone() {
+                Some(picture) => img(picture).size(size).into_any_element(),
+                None => div()
+                    .size(size)
+                    .rounded(theme.shape.small)
+                    .bg(theme.colors.outline)
+                    .into_any_element(),
+            })
     }
 }
 
@@ -147,6 +180,10 @@ impl Overview {
             .and_then(|program| cx.global::<AppIcons>().of_executable(program));
         let state = self.cards[card].windows[place].state(window);
         let id = resident.id;
+        let carried = Carried {
+            id,
+            picture: picture.clone(),
+        };
         let face = div()
             .id(("resident", id.raw() as usize))
             .p(theme.spacing.tiny)
@@ -159,6 +196,10 @@ impl Overview {
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 Kept::show_window(id, cx);
+            })
+            .on_drag(carried, |carried: &Carried, _, _, cx| {
+                let carried = carried.clone();
+                cx.new(|_| carried)
             })
             .child(match picture {
                 Some(picture) => img(picture).size(size).into_any_element(),
@@ -231,10 +272,17 @@ impl Overview {
             .flex_col()
             .gap(theme.spacing.small)
             .rounded(theme.shape.large)
+            .border_1()
+            .border_color(colors.primary.opacity(0.))
             .bg(state_layer(theme, ground, state))
             .text_size(theme.typography.label_size)
             .on_click(cx.listener(move |this, _, _, cx| {
                 Kept::show(index, cx);
+                this.look(cx);
+            }))
+            .drag_over::<Carried>(move |style, _, _, _| style.border_color(colors.primary))
+            .on_drop(cx.listener(move |this, carried: &Carried, _, cx| {
+                Kept::move_window(carried.id, index, cx);
                 this.look(cx);
             }))
             .child(title)
