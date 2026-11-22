@@ -154,6 +154,11 @@ impl WidgetRegistry {
     }
 
     /// The identifiers of the widgets a layout can name, in order.
+    /// The names of the popups that come with the widgets.
+    pub fn popup_names(&self) -> Vec<String> {
+        self.popups.keys().cloned().collect()
+    }
+
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.factories.keys().cloned().collect();
         names.sort();

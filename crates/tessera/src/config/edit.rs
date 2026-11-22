@@ -138,6 +138,9 @@ pub struct Place {
     pub index: usize,
 }
 
+/// What a `[[key]]` has one of.
+pub const DEEDS: [&str; 5] = ["popup", "tiling", "focus", "move", "run"];
+
 /// The configuration file, open for changing.
 pub struct ConfigFile {
     document: DocumentMut,
@@ -325,6 +328,70 @@ impl ConfigFile {
             .entry("content")
             .or_insert_with(|| Item::Value(Value::Array(Array::new())));
         item.as_array_mut()
+    }
+
+    /// A `[[key]]` of the file.
+    fn hotkey(&mut self, key: usize) -> Option<&mut Table> {
+        let keys = self.document.get_mut("key")?.as_array_of_tables_mut()?;
+        keys.get_mut(key)
+    }
+
+    /// Appends a `[[key]]` of the combination `press`, which takes the
+    /// tiling mode after the one in use.
+    pub fn add_hotkey(&mut self, press: &str) -> bool {
+        let item = self
+            .document
+            .entry("key")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(keys) = item.as_array_of_tables_mut() else {
+            return false;
+        };
+        let mut key = Table::new();
+        key.insert("press", value(press));
+        key.insert("tiling", value("next"));
+        keys.push(key);
+        true
+    }
+
+    /// Takes a `[[key]]` out.
+    pub fn remove_hotkey(&mut self, key: usize) -> bool {
+        let keys = self.document.get_mut("key");
+        let Some(keys) = keys.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        if key >= keys.len() {
+            return false;
+        }
+        keys.remove(key);
+        if keys.is_empty() {
+            self.document.remove("key");
+        }
+        true
+    }
+
+    /// Gives a `[[key]]` another combination.
+    pub fn set_hotkey_press(&mut self, key: usize, press: &str) -> bool {
+        let Some(key) = self.hotkey(key) else {
+            return false;
+        };
+        key.insert("press", value(press));
+        true
+    }
+
+    /// Has a `[[key]]` do `deed`, one of [`DEEDS`], with `to`, instead of
+    /// what it did.
+    pub fn set_hotkey_deed(&mut self, key: usize, deed: &str, to: &str) -> bool {
+        let Some(key) = self.hotkey(key) else {
+            return false;
+        };
+        if !DEEDS.contains(&deed) {
+            return false;
+        }
+        for other in DEEDS {
+            key.remove(other);
+        }
+        key.insert(deed, value(to));
+        true
     }
 
     /// Appends a card with the clock to the desktop.
@@ -948,6 +1015,30 @@ content = ["apps"]
             let settings = layout.popups.iter().any(|popup| popup.name == "settings");
             assert!(settings, "{name} cannot be left again");
         }
+    }
+
+    #[test]
+    fn keys_are_added_changed_and_taken_out() {
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        assert!(!file.remove_hotkey(0));
+        assert!(file.add_hotkey("ctrl+alt+a"));
+        assert!(file.add_hotkey("ctrl+alt+b"));
+        assert!(file.set_hotkey_press(1, "alt+shift+left"));
+        assert!(file.set_hotkey_deed(1, "move", "left"));
+        assert!(!file.set_hotkey_deed(1, "press", "left"));
+        assert!(!file.set_hotkey_deed(2, "focus", "left"));
+        let keys = file.config().unwrap().keys;
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].tiling.as_deref(), Some("next"));
+        assert_eq!(keys[1].press, "alt+shift+left");
+        assert_eq!(
+            (keys[1].tiling.as_deref(), keys[1].carry.as_deref()),
+            (None, Some("left"))
+        );
+        assert!(file.remove_hotkey(0));
+        assert!(file.remove_hotkey(0));
+        assert!(file.config().unwrap().keys.is_empty());
+        assert!(!file.document.contains_key("key"));
     }
 
     #[test]

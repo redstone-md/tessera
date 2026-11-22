@@ -561,6 +561,30 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Theme files are looked for in the themes directory of the configuration directory.",
         "Файлы тем ищутся в папке themes в папке конфигурации.",
     ),
+    ("Keys", "Клавиши"),
+    (
+        "Key combinations Tessera answers wherever they are pressed. One that Windows or another program holds does nothing and is reported as a problem.",
+        "Сочетания клавиш, на которые Tessera отвечает, где бы их ни нажали. Сочетание, занятое Windows или другой программой, ничего не делает и попадает в список проблем.",
+    ),
+    ("No key combination is set.", "Сочетаний нет."),
+    ("Add a key", "Добавить сочетание"),
+    ("Remove the key", "Убрать сочетание"),
+    ("Held", "Удерживать"),
+    ("Key", "Клавиша"),
+    ("Does", "Действие"),
+    ("Popup", "Попап"),
+    ("Focus", "Фокус"),
+    ("Move", "Перенос"),
+    ("Program", "Программа"),
+    ("Next", "Следующий"),
+    ("Left", "Влево"),
+    ("Right", "Вправо"),
+    ("Up", "Вверх"),
+    ("Down", "Вниз"),
+    (
+        "The program is written in the file by hand.",
+        "Программа пишется в файле вручную.",
+    ),
 ];
 
 #[cfg(test)]

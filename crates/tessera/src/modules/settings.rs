@@ -15,19 +15,21 @@ use gpui::{
     img, px,
 };
 
-use crate::config::edit::{CardLength, ConfigFile, LAYOUTS, Place, Slot};
-use crate::config::{Config, Displays, Hiding, SurfaceConfig, WidgetSpec, config_dir};
+use crate::config::edit::{CardLength, ConfigFile, DEEDS, LAYOUTS, Place, Slot};
+use crate::config::{Config, Displays, Hiding, KeyConfig, SurfaceConfig, WidgetSpec, config_dir};
 use crate::desk::{CardConfig, Corner};
 use crate::i18n::Language;
 use crate::icons::AppIcons;
+use crate::keys::{HELD, KEYS, Press, key_label};
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::marketplace::{Changed, Marketplace};
 use crate::motion::{Interaction, Spring, mix, staggered};
 use crate::panel::Arranging;
-use crate::platform::{AppWindow, ScreenEdge};
+use crate::platform::{AppWindow, Modifiers, ScreenEdge};
 use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::{ACCENT_THEME, Theme};
+use crate::tiling::TileLayout;
 use crate::ui::{icon, state_layer, switch};
 
 /// The directory of the configuration directory that holds theme files.
@@ -87,12 +89,13 @@ enum Section {
     Dock,
     Tray,
     Windows,
+    Keys,
     Themes,
     Extensions,
 }
 
 impl Section {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::General,
         Self::Bars,
         Self::Desktop,
@@ -100,6 +103,7 @@ impl Section {
         Self::Dock,
         Self::Tray,
         Self::Windows,
+        Self::Keys,
         Self::Themes,
         Self::Extensions,
     ];
@@ -113,6 +117,7 @@ impl Section {
             Self::Dock => "Dock",
             Self::Tray => "Tray",
             Self::Windows => "Windows",
+            Self::Keys => "Keys",
             Self::Themes => "Themes",
             Self::Extensions => "Extensions",
         }
@@ -127,6 +132,7 @@ impl Section {
             Self::Dock => "\u{e7c4}",
             Self::Tray => "\u{e712}",
             Self::Windows => "\u{e8a7}",
+            Self::Keys => "\u{e765}",
             Self::Themes => "\u{e790}",
             Self::Extensions => "\u{e719}",
         }
@@ -505,6 +511,71 @@ enum Control {
     Pin(usize),
     /// Counts the theme files; `None` is the built-in theme.
     Theme(Option<usize>),
+    /// Adds a key combination.
+    NewKey,
+    /// Counts the key combinations.
+    DropKey(usize),
+    /// Holds this one of the keys to hold for a combination, or lets it go.
+    KeyHeld(usize, usize),
+    /// Opens or closes the list of keys a combination can end with.
+    KeyList(usize),
+    /// Ends a combination with the key at this place of the list.
+    KeyPick(usize, usize),
+    /// Has a combination do this one of the deeds.
+    KeyDeed(usize, usize),
+    /// Gives the deed of a combination this one of its answers.
+    KeyValue(usize, usize),
+}
+
+/// The deeds of a key combination as they are shown, in the order of
+/// [`DEEDS`]. The last one is not chosen here: it takes a text.
+const DEED_TITLES: [&str; 5] = ["Popup", "Tiling", "Focus", "Move", "Program"];
+const DEED_RUN: usize = 4;
+const SIDES: [&str; 4] = ["left", "right", "up", "down"];
+
+/// Which of [`DEEDS`] a key combination does, and with what.
+fn deed_of(key: &KeyConfig) -> Option<(usize, String)> {
+    let run = key.run.as_ref().map(|run| run.join(" "));
+    let deeds = [&key.popup, &key.tiling, &key.focus, &key.carry, &run];
+    let mut deeds = deeds.into_iter().enumerate();
+    deeds.find_map(|(kind, deed)| Some((kind, deed.clone()?)))
+}
+
+/// What the answer `answer` of a deed is called.
+fn answer_title(answer: &str, language: Language) -> SharedString {
+    let title = match answer {
+        "next" => "Next",
+        "off" => "Off",
+        "left" => "Left",
+        "right" => "Right",
+        "up" => "Up",
+        "down" => "Down",
+        _ => {
+            let named = |layout: &&TileLayout| layout.name().eq_ignore_ascii_case(answer);
+            match TileLayout::ALL.iter().find(named) {
+                Some(layout) => layout.name(),
+                None => return SharedString::new(answer),
+            }
+        }
+    };
+    language.say(title).into()
+}
+
+/// A line of a card: what is chosen, and the chooser.
+fn line(theme: &Theme, title: &'static str, chooser: AnyElement) -> gpui::Div {
+    div()
+        .min_h(CHIP_HEIGHT)
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(theme.spacing.small)
+        .child(
+            div()
+                .flex_none()
+                .text_color(theme.colors.on_surface_variant)
+                .child(title),
+        )
+        .child(chooser)
 }
 
 /// What widgets are added to.
@@ -633,6 +704,13 @@ struct Settings {
     adding: Option<Holder>,
     /// 1 while that list is open, 0 while it is closed.
     add_list: Spring,
+    /// The popups a key combination can open.
+    popups: Vec<String>,
+    /// The key combination whose list of keys is open, kept while it
+    /// closes.
+    picking: Option<usize>,
+    /// 1 while that list is open, 0 while it is closed.
+    key_list: Spring,
     interactions: HashMap<Control, Interaction>,
 }
 
@@ -661,6 +739,9 @@ impl Settings {
             languages: Vec::new(),
             adding: None,
             add_list: Spring::new(motion.spatial_fast, 0.),
+            popups: Vec::new(),
+            picking: None,
+            key_list: Spring::new(motion.spatial_fast, 0.),
             interactions: HashMap::new(),
         };
         match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
@@ -676,6 +757,12 @@ impl Settings {
         self.available = cx.global::<WidgetRegistry>().names();
         self.themes = themes();
         self.languages = Language::installed();
+        let mut popups = cx.global::<WidgetRegistry>().popup_names();
+        let own = self.config.iter().flat_map(|config| &config.popups);
+        popups.extend(own.map(|popup| popup.name.clone()));
+        popups.sort();
+        popups.dedup();
+        self.popups = popups;
         let pins = self
             .config
             .as_ref()
@@ -914,6 +1001,79 @@ impl Settings {
                 };
                 pins.push(plain(program));
                 self.change(cx, |file| file.set_pinned(&pins));
+            }
+            Control::NewKey => {
+                let keys = self.config.iter().flat_map(|config| &config.keys);
+                let taken: Vec<Press> = keys.filter_map(|key| Press::parse(&key.press)).collect();
+                let held = Modifiers {
+                    control: true,
+                    alt: true,
+                    ..Modifiers::default()
+                };
+                let letters = KEYS.iter().map(|key| Press {
+                    held,
+                    key: (*key).to_owned(),
+                });
+                let free = letters.into_iter().find(|press| !taken.contains(press));
+                if let Some(press) = free.and_then(|press| press.written()) {
+                    self.change(cx, |file| file.add_hotkey(&press));
+                }
+            }
+            Control::DropKey(key) => {
+                // The combinations after it are counted anew.
+                self.picking = None;
+                self.change(cx, |file| file.remove_hotkey(key));
+            }
+            Control::KeyHeld(key, which) => {
+                let mut press = self.press(key);
+                let Some(held) = press.held_mut(which) else {
+                    return;
+                };
+                *held = !*held;
+                // The last key held stays: without one it is no combination.
+                if let Some(press) = press.written() {
+                    self.change(cx, |file| file.set_hotkey_press(key, &press));
+                }
+            }
+            Control::KeyList(key) => {
+                let open = self.key_list.target() > 0.;
+                if open && self.picking == Some(key) {
+                    self.key_list.animate_to(0.);
+                } else {
+                    if self.picking != Some(key) {
+                        self.key_list.jump_to(0.);
+                    }
+                    self.picking = Some(key);
+                    self.key_list.animate_to(1.);
+                }
+                cx.notify();
+            }
+            Control::KeyPick(key, at) => {
+                let mut press = self.press(key);
+                let Some(name) = KEYS.get(at) else {
+                    return;
+                };
+                press.key = (*name).to_owned();
+                self.key_list.animate_to(0.);
+                if let Some(press) = press.written() {
+                    self.change(cx, |file| file.set_hotkey_press(key, &press));
+                }
+            }
+            Control::KeyDeed(key, kind) => {
+                let first = self.answers(kind).into_iter().next();
+                if let (Some(deed), Some(answer)) = (DEEDS.get(kind), first) {
+                    self.change(cx, |file| file.set_hotkey_deed(key, deed, &answer));
+                }
+            }
+            Control::KeyValue(key, at) => {
+                let keys = self.config.as_ref().map(|config| &config.keys);
+                let deed = keys.and_then(|keys| deed_of(keys.get(key)?));
+                let Some((kind, _)) = deed else {
+                    return;
+                };
+                if let Some(answer) = self.answers(kind).into_iter().nth(at) {
+                    self.change(cx, |file| file.set_hotkey_deed(key, DEEDS[kind], &answer));
+                }
             }
             Control::Theme(choice) => {
                 let theme = choice.and_then(|index| self.themes.get(index).cloned());
@@ -1175,21 +1335,8 @@ impl Settings {
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
-        let line = |title: &'static str, chooser: AnyElement| {
-            div()
-                .min_h(CHIP_HEIGHT)
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(theme.spacing.small)
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(theme.colors.on_surface_variant)
-                        .child(language.say(title)),
-                )
-                .child(chooser)
-        };
+        let line =
+            |title: &'static str, chooser: AnyElement| line(&theme, language.say(title), chooser);
         let title = format!("{} {}", language.say("Card"), index + 1);
         let mut section = card(&theme, title);
 
@@ -1268,6 +1415,166 @@ impl Settings {
             selected: false,
         };
         let remove = self.control(Control::DropCard(index), face, window, cx);
+        section
+            .child(div().flex().justify_end().child(remove))
+            .into_any_element()
+    }
+
+    /// What the key combination at `key` presses; Ctrl and the first key
+    /// where the file has none that can be held.
+    fn press(&self, key: usize) -> Press {
+        let keys = self.config.as_ref().map(|config| &config.keys);
+        let press = keys.and_then(|keys| Press::parse(&keys.get(key)?.press));
+        press.unwrap_or_else(|| Press {
+            held: Modifiers::default(),
+            key: KEYS[0].to_owned(),
+        })
+    }
+
+    /// What the deed at `kind` of [`DEEDS`] can be done with, as the file
+    /// writes it. A program is not among it: it is a text.
+    fn answers(&self, kind: usize) -> Vec<String> {
+        let layouts = TileLayout::ALL.iter();
+        let layouts = layouts.map(|layout| layout.name().to_ascii_lowercase());
+        match DEEDS.get(kind) {
+            Some(&"popup") => self.popups.clone(),
+            Some(&"tiling") => { ["next", "off"].map(str::to_owned).into_iter() }
+                .chain(layouts)
+                .collect(),
+            Some(&"focus" | &"move") => SIDES.map(str::to_owned).to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What the key combinations are, and the button that adds one.
+    fn keys(&mut self, config: &Config, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let about = "Key combinations Tessera answers wherever they are pressed. One that Windows or another program holds does nothing and is reported as a problem.";
+        let face = Face::Chip {
+            text: language.say("Add a key").into(),
+            selected: true,
+        };
+        let add = self.control(Control::NewKey, face, window, cx);
+        let none = config.keys.is_empty();
+        let none = none.then(|| note(&theme, language.say("No key combination is set.")));
+        card(&theme, language.say("Keys"))
+            .child(note(&theme, language.say(about)))
+            .children(none)
+            .child(div().flex().child(add))
+            .into_any_element()
+    }
+
+    /// The list of keys the combination at `index` can end with, while it
+    /// is open there.
+    fn key_offers(
+        &mut self,
+        index: usize,
+        now: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let theme = *cx.global::<Theme>();
+        let key_list = self.key_list.value(window);
+        if self.picking != Some(index) || key_list <= 0. {
+            return None;
+        }
+        let mut offers = Vec::new();
+        for (at, key) in KEYS.into_iter().enumerate() {
+            let face = Face::Chip {
+                text: key_label(key).into(),
+                selected: now == Some(key),
+            };
+            offers.push(self.control(Control::KeyPick(index, at), face, window, cx));
+        }
+        Some(
+            div()
+                .max_h(ADD_LIST_HEIGHT * key_list)
+                .opacity(key_list.clamp(0., 1.))
+                .overflow_hidden()
+                .child(wrap(&theme).children(offers)),
+        )
+    }
+
+    /// A key combination: the keys held, the key pressed, and what it does.
+    fn key_card(
+        &mut self,
+        index: usize,
+        key: &KeyConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let press = Press::parse(&key.press);
+        // A combination that cannot be held is shown as the file has it.
+        let title = { press.as_ref() }.map_or_else(|| key.press.clone(), Press::shown);
+        let mut section = card(&theme, title);
+
+        let mut held = Vec::new();
+        for (which, name) in HELD.into_iter().enumerate() {
+            let mut pressed = press.clone();
+            let is_held = pressed.as_mut().and_then(|press| press.held_mut(which));
+            let face = Face::Chip {
+                text: name.into(),
+                selected: is_held.is_some_and(|held| *held),
+            };
+            held.push(self.control(Control::KeyHeld(index, which), face, window, cx));
+        }
+        let held = wrap(&theme).justify_end().children(held);
+        section = section.child(line(&theme, language.say("Held"), held.into_any_element()));
+
+        let now = press.as_ref().map(|press| press.key.as_str());
+        let face = Face::Chip {
+            text: now.map_or_else(|| "?".to_owned(), key_label).into(),
+            selected: self.picking == Some(index) && self.key_list.target() > 0.,
+        };
+        let pick = self.control(Control::KeyList(index), face, window, cx);
+        section = section
+            .child(line(&theme, language.say("Key"), pick))
+            .children(self.key_offers(index, now, window, cx));
+
+        let deed = deed_of(key);
+        let kind = deed.as_ref().map(|(kind, _)| *kind);
+        let mut kinds = Vec::new();
+        for (at, title) in DEED_TITLES.into_iter().enumerate() {
+            // A program is shown where the file has one and not offered.
+            if at == DEED_RUN && kind != Some(DEED_RUN) {
+                continue;
+            }
+            let face = Face::Chip {
+                text: language.say(title).into(),
+                selected: kind == Some(at),
+            };
+            kinds.push(self.control(Control::KeyDeed(index, at), face, window, cx));
+        }
+        let kinds = wrap(&theme).justify_end().children(kinds);
+        section = section.child(line(&theme, language.say("Does"), kinds.into_any_element()));
+
+        if let Some((kind, value)) = deed {
+            if kind == DEED_RUN {
+                let by_hand = "The program is written in the file by hand.";
+                section = section
+                    .child(div().child(SharedString::new(value)))
+                    .child(note(&theme, language.say(by_hand)));
+            } else {
+                let mut answers = Vec::new();
+                for (at, answer) in self.answers(kind).into_iter().enumerate() {
+                    let face = Face::Chip {
+                        text: answer_title(&answer, language),
+                        selected: answer == value,
+                    };
+                    answers.push(self.control(Control::KeyValue(index, at), face, window, cx));
+                }
+                section = section.child(wrap(&theme).justify_end().children(answers));
+            }
+        }
+
+        let face = Face::Chip {
+            text: language.say("Remove the key").into(),
+            selected: false,
+        };
+        let remove = self.control(Control::DropKey(index), face, window, cx);
         section
             .child(div().flex().justify_end().child(remove))
             .into_any_element()
@@ -1701,6 +2008,12 @@ impl Settings {
                         .into_any_element()
                 }
             }),
+            Section::Keys => {
+                wide.push(self.keys(config, window, cx));
+                for (index, key) in config.keys.iter().enumerate() {
+                    wide.push(self.key_card(index, key, window, cx));
+                }
+            }
             Section::Themes => wide.push(self.themes(config.theme.as_deref(), window, cx)),
             Section::Widgets | Section::Tray | Section::Windows | Section::Extensions => {}
         }
