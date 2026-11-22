@@ -5,17 +5,16 @@
 //! of the folders its `folders` option names. Widget: `launcher`.
 
 use std::fs;
-use std::ops::Range;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Bounds, Context, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement,
-    Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    UTF16Selection, WeakEntity, Window, canvas, div, img, point, px,
+    AnyElement, AppContext, AsyncApp, Context, Entity, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Pixels, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, div, img, point, px,
 };
 
+use crate::field::TextField;
 use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
@@ -246,9 +245,8 @@ struct Launcher {
     /// How many of `shortcuts` are applications, and how many pages.
     apps: usize,
     pages: usize,
-    query: String,
-    /// Text an input method is still composing; it follows the query.
-    composing: String,
+    /// The field the search is typed into.
+    field: Entity<TextField>,
     /// Positions in `shortcuts` of those matching the query, best first.
     matches: Vec<usize>,
     /// The position in `matches` that Enter starts.
@@ -256,9 +254,8 @@ struct Launcher {
     /// The row the selection highlight is drawn at; follows `selected`.
     highlight: Spring,
     scroll: ScrollHandle,
-    focus: FocusHandle,
+    /// Whether the keys were given to the field yet.
     focused: bool,
-    placeholder: SharedString,
     /// What is pinned to the Start menu, which a row can change.
     pins: Entity<Pins>,
 }
@@ -276,6 +273,8 @@ impl Launcher {
             shortcuts.extend(pages);
             shortcuts.len() - apps
         };
+        let field = cx.new(|cx| TextField::new(placeholder, cx).with_glyph(ICON_SEARCH));
+        cx.observe(&field, |this, _, cx| this.typed(cx)).detach();
         let pins = Pins::shared(cx);
         cx.observe(&pins, |_, _, cx| cx.notify()).detach();
         if !folders.is_empty() {
@@ -288,7 +287,7 @@ impl Launcher {
                 this.update(cx, |this, cx| {
                     this.shortcuts.truncate(this.apps + this.pages);
                     this.shortcuts.extend(files);
-                    this.find();
+                    this.find(cx);
                     cx.notify();
                 })
                 .ok();
@@ -301,26 +300,22 @@ impl Launcher {
             apps,
             pages,
             shortcuts,
-            query: String::new(),
-            composing: String::new(),
+            field,
             selected: 0,
             highlight: Spring::new(cx.global::<Theme>().motion.spatial_fast, 0.),
             scroll: ScrollHandle::new(),
-            focus: cx.focus_handle(),
             focused: false,
-            placeholder,
         }
     }
 
     /// What the field shows and the list is searched for.
-    fn text(&self) -> String {
-        format!("{}{}", self.query, self.composing)
+    fn text(&self, cx: &Context<Self>) -> String {
+        self.field.read(cx).text()
     }
 
-    fn set_query(&mut self, query: String, composing: &str, cx: &mut Context<Self>) {
-        self.query = query;
-        composing.clone_into(&mut self.composing);
-        self.find();
+    /// The field says something else: the list starts over.
+    fn typed(&mut self, cx: &mut Context<Self>) {
+        self.find(cx);
         self.scroll.set_offset(point(px(0.), px(0.)));
         self.select(0, cx);
         cx.notify();
@@ -341,8 +336,8 @@ impl Launcher {
     /// and among the pages of the settings and the files once enough
     /// letters are written. The pages come after the applications and
     /// the files last.
-    fn find(&mut self) {
-        let text = self.text();
+    fn find(&mut self, cx: &Context<Self>) {
+        let text = self.text(cx);
         let (apps, rest) = self.shortcuts.split_at(self.apps);
         let (pages, files) = rest.split_at(self.pages);
         fn names(shortcuts: &[Shortcut]) -> impl Iterator<Item = &str> {
@@ -392,67 +387,15 @@ impl Launcher {
         cx.defer(Popups::close);
     }
 
-    /// Handles the keys that are not text; text arrives through
-    /// `EntityInputHandler`.
+    /// Handles the keys that are not text; text goes to the field.
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         match event.keystroke.key.as_str() {
             "escape" => cx.defer(Popups::close),
             "enter" => self.launch(self.selected, cx),
             "down" => self.step(1, cx),
             "up" => self.step(-1, cx),
-            "backspace" if self.composing.is_empty() => {
-                let mut query = self.query.clone();
-                query.pop();
-                self.set_query(query, "", cx);
-            }
             _ => {}
         }
-    }
-
-    fn render_field(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let shown = self.text();
-        let is_empty = shown.is_empty();
-        let text = if is_empty {
-            div()
-                .text_color(theme.colors.on_surface_variant)
-                .child(self.placeholder.clone())
-        } else {
-            div().child(SharedString::new(shown))
-        };
-        // Typed text is delivered to whoever handles input while painting.
-        let (focus, this) = (self.focus.clone(), cx.entity());
-        let input = canvas(
-            |_, _, _| {},
-            move |bounds, (), window, cx| {
-                window.handle_input(&focus, ElementInputHandler::new(bounds, this), cx);
-            },
-        )
-        .absolute()
-        .size_full();
-        let caret = div()
-            .w(px(2.))
-            .h(theme.typography.icon_size)
-            .rounded(theme.shape.full)
-            .bg(theme.colors.primary);
-        let field = div()
-            .h(theme.launcher.field_height)
-            .flex_none()
-            .relative()
-            .child(input)
-            .px(theme.spacing.medium)
-            .flex()
-            .items_center()
-            .gap(theme.spacing.small)
-            .rounded(theme.shape.full)
-            .bg(theme.colors.surface_container_highest)
-            .child(icon(theme, ICON_SEARCH).text_color(theme.colors.on_surface_variant));
-        // The caret stands before the placeholder and after typed text.
-        if is_empty {
-            field.child(caret).child(text)
-        } else {
-            field.child(text).child(caret)
-        }
-        .into_any_element()
     }
 
     fn render_row(
@@ -616,96 +559,12 @@ impl Launcher {
     }
 }
 
-/// Text input, with the caret always at the end. Positions count UTF-16
-/// code units.
-impl EntityInputHandler for Launcher {
-    fn text_for_range(
-        &mut self,
-        range: Range<usize>,
-        _adjusted_range: &mut Option<Range<usize>>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<String> {
-        let units: Vec<u16> = self.text().encode_utf16().collect();
-        let end = range.end.min(units.len());
-        Some(String::from_utf16_lossy(&units[range.start.min(end)..end]))
-    }
-
-    fn selected_text_range(
-        &mut self,
-        _ignore_disabled_input: bool,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<UTF16Selection> {
-        let end = self.text().encode_utf16().count();
-        Some(UTF16Selection {
-            range: end..end,
-            reversed: false,
-        })
-    }
-
-    fn marked_text_range(
-        &self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Range<usize>> {
-        let start = self.query.encode_utf16().count();
-        let length = self.composing.encode_utf16().count();
-        (length > 0).then(|| start..start + length)
-    }
-
-    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.set_query(self.text(), "", cx);
-    }
-
-    fn replace_text_in_range(
-        &mut self,
-        _range: Option<Range<usize>>,
-        text: &str,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let typed: String = text.chars().filter(|typed| !typed.is_control()).collect();
-        self.set_query(format!("{}{typed}", self.query), "", cx);
-    }
-
-    fn replace_and_mark_text_in_range(
-        &mut self,
-        _range: Option<Range<usize>>,
-        new_text: &str,
-        _new_selected_range: Option<Range<usize>>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_query(self.query.clone(), new_text, cx);
-    }
-
-    fn bounds_for_range(
-        &mut self,
-        _range_utf16: Range<usize>,
-        element_bounds: Bounds<Pixels>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Bounds<Pixels>> {
-        Some(element_bounds)
-    }
-
-    fn character_index_for_point(
-        &mut self,
-        _point: Point<Pixels>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<usize> {
-        None
-    }
-}
-
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         if !self.focused {
             self.focused = true;
-            window.focus(&self.focus);
+            self.field.read(cx).focus(window);
         }
         div()
             .flex_1()
@@ -713,9 +572,8 @@ impl Render for Launcher {
             .flex()
             .flex_col()
             .gap(theme.spacing.small)
-            .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
-            .child(self.render_field(&theme, cx))
+            .child(div().flex_none().flex().child(self.field.clone()))
             .child(self.render_list(&theme, window, cx))
     }
 }

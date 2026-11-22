@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The Wi-Fi networks in reach, as Windows last saw them, and joining one
-//! Windows has the settings of.
+//! The Wi-Fi networks in reach, as Windows last saw them; joining one
+//! Windows has the settings of, or one whose password is given here; and
+//! having Windows forget the settings of one.
 //!
 //! Every call waits for Windows to answer, so none belongs on the thread
 //! that draws.
@@ -14,20 +15,62 @@ use windows::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_NDIS_DOT11_POWER_STATE_INVALID, HANDLE,
 };
 use windows::Win32::NetworkManagement::WiFi::{
-    WLAN_AVAILABLE_NETWORK, WLAN_AVAILABLE_NETWORK_CONNECTED, WLAN_AVAILABLE_NETWORK_HAS_PROFILE,
-    WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO_LIST,
-    WlanCloseHandle, WlanConnect, WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList,
-    WlanOpenHandle, WlanScan, dot11_BSS_type_any, wlan_connection_mode_profile,
+    DOT11_AUTH_ALGO_80211_OPEN, DOT11_AUTH_ALGO_RSNA_PSK, DOT11_AUTH_ALGO_WPA3_SAE,
+    DOT11_AUTH_ALGORITHM, WLAN_AVAILABLE_NETWORK, WLAN_AVAILABLE_NETWORK_CONNECTED,
+    WLAN_AVAILABLE_NETWORK_HAS_PROFILE, WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_PARAMETERS,
+    WLAN_INTERFACE_INFO_LIST, WLAN_PROFILE_USER, WlanCloseHandle, WlanConnect, WlanDeleteProfile,
+    WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList, WlanOpenHandle, WlanScan,
+    WlanSetProfile, dot11_BSS_type_any, wlan_connection_mode_profile,
 };
 use windows::core::{GUID, HSTRING, PCWSTR};
 
 /// The version of the interface asked for: the one since Windows Vista.
 const CLIENT_VERSION: u32 = 2;
 
+/// The fewest and the most characters a password of a network has.
+const PASSWORD_LENGTHS: std::ops::RangeInclusive<usize> = 8..=63;
+
+/// How a network lets a machine in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiSecurity {
+    /// Anyone joins.
+    Open,
+    /// With a password all share, the way of WPA2.
+    Password,
+    /// With a password all share, the way of WPA3.
+    Password3,
+    /// Another way, such as an account for each person; such a network is
+    /// not joined from here unless Windows has its settings.
+    Other,
+}
+
+impl WifiSecurity {
+    /// What the default way a network offers, with whether it is secured
+    /// at all, comes to.
+    fn of(way: DOT11_AUTH_ALGORITHM, secured: bool) -> Self {
+        match way {
+            DOT11_AUTH_ALGO_80211_OPEN if !secured => Self::Open,
+            DOT11_AUTH_ALGO_RSNA_PSK => Self::Password,
+            DOT11_AUTH_ALGO_WPA3_SAE => Self::Password3,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Whether `password` can be the password of a network: 8 to 63 letters,
+/// digits and signs of ASCII.
+pub fn password_fits(password: &str) -> bool {
+    PASSWORD_LENGTHS.contains(&password.len())
+        && password.bytes().all(|byte| (0x20..0x7f).contains(&byte))
+}
+
 /// A Wi-Fi network in reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WifiNetwork {
     pub name: String,
+    /// The name as the bytes the network sends.
+    pub ssid: Vec<u8>,
+    pub security: WifiSecurity,
     /// The signal, from 0 to 5 bars.
     pub bars: u8,
     /// Whether joining it takes a password or the like.
@@ -96,6 +139,130 @@ impl Wifi {
     /// `profile`. Whether it joined is seen in [`Self::reach`] later.
     pub fn connect(profile: &str) -> Result<(), String> {
         let client = Client::open()?;
+        let adapters = client.adapters()?;
+        client.connect(&adapters, profile)
+    }
+
+    /// Has Windows save settings for `network` with `password`, for this
+    /// user alone, and asks it to join. The settings are called as the
+    /// network is. Whether it joined is seen in [`Self::reach`] later; a
+    /// wrong password shows only in that it never does.
+    pub fn join(network: &WifiNetwork, password: &str) -> Result<(), String> {
+        let settings = HSTRING::from(profile_of(network, password)?);
+        let client = Client::open()?;
+        let adapters = client.adapters()?;
+        let mut saved = Vec::new();
+        let mut failure = format!("there is no Wi-Fi adapter to join {} with", network.name);
+        for adapter in adapters {
+            let mut reason = 0;
+            // SAFETY: the handle is open; the texts and `reason` outlive
+            // the call.
+            let status = unsafe {
+                WlanSetProfile(
+                    client.0,
+                    &adapter,
+                    WLAN_PROFILE_USER,
+                    &settings,
+                    PCWSTR::null(),
+                    true,
+                    None,
+                    &mut reason,
+                )
+            };
+            // The settings hold the password, so they are not reported.
+            match check(status, "Windows did not save the settings of the network") {
+                Ok(()) => saved.push(adapter),
+                Err(error) => failure = format!("{error} (reason {reason})"),
+            }
+        }
+        if saved.is_empty() {
+            return Err(failure);
+        }
+        client.connect(&saved, &network.name)
+    }
+
+    /// Has Windows forget the settings called `profile`.
+    pub fn forget(profile: &str) -> Result<(), String> {
+        let client = Client::open()?;
+        let name = HSTRING::from(profile);
+        let mut failure = format!("there is no Wi-Fi adapter that knows {profile}");
+        let mut forgotten = false;
+        for adapter in client.adapters()? {
+            // SAFETY: the handle is open; the name outlives the call.
+            let status = unsafe { WlanDeleteProfile(client.0, &adapter, &name, None) };
+            match check(status, "Windows did not forget the network") {
+                Ok(()) => forgotten = true,
+                Err(error) => failure = error,
+            }
+        }
+        if forgotten { Ok(()) } else { Err(failure) }
+    }
+}
+
+/// The settings Windows saves to join `network` with `password`, which an
+/// open network has none of.
+fn profile_of(network: &WifiNetwork, password: &str) -> Result<String, String> {
+    let way = match network.security {
+        WifiSecurity::Open => None,
+        WifiSecurity::Password => Some("WPA2PSK"),
+        WifiSecurity::Password3 => Some("WPA3SAE"),
+        WifiSecurity::Other => {
+            return Err(format!(
+                "{} is not joined with a password alone",
+                network.name
+            ));
+        }
+    };
+    if way.is_some() && !password_fits(password) {
+        return Err("a password has 8 to 63 characters".to_owned());
+    }
+    let name = escaped(&network.name);
+    let hex: String = network.ssid.iter().map(|b| format!("{b:02X}")).collect();
+    let security = match way {
+        None => "<authEncryption><authentication>open</authentication>\
+                 <encryption>none</encryption><useOneX>false</useOneX></authEncryption>"
+            .to_owned(),
+        Some(way) => format!(
+            "<authEncryption><authentication>{way}</authentication>\
+             <encryption>AES</encryption><useOneX>false</useOneX></authEncryption>\
+             <sharedKey><keyType>passPhrase</keyType><protected>false</protected>\
+             <keyMaterial>{}</keyMaterial></sharedKey>",
+            escaped(password)
+        ),
+    };
+    Ok(format!(
+        "<?xml version=\"1.0\"?>\
+         <WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">\
+         <name>{name}</name>\
+         <SSIDConfig><SSID><hex>{hex}</hex><name>{name}</name></SSID></SSIDConfig>\
+         <connectionType>ESS</connectionType>\
+         <connectionMode>auto</connectionMode>\
+         <MSM><security>{security}</security></MSM>\
+         </WLANProfile>"
+    ))
+}
+
+/// `text` as it stands inside XML.
+fn escaped(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for letter in text.chars() {
+        match letter {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            letter => escaped.push(letter),
+        }
+    }
+    escaped
+}
+
+impl Client {
+    /// Asks the first of `adapters` that will to join the network whose
+    /// saved settings are called `profile`.
+    fn connect(&self, adapters: &[GUID], profile: &str) -> Result<(), String> {
+        let client = self;
         let name = HSTRING::from(profile);
         let parameters = WLAN_CONNECTION_PARAMETERS {
             wlanConnectionMode: wlan_connection_mode_profile,
@@ -106,10 +273,10 @@ impl Wifi {
             dwFlags: 0,
         };
         let mut failure = format!("there is no Wi-Fi adapter to join {profile} with");
-        for adapter in client.adapters()? {
+        for adapter in adapters {
             // SAFETY: the handle is open; the parameters, and the name they
             // point to, outlive the call.
-            let status = unsafe { WlanConnect(client.0, &adapter, &parameters, None) };
+            let status = unsafe { WlanConnect(client.0, adapter, &parameters, None) };
             match check(status, "Windows did not join the network") {
                 Ok(()) => return Ok(()),
                 Err(error) => failure = error,
@@ -231,7 +398,8 @@ impl Drop for Client {
 /// What `entry` says; `None` for a network without a name.
 fn network_of(entry: &WLAN_AVAILABLE_NETWORK) -> Option<WifiNetwork> {
     let length = (entry.dot11Ssid.uSSIDLength as usize).min(entry.dot11Ssid.ucSSID.len());
-    let name = String::from_utf8_lossy(&entry.dot11Ssid.ucSSID[..length]).into_owned();
+    let ssid = entry.dot11Ssid.ucSSID[..length].to_vec();
+    let name = String::from_utf8_lossy(&ssid).into_owned();
     if name.trim_matches('\0').trim().is_empty() {
         return None;
     }
@@ -239,10 +407,13 @@ fn network_of(entry: &WLAN_AVAILABLE_NETWORK) -> Option<WifiNetwork> {
     let end = profile.iter().position(|&unit| unit == 0);
     let profile = String::from_utf16_lossy(&profile[..end.unwrap_or(profile.len())]);
     let known = entry.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE != 0 && !profile.is_empty();
+    let secured = entry.bSecurityEnabled.as_bool();
     Some(WifiNetwork {
         name,
+        ssid,
+        security: WifiSecurity::of(entry.dot11DefaultAuthAlgorithm, secured),
         bars: bars_of(entry.wlanSignalQuality),
-        secured: entry.bSecurityEnabled.as_bool(),
+        secured,
         connected: entry.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED != 0,
         profile: known.then_some(profile),
     })
@@ -265,6 +436,8 @@ mod tests {
     fn network(name: &str, bars: u8, connected: bool, known: bool) -> WifiNetwork {
         WifiNetwork {
             name: name.to_owned(),
+            ssid: name.as_bytes().to_vec(),
+            security: WifiSecurity::Password,
             bars,
             secured: true,
             connected,
@@ -308,6 +481,47 @@ mod tests {
         ]);
         let names: Vec<_> = listed.iter().map(|network| network.name.as_str()).collect();
         assert_eq!(names, ["Mine", "Strong", "Weak"]);
+    }
+
+    #[test]
+    fn the_settings_of_a_network_hold_its_name_and_password_escaped() {
+        let mut cafe = network("Tom & <Jerry>", 3, false, false);
+        let settings = profile_of(&cafe, "p<ss\"word&1").unwrap();
+        assert!(settings.contains("<name>Tom &amp; &lt;Jerry&gt;</name>"));
+        assert!(settings.contains("<hex>546F6D2026203C4A657272793E</hex>"));
+        assert!(settings.contains("<authentication>WPA2PSK</authentication>"));
+        assert!(settings.contains("<keyMaterial>p&lt;ss&quot;word&amp;1</keyMaterial>"));
+        cafe.security = WifiSecurity::Password3;
+        let settings = profile_of(&cafe, "password").unwrap();
+        assert!(settings.contains("<authentication>WPA3SAE</authentication>"));
+        // An open network has no key, whatever is given.
+        cafe.security = WifiSecurity::Open;
+        let settings = profile_of(&cafe, "").unwrap();
+        assert!(settings.contains("<authentication>open</authentication>"));
+        assert!(!settings.contains("sharedKey"));
+        cafe.security = WifiSecurity::Other;
+        assert!(profile_of(&cafe, "password").is_err());
+    }
+
+    #[test]
+    fn a_password_has_8_to_63_characters_of_ascii() {
+        assert!(!password_fits("1234567"));
+        assert!(password_fits("12345678"));
+        assert!(password_fits(&"x".repeat(63)));
+        assert!(!password_fits(&"x".repeat(64)));
+        assert!(!password_fits("пароль12"));
+        let home = network("Home", 3, false, false);
+        assert!(profile_of(&home, "short").is_err());
+    }
+
+    #[test]
+    fn the_way_a_network_lets_in_is_told_from_what_it_offers() {
+        let of = WifiSecurity::of;
+        assert_eq!(of(DOT11_AUTH_ALGO_80211_OPEN, false), WifiSecurity::Open);
+        // What is open in name but secured is the old WEP.
+        assert_eq!(of(DOT11_AUTH_ALGO_80211_OPEN, true), WifiSecurity::Other);
+        assert_eq!(of(DOT11_AUTH_ALGO_RSNA_PSK, true), WifiSecurity::Password);
+        assert_eq!(of(DOT11_AUTH_ALGO_WPA3_SAE, true), WifiSecurity::Password3);
     }
 
     /// Run by hand: prints what the adapters of this machine see.

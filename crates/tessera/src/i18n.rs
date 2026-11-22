@@ -417,9 +417,22 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Not saved; join it in the Windows settings first",
         "Не сохранена; сначала подключитесь в параметрах Windows",
     ),
+    ("Open network", "Открытая сеть"),
+    ("Asks for a password", "Нужен пароль"),
+    ("Password", "Пароль"),
+    ("Join", "Подключиться"),
     (
-        "Open; join it in the Windows settings first",
-        "Открытая; сначала подключитесь в параметрах Windows",
+        "Right-click again to forget it",
+        "Правый щелчок ещё раз — забыть сеть",
+    ),
+    (
+        "A password has 8 to 63 Latin characters",
+        "В пароле от 8 до 63 латинских символов",
+    ),
+    ("The network was not joined", "Подключиться не удалось"),
+    (
+        "The network was not joined; check the password",
+        "Подключиться не удалось; проверьте пароль",
     ),
     ("Looking for networks", "Поиск сетей"),
     (

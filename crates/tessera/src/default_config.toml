@@ -151,7 +151,9 @@
 #               offers anything; option width, the most it takes, in pixels
 #   "media-controls"  what is playing, with its picture and buttons to skip and pause
 #   "wifi"      the Wi-Fi networks in reach, for a popup; a click joins
-#               one Windows has the settings of
+#               one Windows has the settings of or anyone may join, and
+#               asks for the password of another; two right clicks on a
+#               saved one forget it
 #   "problems"  how many things went wrong since Tessera started; shows
 #               nothing while there are none, and opens the list of them
 #   "problem-list"  what went wrong, the latest first, with a button that
