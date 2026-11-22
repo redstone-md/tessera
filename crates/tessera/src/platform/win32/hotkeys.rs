@@ -74,8 +74,49 @@ pub struct Hotkey {
     pub key: u8,
 }
 
-/// The thread that holds the combinations, and what ends with it.
-static WATCHER: Mutex<Option<(u32, JoinHandle<()>)>> = Mutex::new(None);
+impl Hotkey {
+    /// The combination `text` names: keys to hold as [`Modifiers::parse`]
+    /// takes them, then `+` and the key to press: a digit, a letter, `f1`
+    /// to `f12`, `space`, `tab`, `enter`, `left`, `up`, `right` or `down`.
+    pub fn parse(id: u32, text: &str) -> Option<Self> {
+        let (held, key) = text.rsplit_once('+')?;
+        let key = key.trim().to_ascii_lowercase();
+        let key = match key.as_str() {
+            "space" => 0x20,
+            "tab" => 0x09,
+            "enter" => 0x0d,
+            "left" => 0x25,
+            "up" => 0x26,
+            "right" => 0x27,
+            "down" => 0x28,
+            name => match name.as_bytes() {
+                [key] if key.is_ascii_alphanumeric() => key.to_ascii_uppercase(),
+                [b'f', b'1'..=b'9', ..] => match name[1..].parse::<u8>() {
+                    Ok(number @ 1..=12) => 0x6f + number,
+                    _ => return None,
+                },
+                _ => return None,
+            },
+        };
+        Some(Self {
+            id,
+            modifiers: Modifiers::parse(held)?,
+            key,
+        })
+    }
+}
+
+/// The combinations of each part of Tessera that has some, and the thread
+/// that holds them all with what ends with it.
+struct Held {
+    owned: Vec<(&'static str, Vec<Hotkey>)>,
+    watcher: Option<(u32, JoinHandle<()>)>,
+}
+
+static HELD: Mutex<Held> = Mutex::new(Held {
+    owned: Vec::new(),
+    watcher: None,
+});
 
 fn pressed() -> &'static (Sender<u32>, Receiver<u32>) {
     static PRESSED: OnceLock<(Sender<u32>, Receiver<u32>)> = OnceLock::new();
@@ -91,13 +132,22 @@ impl Hotkeys {
         pressed().1.clone()
     }
 
-    /// Makes `keys` the combinations that are answered, in place of those
-    /// before. The numbers of the ones Windows refused, as it does with a
-    /// combination another program holds, are returned.
-    pub fn set(keys: Vec<Hotkey>) -> anyhow::Result<Vec<u32>> {
-        let mut watcher = WATCHER
+    /// Makes `keys` the combinations that are answered for `owner`, a part
+    /// of Tessera, in place of its ones before; those of the other parts
+    /// stay. The numbers, which no two parts share, of the ones of `keys`
+    /// that Windows refused, as it does with a combination another program
+    /// holds, are returned.
+    pub fn set(owner: &'static str, keys: Vec<Hotkey>) -> anyhow::Result<Vec<u32>> {
+        let mut held = HELD
             .lock()
             .map_err(|_| anyhow!("the thread that holds the key combinations failed"))?;
+        let own: Vec<u32> = keys.iter().map(|key| key.id).collect();
+        held.owned.retain(|(name, _)| *name != owner);
+        held.owned.push((owner, keys));
+        let keys: Vec<Hotkey> = { held.owned.iter() }
+            .flat_map(|(_, keys)| keys.iter().copied())
+            .collect();
+        let watcher = &mut held.watcher;
         // The combinations are free again once their thread has ended.
         if let Some((thread, ended)) = watcher.take() {
             // SAFETY: posting to a thread that has ended fails without
@@ -114,10 +164,11 @@ impl Hotkeys {
             .name("key combinations".to_owned())
             .spawn(move || watch(&keys, &ready))
             .context("the thread that holds the key combinations did not start")?;
-        let (thread, refused) = started
+        let (thread, mut refused): (u32, Vec<u32>) = started
             .recv()
             .map_err(|_| anyhow!("the thread that holds the key combinations ended"))?;
         *watcher = Some((thread, ended));
+        refused.retain(|id| own.contains(id));
         Ok(refused)
     }
 }
@@ -177,6 +228,34 @@ mod tests {
                 ..Modifiers::default()
             })
         );
+    }
+
+    #[test]
+    fn a_combination_is_keys_to_hold_and_a_key_to_press() {
+        let held = Modifiers::parse("ctrl+alt").unwrap();
+        let key = |text| Hotkey::parse(7, text).map(|key| (key.id, key.modifiers, key.key));
+        assert_eq!(key("ctrl+alt+t"), Some((7, held, b'T')));
+        assert_eq!(key("Ctrl + Alt + Space"), Some((7, held, 0x20)));
+        assert_eq!(key("ctrl+alt+1"), Some((7, held, b'1')));
+        assert_eq!(key("ctrl+alt+f1"), Some((7, held, 0x70)));
+        assert_eq!(key("ctrl+alt+f12"), Some((7, held, 0x7b)));
+        assert_eq!(key("ctrl+alt+left"), Some((7, held, 0x25)));
+    }
+
+    #[test]
+    fn a_combination_without_a_key_or_without_keys_to_hold_is_not_taken() {
+        for text in [
+            "t",
+            "ctrl+alt",
+            "ctrl+alt+",
+            "+t",
+            "ctrl+f13",
+            "ctrl+f0",
+            "ctrl+f01",
+            "ctrl+tt",
+        ] {
+            assert_eq!(Hotkey::parse(0, text), None, "{text}");
+        }
     }
 
     #[test]

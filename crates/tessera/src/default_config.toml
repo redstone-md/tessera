@@ -35,6 +35,29 @@
 # they are. Without the key in this file, the Windows key is left to Windows.
 # windows_key = "launcher"
 
+# Each [[key]] is a key combination Tessera answers wherever it is pressed.
+# press names it: keys to hold among alt, ctrl, shift and win, then the key
+# to press, joined by +; that key is a digit, a letter, f1 to f12, space,
+# tab, enter, left, up, right or down. No program gets the combination while
+# Tessera holds it, and one that Windows or another program holds already is
+# reported and does nothing. Each [[key]] has one of:
+#   popup   the [[popup]] to open, or to close when it is open
+#   tiling  "next" for the tiling mode after the one in use, "off", or a
+#           layout of [tiling]
+#   run     a program to start and its arguments, a list
+#
+# [[key]]
+# press = "ctrl+alt+space"
+# popup = "launcher"
+#
+# [[key]]
+# press = "ctrl+alt+t"
+# tiling = "next"
+#
+# [[key]]
+# press = "ctrl+alt+enter"
+# run = ["wt.exe"]
+
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"
 #   thickness  reserved screen space, in logical pixels

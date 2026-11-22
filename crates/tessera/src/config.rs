@@ -180,6 +180,22 @@ impl PopupConfig {
     }
 }
 
+/// A key combination Tessera answers wherever it is pressed, and the one
+/// thing it does.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyConfig {
+    /// The combination, as `ctrl+alt+space`.
+    pub press: String,
+    /// The popup to open, or to close when it is open.
+    pub popup: Option<String>,
+    /// How to tile: `next` for the mode after the one in use, `off`, or
+    /// the name of a layout.
+    pub tiling: Option<String>,
+    /// A program to start, and its arguments.
+    pub run: Option<Vec<String>>,
+}
+
 /// One strip docked to a screen edge, and the widgets in its slots.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -257,6 +273,10 @@ pub struct Config {
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,
+    /// The key combinations that open a popup, change the tiling or start
+    /// a program.
+    #[serde(default, rename = "key")]
+    pub keys: Vec<KeyConfig>,
 }
 
 impl Config {

@@ -13,6 +13,7 @@ mod desk;
 mod extension;
 mod i18n;
 mod icons;
+mod keys;
 mod menu;
 mod module;
 mod modules;

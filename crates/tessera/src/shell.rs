@@ -14,6 +14,7 @@ use crate::config::{Config, Displays};
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
 use crate::icons::AppIcons;
+use crate::keys::Shortcuts;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
@@ -61,6 +62,7 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::start(&config.tiling, cx);
         Workspaces::start(&config.workspaces, cx);
+        Shortcuts::start(&config.keys, cx);
         let extensions = installed_stamp();
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         cx.set_global(Popups::new(&config.popups));
@@ -107,14 +109,18 @@ impl Shell {
         }
     }
 
-    /// Opens the popup of the Windows key, or closes it when it is open:
-    /// at the widget that opens it with a click, on the primary display if
-    /// it has one, and in the middle of a surface when no widget does.
+    /// Opens the popup of the Windows key, or closes it when it is open.
     fn windows_key_pressed(cx: &mut App) {
+        if let Some(name) = cx.global::<Self>().config.windows_key.clone() {
+            Self::toggle_popup(&name, cx);
+        }
+    }
+
+    /// Opens the popup `name`, or closes it when it is open: at the widget
+    /// that opens it with a click, on the display the pointer is on if it
+    /// has one, and in the middle of a surface when no widget does.
+    pub fn toggle_popup(name: &str, cx: &mut App) {
         let this = cx.global::<Self>();
-        let Some(name) = this.config.windows_key.clone() else {
-            return;
-        };
         // The display the pointer is on comes first, then the primary one.
         let primary = cx.primary_display().map(|display| display.id());
         let pointed = DisplayKey::under_pointer();
@@ -139,13 +145,13 @@ impl Shell {
         let mut anywhere = None;
         for (_, surface) in surfaces {
             let found = surface.update(cx, |view, window, cx| {
-                let middle = view.content().read(cx).popup_middle(&name);
-                let middle = middle.or_else(|| Popups::standing(&name, window, cx));
+                let middle = view.content().read(cx).popup_middle(name);
+                let middle = middle.or_else(|| Popups::standing(name, window, cx));
                 let x = middle.unwrap_or(window.viewport_size().width / 2.);
                 (middle.is_some(), PopupAnchor::at(window, x, cx))
             });
             match found {
-                Ok((true, Ok(anchor))) => return Popups::toggle(&name, anchor, cx),
+                Ok((true, Ok(anchor))) => return Popups::toggle(name, anchor, cx),
                 Ok((false, Ok(anchor))) => {
                     anywhere.get_or_insert(anchor);
                 }
@@ -153,7 +159,7 @@ impl Shell {
             }
         }
         match anywhere {
-            Some(anchor) => Popups::toggle(&name, anchor, cx),
+            Some(anchor) => Popups::toggle(name, anchor, cx),
             None => report!("the popup `{name}` has nowhere to open"),
         }
     }
@@ -226,6 +232,7 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
+        Shortcuts::configure(&config.keys, cx);
         Wallpaper::configure(&config.wallpaper, cx);
 
         let old = &cx.global::<Self>().config;

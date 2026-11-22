@@ -262,20 +262,16 @@ impl Workspaces {
             async {}
         })
         .detach();
-        let presses = Hotkeys::presses();
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            while let Ok(pressed) = presses.recv().await {
-                let answered = cx.update(|cx| match pressed.checked_sub(SENDING) {
-                    Some(place) => Self::send_front(place as usize, cx),
-                    None => Self::show(pressed as usize, cx),
-                });
-                if answered.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
         Self::configure(config, cx);
+    }
+
+    /// Answers the key combination of the workspaces with the number
+    /// `pressed`.
+    pub fn pressed(pressed: u32, cx: &mut App) {
+        match pressed.checked_sub(SENDING) {
+            Some(place) => Self::send_front(place as usize, cx),
+            None => Self::show(pressed as usize, cx),
+        }
     }
 
     /// Takes over a configuration that was read again, if it says
@@ -291,7 +287,7 @@ impl Workspaces {
         this.homes = Homes::new(config.count().unwrap_or(0));
         this.task += 1;
         let task = this.task;
-        match Hotkeys::set(config.hotkeys(this.homes.count)) {
+        match Hotkeys::set("workspaces", config.hotkeys(this.homes.count)) {
             Ok(refused) if refused.is_empty() => {}
             Ok(refused) => {
                 let digits: Vec<String> = refused
