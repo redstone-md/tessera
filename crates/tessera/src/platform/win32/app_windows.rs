@@ -16,23 +16,23 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONEAREST, MonitorFromRect};
 use windows::Win32::System::Threading::{
-    GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    QueryFullProcessImageNameW,
+    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId, OpenProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow,
+    GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    PostMessageW, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOZORDER, SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE,
+    WS_CHILD, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE,
     EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND, OBJID_WINDOW,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindow,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE,
-    SW_MINIMIZE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER,
-    SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD,
-    WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 use windows::core::{BOOL, PWSTR};
 
@@ -129,22 +129,52 @@ impl AppWindowId {
     ///
     /// Windows lets a program put a window in front only when the last
     /// input went to that program, which a key combination answered
-    /// without a window in front is not. When it refuses, a key nothing
+    /// without a window in front is not, nor a command handed over by
+    /// another start of the program. When it refuses, a key nothing
     /// listens to is pressed from here, which counts as such input, and
-    /// the window is asked for again.
+    /// the window is asked for again; when that is refused too, it is
+    /// asked for as if by the window that is in front, which may always
+    /// give its place away.
     pub fn activate(self) {
         let hwnd = self.hwnd();
-        // SAFETY: every call tolerates a handle whose window has since been
+        // SAFETY: the call tolerates a handle whose window has since been
         // destroyed and fails without side effects.
         unsafe {
             if IsIconic(hwnd).as_bool() {
                 let _ = ShowWindowAsync(hwnd, SW_RESTORE);
             }
-            if !SetForegroundWindow(hwnd).as_bool() {
-                super::windows_key::press_unassigned_key();
+        }
+        if self.come_in_front() {
+            return;
+        }
+        super::windows_key::press_unassigned_key();
+        if self.come_in_front() {
+            return;
+        }
+        // SAFETY: the calls only read which threads these are, and
+        // joining the input of a thread that has ended fails without
+        // side effects; what is joined is parted again right away.
+        unsafe {
+            let ours = GetCurrentThreadId();
+            let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            if theirs == 0 || theirs == ours {
+                return;
+            }
+            if AttachThreadInput(ours, theirs, true).as_bool() {
                 let _ = SetForegroundWindow(hwnd);
+                let _ = BringWindowToTop(hwnd);
+                let _ = AttachThreadInput(ours, theirs, false);
             }
         }
+    }
+
+    /// Asks Windows to put the window in front, and says whether it is
+    /// there now: Windows may say yes and only flash its button.
+    fn come_in_front(self) -> bool {
+        // SAFETY: the call tolerates a handle whose window has since been
+        // destroyed and fails without side effects.
+        let _ = unsafe { SetForegroundWindow(self.hwnd()) };
+        Self::foreground() == Some(self)
     }
 
     /// Asks the window to close, as its close button does. The application
