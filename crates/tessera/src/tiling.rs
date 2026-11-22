@@ -6,7 +6,9 @@
 //!
 //! Only windows that can be resized by their border take part, and of
 //! those only the ones that are neither minimized nor maximized. A window
-//! that is dragged onto the tile of another trades places with it. When
+//! that is dragged onto the tile of another trades places with it, and so
+//! does the window in front when a key combination sends it toward a
+//! side; another combination brings the window on that side in front. When
 //! tiling is switched off, and when the shell quits, every window goes
 //! back to where it was before it was first tiled.
 
@@ -141,6 +143,49 @@ fn holds(rect: ScreenRect, (x, y): (i32, i32)) -> bool {
     (rect.left..rect.right).contains(&x) && (rect.top..rect.bottom).contains(&y)
 }
 
+/// A side of a window, as a key combination names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toward {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl Toward {
+    /// The side `name` is: `left`, `right`, `up` or `down`.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            _ => None,
+        }
+    }
+
+    /// Of `others`, the one that lies on this side of `from`: the nearest
+    /// one, where a step aside counts twice as far as one ahead.
+    fn of<T: Copy>(self, from: ScreenRect, others: &[(T, ScreenRect)]) -> Option<T> {
+        let (x, y) = center(from);
+        let far = |&(_, other): &(T, ScreenRect)| {
+            let (other_x, other_y) = center(other);
+            let (ahead, aside) = match self {
+                Self::Left => (x - other_x, other_y - y),
+                Self::Right => (other_x - x, other_y - y),
+                Self::Up => (y - other_y, other_x - x),
+                Self::Down => (other_y - y, other_x - x),
+            };
+            (ahead > 0).then(|| ahead + 2 * aside.abs())
+        };
+        let nearest = others
+            .iter()
+            .filter_map(|other| Some((far(other)?, other.0)))
+            .min_by_key(|&(far, _)| far)?;
+        Some(nearest.1)
+    }
+}
+
 /// The rectangle `amount` of the way from `from` to `to`; an amount above
 /// 1 lies beyond `to`.
 fn between(from: ScreenRect, to: ScreenRect, amount: f32) -> ScreenRect {
@@ -265,6 +310,10 @@ pub struct Tiler {
     /// Where each window was before it was first tiled.
     before: HashMap<AppWindowId, ScreenRect>,
     sent: HashMap<AppWindowId, Sent>,
+    /// Whether the order was changed by a key combination, so that the
+    /// window in front lies on a tile that is no longer its own without
+    /// having been dropped there.
+    carried: bool,
     /// Counts the tasks that were started to keep the tiles; only the
     /// latest goes on.
     task: u64,
@@ -281,6 +330,7 @@ impl Tiler {
             moves: HashMap::new(),
             before: HashMap::new(),
             sent: HashMap::new(),
+            carried: false,
             task: 0,
         });
         cx.on_app_quit(|cx| {
@@ -357,6 +407,51 @@ impl Tiler {
         .detach();
     }
 
+    /// The window in front and the window on the side `toward` of it,
+    /// among the windows tiling covers, and whether both are on one
+    /// display.
+    fn beside(&self, toward: Toward) -> Option<(AppWindowId, AppWindowId, bool)> {
+        let front = AppWindowId::foreground()?;
+        let windows: Vec<AppWindow> = AppWindow::enumerate()
+            .into_iter()
+            .filter(|window| self.config.covers(window.executable.as_deref()))
+            .filter(|window| window.id.is_tileable())
+            .collect();
+        let display = |id| Some(windows.iter().find(|window| window.id == id)?.display);
+        let home = display(front)?;
+        let others: Vec<(AppWindowId, ScreenRect)> = { windows.iter() }
+            .filter(|window| window.id != front)
+            .filter_map(|window| Some((window.id, window.id.frame()?)))
+            .collect();
+        let other = toward.of(front.frame()?, &others)?;
+        Some((front, other, display(other) == Some(home)))
+    }
+
+    /// Brings the window on the side `toward` of the window in front, in
+    /// front itself.
+    pub fn focus(toward: Toward, cx: &mut App) {
+        if let Some((_, other, _)) = cx.global::<Self>().beside(toward) {
+            other.activate();
+        }
+    }
+
+    /// Has the window in front trade tiles with the one on the side
+    /// `toward` of it on the same display, while windows are tiled.
+    pub fn carry(toward: Toward, cx: &mut App) {
+        let mode = *cx.global::<TilingMode>();
+        let spring = cx.global::<Theme>().motion.spatial;
+        let this = cx.global_mut::<Self>();
+        let Some((front, other, true)) = this.beside(toward) else {
+            return;
+        };
+        let place = |id| this.order.iter().position(|&listed| listed == id);
+        if let (true, Some(first), Some(second)) = (mode.enabled, place(front), place(other)) {
+            this.order.swap(first, second);
+            this.carried = true;
+            this.arrange(mode.layout, spring);
+        }
+    }
+
     /// Sends every window that is not in its tile on its way there.
     fn arrange(&mut self, layout: TileLayout, spring: SpringSpec) {
         let windows: Vec<AppWindow> = AppWindow::enumerate()
@@ -379,7 +474,13 @@ impl Tiler {
 
         let gap = self.config.gap();
         let mut places = Self::places(&self.order, &windows, layout, gap);
-        if let Some((dragged, onto)) = self.traded(&places) {
+        // Windows a key combination had trade places are on their way to
+        // their tiles, not dropped on them.
+        let dropped = match std::mem::take(&mut self.carried) {
+            true => None,
+            false => self.traded(&places),
+        };
+        if let Some((dragged, onto)) = dropped {
             let place = |id| self.order.iter().position(|&listed| listed == id);
             if let (Some(first), Some(second)) = (place(dragged), place(onto)) {
                 self.order.swap(first, second);
@@ -518,6 +619,37 @@ const BACK: SpringSpec = SpringSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_on_a_side_is_the_nearest_one_that_way() {
+        let rect = |left, top, right, bottom| ScreenRect {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        // A wide window on the left, three in a column on the right.
+        let master = rect(0, 0, 600, 900);
+        let stack = [
+            ('a', rect(600, 0, 1000, 300)),
+            ('b', rect(600, 300, 1000, 600)),
+            ('c', rect(600, 600, 1000, 900)),
+        ];
+        assert_eq!(Toward::Right.of(master, &stack), Some('b'));
+        assert_eq!(Toward::Left.of(master, &stack), None);
+        let others = [('m', master), stack[1], stack[2]];
+        assert_eq!(Toward::Down.of(stack[0].1, &others), Some('b'));
+        assert_eq!(Toward::Left.of(stack[0].1, &others), Some('m'));
+        assert_eq!(Toward::Up.of(stack[0].1, &others), None);
+        assert_eq!(Toward::Right.of(stack[0].1, &others), None);
+    }
+
+    #[test]
+    fn a_side_has_one_of_four_names() {
+        assert_eq!(Toward::parse("left"), Some(Toward::Left));
+        assert_eq!(Toward::parse("down"), Some(Toward::Down));
+        assert_eq!(Toward::parse("back"), None);
+    }
 
     const AREA: ScreenRect = ScreenRect {
         left: 0,

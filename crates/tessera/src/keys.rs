@@ -15,7 +15,7 @@ use gpui::{App, AsyncApp, Global};
 use crate::config::KeyConfig;
 use crate::platform::{Hotkey, Hotkeys};
 use crate::shell::Shell;
-use crate::tiling::{TileLayout, Tiler, TilingMode};
+use crate::tiling::{TileLayout, Tiler, TilingMode, Toward};
 use crate::workspaces::Workspaces;
 
 /// The number the first `[[key]]` is reported by; the workspaces have the
@@ -29,17 +29,33 @@ enum Deed {
     /// The tiling mode to take; `None` for the one after the mode in use.
     Tiling(Option<TilingMode>),
     Run(Vec<String>),
+    Focus(Toward),
+    Carry(Toward),
 }
 
 impl Deed {
     /// What `key` does, or why it does nothing.
     fn of(key: &KeyConfig) -> Result<Self, String> {
-        match (&key.popup, &key.tiling, &key.run) {
-            (Some(popup), None, None) => Ok(Self::Popup(popup.clone())),
-            (None, Some(tiling), None) => Self::tiling(tiling),
-            (None, None, Some(run)) if !run.is_empty() => Ok(Self::Run(run.clone())),
-            (None, None, Some(_)) => Err("`run` names no program".to_owned()),
-            _ => Err("it needs one of `popup`, `tiling` and `run`".to_owned()),
+        let side = |name: &String| {
+            Toward::parse(name)
+                .ok_or_else(|| format!("a side is `left`, `right`, `up` or `down`, not `{name}`"))
+        };
+        let deeds = [
+            key.popup
+                .as_ref()
+                .map(|popup| Ok(Self::Popup(popup.clone()))),
+            key.tiling.as_deref().map(Self::tiling),
+            key.run.as_ref().map(|run| match run.is_empty() {
+                true => Err("`run` names no program".to_owned()),
+                false => Ok(Self::Run(run.clone())),
+            }),
+            key.focus.as_ref().map(|name| side(name).map(Self::Focus)),
+            key.carry.as_ref().map(|name| side(name).map(Self::Carry)),
+        ];
+        let mut deeds = deeds.into_iter().flatten();
+        match (deeds.next(), deeds.next()) {
+            (Some(deed), None) => deed,
+            _ => Err("it needs one of `popup`, `tiling`, `run`, `focus` and `move`".to_owned()),
         }
     }
 
@@ -65,6 +81,8 @@ impl Deed {
                 let mode = mode.unwrap_or_else(|| cx.global::<TilingMode>().next());
                 Tiler::set_mode(mode, cx);
             }
+            Self::Focus(toward) => Tiler::focus(*toward, cx),
+            Self::Carry(toward) => Tiler::carry(*toward, cx),
             Self::Run(command) => {
                 let started = Command::new(&command[0])
                     .args(&command[1..])
@@ -174,6 +192,8 @@ mod tests {
             popup: popup.map(str::to_owned),
             tiling: tiling.map(str::to_owned),
             run: run.map(|run| run.iter().map(|&part| part.to_owned()).collect()),
+            focus: None,
+            carry: None,
         }
     }
 
@@ -209,6 +229,21 @@ mod tests {
         assert!(Deed::of(&key(Some("launcher"), Some("next"), None)).is_err());
         assert!(Deed::of(&key(None, None, Some(&[]))).is_err());
         assert!(Deed::of(&key(None, Some("spiral"), None)).is_err());
+        let mut both = key(Some("launcher"), None, None);
+        both.focus = Some("left".to_owned());
+        assert!(Deed::of(&both).is_err());
+    }
+
+    #[test]
+    fn a_key_names_the_side_of_the_window_it_is_about() {
+        let mut focus = key(None, None, None);
+        focus.focus = Some("left".to_owned());
+        assert_eq!(Deed::of(&focus), Ok(Deed::Focus(Toward::Left)));
+        let mut carry = key(None, None, None);
+        carry.carry = Some("down".to_owned());
+        assert_eq!(Deed::of(&carry), Ok(Deed::Carry(Toward::Down)));
+        carry.carry = Some("away".to_owned());
+        assert!(Deed::of(&carry).is_err());
     }
 
     #[test]

@@ -45,6 +45,11 @@
 #   tiling  "next" for the tiling mode after the one in use, "off", or a
 #           layout of [tiling]
 #   run     a program to start and its arguments, a list
+#   focus   "left", "right", "up" or "down": the window on that side of the
+#           window in front comes in front, among the windows [tiling]
+#           covers, tiled or not
+#   move    one of those sides: the window in front trades tiles with the
+#           window on that side of it on its display, while tiling is on
 #
 # [[key]]
 # press = "ctrl+alt+space"
@@ -57,6 +62,14 @@
 # [[key]]
 # press = "ctrl+alt+enter"
 # run = ["wt.exe"]
+#
+# [[key]]
+# press = "alt+left"
+# focus = "left"
+#
+# [[key]]
+# press = "alt+shift+left"
+# move = "left"
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"

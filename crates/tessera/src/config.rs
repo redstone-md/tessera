@@ -194,6 +194,12 @@ pub struct KeyConfig {
     pub tiling: Option<String>,
     /// A program to start, and its arguments.
     pub run: Option<Vec<String>>,
+    /// The side, `left`, `right`, `up` or `down`, on which the window to
+    /// bring in front lies.
+    pub focus: Option<String>,
+    /// The side toward which the window in front trades tiles.
+    #[serde(rename = "move")]
+    pub carry: Option<String>,
 }
 
 /// One strip docked to a screen edge, and the widgets in its slots.
