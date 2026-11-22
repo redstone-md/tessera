@@ -344,13 +344,14 @@ impl Shell {
                     continue;
                 }
                 let (edge, thickness) = (layout.edge, px(layout.thickness));
+                let hide = layout.hide;
                 let kept = open
                     .iter()
                     .position(|surface| surface.display == display.id() && surface.edge == edge)
                     .map(|index| open.swap_remove(index))
                     .filter(|surface| {
                         let refilled = surface.window.update(cx, |view, window, cx| {
-                            view.refill(thickness, window, cx, |display, cx| {
+                            view.refill(thickness, hide, window, cx, |display, cx| {
                                 Panel::new(index, layout, display, cx)
                             });
                         });
@@ -360,7 +361,12 @@ impl Shell {
                     surfaces.push(surface);
                     continue;
                 }
-                let opened = EdgeSurface { edge, thickness }.open(&display, cx, |display, cx| {
+                let surface = EdgeSurface {
+                    edge,
+                    thickness,
+                    hide,
+                };
+                let opened = surface.open(&display, cx, |display, cx| {
                     Panel::new(index, layout, display, cx)
                 });
                 match opened {

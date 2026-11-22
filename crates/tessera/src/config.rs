@@ -189,6 +189,10 @@ pub struct SurfaceConfig {
     pub thickness: f32,
     #[serde(default)]
     pub displays: Displays,
+    /// Whether the strip goes away while the pointer is elsewhere and
+    /// reserves no screen space.
+    #[serde(default)]
+    pub hide: bool,
     #[serde(default)]
     pub start: Vec<WidgetSpec>,
     #[serde(default)]

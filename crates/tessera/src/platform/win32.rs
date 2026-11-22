@@ -75,7 +75,7 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
     MonitorFromWindow,
 };
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
@@ -90,7 +90,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
     WM_APP, WM_MOUSEMOVE, WM_SIZE, WS_CAPTION, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WindowFromPoint,
 };
 
 /// Classes of windows that cover a display without being an application
@@ -158,6 +158,23 @@ impl ScreenRect {
             && self.top <= other.top
             && self.right >= other.right
             && self.bottom >= other.bottom
+    }
+}
+
+/// Whether the pointer is on a window this program keeps above the others:
+/// a surface, a popup or a menu, but not a card on the desktop.
+pub fn pointer_on_own_window() -> bool {
+    let Some((x, y)) = pointer_at() else {
+        return false;
+    };
+    let mut process = 0;
+    // SAFETY: the calls only read which window is at a point and whose it
+    // is; `process` outlives the call that fills it.
+    unsafe {
+        let window = WindowFromPoint(POINT { x, y });
+        GetWindowThreadProcessId(window, Some(&raw mut process));
+        let above = GetWindowLongPtrW(window, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize != 0;
+        above && process == GetCurrentProcessId()
     }
 }
 
@@ -339,6 +356,29 @@ impl NativeSurface {
             bail!("the window's display could not be read");
         }
         Ok(monitor.rcMonitor.into())
+    }
+
+    /// The strip `thickness` physical pixels deep at `edge` of the
+    /// surface's display.
+    pub fn strip(self, edge: ScreenEdge, thickness: i32) -> Result<ScreenRect> {
+        let display = self.display_frame()?;
+        let mut strip = RECT {
+            left: display.left,
+            top: display.top,
+            right: display.right,
+            bottom: display.bottom,
+        };
+        edge.clamp(&mut strip, thickness);
+        Ok(strip.into())
+    }
+
+    /// Whether the pointer is in the strip `thickness` physical pixels deep
+    /// at `edge` of the surface's display.
+    pub fn pointer_in_strip(self, edge: ScreenEdge, thickness: i32) -> bool {
+        let (Ok(strip), Some((x, y))) = (self.strip(edge, thickness), pointer_at()) else {
+            return false;
+        };
+        (strip.left..strip.right).contains(&x) && (strip.top..strip.bottom).contains(&y)
     }
 
     /// Moves and resizes the window without activating it.

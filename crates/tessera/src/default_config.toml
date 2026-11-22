@@ -39,6 +39,9 @@
 #   edge       "top" or "bottom"
 #   thickness  reserved screen space, in logical pixels
 #   displays   "all" (default) or "primary"
+#   hide       true to have the strip slide away while the pointer is
+#              elsewhere and come back when the pointer reaches that edge
+#              of the display; it then reserves no screen space
 #   start, center, end  widgets to place
 #
 # A widget is its name, or a table: { widget = "name", popup = "name", ... }.

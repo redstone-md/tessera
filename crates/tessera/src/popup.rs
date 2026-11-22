@@ -327,6 +327,11 @@ impl Popups {
         }
     }
 
+    /// Whether a popup is open.
+    pub fn is_open(cx: &App) -> bool {
+        cx.global::<Self>().open.is_some()
+    }
+
     /// Closes the open popup, if there is one.
     pub fn close(cx: &mut App) {
         if let Some((_, window)) = cx.global_mut::<Self>().open.take() {
