@@ -64,6 +64,12 @@
 #           with nothing brought in front. Windows gives alt+tab to
 #           no program, so Tessera takes keys it is refused from the keyboard
 #           itself, and the switcher of Windows no longer opens for them
+#   dock    1 to 9: what a click on the button of the application with that
+#           number does, counted from the first application in the "windows"
+#           widget of the display the pointer is on: a pinned one without a
+#           window starts, and the windows of the others are gone through.
+#           Windows keeps the Windows key with a digit to itself as well,
+#           so such keys are taken from the keyboard like those of switch
 #
 # [[key]]
 # press = "ctrl+alt+space"
@@ -92,6 +98,10 @@
 # [[key]]
 # press = "alt+shift+tab"
 # switch = "previous"
+#
+# [[key]]
+# press = "win+1"
+# dock = 1
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"

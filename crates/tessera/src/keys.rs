@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use gpui::{App, AsyncApp, Global};
 
 use crate::config::KeyConfig;
+use crate::modules::windows::Docks;
 use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys};
 use crate::shell::Shell;
 use crate::switcher::Switcher;
@@ -110,7 +111,7 @@ const FIRST: u32 = 1 << 16;
 
 /// The words a start of the program may begin with to hand them to the
 /// Tessera that runs already.
-const COMMANDS: [&str; 5] = ["popup", "tiling", "focus", "move", "quit"];
+const COMMANDS: [&str; 6] = ["popup", "tiling", "focus", "move", "dock", "quit"];
 
 /// What separates the words on their way.
 const BETWEEN: char = '\n';
@@ -147,6 +148,7 @@ impl Asked {
             focus: None,
             carry: None,
             switch: None,
+            dock: None,
         };
         match words[..] {
             ["quit"] => return Ok(Self::Quit),
@@ -154,8 +156,10 @@ impl Asked {
             ["tiling", name] => key.tiling = said(name),
             ["focus", side] => key.focus = said(side),
             ["move", side] => key.carry = said(side),
+            // A word that is no number is one no application has.
+            ["dock", number] => key.dock = Some(number.parse().unwrap_or(0)),
             _ => {
-                let why = "it is `quit`, or one of `popup`, `tiling`, `focus` and `move` with one word after it";
+                let why = "it is `quit`, or one of `popup`, `tiling`, `focus`, `move` and `dock` with one word after it";
                 return Err(why.to_owned());
             }
         }
@@ -183,6 +187,8 @@ enum Deed {
         back: bool,
         held: Modifiers,
     },
+    /// What a click on the button of this number in the dock does.
+    Dock(usize),
 }
 
 impl Deed {
@@ -206,12 +212,17 @@ impl Deed {
             key.switch
                 .as_deref()
                 .map(|name| Self::switch(name, &key.press)),
+            key.dock.map(|number| match number {
+                1..=9 => Ok(Self::Dock(number as usize)),
+                _ => Err(format!("`dock` is a number from 1 to 9, not {number}")),
+            }),
         ];
         let mut deeds = deeds.into_iter().flatten();
         match (deeds.next(), deeds.next()) {
             (Some(deed), None) => deed,
             _ => Err(
-                "it needs one of `popup`, `tiling`, `run`, `focus`, `move` and `switch`".to_owned(),
+                "it needs one of `popup`, `tiling`, `run`, `focus`, `move`, `switch` and `dock`"
+                    .to_owned(),
             ),
         }
     }
@@ -259,6 +270,7 @@ impl Deed {
             Self::Resize(wider) => Tiler::resize(*wider, cx),
             Self::Focus(toward) => Tiler::focus(*toward, cx),
             Self::Carry(toward) => Tiler::carry(*toward, cx),
+            Self::Dock(number) => Docks::press(*number, cx),
             Self::Run(command) => {
                 let started = Command::new(&command[0])
                     .args(&command[1..])
@@ -346,12 +358,13 @@ impl Shortcuts {
         }
         this.config = keys.to_vec();
         let (deeds, hotkeys) = Self::read(keys);
-        // Windows keeps Alt+Tab and its like to itself. The keys of the
-        // window switcher that it refuses are taken from it; a refused
-        // combination of anything else is left to whoever holds it.
+        // Windows keeps Alt+Tab and the Windows key with a digit to
+        // itself. The keys of the window switcher and of the dock that it
+        // refuses are taken from it; a refused combination of anything
+        // else is left to whoever holds it.
         let switches = |id: u32| {
             let deed = deeds.get((id - FIRST) as usize);
-            matches!(deed, Some(Some(Deed::Switch { .. })))
+            matches!(deed, Some(Some(Deed::Switch { .. } | Deed::Dock(_))))
         };
         let refused = Hotkeys::set("keys", hotkeys.clone()).unwrap_or_else(|error| {
             report!("the `[[key]]` entries have no keys: {error:#}");
@@ -367,7 +380,7 @@ impl Shortcuts {
             .into_iter()
             .filter(|hotkey| taken.contains(&hotkey.id));
         if let Err(error) = TakenKeys::set(taken.collect()) {
-            report!("the keys of the window switcher stay with Windows: {error:#}");
+            report!("the keys Windows keeps to itself stay with it: {error:#}");
         }
         cx.global_mut::<Self>().deeds = deeds;
     }
@@ -444,6 +457,9 @@ mod tests {
             Ok(Asked::Deed(Deed::Popup("launcher".to_owned())))
         );
         assert_eq!(Asked::of("tiling\nfloat"), Ok(Asked::Deed(Deed::Float)));
+        assert_eq!(Asked::of("dock\n3"), Ok(Asked::Deed(Deed::Dock(3))));
+        assert!(Asked::of("dock\n10").is_err());
+        assert!(Asked::of("dock\nfirst").is_err());
         assert!(Asked::of("focus\nsideways").is_err());
         assert!(Asked::of("run\ncmd.exe").is_err());
         assert!(Asked::of("popup").is_err());
@@ -458,6 +474,7 @@ mod tests {
             focus: None,
             carry: None,
             switch: None,
+            dock: None,
         }
     }
 

@@ -139,7 +139,7 @@ pub struct Place {
 }
 
 /// What a `[[key]]` has one of.
-pub const DEEDS: [&str; 6] = ["popup", "tiling", "focus", "move", "switch", "run"];
+pub const DEEDS: [&str; 7] = ["popup", "tiling", "focus", "move", "switch", "dock", "run"];
 
 /// The configuration file, open for changing.
 pub struct ConfigFile {
@@ -390,7 +390,12 @@ impl ConfigFile {
         for other in DEEDS {
             key.remove(other);
         }
-        key.insert(deed, value(to));
+        // The number of an application in the dock is written as one.
+        let written = match (deed, to.parse::<i64>()) {
+            ("dock", Ok(number)) => value(number),
+            _ => value(to),
+        };
+        key.insert(deed, written);
         true
     }
 
@@ -1024,6 +1029,8 @@ content = ["apps"]
         assert!(file.add_hotkey("ctrl+alt+a"));
         assert!(file.add_hotkey("ctrl+alt+b"));
         assert!(file.set_hotkey_press(1, "alt+shift+left"));
+        assert!(file.set_hotkey_deed(1, "dock", "3"));
+        assert!(file.document.to_string().contains("dock = 3"));
         assert!(file.set_hotkey_deed(1, "move", "left"));
         assert!(!file.set_hotkey_deed(1, "press", "left"));
         assert!(!file.set_hotkey_deed(2, "focus", "left"));

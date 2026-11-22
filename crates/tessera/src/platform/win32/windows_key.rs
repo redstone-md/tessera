@@ -75,6 +75,11 @@ impl LonePress {
             (false, false) => false,
         }
     }
+
+    /// Takes in that a key went down that is passed on to no one.
+    fn joined(&mut self) {
+        self.alone = false;
+    }
 }
 
 static PRESS: Mutex<LonePress> = Mutex::new(LonePress {
@@ -248,9 +253,18 @@ fn taken_key(key: VIRTUAL_KEY, down: bool) -> bool {
     if taken.is_empty() {
         return false;
     }
-    let Some(id) = completed(&taken, key.0, Modifiers::down_now()) else {
+    let held = Modifiers::down_now();
+    let Some(id) = completed(&taken, key.0, held) else {
         return false;
     };
+    if held.windows {
+        // Windows does not see the key that is kept from it, and would
+        // take the Windows key for pressed by itself.
+        if let Ok(mut press) = PRESS.lock() {
+            press.joined();
+        }
+        press_unassigned_key();
+    }
     SWALLOWED.store(code, Ordering::Relaxed);
     // Presses that still wait to be answered are enough.
     taken_presses().0.try_send(id).ok();
@@ -383,6 +397,14 @@ mod tests {
         assert!(!press.key(true, false, false));
         press.key(true, true, false);
         assert!(press.key(true, false, false));
+    }
+
+    #[test]
+    fn a_key_kept_from_windows_makes_it_a_combination() {
+        let mut press = LonePress::default();
+        press.key(true, true, false);
+        press.joined();
+        assert!(!press.key(true, false, false));
     }
 
     #[test]

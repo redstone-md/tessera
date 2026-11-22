@@ -206,6 +206,9 @@ pub struct KeyConfig {
     /// `next` or `previous`: the window switcher goes that way through
     /// the windows while the keys to hold stay down.
     pub switch: Option<String>,
+    /// 1 to 9: the application with that number in the dock is started
+    /// or its windows are gone through, as a click on its button does.
+    pub dock: Option<u32>,
 }
 
 /// When a surface goes away.

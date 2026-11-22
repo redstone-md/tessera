@@ -28,7 +28,7 @@ mod trash;
 mod tray;
 mod user;
 mod wifi;
-mod windows;
+pub mod windows;
 mod workspaces;
 
 use crate::config::Config;

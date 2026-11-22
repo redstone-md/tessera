@@ -593,19 +593,23 @@ enum Control {
 
 /// The deeds of a key combination as they are shown, in the order of
 /// [`DEEDS`]. The last one is not chosen here: it takes a text.
-const DEED_TITLES: [&str; 6] = ["Popup", "Tiling", "Focus", "Move", "Windows", "Program"];
-const DEED_RUN: usize = 5;
+const DEED_TITLES: [&str; 7] = [
+    "Popup", "Tiling", "Focus", "Move", "Windows", "Dock", "Program",
+];
+const DEED_RUN: usize = 6;
 const SIDES: [&str; 4] = ["left", "right", "up", "down"];
 
 /// Which of [`DEEDS`] a key combination does, and with what.
 fn deed_of(key: &KeyConfig) -> Option<(usize, String)> {
     let run = key.run.as_ref().map(|run| run.join(" "));
+    let dock = key.dock.map(|number| number.to_string());
     let deeds = [
         &key.popup,
         &key.tiling,
         &key.focus,
         &key.carry,
         &key.switch,
+        &dock,
         &run,
     ];
     let mut deeds = deeds.into_iter().enumerate();
@@ -1515,6 +1519,7 @@ impl Settings {
                 .collect(),
             Some(&"focus" | &"move") => SIDES.map(str::to_owned).to_vec(),
             Some(&"switch") => ["next", "previous"].map(str::to_owned).to_vec(),
+            Some(&"dock") => (1..=9).map(|number| number.to_string()).collect(),
             _ => Vec::new(),
         }
     }

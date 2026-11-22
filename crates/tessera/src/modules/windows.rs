@@ -12,9 +12,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity,
-    Window, canvas, div, img, px,
+    AnyElement, App, AppContext, AsyncApp, Context, Global, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, canvas, div, img, px,
 };
 
 use crate::config::edit::ConfigFile;
@@ -353,6 +353,42 @@ fn switch_to(windows: &[AppWindowId]) {
     }
 }
 
+/// The lists that are shown, for the keys that press their buttons.
+#[derive(Default)]
+pub struct Docks {
+    lists: Vec<WeakEntity<WindowList>>,
+}
+
+impl Global for Docks {}
+
+impl Docks {
+    /// Does what a click on the button `number` does, counted from 1
+    /// among the applications of the list on the display the pointer is
+    /// on, or else of the list that was made first.
+    pub fn press(number: usize, cx: &mut App) {
+        let docks = cx.default_global::<Self>();
+        docks.lists.retain(|list| list.upgrade().is_some());
+        let lists: Vec<_> = docks.lists.iter().filter_map(WeakEntity::upgrade).collect();
+        let pointed = DisplayKey::under_pointer();
+        let here = |list: &&gpui::Entity<WindowList>| {
+            pointed.is_some() && list.read(cx).display == pointed
+        };
+        let Some(list) = lists.iter().find(here).or(lists.first()) else {
+            return report!("no application has the number {number}: no dock is shown");
+        };
+        Previews::close(cx);
+        Menus::close(cx);
+        list.read(cx).press(number);
+    }
+}
+
+/// Which of the buttons is the one of `number`, counted from 1 among
+/// those that are not `leaving`.
+fn numbered(leaving: impl Iterator<Item = bool>, number: usize) -> Option<usize> {
+    let mut shown = leaving.enumerate().filter(|(_, leaving)| !leaving);
+    shown.nth(number.checked_sub(1)?).map(|(index, _)| index)
+}
+
 /// The button before the applications, which opens a popup.
 struct Start {
     popup: String,
@@ -408,6 +444,8 @@ impl WindowList {
         })
         .detach();
 
+        let this = cx.weak_entity();
+        cx.default_global::<Docks>().lists.push(this);
         let motion = cx.global::<Theme>().motion;
         let mut list = Self {
             start: start.map(|(popup, glyph)| Start {
@@ -426,6 +464,21 @@ impl WindowList {
         }
         list.refresh(cx);
         list
+    }
+
+    /// Does what a click on the button `number` of the applications
+    /// does: starts a pinned one without a window, and goes through the
+    /// windows of the others.
+    fn press(&self, number: usize) {
+        let leaving = self.items.iter().map(|item| item.leaving);
+        let Some(item) = numbered(leaving, number).map(|index| &self.items[index]) else {
+            return;
+        };
+        let ids: Vec<AppWindowId> = item.windows.iter().map(|window| window.id).collect();
+        match &item.pin {
+            Some(pin) if ids.is_empty() => pin.shortcut.launch(),
+            _ => switch_to(&ids),
+        }
     }
 
     /// Appends a button, which grows in.
@@ -921,6 +974,16 @@ mod tests {
             group(None, None, Some(Path::new("C:/programs/editor.EXE")))
         );
         assert_eq!(group(None, None, None), None);
+    }
+
+    #[test]
+    fn buttons_are_numbered_without_the_ones_that_leave() {
+        let leaving = [false, true, false, false];
+        assert_eq!(numbered(leaving.into_iter(), 1), Some(0));
+        assert_eq!(numbered(leaving.into_iter(), 2), Some(2));
+        assert_eq!(numbered(leaving.into_iter(), 3), Some(3));
+        assert_eq!(numbered(leaving.into_iter(), 4), None);
+        assert_eq!(numbered(leaving.into_iter(), 0), None);
     }
 
     #[test]
