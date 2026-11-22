@@ -233,7 +233,9 @@
 #               written, such as folders = ["~/Documents", "D:/music"]; a
 #               ~ at the start is the folder of the user. They are read
 #               four levels deep when the launcher opens, without what is
-#               hidden, and the first 20000 are kept
+#               hidden, and the first 20000 are kept. Once two letters
+#               are written the search also finds pages of the Windows
+#               settings by their names; settings = false leaves them out
 #   "apps"      the applications pinned to the Start menu, as a grid; options
 #               pinned, their names as the search shows them, and columns,
 #               how many stand in a row (5). The search pins and unpins

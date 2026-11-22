@@ -16,6 +16,7 @@ use gpui::{
     UTF16Selection, WeakEntity, Window, canvas, div, img, point, px,
 };
 
+use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::start::Pins;
@@ -51,6 +52,42 @@ const FILES_KEPT: usize = 20_000;
 /// system.
 const HIDDEN_OR_SYSTEM: u32 = 0x2 | 0x4;
 
+/// The pages of the Windows settings the search finds, each with what
+/// Windows opens it by.
+const PAGES: [(&str, &str); 29] = [
+    ("Display", "ms-settings:display"),
+    ("Night light", "ms-settings:nightlight"),
+    ("Sound", "ms-settings:sound"),
+    ("Notifications", "ms-settings:notifications"),
+    ("Power and battery", "ms-settings:powersleep"),
+    ("Storage", "ms-settings:storagesense"),
+    ("Bluetooth and devices", "ms-settings:bluetooth"),
+    ("Printers and scanners", "ms-settings:printers"),
+    ("Mouse", "ms-settings:mousetouchpad"),
+    ("Network and internet", "ms-settings:network-status"),
+    ("Wi-Fi", "ms-settings:network-wifi"),
+    ("VPN", "ms-settings:network-vpn"),
+    ("Personalization", "ms-settings:personalization"),
+    ("Background", "ms-settings:personalization-background"),
+    ("Colors", "ms-settings:colors"),
+    ("Themes", "ms-settings:themes"),
+    ("Lock screen", "ms-settings:lockscreen"),
+    ("Installed apps", "ms-settings:appsfeatures"),
+    ("Default apps", "ms-settings:defaultapps"),
+    ("Startup apps", "ms-settings:startupapps"),
+    ("Your account", "ms-settings:yourinfo"),
+    ("Sign-in options", "ms-settings:signinoptions"),
+    ("Date and time", "ms-settings:dateandtime"),
+    ("Language and region", "ms-settings:regionlanguage"),
+    ("Typing", "ms-settings:typing"),
+    ("Accessibility", "ms-settings:easeofaccess"),
+    ("Privacy and security", "ms-settings:privacy"),
+    ("Windows Update", "ms-settings:windowsupdate"),
+    ("About this computer", "ms-settings:about"),
+];
+
+const ICON_SETTINGS: &str = "\u{e713}";
+
 pub struct LauncherModule;
 
 impl Module for LauncherModule {
@@ -60,11 +97,18 @@ impl Module for LauncherModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("launcher", |context, cx| {
-            let placeholder = context.text("placeholder").unwrap_or(DEFAULT_PLACEHOLDER);
+            let language = Language::of(cx);
+            let placeholder = context.text("placeholder");
+            let placeholder = placeholder.unwrap_or(language.say(DEFAULT_PLACEHOLDER));
             let placeholder = SharedString::new(placeholder);
             let folders = context.texts("folders").unwrap_or_default();
             let folders = folders.iter().map(|folder| folder_named(folder)).collect();
-            cx.new(|cx| Launcher::new(placeholder, folders, cx)).into()
+            let pages = match context.flag("settings") {
+                Some(false) => Vec::new(),
+                _ => pages(language),
+            };
+            cx.new(|cx| Launcher::new(placeholder, pages, folders, cx))
+                .into()
         })
     }
 }
@@ -93,6 +137,41 @@ fn search<'a>(names: impl Iterator<Item = &'a str>, query: &str) -> Vec<usize> {
         .collect();
     found.sort_by_key(|&(rank, _)| rank);
     found.into_iter().map(|(_, index)| index).collect()
+}
+
+/// The pages of the Windows settings, named in `language`.
+fn pages(language: Language) -> Vec<Shortcut> {
+    let page = |&(name, address): &(&'static str, &str)| Shortcut {
+        name: language.say(name).to_owned(),
+        path: PathBuf::from(address),
+    };
+    PAGES.iter().map(page).collect()
+}
+
+/// The positions in `pages`, which are those of [`PAGES`] in a language,
+/// of the ones whose name in that language or in English contains
+/// `query`, the best first.
+fn pages_matching(pages: &[Shortcut], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    let mut found: Vec<(u8, usize)> = pages
+        .iter()
+        .zip(PAGES)
+        .enumerate()
+        .filter_map(|(index, (page, (english, _)))| {
+            let ranks = [page.name.as_str(), english].map(|name| rank(name, &query));
+            Some((ranks.into_iter().flatten().min()?, index))
+        })
+        .collect();
+    found.sort_by_key(|&(rank, _)| rank);
+    found.into_iter().map(|(_, index)| index).collect()
+}
+
+/// What a row of the list opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    App,
+    Page,
+    File,
 }
 
 /// The folder `name` stands for: a `~` it begins with is the folder of
@@ -161,10 +240,12 @@ fn visible_rows(count: usize, row: f32, scrolled: f32, viewport: f32) -> (usize,
 /// A search field over the list of Start menu shortcuts and the files of
 /// the folders that are searched.
 struct Launcher {
-    /// The applications, and after them the files.
+    /// The applications, after them the pages of the Windows settings and
+    /// then the files.
     shortcuts: Vec<Shortcut>,
-    /// How many of `shortcuts` are applications.
+    /// How many of `shortcuts` are applications, and how many pages.
     apps: usize,
+    pages: usize,
     query: String,
     /// Text an input method is still composing; it follows the query.
     composing: String,
@@ -183,8 +264,18 @@ struct Launcher {
 }
 
 impl Launcher {
-    fn new(placeholder: SharedString, folders: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let shortcuts = Shortcut::start_menu();
+    fn new(
+        placeholder: SharedString,
+        pages: Vec<Shortcut>,
+        folders: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut shortcuts = Shortcut::start_menu();
+        let apps = shortcuts.len();
+        let pages = {
+            shortcuts.extend(pages);
+            shortcuts.len() - apps
+        };
         let pins = Pins::shared(cx);
         cx.observe(&pins, |_, _, cx| cx.notify()).detach();
         if !folders.is_empty() {
@@ -195,7 +286,7 @@ impl Launcher {
                     .spawn(async move { files_under(&folders) });
                 let files = files.await;
                 this.update(cx, |this, cx| {
-                    this.shortcuts.truncate(this.apps);
+                    this.shortcuts.truncate(this.apps + this.pages);
                     this.shortcuts.extend(files);
                     this.find();
                     cx.notify();
@@ -206,8 +297,9 @@ impl Launcher {
         }
         Self {
             pins,
-            matches: (0..shortcuts.len()).collect(),
-            apps: shortcuts.len(),
+            matches: (0..apps).collect(),
+            apps,
+            pages,
             shortcuts,
             query: String::new(),
             composing: String::new(),
@@ -234,20 +326,35 @@ impl Launcher {
         cx.notify();
     }
 
+    /// What the entry of `shortcuts` at `index` is.
+    fn kind(&self, index: usize) -> Kind {
+        if index < self.apps {
+            Kind::App
+        } else if index < self.apps + self.pages {
+            Kind::Page
+        } else {
+            Kind::File
+        }
+    }
+
     /// Looks for what the field asks for: among the applications always,
-    /// and among the files once enough letters are written. The files
-    /// come after the applications.
+    /// and among the pages of the settings and the files once enough
+    /// letters are written. The pages come after the applications and
+    /// the files last.
     fn find(&mut self) {
         let text = self.text();
-        let (apps, files) = self.shortcuts.split_at(self.apps);
+        let (apps, rest) = self.shortcuts.split_at(self.apps);
+        let (pages, files) = rest.split_at(self.pages);
         fn names(shortcuts: &[Shortcut]) -> impl Iterator<Item = &str> {
             shortcuts.iter().map(|shortcut| shortcut.name.as_str())
         }
         let mut matches = search(names(apps), &text);
         if text.trim().chars().count() >= LETTERS_FOR_FILES {
+            let pages = pages_matching(pages, &text);
+            matches.extend(pages.into_iter().map(|index| index + self.apps));
             let files = search(names(files), &text);
             let files = files.into_iter().take(FILES_SHOWN);
-            matches.extend(files.map(|index| index + self.apps));
+            matches.extend(files.map(|index| index + self.apps + self.pages));
         }
         self.matches = matches;
         if self.selected >= self.matches.len() {
@@ -356,10 +463,13 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let shortcut = &self.shortcuts[self.matches[row]];
-        // A file says where it lies.
-        let folder = (self.matches[row] >= self.apps)
-            .then(|| folder_of(&shortcut.path))
-            .flatten();
+        let kind = self.kind(self.matches[row]);
+        // A file says where it lies, and a page that it is one.
+        let folder = match kind {
+            Kind::App => None,
+            Kind::Page => Some(Language::of(cx).say("Settings").to_owned()),
+            Kind::File => folder_of(&shortcut.path),
+        };
         let folder = folder.map(|folder| {
             div()
                 .flex_none()
@@ -370,13 +480,22 @@ impl Launcher {
         });
         let size = theme.launcher.icon_size;
         let icons = cx.global::<AppIcons>();
-        let image = if self.matches[row] >= self.apps {
-            icons.of_file(&shortcut.path)
-        } else {
-            icons.of_shortcut(shortcut)
+        let image = match kind {
+            Kind::App => icons.of_shortcut(shortcut),
+            Kind::File => icons.of_file(&shortcut.path),
+            Kind::Page => None,
         };
         let image = match image {
             Some(image) => img(image).size(size).flex_none().into_any_element(),
+            None if kind == Kind::Page => div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.colors.primary)
+                .child(icon(theme, ICON_SETTINGS))
+                .into_any_element(),
             None => div()
                 .size(size)
                 .flex_none()
@@ -413,7 +532,7 @@ impl Launcher {
     /// only if something shows the pins.
     fn render_pin(&self, row: usize, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Only applications are pinned.
-        if self.matches[row] >= self.apps {
+        if self.kind(self.matches[row]) != Kind::App {
             return None;
         }
         let name = self.shortcuts[self.matches[row]].name.clone();
@@ -459,7 +578,7 @@ impl Launcher {
                 .items_center()
                 .justify_center()
                 .text_color(theme.colors.on_surface_variant)
-                .child("No application matches")
+                .child(Language::of(cx).say("Nothing matches"))
                 .into_any_element();
         }
         let row = theme.launcher.row_height;
@@ -649,6 +768,27 @@ mod tests {
                 PathBuf::from(home).join("Documents")
             );
         }
+    }
+
+    #[test]
+    fn the_pages_of_the_settings_are_named_and_addressed() {
+        let russian = pages(Language::Russian);
+        assert_eq!(russian.len(), PAGES.len());
+        let sound = russian.iter().find(|page| page.name == "Звук").unwrap();
+        assert_eq!(sound.path, PathBuf::from("ms-settings:sound"));
+        let update = pages_matching(&russian, "windows up");
+        assert_eq!(
+            russian[update[0]].path,
+            PathBuf::from("ms-settings:windowsupdate")
+        );
+        let sounds = pages_matching(&russian, "зву");
+        assert_eq!(russian[sounds[0]].name, "Звук");
+        let english = pages(Language::English);
+        assert!(english.iter().all(|page| !page.name.is_empty()));
+        let mut names: Vec<&str> = PAGES.iter().map(|page| page.0).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), PAGES.len());
     }
 
     #[test]
