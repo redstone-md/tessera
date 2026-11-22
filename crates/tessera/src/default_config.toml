@@ -203,6 +203,9 @@
 #               start-icon, the character it shows
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
+#   "plan"      the power plan of Windows that is in use, read every five
+#               seconds; a click puts the next plan in use, the first
+#               after the last. Option name, false to show the icon alone
 #   "trash"     the number of items in the Recycle Bin, counted every
 #               three seconds, or the icon alone while the bin is empty;
 #               a click has Explorer open the bin. It does not empty it

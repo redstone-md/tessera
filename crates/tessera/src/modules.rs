@@ -17,6 +17,7 @@ mod marketplace;
 mod media;
 mod network;
 mod notifications;
+mod plan;
 mod problems;
 mod session;
 mod settings;
@@ -62,6 +63,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
+        Box::new(plan::PlanModule),
         Box::new(trash::TrashModule),
         Box::new(update::UpdateModule),
         Box::new(tray::TrayModule),
