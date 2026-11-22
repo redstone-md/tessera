@@ -9,15 +9,15 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    div,
+    MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, div,
 };
 
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::VirtualDesktops;
 use crate::theme::Theme;
-use crate::ui::state_layer;
+use crate::ui::{state_layer, text_width};
 use crate::workspaces::Workspaces as Kept;
 
 /// How often the workspaces are looked at; Windows announces no change
@@ -26,6 +26,9 @@ const CHECK_INTERVAL: Duration = Duration::from_millis(300);
 
 /// The height of a button, as a share of the height of a pill.
 const BUTTON_SHARE: f32 = 0.66;
+
+/// The room beside a name in its button, in button heights.
+const NAME_MARGIN: f32 = 0.7;
 
 /// How much wider than high the button of the shown desktop is.
 const SHOWN_STRETCH: f32 = 0.8;
@@ -53,6 +56,8 @@ struct Workspace {
 
 struct Workspaces {
     desktops: VirtualDesktops,
+    /// What each button says.
+    labels: Vec<SharedString>,
     /// One for each desktop, and for those that are still going away.
     buttons: Vec<Workspace>,
 }
@@ -70,6 +75,7 @@ impl Workspaces {
         .detach();
         let mut this = Self {
             desktops: Kept::now(cx),
+            labels: Vec::new(),
             buttons: Vec::new(),
         };
         this.follow(cx);
@@ -84,17 +90,34 @@ impl Workspaces {
 
     fn look(&mut self, cx: &mut Context<Self>) {
         let desktops = Kept::now(cx);
-        if desktops != self.desktops {
+        let said = |index: usize| -> SharedString { Kept::label(index, cx).into() };
+        let labels: Vec<SharedString> = (0..desktops.count).map(said).collect();
+        // The labels of buttons that are going away stay as they were.
+        let renamed = labels.iter().zip(&self.labels).any(|(now, was)| now != was);
+        if desktops != self.desktops || renamed {
             self.desktops = desktops;
             self.follow(cx);
             cx.notify();
         }
     }
 
+    /// What the button at `index` says.
+    fn label(&self, index: usize) -> SharedString {
+        let label = self.labels.get(index).cloned();
+        label.unwrap_or_else(|| (index + 1).to_string().into())
+    }
+
     /// Sends the buttons where the desktops are: new ones come, the ones
     /// over the count go, and the shown one stands out.
     fn follow(&mut self, cx: &mut Context<Self>) {
         let motion = cx.global::<Theme>().motion;
+        for index in 0..self.desktops.count {
+            let label: SharedString = Kept::label(index, cx).into();
+            match self.labels.get_mut(index) {
+                Some(was) => *was = label,
+                None => self.labels.push(label),
+            }
+        }
         while self.buttons.len() < self.desktops.count {
             self.buttons.push(Workspace {
                 presence: Spring::new(motion.spatial, 0.),
@@ -117,13 +140,18 @@ impl Workspaces {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let label = self.label(index);
         let button = &mut self.buttons[index];
         let presence = button.presence.value(window);
         let shown = button.shown.value(window);
         let state = button.interaction.state(window);
         let colors = theme.colors;
         let height = theme.bar.pill_height * BUTTON_SHARE;
-        let width = height * (1. + SHOWN_STRETCH * shown.max(0.));
+        // A name takes the room it needs; a number, that of a circle.
+        let typography = theme.typography;
+        let text = text_width(&label, typography.family, typography.label_size, window);
+        let room = (text + height * NAME_MARGIN).max(height);
+        let width = room + height * SHOWN_STRETCH * shown.max(0.);
         let lit = shown.clamp(0., 1.);
         let ground = mix(
             theme.on_bar(colors.surface_container_highest),
@@ -151,7 +179,7 @@ impl Workspaces {
                 MouseButton::Right,
                 cx.listener(move |_, _, _, cx| Kept::send_front(index, cx)),
             )
-            .child((index + 1).to_string());
+            .child(label);
         let face = Interaction::track(face, cx, move |this: &mut Self| {
             Some(&mut this.buttons.get_mut(index)?.interaction)
         });
@@ -185,6 +213,7 @@ impl Render for Workspaces {
         {
             self.buttons.pop();
         }
+        self.labels.truncate(self.buttons.len());
         div()
             .h(theme.bar.pill_height)
             .px(theme.spacing.small - theme.spacing.tiny / 2.)

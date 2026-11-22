@@ -322,10 +322,14 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # window in front there: alt, ctrl, shift and win, joined by +. No program
 # gets those combinations while Tessera holds them. Every window is shown
 # again when Tessera quits, and at its next start if it was terminated.
+# names is what the buttons say instead of their numbers, the first for the
+# first workspace; it names the virtual desktops of Windows as well when
+# there is no own, and a workspace without a name keeps its number.
 #
 # [workspaces]
 # own = 3
 # keys = "alt"
+# names = ["web", "code", "chat"]
 # except = ["taskmgr.exe"]
 
 # [notifications] has Tessera show a notification that arrives as a banner,

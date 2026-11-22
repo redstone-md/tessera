@@ -63,9 +63,22 @@ pub struct WorkspacesConfig {
     /// The keys held with a digit to go to the workspace of that number,
     /// and with Shift as well to send the window in front there.
     keys: Option<String>,
+    /// What the buttons of the workspaces say instead of their numbers,
+    /// the first for the first workspace; an empty one leaves the number.
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 impl WorkspacesConfig {
+    /// The same without the names, which change nothing about where the
+    /// windows are.
+    fn unnamed(&self) -> Self {
+        Self {
+            names: Vec::new(),
+            ..self.clone()
+        }
+    }
+
     /// How many workspaces of its own Tessera keeps, if it keeps any. A
     /// number that is not usable is reported and counts as none.
     fn count(&self) -> Option<usize> {
@@ -236,9 +249,22 @@ impl Homes {
     }
 }
 
+/// What the button of the workspace at `index` says, given the `names`
+/// of the workspaces: its name, or its number where it has none.
+fn label(names: &[String], index: usize) -> String {
+    let name = names.get(index).map(|name| name.trim());
+    match name.filter(|name| !name.is_empty()) {
+        Some(name) => name.to_owned(),
+        None => (index + 1).to_string(),
+    }
+}
+
 /// Keeps the workspaces.
 pub struct Workspaces {
+    /// What is configured, apart from the names.
     config: WorkspacesConfig,
+    /// What the buttons of the workspaces say, where it is not a number.
+    names: Vec<String>,
     homes: Homes,
     /// Counts the tasks that were started to watch the windows; only the
     /// latest goes on.
@@ -254,6 +280,7 @@ impl Workspaces {
         Self::recover();
         cx.set_global(Self {
             config: WorkspacesConfig::default(),
+            names: Vec::new(),
             homes: Homes::default(),
             task: 0,
         });
@@ -279,6 +306,8 @@ impl Workspaces {
     /// is shown and starts on the first workspace again.
     pub fn configure(config: &WorkspacesConfig, cx: &mut App) {
         let this = cx.global_mut::<Self>();
+        this.names.clone_from(&config.names);
+        let config = &config.unnamed();
         if this.config == *config {
             return;
         }
@@ -346,6 +375,12 @@ impl Workspaces {
             count: homes.count,
             current: homes.current,
         }
+    }
+
+    /// What the button of the workspace at `index` says: its name, or
+    /// its number where it has none.
+    pub fn label(index: usize, cx: &App) -> String {
+        label(&cx.global::<Self>().names, index)
     }
 
     /// Goes to the workspace at `index`.
@@ -476,6 +511,22 @@ mod tests {
     fn sorted(mut ids: Vec<AppWindowId>) -> Vec<isize> {
         ids.sort_by_key(|id| id.raw());
         ids.into_iter().map(AppWindowId::raw).collect()
+    }
+
+    #[test]
+    fn a_workspace_without_a_name_says_its_number() {
+        let names = ["web".to_owned(), " ".to_owned()];
+        assert_eq!(label(&names, 0), "web");
+        assert_eq!(label(&names, 1), "2");
+        assert_eq!(label(&names, 2), "3");
+    }
+
+    #[test]
+    fn names_change_nothing_about_the_windows() {
+        let named: WorkspacesConfig = toml::from_str("own = 3\nnames = ['a']").unwrap();
+        let plain: WorkspacesConfig = toml::from_str("own = 3").unwrap();
+        assert_ne!(named, plain);
+        assert_eq!(named.unnamed(), plain);
     }
 
     #[test]
