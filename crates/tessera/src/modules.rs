@@ -24,6 +24,7 @@ mod sound;
 mod start;
 mod system;
 mod tiling;
+mod trash;
 mod tray;
 mod user;
 mod wifi;
@@ -60,6 +61,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
+        Box::new(trash::TrashModule),
         Box::new(tray::TrayModule),
         Box::new(user::UserModule),
         Box::new(wifi::WifiModule),

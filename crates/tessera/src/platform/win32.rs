@@ -10,6 +10,7 @@ mod account;
 mod app_windows;
 mod audio;
 mod backdrop;
+mod bin;
 mod bluetooth;
 mod brightness;
 mod commands;
@@ -44,6 +45,7 @@ pub use backdrop::{
     BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,
     read_desktop_if_requested,
 };
+pub use bin::RecycleBin;
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use brightness::ScreenBrightness;
 pub use commands::Commands;
