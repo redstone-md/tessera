@@ -3,7 +3,8 @@
 
 //! Workspaces: either the virtual desktops of Windows, or workspaces of
 //! Tessera's own, which hide the windows of every workspace but the one
-//! shown.
+//! shown. The workspaces of Tessera's own are one row for all displays,
+//! or a row for each display.
 //!
 //! A window belongs to the workspace it was first seen on. Windows that
 //! are hidden are written down before they are hidden, so that a Tessera
@@ -20,7 +21,8 @@ use serde::Deserialize;
 
 use crate::config::config_dir;
 use crate::platform::{
-    AppWindow, AppWindowId, Hotkey, Hotkeys, Modifiers, Passage, VirtualDesktops, WindowEvents,
+    AppWindow, AppWindowId, DisplayKey, Hotkey, Hotkeys, Modifiers, Passage, VirtualDesktops,
+    WindowEvents,
 };
 use crate::tiling::listed;
 
@@ -53,6 +55,10 @@ pub struct WorkspacesConfig {
     /// How many workspaces of its own Tessera keeps. Without it, the
     /// workspaces are the virtual desktops of Windows.
     own: Option<usize>,
+    /// Whether every display has workspaces of its own, so that going to
+    /// another one changes the windows of one display only.
+    #[serde(default)]
+    per_display: bool,
     /// The programs whose windows belong to a workspace, by the file name
     /// of the executable; every program when empty.
     #[serde(default)]
@@ -199,6 +205,23 @@ impl Homes {
         changed
     }
 
+    /// Whether `id` was asked to hide so lately that it may still be on
+    /// its way.
+    fn hiding(&self, id: AppWindowId, now: Instant) -> bool {
+        let hidden = self.hidden.get(&id);
+        hidden.is_some_and(|&since| now.duration_since(since) < HIDING_TIME)
+    }
+
+    /// Forgets the window `id`, which went elsewhere. Whether the hidden
+    /// windows changed is returned.
+    fn evict(&mut self, id: AppWindowId) -> bool {
+        self.home.remove(&id);
+        for front in &mut self.fronts {
+            *front = front.filter(|&front| front != id);
+        }
+        self.hidden.remove(&id).is_some()
+    }
+
     /// Forgets the windows of which `exists` says that they are gone.
     /// Whether the hidden windows changed is returned.
     fn forget(&mut self, exists: impl Fn(AppWindowId) -> bool) -> bool {
@@ -324,7 +347,12 @@ pub struct Workspaces {
     config: WorkspacesConfig,
     /// What the buttons of the workspaces say, where it is not a number.
     names: Vec<String>,
+    /// The workspaces all displays have in common; with a row for each
+    /// display it holds no window and says how many there are.
     homes: Homes,
+    /// The workspaces of each display that was seen, when each has a row
+    /// of its own.
+    local: Vec<(DisplayKey, Homes)>,
     /// What the icon of each window is taken from; a hidden window is
     /// not asked, so it is kept from when the window was seen.
     programs: HashMap<AppWindowId, PathBuf>,
@@ -344,6 +372,7 @@ impl Workspaces {
             config: WorkspacesConfig::default(),
             names: Vec::new(),
             homes: Homes::default(),
+            local: Vec::new(),
             programs: HashMap::new(),
             task: 0,
         });
@@ -358,9 +387,58 @@ impl Workspaces {
     /// Answers the key combination of the workspaces with the number
     /// `pressed`.
     pub fn pressed(pressed: u32, cx: &mut App) {
+        // The keys mean the display that is worked on: that of the window
+        // in front, or else the one the pointer is on.
+        let front = AppWindowId::foreground();
+        let windows = AppWindow::enumerate();
+        let in_front = windows.iter().find(|window| Some(window.id) == front);
+        let display = in_front
+            .map(|window| window.display)
+            .or_else(DisplayKey::under_pointer);
         match pressed.checked_sub(SENDING) {
-            Some(place) => Self::send_front(place as usize, cx),
-            None => Self::show(pressed as usize, cx),
+            Some(place) => Self::send_front(place as usize, display, cx),
+            None => Self::show(pressed as usize, display, cx),
+        }
+    }
+
+    /// Whether every display has a row of workspaces of its own.
+    fn separate(&self) -> bool {
+        self.config.per_display && self.homes.count > 0
+    }
+
+    /// The workspaces `display` shows, or those of the display the
+    /// pointer is on; `None` where a display has shown none yet.
+    fn peek(&self, display: Option<DisplayKey>) -> Option<&Homes> {
+        if !self.separate() {
+            return Some(&self.homes);
+        }
+        let display = display.or_else(DisplayKey::under_pointer)?;
+        let local = self.local.iter().find(|(key, _)| *key == display);
+        local.map(|(_, homes)| homes)
+    }
+
+    /// The same to change, made where there are none yet.
+    fn at(&mut self, display: Option<DisplayKey>) -> &mut Homes {
+        let display = display.or_else(DisplayKey::under_pointer);
+        let (true, Some(display)) = (self.separate(), display) else {
+            return &mut self.homes;
+        };
+        let place = match self.local.iter().position(|(key, _)| *key == display) {
+            Some(place) => place,
+            None => {
+                self.local.push((display, Homes::new(self.homes.count)));
+                self.local.len() - 1
+            }
+        };
+        &mut self.local[place].1
+    }
+
+    /// The workspaces the window `id` belongs to.
+    fn of_window(&mut self, id: AppWindowId) -> &mut Homes {
+        let holds = |(_, homes): &(DisplayKey, Homes)| homes.home.contains_key(&id);
+        match self.local.iter().position(holds) {
+            Some(place) => &mut self.local[place].1,
+            None => &mut self.homes,
         }
     }
 
@@ -377,6 +455,7 @@ impl Workspaces {
         this.show_all();
         this.config = config.clone();
         this.homes = Homes::new(config.count().unwrap_or(0));
+        this.local.clear();
         this.task += 1;
         let task = this.task;
         match Hotkeys::set("workspaces", config.hotkeys(this.homes.count)) {
@@ -427,16 +506,16 @@ impl Workspaces {
         .detach();
     }
 
-    /// How many workspaces there are and which one is shown: Tessera's
-    /// own, or else the virtual desktops of Windows.
-    pub fn now(cx: &App) -> VirtualDesktops {
-        let homes = &cx.global::<Self>().homes;
-        if homes.count == 0 {
+    /// How many workspaces there are and which one `display` shows:
+    /// Tessera's own, or else the virtual desktops of Windows.
+    pub fn now(display: Option<DisplayKey>, cx: &App) -> VirtualDesktops {
+        let this = cx.global::<Self>();
+        if this.homes.count == 0 {
             return VirtualDesktops::now();
         }
         VirtualDesktops {
-            count: homes.count,
-            current: homes.current,
+            count: this.homes.count,
+            current: this.peek(display).map_or(0, |homes| homes.current),
         }
     }
 
@@ -446,8 +525,9 @@ impl Workspaces {
         label(&cx.global::<Self>().names, index)
     }
 
-    /// Goes to the workspace at `index`.
-    pub fn show(index: usize, cx: &mut App) {
+    /// Goes to the workspace at `index`, on `display` where every display
+    /// has its own.
+    pub fn show(index: usize, display: Option<DisplayKey>, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         if this.homes.count == 0 {
             if !VirtualDesktops::now().show(index) {
@@ -456,26 +536,28 @@ impl Workspaces {
             return;
         }
         this.look();
-        let change = this.homes.go(index, Instant::now());
+        let change = this.at(display).go(index, Instant::now());
         this.apply(change);
     }
 
-    /// Sends the window that was last in front to the workspace at
-    /// `index`. The virtual desktops of Windows offer no way to do that.
-    pub fn send_front(index: usize, cx: &mut App) {
+    /// Sends the window that was last in front, on `display` where every
+    /// display has its own workspaces, to the workspace at `index`. The
+    /// virtual desktops of Windows offer no way to do that.
+    pub fn send_front(index: usize, display: Option<DisplayKey>, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         if this.homes.count == 0 {
             return;
         }
         this.look();
-        let change = this.homes.send(index, Instant::now());
+        let change = this.at(display).send(index, Instant::now());
         this.apply(change);
     }
 
     /// The windows of every workspace of Tessera's own, the first list for
     /// the first workspace; `None` when Tessera keeps none, as Windows
-    /// does not tell which window is on which of its desktops.
-    pub fn residents(cx: &App) -> Option<Vec<Vec<Resident>>> {
+    /// does not tell which window is on which of its desktops. Where every
+    /// display has its own workspaces they are those of `display`.
+    pub fn residents(display: Option<DisplayKey>, cx: &App) -> Option<Vec<Vec<Resident>>> {
         let this = cx.global::<Self>();
         if this.homes.count == 0 {
             return None;
@@ -484,7 +566,11 @@ impl Workspaces {
             id,
             program: this.programs.get(&id).cloned(),
         };
-        let residents = this.homes.residents().into_iter();
+        let residents = match this.peek(display) {
+            Some(homes) => homes.residents(),
+            None => vec![Vec::new(); this.homes.count],
+        };
+        let residents = residents.into_iter();
         Some(
             residents
                 .map(|windows| windows.into_iter().map(resident).collect())
@@ -496,14 +582,15 @@ impl Workspaces {
     pub fn show_window(id: AppWindowId, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         this.look();
-        let Some(home) = this.homes.bring(id) else {
+        let homes = this.of_window(id);
+        let Some(home) = homes.bring(id) else {
             return;
         };
-        if home == this.homes.current {
+        if home == homes.current {
             id.activate();
             return;
         }
-        let change = this.homes.go(home, Instant::now());
+        let change = homes.go(home, Instant::now());
         this.apply(change);
     }
 
@@ -512,7 +599,7 @@ impl Workspaces {
     pub fn move_window(id: AppWindowId, index: usize, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         this.look();
-        let change = this.homes.settle(id, index, Instant::now());
+        let change = this.of_window(id).settle(id, index, Instant::now());
         this.apply(change);
     }
 
@@ -528,20 +615,57 @@ impl Workspaces {
                 )
             })
             .collect();
-        let seen: Vec<AppWindowId> = windows.iter().map(|window| window.id).collect();
         self.programs.retain(|&id, _| id.exists());
         for window in &windows {
             if let Some(program) = window.program() {
                 self.programs.insert(window.id, program);
             }
         }
+        let (front, now) = (AppWindowId::foreground(), Instant::now());
         let mut changed = self.homes.forget(AppWindowId::exists);
-        changed |= self
-            .homes
-            .see(&seen, AppWindowId::foreground(), Instant::now());
+        for (_, homes) in &mut self.local {
+            changed |= homes.forget(AppWindowId::exists);
+        }
+        if !self.separate() {
+            let seen: Vec<AppWindowId> = windows.iter().map(|window| window.id).collect();
+            changed |= self.homes.see(&seen, front, now);
+        } else {
+            // A window belongs to the display it is seen on. One that was
+            // just asked to hide may pass over another display on its way
+            // and stays with its own.
+            let mut seen: Vec<(DisplayKey, Vec<AppWindowId>)> = Vec::new();
+            for window in &windows {
+                let id = window.id;
+                let mut display = window.display;
+                let holds = |(_, homes): &(DisplayKey, Homes)| homes.home.contains_key(&id);
+                if let Some(owner) = self.local.iter().position(holds) {
+                    let (key, homes) = &mut self.local[owner];
+                    if *key != display && homes.hiding(id, now) {
+                        display = *key;
+                    } else if *key != display {
+                        changed |= homes.evict(id);
+                    }
+                }
+                match seen.iter_mut().find(|(key, _)| *key == display) {
+                    Some((_, ids)) => ids.push(id),
+                    None => seen.push((display, vec![id])),
+                }
+            }
+            for (display, ids) in seen {
+                changed |= self.at(Some(display)).see(&ids, front, now);
+            }
+        }
         if changed {
             self.write_record();
         }
+    }
+
+    /// Every window that is hidden.
+    fn hidden(&self) -> Vec<AppWindowId> {
+        let rows = self.local.iter().map(|(_, homes)| homes);
+        let rows = rows.chain([&self.homes]);
+        rows.flat_map(|homes| homes.hidden.keys().copied())
+            .collect()
     }
 
     /// Hides and shows windows as `change` says. What is hidden is
@@ -554,8 +678,12 @@ impl Workspaces {
 
     /// Shows every window that is hidden.
     fn show_all(&mut self) {
-        for (id, _) in self.homes.hidden.drain() {
+        for id in self.hidden() {
             id.unhide();
+        }
+        self.homes.hidden.clear();
+        for (_, homes) in &mut self.local {
+            homes.hidden.clear();
         }
         self.write_record();
     }
@@ -570,14 +698,13 @@ impl Workspaces {
         let Some(path) = Self::record() else {
             return;
         };
-        if self.homes.hidden.is_empty() {
+        let hidden = self.hidden();
+        if hidden.is_empty() {
             let _ = fs::remove_file(&path);
             return;
         }
-        let lines: String = self
-            .homes
-            .hidden
-            .keys()
+        let lines: String = hidden
+            .iter()
             .map(|id| format!("{} {}\n", id.raw(), id.process()))
             .collect();
         if let Err(error) = fs::write(&path, lines) {
@@ -646,6 +773,28 @@ mod tests {
         assert_eq!(homes.bring(id(2)), Some(0));
         assert_eq!(homes.go(0, start).front, Some(id(2)));
         assert_eq!(homes.bring(id(9)), None);
+    }
+
+    #[test]
+    fn a_window_that_left_for_another_display_is_forgotten() {
+        let start = Instant::now();
+        let mut homes = Homes::new(2);
+        homes.see(&[id(1), id(2)], Some(id(1)), start);
+        homes.go(1, start);
+        // Both were asked to hide a moment ago and are still on their way.
+        assert!(homes.hiding(id(1), start));
+        assert!(!homes.hiding(id(1), start + HIDING_TIME));
+        assert!(!homes.hiding(id(7), start));
+        // The one that is gone leaves nothing behind.
+        assert!(homes.evict(id(1)));
+        assert_eq!(homes.fronts, [None, None]);
+        assert!(!homes.home.contains_key(&id(1)));
+        assert!(!homes.hidden.contains_key(&id(1)));
+        assert!(homes.hidden.contains_key(&id(2)));
+        // A window that was not hidden changes nothing about the hidden.
+        homes.go(0, start);
+        assert!(!homes.evict(id(2)));
+        assert!(!homes.evict(id(7)));
     }
 
     #[test]

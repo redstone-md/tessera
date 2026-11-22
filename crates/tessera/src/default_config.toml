@@ -395,9 +395,13 @@ content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-out
 # names is what the buttons say instead of their numbers, the first for the
 # first workspace; it names the virtual desktops of Windows as well when
 # there is no own, and a workspace without a name keeps its number.
+# per_display = true gives every display workspaces of its own: a bar shows
+# and changes those of its display, the keys those of the display the
+# window in front is on, and a window belongs to the display it is seen on.
 #
 # [workspaces]
 # own = 3
+# per_display = true
 # keys = "alt"
 # names = ["web", "code", "chat"]
 # except = ["taskmgr.exe"]

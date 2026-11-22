@@ -20,7 +20,7 @@ use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix, staggered};
-use crate::platform::AppWindowId;
+use crate::platform::{AppWindowId, DisplayKey};
 use crate::theme::Theme;
 use crate::ui::{one_line, state_layer};
 use crate::workspaces::{Resident, Workspaces as Kept};
@@ -39,7 +39,12 @@ impl Module for OverviewModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("overview", |_, cx| cx.new(Overview::new).into())
+        widgets.register("overview", |context, cx| {
+            // A popup that does not say its display is on the one the
+            // pointer was on when it opened.
+            let display = context.display.or_else(DisplayKey::under_pointer);
+            cx.new(|cx| Overview::new(display, cx)).into()
+        })
     }
 }
 
@@ -82,12 +87,12 @@ struct Seen {
 }
 
 impl Seen {
-    fn now(cx: &App) -> Self {
-        let residents = Kept::residents(cx);
+    fn now(display: Option<DisplayKey>, cx: &App) -> Self {
+        let residents = Kept::residents(display, cx);
         let count = residents.as_ref().map_or(0, Vec::len);
         Self {
             residents,
-            current: Kept::now(cx).current,
+            current: Kept::now(display, cx).current,
             labels: (0..count)
                 .map(|index| Kept::label(index, cx).into())
                 .collect(),
@@ -105,6 +110,9 @@ struct Card {
 }
 
 struct Overview {
+    /// The display whose workspaces are shown, where every display has
+    /// its own.
+    display: Option<DisplayKey>,
     seen: Seen,
     cards: Vec<Card>,
     /// 0 when the widget appears, 1 once the cards are in place.
@@ -112,7 +120,7 @@ struct Overview {
 }
 
 impl Overview {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(display: Option<DisplayKey>, cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
@@ -124,7 +132,8 @@ impl Overview {
         })
         .detach();
         let mut this = Self {
-            seen: Seen::now(cx),
+            display,
+            seen: Seen::now(display, cx),
             cards: Vec::new(),
             arrival: Spring::new(motion.spatial, 0.),
         };
@@ -139,7 +148,7 @@ impl Overview {
     }
 
     fn look(&mut self, cx: &mut Context<Self>) {
-        let seen = Seen::now(cx);
+        let seen = Seen::now(self.display, cx);
         if seen != self.seen {
             self.seen = seen;
             self.follow(cx);
@@ -277,7 +286,7 @@ impl Overview {
             .bg(state_layer(theme, ground, state))
             .text_size(theme.typography.label_size)
             .on_click(cx.listener(move |this, _, _, cx| {
-                Kept::show(index, cx);
+                Kept::show(index, this.display, cx);
                 this.look(cx);
             }))
             .drag_over::<Carried>(move |style, _, _, _| style.border_color(colors.primary))

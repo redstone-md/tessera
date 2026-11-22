@@ -15,7 +15,7 @@ use gpui::{
 
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::VirtualDesktops;
+use crate::platform::{DisplayKey, VirtualDesktops};
 use crate::theme::Theme;
 use crate::ui::{state_layer, text_width};
 use crate::workspaces::Workspaces as Kept;
@@ -41,7 +41,10 @@ impl Module for WorkspacesModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("workspaces", |_, cx| cx.new(Workspaces::new).into())
+        widgets.register("workspaces", |context, cx| {
+            let display = context.display;
+            cx.new(|cx| Workspaces::new(display, cx)).into()
+        })
     }
 }
 
@@ -55,6 +58,9 @@ struct Workspace {
 }
 
 struct Workspaces {
+    /// The display of the bar, whose workspaces are shown where every
+    /// display has its own.
+    display: Option<DisplayKey>,
     desktops: VirtualDesktops,
     /// What each button says.
     labels: Vec<SharedString>,
@@ -63,7 +69,7 @@ struct Workspaces {
 }
 
 impl Workspaces {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(display: Option<DisplayKey>, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(CHECK_INTERVAL).await;
@@ -74,7 +80,8 @@ impl Workspaces {
         })
         .detach();
         let mut this = Self {
-            desktops: Kept::now(cx),
+            display,
+            desktops: Kept::now(display, cx),
             labels: Vec::new(),
             buttons: Vec::new(),
         };
@@ -89,7 +96,7 @@ impl Workspaces {
     }
 
     fn look(&mut self, cx: &mut Context<Self>) {
-        let desktops = Kept::now(cx);
+        let desktops = Kept::now(self.display, cx);
         let said = |index: usize| -> SharedString { Kept::label(index, cx).into() };
         let labels: Vec<SharedString> = (0..desktops.count).map(said).collect();
         // The labels of buttons that are going away stay as they were.
@@ -172,12 +179,12 @@ impl Workspaces {
             .text_color(mix(colors.on_surface_variant, colors.on_surface, lit))
             .font_weight(FontWeight::MEDIUM)
             .on_click(cx.listener(move |this, _, _, cx| {
-                Kept::show(index, cx);
+                Kept::show(index, this.display, cx);
                 this.look(cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |_, _, _, cx| Kept::send_front(index, cx)),
+                cx.listener(move |this, _, _, cx| Kept::send_front(index, this.display, cx)),
             )
             .child(label);
         let face = Interaction::track(face, cx, move |this: &mut Self| {
