@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -20,8 +21,19 @@ use serde::Deserialize;
 
 use crate::config::config_dir;
 
-/// The directory of the language files, within the configuration.
+/// The directory of the language files, within the configuration and
+/// beside the program.
 const DIRECTORY: &str = "languages";
+
+/// Where language files are looked for: the configuration first, then
+/// the directory the program lies in, where a download keeps them.
+fn directories() -> Vec<PathBuf> {
+    let beside = std::env::current_exe().ok();
+    let beside = beside.as_deref().and_then(Path::parent).map(Path::to_owned);
+    { config_dir().into_iter().chain(beside) }
+        .map(|directory| directory.join(DIRECTORY))
+        .collect()
+}
 
 /// A language of the user interface, named in the configuration by its
 /// letters: `en`, `ru`, or the name of a language file without `.toml`.
@@ -100,8 +112,13 @@ impl Tongue {
         if code.is_empty() || !code.chars().all(plain) {
             return None;
         }
-        let path = config_dir()?.join(DIRECTORY).join(format!("{code}.toml"));
-        let written = fs::metadata(&path).and_then(|file| file.modified()).ok()?;
+        let file = format!("{code}.toml");
+        let found = { directories().into_iter() }.find_map(|directory| {
+            let path = directory.join(&file);
+            let written = fs::metadata(&path).and_then(|file| file.modified()).ok()?;
+            Some((path, written))
+        });
+        let (path, written) = found?;
         let mut tongues = TONGUES.lock().ok()?;
         let known =
             |&&(at, tongue): &&(SystemTime, &'static Self)| at == written && tongue.code == code;
@@ -159,9 +176,8 @@ impl Language {
     /// Every language there is to choose: the ones compiled in, then the
     /// ones of the language files, by name of file.
     pub fn installed() -> Vec<Self> {
-        let entries = config_dir()
-            .and_then(|directory| fs::read_dir(directory.join(DIRECTORY)).ok())
-            .into_iter()
+        let entries = { directories().into_iter() }
+            .filter_map(|directory| fs::read_dir(directory).ok())
             .flatten();
         let mut codes: Vec<String> = entries
             .filter_map(Result::ok)
@@ -174,6 +190,7 @@ impl Language {
             .filter(|code| Self::BUILTIN.iter().all(|known| known.code() != code))
             .collect();
         codes.sort();
+        codes.dedup();
         let files = codes.iter().filter_map(|code| Tongue::read(code));
         let mut all = Self::BUILTIN.to_vec();
         all.extend(files.map(Self::File));
@@ -698,16 +715,23 @@ mod tests {
     }
 
     #[test]
-    fn the_language_file_that_comes_with_tessera_gives_the_texts_of_the_table() {
-        let file = include_str!("../../../languages/de.toml");
-        let german = Tongue::parse("de", file).unwrap();
-        for (english, _) in RUSSIAN {
-            let given = german.file.texts.contains_key(*english);
-            assert!(given, "`{english}` is not given");
-        }
-        for english in german.file.texts.keys() {
-            let known = RUSSIAN.iter().any(|(text, _)| text == english);
-            assert!(known, "`{english}` is no text of Tessera");
+    fn the_language_files_that_come_with_tessera_give_the_texts_of_the_table() {
+        let files = [
+            ("de", include_str!("../../../languages/de.toml")),
+            ("es", include_str!("../../../languages/es.toml")),
+            ("fr", include_str!("../../../languages/fr.toml")),
+            ("uk", include_str!("../../../languages/uk.toml")),
+        ];
+        for (name, file) in files {
+            let tongue = Tongue::parse(name, file).unwrap();
+            for (english, _) in RUSSIAN {
+                let given = tongue.file.texts.contains_key(*english);
+                assert!(given, "`{english}` is not given in `{name}`");
+            }
+            for english in tongue.file.texts.keys() {
+                let known = RUSSIAN.iter().any(|(text, _)| text == english);
+                assert!(known, "`{english}` of `{name}` is no text of Tessera");
+            }
         }
     }
 

@@ -22,7 +22,8 @@
 
 # The language of the settings, the marketplace, the calendar, the lists of
 # notifications and problems and the names of days and months in the clock: "en" (default), "ru",
-# or the name of a file of the `languages` directory next to this file without `.toml`.
+# or the name of a file of the `languages` directory next to this file, or
+# of the one beside tessera.exe, without `.toml`.
 # What the widgets of the bars say stays English.
 # language = "ru"
 
