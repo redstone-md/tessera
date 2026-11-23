@@ -149,6 +149,8 @@ pub struct Marketplace {
     reading: bool,
     problems: Vec<SharedString>,
     rows: Vec<Row>,
+    /// What is installed and offered by no registry that was read.
+    others: Vec<Installed>,
     reload: Interaction,
 }
 
@@ -193,6 +195,7 @@ impl Marketplace {
             reading: false,
             problems: Vec::new(),
             rows: Vec::new(),
+            others: Vec::new(),
             reload: Interaction::new(&theme.motion),
         };
         this.read(cx);
@@ -238,7 +241,76 @@ impl Marketplace {
             }
         });
         self.rows = rows.collect();
+        self.others = installed;
         cx.notify();
+    }
+
+    /// The card of what is installed without a registry that offers it:
+    /// its name and, for an extension, its widgets.
+    fn render_other(other: &Installed, theme: &Theme, language: Language) -> AnyElement {
+        let caption_size = theme.typography.label_size * CAPTION_SHARE;
+        let letter = other.id.chars().next().unwrap_or('?');
+        let badge = div()
+            .size(BADGE_SIZE)
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.full)
+            .bg(theme.colors.secondary_container)
+            .text_color(theme.colors.primary)
+            .font_weight(FontWeight::MEDIUM)
+            .child(SharedString::from(letter.to_uppercase().to_string()));
+        let mark = match &other.version {
+            Some(version) => format!("{} {version}", language.say("Installed")),
+            None => language.say("Installed by hand").to_owned(),
+        };
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(theme.spacing.small + theme.spacing.tiny)
+            .child(badge)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.colors.on_surface)
+                    .child(one_line(other.id.clone())),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(theme.spacing.small)
+                    .py(theme.spacing.tiny / 2.)
+                    .rounded(theme.shape.full)
+                    .bg(theme.colors.secondary_container)
+                    .text_size(caption_size)
+                    .text_color(theme.colors.primary)
+                    .child(SharedString::from(mark)),
+            );
+        let widgets = (!other.widgets.is_empty()).then(|| {
+            let said = language.say("Widgets for the layout:");
+            div()
+                .text_size(caption_size)
+                .text_color(theme.colors.on_surface_variant)
+                .child(format!("{said} {}", other.widgets.join(", ")))
+        });
+        let card = div()
+            .p(theme.spacing.medium)
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.small)
+            .rounded(theme.shape.large)
+            .bg(theme.colors.surface_container_highest)
+            .child(header)
+            .children(widgets);
+        div()
+            .w_full()
+            .flex_none()
+            .pb(theme.spacing.medium)
+            .child(card)
+            .into_any_element()
     }
 
     /// Downloads the extension of the row, then asks before installing it.
@@ -573,11 +645,15 @@ impl Render for Marketplace {
         let language = Language::of(cx);
         let caption_size = theme.typography.label_size * CAPTION_SHARE;
         let mut rows = mem::take(&mut self.rows);
-        let cards: Vec<AnyElement> = rows
+        let others = self.others.iter();
+        let mut cards: Vec<AnyElement> = others
+            .map(|other| Self::render_other(other, &theme, language))
+            .collect();
+        let offered = rows
             .iter_mut()
             .enumerate()
-            .map(|(index, row)| Self::render_row(index, row, &theme, window, cx))
-            .collect();
+            .map(|(index, row)| Self::render_row(index, row, &theme, window, cx));
+        cards.extend(offered);
         self.rows = rows;
 
         let state = self.reload.state(window);

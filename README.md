@@ -142,7 +142,7 @@ What this does and does not guard:
 - Before installing or updating, the widget names the hosts and files the manifest asks for and waits for `Allow and install`. Nothing else of the extension is inspected.
 - Installing writes `extension.wasm`, `extension.toml` and `installed.toml` (the version and the registry it came from) to `%APPDATA%\tessera\extensions\<id>\`. It does not change the layout: the widget lists the names to put into `config.toml`, such as `counter.total`, and that is still done by hand.
 - `Update` is offered when the version of the registry differs from the installed one; nothing checks for updates on its own.
-- `Remove` deletes those files and the extension's `state.txt`. An extension without `installed.toml` was copied in by hand and is neither replaced nor removed.
+- `Remove` deletes those files and the extension's `state.txt`. An extension without `installed.toml` was copied in by hand and is neither replaced nor removed. What is installed and offered by no registry that was read is listed before the offers, with its name and the widgets it gives a layout, and with no buttons; this was not tried on a running shell.
 - A registry or an offer that cannot be used is listed at the top of the widget with the reason.
 - A theme is checked against its SHA-256 sum and has to parse as a theme file, at most 64 KiB of it. Installing writes `<id>.toml` and `<id>.installed` (the version and the registry) to `%APPDATA%\tessera\themes\`; it does not choose the theme, which the settings or `theme = "<id>"` do. A theme file without its `.installed` file was written by hand and is neither replaced nor removed. Removing the theme in use leaves the layout naming a missing file, which is reported, and the built-in theme shows.
 
