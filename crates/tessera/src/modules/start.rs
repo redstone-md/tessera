@@ -29,11 +29,6 @@ const DEFAULT_COLUMNS: usize = 5;
 /// The side of the icon of a pinned application.
 const TILE_ICON: Pixels = px(36.);
 
-/// The height kept for the grid while it is empty, about that of a row of
-/// tiles, so that the first pins do not move what is below the grid away
-/// from the pointer that pins.
-const EMPTY_HEIGHT: Pixels = px(76.);
-
 /// How far below its place a tile starts when it appears.
 const TILE_TRAVEL: f32 = 12.;
 
@@ -276,19 +271,9 @@ impl Apps {
 
 impl Render for Apps {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = *cx.global::<Theme>();
         let names = self.pins.read(cx).names.clone();
         if names.is_empty() {
-            return div()
-                .flex_none()
-                .h(EMPTY_HEIGHT)
-                .flex()
-                .items_center()
-                .text_color(theme.colors.on_surface_variant)
-                // A text right in a row is as wide as its one line.
-                .child(div().min_w_0().child(
-                    "Nothing is pinned. Point at an application in the list and click its pin.",
-                ));
+            return div().flex_none();
         }
         let mut tiles = Vec::new();
         for (index, name) in names.iter().enumerate() {
