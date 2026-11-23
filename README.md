@@ -81,7 +81,7 @@ Whatever the theme, the colors that are read (text and icons, the accent, outlin
 
 ## Extensions
 
-An extension is a WebAssembly file that Tessera runs in a [Wasmtime](https://wasmtime.dev) sandbox. It describes the content of its widgets as a tree of rows, columns, text, captions, buttons and progress bars, which Tessera draws with the active theme, and it is told when one of its buttons is pressed. [`wit/extension.wit`](wit/extension.wit) is the whole interface. It is unstable and will change.
+An extension is a WebAssembly file that Tessera runs in a [Wasmtime](https://wasmtime.dev) sandbox. It describes the content of its widgets as a tree of rows, columns, text, captions, buttons and progress bars, which Tessera draws with the active theme, and it is told when one of its buttons is pressed. A column inside a column is drawn as a card, and what a column holds keeps its height where it does not all fit, the widget scrolling instead; before, progress bars there were squeezed flat. Neither was tried on a running shell. [`wit/extension.wit`](wit/extension.wit) is the whole interface. It is unstable and will change.
 
 Besides drawing, an extension can:
 

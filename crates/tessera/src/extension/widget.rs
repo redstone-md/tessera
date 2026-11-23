@@ -13,12 +13,14 @@ use gpui::{
 
 use super::host::Host;
 use super::runtime::{Node, NodeKind};
-use crate::motion::{Interaction, Spring};
+use crate::motion::{Interaction, Spring, mix};
 use crate::theme::Theme;
 use crate::ui::{pill, state_layer};
 
 /// A window fewer pill heights high than this has one line of room.
 const FLAT_BELOW: f32 = 3.;
+/// How much of the text color the track of a progress bar takes on.
+const TRACK_TINT: f32 = 0.12;
 
 /// How a node is laid out, which depends on what contains it.
 #[derive(Clone, Copy, PartialEq)]
@@ -112,7 +114,8 @@ impl ExtensionWidget {
         let words = div().child(text.to_owned());
         match placement {
             Placement::Root | Placement::InRow => words.flex_none().whitespace_nowrap(),
-            Placement::InColumn => words,
+            // Not squeezed where a column has more than fits.
+            Placement::InColumn => words.flex_none(),
         }
     }
 
@@ -146,7 +149,14 @@ impl ExtensionWidget {
                         .size_full()
                         .overflow_y_scroll()
                         .into_any_element(),
-                    Placement::InRow | Placement::InColumn => column.into_any_element(),
+                    Placement::InRow => column.into_any_element(),
+                    // A column within a column is a card of its own.
+                    Placement::InColumn => column
+                        .flex_none()
+                        .p(theme.spacing.medium)
+                        .rounded(theme.shape.large)
+                        .bg(theme.colors.surface_container_highest)
+                        .into_any_element(),
                 }
             }
             // Where there is one line of room a column is laid out as a row.
@@ -161,6 +171,7 @@ impl ExtensionWidget {
                     Placement::InColumn => div()
                         .w_full()
                         .flex()
+                        .flex_none()
                         .items_center()
                         .justify_between()
                         .gap(theme.spacing.small),
@@ -180,11 +191,18 @@ impl ExtensionWidget {
                     .or_insert_with(|| Spring::new(theme.motion.effects, 0.));
                 shown.animate_to(share);
                 let shown = shown.value(window).clamp(0., 1.);
+                // Kept at its height where a column has more than fits,
+                // and told apart from a card it lies on.
                 let track = div()
                     .h(theme.spacing.small)
+                    .flex_none()
                     .rounded(theme.shape.full)
                     .overflow_hidden()
-                    .bg(theme.colors.surface_container_highest)
+                    .bg(mix(
+                        theme.colors.surface_container_highest,
+                        theme.colors.on_surface,
+                        TRACK_TINT,
+                    ))
                     .child(
                         div()
                             .h_full()

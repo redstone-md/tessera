@@ -22,6 +22,8 @@ world extension {
         /// is as wide as the column and spreads its children apart.
         row,
         /// Lays its children out vertically, as wide as the space allows.
+        /// As the root, it scrolls what does not fit. Inside a column it
+        /// is drawn as a card of its own.
         column,
         /// A line of text.
         text(string),
