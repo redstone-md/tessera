@@ -15,7 +15,7 @@ use gpui::{
 use crate::config::Hiding;
 use crate::motion::Spring;
 use crate::platform::{
-    AppWindow, DisplayKey, EdgeReservation, NativeSurface, ScreenEdge, SmallBirth,
+    AppWindow, DisplayKey, EdgeReservation, NativeSurface, ScreenEdge, ScreenRect, SmallBirth,
     pointer_on_own_window,
 };
 use crate::popup::Popups;
@@ -100,6 +100,7 @@ impl EdgeSurface {
                     shown: Spring::new(cx.global::<Theme>().motion.spatial, 1.),
                     away: None,
                     concealed: false,
+                    placed_on: native.and_then(|native| native.display_frame().ok()),
                 }
             })
         })
@@ -196,6 +197,8 @@ pub struct EdgeSurfaceView<V> {
     away: Option<Instant>,
     /// Whether the window is hidden, after the surface slid away.
     concealed: bool,
+    /// The bounds of the display the surface was last placed on.
+    placed_on: Option<ScreenRect>,
 }
 
 impl<V: Render> EdgeSurfaceView<V> {
@@ -247,6 +250,7 @@ impl<V: Render> EdgeSurfaceView<V> {
     /// Has the surface go or come back by where the pointer is, and says
     /// how long to wait before looking again.
     fn follow(&mut self, native: NativeSurface, cx: &mut Context<Self>) -> Duration {
+        self.realign(native, cx);
         if !self.surface.hide.hides() {
             if self.concealed || self.shown.target() != 1. {
                 self.come_back(native, cx);
@@ -282,6 +286,29 @@ impl<V: Render> EdgeSurfaceView<V> {
             native.conceal();
         }
         POINTER_CHECK
+    }
+
+    /// Puts the surface back at its screen edge after its display changed,
+    /// as it does when the resolution is set anew.
+    fn realign(&mut self, native: NativeSurface, cx: &mut Context<Self>) {
+        let Ok(display) = native.display_frame() else {
+            return;
+        };
+        if self.placed_on == Some(display) {
+            return;
+        }
+        self.placed_on = Some(display);
+        let edge = self.surface.edge;
+        let moved = match &self.reservation {
+            Some(reservation) => reservation.occupy(edge, self.depth),
+            None => native
+                .strip(edge, self.depth)
+                .and_then(|strip| native.place(strip)),
+        };
+        if let Err(error) = moved {
+            report!("a surface did not follow its display: {error:#}");
+        }
+        cx.notify();
     }
 
     /// Whether a window of an application lies in the strip of the surface.
