@@ -38,6 +38,21 @@ const ICON_ADD: &str = "\u{e710}";
 const ICON_DONE: &str = "\u{e73e}";
 const ICON_DISCARD: &str = "\u{e74d}";
 
+/// The width the first of three slots, `wide` each, is given in `room`
+/// with `gap` between them where the widest side leaves the middle one no
+/// room in the middle; `None` where it does. The middle slot is moved off
+/// the middle only as far as the last slot needs, and no further than the
+/// first one lets it.
+fn lead_of(wide: [Pixels; 3], room: Pixels, gap: Pixels) -> Option<Pixels> {
+    let [start, center, end] = wide;
+    if center + start.max(end) * 2. <= room {
+        return None;
+    }
+    let middle = (room - center) / 2. - gap;
+    let before_end = room - end - center - gap * 2.;
+    Some(middle.min(before_end).max(start))
+}
+
 /// The smallest a widget is while the widgets are arranged, so that one
 /// that shows nothing at the moment can still be taken.
 const HANDLE_MIN: Pixels = px(20.);
@@ -772,15 +787,16 @@ impl Panel {
             .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
     }
 
-    /// Whether the slots have no room to keep the middle one in the middle
-    /// of a surface `width` wide.
-    fn is_packed(&self, theme: &Theme, width: Pixels) -> bool {
+    /// The width the first slot is given where the slots have no room to
+    /// keep the middle one in the middle of a surface `width` wide; `None`
+    /// where they have.
+    fn lead(&self, theme: &Theme, width: Pixels) -> Option<Pixels> {
         let wide = |slot: usize| {
             let place: Option<Bounds<Pixels>> = self.places[slot].get();
             place.map_or(px(0.), |place| place.size.width)
         };
         let room = width - theme.spacing.small * 2.;
-        wide(1) + wide(0).max(wide(2)) * 2. > room
+        lead_of([wide(0), wide(1), wide(2)], room, theme.spacing.small)
     }
 
     /// A slot while the widgets are arranged: its widgets as handles, the
@@ -872,8 +888,8 @@ impl Render for Panel {
             (self.frame, self.visited, self.visitor) = (None, None, None);
             self.watch_ground(&theme, window, cx);
             let [start, center, end] = [0, 1, 2].map(|slot| self.slot(slot, &theme, window, cx));
-            let packed = self.is_packed(&theme, window.viewport_size().width);
-            return root.child(centered_row(&theme, start, center, end, packed));
+            let lead = self.lead(&theme, window.viewport_size().width);
+            return root.child(centered_row(&theme, start, center, end, lead));
         }
         // A drag that ended anywhere but over this surface is over too.
         if self.dragged.is_some() && !cx.has_active_drag() {
@@ -926,8 +942,32 @@ impl Render for Panel {
                 this.aim_at(event.event.position, window, cx);
             }),
         )
-        .child(centered_row(&theme, start, center, end, false))
+        .child(centered_row(&theme, start, center, end, None))
         .children(visitor)
         .child(canvas(|_, _, _| {}, listen).absolute().size_0())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_middle_slot_leaves_the_middle_only_as_far_as_a_side_needs() {
+        let gap = px(8.);
+        // Both sides fit beside a middle slot in the middle.
+        assert_eq!(
+            lead_of([px(100.), px(200.), px(300.)], px(1000.), gap),
+            None
+        );
+        // The last slot reaches 50 into it: it stands that much earlier.
+        let lead = lead_of([px(100.), px(200.), px(450.)], px(1000.), gap);
+        assert_eq!(lead, Some(px(334.)));
+        // The first slot is not given less than it takes.
+        let lead = lead_of([px(400.), px(200.), px(450.)], px(1000.), gap);
+        assert_eq!(lead, Some(px(400.)));
+        // A wide first slot moves the middle one on by what it needs.
+        let lead = lead_of([px(450.), px(200.), px(100.)], px(1000.), gap);
+        assert_eq!(lead, Some(px(450.)));
     }
 }

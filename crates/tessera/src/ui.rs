@@ -147,23 +147,22 @@ pub fn state_layer(theme: &Theme, base: Hsla, state: InteractionState) -> Hsla {
 }
 
 /// A row that keeps `center` in the middle regardless of the side widths.
-/// A `packed` row is for sides that have no room for that: `center` stands
-/// between them where they leave it, and what still does not fit is cut
-/// off at the far end of `start` and at the near end of `end`.
-pub fn centered_row(theme: &Theme, start: Div, center: Div, end: Div, packed: bool) -> Div {
+/// Where the sides have no room for that, `lead` is the width `start` is
+/// given instead: `center` stands right after it, and what still does not
+/// fit is cut off at the far end of `start` and at the near end of `end`.
+pub fn centered_row(theme: &Theme, start: Div, center: Div, end: Div, lead: Option<Pixels>) -> Div {
     let row = div()
         .size_full()
         .flex()
         .items_center()
         .px(theme.spacing.small);
     let side = || div().flex().min_w_0().overflow_hidden();
-    if packed {
+    if let Some(lead) = lead {
         return row
-            .justify_between()
             .gap(theme.spacing.small)
-            .child(side().flex_shrink().justify_start().child(start))
+            .child(side().flex_none().w(lead).justify_start().child(start))
             .child(center.flex_none())
-            .child(side().flex_shrink().justify_end().child(end));
+            .child(side().flex_1().justify_end().child(end));
     }
     row.child(side().flex_1().justify_start().child(start))
         .child(center.flex_none())
