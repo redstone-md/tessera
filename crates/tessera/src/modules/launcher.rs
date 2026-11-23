@@ -403,6 +403,7 @@ impl Launcher {
         row: usize,
         theme: &Theme,
         top: Pixels,
+        lit: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let shortcut = &self.shortcuts[self.matches[row]];
@@ -464,16 +465,22 @@ impl Launcher {
                     .child(one_line(SharedString::new(shortcut.name.as_str()))),
             )
             .children(folder)
-            .children(self.render_pin(row, theme, cx))
+            .children(self.render_pin(row, row == lit, theme, cx))
             .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))
             .on_click(cx.listener(move |this, _, _, cx| this.launch(row, cx)))
             .into_any_element()
     }
 
     /// The button that pins the application of `row` to the Start menu or
-    /// unpins it. It is there on the selected row and on pinned ones, and
-    /// only if something shows the pins.
-    fn render_pin(&self, row: usize, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// unpins it. It is there on the row the highlight is on (`lit`) and on
+    /// pinned ones, and only if something shows the pins.
+    fn render_pin(
+        &self,
+        row: usize,
+        lit: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         // Only applications are pinned.
         if self.kind(self.matches[row]) != Kind::App {
             return None;
@@ -481,7 +488,7 @@ impl Launcher {
         let name = self.shortcuts[self.matches[row]].name.clone();
         let pins = self.pins.read(cx);
         let pinned = pins.holds(&name);
-        if !pins.is_shown() || !(pinned || row == self.selected) {
+        if !pins.is_shown() || !(pinned || lit) {
             return None;
         }
         let (glyph, color) = if pinned {
@@ -531,15 +538,19 @@ impl Launcher {
             -f32::from(self.scroll.offset().y),
             f32::from(self.scroll.bounds().size.height),
         );
+        // The highlight moves to the selected row; what goes with it is
+        // drawn on the row it has reached.
+        let at = self.highlight.value(window).max(0.);
+        let lit = at.round() as usize;
         let highlight = div()
             .absolute()
-            .top(row * self.highlight.value(window).max(0.))
+            .top(row * at)
             .w_full()
             .h(row)
             .rounded(theme.shape.medium)
             .bg(theme.colors.secondary_container);
         let rows: Vec<AnyElement> = (first..first + shown)
-            .map(|index| self.render_row(index, theme, row * index as f32, cx))
+            .map(|index| self.render_row(index, theme, row * index as f32, lit, cx))
             .collect();
         div()
             .id("launcher-list")
