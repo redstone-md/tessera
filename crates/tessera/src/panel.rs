@@ -31,6 +31,9 @@ use crate::shell::Shell;
 use crate::theme::{Ground, Theme};
 use crate::ui::{HOVER_LAYER, PRESS_LAYER, centered_row, icon};
 
+/// How much the width of a slot changes before the row is laid out anew.
+const FIT_SLACK: Pixels = px(0.5);
+
 const ICON_ADD: &str = "\u{e710}";
 const ICON_DONE: &str = "\u{e73e}";
 const ICON_DISCARD: &str = "\u{e74d}";
@@ -748,11 +751,36 @@ impl Panel {
         let widgets: Vec<AnyElement> = (0..self.slots[slot].len())
             .map(|index| self.widget(slot, index, theme, window, cx))
             .collect();
+        // How wide the slot is decides how the row is laid out, so a
+        // width that changed has the row drawn again.
+        let seen = self.places[slot].clone();
+        let measure = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
+            let before = seen.replace(Some(bounds));
+            let changed = before
+                .is_none_or(|before| (before.size.width - bounds.size.width).abs() > FIT_SLACK);
+            if changed {
+                window.request_animation_frame();
+            }
+        };
         div()
+            .relative()
             .flex()
+            .flex_none()
             .items_center()
             .gap(theme.spacing.small)
             .children(widgets)
+            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+    }
+
+    /// Whether the slots have no room to keep the middle one in the middle
+    /// of a surface `width` wide.
+    fn is_packed(&self, theme: &Theme, width: Pixels) -> bool {
+        let wide = |slot: usize| {
+            let place: Option<Bounds<Pixels>> = self.places[slot].get();
+            place.map_or(px(0.), |place| place.size.width)
+        };
+        let room = width - theme.spacing.small * 2.;
+        wide(1) + wide(0).max(wide(2)) * 2. > room
     }
 
     /// A slot while the widgets are arranged: its widgets as handles, the
@@ -844,7 +872,8 @@ impl Render for Panel {
             (self.frame, self.visited, self.visitor) = (None, None, None);
             self.watch_ground(&theme, window, cx);
             let [start, center, end] = [0, 1, 2].map(|slot| self.slot(slot, &theme, window, cx));
-            return root.child(centered_row(&theme, start, center, end));
+            let packed = self.is_packed(&theme, window.viewport_size().width);
+            return root.child(centered_row(&theme, start, center, end, packed));
         }
         // A drag that ended anywhere but over this surface is over too.
         if self.dragged.is_some() && !cx.has_active_drag() {
@@ -897,7 +926,7 @@ impl Render for Panel {
                 this.aim_at(event.event.position, window, cx);
             }),
         )
-        .child(centered_row(&theme, start, center, end))
+        .child(centered_row(&theme, start, center, end, false))
         .children(visitor)
         .child(canvas(|_, _, _| {}, listen).absolute().size_0())
     }

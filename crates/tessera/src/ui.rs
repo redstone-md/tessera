@@ -140,15 +140,27 @@ pub fn state_layer(theme: &Theme, base: Hsla, state: InteractionState) -> Hsla {
 }
 
 /// A row that keeps `center` in the middle regardless of the side widths.
-pub fn centered_row(theme: &Theme, start: Div, center: Div, end: Div) -> Div {
-    div()
+/// A `packed` row is for sides that have no room for that: `center` stands
+/// between them where they leave it, and what still does not fit is cut
+/// off at the far end of `start` and at the near end of `end`.
+pub fn centered_row(theme: &Theme, start: Div, center: Div, end: Div, packed: bool) -> Div {
+    let row = div()
         .size_full()
         .flex()
         .items_center()
-        .px(theme.spacing.small)
-        .child(div().flex_1().flex().justify_start().child(start))
-        .child(center)
-        .child(div().flex_1().flex().justify_end().child(end))
+        .px(theme.spacing.small);
+    let side = || div().flex().min_w_0().overflow_hidden();
+    if packed {
+        return row
+            .justify_between()
+            .gap(theme.spacing.small)
+            .child(side().flex_shrink().justify_start().child(start))
+            .child(center.flex_none())
+            .child(side().flex_shrink().justify_end().child(end));
+    }
+    row.child(side().flex_1().justify_start().child(start))
+        .child(center.flex_none())
+        .child(side().flex_1().justify_end().child(end))
 }
 
 /// What stands for the part of a text that was cut off.
