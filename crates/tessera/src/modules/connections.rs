@@ -77,8 +77,8 @@ impl Module for ConnectionsModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("connections", |_, cx| cx.new(Links::new).into())?;
-        widgets.register("radio-switch", |context, cx| {
+        widgets.register_panel("connections", |_, cx| cx.new(Links::new).into())?;
+        widgets.register_panel("radio-switch", |context, cx| {
             let radio = match context.text("radio") {
                 Some("bluetooth") => Wireless::Bluetooth,
                 Some("wifi") | None => Wireless::Wifi,

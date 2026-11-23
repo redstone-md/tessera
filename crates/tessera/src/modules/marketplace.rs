@@ -62,7 +62,7 @@ impl Module for MarketplaceModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         let registries = self.registries.clone();
-        widgets.register("marketplace", move |context, cx| {
+        widgets.register_panel("marketplace", move |context, cx| {
             let kind = match context.text(SHOW_OPTION) {
                 None | Some(SHOW_EXTENSIONS) => Kind::Extension,
                 Some(SHOW_THEMES) => Kind::Theme,

@@ -64,7 +64,7 @@ impl Module for BluetoothModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("bluetooth", |_, cx| cx.new(Devices::new).into())?;
+        widgets.register_panel("bluetooth", |_, cx| cx.new(Devices::new).into())?;
         widgets.register("bluetooth-button", |_, cx| cx.new(Button::new).into())
     }
 }

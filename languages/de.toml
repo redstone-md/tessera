@@ -120,6 +120,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Windows" = "Fenster"
 "Themes" = "Designs"
 "Extensions" = "Erweiterungen"
+"Extension" = "Erweiterung"
 "Quit" = "Beenden"
 "Settings" = "Einstellungen"
 

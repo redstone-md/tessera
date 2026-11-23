@@ -3,7 +3,7 @@
 
 //! The seam between the shell and the features plugged into it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use anyhow::bail;
@@ -94,6 +94,8 @@ pub struct WidgetRegistry {
     /// The popup a click on a widget opens when the layout names none, by
     /// widget identifier.
     opened: HashMap<String, String>,
+    /// The widgets made to fill a popup or a card, not to stand in a bar.
+    panels: HashSet<String>,
 }
 
 impl WidgetRegistry {
@@ -122,12 +124,33 @@ impl WidgetRegistry {
         Ok(())
     }
 
+    /// Makes `factory` available to layouts as `id`, as a widget made to
+    /// fill a popup or a card of the desktop: the settings do not offer
+    /// it for a bar.
+    pub fn register_panel(
+        &mut self,
+        id: &str,
+        factory: impl Fn(&WidgetContext, &mut App) -> AnyView + 'static,
+    ) -> anyhow::Result<()> {
+        self.register(id, factory)?;
+        self.panels.insert(id.to_owned());
+        Ok(())
+    }
+
+    /// Whether the widget `id` is made to fill a popup or a card.
+    pub fn is_panel(&self, id: &str) -> bool {
+        self.panels.contains(id)
+    }
+
     /// Makes `popup` available to layouts under its name. A popup of the
-    /// same name in the user's configuration is used instead of it.
+    /// same name in the user's configuration is used instead of it. What
+    /// it holds counts as made for a popup.
     pub fn register_popup(&mut self, popup: PopupConfig) -> anyhow::Result<()> {
         if self.popups.contains_key(&popup.name) {
             bail!("a popup named `{}` is already registered", popup.name);
         }
+        let held = popup.content.iter().chain(&popup.side);
+        self.panels.extend(held.map(|spec| spec.widget.clone()));
         self.popups.insert(popup.name.clone(), popup);
         Ok(())
     }

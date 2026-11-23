@@ -121,6 +121,7 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Windows" = "Ventanas"
 "Themes" = "Temas"
 "Extensions" = "Extensiones"
+"Extension" = "Extensión"
 "Quit" = "Salir"
 "Settings" = "Configuración"
 

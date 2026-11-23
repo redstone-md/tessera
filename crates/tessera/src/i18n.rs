@@ -495,6 +495,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Windows", "Окна"),
     ("Themes", "Темы"),
     ("Extensions", "Расширения"),
+    ("Extension", "Расширение"),
     ("Quit", "Выйти"),
     ("Restart Tessera", "Перезапустить Tessera"),
     ("Updating", "Обновление"),

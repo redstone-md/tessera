@@ -121,6 +121,7 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Windows" = "Fenêtres"
 "Themes" = "Thèmes"
 "Extensions" = "Extensions"
+"Extension" = "Extension"
 "Quit" = "Quitter"
 "Settings" = "Paramètres"
 

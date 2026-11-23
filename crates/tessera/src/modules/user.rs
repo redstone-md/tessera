@@ -59,10 +59,10 @@ impl Module for UserModule {
             let named = context.flag("name").unwrap_or(true);
             cx.new(|cx| Person::new(false, named, cx)).into()
         })?;
-        widgets.register("profile", |_, cx| {
+        widgets.register_panel("profile", |_, cx| {
             cx.new(|cx| Person::new(true, true, cx)).into()
         })?;
-        widgets.register("places", |context, cx| {
+        widgets.register_panel("places", |context, cx| {
             let places = match context.texts("show") {
                 Some(names) => names.iter().filter_map(|name| place_named(name)).collect(),
                 None => SHOWN.to_vec(),

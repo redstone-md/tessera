@@ -42,7 +42,7 @@ impl Module for ProblemsModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("problems", |_, cx| cx.new(Indicator::new).into())?;
-        widgets.register("problem-list", |_, cx| cx.new(List::new).into())?;
+        widgets.register_panel("problem-list", |_, cx| cx.new(List::new).into())?;
         widgets.register_popup(PopupConfig {
             place: Default::default(),
             name: POPUP.to_owned(),

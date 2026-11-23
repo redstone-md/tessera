@@ -95,7 +95,7 @@ impl Module for LauncherModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("launcher", |context, cx| {
+        widgets.register_panel("launcher", |context, cx| {
             let language = Language::of(cx);
             let placeholder = context.text("placeholder");
             let placeholder = placeholder.unwrap_or(language.say(DEFAULT_PLACEHOLDER));

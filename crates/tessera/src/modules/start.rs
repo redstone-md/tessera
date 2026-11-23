@@ -50,7 +50,7 @@ impl Module for StartModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("apps", |context, cx| {
+        widgets.register_panel("apps", |context, cx| {
             let pinned = context.texts("pinned").unwrap_or_default();
             let columns = context
                 .number("columns")
@@ -59,7 +59,7 @@ impl Module for StartModule {
             pins.update(cx, |pins, cx| pins.show(pinned, cx));
             cx.new(|cx| Apps::new(pins, columns, cx)).into()
         })?;
-        widgets.register("power", |context, cx| {
+        widgets.register_panel("power", |context, cx| {
             let named = context.texts("actions");
             let actions = match named {
                 Some(names) => names.iter().filter_map(|name| action_named(name)).collect(),

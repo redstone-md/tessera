@@ -72,7 +72,7 @@ impl Module for MediaModule {
             cx.new(|cx| Readout::new(player, px(width.max(0.)), cx))
                 .into()
         })?;
-        widgets.register("media-controls", |_, cx| {
+        widgets.register_panel("media-controls", |_, cx| {
             let player = Player::shared(cx);
             cx.new(|cx| Controls::new(player, cx)).into()
         })

@@ -5,7 +5,7 @@
 //! a rail of parts on the left, and the cards of the part chosen on the
 //! right. Widget: `settings`, made for a popup in the middle of the display.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +38,8 @@ const THEMES_DIRECTORY: &str = "themes";
 /// The height of a chip and the side of the round buttons in it.
 const CHIP_HEIGHT: Pixels = px(28.);
 const SMALL_BUTTON: Pixels = px(20.);
+/// The size of the name of a group of widgets, as a share of the label size.
+const CAPTION_SHARE: f32 = 0.86;
 
 /// How much of the content color a chip that holds buttons has, to stand
 /// out from its card.
@@ -508,7 +510,7 @@ impl Module for SettingsModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("settings", |_, cx| cx.new(Settings::new).into())
+        widgets.register_panel("settings", |_, cx| cx.new(Settings::new).into())
     }
 }
 
@@ -774,6 +776,8 @@ struct Settings {
     failure: Option<SharedString>,
     /// The widgets a layout can name.
     available: Vec<String>,
+    /// Which of them are made to fill a popup or a card, not for a bar.
+    panels: HashSet<String>,
     /// The programs with an open window that are not pinned.
     running: Vec<PathBuf>,
     themes: Vec<String>,
@@ -813,6 +817,7 @@ impl Settings {
             markets: HashMap::new(),
             failure: None,
             available: Vec::new(),
+            panels: HashSet::new(),
             running: Vec::new(),
             themes: Vec::new(),
             languages: Vec::new(),
@@ -833,7 +838,10 @@ impl Settings {
 
     /// Reads what the choices depend on besides the file.
     fn look_around(&mut self, cx: &mut Context<Self>) {
-        self.available = cx.global::<WidgetRegistry>().names();
+        let registry = cx.global::<WidgetRegistry>();
+        self.available = registry.names();
+        let panels = self.available.iter();
+        self.panels = panels.filter(|id| registry.is_panel(id)).cloned().collect();
         self.themes = themes();
         self.languages = Language::installed();
         let mut popups = cx.global::<WidgetRegistry>().popup_names();
@@ -1023,6 +1031,9 @@ impl Settings {
                 else {
                     return;
                 };
+                if !self.fits(holder, &widget) {
+                    return;
+                }
                 self.change(cx, |file| match holder {
                     Holder::Slot(surface, slot) => file.add(surface, slot, &widget),
                     Holder::Card(card) => file.add_to_card(card, &widget),
@@ -1371,21 +1382,64 @@ impl Settings {
         if self.adding != Some(holder) || add_list <= 0. {
             return None;
         }
-        let mut offers = Vec::new();
+        let language = Language::of(cx);
+        // Those of Tessera first, then those of each extension under its
+        // name.
+        let mut groups: Vec<(Option<String>, Vec<AnyElement>)> = vec![(None, Vec::new())];
         for at in 0..self.available.len() {
+            let name = self.available[at].clone();
+            if !self.fits(holder, &name) {
+                continue;
+            }
+            let (owner, title) = match name.split_once('.') {
+                Some((owner, title)) => (Some(owner.to_owned()), title.to_owned()),
+                None => (None, name),
+            };
             let face = Face::Chip {
-                text: self.available[at].clone().into(),
+                text: title.into(),
                 selected: true,
             };
-            offers.push(self.control(Control::Add(at), face, window, cx));
+            let chip = self.control(Control::Add(at), face, window, cx);
+            match groups.last_mut() {
+                Some((last, chips)) if *last == owner => chips.push(chip),
+                _ => groups.push((owner, vec![chip])),
+            }
         }
-        Some(
+        let groups = groups.into_iter().filter(|(_, chips)| !chips.is_empty());
+        let groups = groups.map(|(owner, chips)| {
+            let title = match owner {
+                Some(owner) => format!("{} {owner}", language.say("Extension")),
+                None => "Tessera".to_owned(),
+            };
             div()
-                .max_h(ADD_LIST_HEIGHT * add_list)
-                .opacity(add_list.clamp(0., 1.))
-                .overflow_hidden()
-                .child(wrap(&theme).children(offers)),
-        )
+                .flex()
+                .flex_col()
+                .gap(theme.spacing.tiny)
+                .child(note(&theme, title).text_size(theme.typography.label_size * CAPTION_SHARE))
+                .child(wrap(&theme).children(chips))
+        });
+        let list = div()
+            .id(SharedString::from(format!("offers-{holder:?}")))
+            .max_h(ADD_LIST_HEIGHT * add_list)
+            .opacity(add_list.clamp(0., 1.))
+            .overflow_y_scroll()
+            .p(theme.spacing.small)
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.small)
+            .rounded(theme.shape.medium)
+            .bg(theme.colors.surface_container)
+            .children(groups);
+        Some(div().child(list))
+    }
+
+    /// Whether the widget `name` is offered for `holder`: a bar takes no
+    /// widget made to fill a popup or a card, a card takes any.
+    fn fits(&self, holder: Holder, name: &str) -> bool {
+        match holder {
+            Holder::Slot(..) => !self.panels.contains(name),
+            Holder::Card(_) => true,
+        }
     }
 
     /// What the cards of the desktop are, and the button that lays

@@ -26,7 +26,7 @@ impl Module for CalendarModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("calendar", |context, cx| {
+        widgets.register_panel("calendar", |context, cx| {
             let week_start = match context.text("week_start") {
                 None | Some("monday") => Weekday::Mon,
                 Some("sunday") => Weekday::Sun,

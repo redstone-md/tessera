@@ -53,7 +53,7 @@ impl Module for WifiModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("wifi", |_, cx| cx.new(WifiList::new).into())
+        widgets.register_panel("wifi", |_, cx| cx.new(WifiList::new).into())
     }
 }
 

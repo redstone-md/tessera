@@ -46,7 +46,7 @@ impl Module for NotificationsModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("notifications", |_, cx| {
+        widgets.register_panel("notifications", |_, cx| {
             cx.new(NotificationList::new).into()
         })
     }

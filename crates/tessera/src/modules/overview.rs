@@ -39,7 +39,7 @@ impl Module for OverviewModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("overview", |context, cx| {
+        widgets.register_panel("overview", |context, cx| {
             // A popup that does not say its display is on the one the
             // pointer was on when it opened.
             let display = context.display.or_else(DisplayKey::under_pointer);

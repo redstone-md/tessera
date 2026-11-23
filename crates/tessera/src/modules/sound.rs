@@ -57,15 +57,15 @@ impl Module for SoundModule {
             })
             .into()
         })?;
-        widgets.register("volume-slider", |_, cx| {
+        widgets.register_panel("volume-slider", |_, cx| {
             cx.new(|cx| LevelControl::new(Channel::Output, cx)).into()
         })?;
-        widgets.register("microphone-slider", |_, cx| {
+        widgets.register_panel("microphone-slider", |_, cx| {
             cx.new(|cx| LevelControl::new(Channel::Microphone, cx))
                 .into()
         })?;
-        widgets.register("volume-mixer", |_, cx| cx.new(VolumeMixer::new).into())?;
-        widgets.register("audio-outputs", |_, cx| cx.new(AudioOutputs::new).into())
+        widgets.register_panel("volume-mixer", |_, cx| cx.new(VolumeMixer::new).into())?;
+        widgets.register_panel("audio-outputs", |_, cx| cx.new(AudioOutputs::new).into())
     }
 }
 

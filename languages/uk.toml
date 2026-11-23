@@ -121,6 +121,7 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Windows" = "Вікна"
 "Themes" = "Теми"
 "Extensions" = "Розширення"
+"Extension" = "Розширення"
 "Quit" = "Вийти"
 "Settings" = "Параметри"
 

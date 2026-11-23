@@ -35,7 +35,7 @@ impl Module for BrightnessModule {
             })
             .into()
         })?;
-        widgets.register("brightness-slider", |context, cx| {
+        widgets.register_panel("brightness-slider", |context, cx| {
             let brightness = Brightness::shared(context.display, cx);
             cx.new(|cx| BrightnessSlider::new(brightness, cx)).into()
         })
