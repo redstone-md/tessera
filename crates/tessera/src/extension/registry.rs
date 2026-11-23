@@ -304,7 +304,7 @@ impl Offer {
         Ok(Package {
             id: self.id.clone(),
             receipt,
-            network: parsed.permissions.network().to_vec(),
+            network: parsed.permissions.network(),
             files: parsed.permissions.files().to_vec(),
             devices: parsed.permissions.devices().to_vec(),
             content: Content::Extension { manifest, wasm },

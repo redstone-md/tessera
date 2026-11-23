@@ -49,7 +49,10 @@ world extension {
         /// `GET`, `POST` and so on.
         method: string,
         /// Must start with `https://` and name a host the extension
-        /// manifest lists under `permissions.network`.
+        /// manifest lists under `permissions.network`, or start with
+        /// `http://` and name a server, with its port, that the manifest
+        /// lists under `permissions.local` and that is on the local
+        /// network.
         url: string,
         headers: list<header>,
         body: option<string>,

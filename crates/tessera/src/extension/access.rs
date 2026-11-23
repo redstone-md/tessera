@@ -25,6 +25,11 @@ pub struct Permissions {
     /// The hosts the extension may send requests to, over HTTPS.
     #[serde(default)]
     network: Vec<String>,
+    /// The servers of the local network the extension may send requests
+    /// to over plain HTTP, each a host name or address and its port, as
+    /// `nas.local:8080`.
+    #[serde(default)]
+    local: Vec<String>,
     /// The files the extension may read; `~` is the home directory.
     #[serde(default)]
     files: Vec<String>,
@@ -50,9 +55,11 @@ impl DeviceKind {
 }
 
 impl Permissions {
-    /// The hosts the extension asks to contact.
-    pub fn network(&self) -> &[String] {
-        &self.network
+    /// What the extension asks to contact: the hosts reached over HTTPS
+    /// by name, the servers of the local network as `http://` addresses.
+    pub fn network(&self) -> Vec<String> {
+        let local = self.local.iter().map(|server| format!("http://{server}"));
+        self.network.iter().cloned().chain(local).collect()
     }
 
     /// The files the extension asks to read.
@@ -67,6 +74,15 @@ impl Permissions {
 
     /// Whether a request to `url` is permitted.
     pub fn check_url(&self, url: &str) -> Result<(), String> {
+        if let Some(server) = local_server(url) {
+            let listed = |allowed: &String| allowed.eq_ignore_ascii_case(server);
+            return match self.local.iter().any(listed) {
+                true => Ok(()),
+                false => Err(format!(
+                    "the manifest does not permit contacting `{server}`"
+                )),
+            };
+        }
         let host =
             https_host(url).ok_or("only https:// URLs of a plain host name can be fetched")?;
         if self
@@ -106,6 +122,20 @@ fn https_host(url: &str) -> Option<&str> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
     is_name.then_some(authority)
+}
+
+/// The host and port of a plain HTTP URL, as `nas.local:8080`. URLs
+/// without a port, with credentials or with anything else before the path
+/// are not accepted.
+fn local_server(url: &str) -> Option<&str> {
+    let authority = url.strip_prefix("http://")?.split(['/', '?', '#']).next()?;
+    let (host, port) = authority.split_once(':')?;
+    let is_name = !host.is_empty()
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    let is_port = port.bytes().all(|byte| byte.is_ascii_digit()) && port.parse::<u16>().is_ok();
+    (is_name && is_port).then_some(authority)
 }
 
 /// The resources of one extension.
@@ -171,6 +201,7 @@ mod tests {
     fn permissions(network: &[&str], files: &[&str]) -> Permissions {
         Permissions {
             network: network.iter().map(|&host| host.to_owned()).collect(),
+            local: Vec::new(),
             files: files.iter().map(|&file| file.to_owned()).collect(),
             devices: Vec::new(),
         }
@@ -212,6 +243,32 @@ mod tests {
             "https://api.example.com:8443/",
             "https:///",
             "file:///C:/secret",
+        ] {
+            assert!(permissions.check_url(url).is_err(), "{url} was permitted");
+        }
+    }
+
+    #[test]
+    fn only_listed_local_servers_are_reached_over_plain_http() {
+        let permissions = Permissions {
+            local: vec!["nas.local:8080".to_owned()],
+            ..Permissions::default()
+        };
+        assert!(
+            permissions
+                .check_url("http://nas.local:8080/api?x=1")
+                .is_ok()
+        );
+        assert!(permissions.check_url("http://NAS.local:8080").is_ok());
+        assert_eq!(permissions.network(), ["http://nas.local:8080"]);
+        for url in [
+            "http://nas.local/",
+            "http://nas.local:8081/",
+            "http://nas.local:8080@evil.test:8080/",
+            "http://evil.test:8080/",
+            "http://nas.local:+8080/",
+            "https://nas.local:8080/",
+            "https://nas.local/",
         ] {
             assert!(permissions.check_url(url).is_err(), "{url} was permitted");
         }

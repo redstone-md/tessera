@@ -90,6 +90,7 @@ Besides drawing, an extension can:
 - keep up to 64 KiB of text across restarts, stored as `state.txt` in its own directory;
 - read the files its manifest lists under `permissions.files`, and no others;
 - send HTTPS requests to the hosts its manifest lists under `permissions.network`, and no others. Requests run in the background and the answer is delivered later; redirects are not followed, a response is cut off at 1 MiB, and servers are verified against the Windows certificate store;
+- send plain HTTP requests to the servers its manifest lists under `permissions.local`, each a name or address with its port, as `nas.local:8080`. A request is sent only when the name stands for addresses of this machine or of a private or link-local network; nothing protects what is sent from others on that network, and the name is looked up a second time for the request itself, so a name server that answers differently then is not guarded against. The marketplace lists such a server as `http://nas.local:8080` among the hosts an extension asks to contact;
 - learn which Bluetooth devices are paired with the machine, whether each is connected and the charge Windows knows of it, when its manifest lists `bluetooth` under `permissions.devices`. Tessera reads the devices on a thread of its own every twenty seconds while an extension asks, so an answer can be that old, and the first question is answered with an error while the first reading runs. An extension cannot connect, disconnect or talk to a device.
 
 The limits of that:
