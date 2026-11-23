@@ -17,6 +17,9 @@ use crate::motion::{Interaction, Spring};
 use crate::theme::Theme;
 use crate::ui::{pill, state_layer};
 
+/// A window fewer pill heights high than this has one line of room.
+const FLAT_BELOW: f32 = 3.;
+
 /// How a node is laid out, which depends on what contains it.
 #[derive(Clone, Copy, PartialEq)]
 enum Placement {
@@ -39,6 +42,9 @@ pub struct ExtensionWidget {
     buttons: HashMap<usize, Interaction>,
     /// The shown fill of the progress bars, by node index.
     progress: HashMap<usize, Spring>,
+    /// Whether the widget stands where there is one line of room, as on a
+    /// bar: columns are laid out as rows there.
+    flat: bool,
 }
 
 impl ExtensionWidget {
@@ -68,6 +74,7 @@ impl ExtensionWidget {
             content: None,
             buttons: HashMap::new(),
             progress: HashMap::new(),
+            flat: false,
         };
         widget.refresh(cx);
         widget
@@ -124,25 +131,7 @@ impl ExtensionWidget {
             NodeKind::Caption(text) => Self::words(text, placement)
                 .text_color(theme.colors.on_surface_variant)
                 .into_any_element(),
-            NodeKind::Row => {
-                let row = match placement {
-                    Placement::Root => pill(theme).flex_none(),
-                    Placement::InRow => div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(theme.spacing.small),
-                    Placement::InColumn => div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(theme.spacing.small),
-                };
-                row.children(self.children(nodes, index, Placement::InRow, theme, window, cx))
-                    .into_any_element()
-            }
-            NodeKind::Column => {
+            NodeKind::Column if !self.flat => {
                 let children = self.children(nodes, index, Placement::InColumn, theme, window, cx);
                 let column = div()
                     .w_full()
@@ -159,6 +148,25 @@ impl ExtensionWidget {
                         .into_any_element(),
                     Placement::InRow | Placement::InColumn => column.into_any_element(),
                 }
+            }
+            // Where there is one line of room a column is laid out as a row.
+            NodeKind::Row | NodeKind::Column => {
+                let row = match placement {
+                    Placement::Root => pill(theme).flex_none(),
+                    Placement::InRow => div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(theme.spacing.small),
+                    Placement::InColumn => div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(theme.spacing.small),
+                };
+                row.children(self.children(nodes, index, Placement::InRow, theme, window, cx))
+                    .into_any_element()
             }
             NodeKind::Progress(share) => {
                 let share = if share.is_nan() {
@@ -229,6 +237,7 @@ impl Render for ExtensionWidget {
                 .child(format!("{} stopped working", self.id))
                 .into_any_element();
         };
+        self.flat = window.viewport_size().height < theme.bar.pill_height * FLAT_BELOW;
         self.element(&nodes, 0, Placement::Root, &theme, window, cx)
             .unwrap_or_else(|| div().into_any_element())
     }
