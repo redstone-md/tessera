@@ -84,8 +84,8 @@ use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
-    MonitorFromWindow,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO,
+    MonitorFromPoint, MonitorFromWindow,
 };
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Shell::{
@@ -97,7 +97,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
+    GetWindowRect, GetWindowThreadProcessId, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, IsIconic,
     IsWindowVisible, LWA_ALPHA, PostMessageW, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
@@ -468,10 +468,41 @@ impl NativeSurface {
     /// the room left to windows: Windows moves a game out of an edge that
     /// gets reserved while it runs, and it stays there.
     pub fn display_is_filled(self) -> bool {
+        // SAFETY: the call only reads which window is in front.
+        let front = unsafe { GetForegroundWindow() };
+        if self.is_filled_by(front) {
+            return true;
+        }
+        // An application shown full screen keeps its display while the
+        // user works on another one: the window that lies on top of the
+        // others on this display says.
+        // SAFETY: the calls only read the state of windows.
+        let display = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
+        let on_top = AppWindow::enumerate().into_iter().find(|window| {
+            let hwnd = HWND(window.id.raw() as *mut c_void);
+            // SAFETY: as above; a window that went away is on no display,
+            // and a minimized one covers nothing.
+            let (there, pinned) = unsafe {
+                let there = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) == display;
+                let extended = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+                (
+                    there && !IsIconic(hwnd).as_bool(),
+                    extended & WS_EX_TOPMOST.0 != 0,
+                )
+            };
+            // A window kept above the others covers no application.
+            there && !pinned
+        });
+        on_top.is_some_and(|window| self.is_filled_by(HWND(window.id.raw() as *mut c_void)))
+    }
+
+    /// Whether `window` is one of an application that fills the display of
+    /// this surface.
+    fn is_filled_by(self, window: HWND) -> bool {
+        let front = window;
         // SAFETY: the calls only read the state of windows; a window that
         // went away meanwhile makes them fail, which counts as not filled.
         unsafe {
-            let front = GetForegroundWindow();
             if front.is_invalid() || front == self.hwnd || !IsWindowVisible(front).as_bool() {
                 return false;
             }
