@@ -52,9 +52,16 @@ pub fn pill(theme: &Theme) -> Div {
         .text_color(theme.colors.on_surface)
 }
 
+/// How far below the middle of its line an icon is drawn, in parts of its
+/// size: the icon font draws its characters that much above it, which
+/// shows beside a text.
+const ICON_DROP: f32 = 0.08;
+
 /// An icon: `glyph` is a character of the theme's icon font.
 pub fn icon(theme: &Theme, glyph: impl Into<SharedString>) -> Div {
     div()
+        .relative()
+        .top(theme.typography.icon_size * ICON_DROP)
         .font_family(theme.typography.icon_family)
         .text_size(theme.typography.icon_size)
         .child(glyph.into())
