@@ -795,7 +795,6 @@ impl WindowList {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(theme.spacing.tiny)
             .rounded(theme.shape.medium)
             .bg(state_layer(&theme, background, state))
             .on_mouse_down(
@@ -973,9 +972,15 @@ impl WindowList {
                 .opacity(shown)
                 .bg(color)
         });
+        // Under the icon, which keeps the middle of its button.
         div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(theme.spacing.tiny / 2.)
             .flex()
             .items_center()
+            .justify_center()
             .opacity(running.clamp(0., 1.))
             .child(
                 div()
