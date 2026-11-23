@@ -18,7 +18,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix, staggered};
 use crate::platform::{Bluetooth, PairedDevice, Wireless};
 use crate::theme::Theme;
-use crate::ui::{icon, list_row, pill, state_layer, wave_bar};
+use crate::ui::{LIST_MIN_HEIGHT, icon, list_row, pill, state_layer, wave_bar};
 
 /// How often the machine is asked whether it has Bluetooth: an adapter may
 /// be plugged in and pulled out.
@@ -357,7 +357,7 @@ impl Render for Devices {
             .id("bluetooth-list")
             .w_full()
             .flex_1()
-            .min_h_0()
+            .min_h(LIST_MIN_HEIGHT)
             .flex()
             .flex_col()
             .gap(theme.spacing.small)

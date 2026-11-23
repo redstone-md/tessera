@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyView, AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, Div, Global,
-    IntoElement, ParentElement, Pixels, Render, Styled, Subscription, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, point,
-    px, size,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, StatefulInteractiveElement,
+    Styled, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, div, point, px, size,
 };
 
 use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
@@ -480,7 +480,17 @@ impl Render for PopupView {
         }
         floating_panel(&theme, self.edge, visibility, |panel| {
             let panel = if self.side.is_empty() {
-                panel.children(self.content.iter().cloned())
+                // What does not fit under one another is scrolled to.
+                panel.child(
+                    div()
+                        .id("popup-content")
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .gap(theme.spacing.medium)
+                        .overflow_y_scroll()
+                        .children(self.content.iter().cloned()),
+                )
             } else {
                 let column = |widgets: &[AnyView]| {
                     div()

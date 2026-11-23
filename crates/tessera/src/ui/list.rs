@@ -16,6 +16,10 @@ use crate::theme::Theme;
 /// How high a row of a list is.
 pub const ROW_HEIGHT: Pixels = px(56.);
 
+/// The least height of a list that takes the room the rest of a popup
+/// leaves: its title and two rows and a half, which shows there are more.
+pub const LIST_MIN_HEIGHT: Pixels = px(188.);
+
 /// The size of the note under the title of a row.
 const NOTE_SIZE: Pixels = px(11.);
 

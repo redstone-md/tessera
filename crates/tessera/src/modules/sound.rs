@@ -20,7 +20,9 @@ use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
 use crate::platform::{AppSound, AudioDevice, AudioOutput};
 use crate::theme::Theme;
-use crate::ui::{ROW_HEIGHT, Slider, icon, list_row, list_title, one_line, pill, state_layer};
+use crate::ui::{
+    LIST_MIN_HEIGHT, ROW_HEIGHT, Slider, icon, list_row, list_title, one_line, pill, state_layer,
+};
 
 /// How often changes made outside Tessera are picked up.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -539,7 +541,7 @@ impl Render for VolumeMixer {
             .id("volume-mixer")
             .w_full()
             .flex_1()
-            .min_h_0()
+            .min_h(LIST_MIN_HEIGHT)
             .flex()
             .flex_col()
             .gap(theme.spacing.small)

@@ -48,7 +48,7 @@ content = ["media-controls"]
 [[popup]]
 name = "network"
 width = 360
-height = 520
+height = 600
 content = ["connections", { widget = "radio-switch", radio = "wifi" }, "wifi"]
 
 [[popup]]
@@ -60,5 +60,5 @@ content = [{ widget = "radio-switch", radio = "bluetooth" }, "bluetooth"]
 [[popup]]
 name = "sound"
 width = 360
-height = 520
-content = ["volume-slider", "microphone-slider", "brightness-slider", "audio-outputs", "volume-mixer"]
+height = 600
+content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"]
