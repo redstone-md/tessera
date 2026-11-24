@@ -67,6 +67,38 @@ pub fn icon(theme: &Theme, glyph: impl Into<SharedString>) -> Div {
         .child(glyph.into())
 }
 
+/// How much of the mark of Tessera lies between two of its tiles, and how
+/// round the corners of a tile are, in parts of its side.
+const LOGO_GAP: f32 = 0.1;
+const LOGO_CORNER: f32 = 0.3;
+
+/// The mark of Tessera, `size` wide and high, in `color`: three tiles in
+/// a row and a longer one under the middle of them, set like the stones
+/// of a mosaic, which together stand as a T. `assets/logo.svg` is the
+/// same drawing.
+pub fn logo(size: Pixels, color: Hsla) -> Div {
+    let gap = size * LOGO_GAP;
+    let tile = (size - gap * 2.) / 3.;
+    let step = tile + gap;
+    let piece = |left: Pixels, top: Pixels, height: Pixels, corner: Pixels| {
+        div()
+            .absolute()
+            .left(left)
+            .top(top)
+            .w(tile)
+            .h(height)
+            .rounded(corner)
+            .bg(color)
+    };
+    let stem = piece(step, step, size - step, tile / 2.);
+    div()
+        .relative()
+        .size(size)
+        .flex_none()
+        .children((0..3).map(|at| piece(step * at as f32, px(0.), tile, tile * LOGO_CORNER)))
+        .child(stem)
+}
+
 /// A line that is wavy up to `level`, from 0 to 1, and straight after it.
 /// The wave travels as the level changes.
 pub fn wave_meter(theme: &Theme, level: f32) -> impl IntoElement + use<> {

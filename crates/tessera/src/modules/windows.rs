@@ -31,7 +31,7 @@ use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::shell::Shell;
 use crate::theme::Theme;
-use crate::ui::{icon, state_layer};
+use crate::ui::{icon, logo, state_layer};
 
 /// How often it is checked whether something happened to a window.
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
@@ -53,12 +53,11 @@ const PRESS_SHRINK: f32 = 0.16;
 const RECENT_SHOWN: u32 = 5;
 
 /// How large the glyph of the button that opens a popup is, as a part of
-/// the icon of an application, and how strong the line after it is.
+/// the icon of an application, and the mark of Tessera it shows otherwise, and how strong the line after it is.
 const START_GLYPH: f32 = 0.8;
+const START_LOGO: f32 = 0.62;
 const START_LINE: f32 = 0.4;
 
-/// What the button that opens a popup shows when the layout names no icon.
-const ICON_START: &str = "\u{e71d}";
 const ICON_CLOSE: &str = "\u{e8bb}";
 const ICON_DOCUMENT: &str = "\u{e8a5}";
 const ICON_TASK: &str = "\u{e945}";
@@ -94,8 +93,9 @@ impl Module for WindowsModule {
             };
             let pins = Pin::find(&context.texts("pinned").unwrap_or_default());
             let start = context.text("start").map(|popup| {
-                let glyph = context.text("start-icon").unwrap_or(ICON_START);
-                (popup.to_owned(), SharedString::from(glyph.to_owned()))
+                let glyph = context.text("start-icon");
+                let glyph = glyph.map(|glyph| SharedString::from(glyph.to_owned()));
+                (popup.to_owned(), glyph)
             });
             let badges = context.flag("badges").unwrap_or(true);
             cx.new(|cx| WindowList::new(display, pins, start, badges, cx))
@@ -438,7 +438,8 @@ fn numbered(leaving: impl Iterator<Item = bool>, number: usize) -> Option<usize>
 /// The button before the applications, which opens a popup.
 struct Start {
     popup: String,
-    glyph: SharedString,
+    /// The character it shows; the mark of Tessera without one.
+    glyph: Option<SharedString>,
     interaction: Interaction,
     /// The middle of the button in its surface, once it has been drawn.
     middle: Rc<Cell<Option<Pixels>>>,
@@ -462,7 +463,7 @@ impl WindowList {
     fn new(
         display: Option<DisplayKey>,
         pins: Vec<Pin>,
-        start: Option<(String, SharedString)>,
+        start: Option<(String, Option<SharedString>)>,
         badges: bool,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -878,6 +879,12 @@ impl WindowList {
         let size =
             theme.dock.icon_size * (1. + HOVER_GROWTH * state.hover - PRESS_SHRINK * state.press);
         let (popup, middle) = (start.popup.clone(), start.middle.clone());
+        let shown = match &start.glyph {
+            Some(glyph) => icon(&theme, glyph.clone())
+                .text_size(size * START_GLYPH)
+                .text_color(theme.colors.primary),
+            None => logo(size * START_LOGO, theme.colors.primary),
+        };
         let (name, seen) = (popup.clone(), middle.clone());
         let measure = move |bounds: gpui::Bounds<Pixels>, window: &mut Window, cx: &mut App| {
             let x = bounds.origin.x + bounds.size.width / 2.;
@@ -904,11 +911,7 @@ impl WindowList {
                 }
             })
             .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
-            .child(
-                icon(&theme, start.glyph.clone())
-                    .text_size(size * START_GLYPH)
-                    .text_color(theme.colors.primary),
-            );
+            .child(shown);
         let button = Interaction::track(button, cx, |this: &mut Self| {
             Some(&mut this.start.as_mut()?.interaction)
         });

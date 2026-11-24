@@ -211,7 +211,8 @@
 #               ["C:/Windows/notepad.exe", "Paint"]; option start, the
 #               name of a popup: a button before the applications, drawn
 #               like theirs, opens it, the way a Start button does; option
-#               start-icon, the character it shows; option badges, true
+#               start-icon, the character it shows in place of the
+#               mark of Tessera; option badges, true
 #               or false: whether a button counts the notifications of
 #               its application that wait in the notification center
 #               (it does without the option). An application is told by
@@ -258,7 +259,8 @@
 #               "downloads", "pictures", "music" and "videos" to list, in
 #               that order (all but the first two)
 #   "label"     fixed content; options text and icon, a character of the
-#               Segoe Fluent Icons font such as "\uE71D"
+#               Segoe Fluent Icons font such as "\uE71D", or "tessera"
+#               for the mark of Tessera
 #   "command"   the first line a program prints, run again and again without
 #               a window; options command, the program and its arguments as
 #               a list such as ["cmd", "/C", "echo hello"], interval, the
