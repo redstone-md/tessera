@@ -284,13 +284,30 @@ impl Readout {
 
     fn follow(&mut self, cx: &mut Context<Self>) {
         let now = self.player.read(cx).now.clone();
-        self.presence
-            .animate_to(if now.is_some() { 1. } else { 0. });
+        let presence = if now.is_some() { 1. } else { 0. };
+        // The position goes on every second and is not shown here: only
+        // what is shown has the bar drawn again.
+        let changed = self.presence.target() != presence
+            || now.as_ref().is_some_and(|now| {
+                !self
+                    .shown
+                    .as_ref()
+                    .is_some_and(|shown| reads_as(shown, now))
+            });
+        if !changed {
+            return;
+        }
+        self.presence.animate_to(presence);
         if now.is_some() {
             self.shown = now;
         }
         cx.notify();
     }
+}
+
+/// Whether the readout of a bar shows `one` and `other` alike.
+fn reads_as(one: &NowPlaying, other: &NowPlaying) -> bool {
+    one.playing == other.playing && headline(one) == headline(other)
 }
 
 impl Render for Readout {

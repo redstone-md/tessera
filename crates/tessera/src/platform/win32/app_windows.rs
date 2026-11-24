@@ -298,6 +298,9 @@ pub fn pointer_at() -> Option<(i32, i32)> {
     Some((pointer.x, pointer.y))
 }
 
+/// Whether Windows accepted every request of `WindowEvents::watch`.
+static WATCHING: AtomicU64 = AtomicU64::new(0);
+
 /// Counts what happened to windows since `WindowEvents::watch`.
 static HAPPENED: AtomicU64 = AtomicU64::new(0);
 
@@ -323,7 +326,6 @@ impl WindowEvents {
     /// runs. Whether Windows accepted every request is returned.
     pub fn watch() -> bool {
         static STARTED: Once = Once::new();
-        static WATCHING: AtomicU64 = AtomicU64::new(0);
         STARTED.call_once(|| {
             let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
             let accepted = Self::WATCHED.iter().all(|&(first, last)| {
@@ -335,6 +337,12 @@ impl WindowEvents {
             });
             WATCHING.store(accepted.into(), Ordering::Relaxed);
         });
+        Self::watched()
+    }
+
+    /// Whether Windows reports what happens to windows, so that
+    /// [`WindowEvents::generation`] tells of every change.
+    pub fn watched() -> bool {
         WATCHING.load(Ordering::Relaxed) != 0
     }
 
@@ -382,8 +390,14 @@ pub struct AppWindow {
     pub app_id: Option<String>,
 }
 
-/// For how long a list of the windows is given again.
+/// For how long a list of the windows is given again where Windows does
+/// not report what happens to them.
 const LIST_KEPT: Duration = Duration::from_millis(100);
+
+/// For how long it is given again where Windows does, and nothing was
+/// reported: what asks several times a second, as every bar does to step
+/// aside for a game, then reads the windows once a second.
+const LIST_KEPT_WATCHED: Duration = Duration::from_secs(1);
 
 impl AppWindow {
     /// What starts another window of the window's application and names
@@ -398,15 +412,20 @@ impl AppWindow {
     ///
     /// Every bar asks at the same moment, when something happened to a
     /// window, and the answer costs a look into each process. The list
-    /// read last is therefore given again for a tenth of a second, unless
+    /// read last is therefore given again for a tenth of a second, or
+    /// for a second where Windows reports what happens to windows, unless
     /// something has happened to a window since.
     pub fn enumerate() -> Vec<Self> {
         static LAST: Mutex<Option<(u64, Instant, Vec<AppWindow>)>> = Mutex::new(None);
         let generation = WindowEvents::generation();
+        let kept = match WindowEvents::watched() {
+            true => LIST_KEPT_WATCHED,
+            false => LIST_KEPT,
+        };
         let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some((read_at, read, windows)) = last.as_ref()
             && *read_at == generation
-            && read.elapsed() < LIST_KEPT
+            && read.elapsed() < kept
         {
             return windows.clone();
         }

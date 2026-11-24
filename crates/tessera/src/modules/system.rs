@@ -98,7 +98,7 @@ impl Gauge for ProcessorGauge {
     }
 
     fn read(&mut self) -> Option<Reading> {
-        let level = self.0.read()?;
+        let level = whole_percent(self.0.read()?);
         Some(Reading {
             level,
             glyph: "\u{E950}",
@@ -120,7 +120,7 @@ impl Gauge for MemoryGauge {
 
     fn read(&mut self) -> Option<Reading> {
         let memory = MemoryLoad::read()?;
-        let level = (memory.used as f64 / memory.total.max(1) as f64) as f32;
+        let level = whole_percent((memory.used as f64 / memory.total.max(1) as f64) as f32);
         Some(Reading {
             level,
             glyph: "\u{E964}",
@@ -154,6 +154,13 @@ impl Gauge for BatteryGauge {
             text_width: VALUE_WIDTH,
         })
     }
+}
+
+/// `level` at the nearest hundredth. A level wavers by less all the time,
+/// and a reading that differs only so is the same reading: it has
+/// nothing drawn again.
+fn whole_percent(level: f32) -> f32 {
+    (level * 100.).round() / 100.
 }
 
 fn percent(level: f32) -> String {
@@ -283,6 +290,13 @@ mod tests {
         assert_eq!(battery_glyph(battery(100, false)), "\u{E83F}");
         assert_eq!(battery_glyph(battery(96, true)), "\u{EA93}");
         assert_eq!(battery_glyph(battery(4, true)), "\u{E85A}");
+    }
+
+    #[test]
+    fn a_level_that_wavers_within_a_percent_reads_the_same() {
+        assert_eq!(whole_percent(0.4212), whole_percent(0.4188));
+        assert_ne!(whole_percent(0.42), whole_percent(0.43));
+        assert_eq!(percent(whole_percent(0.4188)), "42%");
     }
 
     #[test]
