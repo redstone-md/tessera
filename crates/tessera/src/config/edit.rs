@@ -118,15 +118,6 @@ impl Slot {
             Self::End => "End",
         }
     }
-
-    fn neighbor(self, forward: bool) -> Option<Self> {
-        match (self, forward) {
-            (Self::Start, true) | (Self::End, false) => Some(Self::Center),
-            (Self::Center, true) => Some(Self::End),
-            (Self::Center, false) => Some(Self::Start),
-            (Self::Start, false) | (Self::End, true) => None,
-        }
-    }
 }
 
 /// Where a widget is in the layout.
@@ -272,44 +263,6 @@ impl ConfigFile {
             return false;
         };
         let index = index.min(widgets.len());
-        widgets.insert(index, widget);
-        widgets.fmt();
-        true
-    }
-
-    /// Moves the widget at `place` one step toward the end of its surface,
-    /// or toward the start: past its neighbor, or into the next slot when
-    /// it is the last of its own.
-    pub fn shift(&mut self, place: Place, forward: bool) -> bool {
-        let Some(count) = self.slot(place.surface, place.slot).map(|slot| slot.len()) else {
-            return false;
-        };
-        let inside = if forward {
-            place.index + 1 < count
-        } else {
-            place.index > 0 && place.index < count
-        };
-        let (slot, index) = if inside {
-            let index = if forward {
-                place.index + 1
-            } else {
-                place.index - 1
-            };
-            (place.slot, Some(index))
-        } else {
-            let Some(neighbor) = place.slot.neighbor(forward) else {
-                return false;
-            };
-            // It enters the neighbor at the near end.
-            (neighbor, (forward).then_some(0))
-        };
-        let Some(widget) = self.take(place) else {
-            return false;
-        };
-        let Some(widgets) = self.slot(place.surface, slot) else {
-            return false;
-        };
-        let index = index.unwrap_or(widgets.len()).min(widgets.len());
         widgets.insert(index, widget);
         widgets.fmt();
         true
@@ -749,25 +702,6 @@ center = ["windows"]
     }
 
     #[test]
-    fn a_widget_moves_past_its_neighbor_and_into_the_next_slot() {
-        let mut file = ConfigFile::parse(LAYOUT).unwrap();
-        assert!(file.shift(place(0, Slot::Start, 0), true));
-        assert_eq!(names(&file, 0, Slot::Start), ["label", "clock"]);
-        assert!(file.shift(place(0, Slot::Start, 1), true));
-        assert_eq!(names(&file, 0, Slot::Start), ["label"]);
-        assert_eq!(names(&file, 0, Slot::Center), ["clock"]);
-        assert!(file.shift(place(0, Slot::Center, 0), true));
-        assert_eq!(names(&file, 0, Slot::End), ["clock", "quit"]);
-        assert!(file.shift(place(0, Slot::End, 0), false));
-        assert!(file.shift(place(0, Slot::Center, 0), false));
-        assert_eq!(names(&file, 0, Slot::Start), ["label", "clock"]);
-        assert!(!file.shift(place(0, Slot::Start, 0), false));
-        assert!(!file.shift(place(0, Slot::End, 0), true));
-        assert!(!file.shift(place(0, Slot::End, 7), true));
-        assert!(!file.shift(place(5, Slot::End, 0), true));
-    }
-
-    #[test]
     fn cards_are_added_changed_and_taken_away() {
         use crate::desk::Corner;
 
@@ -1052,7 +986,7 @@ content = ["apps"]
     fn the_built_in_configuration_can_be_changed() {
         let mut file = ConfigFile::parse(DEFAULT).unwrap();
         assert!(file.set_pinned(&["Paint".to_owned()]));
-        assert!(file.shift(place(0, Slot::Start, 0), true));
+        assert!(file.transfer(place(0, Slot::Start, 0), place(0, Slot::End, 0)));
         file.config().expect("it stays usable");
     }
 }

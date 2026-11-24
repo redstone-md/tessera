@@ -5,14 +5,14 @@
 //! a rail of parts on the left, and the cards of the part chosen on the
 //! right. Widget: `settings`, made for a popup in the middle of the display.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, AnyView, AppContext, Context, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    img, px,
+    AnyElement, AnyView, AppContext, Context, CursorStyle, Div, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Render, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, Window, div, img, px, transparent_black,
 };
 
 use crate::config::edit::{CardLength, ConfigFile, DEEDS, LAYOUTS, Place, Slot};
@@ -45,11 +45,15 @@ const CAPTION_SHARE: f32 = 0.86;
 /// out from its card.
 const CHIP_TINT: f32 = 0.07;
 
-/// The width kept for the name of a slot.
-const SLOT_LABEL_WIDTH: Pixels = px(52.);
-
 /// The most a list of widgets to add takes while it opens.
 const ADD_LIST_HEIGHT: Pixels = px(240.);
+/// How tall the list of widgets for the bars gets before it scrolls.
+const PALETTE_HEIGHT: Pixels = px(220.);
+/// How much of the color of what is dragged a slot takes while that is
+/// over it.
+const ZONE_TINT: f32 = 0.14;
+/// How much is seen of a widget while it is dragged away.
+const LIFTED: f32 = 0.35;
 
 /// The width of the rail of parts, and the height of a part in it.
 const RAIL_WIDTH: Pixels = px(196.);
@@ -551,12 +555,16 @@ enum Control {
     Step(usize, bool),
     /// Switches the setting at this place.
     Toggle(usize),
-    /// Moves a widget toward the end of its surface, or toward the start.
-    Shift(Place, bool),
+    /// Stands for the widget at this place of a bar, which is dragged.
+    Grab(Place),
     Remove(Place),
+    /// Chooses this slot of a surface for the widgets that are pressed.
+    Aim(usize, Slot),
+    /// Adds the widget at this place of the list to the chosen slot.
+    Offer(usize),
     /// Says when a surface hides.
     SurfaceHide(usize, Hiding),
-    /// Opens or closes the list of widgets to add to a slot or a card.
+    /// Opens or closes the list of widgets to add to a card.
     Adding(Holder),
     /// Adds the widget at this place of the list to what is being added to.
     Add(usize),
@@ -662,8 +670,6 @@ fn line(theme: &Theme, title: &'static str, chooser: AnyElement) -> gpui::Div {
 /// What widgets are added to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Holder {
-    /// A slot of the surface at this place.
-    Slot(usize, Slot),
     /// The card at this place.
     Card(usize),
 }
@@ -676,12 +682,102 @@ enum Face {
     Chip { text: SharedString, selected: bool },
 }
 
+/// What the widgets of Tessera are called, by the names a layout has for
+/// them.
+const WIDGET_LABELS: &[(&str, &str)] = &[
+    ("appearance", "Appearance"),
+    ("battery", "Battery"),
+    ("bluetooth-button", "Bluetooth"),
+    ("brightness", "Brightness"),
+    ("calendar", "Calendar"),
+    ("clock", "Clock"),
+    ("command", "Command"),
+    ("cpu", "Processor"),
+    ("desktop", "Show desktop"),
+    ("focused", "Window title"),
+    ("hdr", "HDR"),
+    ("keyboard", "Keyboard layout"),
+    ("label", "Label"),
+    ("media", "Now playing"),
+    ("memory", "Memory"),
+    ("network", "Network"),
+    ("notifications", "Notifications"),
+    ("plan", "Power plan"),
+    ("problems", "Problems"),
+    ("quit", "Quit"),
+    ("settings", "Settings"),
+    ("tiling", "Tiling"),
+    ("trash", "Recycle Bin"),
+    ("tray", "Tray"),
+    ("update", "Updates"),
+    ("user", "Account"),
+    ("volume", "Volume"),
+    ("windows", "Windows"),
+    ("workspaces", "Workspaces"),
+];
+
+/// What the widget a layout names `name` is called: one of Tessera by
+/// what it shows, one of an extension by the extension and its own name,
+/// any other by `name` itself.
+fn widget_name(name: &str, language: Language) -> String {
+    if let Some((owner, title)) = name.split_once('.') {
+        return format!("{owner} \u{b7} {title}");
+    }
+    let label = WIDGET_LABELS.iter().find(|(widget, _)| *widget == name);
+    label.map_or_else(
+        || name.to_owned(),
+        |(_, label)| language.say(label).to_owned(),
+    )
+}
+
 /// What a widget of the layout is called: its name, and its text where it
 /// has one, which tells several of a kind apart.
-fn widget_title(spec: &WidgetSpec) -> String {
+fn widget_title(spec: &WidgetSpec, language: Language) -> String {
+    let name = widget_name(&spec.widget, language);
     match spec.options.get("text").and_then(toml::Value::as_str) {
-        Some(text) => format!("{}: {text}", spec.widget),
-        None => spec.widget.clone(),
+        Some(text) => format!("{name}: {text}"),
+        None => name,
+    }
+}
+
+/// The widgets of a slot of a surface.
+fn held(surface: &SurfaceConfig, slot: Slot) -> &[WidgetSpec] {
+    match slot {
+        Slot::Start => &surface.start,
+        Slot::Center => &surface.center,
+        Slot::End => &surface.end,
+    }
+}
+
+/// A widget on its way to a slot of a bar.
+struct Carried {
+    /// Where it stood; `None` for one taken from the list of widgets.
+    from: Option<Place>,
+    /// The name a layout has for it.
+    widget: String,
+    title: SharedString,
+}
+
+/// What follows the pointer while a widget is dragged.
+struct Lifted {
+    title: SharedString,
+}
+
+impl Render for Lifted {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        div()
+            .h(CHIP_HEIGHT)
+            .px(theme.spacing.small + theme.spacing.tiny)
+            .flex()
+            .items_center()
+            .rounded(theme.shape.full)
+            .bg(theme.colors.primary)
+            .font_family(theme.typography.family)
+            .text_size(theme.typography.label_size)
+            .text_color(theme.colors.surface_container)
+            .whitespace_nowrap()
+            .child(self.title.clone())
     }
 }
 
@@ -783,7 +879,13 @@ struct Settings {
     themes: Vec<String>,
     /// The languages there are to choose.
     languages: Vec<Language>,
-    /// The slot whose list of widgets to add is open, kept while it closes.
+    /// The slot of a surface that takes the widgets pressed in the list.
+    aimed: (usize, Slot),
+    /// 1 for the chosen slot, 0 for the others.
+    aims: HashMap<(usize, Slot), Spring>,
+    /// The widget of a bar that is being dragged.
+    lifted: Option<Place>,
+    /// The card whose list of widgets to add is open, kept while it closes.
     adding: Option<Holder>,
     /// 1 while that list is open, 0 while it is closed.
     add_list: Spring,
@@ -821,6 +923,9 @@ impl Settings {
             running: Vec::new(),
             themes: Vec::new(),
             languages: Vec::new(),
+            aimed: (0, Slot::End),
+            aims: HashMap::new(),
+            lifted: None,
             adding: None,
             add_list: Spring::new(motion.spatial_fast, 0.),
             popups: Vec::new(),
@@ -1010,8 +1115,22 @@ impl Settings {
                     self.put(setting.target, if is_on { off } else { on }, cx);
                 }
             }
-            Control::Shift(place, forward) => self.change(cx, |file| file.shift(place, forward)),
+            Control::Grab(_) => {}
             Control::Remove(place) => self.change(cx, |file| file.remove(place)),
+            Control::Aim(surface, slot) => {
+                self.aimed = (surface, slot);
+                cx.notify();
+            }
+            Control::Offer(index) => {
+                let Some(widget) = self.available.get(index).cloned() else {
+                    return;
+                };
+                if self.panels.contains(&widget) {
+                    return;
+                }
+                let (surface, slot) = self.aimed;
+                self.change(cx, |file| file.add(surface, slot, &widget));
+            }
             Control::Adding(holder) => {
                 let open = self.add_list.target() > 0.;
                 if open && self.adding == Some(holder) {
@@ -1031,13 +1150,8 @@ impl Settings {
                 else {
                     return;
                 };
-                if !self.fits(holder, &widget) {
-                    return;
-                }
-                self.change(cx, |file| match holder {
-                    Holder::Slot(surface, slot) => file.add(surface, slot, &widget),
-                    Holder::Card(card) => file.add_to_card(card, &widget),
-                });
+                let Holder::Card(card) = holder;
+                self.change(cx, |file| file.add_to_card(card, &widget));
             }
             Control::NewCard => self.change(cx, ConfigFile::add_card),
             Control::DropCard(card) => {
@@ -1187,6 +1301,17 @@ impl Settings {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.button(control, face, window, cx).into_any_element()
+    }
+
+    /// The same, for more to be said of it.
+    fn button(
+        &mut self,
+        control: Control,
+        face: Face,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let theme = *cx.global::<Theme>();
         let state = self
             .interactions
@@ -1225,10 +1350,9 @@ impl Settings {
         Interaction::track(button, cx, move |this: &mut Self| {
             this.interactions.get_mut(&control)
         })
-        .into_any_element()
     }
 
-    /// A widget of the layout: its name, and buttons that move it back,
+    /// A widget of a card: its name, and buttons that move it back,
     /// move it forward and remove it, which is what `controls` do.
     fn widget_chip(
         &mut self,
@@ -1238,6 +1362,7 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
         let known = self.available.contains(&spec.widget);
         let [back, forward, remove] = controls;
         let buttons = [
@@ -1266,11 +1391,195 @@ impl Settings {
             } else {
                 theme.colors.outline
             })
-            .child(div().pr(theme.spacing.tiny).child(widget_title(spec)))
+            .child(
+                div()
+                    .pr(theme.spacing.tiny)
+                    .child(widget_title(spec, language)),
+            )
             .children(buttons)
             .into_any_element()
     }
 
+    /// A widget of a bar: what it is called and a button that takes it
+    /// out. It is dragged to another place, and what is let go over it
+    /// goes before it.
+    fn pill(
+        &mut self,
+        place: Place,
+        spec: &WidgetSpec,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let known = self.available.contains(&spec.widget);
+        let title: SharedString = widget_title(spec, language).into();
+        let grab = Control::Grab(place);
+        let state = self
+            .interactions
+            .entry(grab.clone())
+            .or_insert_with(|| Interaction::new(&theme.motion))
+            .state(window);
+        let remove = self.control(Control::Remove(place), Face::Glyph(ICON_REMOVE), window, cx);
+        let carried = Carried {
+            from: Some(place),
+            widget: spec.widget.clone(),
+            title: title.clone(),
+        };
+        let view = cx.entity().downgrade();
+        let base = mix(
+            theme.colors.surface_container_highest,
+            theme.colors.on_surface,
+            CHIP_TINT,
+        );
+        let body = div()
+            .id(SharedString::from(format!("{grab:?}")))
+            .flex_none()
+            .h(CHIP_HEIGHT)
+            .pl(theme.spacing.small + theme.spacing.tiny)
+            .pr(theme.spacing.tiny)
+            .flex()
+            .items_center()
+            .gap(theme.spacing.tiny)
+            .rounded(theme.shape.full)
+            .bg(state_layer(&theme, base, state))
+            // A widget no module provides is shown, but dimmed.
+            .text_color(if known {
+                theme.colors.on_surface
+            } else {
+                theme.colors.outline
+            })
+            .cursor(CursorStyle::OpenHand)
+            .child(div().pr(theme.spacing.tiny).child(title))
+            .child(remove)
+            .on_drag(carried, move |carried: &Carried, _, _, cx| {
+                let from = carried.from;
+                let lifted = view.update(cx, |this, cx| {
+                    this.lifted = from;
+                    cx.notify();
+                });
+                lifted.ok();
+                let title = carried.title.clone();
+                cx.new(|_| Lifted { title })
+            });
+        let body = Interaction::track(body, cx, move |this: &mut Self| {
+            this.interactions.get_mut(&grab)
+        });
+        let mark = theme.colors.primary;
+        div()
+            .flex_none()
+            .pl(theme.spacing.tiny)
+            .border_l_2()
+            .border_color(transparent_black())
+            .opacity(if self.lifted == Some(place) {
+                LIFTED
+            } else {
+                1.
+            })
+            .drag_over::<Carried>(move |style, _, _, _| style.border_color(mark))
+            .on_drop(cx.listener(move |this, carried: &Carried, _, cx| {
+                this.land(carried, place, cx);
+            }))
+            .child(body)
+            .into_any_element()
+    }
+
+    /// A slot of a bar, standing where it stands in the bar: its widgets,
+    /// and room to let one go after them. A press chooses it for what is
+    /// pressed in the list of widgets.
+    fn zone(
+        &mut self,
+        surface: usize,
+        slot: Slot,
+        specs: &[WidgetSpec],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let aim = Control::Aim(surface, slot);
+        let state = self
+            .interactions
+            .entry(aim.clone())
+            .or_insert_with(|| Interaction::new(&theme.motion))
+            .state(window);
+        let chosen = if self.aimed == (surface, slot) {
+            1.
+        } else {
+            0.
+        };
+        let spring = self
+            .aims
+            .entry((surface, slot))
+            .or_insert_with(|| Spring::new(theme.motion.spatial_fast, chosen));
+        if spring.target() != chosen {
+            spring.animate_to(chosen);
+        }
+        let chosen = spring.value(window).clamp(0., 1.);
+        let mut pills = Vec::new();
+        for (index, spec) in specs.iter().enumerate() {
+            let place = Place {
+                surface,
+                slot,
+                index,
+            };
+            pills.push(self.pill(place, spec, window, cx));
+        }
+        let last = Place {
+            surface,
+            slot,
+            index: specs.len(),
+        };
+        let held = wrap(&theme).min_h(CHIP_HEIGHT);
+        let caption = div()
+            .flex()
+            .text_size(theme.typography.label_size * CAPTION_SHARE)
+            .text_color(mix(
+                theme.colors.on_surface_variant,
+                theme.colors.primary,
+                chosen,
+            ))
+            .child(language.say(slot.label()));
+        let (held, caption) = match slot {
+            Slot::Start => (held.justify_start(), caption.justify_start()),
+            Slot::Center => (held.justify_center(), caption.justify_center()),
+            Slot::End => (held.justify_end(), caption.justify_end()),
+        };
+        let held = if pills.is_empty() {
+            held.child(note(&theme, language.say("Empty")))
+        } else {
+            held.children(pills)
+        };
+        let (rest, lit) = (theme.colors.surface_container, theme.colors.primary);
+        let over = mix(rest, lit, ZONE_TINT);
+        let action = aim.clone();
+        let zone = div()
+            .id(SharedString::from(format!("{aim:?}")))
+            .flex_1()
+            .min_w(px(0.))
+            .p(theme.spacing.small)
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.tiny)
+            .rounded(theme.shape.medium)
+            .border_1()
+            .border_color(mix(theme.colors.surface_container, lit, chosen))
+            .bg(state_layer(&theme, rest, state))
+            .drag_over::<Carried>(move |style, _, _, _| style.bg(over).border_color(lit))
+            .on_drop(cx.listener(move |this, carried: &Carried, _, cx| {
+                this.land(carried, last, cx);
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| this.act(&action, cx)))
+            .child(caption)
+            .child(held);
+        Interaction::track(zone, cx, move |this: &mut Self| {
+            this.interactions.get_mut(&aim)
+        })
+        .into_any_element()
+    }
+
+    /// A bar as it is laid out: its three slots side by side, and when it
+    /// hides.
     fn surface(
         &mut self,
         index: usize,
@@ -1280,49 +1589,9 @@ impl Settings {
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
-        let mut section = card(&theme, surface_title(surface, language));
+        let mut zones = Vec::new();
         for slot in Slot::ALL {
-            let specs = match slot {
-                Slot::Start => &surface.start,
-                Slot::Center => &surface.center,
-                Slot::End => &surface.end,
-            };
-            let holder = Holder::Slot(index, slot);
-            let mut chips = Vec::new();
-            for (at, spec) in specs.iter().enumerate() {
-                let place = Place {
-                    surface: index,
-                    slot,
-                    index: at,
-                };
-                let controls = [
-                    Control::Shift(place, false),
-                    Control::Shift(place, true),
-                    Control::Remove(place),
-                ];
-                chips.push(self.widget_chip(controls, spec, window, cx));
-            }
-            chips.push(self.add_chip(holder, window, cx));
-            section = section.child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(theme.spacing.small)
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(SLOT_LABEL_WIDTH)
-                            .h(CHIP_HEIGHT)
-                            .flex()
-                            .items_center()
-                            .text_color(theme.colors.on_surface_variant)
-                            .child(language.say(slot.label())),
-                    )
-                    .child(wrap(&theme).flex_1().children(chips)),
-            );
-            let offers = self.offers(holder, window, cx);
-            section = section
-                .children(offers.map(|offers| offers.pl(SLOT_LABEL_WIDTH + theme.spacing.small)));
+            zones.push(self.zone(index, slot, held(surface, slot), window, cx));
         }
         let mut hiding = Vec::new();
         for (label, hide) in [
@@ -1336,24 +1605,138 @@ impl Settings {
             };
             hiding.push(self.control(Control::SurfaceHide(index, hide), face, window, cx));
         }
-        section = section.child(
+        card(&theme, surface_title(surface, language))
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(theme.spacing.small)
+                    .children(zones),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(theme.spacing.small)
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(CHIP_HEIGHT)
+                            .flex()
+                            .items_center()
+                            .text_color(theme.colors.on_surface_variant)
+                            .child(language.say("Hiding")),
+                    )
+                    .child(wrap(&theme).flex_1().children(hiding)),
+            )
+            .into_any_element()
+    }
+
+    /// The widgets there are for a bar, those of Tessera first and then
+    /// those of each extension under its name. One is dragged onto a bar,
+    /// or pressed to go to the chosen slot; a widget of a bar let go here
+    /// is taken out.
+    fn palette(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        // A drag that ended anywhere is over.
+        if self.lifted.is_some() && !cx.has_active_drag() {
+            self.lifted = None;
+        }
+        let mut groups: BTreeMap<Option<String>, Vec<AnyElement>> = BTreeMap::new();
+        for at in 0..self.available.len() {
+            let name = self.available[at].clone();
+            if self.panels.contains(&name) {
+                continue;
+            }
+            let (owner, title) = match name.split_once('.') {
+                Some((owner, title)) => (Some(owner.to_owned()), title.to_owned()),
+                None => (None, widget_name(&name, language)),
+            };
+            let title: SharedString = title.into();
+            let face = Face::Chip {
+                text: title.clone(),
+                selected: false,
+            };
+            let carried = Carried {
+                from: None,
+                widget: name,
+                title: widget_name(&self.available[at], language).into(),
+            };
+            let tile = self
+                .button(Control::Offer(at), face, window, cx)
+                .cursor(CursorStyle::OpenHand)
+                .on_drag(carried, |carried: &Carried, _, _, cx| {
+                    let title = carried.title.clone();
+                    cx.new(|_| Lifted { title })
+                });
+            groups
+                .entry(owner)
+                .or_default()
+                .push(tile.into_any_element());
+        }
+        // `None`, which is Tessera, sorts first.
+        let groups = groups.into_iter().map(|(owner, tiles)| {
+            let title = match owner {
+                Some(owner) => format!("{} {owner}", language.say("Extension")),
+                None => "Tessera".to_owned(),
+            };
             div()
                 .flex()
-                .items_start()
-                .gap(theme.spacing.small)
-                .child(
-                    div()
-                        .flex_none()
-                        .w(SLOT_LABEL_WIDTH)
-                        .h(CHIP_HEIGHT)
-                        .flex()
-                        .items_center()
-                        .text_color(theme.colors.on_surface_variant)
-                        .child(language.say("Hiding")),
-                )
-                .child(wrap(&theme).flex_1().children(hiding)),
-        );
-        section.into_any_element()
+                .flex_col()
+                .gap(theme.spacing.tiny)
+                .child(note(&theme, title).text_size(theme.typography.label_size * CAPTION_SHARE))
+                .child(wrap(&theme).children(tiles))
+        });
+        let (rest, away) = (theme.colors.surface_container, theme.colors.outline);
+        let over = mix(rest, away, ZONE_TINT);
+        let list = div()
+            .id("palette")
+            .max_h(PALETTE_HEIGHT)
+            .overflow_y_scroll()
+            .p(theme.spacing.small)
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.small)
+            .rounded(theme.shape.medium)
+            .bg(rest)
+            .drag_over::<Carried>(move |style, _, _, _| style.bg(over))
+            .on_drop(cx.listener(|this, carried: &Carried, _, cx| {
+                if let Some(from) = carried.from {
+                    this.change(cx, |file| file.remove(from));
+                }
+            }))
+            .children(groups);
+        let remark = "Drag a widget onto a bar, or press it to add it to the chosen part. Drag one between the parts to move it, and back here to take it out.";
+        card(&theme, language.say("Widgets"))
+            .child(note(&theme, language.say(remark)))
+            .child(list)
+            .into_any_element()
+    }
+
+    /// Puts what was dragged before what stands at `to`, or last in that
+    /// slot: a widget of a bar is moved there, one of the list is added.
+    fn land(&mut self, carried: &Carried, to: Place, cx: &mut Context<Self>) {
+        self.aimed = (to.surface, to.slot);
+        if let Some(from) = carried.from {
+            self.change(cx, |file| file.transfer(from, to));
+            return;
+        }
+        if self.panels.contains(&carried.widget) {
+            return;
+        }
+        let surfaces = self.config.as_ref().map(|config| &config.surfaces);
+        let Some(count) = surfaces.and_then(|all| Some(held(all.get(to.surface)?, to.slot).len()))
+        else {
+            return;
+        };
+        let widget = carried.widget.clone();
+        self.change(cx, |file| {
+            // It is added last, and goes from there to its place.
+            let added = Place { index: count, ..to };
+            file.add(to.surface, to.slot, &widget)
+                && (to.index >= count || file.transfer(added, to))
+        });
     }
 
     /// The chip that opens the list of widgets to add to `holder`.
@@ -1385,28 +1768,22 @@ impl Settings {
         let language = Language::of(cx);
         // Those of Tessera first, then those of each extension under its
         // name.
-        let mut groups: Vec<(Option<String>, Vec<AnyElement>)> = vec![(None, Vec::new())];
+        let mut groups: BTreeMap<Option<String>, Vec<AnyElement>> = BTreeMap::new();
         for at in 0..self.available.len() {
             let name = self.available[at].clone();
-            if !self.fits(holder, &name) {
-                continue;
-            }
             let (owner, title) = match name.split_once('.') {
                 Some((owner, title)) => (Some(owner.to_owned()), title.to_owned()),
-                None => (None, name),
+                None => (None, widget_name(&name, language)),
             };
             let face = Face::Chip {
                 text: title.into(),
                 selected: true,
             };
             let chip = self.control(Control::Add(at), face, window, cx);
-            match groups.last_mut() {
-                Some((last, chips)) if *last == owner => chips.push(chip),
-                _ => groups.push((owner, vec![chip])),
-            }
+            groups.entry(owner).or_default().push(chip);
         }
-        let groups = groups.into_iter().filter(|(_, chips)| !chips.is_empty());
-        let groups = groups.map(|(owner, chips)| {
+        // `None`, which is Tessera, sorts first.
+        let groups = groups.into_iter().map(|(owner, chips)| {
             let title = match owner {
                 Some(owner) => format!("{} {owner}", language.say("Extension")),
                 None => "Tessera".to_owned(),
@@ -1433,17 +1810,6 @@ impl Settings {
         Some(div().child(list))
     }
 
-    /// Whether the widget `name` is offered for `holder`: a bar takes no
-    /// widget made to fill a popup or a card, a card takes any.
-    fn fits(&self, holder: Holder, name: &str) -> bool {
-        match holder {
-            Holder::Slot(..) => !self.panels.contains(name),
-            Holder::Card(_) => true,
-        }
-    }
-
-    /// What the cards of the desktop are, and the button that lays
-    /// another one.
     fn desk(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
@@ -2133,6 +2499,7 @@ impl Settings {
             }
             Section::Bars => {
                 wide.push(self.arranging(window, cx));
+                wide.push(self.palette(window, cx));
                 for (index, surface) in config.surfaces.iter().enumerate() {
                     wide.push(self.surface(index, surface, window, cx));
                 }
@@ -2277,6 +2644,21 @@ impl Render for Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_widget_is_called_by_what_it_shows_or_by_its_extension() {
+        assert_eq!(widget_name("cpu", Language::English), "Processor");
+        assert_eq!(widget_name("cpu", Language::Russian), "Процессор");
+        assert_eq!(
+            widget_name("home.air", Language::Russian),
+            "home \u{b7} air"
+        );
+        assert_eq!(widget_name("unheard-of", Language::English), "unheard-of");
+        for (_, label) in WIDGET_LABELS {
+            let russian = Language::Russian.say(label);
+            assert!(russian != *label || label.is_ascii() && label.len() <= 9);
+        }
+    }
 
     #[test]
     fn a_pinned_application_is_called_by_its_file_or_its_name() {
