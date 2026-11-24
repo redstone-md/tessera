@@ -389,6 +389,16 @@ const SETTINGS: &[Setting] = &[
     },
     Setting {
         section: Section::Dock,
+        card: "Dock",
+        title: "Windows of every display",
+        target: Target::Widget("windows", "all_displays"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
+        section: Section::Dock,
         card: "Start menu",
         title: "Columns",
         target: Target::Widget("apps", "columns"),

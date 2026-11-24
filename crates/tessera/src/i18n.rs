@@ -496,6 +496,7 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Themes", "Темы"),
     ("Extensions", "Расширения"),
     ("Extension", "Расширение"),
+    ("Windows of every display", "Окна со всех экранов"),
     ("Appearance", "Оформление"),
     ("Brightness", "Яркость"),
     ("Command", "Команда"),

@@ -86,7 +86,12 @@ impl Module for WindowsModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("windows", |context, cx| {
-            let display = context.display;
+            // The windows of every display are listed where the layout
+            // asks for that.
+            let display = match context.flag("all_displays") {
+                Some(true) => None,
+                _ => context.display,
+            };
             let pins = Pin::find(&context.texts("pinned").unwrap_or_default());
             let start = context.text("start").map(|popup| {
                 let glyph = context.text("start-icon").unwrap_or(ICON_START);

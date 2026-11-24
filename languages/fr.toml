@@ -122,6 +122,7 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Themes" = "Thèmes"
 "Extensions" = "Extensions"
 "Extension" = "Extension"
+"Windows of every display" = "Fenêtres de tous les écrans"
 "Appearance" = "Apparence"
 "Brightness" = "Luminosité"
 "Command" = "Commande"
