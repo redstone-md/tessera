@@ -85,6 +85,17 @@ impl AppIcons {
         })
     }
 
+    /// Whether the icon of the shortcut or program at `file` was looked
+    /// for already, so that asking for it costs nothing.
+    pub fn has(&self, file: &Path) -> bool {
+        self.cache.borrow().contains_key(file)
+    }
+
+    /// The same for the icon the shell draws for the file at `path`.
+    pub fn has_of_file(&self, path: &Path) -> bool {
+        self.has(&kind_of(path))
+    }
+
     /// The icon remembered for `file`, found with `find` the first time.
     fn cached(&self, file: &Path, find: impl FnOnce() -> Icon) -> Icon {
         if let Some(icon) = self.cache.borrow().get(file) {

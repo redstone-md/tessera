@@ -4,6 +4,7 @@
 //! Finds and starts applications from the Start menu, and opens the files
 //! of the folders its `folders` option names. Widget: `launcher`.
 
+use std::cell::Cell;
 use std::fs;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,22 @@ const FILES_SHOWN: usize = 30;
 /// the first level, and how many are remembered at most.
 const FOLDER_DEPTH: usize = 4;
 const FILES_KEPT: usize = 20_000;
+
+/// The folders whose files the search finds where the layout names none:
+/// those of the user that Windows keeps documents in.
+const DEFAULT_FOLDERS: [&str; 6] = [
+    "~/Desktop",
+    "~/Documents",
+    "~/Downloads",
+    "~/Pictures",
+    "~/Music",
+    "~/Videos",
+];
+
+/// How many icons are looked for while one frame is drawn. Finding one
+/// takes long enough to hold back the letters typed, so the rest of the
+/// rows wait for the next frames.
+const ICONS_PER_FRAME: usize = 2;
 
 /// The attributes of a file or folder that is hidden or belongs to the
 /// system.
@@ -100,7 +117,8 @@ impl Module for LauncherModule {
             let placeholder = context.text("placeholder");
             let placeholder = placeholder.unwrap_or(language.say(DEFAULT_PLACEHOLDER));
             let placeholder = SharedString::new(placeholder);
-            let folders = context.texts("folders").unwrap_or_default();
+            let folders = context.texts("folders");
+            let folders = folders.unwrap_or_else(|| DEFAULT_FOLDERS.map(str::to_owned).to_vec());
             let folders = folders.iter().map(|folder| folder_named(folder)).collect();
             let pages = match context.flag("settings") {
                 Some(false) => Vec::new(),
@@ -258,6 +276,10 @@ struct Launcher {
     focused: bool,
     /// What is pinned to the Start menu, which a row can change.
     pins: Entity<Pins>,
+    /// How many icons may still be looked for in the frame being drawn,
+    /// and whether a row went without its icon for that.
+    icons_left: Cell<usize>,
+    icons_owed: Cell<bool>,
 }
 
 impl Launcher {
@@ -305,6 +327,8 @@ impl Launcher {
             highlight: Spring::new(cx.global::<Theme>().motion.spatial_fast, 0.),
             scroll: ScrollHandle::new(),
             focused: false,
+            icons_left: Cell::new(ICONS_PER_FRAME),
+            icons_owed: Cell::new(false),
         }
     }
 
@@ -424,7 +448,19 @@ impl Launcher {
         });
         let size = theme.launcher.icon_size;
         let icons = cx.global::<AppIcons>();
+        let known = match kind {
+            Kind::App => icons.has(&shortcut.path),
+            Kind::File => icons.has_of_file(&shortcut.path),
+            Kind::Page => true,
+        };
+        let waits = !known && self.icons_left.get() == 0;
+        if waits {
+            self.icons_owed.set(true);
+        } else if !known {
+            self.icons_left.set(self.icons_left.get() - 1);
+        }
         let image = match kind {
+            _ if waits => None,
             Kind::App => icons.of_shortcut(shortcut),
             Kind::File => icons.of_file(&shortcut.path),
             Kind::Page => None,
@@ -549,9 +585,14 @@ impl Launcher {
             .h(row)
             .rounded(theme.shape.medium)
             .bg(theme.colors.secondary_container);
+        self.icons_left.set(ICONS_PER_FRAME);
         let rows: Vec<AnyElement> = (first..first + shown)
             .map(|index| self.render_row(index, theme, row * index as f32, lit, cx))
             .collect();
+        // The rows that went without an icon get it in the next frames.
+        if self.icons_owed.replace(false) {
+            window.request_animation_frame();
+        }
         div()
             .id("launcher-list")
             .flex_1()
