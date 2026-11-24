@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! Finds and starts applications from the Start menu, and opens the files
-//! of the folders its `folders` option names. Widget: `launcher`.
+//! Windows Search knows or those of the folders its `folders` option
+//! names. Widget: `launcher`.
 
 use std::cell::Cell;
 use std::fs;
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, Entity, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, img, point, px,
+    StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, img, point, px,
 };
 
 use crate::field::TextField;
@@ -21,7 +22,7 @@ use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::start::Pins;
 use crate::motion::Spring;
-use crate::platform::Shortcut;
+use crate::platform::{SearchIndex, Shortcut};
 use crate::popup::Popups;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
@@ -48,8 +49,9 @@ const FILES_SHOWN: usize = 30;
 const FOLDER_DEPTH: usize = 4;
 const FILES_KEPT: usize = 20_000;
 
-/// The folders whose files the search finds where the layout names none:
-/// those of the user that Windows keeps documents in.
+/// The folders whose files the search finds where the layout names none
+/// and Windows Search cannot be asked: those of the user that Windows
+/// keeps documents in.
 const DEFAULT_FOLDERS: [&str; 6] = [
     "~/Desktop",
     "~/Documents",
@@ -118,8 +120,7 @@ impl Module for LauncherModule {
             let placeholder = placeholder.unwrap_or(language.say(DEFAULT_PLACEHOLDER));
             let placeholder = SharedString::new(placeholder);
             let folders = context.texts("folders");
-            let folders = folders.unwrap_or_else(|| DEFAULT_FOLDERS.map(str::to_owned).to_vec());
-            let folders = folders.iter().map(|folder| folder_named(folder)).collect();
+            let folders = folders.map(|folders| folders.iter().map(|f| folder_named(f)).collect());
             let pages = match context.flag("settings") {
                 Some(false) => Vec::new(),
                 _ => pages(language),
@@ -280,13 +281,21 @@ struct Launcher {
     /// and whether a row went without its icon for that.
     icons_left: Cell<usize>,
     icons_owed: Cell<bool>,
+    /// Whether the files are those Windows Search finds for what is
+    /// written, and not those read from folders.
+    indexed: bool,
+    /// The question Windows Search was asked last, while it is awaited;
+    /// one asked before it is given up.
+    asked: Option<Task<()>>,
+    /// What was written when Windows Search gave the files held now.
+    answered: Option<String>,
 }
 
 impl Launcher {
     fn new(
         placeholder: SharedString,
         pages: Vec<Shortcut>,
-        folders: Vec<PathBuf>,
+        folders: Option<Vec<PathBuf>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut shortcuts = Shortcut::start_menu();
@@ -299,23 +308,8 @@ impl Launcher {
         cx.observe(&field, |this, _, cx| this.typed(cx)).detach();
         let pins = Pins::shared(cx);
         cx.observe(&pins, |_, _, cx| cx.notify()).detach();
-        if !folders.is_empty() {
-            // Folders are read aside: there may be many files in them.
-            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let files = cx
-                    .background_executor()
-                    .spawn(async move { files_under(&folders) });
-                let files = files.await;
-                this.update(cx, |this, cx| {
-                    this.shortcuts.truncate(this.apps + this.pages);
-                    this.shortcuts.extend(files);
-                    this.find(cx);
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-        }
+        let indexed = folders.is_none();
+        Self::read(folders.unwrap_or_default(), cx);
         Self {
             pins,
             matches: (0..apps).collect(),
@@ -329,7 +323,72 @@ impl Launcher {
             focused: false,
             icons_left: Cell::new(ICONS_PER_FRAME),
             icons_owed: Cell::new(false),
+            indexed,
+            asked: None,
+            answered: None,
         }
+    }
+
+    /// Reads the files of `folders` aside, there may be many of them, and
+    /// has them searched from then on.
+    fn read(folders: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if folders.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let files = cx
+                .background_executor()
+                .spawn(async move { files_under(&folders) });
+            let files = files.await;
+            this.update(cx, |this, cx| this.take(files, cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Has `files` be the files that are searched.
+    fn take(&mut self, files: Vec<Shortcut>, cx: &mut Context<Self>) {
+        self.shortcuts.truncate(self.apps + self.pages);
+        self.shortcuts.extend(files);
+        self.find(cx);
+        cx.notify();
+    }
+
+    /// Asks Windows Search for the files named like what is written, once
+    /// enough letters are. Until it answers the files of the answer before
+    /// stay, those of them that still match. Where it cannot be asked the
+    /// folders of the user are read instead, from then on.
+    fn ask(&mut self, cx: &mut Context<Self>) {
+        let text = self.text(cx).trim().to_owned();
+        if !self.indexed || text.chars().count() < LETTERS_FOR_FILES {
+            self.asked = None;
+            return;
+        }
+        let asked = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let found = cx.background_executor().spawn({
+                let text = text.clone();
+                async move { SearchIndex::files_named(&text, FILES_SHOWN) }
+            });
+            let found = found.await;
+            this.update(cx, |this, cx| match found {
+                Ok(files) => {
+                    let named = |path: PathBuf| {
+                        let name = path.file_name()?.to_string_lossy().into_owned();
+                        Some(Shortcut { name, path })
+                    };
+                    let files = files.into_iter().filter_map(named).collect();
+                    this.answered = Some(text);
+                    this.take(files, cx);
+                }
+                Err(error) => {
+                    report!("Windows Search finds no files, folders are read: {error:#}");
+                    this.indexed = false;
+                    let folders = DEFAULT_FOLDERS.map(folder_named).to_vec();
+                    Self::read(folders, cx);
+                }
+            })
+            .ok();
+        });
+        self.asked = Some(asked);
     }
 
     /// What the field shows and the list is searched for.
@@ -340,6 +399,7 @@ impl Launcher {
     /// The field says something else: the list starts over.
     fn typed(&mut self, cx: &mut Context<Self>) {
         self.find(cx);
+        self.ask(cx);
         self.scroll.set_offset(point(px(0.), px(0.)));
         self.select(0, cx);
         cx.notify();
@@ -371,7 +431,12 @@ impl Launcher {
         if text.trim().chars().count() >= LETTERS_FOR_FILES {
             let pages = pages_matching(pages, &text);
             matches.extend(pages.into_iter().map(|index| index + self.apps));
-            let files = search(names(files), &text);
+            // What Windows Search found for these very letters is
+            // shown as it is: it matches words, each on its own.
+            let files = match self.answered.as_deref() == Some(text.trim()) {
+                true => (0..files.len()).collect(),
+                false => search(names(files), &text),
+            };
             let files = files.into_iter().take(FILES_SHOWN);
             matches.extend(files.map(|index| index + self.apps + self.pages));
         }
