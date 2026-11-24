@@ -276,7 +276,9 @@
 #               four levels deep when the launcher opens, without what is
 #               hidden, and the first 20000 are kept. Once two letters
 #               are written the search also finds pages of the Windows
-#               settings by their names; settings = false leaves them out
+#               settings by their names; settings = false leaves them out.
+#               Until something is written the applications stand as
+#               tiles in rows; view = "list" keeps them one under another
 #   "apps"      the applications pinned to the Start menu, as a grid; options
 #               pinned, their names as the search shows them, and columns,
 #               how many stand in a row (5). The search pins and unpins
@@ -316,8 +318,8 @@ center = [{ widget = "windows", start = "launcher" }]
 
 [[popup]]
 name = "launcher"
-width = 420
-height = 640
+width = 640
+height = 720
 content = ["apps", "launcher", "power"]
 
 [[popup]]

@@ -3,7 +3,8 @@
 
 //! Finds and starts applications from the Start menu, and opens the files
 //! Windows Search knows or those of the folders its `folders` option
-//! names. Widget: `launcher`.
+//! names. Until something is written the applications stand as tiles in
+//! rows, the way the Start menu of Windows lists them. Widget: `launcher`.
 
 use std::cell::Cell;
 use std::fs;
@@ -13,7 +14,7 @@ use std::path::{Path, PathBuf};
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, Entity, InteractiveElement, IntoElement,
     KeyDownEvent, ParentElement, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, img, point, px,
+    StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, img, point, px, relative,
 };
 
 use crate::field::TextField;
@@ -33,6 +34,14 @@ const ICON_PINNED: &str = "\u{e841}";
 
 /// The side of the button that pins the application of a row.
 const PIN_BUTTON: Pixels = px(28.);
+
+/// How high the tile of an application is, the side of its icon, how
+/// wide a tile is at the least, which says how many stand in a row, and
+/// how many do at the most.
+const TILE_HEIGHT: Pixels = px(92.);
+const TILE_ICON: Pixels = px(36.);
+const TILE_MIN_WIDTH: f32 = 100.;
+const TILES_IN_A_ROW: usize = 8;
 
 const DEFAULT_PLACEHOLDER: &str = "Search applications";
 
@@ -125,7 +134,8 @@ impl Module for LauncherModule {
                 Some(false) => Vec::new(),
                 _ => pages(language),
             };
-            cx.new(|cx| Launcher::new(placeholder, pages, folders, cx))
+            let tiles = context.text("view") != Some("list");
+            cx.new(|cx| Launcher::new(placeholder, pages, folders, tiles, cx))
                 .into()
         })
     }
@@ -255,6 +265,11 @@ fn visible_rows(count: usize, row: f32, scrolled: f32, viewport: f32) -> (usize,
     (first, shown.min(count - first))
 }
 
+/// How many tiles stand in a row of a list `width` wide.
+fn tiles_across(width: f32) -> usize {
+    ((width / TILE_MIN_WIDTH) as usize).clamp(1, TILES_IN_A_ROW)
+}
+
 /// A search field over the list of Start menu shortcuts and the files of
 /// the folders that are searched.
 struct Launcher {
@@ -270,8 +285,17 @@ struct Launcher {
     matches: Vec<usize>,
     /// The position in `matches` that Enter starts.
     selected: usize,
-    /// The row the selection highlight is drawn at; follows `selected`.
+    /// The row the selection highlight is drawn at, and the tile of that
+    /// row; they follow `selected`.
     highlight: Spring,
+    across: Spring,
+    /// What the field said when the list was made, so that only another
+    /// text starts it over: the field also tells of its caret.
+    written: String,
+    /// Whether the applications stand as tiles until something is
+    /// written, and how many entries a row of the list holds now.
+    tiles: bool,
+    columns: usize,
     scroll: ScrollHandle,
     /// Whether the keys were given to the field yet.
     focused: bool,
@@ -296,6 +320,7 @@ impl Launcher {
         placeholder: SharedString,
         pages: Vec<Shortcut>,
         folders: Option<Vec<PathBuf>>,
+        tiles: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut shortcuts = Shortcut::start_menu();
@@ -319,6 +344,10 @@ impl Launcher {
             field,
             selected: 0,
             highlight: Spring::new(cx.global::<Theme>().motion.spatial_fast, 0.),
+            across: Spring::new(cx.global::<Theme>().motion.spatial_fast, 0.),
+            written: String::new(),
+            tiles,
+            columns: 1,
             scroll: ScrollHandle::new(),
             focused: false,
             icons_left: Cell::new(ICONS_PER_FRAME),
@@ -398,11 +427,32 @@ impl Launcher {
 
     /// The field says something else: the list starts over.
     fn typed(&mut self, cx: &mut Context<Self>) {
+        let text = self.text(cx);
+        if text == self.written {
+            return;
+        }
+        self.written = text;
+        if !self.tiled() {
+            self.columns = 1;
+        }
         self.find(cx);
         self.ask(cx);
         self.scroll.set_offset(point(px(0.), px(0.)));
         self.select(0, cx);
         cx.notify();
+    }
+
+    /// Whether the entries stand as tiles: nothing is looked for.
+    fn tiled(&self) -> bool {
+        self.tiles && self.written.trim().is_empty()
+    }
+
+    /// Has the highlight go to the selected entry.
+    fn point(&mut self) {
+        self.highlight
+            .animate_to((self.selected / self.columns) as f32);
+        self.across
+            .animate_to((self.selected % self.columns) as f32);
     }
 
     /// What the entry of `shortcuts` at `index` is.
@@ -452,15 +502,22 @@ impl Launcher {
             self.selected = row;
             cx.notify();
         }
-        self.highlight.animate_to(row as f32);
+        self.point();
     }
 
-    /// Selects the row `steps` away and scrolls it into view.
+    /// Selects the entry `steps` away, if there is one that far before,
+    /// and scrolls it into view.
     fn step(&mut self, steps: isize, cx: &mut Context<Self>) {
-        self.select(self.selected.saturating_add_signed(steps), cx);
-        let row = cx.global::<Theme>().launcher.row_height;
+        let Some(wanted) = self.selected.checked_add_signed(steps) else {
+            return;
+        };
+        self.select(wanted, cx);
+        let row = match self.tiled() {
+            true => TILE_HEIGHT,
+            false => cx.global::<Theme>().launcher.row_height,
+        };
         let viewport = self.scroll.bounds().size.height;
-        let top = row * self.selected as f32;
+        let top = row * (self.selected / self.columns) as f32;
         let scrolled = -self.scroll.offset().y;
         let wanted = scrolled.clamp(top + row - viewport, top).max(px(0.));
         self.scroll.set_offset(point(px(0.), -wanted));
@@ -481,10 +538,107 @@ impl Launcher {
         match event.keystroke.key.as_str() {
             "escape" => cx.defer(Popups::close),
             "enter" => self.launch(self.selected, cx),
-            "down" => self.step(1, cx),
-            "up" => self.step(-1, cx),
+            "down" => self.step(self.columns as isize, cx),
+            "up" => self.step(-(self.columns as isize), cx),
+            // The field is empty while there are tiles, so these keys
+            // have no caret to move.
+            "right" if self.tiled() => self.step(1, cx),
+            "left" if self.tiled() => self.step(-1, cx),
             _ => {}
         }
+    }
+
+    /// The icon of the entry in `row`, `size` wide and high: a blank
+    /// square where there is none, or none was looked for yet.
+    fn render_icon(
+        &self,
+        row: usize,
+        size: Pixels,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let shortcut = &self.shortcuts[self.matches[row]];
+        let kind = self.kind(self.matches[row]);
+        let icons = cx.global::<AppIcons>();
+        let known = match kind {
+            Kind::App => icons.has(&shortcut.path),
+            Kind::File => icons.has_of_file(&shortcut.path),
+            Kind::Page => true,
+        };
+        let waits = !known && self.icons_left.get() == 0;
+        if waits {
+            self.icons_owed.set(true);
+        } else if !known {
+            self.icons_left.set(self.icons_left.get() - 1);
+        }
+        let image = match kind {
+            _ if waits => None,
+            Kind::App => icons.of_shortcut(shortcut),
+            Kind::File => icons.of_file(&shortcut.path),
+            Kind::Page => None,
+        };
+        match image {
+            Some(image) => img(image).size(size).flex_none().into_any_element(),
+            None if kind == Kind::Page => div()
+                .size(size)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.colors.primary)
+                .child(icon(theme, ICON_SETTINGS))
+                .into_any_element(),
+            None => div()
+                .size(size)
+                .flex_none()
+                .rounded(theme.shape.small)
+                .bg(theme.colors.outline)
+                .into_any_element(),
+        }
+    }
+
+    /// The application in `row` as a tile: its icon over its name.
+    fn render_tile(
+        &self,
+        row: usize,
+        theme: &Theme,
+        lit: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let columns = self.columns;
+        let part = 1. / columns as f32;
+        let name = self.shortcuts[self.matches[row]].name.clone();
+        let pin = self.render_pin(row, row == lit, theme, cx).map(|pin| {
+            div()
+                .absolute()
+                .top(theme.spacing.tiny)
+                .right(theme.spacing.tiny)
+                .child(pin)
+        });
+        div()
+            .id(("launcher-tile", row))
+            .absolute()
+            .top(TILE_HEIGHT * (row / columns) as f32)
+            .left(relative(part * (row % columns) as f32))
+            .w(relative(part))
+            .h(TILE_HEIGHT)
+            .px(theme.spacing.small)
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(theme.spacing.small)
+            .child(self.render_icon(row, TILE_ICON, theme, cx))
+            .child(
+                div()
+                    .max_w_full()
+                    .text_size(theme.typography.label_size)
+                    .child(one_line(SharedString::new(name))),
+            )
+            .children(pin)
+            .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.launch(row, cx)))
+            .into_any_element()
     }
 
     fn render_row(
@@ -511,43 +665,7 @@ impl Launcher {
                 .text_color(theme.colors.on_surface_variant)
                 .child(one_line(SharedString::new(folder)))
         });
-        let size = theme.launcher.icon_size;
-        let icons = cx.global::<AppIcons>();
-        let known = match kind {
-            Kind::App => icons.has(&shortcut.path),
-            Kind::File => icons.has_of_file(&shortcut.path),
-            Kind::Page => true,
-        };
-        let waits = !known && self.icons_left.get() == 0;
-        if waits {
-            self.icons_owed.set(true);
-        } else if !known {
-            self.icons_left.set(self.icons_left.get() - 1);
-        }
-        let image = match kind {
-            _ if waits => None,
-            Kind::App => icons.of_shortcut(shortcut),
-            Kind::File => icons.of_file(&shortcut.path),
-            Kind::Page => None,
-        };
-        let image = match image {
-            Some(image) => img(image).size(size).flex_none().into_any_element(),
-            None if kind == Kind::Page => div()
-                .size(size)
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(theme.colors.primary)
-                .child(icon(theme, ICON_SETTINGS))
-                .into_any_element(),
-            None => div()
-                .size(size)
-                .flex_none()
-                .rounded(theme.shape.small)
-                .bg(theme.colors.outline)
-                .into_any_element(),
-        };
+        let image = self.render_icon(row, theme.launcher.icon_size, theme, cx);
         div()
             .id(("launcher-row", row))
             .absolute()
@@ -632,27 +750,57 @@ impl Launcher {
                 .child(Language::of(cx).say("Nothing matches"))
                 .into_any_element();
         }
-        let row = theme.launcher.row_height;
+        // Tiles stand as many in a row as the list is wide for, which
+        // is known once it was drawn.
+        let tiled = self.tiled();
+        let columns = match tiled {
+            true => {
+                let width = self.scroll.bounds().size.width;
+                let width = match width > px(0.) {
+                    true => width,
+                    false => window.viewport_size().width,
+                };
+                tiles_across(f32::from(width))
+            }
+            false => 1,
+        };
+        if columns != self.columns {
+            self.columns = columns;
+            self.point();
+        }
+        let row = match tiled {
+            true => TILE_HEIGHT,
+            false => theme.launcher.row_height,
+        };
+        let count = self.matches.len();
+        let lines = count.div_ceil(columns);
         let (first, shown) = visible_rows(
-            self.matches.len(),
+            lines,
             f32::from(row),
             -f32::from(self.scroll.offset().y),
             f32::from(self.scroll.bounds().size.height),
         );
-        // The highlight moves to the selected row; what goes with it is
-        // drawn on the row it has reached.
+        // The highlight moves to the selected entry; what goes with it
+        // is drawn on the entry it has reached.
         let at = self.highlight.value(window).max(0.);
-        let lit = at.round() as usize;
+        let across = self.across.value(window).max(0.);
+        let lit = at.round() as usize * columns + across.round() as usize;
+        let part = 1. / columns as f32;
         let highlight = div()
             .absolute()
             .top(row * at)
-            .w_full()
+            .left(relative(part * across))
+            .w(relative(part))
             .h(row)
             .rounded(theme.shape.medium)
             .bg(theme.colors.secondary_container);
         self.icons_left.set(ICONS_PER_FRAME);
-        let rows: Vec<AnyElement> = (first..first + shown)
-            .map(|index| self.render_row(index, theme, row * index as f32, lit, cx))
+        let entries = first * columns..((first + shown) * columns).min(count);
+        let rows: Vec<AnyElement> = entries
+            .map(|index| match tiled {
+                true => self.render_tile(index, theme, lit, cx),
+                false => self.render_row(index, theme, row * index as f32, lit, cx),
+            })
             .collect();
         // The rows that went without an icon get it in the next frames.
         if self.icons_owed.replace(false) {
@@ -668,7 +816,7 @@ impl Launcher {
                 div()
                     .relative()
                     .w_full()
-                    .h(row * self.matches.len() as f32)
+                    .h(row * lines as f32)
                     .child(highlight)
                     .children(rows),
             )
@@ -764,6 +912,14 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), PAGES.len());
+    }
+
+    #[test]
+    fn a_wider_list_holds_more_tiles_in_a_row() {
+        assert_eq!(tiles_across(0.), 1);
+        assert_eq!(tiles_across(390.), 3);
+        assert_eq!(tiles_across(608.), 6);
+        assert_eq!(tiles_across(4000.), TILES_IN_A_ROW);
     }
 
     #[test]

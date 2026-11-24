@@ -21,8 +21,8 @@ center = [{ widget = "windows", start = "launcher" }]
 
 [[popup]]
 name = "launcher"
-width = 420
-height = 640
+width = 640
+height = 720
 content = ["apps", "launcher", "power"]
 
 [[popup]]
