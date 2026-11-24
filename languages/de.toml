@@ -134,7 +134,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Updates" = "Updates"
 "Account" = "Konto"
 "Volume" = "Lautstärke"
-"Drag a widget onto a bar, or press it to add it to the chosen part. Drag one between the parts to move it, and back here to take it out." = "Ein Widget auf eine Leiste ziehen oder es anklicken, um es dem gewählten Teil hinzuzufügen. Zwischen den Teilen ziehen, um es zu verschieben, und hierher zurück, um es zu entfernen."
 "Quit" = "Beenden"
 "Settings" = "Einstellungen"
 

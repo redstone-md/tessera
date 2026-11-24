@@ -135,7 +135,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Updates" = "Оновлення"
 "Account" = "Обліковий запис"
 "Volume" = "Гучність"
-"Drag a widget onto a bar, or press it to add it to the chosen part. Drag one between the parts to move it, and back here to take it out." = "Перетягніть віджет на панель або натисніть на нього, щоб додати до вибраної частини. Перетягуйте між частинами, щоб перемістити, і назад сюди, щоб прибрати."
 "Quit" = "Вийти"
 "Settings" = "Параметри"
 

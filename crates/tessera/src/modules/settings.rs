@@ -47,8 +47,8 @@ const CHIP_TINT: f32 = 0.07;
 
 /// The most a list of widgets to add takes while it opens.
 const ADD_LIST_HEIGHT: Pixels = px(240.);
-/// How tall the list of widgets for the bars gets before it scrolls.
-const PALETTE_HEIGHT: Pixels = px(220.);
+/// How tall the list of widgets to add is taken to be while it opens.
+const OFFERS_HEIGHT: Pixels = px(420.);
 /// How much of the color of what is dragged a slot takes while that is
 /// over it.
 const ZONE_TINT: f32 = 0.14;
@@ -558,13 +558,9 @@ enum Control {
     /// Stands for the widget at this place of a bar, which is dragged.
     Grab(Place),
     Remove(Place),
-    /// Chooses this slot of a surface for the widgets that are pressed.
-    Aim(usize, Slot),
-    /// Adds the widget at this place of the list to the chosen slot.
-    Offer(usize),
     /// Says when a surface hides.
     SurfaceHide(usize, Hiding),
-    /// Opens or closes the list of widgets to add to a card.
+    /// Opens or closes the list of widgets to add to a slot or a card.
     Adding(Holder),
     /// Adds the widget at this place of the list to what is being added to.
     Add(usize),
@@ -670,6 +666,8 @@ fn line(theme: &Theme, title: &'static str, chooser: AnyElement) -> gpui::Div {
 /// What widgets are added to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Holder {
+    /// A slot of the surface at this place.
+    Slot(usize, Slot),
     /// The card at this place.
     Card(usize),
 }
@@ -749,12 +747,10 @@ fn held(surface: &SurfaceConfig, slot: Slot) -> &[WidgetSpec] {
     }
 }
 
-/// A widget on its way to a slot of a bar.
+/// A widget of a bar on its way to another place.
 struct Carried {
-    /// Where it stood; `None` for one taken from the list of widgets.
-    from: Option<Place>,
-    /// The name a layout has for it.
-    widget: String,
+    /// Where it stood.
+    from: Place,
     title: SharedString,
 }
 
@@ -879,13 +875,9 @@ struct Settings {
     themes: Vec<String>,
     /// The languages there are to choose.
     languages: Vec<Language>,
-    /// The slot of a surface that takes the widgets pressed in the list.
-    aimed: (usize, Slot),
-    /// 1 for the chosen slot, 0 for the others.
-    aims: HashMap<(usize, Slot), Spring>,
     /// The widget of a bar that is being dragged.
     lifted: Option<Place>,
-    /// The card whose list of widgets to add is open, kept while it closes.
+    /// What has its list of widgets to add open, kept while it closes.
     adding: Option<Holder>,
     /// 1 while that list is open, 0 while it is closed.
     add_list: Spring,
@@ -923,8 +915,6 @@ impl Settings {
             running: Vec::new(),
             themes: Vec::new(),
             languages: Vec::new(),
-            aimed: (0, Slot::End),
-            aims: HashMap::new(),
             lifted: None,
             adding: None,
             add_list: Spring::new(motion.spatial_fast, 0.),
@@ -1117,20 +1107,6 @@ impl Settings {
             }
             Control::Grab(_) => {}
             Control::Remove(place) => self.change(cx, |file| file.remove(place)),
-            Control::Aim(surface, slot) => {
-                self.aimed = (surface, slot);
-                cx.notify();
-            }
-            Control::Offer(index) => {
-                let Some(widget) = self.available.get(index).cloned() else {
-                    return;
-                };
-                if self.panels.contains(&widget) {
-                    return;
-                }
-                let (surface, slot) = self.aimed;
-                self.change(cx, |file| file.add(surface, slot, &widget));
-            }
             Control::Adding(holder) => {
                 let open = self.add_list.target() > 0.;
                 if open && self.adding == Some(holder) {
@@ -1150,8 +1126,10 @@ impl Settings {
                 else {
                     return;
                 };
-                let Holder::Card(card) = holder;
-                self.change(cx, |file| file.add_to_card(card, &widget));
+                self.change(cx, |file| match holder {
+                    Holder::Slot(surface, slot) => file.add(surface, slot, &widget),
+                    Holder::Card(card) => file.add_to_card(card, &widget),
+                });
             }
             Control::NewCard => self.change(cx, ConfigFile::add_card),
             Control::DropCard(card) => {
@@ -1422,8 +1400,7 @@ impl Settings {
             .state(window);
         let remove = self.control(Control::Remove(place), Face::Glyph(ICON_REMOVE), window, cx);
         let carried = Carried {
-            from: Some(place),
-            widget: spec.widget.clone(),
+            from: place,
             title: title.clone(),
         };
         let view = cx.entity().downgrade();
@@ -1455,7 +1432,7 @@ impl Settings {
             .on_drag(carried, move |carried: &Carried, _, _, cx| {
                 let from = carried.from;
                 let lifted = view.update(cx, |this, cx| {
-                    this.lifted = from;
+                    this.lifted = Some(from);
                     cx.notify();
                 });
                 lifted.ok();
@@ -1485,8 +1462,8 @@ impl Settings {
     }
 
     /// A slot of a bar, standing where it stands in the bar: its widgets,
-    /// and room to let one go after them. A press chooses it for what is
-    /// pressed in the list of widgets.
+    /// the plus that opens the list of widgets to add to it, and room to
+    /// let a dragged widget go after the others.
     fn zone(
         &mut self,
         surface: usize,
@@ -1497,25 +1474,12 @@ impl Settings {
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
-        let aim = Control::Aim(surface, slot);
-        let state = self
-            .interactions
-            .entry(aim.clone())
-            .or_insert_with(|| Interaction::new(&theme.motion))
-            .state(window);
-        let chosen = if self.aimed == (surface, slot) {
-            1.
+        let holder = Holder::Slot(surface, slot);
+        let open = if self.adding == Some(holder) {
+            self.add_list.value(window).clamp(0., 1.)
         } else {
             0.
         };
-        let spring = self
-            .aims
-            .entry((surface, slot))
-            .or_insert_with(|| Spring::new(theme.motion.spatial_fast, chosen));
-        if spring.target() != chosen {
-            spring.animate_to(chosen);
-        }
-        let chosen = spring.value(window).clamp(0., 1.);
         let mut pills = Vec::new();
         for (index, spec) in specs.iter().enumerate() {
             let place = Place {
@@ -1525,19 +1489,20 @@ impl Settings {
             };
             pills.push(self.pill(place, spec, window, cx));
         }
+        pills.push(self.control(Control::Adding(holder), Face::Glyph(ICON_MORE), window, cx));
         let last = Place {
             surface,
             slot,
             index: specs.len(),
         };
-        let held = wrap(&theme).min_h(CHIP_HEIGHT);
+        let held = wrap(&theme).min_h(CHIP_HEIGHT).children(pills);
         let caption = div()
             .flex()
             .text_size(theme.typography.label_size * CAPTION_SHARE)
             .text_color(mix(
                 theme.colors.on_surface_variant,
                 theme.colors.primary,
-                chosen,
+                open,
             ))
             .child(language.say(slot.label()));
         let (held, caption) = match slot {
@@ -1545,16 +1510,9 @@ impl Settings {
             Slot::Center => (held.justify_center(), caption.justify_center()),
             Slot::End => (held.justify_end(), caption.justify_end()),
         };
-        let held = if pills.is_empty() {
-            held.child(note(&theme, language.say("Empty")))
-        } else {
-            held.children(pills)
-        };
         let (rest, lit) = (theme.colors.surface_container, theme.colors.primary);
         let over = mix(rest, lit, ZONE_TINT);
-        let action = aim.clone();
-        let zone = div()
-            .id(SharedString::from(format!("{aim:?}")))
+        div()
             .flex_1()
             .min_w(px(0.))
             .p(theme.spacing.small)
@@ -1563,23 +1521,19 @@ impl Settings {
             .gap(theme.spacing.tiny)
             .rounded(theme.shape.medium)
             .border_1()
-            .border_color(mix(theme.colors.surface_container, lit, chosen))
-            .bg(state_layer(&theme, rest, state))
+            .border_color(mix(rest, lit, open))
+            .bg(rest)
             .drag_over::<Carried>(move |style, _, _, _| style.bg(over).border_color(lit))
             .on_drop(cx.listener(move |this, carried: &Carried, _, cx| {
                 this.land(carried, last, cx);
             }))
-            .on_click(cx.listener(move |this, _, _, cx| this.act(&action, cx)))
             .child(caption)
-            .child(held);
-        Interaction::track(zone, cx, move |this: &mut Self| {
-            this.interactions.get_mut(&aim)
-        })
-        .into_any_element()
+            .child(held)
+            .into_any_element()
     }
 
-    /// A bar as it is laid out: its three slots side by side, and when it
-    /// hides.
+    /// A bar as it is laid out: its three slots side by side, the list of
+    /// widgets to add while one of them has it open, and when it hides.
     fn surface(
         &mut self,
         index: usize,
@@ -1589,9 +1543,16 @@ impl Settings {
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
+        // A drag that ended anywhere is over.
+        if self.lifted.is_some() && !cx.has_active_drag() {
+            self.lifted = None;
+        }
         let mut zones = Vec::new();
+        let mut offers = None;
         for slot in Slot::ALL {
             zones.push(self.zone(index, slot, held(surface, slot), window, cx));
+            let list = self.offers(Holder::Slot(index, slot), window, cx);
+            offers = offers.or(list);
         }
         let mut hiding = Vec::new();
         for (label, hide) in [
@@ -1613,6 +1574,7 @@ impl Settings {
                     .gap(theme.spacing.small)
                     .children(zones),
             )
+            .children(offers)
             .child(
                 div()
                     .flex()
@@ -1632,111 +1594,11 @@ impl Settings {
             .into_any_element()
     }
 
-    /// The widgets there are for a bar, those of Tessera first and then
-    /// those of each extension under its name. One is dragged onto a bar,
-    /// or pressed to go to the chosen slot; a widget of a bar let go here
-    /// is taken out.
-    fn palette(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = *cx.global::<Theme>();
-        let language = Language::of(cx);
-        // A drag that ended anywhere is over.
-        if self.lifted.is_some() && !cx.has_active_drag() {
-            self.lifted = None;
-        }
-        let mut groups: BTreeMap<Option<String>, Vec<AnyElement>> = BTreeMap::new();
-        for at in 0..self.available.len() {
-            let name = self.available[at].clone();
-            if self.panels.contains(&name) {
-                continue;
-            }
-            let (owner, title) = match name.split_once('.') {
-                Some((owner, title)) => (Some(owner.to_owned()), title.to_owned()),
-                None => (None, widget_name(&name, language)),
-            };
-            let title: SharedString = title.into();
-            let face = Face::Chip {
-                text: title.clone(),
-                selected: false,
-            };
-            let carried = Carried {
-                from: None,
-                widget: name,
-                title: widget_name(&self.available[at], language).into(),
-            };
-            let tile = self
-                .button(Control::Offer(at), face, window, cx)
-                .cursor(CursorStyle::OpenHand)
-                .on_drag(carried, |carried: &Carried, _, _, cx| {
-                    let title = carried.title.clone();
-                    cx.new(|_| Lifted { title })
-                });
-            groups
-                .entry(owner)
-                .or_default()
-                .push(tile.into_any_element());
-        }
-        // `None`, which is Tessera, sorts first.
-        let groups = groups.into_iter().map(|(owner, tiles)| {
-            let title = match owner {
-                Some(owner) => format!("{} {owner}", language.say("Extension")),
-                None => "Tessera".to_owned(),
-            };
-            div()
-                .flex()
-                .flex_col()
-                .gap(theme.spacing.tiny)
-                .child(note(&theme, title).text_size(theme.typography.label_size * CAPTION_SHARE))
-                .child(wrap(&theme).children(tiles))
-        });
-        let (rest, away) = (theme.colors.surface_container, theme.colors.outline);
-        let over = mix(rest, away, ZONE_TINT);
-        let list = div()
-            .id("palette")
-            .max_h(PALETTE_HEIGHT)
-            .overflow_y_scroll()
-            .p(theme.spacing.small)
-            .flex()
-            .flex_col()
-            .gap(theme.spacing.small)
-            .rounded(theme.shape.medium)
-            .bg(rest)
-            .drag_over::<Carried>(move |style, _, _, _| style.bg(over))
-            .on_drop(cx.listener(|this, carried: &Carried, _, cx| {
-                if let Some(from) = carried.from {
-                    this.change(cx, |file| file.remove(from));
-                }
-            }))
-            .children(groups);
-        let remark = "Drag a widget onto a bar, or press it to add it to the chosen part. Drag one between the parts to move it, and back here to take it out.";
-        card(&theme, language.say("Widgets"))
-            .child(note(&theme, language.say(remark)))
-            .child(list)
-            .into_any_element()
-    }
-
-    /// Puts what was dragged before what stands at `to`, or last in that
-    /// slot: a widget of a bar is moved there, one of the list is added.
+    /// Moves the dragged widget to stand before what is at `to`, or last
+    /// in that slot.
     fn land(&mut self, carried: &Carried, to: Place, cx: &mut Context<Self>) {
-        self.aimed = (to.surface, to.slot);
-        if let Some(from) = carried.from {
-            self.change(cx, |file| file.transfer(from, to));
-            return;
-        }
-        if self.panels.contains(&carried.widget) {
-            return;
-        }
-        let surfaces = self.config.as_ref().map(|config| &config.surfaces);
-        let Some(count) = surfaces.and_then(|all| Some(held(all.get(to.surface)?, to.slot).len()))
-        else {
-            return;
-        };
-        let widget = carried.widget.clone();
-        self.change(cx, |file| {
-            // It is added last, and goes from there to its place.
-            let added = Place { index: count, ..to };
-            file.add(to.surface, to.slot, &widget)
-                && (to.index >= count || file.transfer(added, to))
-        });
+        let from = carried.from;
+        self.change(cx, |file| file.transfer(from, to));
     }
 
     /// The chip that opens the list of widgets to add to `holder`.
@@ -1771,6 +1633,10 @@ impl Settings {
         let mut groups: BTreeMap<Option<String>, Vec<AnyElement>> = BTreeMap::new();
         for at in 0..self.available.len() {
             let name = self.available[at].clone();
+            // A bar is offered no widget made to fill a popup or a card.
+            if matches!(holder, Holder::Slot(..)) && self.panels.contains(&name) {
+                continue;
+            }
             let (owner, title) = match name.split_once('.') {
                 Some((owner, title)) => (Some(owner.to_owned()), title.to_owned()),
                 None => (None, widget_name(&name, language)),
@@ -1795,11 +1661,15 @@ impl Settings {
                 .child(note(&theme, title).text_size(theme.typography.label_size * CAPTION_SHARE))
                 .child(wrap(&theme).children(chips))
         });
-        let list = div()
-            .id(SharedString::from(format!("offers-{holder:?}")))
-            .max_h(ADD_LIST_HEIGHT * add_list)
-            .opacity(add_list.clamp(0., 1.))
-            .overflow_y_scroll()
+        // It is as tall as what it holds, so that the wheel turns the page
+        // and nothing inside it; it is cut only while it opens or closes.
+        let list = div().opacity(add_list.clamp(0., 1.));
+        let list = if add_list < 1. {
+            list.max_h(OFFERS_HEIGHT * add_list).overflow_hidden()
+        } else {
+            list
+        };
+        let list = list
             .p(theme.spacing.small)
             .flex()
             .flex_col()
@@ -2499,7 +2369,6 @@ impl Settings {
             }
             Section::Bars => {
                 wide.push(self.arranging(window, cx));
-                wide.push(self.palette(window, cx));
                 for (index, surface) in config.surfaces.iter().enumerate() {
                     wide.push(self.surface(index, surface, window, cx));
                 }

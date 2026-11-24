@@ -509,10 +509,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Updates", "Обновления"),
     ("Account", "Учётная запись"),
     ("Volume", "Громкость"),
-    (
-        "Drag a widget onto a bar, or press it to add it to the chosen part. Drag one between the parts to move it, and back here to take it out.",
-        "Перетащите виджет на панель или нажмите на него, чтобы добавить в выбранную часть. Перетаскивайте между частями, чтобы переместить, и обратно сюда, чтобы убрать.",
-    ),
     ("Quit", "Выйти"),
     ("Restart Tessera", "Перезапустить Tessera"),
     ("Updating", "Обновление"),
