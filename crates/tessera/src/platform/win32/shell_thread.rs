@@ -16,7 +16,13 @@
 //! of its own is done in the meantime, from inside that loop. Work that
 //! keeps a dialog open for long, such as a file operation with its
 //! progress, therefore holds nothing up, but it is better given a thread
-//! of its own, initialized the same way.
+//! of its own, initialized the same way, with [`ShellThread::run_alone`];
+//! so is work that may wait without handling messages, such as a start
+//! that waits on the network.
+//!
+//! The thread is made the first time work is handed over, and that call
+//! returns at once: the work waits until the thread has initialized OLE
+//! and made its window.
 //!
 //! ```ignore
 //! // From the thread of GPUI: hand the work over, await the answer.
@@ -27,7 +33,8 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
 
@@ -57,20 +64,24 @@ const WORK_WAITING: u32 = WM_APP + 0x51;
 type Work = Box<dyn FnOnce() + Send>;
 
 /// A handler of the messages of the hidden window; see
-/// [`ShellThread::intercept`].
-type Handler = Box<dyn FnMut(u32, WPARAM, LPARAM) -> Option<LRESULT>>;
+/// [`ShellThread::intercept`]. It is shared so that it can be called
+/// while the list of handlers is changed, and borrowed while it runs.
+type Handler = Rc<RefCell<dyn FnMut(u32, WPARAM, LPARAM) -> Option<LRESULT>>>;
 
-/// The running shell thread: where work is queued and the window that is
-/// told of it.
+/// The shell thread: where work is queued.
 struct Worker {
     queue: mpsc::Sender<Work>,
-    /// The hidden window, as a number, since a handle cannot be shared
-    /// between threads.
-    window: isize,
 }
 
-/// The thread, once started; why it could not start otherwise.
+/// The thread, once made; why it could not be made otherwise. It is made
+/// the first time work is handed over, without waiting for it to be
+/// ready: the work waits in the queue until it is.
 static WORKER: OnceLock<Result<Worker, String>> = OnceLock::new();
+
+/// The hidden window of the shell thread, as a number since a handle
+/// cannot be shared between threads; zero until the thread has made it,
+/// and for good where it could not.
+static WINDOW: AtomicIsize = AtomicIsize::new(0);
 
 /// The number of the shell thread, or zero before it runs.
 static THREAD: AtomicU32 = AtomicU32::new(0);
@@ -78,7 +89,8 @@ static THREAD: AtomicU32 = AtomicU32::new(0);
 thread_local! {
     /// The work queued for this thread, on the shell thread only.
     static WAITING: RefCell<Option<mpsc::Receiver<Work>>> = const { RefCell::new(None) };
-    /// The handlers of messages to the hidden window, with their numbers.
+    /// The handlers of messages to the hidden window, with their numbers,
+    /// the oldest first.
     static HANDLERS: RefCell<Vec<(u64, Handler)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -87,8 +99,9 @@ pub struct ShellThread;
 
 impl ShellThread {
     /// Has `work` done on the shell thread, after what was handed over
-    /// before. It returns at once. A panic in `work` is reported and the
-    /// thread goes on.
+    /// before. It returns at once, also the first time, while the thread
+    /// is still starting. A panic in `work` is reported and the thread
+    /// goes on.
     ///
     /// Where the thread could not be started, which is reported once, the
     /// work is done on a new thread with OLE initialized instead, without
@@ -97,21 +110,23 @@ impl ShellThread {
         let work: Work = Box::new(work);
         let worker = match WORKER.get_or_init(Worker::start) {
             Ok(worker) => worker,
-            Err(_) => return Self::run_elsewhere(work),
+            Err(_) => return Self::run_alone("shell work", work),
         };
-        if worker.queue.send(work).is_err() {
-            return report!("the shell thread takes no more work");
+        // The thread holds the queue for as long as the process lives, so
+        // this fails only if it ended with a panic.
+        if let Err(mpsc::SendError(work)) = worker.queue.send(work) {
+            return Self::run_alone("shell work", work);
+        }
+        // Before the window exists the thread is still starting, and does
+        // the waiting work once it has made it.
+        let window = WINDOW.load(Ordering::SeqCst);
+        if window == 0 {
+            return;
         }
         // SAFETY: posting to a window that has been destroyed fails without
         // side effects.
-        let posted = unsafe {
-            PostMessageW(
-                Some(handle(worker.window)),
-                WORK_WAITING,
-                WPARAM(0),
-                LPARAM(0),
-            )
-        };
+        let posted =
+            unsafe { PostMessageW(Some(handle(window)), WORK_WAITING, WPARAM(0), LPARAM(0)) };
         if let Err(error) = posted {
             report!("the shell thread was not told of new work: {error}");
         }
@@ -140,10 +155,12 @@ impl ShellThread {
     /// The hidden window of the shell thread, to name as the owner of a
     /// menu (`TrackPopupMenuEx`), of a dialog or of an operation of the
     /// Shell done on that thread. It is never shown. `None` where the
-    /// thread could not start.
+    /// thread could not start, or has not yet.
+    /// Asked for on the shell thread itself, it is there once the work
+    /// runs.
     pub(super) fn owner() -> Option<HWND> {
-        let worker = WORKER.get_or_init(Worker::start).as_ref().ok()?;
-        Some(handle(worker.window))
+        let window = WINDOW.load(Ordering::SeqCst);
+        (window != 0).then(|| handle(window))
     }
 
     /// Has `handler` see every message to the hidden window before the
@@ -152,8 +169,14 @@ impl ShellThread {
     /// context menu of the Shell gets the messages it asks for
     /// (`IContextMenu3::HandleMenuMsg2` for `WM_INITMENUPOPUP`,
     /// `WM_DRAWITEM`, `WM_MEASUREITEM` and `WM_MENUCHAR`) while
-    /// `TrackPopupMenuEx` runs. It is to be called on the shell thread,
-    /// and the interception dropped there too; elsewhere it does nothing.
+    /// `TrackPopupMenuEx` runs.
+    ///
+    /// The newest handler is asked first, so the menu of work done inside
+    /// the menu loop of earlier work gets its own messages. A handler that
+    /// is running is not asked again for a message that arrives while it
+    /// runs; the others are. A handler that panics is reported and removed.
+    /// It is to be called on the shell thread, and the interception dropped
+    /// there too; elsewhere it does nothing.
     #[allow(dead_code, reason = "for the context menus of the Shell")]
     pub(super) fn intercept(
         handler: impl FnMut(u32, WPARAM, LPARAM) -> Option<LRESULT> + 'static,
@@ -161,30 +184,46 @@ impl ShellThread {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let number = NEXT.fetch_add(1, Ordering::Relaxed);
         if Self::is_current() {
-            HANDLERS.with(|handlers| match handlers.try_borrow_mut() {
-                Ok(mut handlers) => handlers.push((number, Box::new(handler))),
-                Err(_) => report!("a handler of the shell thread was added while one ran"),
-            });
+            let handler: Handler = Rc::new(RefCell::new(handler));
+            HANDLERS.with(|handlers| handlers.borrow_mut().push((number, handler)));
         } else {
             report!("a handler of the shell thread was added on another thread");
         }
         Interception(number)
     }
 
-    /// Does `work` on a thread of its own with OLE initialized, for when
-    /// the shell thread could not be started.
-    fn run_elsewhere(work: Work) {
-        let started = thread::Builder::new()
-            .name("shell work".to_owned())
-            .spawn(move || {
-                if let Err(error) = enter_apartment() {
-                    report!("{error}, for the work of the Shell");
-                }
-                do_work(work);
-            });
+    /// Does `work` on a new thread called `name`, with COM initialized
+    /// apartment-threaded and OLE, as on the shell thread but without its
+    /// hidden window, and returns at once. This is for work that may keep
+    /// the thread for long without handling messages, which would hold up
+    /// the work after it on the shell thread: a file operation with its
+    /// progress, a pool of thumbnails, a start that waits on the network
+    /// or for the consent of the user. A panic in `work` is reported.
+    pub fn run_alone(name: &str, work: impl FnOnce() + Send + 'static) {
+        let work: Work = Box::new(work);
+        let started = thread::Builder::new().name(name.to_owned()).spawn(move || {
+            if let Err(error) = enter_apartment() {
+                report!("{error}, for the work of the Shell");
+            }
+            do_work(work);
+        });
         if let Err(error) = started {
             report!("no thread starts for the work of the Shell: {error}");
         }
+    }
+
+    /// Has `work` done as [`Self::run_alone`] does, and gives its answer
+    /// as [`Self::call`] does.
+    #[allow(dead_code, reason = "for the packages that ask the Shell for answers")]
+    pub fn call_alone<R: Send + 'static>(
+        name: &str,
+        work: impl FnOnce() -> R + Send + 'static,
+    ) -> Receiver<R> {
+        let (answer, answered) = async_channel::bounded(1);
+        Self::run_alone(name, move || {
+            answer.try_send(work()).ok();
+        });
+        answered
     }
 }
 
@@ -197,39 +236,38 @@ pub(super) struct Interception(u64);
 impl Drop for Interception {
     fn drop(&mut self) {
         let number = self.0;
-        HANDLERS.with(|handlers| {
-            if let Ok(mut handlers) = handlers.try_borrow_mut() {
-                handlers.retain(|(other, _)| *other != number);
-            }
-        });
+        remove_handler(number);
     }
 }
 
-impl Worker {
-    /// Starts the thread and waits until its window exists. A failure is
-    /// reported here, once.
-    fn start() -> Result<Self, String> {
-        let started = Self::try_start();
-        if let Err(error) = &started {
-            report!(
-                "the shell thread did not start, work of the Shell gets threads of its own: {error:#}"
-            );
+/// Removes the handler with the number `number`, on this thread.
+fn remove_handler(number: u64) {
+    HANDLERS.with(|handlers| {
+        // The list is borrowed only for as long as it is changed or
+        // copied, never while a handler runs.
+        if let Ok(mut handlers) = handlers.try_borrow_mut() {
+            handlers.retain(|(other, _)| *other != number);
         }
-        started.map_err(|error| format!("{error:#}"))
-    }
+    });
+}
 
-    fn try_start() -> Result<Self> {
+impl Worker {
+    /// Makes the thread and returns at once; the thread gets ready on its
+    /// own. A failure to make it is reported here, once.
+    fn start() -> Result<Self, String> {
         let (queue, waiting) = mpsc::channel::<Work>();
-        let (ready, started) = mpsc::channel::<Result<isize, String>>();
-        thread::Builder::new()
+        let made = thread::Builder::new()
             .name("shell".to_owned())
-            .spawn(move || pump(waiting, &ready))
-            .context("the thread could not be made")?;
-        let window = started
-            .recv()
-            .map_err(|_| anyhow!("the thread ended before it was ready"))?
-            .map_err(|error| anyhow!(error))?;
-        Ok(Self { queue, window })
+            .spawn(move || pump(waiting));
+        match made {
+            Ok(_) => Ok(Self { queue }),
+            Err(error) => {
+                report!(
+                    "the shell thread was not made, work of the Shell gets threads of its own: {error}"
+                );
+                Err(error.to_string())
+            }
+        }
     }
 }
 
@@ -261,24 +299,31 @@ fn enter_apartment() -> Result<(), String> {
 }
 
 /// The body of the shell thread: initializes OLE, makes the hidden
-/// window, tells `ready` of it, and handles messages for as long as the
-/// process lives.
-fn pump(waiting: mpsc::Receiver<Work>, ready: &mpsc::Sender<Result<isize, String>>) {
-    if let Err(error) = enter_apartment() {
-        ready.send(Err(error)).ok();
-        return;
-    }
-    let window = match create_window() {
+/// window, does the work that waited meanwhile, and handles messages for
+/// as long as the process lives. Where it cannot get ready, it hands each
+/// piece of work to a thread of its own instead, the waiting ones first.
+fn pump(waiting: mpsc::Receiver<Work>) {
+    let window =
+        enter_apartment().and_then(|()| create_window().map_err(|error| format!("{error:#}")));
+    let window = match window {
         Ok(window) => window,
         Err(error) => {
-            ready.send(Err(format!("{error:#}"))).ok();
+            report!(
+                "the shell thread did not start, work of the Shell gets threads of its own: {error}"
+            );
+            for work in waiting {
+                ShellThread::run_alone("shell work", work);
+            }
             return;
         }
     };
     WAITING.with(|queue| *queue.borrow_mut() = Some(waiting));
     // SAFETY: the call only reads which thread this is.
     THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
-    ready.send(Ok(window.0 as isize)).ok();
+    // Work handed over from now on is told of with a message; the work
+    // handed over before is done here.
+    WINDOW.store(window.0 as isize, Ordering::SeqCst);
+    work_waiting();
     let mut message = MSG::default();
     // SAFETY: `message` outlives the calls that fill and pass it on; the
     // window procedure is called from inside them.
@@ -338,21 +383,44 @@ fn work_waiting() {
     }
 }
 
-/// The window procedure of the hidden window.
+/// The window procedure of the hidden window. Nothing may unwind out of
+/// it, as that would end the process: a panic is reported, and the
+/// message gets the default handling.
 unsafe extern "system" fn receive(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
-    if message == WORK_WAITING {
-        work_waiting();
-        return LRESULT(0);
-    }
-    let handled = HANDLERS.with(|handlers| {
-        let mut handlers = handlers.try_borrow_mut().ok()?;
-        handlers
-            .iter_mut()
-            .find_map(|(_, handler)| handler(message, w, l))
-    });
-    if let Some(answer) = handled {
-        return answer;
+    match catch_unwind(|| answer(message, w, l)) {
+        Ok(Some(answer)) => return answer,
+        Ok(None) => {}
+        Err(_) => report!("a message to the shell thread was not handled"),
     }
     // SAFETY: the arguments are passed on as they came.
     unsafe { DefWindowProcW(window, message, w, l) }
+}
+
+/// What the hidden window answers to `message`, if anything other than
+/// the default: work that is waiting is done, and the handlers are asked,
+/// the newest first.
+fn answer(message: u32, w: WPARAM, l: LPARAM) -> Option<LRESULT> {
+    if message == WORK_WAITING {
+        work_waiting();
+        return Some(LRESULT(0));
+    }
+    // A copy, so that a handler can add or remove handlers, and messages
+    // that arrive while it runs reach the others.
+    let handlers: Vec<(u64, Handler)> =
+        HANDLERS.with(|handlers| handlers.borrow().iter().rev().cloned().collect());
+    for (number, handler) in handlers {
+        let Ok(mut handler) = handler.try_borrow_mut() else {
+            continue;
+        };
+        match catch_unwind(AssertUnwindSafe(|| (*handler)(message, w, l))) {
+            Ok(Some(answer)) => return Some(answer),
+            Ok(None) => {}
+            Err(_) => {
+                drop(handler);
+                report!("a handler of the shell thread failed and was removed");
+                remove_handler(number);
+            }
+        }
+    }
+    None
 }
