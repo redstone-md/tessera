@@ -60,10 +60,14 @@ fn main() {
     }
     Taskbar::wait_for_predecessor(std::env::args().skip(1));
     platform::Pace::keep();
+    // Decided before anything is opened; as the shell of the session
+    // Tessera finds no taskbar of Explorer to hide.
+    let shell = platform::shell_mode();
     let config = Config::load();
     Application::new().run(move |cx: &mut App| {
-        match Taskbar::hide_until_exit() {
-            Ok(()) => cx
+        match (!shell).then(Taskbar::hide_until_exit) {
+            None => {}
+            Some(Ok(())) => cx
                 .spawn(async move |cx: &mut AsyncApp| {
                     loop {
                         cx.background_executor().timer(TASKBAR_CHECK_INTERVAL).await;
@@ -71,7 +75,7 @@ fn main() {
                     }
                 })
                 .detach(),
-            Err(error) => report!("the Windows taskbar stays visible: {error:#}"),
+            Some(Err(error)) => report!("the Windows taskbar stays visible: {error:#}"),
         }
         if let Err(error) = Shell::start(config, cx) {
             report!("the shell does not start: {error:#}");

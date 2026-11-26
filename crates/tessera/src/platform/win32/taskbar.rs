@@ -175,7 +175,8 @@ impl Taskbar {
         windows
     }
 
-    fn windows_of_class(class: PCWSTR) -> Vec<HWND> {
+    /// The top-level windows of `class` that belong to other processes.
+    pub(super) fn windows_of_class(class: PCWSTR) -> Vec<HWND> {
         let mut windows = Vec::new();
         let mut previous = None;
         // SAFETY: `class` is a NUL-terminated literal, and the search resumes
