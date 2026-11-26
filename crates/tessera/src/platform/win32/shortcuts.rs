@@ -9,17 +9,17 @@ use std::fs;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::thread;
 
 use anyhow::{Result, bail};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
-    CoInitializeEx, CoUninitialize, IPersistFile, STGM_READ,
+    CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile, STGM_READ,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::UI::Shell::{IShellLinkW, ShellExecuteW, ShellLink};
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{Interface, PCWSTR, w};
+
+use super::ShellThread;
 
 /// Where the Start menu keeps shortcuts, below a profile directory.
 const PROGRAMS: &str = r"Microsoft\Windows\Start Menu\Programs";
@@ -95,10 +95,10 @@ impl Shortcut {
     ///
     /// The shell handles window messages while it opens a file, which the
     /// user interface thread must not do in the middle of an event, so the
-    /// work is done on a thread of its own.
+    /// work is done on the [`ShellThread`].
     pub fn launch(&self) {
         let shortcut = self.clone();
-        thread::spawn(move || {
+        ShellThread::run(move || {
             if let Err(error) = shortcut.open() {
                 report!("{error:#}");
             }
@@ -107,24 +107,17 @@ impl Shortcut {
 
     fn open(&self) -> Result<()> {
         let path = wide(&self.path);
-        // SAFETY: COM is initialized for the duration of the call on this
-        // thread and released only when that succeeded; both strings are
+        // SAFETY: the shell thread has COM initialized; both strings are
         // NUL-terminated and outlive the call.
         let instance = unsafe {
-            let initialized =
-                CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).is_ok();
-            let instance = ShellExecuteW(
+            ShellExecuteW(
                 None,
                 w!("open"),
                 PCWSTR(path.as_ptr()),
                 None,
                 None,
                 SW_SHOWNORMAL,
-            );
-            if initialized {
-                CoUninitialize();
-            }
-            instance
+            )
         };
         // The call reports success as a value above 32.
         if instance.0 as usize <= 32 {

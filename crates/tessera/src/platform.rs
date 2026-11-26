@@ -5,6 +5,11 @@
 
 mod win32;
 
+#[allow(
+    unused_imports,
+    reason = "for the packages that hand work to the Shell"
+)]
+pub use win32::ShellThread;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,

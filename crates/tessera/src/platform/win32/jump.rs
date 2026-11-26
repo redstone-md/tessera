@@ -9,13 +9,9 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::thread;
 
 use windows::Win32::Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_Title};
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
-    CoInitializeEx, CoUninitialize, IPersistStream,
-};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistStream};
 use windows::Win32::UI::Shell::Common::IObjectArray;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
@@ -26,8 +22,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{BSTR, HSTRING, Interface, PCWSTR, w};
 
-use super::AppWindowId;
 use super::packaged::take;
+use super::{AppWindowId, ShellThread};
 
 /// The directories Windows names by an identifier instead of their path
 /// when it makes up the identifier of an application from its program
@@ -233,28 +229,21 @@ fn position(bytes: &[u8], pattern: &[u8]) -> Option<usize> {
 /// Starts `program` with `arguments` the way the shell does. A failure is
 /// reported under `name`.
 ///
-/// The work is done on a thread of its own, as the shell handles window
+/// The work is done on the [`ShellThread`], as the shell handles window
 /// messages while it starts a program.
 fn execute(program: HSTRING, arguments: HSTRING, name: String) {
-    thread::spawn(move || {
-        // SAFETY: COM is initialized for the duration of the call on
-        // this thread and released only when that succeeded; the
-        // strings are NUL-terminated and outlive the call.
+    ShellThread::run(move || {
+        // SAFETY: the shell thread has COM initialized; the strings are
+        // NUL-terminated and outlive the call.
         let instance = unsafe {
-            let initialized =
-                CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).is_ok();
-            let instance = ShellExecuteW(
+            ShellExecuteW(
                 None,
                 w!("open"),
                 PCWSTR(program.as_ptr()),
                 PCWSTR(arguments.as_ptr()),
                 None,
                 SW_SHOWNORMAL,
-            );
-            if initialized {
-                CoUninitialize();
-            }
-            instance
+            )
         };
         // The call reports success as a value above 32.
         if instance.0 as usize <= 32 {
@@ -437,7 +426,10 @@ mod tests {
     fn tasks_of_open_windows() {
         // SAFETY: COM is initialized once for the thread of the test.
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            );
         }
         for window in super::super::AppWindow::enumerate() {
             let stated = window.id.stated_app_id();
@@ -470,7 +462,10 @@ mod tests {
     fn recent_documents_of_open_windows() {
         // SAFETY: COM is initialized once for the thread of the test.
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            );
         }
         for window in super::super::AppWindow::enumerate() {
             let stated = window.id.stated_app_id();
