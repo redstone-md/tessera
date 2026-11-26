@@ -6,6 +6,8 @@
 //! rename and delete it, through the Shell where Explorer would.
 
 mod model;
+mod pane;
+mod sidebar;
 mod view;
 
 use std::path::{Path, PathBuf};
