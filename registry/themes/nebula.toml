@@ -1,0 +1,49 @@
+# Tessera theme «Nebula»: Magenta and indigo clouds of a distant nebula.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "nebula"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/nebula.jpg.
+
+seed = "#d16bff"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#120c24"
+surface_container_highest = "#1f1638"
+on_surface = "#efe8ff"
+on_surface_variant = "#ab9fd1"
+outline = "#4d3f80"
+primary = "#d16bff"
+secondary_container = "#3a1f6e"
+
+[shape]
+small = 12
+medium = 22
+large = 30
+
+[spacing]
+tiny = 4
+small = 9
+medium = 15
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 300
+damping_ratio = 0.55
+
+[motion.spatial_fast]
+stiffness = 720
+damping_ratio = 0.5
+
+[bar]
+pill_height = 36
+
+[dock]
+container_height = 64
+item_size = 50
+icon_size = 34
+indicator_height = 4
+indicator_active_width = 20

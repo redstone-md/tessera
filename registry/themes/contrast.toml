@@ -1,0 +1,49 @@
+# Tessera theme «High Contrast»: Black and signal yellow at the highest contrast, for clear reading.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "contrast"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/contrast.jpg.
+
+seed = "#ffe600"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#000000"
+surface_container_highest = "#1a1a1a"
+on_surface = "#ffffff"
+on_surface_variant = "#ffe600"
+outline = "#ffffff"
+primary = "#ffe600"
+secondary_container = "#3d3600"
+
+[shape]
+small = 4
+medium = 8
+large = 12
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 15
+icon_size = 17
+
+[motion.spatial]
+stiffness = 500
+damping_ratio = 1.0
+
+[motion.spatial_fast]
+stiffness = 1000
+damping_ratio = 1.0
+
+[bar]
+pill_height = 36
+
+[dock]
+container_height = 64
+item_size = 50
+icon_size = 34
+indicator_height = 4
+indicator_active_width = 20

@@ -1,0 +1,49 @@
+# Tessera theme «Forest»: Deep moss greens and misty light from an old-growth wood.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "forest"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/forest.jpg.
+
+seed = "#8fd18b"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#121a14"
+surface_container_highest = "#1d2a20"
+on_surface = "#e2efe3"
+on_surface_variant = "#a3b8a5"
+outline = "#4d6550"
+primary = "#8fd18b"
+secondary_container = "#2d4a2f"
+
+[shape]
+small = 10
+medium = 18
+large = 26
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 340
+damping_ratio = 0.75
+
+[motion.spatial_fast]
+stiffness = 800
+damping_ratio = 0.75
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 60
+item_size = 46
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 20

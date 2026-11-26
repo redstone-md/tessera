@@ -1,0 +1,49 @@
+# Tessera theme «Glacier»: Crisp ice blues on white; light, tidy and calm.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "glacier"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/glacier.jpg.
+
+seed = "#2b7fc4"
+scheme = "light"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#f3f8fc"
+surface_container_highest = "#dde9f3"
+on_surface = "#10222f"
+on_surface_variant = "#4f6677"
+outline = "#9ab3c6"
+primary = "#2b7fc4"
+secondary_container = "#cfe5f7"
+
+[shape]
+small = 6
+medium = 12
+large = 18
+
+[spacing]
+tiny = 4
+small = 7
+medium = 12
+
+[typography]
+label_size = 13
+icon_size = 15
+
+[motion.spatial]
+stiffness = 420
+damping_ratio = 0.85
+
+[motion.spatial_fast]
+stiffness = 900
+damping_ratio = 0.9
+
+[bar]
+pill_height = 30
+
+[dock]
+container_height = 56
+item_size = 44
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 16

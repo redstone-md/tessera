@@ -1,0 +1,52 @@
+# Tessera theme «Terminal»: Phosphor green on black in a monospaced font; for those who live in a shell.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "terminal"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/terminal.jpg.
+
+seed = "#39ff6a"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#050805"
+surface_container_highest = "#0e160e"
+on_surface = "#b8f5b0"
+on_surface_variant = "#6fae68"
+outline = "#2a4a27"
+primary = "#39ff6a"
+secondary_container = "#133a17"
+
+[shape]
+small = 2
+medium = 3
+large = 4
+full = 4
+
+[spacing]
+tiny = 3
+small = 6
+medium = 10
+
+[typography]
+family = "Cascadia Mono"
+label_size = 13
+icon_size = 14
+
+[motion.spatial]
+stiffness = 600
+damping_ratio = 1.0
+
+[motion.spatial_fast]
+stiffness = 1200
+damping_ratio = 1.0
+
+[bar]
+pill_height = 26
+flat = true
+
+[dock]
+container_height = 50
+item_size = 40
+icon_size = 26
+indicator_height = 4
+indicator_active_width = 16

@@ -1,0 +1,49 @@
+# Tessera theme «Aurora»: Night teal and violet, after northern lights over a frozen fjord.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "aurora"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/aurora.jpg.
+
+seed = "#5ef2c8"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#0f1a24"
+surface_container_highest = "#1c2b3a"
+on_surface = "#e3f2ff"
+on_surface_variant = "#9bb4c8"
+outline = "#4a6378"
+primary = "#5ef2c8"
+secondary_container = "#3b2d6b"
+
+[shape]
+small = 10
+medium = 18
+large = 26
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 360
+damping_ratio = 0.62
+
+[motion.spatial_fast]
+stiffness = 800
+damping_ratio = 0.6
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 62
+item_size = 48
+icon_size = 32
+indicator_height = 4
+indicator_active_width = 20

@@ -1,0 +1,50 @@
+# Tessera theme «OLED»: True black and white for OLED panels: flat, small and still.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "oled"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/oled.jpg.
+
+seed = "#ffffff"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#000000"
+surface_container_highest = "#141414"
+on_surface = "#f5f5f5"
+on_surface_variant = "#a0a0a0"
+outline = "#3a3a3a"
+primary = "#ffffff"
+secondary_container = "#262626"
+
+[shape]
+small = 6
+medium = 10
+large = 16
+
+[spacing]
+tiny = 3
+small = 7
+medium = 12
+
+[typography]
+label_size = 13
+icon_size = 15
+
+[motion.spatial]
+stiffness = 500
+damping_ratio = 1.0
+
+[motion.spatial_fast]
+stiffness = 1000
+damping_ratio = 1.0
+
+[bar]
+pill_height = 28
+flat = true
+
+[dock]
+container_height = 54
+item_size = 42
+icon_size = 28
+indicator_height = 4
+indicator_active_width = 16

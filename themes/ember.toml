@@ -1,0 +1,49 @@
+# Tessera theme «Ember»: Warm charcoal with glowing orange, like coals after the fire.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "ember"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/ember.jpg.
+
+seed = "#ff7a2f"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#1a1412"
+surface_container_highest = "#2a201c"
+on_surface = "#f6e7df"
+on_surface_variant = "#c4a596"
+outline = "#6e5246"
+primary = "#ff7a2f"
+secondary_container = "#5a2a12"
+
+[shape]
+small = 8
+medium = 16
+large = 24
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 380
+damping_ratio = 0.7
+
+[motion.spatial_fast]
+stiffness = 850
+damping_ratio = 0.7
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 60
+item_size = 46
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 20

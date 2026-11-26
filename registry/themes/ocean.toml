@@ -1,0 +1,49 @@
+# Tessera theme «Ocean»: Navy depths and aqua light from beneath the waves.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "ocean"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/ocean.jpg.
+
+seed = "#3fd0e8"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#071a2b"
+surface_container_highest = "#0e2a42"
+on_surface = "#def3ff"
+on_surface_variant = "#8fb3c9"
+outline = "#2f5874"
+primary = "#3fd0e8"
+secondary_container = "#0f4566"
+
+[shape]
+small = 12
+medium = 20
+large = 30
+
+[spacing]
+tiny = 4
+small = 9
+medium = 15
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 300
+damping_ratio = 0.6
+
+[motion.spatial_fast]
+stiffness = 700
+damping_ratio = 0.55
+
+[bar]
+pill_height = 36
+
+[dock]
+container_height = 64
+item_size = 50
+icon_size = 34
+indicator_height = 4
+indicator_active_width = 20

@@ -1,0 +1,49 @@
+# Tessera theme «Citrus»: Lemon and lime on a sunny cream; playful and bright.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "citrus"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/citrus.jpg.
+
+seed = "#5f9e16"
+scheme = "light"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#fffbea"
+surface_container_highest = "#fff1c2"
+on_surface = "#262410"
+on_surface_variant = "#6a6540"
+outline = "#c9bf7e"
+primary = "#5f9e16"
+secondary_container = "#fde68a"
+
+[shape]
+small = 14
+medium = 24
+large = 34
+
+[spacing]
+tiny = 5
+small = 10
+medium = 16
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 300
+damping_ratio = 0.45
+
+[motion.spatial_fast]
+stiffness = 700
+damping_ratio = 0.45
+
+[bar]
+pill_height = 36
+
+[dock]
+container_height = 64
+item_size = 50
+icon_size = 34
+indicator_height = 4
+indicator_active_width = 20

@@ -1,0 +1,49 @@
+# Tessera theme «Mocha»: Coffee browns and caramel; cosy and easy on the eyes.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "mocha"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/mocha.jpg.
+
+seed = "#d9a066"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#1e1714"
+surface_container_highest = "#2c221d"
+on_surface = "#f3e6dc"
+on_surface_variant = "#bfa797"
+outline = "#5e4a3f"
+primary = "#d9a066"
+secondary_container = "#4a3426"
+
+[shape]
+small = 10
+medium = 18
+large = 26
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 360
+damping_ratio = 0.8
+
+[motion.spatial_fast]
+stiffness = 820
+damping_ratio = 0.8
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 60
+item_size = 46
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 20

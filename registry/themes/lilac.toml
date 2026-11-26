@@ -1,0 +1,49 @@
+# Tessera theme «Lilac»: Lavender fields at golden hour, pastel and airy.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "lilac"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/lilac.jpg.
+
+seed = "#7b4fc9"
+scheme = "light"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#f7f2fc"
+surface_container_highest = "#ebe1f6"
+on_surface = "#2a2136"
+on_surface_variant = "#6c5d7d"
+outline = "#b3a3c7"
+primary = "#7b4fc9"
+secondary_container = "#e3d3fa"
+
+[shape]
+small = 12
+medium = 22
+large = 30
+
+[spacing]
+tiny = 5
+small = 9
+medium = 15
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 320
+damping_ratio = 0.6
+
+[motion.spatial_fast]
+stiffness = 720
+damping_ratio = 0.55
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 62
+item_size = 48
+icon_size = 32
+indicator_height = 4
+indicator_active_width = 20

@@ -1,0 +1,50 @@
+# Tessera theme «Paper»: Ink on warm paper. Flat bars, square-ish shapes, no fuss.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "paper"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/paper.jpg.
+
+seed = "#8c4a2f"
+scheme = "light"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#f6f0e4"
+surface_container_highest = "#ebe2d1"
+on_surface = "#2b2620"
+on_surface_variant = "#6d6355"
+outline = "#b9ab95"
+primary = "#8c4a2f"
+secondary_container = "#e3d5bb"
+
+[shape]
+small = 4
+medium = 8
+large = 12
+
+[spacing]
+tiny = 3
+small = 7
+medium = 12
+
+[typography]
+label_size = 13
+icon_size = 15
+
+[motion.spatial]
+stiffness = 450
+damping_ratio = 1.0
+
+[motion.spatial_fast]
+stiffness = 950
+damping_ratio = 1.0
+
+[bar]
+pill_height = 28
+flat = true
+
+[dock]
+container_height = 54
+item_size = 42
+icon_size = 28
+indicator_height = 4
+indicator_active_width = 16

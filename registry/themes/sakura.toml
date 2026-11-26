@@ -1,0 +1,49 @@
+# Tessera theme «Sakura»: Soft blossom pinks on cream, light and round, with a gentle bounce.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "sakura"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/sakura.jpg.
+
+seed = "#d6457a"
+scheme = "light"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#fff4f6"
+surface_container_highest = "#fbe1e8"
+on_surface = "#3a2330"
+on_surface_variant = "#7d5a68"
+outline = "#c79aab"
+primary = "#d6457a"
+secondary_container = "#ffd2e0"
+
+[shape]
+small = 14
+medium = 24
+large = 34
+
+[spacing]
+tiny = 5
+small = 10
+medium = 16
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 280
+damping_ratio = 0.5
+
+[motion.spatial_fast]
+stiffness = 650
+damping_ratio = 0.5
+
+[bar]
+pill_height = 36
+
+[dock]
+container_height = 64
+item_size = 50
+icon_size = 34
+indicator_height = 4
+indicator_active_width = 20

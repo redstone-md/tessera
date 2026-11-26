@@ -1,0 +1,49 @@
+# Tessera theme «Sandstone»: Terracotta and sand from a sunlit canyon; warm and light.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "sandstone"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/sandstone.jpg.
+
+seed = "#c0612b"
+scheme = "light"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#faf1e8"
+surface_container_highest = "#f0e0cf"
+on_surface = "#33241a"
+on_surface_variant = "#7a6150"
+outline = "#c5a88f"
+primary = "#c0612b"
+secondary_container = "#f6d5b8"
+
+[shape]
+small = 8
+medium = 16
+large = 24
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 360
+damping_ratio = 0.75
+
+[motion.spatial_fast]
+stiffness = 820
+damping_ratio = 0.75
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 60
+item_size = 46
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 20

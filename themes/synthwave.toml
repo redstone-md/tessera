@@ -1,0 +1,49 @@
+# Tessera theme «Synthwave»: Neon pink and electric cyan on a deep purple night.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "synthwave"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/synthwave.jpg.
+
+seed = "#ff3ea5"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#1a0b2e"
+surface_container_highest = "#2b1450"
+on_surface = "#fbe9ff"
+on_surface_variant = "#c3a3d9"
+outline = "#6c3fa0"
+primary = "#ff3ea5"
+secondary_container = "#0d4a5c"
+
+[shape]
+small = 8
+medium = 14
+large = 22
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 420
+damping_ratio = 0.55
+
+[motion.spatial_fast]
+stiffness = 900
+damping_ratio = 0.5
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 60
+item_size = 46
+icon_size = 30
+indicator_height = 4
+indicator_active_width = 20

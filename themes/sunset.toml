@@ -1,0 +1,49 @@
+# Tessera theme «Sunset»: Dusk over the dunes: burning orange under a purple sky.
+# Copy it to %APPDATA%\tessera\themes\ and choose it in the settings,
+# install it from the marketplace, or write `theme = "sunset"` at the top
+# of config.toml. Its wallpaper is registry/wallpapers/sunset.jpg.
+
+seed = "#ff9a4d"
+scheme = "dark"
+
+# Every role is set, so the theme looks the same whatever it is derived from.
+[colors]
+surface_container = "#1d1226"
+surface_container_highest = "#2d1b38"
+on_surface = "#ffe9dc"
+on_surface_variant = "#d1a9a0"
+outline = "#6d4660"
+primary = "#ff9a4d"
+secondary_container = "#5b2448"
+
+[shape]
+small = 10
+medium = 20
+large = 28
+
+[spacing]
+tiny = 4
+small = 8
+medium = 14
+
+[typography]
+label_size = 14
+icon_size = 16
+
+[motion.spatial]
+stiffness = 330
+damping_ratio = 0.6
+
+[motion.spatial_fast]
+stiffness = 760
+damping_ratio = 0.55
+
+[bar]
+pill_height = 34
+
+[dock]
+container_height = 62
+item_size = 48
+icon_size = 32
+indicator_height = 4
+indicator_active_width = 20
