@@ -59,6 +59,7 @@ pub use brightness::ScreenBrightness;
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
+pub use execute::Process;
 pub use execute::{Launch, Show};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
