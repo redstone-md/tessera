@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! How busy the machine is and how much charge it has left.
-//! Widgets: `cpu`, `memory`, `battery`.
+//! Widgets: `cpu`, `memory`, `battery`, `disk`, `network`.
 
 use std::time::Duration;
 
@@ -11,9 +11,10 @@ use gpui::{
     SharedString, Styled, WeakEntity, Window, div,
 };
 
+use crate::files::size_text;
 use crate::module::{Module, WidgetContext, WidgetRegistry};
 use crate::motion::Spring;
-use crate::platform::{Battery, MemoryLoad, ProcessorLoad};
+use crate::platform::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, disk_space};
 use crate::theme::Theme;
 use crate::ui::{icon, pill, wave_meter};
 
@@ -47,6 +48,21 @@ impl Module for SystemModule {
         widgets.register("battery", |context, cx| {
             cx.new(|cx| Meter::new(Box::new(BatteryGauge), context, cx))
                 .into()
+        })?;
+        widgets.register("disk", |context, cx| {
+            let gauge = DiskGauge {
+                root: context.text("drive").unwrap_or("C:\\").into(),
+                amount: one_of(context, "show", &["percent", "free"]) == 1,
+            };
+            cx.new(|cx| Meter::new(Box::new(gauge), context, cx)).into()
+        })?;
+        widgets.register("network", |context, cx| {
+            let megabits = context.number("megabits").unwrap_or(100.).max(1.);
+            let gauge = NetworkGauge {
+                traffic: NetworkTraffic::default(),
+                full: megabits * 1_000_000. / 8.,
+            };
+            cx.new(|cx| Meter::new(Box::new(gauge), context, cx)).into()
         })
     }
 }
@@ -152,6 +168,62 @@ impl Gauge for BatteryGauge {
             glyph: battery_glyph(battery),
             text: format!("{}%", battery.percent),
             text_width: VALUE_WIDTH,
+        })
+    }
+}
+
+/// How full the drive with `root` is. Option `drive` (`C:\`), and
+/// `show = "free"` for what is left instead of the share used.
+struct DiskGauge {
+    root: std::path::PathBuf,
+    amount: bool,
+}
+
+impl Gauge for DiskGauge {
+    fn interval(&self) -> Duration {
+        Duration::from_secs(30)
+    }
+
+    fn read(&mut self) -> Option<Reading> {
+        let (total, free) = disk_space(&self.root)?;
+        let level = whole_percent(1. - free as f32 / total.max(1) as f32);
+        Some(Reading {
+            level,
+            glyph: "\u{EDA2}",
+            text: match self.amount {
+                true => size_text(free),
+                false => percent(level),
+            },
+            text_width: if self.amount {
+                AMOUNT_WIDTH
+            } else {
+                VALUE_WIDTH
+            },
+        })
+    }
+}
+
+/// What goes through the network: the level is the busier way against
+/// `megabits` per second (100), the text what is received each second.
+struct NetworkGauge {
+    traffic: NetworkTraffic,
+    /// Bytes per second that fill the meter.
+    full: f64,
+}
+
+impl Gauge for NetworkGauge {
+    fn interval(&self) -> Duration {
+        Duration::from_secs(2)
+    }
+
+    fn read(&mut self) -> Option<Reading> {
+        let (received, sent) = self.traffic.read()?;
+        let level = whole_percent((received.max(sent) / self.full).min(1.) as f32);
+        Some(Reading {
+            level,
+            glyph: "\u{E896}",
+            text: format!("{}/s", size_text(received as u64)),
+            text_width: AMOUNT_WIDTH + 1.,
         })
     }
 }
