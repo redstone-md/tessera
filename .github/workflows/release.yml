@@ -1,6 +1,7 @@
-# Builds Tessera for a tag that names a version and publishes the files a
-# release carries: the archive, and the program with its checksum, which
-# the `update` widget installs.
+# Runs only for a tag that names a version, such as v0.3.0: checks the
+# code, builds Tessera and publishes the files a release carries — the
+# archive, and the program with its checksum, which the `update` widget
+# installs. Nothing runs for ordinary pushes or pull requests.
 name: release
 
 on:
@@ -10,11 +11,48 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  windows:
+  check:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+
+  extensions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Test and build every extension
+        shell: bash
+        run: |
+          for manifest in extensions/*/Cargo.toml; do
+            cargo test --manifest-path "$manifest" --locked
+            cargo build --release --locked --target wasm32-unknown-unknown \
+              --manifest-path "$manifest" --target-dir target/extensions
+          done
+
+  release:
+    needs: [check, extensions]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --release --locked
       - name: Gather the files
@@ -23,6 +61,8 @@ jobs:
           New-Item -ItemType Directory -Force dist/tessera | Out-Null
           Copy-Item target/release/tessera.exe, LICENSE, README.md dist/tessera/
           Copy-Item -Recurse themes, languages dist/tessera/
+          New-Item -ItemType Directory -Force dist/tessera/wallpapers | Out-Null
+          Copy-Item registry/wallpapers/*.jpg dist/tessera/wallpapers/
           Compress-Archive -Path dist/tessera -DestinationPath dist/tessera-win64.zip
           Copy-Item target/release/tessera.exe dist/tessera.exe
           $sum = (Get-FileHash dist/tessera.exe -Algorithm SHA256).Hash.ToLower()
@@ -34,4 +74,5 @@ jobs:
         run: >
           gh release create "${{ github.ref_name }}"
           dist/tessera-win64.zip dist/tessera.exe dist/tessera.exe.sha256
-          --title "${{ github.ref_name }}" --generate-notes
+          --title "Tessera ${{ github.ref_name }}" --generate-notes
+          --verify-tag
