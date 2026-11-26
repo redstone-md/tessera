@@ -3,7 +3,8 @@
 
 //! Two small buttons for the look of Windows. Widget `appearance`: whether
 //! Windows is light or dark, and a click that makes it the other. Widget
-//! `desktop`: a click shows the desktop or brings the windows back.
+//! `desktop`: a click shows the desktop or brings the windows back, as the
+//! action `desktop` does.
 
 use std::time::Duration;
 
@@ -12,9 +13,10 @@ use gpui::{
     StatefulInteractiveElement, Styled, WeakEntity, Window,
 };
 
+use crate::actions::{Action, Actions};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{Taskbar, light_mode, set_light_mode};
+use crate::platform::{ShowDesktop, Taskbar, light_mode, set_light_mode};
 use crate::theme::Theme;
 use crate::ui::{icon, pill, state_layer};
 
@@ -42,6 +44,21 @@ impl Module for LookModule {
             })
             .into()
         })
+    }
+
+    fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
+        // Windows keeps Win+D to itself while Explorer runs.
+        let desktop = Action::new(|_, _| toggle_desktop()).taking_reserved_keys();
+        actions.register("desktop", desktop)
+    }
+}
+
+/// Shows the desktop by putting all windows aside, or brings them back:
+/// through the taskbar of Explorer where it runs, which knows best what
+/// to bring back, and with Tessera's own [`ShowDesktop`] otherwise.
+fn toggle_desktop() {
+    if !Taskbar::toggle_desktop() {
+        ShowDesktop::toggle();
     }
 }
 
@@ -140,10 +157,7 @@ struct DesktopButton {
 
 impl DesktopButton {
     fn toggle(&mut self, cx: &mut Context<Self>) {
-        if !Taskbar::toggle_desktop() {
-            report!("there is no taskbar to ask for the desktop");
-            return;
-        }
+        toggle_desktop();
         self.pressed.jump_to(1.);
         self.pressed.animate_to(0.);
         cx.notify();

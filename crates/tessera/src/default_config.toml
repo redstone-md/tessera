@@ -126,11 +126,17 @@
 #           Tessera are:
 #             popup    the popup arg names, as popup above; its keys are
 #                      taken from Windows where it keeps them, as win+v
+#             desktop  shows the desktop, or brings the windows back, as
+#                      the widget desktop does; win+d is taken from Windows
 #
 # [[key]]
 # press = "win+v"
 # action = "popup"
 # arg = "clipboard"
+#
+# [[key]]
+# press = "win+d"
+# action = "desktop"
 
 # The file manager of Tessera, which `tessera files [folder]`, the widget
 # `files` and the key above open. It reads folders without Explorer, opens
