@@ -327,6 +327,26 @@ const SETTINGS: &[Setting] = &[
         },
     },
     Setting {
+        section: Section::General,
+        card: "File manager",
+        title: "Open folders in Tessera",
+        target: Target::Table("files", "own"),
+        kind: Kind::Switch {
+            on: Answer::Unset,
+            off: Answer::Flag(false),
+        },
+    },
+    Setting {
+        section: Section::General,
+        card: "File manager",
+        title: "Show hidden files",
+        target: Target::Table("files", "hidden"),
+        kind: Kind::Switch {
+            on: Answer::Flag(true),
+            off: Answer::Unset,
+        },
+    },
+    Setting {
         section: Section::Widgets,
         card: "Clock",
         title: "Format",

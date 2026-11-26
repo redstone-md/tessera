@@ -1064,7 +1064,10 @@ impl FilesView {
             .hover(|style| style.bg(theme.colors.surface_container_highest))
             .child(icon(theme, ICON_COMPUTER))
             .child(language.say("This PC"))
-            .on_click(cx.listener(|this, _, window, cx| this.go(Location::Computer, window, cx)));
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.go(Location::Computer, window, cx)
+            }));
         steps.push(root.into_any_element());
         if let Location::Folder(path) = self.history.current() {
             for (index, (name, target)) in crumbs(path).into_iter().enumerate() {
@@ -1087,6 +1090,7 @@ impl FilesView {
                         .hover(|style| style.bg(theme.colors.surface_container_highest))
                         .child(name)
                         .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
                             this.go(Location::Folder(target.clone()), window, cx)
                         }))
                         .into_any_element(),

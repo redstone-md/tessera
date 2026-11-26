@@ -290,6 +290,8 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Restart Tessera" = "Redémarrer Tessera"
 
 # The file manager.
+"File manager" = "Gestionnaire de fichiers"
+"Open folders in Tessera" = "Ouvrir les dossiers dans Tessera"
 "Filter" = "Filtrer"
 "This PC" = "Ce PC"
 "New folder" = "Nouveau dossier"

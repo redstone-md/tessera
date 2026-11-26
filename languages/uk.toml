@@ -290,6 +290,8 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Restart Tessera" = "Перезапустити Tessera"
 
 # The file manager.
+"File manager" = "Файловий менеджер"
+"Open folders in Tessera" = "Відкривати теки в Tessera"
 "Filter" = "Фільтр"
 "This PC" = "Цей комп'ютер"
 "New folder" = "Нова папка"
