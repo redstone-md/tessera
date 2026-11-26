@@ -700,6 +700,12 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Reading…", "Чтение…"),
     ("This folder cannot be read", "Эту папку нельзя прочитать"),
     ("This folder is empty", "Папка пуста"),
+    // Settings: keys that name an action.
+    ("Action", "Действие"),
+    (
+        "The action is written in the file by hand.",
+        "Действие записывается в файл вручную.",
+    ),
 ];
 
 #[cfg(test)]

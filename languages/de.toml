@@ -316,3 +316,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Reading…" = "Wird gelesen…"
 "This folder cannot be read" = "Dieser Ordner kann nicht gelesen werden"
 "This folder is empty" = "Dieser Ordner ist leer"
+
+# Settings: keys that name an action.
+"Action" = "Aktion"
+"The action is written in the file by hand." = "Die Aktion wird von Hand in die Datei geschrieben."

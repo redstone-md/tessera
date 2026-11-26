@@ -317,3 +317,7 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Reading…" = "Читання…"
 "This folder cannot be read" = "Цю теку не можна прочитати"
 "This folder is empty" = "Тека порожня"
+
+# Settings: keys that name an action.
+"Action" = "Дія"
+"The action is written in the file by hand." = "Дію записують у файл вручну."

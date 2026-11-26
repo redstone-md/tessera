@@ -631,17 +631,34 @@ enum Control {
 }
 
 /// The deeds of a key combination as they are shown, in the order of
-/// [`DEEDS`]. The last one is not chosen here: it takes a text.
-const DEED_TITLES: [&str; 7] = [
-    "Popup", "Tiling", "Focus", "Move", "Windows", "Dock", "Program",
+/// [`DEEDS`], and then an action, which `DEEDS` has not. The last two are
+/// not chosen here: they are texts written by hand.
+const DEED_TITLES: [&str; 8] = [
+    "Popup", "Tiling", "Focus", "Move", "Windows", "Dock", "Program", "Action",
 ];
 const DEED_RUN: usize = 6;
+const DEED_ACTION: usize = 7;
 const SIDES: [&str; 4] = ["left", "right", "up", "down"];
 
-/// Which of [`DEEDS`] a key combination does, and with what.
+/// Which of [`DEED_TITLES`] a key combination does, and with what. An
+/// action is shown as its name and `arg`; a folder of the file manager as
+/// the action `files` it is the same as.
 fn deed_of(key: &KeyConfig) -> Option<(usize, String)> {
     let run = key.run.as_ref().map(|run| run.join(" "));
     let dock = key.dock.map(|number| number.to_string());
+    let action = match (&key.action, &key.files) {
+        (Some(name), _) => Some(name.clone()),
+        (None, Some(_)) => Some("files".to_owned()),
+        (None, None) => None,
+    };
+    let arg = key
+        .arg
+        .as_ref()
+        .or(key.files.as_ref().filter(|_| key.action.is_none()));
+    let action = action.map(|name| match arg {
+        Some(arg) => format!("{name} {arg}"),
+        None => name,
+    });
     let deeds = [
         &key.popup,
         &key.tiling,
@@ -650,6 +667,7 @@ fn deed_of(key: &KeyConfig) -> Option<(usize, String)> {
         &key.switch,
         &dock,
         &run,
+        &action,
     ];
     let mut deeds = deeds.into_iter().enumerate();
     deeds.find_map(|(kind, deed)| Some((kind, deed.clone()?)))
@@ -1940,8 +1958,9 @@ impl Settings {
         let kind = deed.as_ref().map(|(kind, _)| *kind);
         let mut kinds = Vec::new();
         for (at, title) in DEED_TITLES.into_iter().enumerate() {
-            // A program is shown where the file has one and not offered.
-            if at == DEED_RUN && kind != Some(DEED_RUN) {
+            // A program and an action are shown where the file has one and
+            // not offered.
+            if (at == DEED_RUN || at == DEED_ACTION) && kind != Some(at) {
                 continue;
             }
             let face = Face::Chip {
@@ -1954,8 +1973,11 @@ impl Settings {
         section = section.child(line(&theme, language.say("Does"), kinds.into_any_element()));
 
         if let Some((kind, value)) = deed {
-            if kind == DEED_RUN {
-                let by_hand = "The program is written in the file by hand.";
+            if kind == DEED_RUN || kind == DEED_ACTION {
+                let by_hand = match kind {
+                    DEED_RUN => "The program is written in the file by hand.",
+                    _ => "The action is written in the file by hand.",
+                };
                 section = section
                     .child(div().child(SharedString::new(value)))
                     .child(note(&theme, language.say(by_hand)));
@@ -2543,6 +2565,32 @@ impl Render for Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_that_names_an_action_is_shown_as_doing_it() {
+        let mut key = KeyConfig {
+            action: Some("desktop".to_owned()),
+            arg: Some("minimize".to_owned()),
+            ..KeyConfig::default()
+        };
+        assert_eq!(
+            deed_of(&key),
+            Some((DEED_ACTION, "desktop minimize".to_owned()))
+        );
+        key.arg = None;
+        assert_eq!(deed_of(&key), Some((DEED_ACTION, "desktop".to_owned())));
+        let folder = KeyConfig {
+            files: Some("~".to_owned()),
+            ..KeyConfig::default()
+        };
+        assert_eq!(deed_of(&folder), Some((DEED_ACTION, "files ~".to_owned())));
+        let popup = KeyConfig {
+            popup: Some("launcher".to_owned()),
+            ..KeyConfig::default()
+        };
+        assert_eq!(deed_of(&popup), Some((0, "launcher".to_owned())));
+        assert_eq!(DEED_TITLES[DEED_ACTION], "Action");
+    }
 
     #[test]
     fn a_widget_is_called_by_what_it_shows_or_by_its_extension() {

@@ -317,3 +317,7 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Reading…" = "Leyendo…"
 "This folder cannot be read" = "No se puede leer esta carpeta"
 "This folder is empty" = "Esta carpeta está vacía"
+
+# Settings: keys that name an action.
+"Action" = "Acción"
+"The action is written in the file by hand." = "La acción se escribe a mano en el archivo."
