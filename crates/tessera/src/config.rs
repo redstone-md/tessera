@@ -186,7 +186,7 @@ impl PopupConfig {
 
 /// A key combination Tessera answers wherever it is pressed, and the one
 /// thing it does.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyConfig {
     /// The combination, as `ctrl+alt+space`.
@@ -213,6 +213,12 @@ pub struct KeyConfig {
     /// A folder to open in the file manager: a path, `~` for the folder
     /// of the user, or `computer` for the drives.
     pub files: Option<String>,
+    /// The name of an action, one of those the modules of Tessera
+    /// register (see crate::actions), such as `desktop`.
+    pub action: Option<String>,
+    /// What the action of `action` is done with, as `tessera do <action>
+    /// <arg>` would give it.
+    pub arg: Option<String>,
 }
 
 /// When a surface goes away.

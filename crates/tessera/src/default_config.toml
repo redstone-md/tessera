@@ -39,10 +39,13 @@
 
 # Each [[key]] is a key combination Tessera answers wherever it is pressed.
 # press names it: keys to hold among alt, ctrl, shift and win, then the key
-# to press, joined by +; that key is a digit, a letter, f1 to f12, space,
-# tab, enter, left, up, right or down. No program gets the combination while
-# Tessera holds it, and one that Windows or another program holds already is
-# reported and does nothing. Each [[key]] has one of:
+# to press, joined by +; that key is a digit, a letter, f1 to f24, space,
+# tab, enter, left, up, right, down, home, end, pageup, pagedown, insert,
+# delete, backspace, escape, pause, printscreen, or the keys of period,
+# comma, plus, minus and backquote (where a US layout has them). No program
+# gets the combination while Tessera holds it, and one that Windows or
+# another program holds already is reported and does nothing. Each [[key]]
+# has one of:
 #   popup   the [[popup]] to open, or to close when it is open
 #   tiling  "next" for the tiling mode after the one in use, "off", a
 #           layout of [tiling], or "float", which takes the window in front
@@ -114,6 +117,20 @@
 # [[key]]
 # press = "win+e"
 # files = "~"
+#
+#   action  the name of an action, which the modules of Tessera register;
+#           arg is what it is done with, where it takes something. A name
+#           no module registered, or an arg the action refuses, is
+#           reported like any other mistake. `tessera do <action> [arg]`
+#           does the same from a console. The actions that come with
+#           Tessera are:
+#             popup    the popup arg names, as popup above; its keys are
+#                      taken from Windows where it keeps them, as win+v
+#
+# [[key]]
+# press = "win+v"
+# action = "popup"
+# arg = "clipboard"
 
 # The file manager of Tessera, which `tessera files [folder]`, the widget
 # `files` and the key above open. It reads folders without Explorer, opens

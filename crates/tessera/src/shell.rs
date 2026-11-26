@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
+use crate::actions::Actions;
 use crate::banners::Banners;
 use crate::config::{Config, Displays};
 use crate::desk::Cards;
@@ -66,9 +67,10 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::start(&config.tiling, cx);
         Workspaces::start(&config.workspaces, cx);
-        Shortcuts::start(&config.keys, cx);
         let extensions = installed_stamp();
-        cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
+        let modules = modules::builtin(&config);
+        Actions::start(&modules, cx);
+        cx.set_global(WidgetRegistry::from_modules(&modules));
         cx.set_global(Popups::new(&config.popups));
         cx.set_global(Previews::default());
         cx.set_global(Tips::default());
@@ -83,6 +85,9 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        // The keys come last: what a `[[key]]` names is checked against
+        // the actions, which every part started above has added by now.
+        Shortcuts::start(&config.keys, cx);
         cx.set_global(Self {
             config,
             surfaces,

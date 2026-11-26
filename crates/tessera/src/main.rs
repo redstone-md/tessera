@@ -8,6 +8,7 @@
 #[macro_use]
 mod report;
 
+mod actions;
 mod badges;
 mod banners;
 mod config;

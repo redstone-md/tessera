@@ -33,3 +33,22 @@ files = "~"           # a path, "~" for the folder of the user, or "computer"
 ```
 
 From a console, `tessera files`, `tessera files computer` and `tessera files D:\Projects` open a window in the running shell.
+
+## Actions
+
+A `[[key]]` can name an action instead of one of its other fields: `action` is its name and `arg`, where the action takes one, what it is done with. The modules of Tessera register the actions, so one comes with the feature that brings it, and a name that no module registered, or an `arg` the action refuses, is reported when the configuration is read, like any other mistake in a `[[key]]`. An action may ask for its keys to be taken from Windows where Windows keeps them to itself (as it does with Win+D, Win+V or Win+E); Tessera then takes them with its keyboard hook, as it does for `switch`, `dock` and `files`.
+
+```toml
+[[key]]
+press = "win+v"
+action = "popup"      # the popup `arg` names, opened or closed
+arg = "clipboard"
+```
+
+From a console, `tessera do <action> [arg]` does an action in the running shell, as `tessera do popup launcher`; the words after the name are joined by spaces into the `arg`.
+
+| Action | `arg` | What it does |
+| --- | --- | --- |
+| `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
+
+The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).

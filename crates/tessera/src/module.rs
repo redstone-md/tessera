@@ -9,6 +9,7 @@ use std::rc::Rc;
 use anyhow::bail;
 use gpui::{AnyView, App, Global};
 
+use crate::actions::Actions;
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::platform::DisplayKey;
 
@@ -19,6 +20,13 @@ pub trait Module {
 
     /// Contributes the module's widgets and popups.
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()>;
+
+    /// Contributes the module's actions, which `[[key]]` entries and
+    /// `tessera do` name. Asked once, when the shell starts; most modules
+    /// have none.
+    fn actions(&self, _actions: &mut Actions) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Where and how a widget instance is being placed.

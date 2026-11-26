@@ -101,25 +101,54 @@ pub struct Hotkey {
     pub key: u8,
 }
 
+/// The keys with a name, and the virtual-key code of each. The same code
+/// is asked of `RegisterHotKey` and looked for by the keyboard hook that
+/// takes the combinations Windows keeps to itself, so both know the same
+/// keys.
+const NAMED_KEYS: [(&str, u8); 22] = [
+    ("space", 0x20),
+    ("tab", 0x09),
+    ("enter", 0x0d),
+    ("left", 0x25),
+    ("up", 0x26),
+    ("right", 0x27),
+    ("down", 0x28),
+    ("home", 0x24),
+    ("end", 0x23),
+    ("pageup", 0x21),
+    ("pagedown", 0x22),
+    ("insert", 0x2d),
+    ("delete", 0x2e),
+    ("backspace", 0x08),
+    ("escape", 0x1b),
+    ("pause", 0x13),
+    ("printscreen", 0x2c),
+    // The keys of the punctuation, as on a US layout; another layout
+    // has them where these are.
+    ("period", 0xbe),
+    ("comma", 0xbc),
+    ("plus", 0xbb),
+    ("minus", 0xbd),
+    ("backquote", 0xc0),
+];
+
 impl Hotkey {
     /// The combination `text` names: keys to hold as [`Modifiers::parse`]
     /// takes them, then `+` and the key to press: a digit, a letter, `f1`
-    /// to `f12`, `space`, `tab`, `enter`, `left`, `up`, `right` or `down`.
+    /// to `f24`, or one of `space`, `tab`, `enter`, `left`, `up`, `right`,
+    /// `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`,
+    /// `backspace`, `escape`, `pause`, `printscreen`, `period`, `comma`,
+    /// `plus`, `minus` and `backquote`.
     pub fn parse(id: u32, text: &str) -> Option<Self> {
         let (held, key) = text.rsplit_once('+')?;
         let key = key.trim().to_ascii_lowercase();
-        let key = match key.as_str() {
-            "space" => 0x20,
-            "tab" => 0x09,
-            "enter" => 0x0d,
-            "left" => 0x25,
-            "up" => 0x26,
-            "right" => 0x27,
-            "down" => 0x28,
-            name => match name.as_bytes() {
+        let named = NAMED_KEYS.iter().find(|(name, _)| *name == key);
+        let key = match named {
+            Some(&(_, code)) => code,
+            None => match key.as_bytes() {
                 [key] if key.is_ascii_alphanumeric() => key.to_ascii_uppercase(),
-                [b'f', b'1'..=b'9', ..] => match name[1..].parse::<u8>() {
-                    Ok(number @ 1..=12) => 0x6f + number,
+                [b'f', b'1'..=b'9', ..] => match key[1..].parse::<u8>() {
+                    Ok(number @ 1..=24) => 0x6f + number,
                     _ => return None,
                 },
                 _ => return None,
@@ -276,6 +305,12 @@ mod tests {
         assert_eq!(key("ctrl+alt+f1"), Some((7, held, 0x70)));
         assert_eq!(key("ctrl+alt+f12"), Some((7, held, 0x7b)));
         assert_eq!(key("ctrl+alt+left"), Some((7, held, 0x25)));
+        assert_eq!(key("ctrl+alt+f13"), Some((7, held, 0x7c)));
+        assert_eq!(key("ctrl+alt+f24"), Some((7, held, 0x87)));
+        assert_eq!(key("ctrl+alt+escape"), Some((7, held, 0x1b)));
+        assert_eq!(key("ctrl+alt+PageDown"), Some((7, held, 0x22)));
+        assert_eq!(key("ctrl+alt+period"), Some((7, held, 0xbe)));
+        assert_eq!(key("ctrl+alt+printscreen"), Some((7, held, 0x2c)));
     }
 
     #[test]
@@ -285,7 +320,7 @@ mod tests {
             "ctrl+alt",
             "ctrl+alt+",
             "+t",
-            "ctrl+f13",
+            "ctrl+f25",
             "ctrl+f0",
             "ctrl+f01",
             "ctrl+tt",

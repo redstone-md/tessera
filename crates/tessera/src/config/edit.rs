@@ -340,7 +340,8 @@ impl ConfigFile {
         if !DEEDS.contains(&deed) {
             return false;
         }
-        for other in DEEDS {
+        // What a key does is one of these, or a folder or an action.
+        for other in DEEDS.into_iter().chain(["files", "action", "arg"]) {
             key.remove(other);
         }
         // The number of an application in the dock is written as one.

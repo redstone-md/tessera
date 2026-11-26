@@ -1882,7 +1882,7 @@ impl Settings {
             return None;
         }
         let mut offers = Vec::new();
-        for (at, key) in KEYS.into_iter().enumerate() {
+        for (at, key) in KEYS.iter().copied().enumerate() {
             let face = Face::Chip {
                 text: key_label(key).into(),
                 selected: now == Some(key),
