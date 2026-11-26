@@ -19,6 +19,7 @@ use serde::Deserialize;
 pub use model::{Location, size_text};
 use view::FilesView;
 
+use crate::actions::{Action, Actions};
 use crate::module::{Module, WidgetRegistry};
 use crate::platform::Place;
 use crate::theme::Theme;
@@ -156,7 +157,8 @@ impl Files {
 }
 
 /// The module of the file manager: the widget `files` opens a window of
-/// it, at the folder its option `folder` names.
+/// it, at the folder its option `folder` names, and so does the action
+/// `files`, at the folder of its argument.
 pub struct FilesModule;
 
 impl Module for FilesModule {
@@ -169,6 +171,14 @@ impl Module for FilesModule {
             let folder = context.text("folder").unwrap_or_default().to_owned();
             cx.new(|_| FilesButton { folder }).into()
         })
+    }
+
+    fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
+        // Windows keeps Win+E, which opens Explorer, to itself.
+        let open = |folder: Option<&str>, cx: &mut App| {
+            Files::open(Files::named(folder.unwrap_or_default()), cx);
+        };
+        actions.register("files", Action::new(open).taking_reserved_keys())
     }
 }
 

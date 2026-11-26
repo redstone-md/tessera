@@ -128,6 +128,9 @@
 #                      taken from Windows where it keeps them, as win+v
 #             desktop  shows the desktop, or brings the windows back, as
 #                      the widget desktop does; win+d is taken from Windows
+#             files    the file manager, at the folder arg names as files
+#                      above does (the folder of the user without one);
+#                      win+e is taken from Windows
 #
 # [[key]]
 # press = "win+v"
