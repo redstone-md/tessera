@@ -1,0 +1,21 @@
+[package]
+name = "tessera-example-moon"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Tessera extension: the phase of the moon"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tessera-extension-kit = { path = "../kit" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# Built for WebAssembly, separately from the shell.
+[workspace]

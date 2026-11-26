@@ -1,0 +1,35 @@
+# Layouts refer to the widgets below as "habits.today" and
+# "habits.checklist".
+#
+# Daily habits to check off, named in the configuration of Tessera apart
+# by `;` or `,`:
+#
+#     [extension.habits]
+#     habits = "Water; Stretch; Read"
+#     utc_offset = "+1"   # where your day begins, as "+1" or "-5:30";
+#                         # days are UTC days when it is missing
+#
+# A habit's streak is the days in a row it was checked off; it is kept
+# while the habit is done today or was done yesterday. What was checked
+# off is kept across restarts. Nothing is sent anywhere.
+id = "habits"
+
+# How many habits are done today, for a bar. A click on it opens the
+# popup below, unless the layout names another popup for it.
+[[widget]]
+name = "today"
+refresh_seconds = 60
+popup = "list"
+
+# Every habit with its streak and a button to check it off today, or to
+# take that back, for a popup.
+[[widget]]
+name = "checklist"
+refresh_seconds = 60
+
+# Layouts refer to this popup as "habits.list".
+[[popup]]
+name = "list"
+width = 300
+height = 200
+content = ["checklist"]

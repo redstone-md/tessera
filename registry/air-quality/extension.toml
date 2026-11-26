@@ -1,0 +1,39 @@
+# Layouts refer to the widgets below as "air-quality.index" and
+# "air-quality.details".
+#
+# The air quality at a place, from the air quality forecast of Open-Meteo,
+# which asks for no account. The place is set in the configuration of
+# Tessera in degrees, north and east counted positive:
+#
+#     [extension.air-quality]
+#     latitude = 52.52
+#     longitude = 13.41
+#     interval_minutes = 30   # 10 to 1440
+#
+# It shows the European Air Quality Index, where up to 20 is good and
+# above 100 extremely poor, with fine particles (PM2.5), coarser particles
+# (PM10) and ozone. The place is sent to Open-Meteo, rounded to a
+# hundredth of a degree, and to nobody else. Without it nothing is asked.
+id = "air-quality"
+
+[permissions]
+network = ["air-quality-api.open-meteo.com"]
+
+# The index and what it means, for a bar. A click on it opens the popup
+# below, unless the layout names another popup for it.
+[[widget]]
+name = "index"
+refresh_seconds = 60
+popup = "air"
+
+# The index with the particles and ozone behind it, for a popup.
+[[widget]]
+name = "details"
+refresh_seconds = 60
+
+# Layouts refer to this popup as "air-quality.air".
+[[popup]]
+name = "air"
+width = 300
+height = 200
+content = ["details"]

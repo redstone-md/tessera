@@ -1,0 +1,37 @@
+# Layouts refer to the widgets below as "hacker-news.top" and
+# "hacker-news.stories".
+#
+# The top stories of Hacker News, from its public API at
+# hacker-news.firebaseio.com, which asks for no account. What can be set
+# in the configuration of Tessera; these are the defaults:
+#
+#     [extension.hacker-news]
+#     count = 6               # stories shown, 1 to 15
+#     interval_minutes = 15   # 5 to 1440
+#
+# Each refresh asks for the list of top stories and then for each story
+# shown, one request each, a few at a time. Nothing about the user is
+# sent.
+id = "hacker-news"
+
+[permissions]
+network = ["hacker-news.firebaseio.com"]
+
+# The title of the top story, shortened, for a bar. A click on it opens
+# the popup below, unless the layout names another popup for it.
+[[widget]]
+name = "top"
+refresh_seconds = 60
+popup = "front-page"
+
+# The top stories with their points and comments, for a popup.
+[[widget]]
+name = "stories"
+refresh_seconds = 60
+
+# Layouts refer to this popup as "hacker-news.front-page".
+[[popup]]
+name = "front-page"
+width = 400
+height = 360
+content = ["stories"]

@@ -1,0 +1,25 @@
+# Layouts refer to the widgets below as "dice.roll" and "dice.table".
+#
+# Nothing is set in the configuration and nothing is asked of anyone: the
+# dice are rolled by the extension, from a generator started from the
+# time. The throws are fair enough for games, not for anything at stake.
+id = "dice"
+
+# The last throw with a button that rolls a six-sided die, for a bar. A
+# click on the throw opens the popup below, unless the layout names
+# another popup for it.
+[[widget]]
+name = "roll"
+popup = "tray"
+
+# Buttons for a six-sided die, a twenty-sided die, a coin and an answer to
+# a question asked in silence, with the last throws, for a popup.
+[[widget]]
+name = "table"
+
+# Layouts refer to this popup as "dice.tray".
+[[popup]]
+name = "tray"
+width = 300
+height = 220
+content = ["table"]

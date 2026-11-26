@@ -1,0 +1,34 @@
+# Layouts refer to the widgets below as "countdown.next" and
+# "countdown.events".
+#
+# The time left until named dates, set in the configuration of Tessera as
+# names and dates apart by `;`, each date in UTC, with a time of day or
+# without, which is midnight:
+#
+#     [extension.countdown]
+#     events = "New Year=2027-01-01; Vacation=2027-07-15; Launch=2027-03-02 14:30"
+#
+# The bar shows the nearest date ahead. The bars of the popup fill from
+# when the extension first saw a date to the date itself; when it first
+# saw each one is kept across restarts. Nothing is sent anywhere.
+id = "countdown"
+
+# The nearest date ahead and the time left until it, for a bar. A click
+# on it opens the popup below, unless the layout names another popup for
+# it.
+[[widget]]
+name = "next"
+refresh_seconds = 60
+popup = "dates"
+
+# Every date with the time left until it, or since it passed, for a popup.
+[[widget]]
+name = "events"
+refresh_seconds = 60
+
+# Layouts refer to this popup as "countdown.dates".
+[[popup]]
+name = "dates"
+width = 300
+height = 220
+content = ["events"]

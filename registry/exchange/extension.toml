@@ -1,0 +1,38 @@
+# Layouts refer to the widgets below as "exchange.rate" and
+# "exchange.rates".
+#
+# Currency exchange rates from the open access of ExchangeRate-API
+# (open.er-api.com), which asks for no account and updates its rates once
+# a day. The currencies are given by their three-letter codes in the
+# configuration of Tessera; these are the defaults:
+#
+#     [extension.exchange]
+#     base = "USD"               # what the rates are counted in
+#     symbols = "EUR, GBP, JPY"  # the bar shows the first
+#     interval_minutes = 60      # 30 to 1440
+#
+# Only the base currency is sent, to open.er-api.com and to nobody else.
+id = "exchange"
+
+# What one unit of the base currency buys of the first currency, for a
+# bar. A click on it opens the popup below, unless the layout names
+# another popup for it.
+[[widget]]
+name = "rate"
+refresh_seconds = 60
+popup = "board"
+
+# Every currency with its rate both ways, for a popup.
+[[widget]]
+name = "rates"
+refresh_seconds = 60
+
+[permissions]
+network = ["open.er-api.com"]
+
+# Layouts refer to this popup as "exchange.board".
+[[popup]]
+name = "board"
+width = 300
+height = 200
+content = ["rates"]

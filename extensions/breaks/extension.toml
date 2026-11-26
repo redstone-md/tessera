@@ -1,0 +1,37 @@
+# Layouts refer to the widgets below as "breaks.reminder" and
+# "breaks.controls".
+#
+# Reminders to rest the eyes: every so often, look at something far away
+# for a few seconds. The lengths are set in the configuration of Tessera;
+# these are the defaults:
+#
+#     [extension.breaks]
+#     every_minutes = 20    # between breaks, 5 to 240
+#     break_seconds = 20    # how long to look away, 5 to 600
+#     snooze_minutes = 5    # how much later Snooze asks again, 1 to 60
+#
+# When the last break was is kept across restarts. When a break has been
+# due for more than half an hour, as after the computer slept, the wait
+# starts over instead. Nothing is sent anywhere.
+id = "breaks"
+
+# The time to the next break, or a reminder with a button to say it was
+# taken, for a bar. A click on it opens the popup below, unless the layout
+# names another popup for it.
+[[widget]]
+name = "reminder"
+refresh_seconds = 1
+popup = "panel"
+
+# The same with buttons to take the break now, to snooze it and to say it
+# was taken, for a popup.
+[[widget]]
+name = "controls"
+refresh_seconds = 1
+
+# Layouts refer to this popup as "breaks.panel".
+[[popup]]
+name = "panel"
+width = 300
+height = 140
+content = ["controls"]

@@ -1,0 +1,31 @@
+# Layouts refer to the widgets below as "moon.phase" and "moon.details".
+#
+# The phase of the moon, worked out from the clock alone: nothing is
+# asked of anyone. It follows the mean length of a lunar month, 29.53
+# days, from a known new moon, so the moments of new and full moon it
+# gives can be off by up to about half a day. The one setting:
+#
+#     [extension.moon]
+#     glyph = false   # true shows a moon symbol such as 🌔 in the bar,
+#                     # for fonts that have the symbols
+id = "moon"
+
+# The phase and how much of the moon is lit, for a bar. A click on it
+# opens the popup below, unless the layout names another popup for it.
+[[widget]]
+name = "phase"
+refresh_seconds = 600
+popup = "sky"
+
+# The phase, the age of the moon and the time to the next full and new
+# moon, for a popup.
+[[widget]]
+name = "details"
+refresh_seconds = 600
+
+# Layouts refer to this popup as "moon.sky".
+[[popup]]
+name = "sky"
+width = 280
+height = 170
+content = ["details"]

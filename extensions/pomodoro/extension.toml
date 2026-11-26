@@ -1,0 +1,40 @@
+# Layouts refer to the widgets below as "pomodoro.timer" and
+# "pomodoro.controls".
+#
+# A focus timer: a phase of work, then a break, and after some rounds of
+# work a longer break. The lengths are set in the configuration of
+# Tessera; these are the defaults:
+#
+#     [extension.pomodoro]
+#     work_minutes = 25         # 1 to 180
+#     break_minutes = 5         # 1 to 60
+#     long_break_minutes = 15   # 1 to 120
+#     rounds = 4                # rounds of work before a long break, 1 to 12
+#     auto_start = true         # whether the next phase starts by itself
+#     utc_offset = "+0"         # where "today" begins, as "+1" or "-5:30"
+#
+# The timer keeps when it was started rather than counting ticks, so it
+# goes on while Tessera is closed. A phase that ended more than an hour
+# before Tessera looked again is not counted, and the timer waits for
+# Start. Nothing is sent anywhere.
+id = "pomodoro"
+
+# The phase and the time left in it, for a bar. A click on it opens the
+# popup below, unless the layout names another popup for it.
+[[widget]]
+name = "timer"
+refresh_seconds = 1
+popup = "panel"
+
+# The phase, the time left, buttons to start, pause, skip and reset, and
+# the rounds of work done today, for a popup.
+[[widget]]
+name = "controls"
+refresh_seconds = 1
+
+# Layouts refer to this popup as "pomodoro.panel".
+[[popup]]
+name = "panel"
+width = 300
+height = 180
+content = ["controls"]

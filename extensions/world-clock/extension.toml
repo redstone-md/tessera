@@ -1,0 +1,35 @@
+# Layouts refer to the widgets below as "world-clock.clock" and
+# "world-clock.zones".
+#
+# The time in other places, set in the configuration of Tessera as names
+# and offsets from UTC apart by `;`, half and quarter hours allowed:
+#
+#     [extension.world-clock]
+#     zones = "Tokyo=+9; London=+0; New York=-5; Mumbai=+5:30"
+#     utc_offset = "+1"   # your own offset, which "today" and "tomorrow"
+#                         # in the popup are counted from; +0 when missing
+#     hour12 = false      # true writes 9:05 pm instead of 21:05
+#
+# The offsets are fixed: daylight saving time is not applied, so a place
+# that moves its clocks needs its offset changed when it does. Nothing is
+# sent anywhere.
+id = "world-clock"
+
+# The time at the first place, for a bar. A click on it opens the popup
+# below, unless the layout names another popup for it.
+[[widget]]
+name = "clock"
+refresh_seconds = 10
+popup = "places"
+
+# The time and day at every place, for a popup.
+[[widget]]
+name = "zones"
+refresh_seconds = 10
+
+# Layouts refer to this popup as "world-clock.places".
+[[popup]]
+name = "places"
+width = 300
+height = 200
+content = ["zones"]

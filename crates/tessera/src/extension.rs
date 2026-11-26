@@ -303,6 +303,20 @@ mod tests {
         for manifest in [
             include_str!("../../../extensions/counter/extension.toml"),
             include_str!("../../../extensions/ai-limits/extension.toml"),
+            include_str!("../../../extensions/weather/extension.toml"),
+            include_str!("../../../extensions/device-battery/extension.toml"),
+            include_str!("../../../extensions/pomodoro/extension.toml"),
+            include_str!("../../../extensions/crypto/extension.toml"),
+            include_str!("../../../extensions/exchange/extension.toml"),
+            include_str!("../../../extensions/hacker-news/extension.toml"),
+            include_str!("../../../extensions/moon/extension.toml"),
+            include_str!("../../../extensions/countdown/extension.toml"),
+            include_str!("../../../extensions/world-clock/extension.toml"),
+            include_str!("../../../extensions/habits/extension.toml"),
+            include_str!("../../../extensions/github-stats/extension.toml"),
+            include_str!("../../../extensions/air-quality/extension.toml"),
+            include_str!("../../../extensions/dice/extension.toml"),
+            include_str!("../../../extensions/breaks/extension.toml"),
         ] {
             Manifest::parse(manifest).unwrap();
         }

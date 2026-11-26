@@ -1,0 +1,40 @@
+# Layouts refer to the widgets below as "github-stats.stars" and
+# "github-stats.repos".
+#
+# Stars, forks and open issues of GitHub repositories, named in the
+# configuration of Tessera as owner/name apart by `,` or `;`:
+#
+#     [extension.github-stats]
+#     repos = "rust-lang/rust, redstone-md/tessera"   # the bar shows the first
+#     interval_minutes = 30   # 10 to 1440
+#     token = "github_pat_…"  # optional, see below
+#
+# Without a token GitHub answers 60 requests an hour from one address,
+# one request per repository each time; a token raises that, and lets
+# private repositories be read. A fine-grained token with read-only
+# access to the repositories' metadata is enough. It is sent to
+# api.github.com and to nobody else. GitHub counts open pull requests as
+# open issues too, so the number shown includes them.
+id = "github-stats"
+
+[permissions]
+network = ["api.github.com"]
+
+# The stars of the first repository, for a bar. A click on it opens the
+# popup below, unless the layout names another popup for it.
+[[widget]]
+name = "stars"
+refresh_seconds = 60
+popup = "repositories"
+
+# Every repository with its stars, forks and open issues, for a popup.
+[[widget]]
+name = "repos"
+refresh_seconds = 60
+
+# Layouts refer to this popup as "github-stats.repositories".
+[[popup]]
+name = "repositories"
+width = 320
+height = 200
+content = ["repos"]

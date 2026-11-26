@@ -3,9 +3,10 @@
 # Copyright (C) 2026 Tessera contributors.
 #
 # Builds the example extensions and writes the registry that offers them
-# and the themes of themes/: registry.toml and the files it lists. Run it
-# after changing an example or a theme; a changed theme needs a new version
-# here to be offered as an update.
+# and the themes of themes/: registry.toml and the files it lists, with
+# the pictures preview.py drew. Run preview.py first, then this, after
+# changing an example or a theme; a changed theme needs a new version here
+# to be offered as an update.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -31,6 +32,15 @@ manifest_sha256 = "$(sha256sum "registry/$id/extension.toml" | cut -d ' ' -f 1)"
 wasm = "$id/extension.wasm"
 wasm_sha256 = "$(sha256sum "registry/$id/extension.wasm" | cut -d ' ' -f 1)"
 END
+    preview "$id/icon.png"
+}
+
+# The lines that name the picture of an offer, when preview.py drew one.
+preview() {
+    if [ -f "registry/$1" ]; then
+        printf 'preview = "%s"\npreview_sha256 = "%s"\n' "$1" \
+            "$(sha256sum "registry/$1" | cut -d ' ' -f 1)"
+    fi
 }
 
 theme() {
@@ -47,6 +57,7 @@ version = "$version"
 file = "themes/$id.toml"
 sha256 = "$(sha256sum "registry/themes/$id.toml" | cut -d ' ' -f 1)"
 END
+    preview "previews/$id.jpg"
 }
 
 {
@@ -61,11 +72,71 @@ END
         "What is left of the usage limits of Claude, Codex, OpenRouter and DeepSeek, and when they reset."
     offer device-battery "Device battery"         "An example: the charge of a Bluetooth device in the bar, and every paired device in a popup."
     offer weather "Weather"         "The weather now and on the next days at a place named in the configuration, from Open-Meteo."
+    offer pomodoro "Pomodoro" \
+        "A focus timer of work and breaks for the bar, counting the rounds done today; it keeps time across restarts."
+    offer crypto "Crypto prices" \
+        "Prices of coins and their change over a day, from CoinGecko."
+    offer exchange "Exchange rates" \
+        "Currency exchange rates against a base currency, from ExchangeRate-API, updated daily."
+    offer hacker-news "Hacker News" \
+        "The top stories of Hacker News with their points and comments."
+    offer moon "Moon" \
+        "The phase of the moon, how much of it is lit and when it is next full or new, worked out offline."
+    offer countdown "Countdown" \
+        "The time left until named dates of the configuration, the nearest one in the bar."
+    offer world-clock "World clock" \
+        "The time in other places, at fixed offsets from UTC named in the configuration."
+    offer habits "Habits" \
+        "Daily habits to check off in a popup, with streaks kept across restarts."
+    offer github-stats "GitHub stats" \
+        "Stars, forks and open issues of GitHub repositories named in the configuration."
+    offer air-quality "Air quality" \
+        "The European Air Quality Index, particles and ozone at a place named in the configuration, from Open-Meteo."
+    offer dice "Dice" \
+        "Dice, a coin and answers to questions asked in silence, offline."
+    offer breaks "Eye breaks" \
+        "Reminders to look away from the screen for a moment, every twenty minutes unless set otherwise."
     theme void "Void" 1.0.0 \
         "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
     theme expressive "Expressive" 1.0.0 \
         "Larger, rounder and livelier than what is built in."
     theme compact "Compact" 1.0.0 \
         "Small, square and calm; nothing overshoots."
+    theme aurora "Aurora" 1.0.0 \
+        "Night teal and violet, after northern lights over a frozen fjord."
+    theme sakura "Sakura" 1.0.0 \
+        "Soft blossom pinks on cream, light and round, with a gentle bounce."
+    theme synthwave "Synthwave" 1.0.0 \
+        "Neon pink and electric cyan on a deep purple night."
+    theme ember "Ember" 1.0.0 \
+        "Warm charcoal with glowing orange, like coals after the fire."
+    theme glacier "Glacier" 1.0.0 \
+        "Crisp ice blues on white; light, tidy and calm."
+    theme forest "Forest" 1.0.0 \
+        "Deep moss greens and misty light from an old-growth wood."
+    theme paper "Paper" 1.0.0 \
+        "Ink on warm paper. Flat bars, square-ish shapes, no fuss."
+    theme oled "OLED" 1.0.0 \
+        "True black and white for OLED panels: flat, small and still."
+    theme ocean "Ocean" 1.0.0 \
+        "Navy depths and aqua light from beneath the waves."
+    theme lilac "Lilac" 1.0.0 \
+        "Lavender fields at golden hour, pastel and airy."
+    theme terminal "Terminal" 1.0.0 \
+        "Phosphor green on black in a monospaced font; for those who live in a shell."
+    theme sunset "Sunset" 1.0.0 \
+        "Dusk over the dunes: burning orange under a purple sky."
+    theme mocha "Mocha" 1.0.0 \
+        "Coffee browns and caramel; cosy and easy on the eyes."
+    theme citrus "Citrus" 1.0.0 \
+        "Lemon and lime on a sunny cream; playful and bright."
+    theme nebula "Nebula" 1.0.0 \
+        "Magenta and indigo clouds of a distant nebula."
+    theme sandstone "Sandstone" 1.0.0 \
+        "Terracotta and sand from a sunlit canyon; warm and light."
+    theme contrast "High Contrast" 1.0.0 \
+        "Black and signal yellow at the highest contrast, for clear reading."
+    theme arcade "Arcade" 1.0.0 \
+        "Square pixels, red neon and teal: an evening at the arcade."
 } > registry/registry.toml.new
 mv registry/registry.toml.new registry/registry.toml

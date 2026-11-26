@@ -1,0 +1,13 @@
+[package]
+name = "tessera-extension-kit"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "What the Tessera extensions share: the bindings, a tree builder and small helpers"
+publish = false
+
+[dependencies]
+wit-bindgen = "0.63"
+
+# Built as a part of each extension, separately from the shell.
+[workspace]

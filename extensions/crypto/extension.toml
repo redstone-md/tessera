@@ -1,0 +1,37 @@
+# Layouts refer to the widgets below as "crypto.price" and "crypto.list".
+#
+# Prices of coins from CoinGecko, which asks for no account. The coins are
+# named by their CoinGecko ids, as in the address of a coin's page on
+# coingecko.com, in the configuration of Tessera; these are the defaults:
+#
+#     [extension.crypto]
+#     coins = "bitcoin, ethereum"   # the bar shows the first
+#     currency = "usd"              # "eur", "gbp", "jpy", "btc" and so on
+#     interval_minutes = 10         # at least 2
+#
+# Only the names of the coins and the currency are sent, to CoinGecko and
+# to nobody else.
+id = "crypto"
+
+# The price of the first coin and its change over a day, for a bar. A
+# click on it opens the popup below, unless the layout names another
+# popup for it.
+[[widget]]
+name = "price"
+refresh_seconds = 30
+popup = "prices"
+
+# Every coin with its price and its change over a day, for a popup.
+[[widget]]
+name = "list"
+refresh_seconds = 30
+
+[permissions]
+network = ["api.coingecko.com"]
+
+# Layouts refer to this popup as "crypto.prices".
+[[popup]]
+name = "prices"
+width = 300
+height = 200
+content = ["list"]

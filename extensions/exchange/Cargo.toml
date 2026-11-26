@@ -1,0 +1,22 @@
+[package]
+name = "tessera-example-exchange"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Tessera extension: currency exchange rates"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1"
+tessera-extension-kit = { path = "../kit" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# Built for WebAssembly, separately from the shell.
+[workspace]
