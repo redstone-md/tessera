@@ -16,14 +16,13 @@ use windows::Win32::UI::Shell::Common::IObjectArray;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
     ADLT_RECENT, ApplicationDocumentLists, IApplicationDocumentLists, IShellItem, IShellLinkW,
-    SHCreateMemStream, SHLoadIndirectString, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteW,
-    ShellLink,
+    SHCreateMemStream, SHLoadIndirectString, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellLink,
 };
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::{BSTR, HSTRING, Interface, PCWSTR, w};
+use windows::core::{BSTR, HSTRING, Interface, PCWSTR};
 
+use super::AppWindowId;
+use super::execute::Launch;
 use super::packaged::take;
-use super::{AppWindowId, ShellThread};
 
 /// The directories Windows names by an identifier instead of their path
 /// when it makes up the identifier of an application from its program
@@ -148,8 +147,7 @@ impl JumpTask {
 
     /// Does the task, as the jump list would. A failure is reported.
     pub fn start(&self) {
-        let program = HSTRING::from(self.program.as_os_str());
-        execute(program, HSTRING::from(&self.arguments), self.name.clone());
+        execute(&self.program, &self.arguments, &self.name);
     }
 }
 
@@ -226,30 +224,14 @@ fn position(bytes: &[u8], pattern: &[u8]) -> Option<usize> {
         .position(|window| window == pattern)
 }
 
-/// Starts `program` with `arguments` the way the shell does. A failure is
-/// reported under `name`.
-///
-/// The work is done on the [`ShellThread`], as the shell handles window
-/// messages while it starts a program.
-fn execute(program: HSTRING, arguments: HSTRING, name: String) {
-    ShellThread::run(move || {
-        // SAFETY: the shell thread has COM initialized; the strings are
-        // NUL-terminated and outlive the call.
-        let instance = unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(program.as_ptr()),
-                PCWSTR(arguments.as_ptr()),
-                None,
-                SW_SHOWNORMAL,
-            )
-        };
-        // The call reports success as a value above 32.
-        if instance.0 as usize <= 32 {
-            report!("{name} did not open: error {}", instance.0 as usize);
-        }
-    });
+/// Starts `program` with `arguments` the way the shell does, with
+/// [`Launch`]. A failure is reported under `name`.
+fn execute(program: &Path, arguments: &str, name: &str) {
+    Launch::new(program)
+        .verb("open")
+        .arguments(arguments)
+        .named(name)
+        .start();
 }
 
 /// The identifier Explorer goes by.
@@ -353,9 +335,8 @@ impl RecentDocument {
     /// Opens the document with `program`, as the jump list of that
     /// program would. A failure is reported.
     pub fn open_with(&self, program: &Path) {
-        let program = HSTRING::from(program.as_os_str());
-        let document = HSTRING::from(format!("\"{}\"", self.path.display()));
-        execute(program, document, self.name.clone());
+        let document = format!("\"{}\"", self.path.display());
+        execute(program, &document, &self.name);
     }
 }
 

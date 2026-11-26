@@ -29,7 +29,7 @@ use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
-    Drive, DriveKind, FileClipboard, FileWork, Place, RecycleBin, Shortcut, open_terminal,
+    Drive, DriveKind, FileClipboard, FileWork, Launch, Place, RecycleBin, open_terminal,
     reveal_in_explorer, show_properties,
 };
 use crate::popup::PopupAnchor;
@@ -348,11 +348,9 @@ impl FilesView {
         if entry.folder {
             self.go(Location::Folder(entry.path.clone()), window, cx);
         } else {
-            Shortcut {
-                name: entry.name.clone(),
-                path: entry.path.clone(),
-            }
-            .launch();
+            Launch::new(&entry.path)
+                .named(format!("`{}`", entry.name))
+                .start();
         }
     }
 

@@ -141,7 +141,6 @@ impl ShellThread {
     /// menu (`TrackPopupMenuEx`), of a dialog or of an operation of the
     /// Shell done on that thread. It is never shown. `None` where the
     /// thread could not start.
-    #[allow(dead_code, reason = "for menus and dialogs of the Shell")]
     pub(super) fn owner() -> Option<HWND> {
         let worker = WORKER.get_or_init(Worker::start).as_ref().ok()?;
         Some(handle(worker.window))

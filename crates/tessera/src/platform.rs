@@ -25,3 +25,8 @@ pub use win32::{
     pointer_held, pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer,
     set_light_mode, show_properties,
 };
+#[allow(
+    unused_imports,
+    reason = "Show is for the launchers that ask for a window state"
+)]
+pub use win32::{Launch, Show};

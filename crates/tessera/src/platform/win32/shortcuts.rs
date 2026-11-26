@@ -10,16 +10,14 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile, STGM_READ,
 };
-use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
-use windows::Win32::UI::Shell::{IShellLinkW, ShellExecuteW, ShellLink};
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::{Interface, PCWSTR, w};
+use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+use windows::core::{Interface, PCWSTR};
 
-use super::ShellThread;
+use super::execute::{Launch, expand_environment};
 
 /// Where the Start menu keeps shortcuts, below a profile directory.
 const PROGRAMS: &str = r"Microsoft\Windows\Start Menu\Programs";
@@ -90,40 +88,13 @@ impl Shortcut {
         }
     }
 
-    /// Opens the shortcut the way a double click would. A failure is
-    /// reported on the error output.
-    ///
-    /// The shell handles window messages while it opens a file, which the
-    /// user interface thread must not do in the middle of an event, so the
-    /// work is done on the [`ShellThread`].
+    /// Opens the shortcut the way a double click would, with [`Launch`]
+    /// on the shell thread. A failure is reported.
     pub fn launch(&self) {
-        let shortcut = self.clone();
-        ShellThread::run(move || {
-            if let Err(error) = shortcut.open() {
-                report!("{error:#}");
-            }
-        });
-    }
-
-    fn open(&self) -> Result<()> {
-        let path = wide(&self.path);
-        // SAFETY: the shell thread has COM initialized; both strings are
-        // NUL-terminated and outlive the call.
-        let instance = unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                PCWSTR(path.as_ptr()),
-                None,
-                None,
-                SW_SHOWNORMAL,
-            )
-        };
-        // The call reports success as a value above 32.
-        if instance.0 as usize <= 32 {
-            bail!("`{}` did not start", self.name);
-        }
-        Ok(())
+        Launch::new(&self.path)
+            .verb("open")
+            .named(format!("`{}`", self.name))
+            .start();
     }
 
     /// Reads what the shortcut points to; empty when it cannot be read.
@@ -165,15 +136,7 @@ fn path_in(buffer: &[u16]) -> Option<PathBuf> {
 
 /// Replaces `%NAME%` references to environment variables in `path`.
 fn expand(path: &Path) -> PathBuf {
-    let source = wide(path);
-    let mut expanded = [0u16; MAX_PATH];
-    // SAFETY: the source is NUL-terminated and the buffer carries its length.
-    let length =
-        unsafe { ExpandEnvironmentStringsW(PCWSTR(source.as_ptr()), Some(&mut expanded)) } as usize;
-    if length == 0 || length > expanded.len() {
-        return path.to_owned();
-    }
-    path_in(&expanded).unwrap_or_else(|| path.to_owned())
+    expand_environment(path.as_os_str()).into()
 }
 
 #[cfg(test)]
