@@ -701,7 +701,7 @@ mod tests {
             .taking_reserved_keys()
             .checking(sides);
         actions.register("lean", lean).unwrap();
-        let nothing = crate::actions::Action::new(|_, _| {});
+        let nothing = crate::actions::Action::new(|_, _| {}).taking_any_arg();
         actions.register("nothing", nothing).unwrap();
         actions
     }

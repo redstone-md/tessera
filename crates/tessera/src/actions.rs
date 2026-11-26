@@ -12,6 +12,10 @@
 //! keys are configured. Nothing else needs to change for a new action:
 //! keys.rs does not know any of them by name.
 //!
+//! An action takes no argument unless it says which it takes, with
+//! [`Action::checking`], or that it takes any, with
+//! [`Action::taking_any_arg`].
+//!
 //! ```ignore
 //! fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
 //!     actions.register("snap", Action::new(|side, cx| Snapper::snap(side, cx))
@@ -50,12 +54,13 @@ pub struct Action {
     /// held by someone else.
     pub takes_reserved_keys: bool,
     pub run: ActionRun,
-    /// `None` takes any argument, or none.
+    /// Which arguments the action takes; `None` takes none.
     pub check: Option<ActionCheck>,
 }
 
 impl Action {
-    /// An action that does `run`, takes any argument and leaves the keys
+    /// An action that does `run`, takes no argument (an `arg` given to it
+    /// is reported when the configuration is read) and leaves the keys
     /// Windows keeps to Windows.
     pub fn new(run: impl Fn(Option<&str>, &mut App) + 'static) -> Self {
         Self {
@@ -63,6 +68,11 @@ impl Action {
             run: Rc::new(run),
             check: None,
         }
+    }
+
+    /// The action, taking any argument, or none.
+    pub fn taking_any_arg(self) -> Self {
+        self.checking(|_| Ok(()))
     }
 
     /// The action, taking its keys from Windows where it keeps them.
@@ -81,11 +91,13 @@ impl Action {
         self
     }
 
-    /// Whether the action can be done with `arg`, and why not.
-    pub fn accepts(&self, arg: Option<&str>) -> Result<(), String> {
-        match &self.check {
-            Some(check) => check(arg),
-            None => Ok(()),
+    /// Whether the action, registered as `name`, can be done with `arg`,
+    /// and why not.
+    pub fn accepts(&self, name: &str, arg: Option<&str>) -> Result<(), String> {
+        match (&self.check, arg) {
+            (Some(check), arg) => check(arg),
+            (None, None) => Ok(()),
+            (None, Some(_)) => Err(format!("`{name}` takes no `arg`")),
         }
     }
 }
@@ -168,7 +180,7 @@ impl Actions {
     /// not.
     pub fn check(&self, name: &str, arg: Option<&str>) -> Result<(), String> {
         match self.get(name) {
-            Some(action) => action.accepts(arg),
+            Some(action) => action.accepts(name, arg),
             None => Err(format!(
                 "there is no action named `{name}`; there are `{}`",
                 self.names().join("`, `")
@@ -209,6 +221,19 @@ mod tests {
         assert_eq!(actions.names(), ["nothing"]);
         assert!(!actions.takes_reserved_keys("nothing"));
         assert!(actions.check("elsewhere", None).is_err());
+    }
+
+    #[test]
+    fn an_action_takes_no_argument_unless_it_says_so() {
+        let mut actions = Actions::default();
+        actions.register("still", Action::new(|_, _| {})).unwrap();
+        let open = Action::new(|_, _| {}).taking_any_arg();
+        actions.register("open", open).unwrap();
+        assert_eq!(actions.check("still", None), Ok(()));
+        let refused = actions.check("still", Some("minimize"));
+        assert_eq!(refused, Err("`still` takes no `arg`".to_owned()));
+        assert_eq!(actions.check("open", None), Ok(()));
+        assert_eq!(actions.check("open", Some(r"D:\Projects")), Ok(()));
     }
 
     #[test]

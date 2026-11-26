@@ -178,7 +178,8 @@ impl Module for FilesModule {
         let open = |folder: Option<&str>, cx: &mut App| {
             Files::open(Files::named(folder.unwrap_or_default()), cx);
         };
-        actions.register("files", Action::new(open).taking_reserved_keys())
+        let open = Action::new(open).taking_any_arg().taking_reserved_keys();
+        actions.register("files", open)
     }
 }
 
