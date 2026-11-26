@@ -17,7 +17,7 @@ use crate::actions::Actions;
 use crate::config::KeyConfig;
 use crate::files::Files;
 use crate::modules::windows::Docks;
-use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys};
+use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys, shell_mode};
 use crate::shell::Shell;
 use crate::switcher::Switcher;
 use crate::tiling::{TileLayout, Tiler, TilingMode, Toward};
@@ -433,7 +433,7 @@ impl Global for Shortcuts {}
 impl Shortcuts {
     /// Takes the combinations of `keys` and answers every combination
     /// Tessera holds from now on.
-    pub fn start(keys: &[KeyConfig], cx: &mut App) {
+    pub fn start(keys: &[KeyConfig], windows_keys: Option<bool>, cx: &mut App) {
         cx.set_global(Self::default());
         let presses = Hotkeys::presses();
         cx.spawn(async move |cx: &mut AsyncApp| {
@@ -459,7 +459,7 @@ impl Shortcuts {
         })
         .detach();
         Self::listen(cx);
-        Self::configure(keys, cx);
+        Self::configure(keys, windows_keys, cx);
     }
 
     /// Answers the commands other starts of the program hand over.
@@ -485,13 +485,18 @@ impl Shortcuts {
     }
 
     /// Takes over the entries of a configuration that was read again, if
-    /// they are other than the ones before.
-    pub fn configure(keys: &[KeyConfig], cx: &mut App) {
+    /// they are other than the ones before, with the keys the actions
+    /// bind by default where `windows_keys` asks for them (by default, when
+    /// Tessera is the shell).
+    pub fn configure(keys: &[KeyConfig], windows_keys: Option<bool>, cx: &mut App) {
+        let defaults = windows_keys.unwrap_or_else(shell_mode);
+        let keys = Self::in_use(keys, defaults, Self::actions(cx));
         let this = cx.global_mut::<Self>();
         if this.config == keys {
             return;
         }
-        this.config = keys.to_vec();
+        this.config = keys.clone();
+        let keys = keys.as_slice();
         let actions = Self::actions(cx);
         let (deeds, hotkeys) = Self::read(keys, actions);
         // Windows keeps Alt+Tab, the Windows key with a digit and Win+E,
@@ -523,6 +528,25 @@ impl Shortcuts {
             report!("the keys Windows keeps to itself stay with it: {error:#}");
         }
         cx.global_mut::<Self>().deeds = deeds;
+    }
+
+    /// The entries of the user, and after them, where `defaults`, the
+    /// keys the actions bind by default that press other keys than every
+    /// entry of the user does.
+    fn in_use(keys: &[KeyConfig], defaults: bool, actions: &Actions) -> Vec<KeyConfig> {
+        let pressed = |press: &str| Press::parse(press).and_then(|press| press.written());
+        let mut in_use = keys.to_vec();
+        if !defaults {
+            return in_use;
+        }
+        let taken: Vec<Option<String>> = keys.iter().map(|key| pressed(&key.press)).collect();
+        for key in actions.default_keys() {
+            let press = pressed(&key.press);
+            if press.is_none() || !taken.contains(&press) {
+                in_use.push(key);
+            }
+        }
+        in_use
     }
 
     /// The actions a key can name; none before the shell has collected
@@ -677,6 +701,24 @@ mod tests {
         assert!(!deed(&nothing).unwrap().takes_reserved_keys(&actions()));
         let popup = deed(&key(Some("launcher"), None, None)).unwrap();
         assert!(!popup.takes_reserved_keys(&actions()));
+    }
+
+    #[test]
+    fn the_keys_of_the_actions_give_way_to_those_of_the_user() {
+        let mut actions = actions();
+        let fold = crate::actions::Action::new(|_, _| {})
+            .by_default("win+d", None)
+            .by_default("Win+Shift+M", None);
+        actions.register("fold", fold).unwrap();
+        let mut own = key(Some("launcher"), None, None);
+        own.press = "shift+win+m".to_owned();
+        let user = [own];
+        let presses = |defaults| -> Vec<String> {
+            let keys = Shortcuts::in_use(&user, defaults, &actions);
+            keys.into_iter().map(|key| key.press).collect()
+        };
+        assert_eq!(presses(false), ["shift+win+m"]);
+        assert_eq!(presses(true), ["shift+win+m", "win+d"]);
     }
 
     fn key(popup: Option<&str>, tiling: Option<&str>, run: Option<&[&str]>) -> KeyConfig {

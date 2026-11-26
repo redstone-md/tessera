@@ -354,6 +354,10 @@ pub struct Config {
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,
+    /// Whether the keys of Windows that features of Tessera bring, such
+    /// as Win+D for `desktop`, are bound to them where no `[[key]]` uses
+    /// the same keys; `None` binds them only when Tessera is the shell.
+    pub windows_keys: Option<bool>,
     /// The key combinations that open a popup, change the tiling or start
     /// a program.
     #[serde(default, rename = "key")]

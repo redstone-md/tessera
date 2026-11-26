@@ -87,7 +87,7 @@ impl Shell {
         Files::configure(&config.files, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
-        Shortcuts::start(&config.keys, cx);
+        Shortcuts::start(&config.keys, config.windows_keys, cx);
         cx.set_global(Self {
             config,
             surfaces,
@@ -264,7 +264,7 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
-        Shortcuts::configure(&config.keys, cx);
+        Shortcuts::configure(&config.keys, config.windows_keys, cx);
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);

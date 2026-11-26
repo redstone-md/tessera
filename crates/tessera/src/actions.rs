@@ -33,6 +33,7 @@ use std::rc::Rc;
 use anyhow::bail;
 use gpui::{App, Global};
 
+use crate::config::KeyConfig;
 use crate::module::Module;
 use crate::shell::Shell;
 
@@ -56,6 +57,10 @@ pub struct Action {
     pub run: ActionRun,
     /// Which arguments the action takes; `None` takes none.
     pub check: Option<ActionCheck>,
+    /// The combinations bound to the action unless the user binds them
+    /// to something else, each with its `arg`; see
+    /// [`Action::by_default`].
+    pub default_keys: Vec<(String, Option<String>)>,
 }
 
 impl Action {
@@ -67,7 +72,20 @@ impl Action {
             takes_reserved_keys: false,
             run: Rc::new(run),
             check: None,
+            default_keys: Vec::new(),
         }
+    }
+
+    /// The action, with `press` (as `win+m`) bound to it with `arg` where
+    /// the keys of Windows are in use (`windows_keys`, on by default when
+    /// Tessera is the shell) and no `[[key]]` of the user presses the same
+    /// keys. This is how a feature brings its keys of Windows without the
+    /// keys of the configuration knowing it.
+    #[allow(dead_code, reason = "for the features that bring keys of Windows")]
+    pub fn by_default(mut self, press: &str, arg: Option<&str>) -> Self {
+        self.default_keys
+            .push((press.to_owned(), arg.map(str::to_owned)));
+        self
     }
 
     /// The action, taking any argument, or none.
@@ -188,6 +206,23 @@ impl Actions {
         }
     }
 
+    /// The `[[key]]` entries the actions bind by default, by the name of
+    /// the action and then in the order they were given.
+    pub fn default_keys(&self) -> Vec<KeyConfig> {
+        let mut keys = Vec::new();
+        for name in self.names() {
+            for (press, arg) in &self.actions[&name].default_keys {
+                keys.push(KeyConfig {
+                    press: press.clone(),
+                    action: Some(name.clone()),
+                    arg: arg.clone(),
+                    ..KeyConfig::default()
+                });
+            }
+        }
+        keys
+    }
+
     /// Whether the keys of the action `name` are taken from Windows where
     /// it keeps them.
     pub fn takes_reserved_keys(&self, name: &str) -> bool {
@@ -221,6 +256,38 @@ mod tests {
         assert_eq!(actions.names(), ["nothing"]);
         assert!(!actions.takes_reserved_keys("nothing"));
         assert!(actions.check("elsewhere", None).is_err());
+    }
+
+    #[test]
+    fn an_action_brings_the_keys_it_has_by_default() {
+        let mut actions = Actions::default();
+        let both = |arg: Option<&str>| match arg {
+            None | Some("all") => Ok(()),
+            Some(_) => Err("none or all".to_owned()),
+        };
+        let fold = Action::new(|_, _| {})
+            .checking(both)
+            .by_default("win+m", Some("all"))
+            .by_default("win+home", None);
+        actions.register("fold", fold).unwrap();
+        actions.register("bare", Action::new(|_, _| {})).unwrap();
+        let keys = actions.default_keys();
+        let pressed: Vec<(&str, Option<&str>, Option<&str>)> = { keys.iter() }
+            .map(|key| {
+                (
+                    key.press.as_str(),
+                    key.action.as_deref(),
+                    key.arg.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pressed,
+            [
+                ("win+m", Some("fold"), Some("all")),
+                ("win+home", Some("fold"), None)
+            ]
+        );
     }
 
     #[test]
