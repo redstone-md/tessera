@@ -76,6 +76,8 @@ const ICON_RENAME: &str = "\u{e8ac}";
 const ICON_PROPERTIES: &str = "\u{e946}";
 const ICON_TERMINAL: &str = "\u{e756}";
 pub const ICON_NEW_WINDOW: &str = "\u{e78b}";
+pub const ICON_NEW_TAB: &str = "\u{e8a7}";
+const ICON_TO_OTHER: &str = "\u{e8ab}";
 const ICON_EXPLORER: &str = "\u{ec50}";
 const ICON_LINK: &str = "\u{e71b}";
 const ICON_SORT_UP: &str = "\u{e70e}";
@@ -88,6 +90,11 @@ pub enum PaneEvent {
     Navigated,
     /// The user turned to it, with a click or a key.
     Focused,
+    /// The user asked for `Location` in a tab of its own.
+    OpenInNewTab(Location),
+    /// The user asked to copy, or with `cut` to move, what is chosen in
+    /// the pane into the folder of the pane beside it.
+    ToOtherPane { cut: bool },
 }
 
 /// A file or folder being renamed, with the field its new name is
@@ -130,6 +137,10 @@ pub struct FolderPane {
     /// Whether the pane is in sight, in the tab shown; only then is its
     /// folder watched for changes.
     visible: bool,
+    /// Whether another pane stands beside it, in a split tab.
+    beside: bool,
+    /// Whether it is the pane in front of a split tab, which is outlined.
+    lit: bool,
     /// The window the pane is in.
     window: AnyWindowHandle,
     _watch: Task<()>,
@@ -200,6 +211,8 @@ impl FolderPane {
             icons_left: Cell::new(ICONS_PER_FRAME),
             icons_owed: Cell::new(false),
             visible: true,
+            beside: false,
+            lit: false,
             window: window.window_handle(),
             _watch: watch,
         };
@@ -223,6 +236,15 @@ impl FolderPane {
     /// Gives the pane the keys.
     pub fn focus(&self, window: &mut Window) {
         window.focus(&self.focus);
+    }
+
+    /// Says whether the pane is in sight, whether another stands beside
+    /// it, and whether it is the one in front of the two.
+    pub fn place(&mut self, visible: bool, beside: bool, lit: bool, cx: &mut Context<Self>) {
+        if (self.visible, self.beside, self.lit) != (visible, beside, lit) {
+            (self.visible, self.beside, self.lit) = (visible, beside, lit);
+            cx.notify();
+        }
     }
 
     /// Reads the drives, away from the user interface, as a drive may
@@ -721,6 +743,14 @@ impl FolderPane {
     ) {
         self.take_focus(window, cx);
         let held = event.modifiers;
+        if event.button == MouseButton::Middle {
+            if let Some(entry) = self.listing.get(position).filter(|entry| entry.folder) {
+                cx.emit(PaneEvent::OpenInNewTab(Location::Folder(
+                    entry.path.clone(),
+                )));
+            }
+            return;
+        }
         if event.button == MouseButton::Right {
             let path = self.listing.get(position).map(|entry| entry.path.clone());
             if path.is_some_and(|path| !self.selection.contains(&path)) {
@@ -806,6 +836,11 @@ impl FolderPane {
         }));
         let one_folder = matches!(chosen.as_slice(), [path] if path.is_dir());
         if one_folder {
+            entries.push(entry(ICON_NEW_TAB, "Open in new tab", |this, cx| {
+                for path in this.chosen() {
+                    cx.emit(PaneEvent::OpenInNewTab(Location::Folder(path)));
+                }
+            }));
             entries.push(entry(ICON_NEW_WINDOW, "Open in new window", |this, cx| {
                 for path in this.chosen() {
                     Files::open(Location::Folder(path), cx);
@@ -828,6 +863,14 @@ impl FolderPane {
         entries.push(entry(ICON_LINK, "Copy path", |this, cx| {
             this.copy_paths(cx)
         }));
+        if self.beside {
+            entries.push(entry(ICON_TO_OTHER, "Copy to the other pane", |_, cx| {
+                cx.emit(PaneEvent::ToOtherPane { cut: false })
+            }));
+            entries.push(entry(ICON_TO_OTHER, "Move to the other pane", |_, cx| {
+                cx.emit(PaneEvent::ToOtherPane { cut: true })
+            }));
+        }
         if chosen.len() == 1 {
             entries.push(entry(ICON_RENAME, "Rename", |this, cx| {
                 this.after_menu(cx, |this, window, cx| this.rename_chosen(window, cx))
@@ -1133,7 +1176,7 @@ impl FolderPane {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let mut element = element;
-        for button in [MouseButton::Left, MouseButton::Right] {
+        for button in [MouseButton::Left, MouseButton::Middle, MouseButton::Right] {
             element = element.on_mouse_down(
                 button,
                 cx.listener(move |this, event, window, cx| {
@@ -1464,6 +1507,12 @@ impl Render for FolderPane {
             .size_full()
             .flex()
             .flex_col()
+            .rounded(theme.shape.large)
+            .border_1()
+            .border_color(match self.lit {
+                true => theme.colors.primary.opacity(0.6),
+                false => gpui::transparent_black(),
+            })
             .child(content)
             .child(
                 canvas(

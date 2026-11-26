@@ -7,7 +7,9 @@
 
 mod model;
 mod pane;
+mod session;
 mod sidebar;
+mod tabs;
 mod view;
 
 use std::path::{Path, PathBuf};
@@ -19,6 +21,7 @@ use gpui::{
 use serde::Deserialize;
 
 pub use model::{Location, size_text};
+use session::{Opening, Session};
 use view::FilesView;
 
 use crate::actions::{Action, Actions};
@@ -60,6 +63,9 @@ pub struct FilesConfig {
     pub folders_first: bool,
     /// How a folder is first shown.
     pub view: Look,
+    /// Whether a window opened without a folder opens with the tabs of
+    /// the last window closed.
+    pub restore: bool,
 }
 
 impl Default for FilesConfig {
@@ -69,6 +75,7 @@ impl Default for FilesConfig {
             hidden: false,
             folders_first: true,
             view: Look::Details,
+            restore: false,
         }
     }
 }
@@ -94,6 +101,35 @@ impl Files {
 
     /// Opens a window of the file manager at `location`.
     pub fn open(location: Location, cx: &mut App) {
+        Self::open_with(Opening::at(location), cx);
+    }
+
+    /// Opens a window of the file manager at the folder `name` names, as
+    /// `named` reads it; without a name, with the tabs of the last window
+    /// closed where the configuration asks for that, and else at home.
+    pub fn open_named(name: &str, cx: &mut App) {
+        if !name.trim().is_empty() || !Self::config(cx).restore {
+            Self::open(Self::named(name), cx);
+            return;
+        }
+        cx.spawn(async move |cx| {
+            let session = cx
+                .background_executor()
+                .spawn(async { Session::load() })
+                .await;
+            cx.update(|cx| {
+                let opening = session
+                    .opening(Self::named)
+                    .unwrap_or_else(|| Opening::at(Self::home()));
+                Self::open_with(opening, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens a window of the file manager with the tabs of `opening`.
+    fn open_with(opening: Opening, cx: &mut App) {
         let config = Self::config(cx);
         let bounds = Bounds::centered(None, size(px(OPEN_SIZE.0), px(OPEN_SIZE.1)), cx);
         let options = WindowOptions {
@@ -114,7 +150,7 @@ impl Files {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| FilesView::new(location, config, window, cx))
+            cx.new(|cx| FilesView::new(opening, config, window, cx))
         });
         if let Err(error) = opened {
             report!("the file manager did not open: {error:#}");
@@ -178,7 +214,7 @@ impl Module for FilesModule {
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
         // Windows keeps Win+E, which opens Explorer, to itself.
         let open = |folder: Option<&str>, cx: &mut App| {
-            Files::open(Files::named(folder.unwrap_or_default()), cx);
+            Files::open_named(folder.unwrap_or_default(), cx);
         };
         let open = Action::new(open).taking_any_arg().taking_reserved_keys();
         actions.register("files", open)
@@ -203,6 +239,6 @@ impl Render for FilesButton {
                     .text_color(theme.colors.primary)
                     .child(icon(theme, ICON_FOLDER)),
             )
-            .on_click(move |_, _, cx| Files::open(Files::named(&folder), cx))
+            .on_click(move |_, _, cx| Files::open_named(&folder, cx))
     }
 }

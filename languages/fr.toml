@@ -321,3 +321,9 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # Settings: keys that name an action.
 "Action" = "Action"
 "The action is written in the file by hand." = "L’action est écrite à la main dans le fichier."
+
+# The file manager: tabs, panes, places, views, search and renaming.
+"Open in new tab" = "Ouvrir dans un nouvel onglet"
+"Copy to the other pane" = "Copier dans l'autre volet"
+"Move to the other pane" = "Déplacer dans l'autre volet"
+"tabs" = "onglets"

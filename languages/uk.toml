@@ -321,3 +321,9 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# The file manager: tabs, panes, places, views, search and renaming.
+"Open in new tab" = "Відкрити в новій вкладці"
+"Copy to the other pane" = "Копіювати в іншу панель"
+"Move to the other pane" = "Перемістити в іншу панель"
+"tabs" = "вкладок"

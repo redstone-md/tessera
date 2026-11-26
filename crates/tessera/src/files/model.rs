@@ -43,6 +43,15 @@ impl Location {
             Self::Folder(path) => Some(path),
         }
     }
+
+    /// The location as a command names it, which `Files::named` reads
+    /// back: `computer`, or the path of the folder.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Computer => "computer".to_owned(),
+            Self::Folder(path) => path.display().to_string(),
+        }
+    }
 }
 
 /// The locations a window went through, to go back and forth among them

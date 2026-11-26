@@ -706,6 +706,11 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // The file manager: tabs, panes, places, views, search and renaming.
+    ("Open in new tab", "Открыть в новой вкладке"),
+    ("Copy to the other pane", "Копировать в другую панель"),
+    ("Move to the other pane", "Переместить в другую панель"),
+    ("tabs", "вкладок"),
 ];
 
 #[cfg(test)]
