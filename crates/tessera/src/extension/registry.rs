@@ -36,6 +36,7 @@ const REGISTRY_LIMIT: u64 = 1 << 20;
 const MANIFEST_LIMIT: u64 = 64 << 10;
 const WASM_LIMIT: u64 = 32 << 20;
 const THEME_LIMIT: u64 = 64 << 10;
+const PREVIEW_LIMIT: u64 = 2 << 20;
 
 /// What a registry offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,6 +148,8 @@ struct ThemeEntry {
     version: String,
     file: String,
     sha256: String,
+    #[serde(flatten)]
+    preview: PreviewEntry,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +163,34 @@ struct Entry {
     manifest_sha256: String,
     wasm: String,
     wasm_sha256: String,
+    #[serde(flatten)]
+    preview: PreviewEntry,
+}
+
+/// A picture of what an offer looks like: a JPEG or PNG file and its
+/// SHA-256 checksum. Both or neither are given.
+#[derive(Default, Deserialize)]
+struct PreviewEntry {
+    preview: Option<String>,
+    preview_sha256: Option<String>,
+}
+
+impl PreviewEntry {
+    /// The picture to download, where the registry names one. One that
+    /// cannot be used leaves the offer without a picture, and says why.
+    fn download(&self, registry: &Location, id: &str) -> Option<Download> {
+        let (file, checksum) = match (&self.preview, &self.preview_sha256) {
+            (None, None) => return None,
+            (Some(file), Some(checksum)) => (file, checksum),
+            _ => {
+                report!("the picture of `{id}` needs both `preview` and `preview_sha256`");
+                return None;
+            }
+        };
+        Download::new(registry, file, checksum)
+            .inspect_err(|error| report!("the picture of `{id}` is left out: {error:#}"))
+            .ok()
+    }
 }
 
 #[derive(Deserialize)]
@@ -220,6 +251,8 @@ pub struct Offer {
     /// The name of the registry that offers it.
     pub registry: String,
     files: Files,
+    /// A picture of what it looks like.
+    preview: Option<Download>,
 }
 
 impl Offer {
@@ -232,6 +265,7 @@ impl Offer {
                 .with_context(|| format!("the extension `{}` is left out", entry.id))
         };
         Ok(Self {
+            preview: entry.preview.download(location, &entry.id),
             files: Files::Extension {
                 manifest: download(&entry.manifest, &entry.manifest_sha256)?,
                 wasm: download(&entry.wasm, &entry.wasm_sha256)?,
@@ -251,6 +285,7 @@ impl Offer {
         let file = Download::new(location, &entry.file, &entry.sha256)
             .with_context(|| format!("the theme `{}` is left out", entry.id))?;
         Ok(Self {
+            preview: entry.preview.download(location, &entry.id),
             files: Files::Theme(file),
             id: entry.id,
             name: entry.name,
@@ -265,6 +300,20 @@ impl Offer {
             Files::Extension { .. } => Kind::Extension,
             Files::Theme(_) => Kind::Theme,
         }
+    }
+
+    /// Whether the registry shows a picture of the offer.
+    pub fn has_preview(&self) -> bool {
+        self.preview.is_some()
+    }
+
+    /// Downloads the picture of the offer, if it is the one the registry
+    /// lists.
+    pub fn fetch_preview(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        self.preview
+            .as_ref()
+            .map(|preview| preview.fetch(PREVIEW_LIMIT))
+            .transpose()
     }
 
     /// Downloads the offer and checks it against what the registry lists.

@@ -10,14 +10,15 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use gpui::{
     AnyElement, AppContext, AsyncApp, Context, EventEmitter, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    WeakEntity, Window, div, px,
+    IntoElement, ObjectFit, ParentElement, Pixels, Render, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage, WeakEntity, Window, div, img, px,
 };
 
 use crate::config::config_dir;
 use crate::extension::extensions_dir;
 use crate::extension::registry::{Catalog, Installed, Kind, Offer, Package};
 use crate::i18n::Language;
+use crate::icons::{Icon, image_of_bytes};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, InteractionState, Spring};
 use crate::shell::Shell;
@@ -35,6 +36,11 @@ const ENTRANCE_OFFSET: Pixels = px(16.);
 
 /// The round field with the first letter of an offer.
 const BADGE_SIZE: Pixels = px(36.);
+
+/// How high the picture of a theme is drawn, and how many pixels a
+/// picture is decoded to at most on its longer side.
+const BANNER_HEIGHT: Pixels = px(132.);
+const PICTURE_SIZE: u32 = 640;
 
 /// The most columns the offers stand in.
 const COLUMNS_LIMIT: f64 = 4.;
@@ -123,6 +129,8 @@ struct Row {
     /// How far the question below the row is unfolded, 0 to 1.
     question: Spring,
     buttons: [Interaction; 2],
+    /// The picture the registry shows of the offer, once it is here.
+    picture: Icon,
 }
 
 impl Row {
@@ -238,11 +246,47 @@ impl Marketplace {
                 presence,
                 question: Spring::new(motion.spatial, 0.),
                 buttons: [Interaction::new(&motion); 2],
+                picture: None,
             }
         });
         self.rows = rows.collect();
         self.others = installed;
+        self.fetch_pictures(cx);
         cx.notify();
+    }
+
+    /// Downloads the pictures of the offers, away from the user interface,
+    /// and shows each as it comes. One that cannot be had is reported and
+    /// leaves its offer with the initial of its name.
+    fn fetch_pictures(&mut self, cx: &mut Context<Self>) {
+        let offers: Vec<(usize, Offer)> = { self.rows.iter().enumerate() }
+            .filter(|(_, row)| row.offer.has_preview())
+            .map(|(index, row)| (index, row.offer.clone()))
+            .collect();
+        for (index, offer) in offers {
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let picture = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let bytes = offer.fetch_preview()?;
+                        bytes
+                            .map(|bytes| image_of_bytes(&bytes, PICTURE_SIZE))
+                            .transpose()
+                    })
+                    .await;
+                this.update(cx, |this, cx| match picture {
+                    Ok(picture) => {
+                        if let Some(row) = this.rows.get_mut(index) {
+                            row.picture = picture.flatten();
+                            cx.notify();
+                        }
+                    }
+                    Err(error) => report!("a picture of the marketplace is missing: {error:#}"),
+                })
+                .ok();
+            })
+            .detach();
+        }
     }
 
     /// The card of what is installed without a registry that offers it:
@@ -477,6 +521,24 @@ impl Marketplace {
             (Stage::Offered(_) | Stage::Leaving, _) => {}
         }
         let letter = row.offer.name.chars().next().unwrap_or('?');
+        let picture = row.picture.clone();
+        let banner = picture
+            .clone()
+            .filter(|_| kind == Kind::Theme)
+            .map(|picture| {
+                img(picture)
+                    .w_full()
+                    .h(BANNER_HEIGHT)
+                    .rounded(theme.shape.medium)
+                    .object_fit(ObjectFit::Cover)
+            });
+        let icon = picture.filter(|_| kind == Kind::Extension).map(|picture| {
+            img(picture)
+                .size(BADGE_SIZE)
+                .flex_none()
+                .rounded(theme.shape.small)
+                .into_any_element()
+        });
         let badge = div()
             .size(BADGE_SIZE)
             .flex_none()
@@ -520,7 +582,7 @@ impl Marketplace {
             .flex()
             .items_center()
             .gap(theme.spacing.small + theme.spacing.tiny)
-            .child(badge)
+            .child(icon.unwrap_or_else(|| badge.into_any_element()))
             .child(title)
             .children(mark);
         let description = (!row.offer.description.is_empty())
@@ -595,6 +657,7 @@ impl Marketplace {
             .gap(theme.spacing.small)
             .rounded(theme.shape.large)
             .bg(theme.colors.surface_container_highest)
+            .children(banner)
             .child(header)
             .children(description)
             .children(widgets)
