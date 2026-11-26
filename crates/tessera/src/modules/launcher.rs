@@ -18,6 +18,7 @@ use gpui::{
 };
 
 use crate::field::TextField;
+use crate::files::Files;
 use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
@@ -529,7 +530,9 @@ impl Launcher {
         let Some(shortcut) = self.matches.get(row).map(|&index| &self.shortcuts[index]) else {
             return;
         };
-        shortcut.launch();
+        if !Files::open_folder(&shortcut.path, cx) {
+            shortcut.launch();
+        }
         cx.defer(Popups::close);
     }
 

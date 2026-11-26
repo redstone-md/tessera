@@ -14,6 +14,7 @@ use gpui::{
 };
 
 use crate::config::{PopupConfig, WidgetSpec};
+use crate::files::Files;
 use crate::i18n::Language;
 use crate::icons::{Icon, image_of_bytes};
 use crate::module::{Module, WidgetRegistry};
@@ -21,6 +22,7 @@ use crate::motion::{Interaction, Spring, staggered};
 use crate::platform::{Account, Place, Shortcut};
 use crate::popup::Popups;
 use crate::theme::Theme;
+use crate::ui::place_look as look;
 use crate::ui::{icon, list_row, one_line, pill, state_layer};
 
 const POPUP: &str = "user";
@@ -252,19 +254,6 @@ impl Render for Person {
     }
 }
 
-/// What a folder is called and drawn with.
-fn look(place: Place) -> (&'static str, &'static str) {
-    match place {
-        Place::Home => ("Home", "\u{e80f}"),
-        Place::Desktop => ("Desktop", "\u{e7f4}"),
-        Place::Documents => ("Documents", "\u{e8a5}"),
-        Place::Downloads => ("Downloads", "\u{e896}"),
-        Place::Pictures => ("Pictures", "\u{e8b9}"),
-        Place::Music => ("Music", "\u{ec4f}"),
-        Place::Videos => ("Videos", "\u{e714}"),
-    }
-}
-
 /// A folder of the account, as a row.
 struct PlaceRow {
     place: Place,
@@ -314,7 +303,9 @@ impl Places {
                 name: look(row.place).0.to_owned(),
                 path: row.path.clone(),
             };
-            folder.launch();
+            if !Files::open_folder(&row.path, cx) {
+                folder.launch();
+            }
             Popups::close(cx);
         }
     }

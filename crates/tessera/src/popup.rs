@@ -75,6 +75,31 @@ impl PopupAnchor {
         })
     }
 
+    /// The anchor under the point `position` of an ordinary window, such
+    /// as the one a click with the right button names: what opens there
+    /// hangs from that point.
+    pub fn under(window: &Window, position: gpui::Point<Pixels>, cx: &App) -> anyhow::Result<Self> {
+        let native = NativeSurface::of(window)?;
+        let (frame, screen) = (native.frame()?, native.display_frame()?);
+        let scale = window.scale_factor();
+        let x = frame.left + (position.x / px(1.) * scale).round() as i32;
+        let y = frame.top + (position.y / px(1.) * scale).round() as i32;
+        Ok(Self {
+            surface: ScreenRect {
+                left: x,
+                top: y,
+                right: x,
+                bottom: y,
+            },
+            edge: ScreenEdge::Top,
+            x,
+            screen,
+            scale,
+            display_id: window.display(cx).map(|display| display.id()),
+            display: Some(native.display()),
+        })
+    }
+
     /// The frame of a floating window whose panel is `width` by `height`
     /// logical pixels and stands in the middle of the display, or fills
     /// the display where it is smaller than that.

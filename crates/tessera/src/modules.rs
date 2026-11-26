@@ -38,6 +38,7 @@ mod workspaces;
 
 use crate::config::Config;
 use crate::extension::ExtensionsModule;
+use crate::files::FilesModule;
 use crate::module::Module;
 
 /// Every module the shell starts with; the last one loads extensions.
@@ -48,6 +49,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(calendar::CalendarModule),
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
+        Box::new(FilesModule),
         Box::new(focused::FocusedModule),
         Box::new(keyboard::KeyboardModule),
         Box::new(label::LabelModule),

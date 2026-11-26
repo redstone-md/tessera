@@ -14,6 +14,7 @@ mod config;
 mod desk;
 mod extension;
 mod field;
+mod files;
 mod flyout;
 mod i18n;
 mod icons;

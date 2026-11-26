@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use gpui::{App, AsyncApp, Global};
 
 use crate::config::KeyConfig;
+use crate::files::Files;
 use crate::modules::windows::Docks;
 use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys};
 use crate::shell::Shell;
@@ -111,8 +112,8 @@ const FIRST: u32 = 1 << 16;
 
 /// The words a start of the program may begin with to hand them to the
 /// Tessera that runs already.
-const COMMANDS: [&str; 7] = [
-    "popup", "tiling", "focus", "move", "dock", "quit", "restart",
+const COMMANDS: [&str; 8] = [
+    "popup", "tiling", "focus", "move", "dock", "files", "quit", "restart",
 ];
 
 /// What separates the words on their way.
@@ -152,6 +153,7 @@ impl Asked {
             carry: None,
             switch: None,
             dock: None,
+            files: None,
         };
         match words[..] {
             ["quit"] => return Ok(Self::Quit),
@@ -162,8 +164,10 @@ impl Asked {
             ["move", side] => key.carry = said(side),
             // A word that is no number is one no application has.
             ["dock", number] => key.dock = Some(number.parse().unwrap_or(0)),
+            ["files"] => key.files = said(""),
+            ["files", folder] => key.files = said(folder),
             _ => {
-                let why = "it is `quit`, or one of `popup`, `tiling`, `focus`, `move` and `dock` with one word after it";
+                let why = "it is `quit`, or one of `popup`, `tiling`, `focus`, `move` and `dock` with one word after it, or `files` with a folder or none";
                 return Err(why.to_owned());
             }
         }
@@ -193,6 +197,8 @@ enum Deed {
     },
     /// What a click on the button of this number in the dock does.
     Dock(usize),
+    /// Opens the file manager at the folder named so.
+    Files(String),
 }
 
 impl Deed {
@@ -220,12 +226,15 @@ impl Deed {
                 1..=9 => Ok(Self::Dock(number as usize)),
                 _ => Err(format!("`dock` is a number from 1 to 9, not {number}")),
             }),
+            key.files
+                .as_ref()
+                .map(|folder| Ok(Self::Files(folder.clone()))),
         ];
         let mut deeds = deeds.into_iter().flatten();
         match (deeds.next(), deeds.next()) {
             (Some(deed), None) => deed,
             _ => Err(
-                "it needs one of `popup`, `tiling`, `run`, `focus`, `move`, `switch` and `dock`"
+                "it needs one of `popup`, `tiling`, `run`, `focus`, `move`, `switch`, `dock` and `files`"
                     .to_owned(),
             ),
         }
@@ -275,6 +284,7 @@ impl Deed {
             Self::Focus(toward) => Tiler::focus(*toward, cx),
             Self::Carry(toward) => Tiler::carry(*toward, cx),
             Self::Dock(number) => Docks::press(*number, cx),
+            Self::Files(folder) => Files::open(Files::named(folder), cx),
             Self::Run(command) => {
                 let started = Command::new(&command[0])
                     .args(&command[1..])
@@ -363,13 +373,17 @@ impl Shortcuts {
         }
         this.config = keys.to_vec();
         let (deeds, hotkeys) = Self::read(keys);
-        // Windows keeps Alt+Tab and the Windows key with a digit to
-        // itself. The keys of the window switcher and of the dock that it
-        // refuses are taken from it; a refused combination of anything
-        // else is left to whoever holds it.
+        // Windows keeps Alt+Tab, the Windows key with a digit and Win+E,
+        // which opens Explorer, to itself. The keys of the window
+        // switcher, of the dock and of the file manager that it refuses
+        // are taken from it; a refused combination of anything else is
+        // left to whoever holds it.
         let switches = |id: u32| {
             let deed = deeds.get((id - FIRST) as usize);
-            matches!(deed, Some(Some(Deed::Switch { .. } | Deed::Dock(_))))
+            matches!(
+                deed,
+                Some(Some(Deed::Switch { .. } | Deed::Dock(_) | Deed::Files(_)))
+            )
         };
         let refused = Hotkeys::set("keys", hotkeys.clone()).unwrap_or_else(|error| {
             report!("the `[[key]]` entries have no keys: {error:#}");
@@ -481,6 +495,7 @@ mod tests {
             carry: None,
             switch: None,
             dock: None,
+            files: None,
         }
     }
 

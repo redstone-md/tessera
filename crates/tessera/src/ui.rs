@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use crate::motion::{InteractionState, mix};
-use crate::platform::NativeSurface;
+use crate::platform::{NativeSurface, Place};
 use crate::theme::Theme;
 
 pub use list::{LIST_MIN_HEIGHT, ROW_HEIGHT, list_row, list_title, switch};
@@ -358,5 +358,18 @@ impl Element for OneLine {
         if let Err(error) = line.paint(bounds.origin, window.line_height(), window, cx) {
             report!("a line of text was not drawn: {error:#}");
         }
+    }
+}
+
+/// What a folder is called and drawn with.
+pub fn place_look(place: Place) -> (&'static str, &'static str) {
+    match place {
+        Place::Home => ("Home", "\u{e80f}"),
+        Place::Desktop => ("Desktop", "\u{e7f4}"),
+        Place::Documents => ("Documents", "\u{e8a5}"),
+        Place::Downloads => ("Downloads", "\u{e896}"),
+        Place::Pictures => ("Pictures", "\u{e8b9}"),
+        Place::Music => ("Music", "\u{ec4f}"),
+        Place::Videos => ("Videos", "\u{e714}"),
     }
 }

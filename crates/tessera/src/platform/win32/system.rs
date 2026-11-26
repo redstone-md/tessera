@@ -41,6 +41,58 @@ impl ProcessorLoad {
     }
 }
 
+/// Measures how many bytes go through the network adapters each second
+/// between two readings, over all adapters that are up, but loopback.
+#[derive(Debug, Default)]
+pub struct NetworkTraffic {
+    /// Bytes received and sent in all, and when, at the last reading.
+    previous: Option<(u64, u64, std::time::Instant)>,
+}
+
+impl NetworkTraffic {
+    /// Bytes received and sent per second since the last reading. The
+    /// first reading has nothing to compare with.
+    pub fn read(&mut self) -> Option<(f64, f64)> {
+        let (received, sent) = Self::totals()?;
+        let now = std::time::Instant::now();
+        let (before_in, before_out, then) = self.previous.replace((received, sent, now))?;
+        let seconds = now.duration_since(then).as_secs_f64();
+        (seconds > 0.).then(|| {
+            (
+                received.saturating_sub(before_in) as f64 / seconds,
+                sent.saturating_sub(before_out) as f64 / seconds,
+            )
+        })
+    }
+
+    fn totals() -> Option<(u64, u64)> {
+        use windows::Win32::NetworkManagement::IpHelper::{
+            FreeMibTable, GetIfTable2, IF_TYPE_SOFTWARE_LOOPBACK, MIB_IF_TABLE2,
+        };
+        use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+        let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+        // SAFETY: Windows allocates the table, which is read while it
+        // lives and freed once; its rows are as many as it says.
+        unsafe {
+            GetIfTable2(&raw mut table).ok().ok()?;
+            let count = (*table).NumEntries as usize;
+            let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), count);
+            let totals = rows
+                .iter()
+                .filter(|row| {
+                    row.OperStatus == IfOperStatusUp && row.Type != IF_TYPE_SOFTWARE_LOOPBACK
+                })
+                // Filters stacked on an adapter count its bytes again.
+                .filter(|row| row.InterfaceAndOperStatusFlags._bitfield & 1 != 0)
+                .fold((0u64, 0u64), |(received, sent), row| {
+                    (received + row.InOctets, sent + row.OutOctets)
+                });
+            FreeMibTable(table.cast());
+            Some(totals)
+        }
+    }
+}
+
 /// The bytes of memory that are this process's alone, as Windows counts
 /// them. `None` where Windows does not tell.
 pub fn memory_held() -> Option<u64> {

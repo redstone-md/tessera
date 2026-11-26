@@ -674,7 +674,32 @@ const RUSSIAN: &[(&str, &str)] = &[
     (
         "The program is written in the file by hand.",
         "Программа пишется в файле вручную.",
-    ),
+    ), // The file manager.
+    ("Filter", "Фильтр"),
+    ("This PC", "Этот компьютер"),
+    ("New folder", "Новая папка"),
+    ("Paste", "Вставить"),
+    ("Open in terminal", "Открыть в терминале"),
+    ("Show hidden files", "Показывать скрытые файлы"),
+    ("Properties", "Свойства"),
+    ("Open", "Открыть"),
+    ("Open in new window", "Открыть в новом окне"),
+    ("Cut", "Вырезать"),
+    ("Copy", "Копировать"),
+    ("Copy path", "Копировать путь"),
+    ("Rename", "Переименовать"),
+    ("Delete", "Удалить"),
+    ("Show in Explorer", "Показать в Проводнике"),
+    ("Places", "Места"),
+    ("Modified", "Изменён"),
+    ("Type", "Тип"),
+    ("Size", "Размер"),
+    ("free of", "свободно из"),
+    ("items", "элем."),
+    ("selected", "выбрано"),
+    ("Reading…", "Чтение…"),
+    ("This folder cannot be read", "Эту папку нельзя прочитать"),
+    ("This folder is empty", "Папка пуста"),
 ];
 
 #[cfg(test)]

@@ -107,6 +107,26 @@
 # [[key]]
 # press = "win+1"
 # dock = 1
+#
+#   files   a folder to open in the file manager of Tessera: a path, "~"
+#           for the folder of the user, or "computer" for the drives
+#
+# [[key]]
+# press = "win+e"
+# files = "~"
+
+# The file manager of Tessera, which `tessera files [folder]`, the widget
+# `files` and the key above open. It reads folders without Explorer, opens
+# files with their programs, and has the Shell copy, move and delete, so
+# its dialogs, the Recycle Bin and Undo work as in Explorer.
+#   own            whether the folders the user menu and the launcher open
+#                  open here instead of in Explorer (true)
+#   hidden         whether hidden and system files are shown (false)
+#   folders_first  whether folders stand before files (true)
+#   view           "details" (default) or "tiles"
+# [files]
+# own = true
+# view = "details"
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"

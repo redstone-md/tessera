@@ -14,6 +14,7 @@ use serde::Deserialize;
 use crate::banners::NotificationsConfig;
 use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
+use crate::files::FilesConfig;
 use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
 use crate::platform::ScreenEdge;
@@ -209,6 +210,9 @@ pub struct KeyConfig {
     /// 1 to 9: the application with that number in the dock is started
     /// or its windows are gone through, as a click on its button does.
     pub dock: Option<u32>,
+    /// A folder to open in the file manager: a path, `~` for the folder
+    /// of the user, or `computer` for the drives.
+    pub files: Option<String>,
 }
 
 /// When a surface goes away.
@@ -337,6 +341,10 @@ pub struct Config {
     /// How the window switcher looks.
     #[serde(default)]
     pub switcher: SwitcherConfig,
+    /// How the file manager shows folders, and whether it opens those the
+    /// surfaces of Tessera open.
+    #[serde(default)]
+    pub files: FilesConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

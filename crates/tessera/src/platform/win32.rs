@@ -16,6 +16,7 @@ mod brightness;
 mod commands;
 mod connections;
 mod desktops;
+mod files;
 mod hdr;
 mod hotkeys;
 mod icon;
@@ -54,6 +55,10 @@ pub use brightness::ScreenBrightness;
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
+pub use files::{
+    Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
+    reveal_in_explorer, show_properties,
+};
 pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
 pub use icon::IconPixels;
@@ -69,7 +74,7 @@ pub use passage::Passage;
 pub use plans::PowerPlan;
 pub use power::PowerAction;
 pub use shortcuts::Shortcut;
-pub use system::{Battery, MemoryLoad, ProcessorLoad, memory_held};
+pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};

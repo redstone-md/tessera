@@ -226,6 +226,29 @@ impl TextField {
         window.focus(&self.focus);
     }
 
+    /// Whether the keys go to the field.
+    pub fn is_focused(&self, window: &Window) -> bool {
+        self.focus.is_focused(window)
+    }
+
+    /// Puts `text` in the field, all of it selected, as a field to be
+    /// written over is shown; with `stem`, only the part of it before the
+    /// last dot, as a file name to rename.
+    pub fn set_text(&mut self, text: &str, stem: bool, cx: &mut Context<Self>) {
+        let end = match stem {
+            true => text.rfind('.').filter(|&dot| dot > 0).unwrap_or(text.len()),
+            false => text.len(),
+        };
+        self.line = Line {
+            text: text.to_owned(),
+            caret: end,
+            anchor: 0,
+        };
+        self.composing.clear();
+        self.scrolled = px(0.);
+        self.stir(cx);
+    }
+
     /// Something of the field changed: it is drawn anew, the caret shown.
     fn stir(&mut self, cx: &mut Context<Self>) {
         self.stirred = Instant::now();
