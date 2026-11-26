@@ -4,7 +4,9 @@
 //! Two small buttons for the look of Windows. Widget `appearance`: whether
 //! Windows is light or dark, and a click that makes it the other. Widget
 //! `desktop`: a click shows the desktop or brings the windows back, as the
-//! action `desktop` does.
+//! action `desktop` does without an `arg`; with one it minimizes all
+//! windows (`minimize`), brings them back (`restore`) or minimizes all but
+//! the one in front (`others`).
 
 use std::time::Duration;
 
@@ -16,7 +18,7 @@ use gpui::{
 use crate::actions::{Action, Actions};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{ShowDesktop, Taskbar, light_mode, set_light_mode};
+use crate::platform::{AppWindowId, ShowDesktop, Taskbar, light_mode, set_light_mode};
 use crate::theme::Theme;
 use crate::ui::{icon, pill, state_layer};
 
@@ -47,9 +49,37 @@ impl Module for LookModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        // Windows keeps Win+D to itself while Explorer runs.
-        let desktop = Action::new(|_, _| toggle_desktop()).taking_reserved_keys();
+        // Windows keeps Win+D, Win+M and Win+Home to itself while
+        // Explorer runs.
+        let desktop = Action::new(|arg, _| desktop(arg))
+            .taking_reserved_keys()
+            .checking(|arg| match arg {
+                None | Some("toggle" | "minimize" | "restore" | "others") => Ok(()),
+                Some(_) => Err(
+                    "`desktop` takes `toggle`, `minimize`, `restore`, `others` or no `arg`"
+                        .to_owned(),
+                ),
+            });
         actions.register("desktop", desktop)
+    }
+}
+
+/// Does the action `desktop` with `arg`: shows the desktop or brings the
+/// windows back without one or with `toggle`, minimizes every window with
+/// `minimize`, brings back those minimized so with `restore`, and
+/// minimizes all but the one in front with `others`. Only `toggle` asks
+/// the taskbar of Explorer; the others are Tessera's own, so they bring
+/// back only what Tessera minimized.
+fn desktop(arg: Option<&str>) {
+    match arg {
+        None | Some("toggle") => toggle_desktop(),
+        Some("minimize") => ShowDesktop::minimize_all(),
+        Some("restore") => ShowDesktop::restore_all(),
+        Some("others") => match AppWindowId::foreground() {
+            Some(front) => ShowDesktop::minimize_others(front),
+            None => ShowDesktop::minimize_all(),
+        },
+        Some(other) => report!("`desktop` does nothing with `{other}`"),
     }
 }
 
@@ -188,6 +218,23 @@ impl Render for DesktopButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_action_desktop_takes_what_it_can_do() {
+        let mut actions = Actions::default();
+        LookModule.actions(&mut actions).unwrap();
+        for arg in [
+            None,
+            Some("toggle"),
+            Some("minimize"),
+            Some("restore"),
+            Some("others"),
+        ] {
+            assert_eq!(actions.check("desktop", arg), Ok(()));
+        }
+        assert!(actions.check("desktop", Some("away")).is_err());
+        assert!(actions.takes_reserved_keys("desktop"));
+    }
 
     #[test]
     fn the_icon_follows_the_mode() {

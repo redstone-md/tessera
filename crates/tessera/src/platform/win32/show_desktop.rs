@@ -118,14 +118,12 @@ impl ShowDesktop {
 
     /// Minimizes every application window that is shown, as Win+M does,
     /// and remembers them with those put aside before.
-    #[allow(dead_code, reason = "for the keys of Windows")]
     pub fn minimize_all() {
         put_aside(&mut Self::aside(), None);
     }
 
     /// Brings back the windows put aside that are still minimized, as
     /// Win+Shift+M does, and forgets them.
-    #[allow(dead_code, reason = "for the keys of Windows")]
     pub fn restore_all() {
         let mut aside = Self::aside();
         let windows = still_minimized(&aside, state_of);
@@ -135,7 +133,6 @@ impl ShowDesktop {
 
     /// Minimizes every application window that is shown but `keep`, as
     /// Win+Home does, and remembers them with those put aside before.
-    #[allow(dead_code, reason = "for the keys of Windows")]
     pub fn minimize_others(keep: AppWindowId) {
         put_aside(&mut Self::aside(), Some(keep));
     }

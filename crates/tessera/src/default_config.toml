@@ -128,6 +128,9 @@
 #                      taken from Windows where it keeps them, as win+v
 #             desktop  shows the desktop, or brings the windows back, as
 #                      the widget desktop does; win+d is taken from Windows
+#                      arg "minimize" minimizes every window (win+m),
+#                      "restore" brings them back (win+shift+m), "others"
+#                      minimizes all but the one in front (win+home)
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
