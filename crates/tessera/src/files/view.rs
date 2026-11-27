@@ -32,6 +32,7 @@ use crate::platform::{
     Drive, DriveKind, FileClipboard, FileWork, Launch, Place, RecycleBin, open_terminal,
     reveal_in_explorer, show_properties,
 };
+use crate::platform::{FileDeed, Made, UndoJournal};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, logo, one_line, place_look};
@@ -435,6 +436,10 @@ impl FilesView {
             report!("{} cannot be made: {error}", path.display());
             return;
         }
+        UndoJournal::note(vec![FileDeed::Created {
+            path: path.clone(),
+            made: Made::Folder,
+        }]);
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned());
@@ -501,14 +506,32 @@ impl FilesView {
             report!("`{name}` cannot be the name of a file");
             return;
         }
-        match std::fs::rename(&rename.path, &target) {
-            Ok(()) => {
-                self.selection.clear();
-                self.selection.chosen.insert(target);
-                self.load(cx);
+        self.selection.clear();
+        self.selection.chosen.insert(target);
+        let work = FileWork::Rename {
+            path: rename.path,
+            name: name.to_owned(),
+        };
+        self.work(work, cx);
+    }
+
+    /// Takes the last work on files back, or with `again` does again what
+    /// was taken back, and reads the folder when it is done.
+    fn undo(&mut self, again: bool, cx: &mut Context<Self>) {
+        let done = match again {
+            true => UndoJournal::redo(),
+            false => UndoJournal::undo(),
+        };
+        let Some(done) = done else {
+            return;
+        };
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            if let Ok(outcome) = done.recv().await {
+                outcome.report();
             }
-            Err(error) => report!("{} cannot be renamed: {error}", rename.path.display()),
-        }
+            this.update(cx, |this, cx| this.load(cx)).ok();
+        })
+        .detach();
     }
 
     /// Writes the path of the folder shown in a field instead of its steps.
@@ -617,6 +640,8 @@ impl FilesView {
             ("c", true, false, false) => self.put_on_clipboard(false),
             ("x", true, false, false) => self.put_on_clipboard(true),
             ("v", true, false, false) => self.paste(cx),
+            ("z", true, false, false) => self.undo(false, cx),
+            ("y", true, false, false) | ("z", true, false, true) => self.undo(true, cx),
             ("n", true, false, true) => self.new_folder(window, cx),
             ("n", true, false, false) => Files::open(self.history.current().clone(), cx),
             ("w", true, false, false) => window.remove_window(),
