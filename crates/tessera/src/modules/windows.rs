@@ -793,13 +793,20 @@ impl WindowList {
     }
 
     /// Whether a window of the list asks for attention in the way
-    /// `reveal_on_attention` wants the dock shown for.
+    /// `reveal_on_attention` wants the dock shown for. Only the windows
+    /// this dock shows count: every flashing window of the session is
+    /// heard, those of other displays and workspaces too.
     fn wants_reveal(&self) -> bool {
-        match self.options.reveal {
+        let wanted = |flashing: bool| match self.options.reveal {
             Reveal::Never => false,
-            Reveal::WhileFlashing => self.attention.values().any(|flashing| *flashing),
-            Reveal::UntilActivated => !self.attention.is_empty(),
-        }
+            Reveal::WhileFlashing => flashing,
+            Reveal::UntilActivated => true,
+        };
+        { self.items.iter() }
+            .filter(|item| !item.leaving)
+            .flat_map(|item| &item.windows)
+            .filter_map(|window| self.attention.get(&window.id))
+            .any(|&flashing| wanted(flashing))
     }
 
     /// The key of the button `number`, counted from 1 among those that
