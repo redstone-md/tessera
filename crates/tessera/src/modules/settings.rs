@@ -500,6 +500,7 @@ const WIDGET_LABELS: &[(&str, &str)] = &[
     ("user", "Account"),
     ("volume", "Volume"),
     ("wallpaper", "Wallpaper"),
+    ("wallpaper-settings", "Wallpaper settings"),
     ("windows", "Windows"),
     ("winx", "Win+X menu"),
     ("workspaces", "Workspaces"),

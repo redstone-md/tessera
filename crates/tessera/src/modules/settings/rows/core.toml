@@ -289,6 +289,8 @@ choices = [
     { value = "thumbnails", label = "Large pictures" },
     { value = "list", label = "Compact list" },
     { value = "icons", label = "Row of icons" },
+    { value = "cover", label = "Cover" },
+    { value = "flip", label = "Flip" },
 ]
 
 [[card.row]]
@@ -440,3 +442,294 @@ max = 180
 step = 0.01
 optional = true
 visible_if = { key = "schedule", equals = "sun" }
+
+# The other keys at the top of the file.
+
+[[card]]
+section = "General"
+title = "Windows key"
+
+[[card.row]]
+key = "windows_keys"
+kind = "toggle"
+label = "Keys of Windows that Tessera answers"
+description = "Win+D, Win+E and the other keys of Windows that features of Tessera bring, where no [[key]] uses them."
+optional = true
+unset_label = "Only as the shell"
+
+[[card]]
+section = "General"
+title = "Marketplace"
+search = ["Extensions", "Themes"]
+
+[[card.row]]
+key = "registries"
+kind = "list"
+label = "Registries"
+description = "The addresses of the registries the marketplace offers from; the official one while the list is not set."
+optional = true
+
+[[card]]
+section = "General"
+title = "Pictures of programs"
+
+[[card.row]]
+key = "icons"
+kind = "pairs"
+label = "Pictures of programs"
+description = "A picture file shown instead of the icon of a program, by the file name of its executable."
+
+[[card]]
+section = "Window rules"
+title = "Bundled rules"
+
+[[card.row]]
+key = "rule_templates"
+kind = "list"
+label = "Bundled rules"
+description = "Sets of window rules that come with Tessera, applied before your own."
+optional = true
+choices = [
+    { value = "browsers" },
+    { value = "games" },
+    { value = "password-managers" },
+    { value = "system-dialogs" },
+    { value = "development" },
+    { value = "adobe" },
+    { value = "picture-in-picture" },
+]
+
+# The other flyouts.
+
+[[card]]
+section = "Notifications"
+title = "Flyouts"
+table = "flyout"
+
+[[card.row]]
+key = "brightness"
+kind = "toggle"
+label = "Brightness flyout"
+description = "Shows a change of the brightness of the built-in display."
+optional = true
+
+[[card.row]]
+key = "microphone"
+kind = "toggle"
+label = "Microphone flyout"
+description = "Shows the microphone being muted, or no longer."
+optional = true
+
+[[card.row]]
+key = "locks"
+kind = "toggle"
+label = "Caps Lock and Num Lock flyout"
+description = "Shows Caps Lock and Num Lock being switched."
+optional = true
+
+[[card.row]]
+key = "layout"
+kind = "toggle"
+label = "Keyboard layout flyout"
+description = "Shows another keyboard layout for the window in front, and the layouts while Win+Space is held."
+optional = true
+
+[[card.row]]
+key = "media"
+kind = "toggle"
+label = "Now playing flyout"
+description = "Shows another piece being played, with its picture."
+optional = true
+
+[[card.row]]
+key = "workspace"
+kind = "toggle"
+label = "Workspace flyout"
+description = "Shows going to another workspace."
+optional = true
+
+[[card.row]]
+key = "seconds"
+kind = "number"
+label = "Seconds a flyout stays"
+description = "After the last change; 1.6 seconds while it is not set."
+min = 1
+max = 10
+step = 1
+default = 2
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "margin"
+kind = "number"
+label = "Distance from the edge"
+description = "How far a flyout hangs from the sides of the display, in pixels; 24 while it is not set."
+min = 0
+max = 200
+step = 4
+default = 24
+optional = true
+unset_label = "Default"
+
+# The notices Tessera gives in place of Explorer.
+
+[[card]]
+section = "Notifications"
+title = "Notices"
+table = "notices"
+
+[[card.row]]
+key = "drives"
+kind = "toggle"
+label = "Drives that are plugged in"
+description = "Tells of a drive that is plugged in, with a way to open it."
+optional = true
+unset_label = "Only as the shell"
+
+[[card.row]]
+key = "battery"
+kind = "toggle"
+label = "Battery running low"
+description = "Warns of a battery running low at the levels of the power plan."
+optional = true
+unset_label = "Only as the shell"
+
+# The rest of the window switcher.
+
+[[card]]
+section = "Windows"
+title = "Window switcher"
+table = "switcher"
+
+[[card.row]]
+key = "show_desktop"
+kind = "toggle"
+label = "Show desktop entry"
+description = "Adds an entry that shows the desktop after the windows."
+optional = true
+
+# The programs that start with the session.
+
+[[card]]
+section = "Session"
+title = "Startup apps"
+table = "startup"
+
+[[card.row]]
+key = "run"
+kind = "toggle"
+label = "Start the programs of the session"
+description = "As the shell, Tessera starts the programs that start with the session, as Explorer does."
+default = true
+
+[[card.row]]
+key = "delay"
+kind = "number"
+label = "Seconds after the bars open"
+description = "How long after the bars opened they start."
+min = 0
+max = 120
+step = 1
+default = 2
+unit = "s"
+
+[[card.row]]
+key = "active_setup"
+kind = "toggle"
+label = "Active Setup first"
+description = "Runs the components of Active Setup before them, as Explorer does at a first sign-in."
+default = true
+
+[[card.row]]
+key = "packaged"
+kind = "toggle"
+label = "Startup tasks of Store apps"
+description = "Starts the startup tasks of packaged applications as well."
+default = true
+
+# The performance mode.
+
+[[card]]
+section = "Displays and power"
+title = "Performance mode"
+table = "performance"
+search = ["Battery"]
+
+[[card.row]]
+key = "default"
+kind = "choice"
+label = "On mains power"
+description = "How much the shell spends on looks, wherever no other line applies."
+default = "off"
+choices = [
+    { value = "off", label = "Off" },
+    { value = "minimal", label = "Minimal" },
+    { value = "extreme", label = "Extreme" },
+]
+
+[[card.row]]
+key = "on_battery"
+kind = "choice"
+label = "On battery"
+choices = [
+    { value = "unset", label = "As on mains power" },
+    { value = "off", label = "Off" },
+    { value = "minimal", label = "Minimal" },
+    { value = "extreme", label = "Extreme" },
+]
+
+[[card.row]]
+key = "on_energy_saver"
+kind = "choice"
+label = "With energy saver"
+description = "While energy saver or battery saver is on, whatever the power source."
+choices = [
+    { value = "unset", label = "As for the power source" },
+    { value = "off", label = "Off" },
+    { value = "minimal", label = "Minimal" },
+    { value = "extreme", label = "Extreme" },
+]
+
+# The meters of the system.
+
+[[card]]
+section = "Widgets"
+title = "Meters"
+table = "system"
+
+[[card.row]]
+key = "interval"
+kind = "number"
+label = "Seconds between readings"
+description = "Of a meter that names no time of its own."
+min = 1
+max = 60
+step = 1
+default = 2
+unit = "s"
+
+# The keys of [wallpaper] the wallpaper settings do not set.
+
+[[card]]
+section = "Wallpaper"
+title = "Gradient and dark hours"
+table = "wallpaper"
+
+[[card.row]]
+key = "gradient"
+kind = "list"
+label = "Gradient"
+description = "Two colors, #rrggbb, from the top to the bottom, in place of the color."
+min = 2
+max = 2
+optional = true
+
+[[card.row]]
+key = "dark_hours"
+kind = "list"
+label = "Dark hours"
+description = "Two times of day, HH:MM, from when to when the pictures for dark Windows are shown; while Windows is dark without them."
+min = 2
+max = 2
+optional = true

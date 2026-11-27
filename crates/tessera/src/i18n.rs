@@ -2172,6 +2172,148 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Of the same place, in degrees, east positive.",
         "Того же места, в градусах, восток положителен.",
     ),
+    (
+        "Keys of Windows that Tessera answers",
+        "Клавиши Windows, на которые отвечает Tessera",
+    ),
+    (
+        "Win+D, Win+E and the other keys of Windows that features of Tessera bring, where no [[key]] uses them.",
+        "Win+D, Win+E и другие клавиши Windows, которые приносят функции Tessera, если их не занимает ни один [[key]].",
+    ),
+    ("Only as the shell", "Только как оболочка"),
+    ("Marketplace", "Магазин"),
+    ("Registries", "Реестры"),
+    (
+        "The addresses of the registries the marketplace offers from; the official one while the list is not set.",
+        "Адреса реестров, из которых предлагает магазин; официальный, пока список не задан.",
+    ),
+    ("Pictures of programs", "Картинки программ"),
+    (
+        "A picture file shown instead of the icon of a program, by the file name of its executable.",
+        "Файл картинки, показываемый вместо значка программы, по имени файла её исполняемого файла.",
+    ),
+    ("Bundled rules", "Встроенные правила"),
+    (
+        "Sets of window rules that come with Tessera, applied before your own.",
+        "Наборы правил окон, поставляемые с Tessera, применяются перед вашими.",
+    ),
+    ("Flyouts", "Всплывающие индикаторы"),
+    ("Brightness flyout", "Индикатор яркости"),
+    (
+        "Shows a change of the brightness of the built-in display.",
+        "Показывает изменение яркости встроенного дисплея.",
+    ),
+    ("Microphone flyout", "Индикатор микрофона"),
+    (
+        "Shows the microphone being muted, or no longer.",
+        "Показывает, что микрофон выключен или снова включён.",
+    ),
+    (
+        "Caps Lock and Num Lock flyout",
+        "Индикатор Caps Lock и Num Lock",
+    ),
+    (
+        "Shows Caps Lock and Num Lock being switched.",
+        "Показывает переключение Caps Lock и Num Lock.",
+    ),
+    ("Keyboard layout flyout", "Индикатор раскладки"),
+    (
+        "Shows another keyboard layout for the window in front, and the layouts while Win+Space is held.",
+        "Показывает другую раскладку для окна на переднем плане и список раскладок, пока удерживается Win+Пробел.",
+    ),
+    ("Now playing flyout", "Индикатор воспроизведения"),
+    (
+        "Shows another piece being played, with its picture.",
+        "Показывает начало другого трека с его картинкой.",
+    ),
+    ("Workspace flyout", "Индикатор рабочего пространства"),
+    (
+        "Shows going to another workspace.",
+        "Показывает переход на другое рабочее пространство.",
+    ),
+    ("Seconds a flyout stays", "Секунды показа индикатора"),
+    (
+        "After the last change; 1.6 seconds while it is not set.",
+        "После последнего изменения; 1,6 секунды, пока не задано.",
+    ),
+    ("Distance from the edge", "Отступ от края"),
+    (
+        "How far a flyout hangs from the sides of the display, in pixels; 24 while it is not set.",
+        "Насколько далеко индикатор от краёв дисплея, в пикселях; 24, пока не задано.",
+    ),
+    ("Notices", "Уведомления оболочки"),
+    ("Drives that are plugged in", "Подключённые диски"),
+    (
+        "Tells of a drive that is plugged in, with a way to open it.",
+        "Сообщает о подключённом диске и предлагает открыть его.",
+    ),
+    ("Battery running low", "Низкий заряд батареи"),
+    (
+        "Warns of a battery running low at the levels of the power plan.",
+        "Предупреждает о низком заряде батареи на уровнях схемы электропитания.",
+    ),
+    ("Show desktop entry", "Пункт «Показать рабочий стол»"),
+    (
+        "Adds an entry that shows the desktop after the windows.",
+        "Добавляет после окон пункт, показывающий рабочий стол.",
+    ),
+    (
+        "Start the programs of the session",
+        "Запускать программы сеанса",
+    ),
+    (
+        "As the shell, Tessera starts the programs that start with the session, as Explorer does.",
+        "Как оболочка Tessera запускает программы, стартующие с сеансом, как это делает Проводник.",
+    ),
+    (
+        "Seconds after the bars open",
+        "Секунды после открытия панелей",
+    ),
+    (
+        "How long after the bars opened they start.",
+        "Через сколько после открытия панелей они запускаются.",
+    ),
+    ("Active Setup first", "Сначала Active Setup"),
+    (
+        "Runs the components of Active Setup before them, as Explorer does at a first sign-in.",
+        "Перед ними выполняет компоненты Active Setup, как Проводник при первом входе.",
+    ),
+    (
+        "Startup tasks of Store apps",
+        "Задачи автозапуска приложений Store",
+    ),
+    (
+        "Starts the startup tasks of packaged applications as well.",
+        "Также запускает задачи автозапуска упакованных приложений.",
+    ),
+    ("On mains power", "От сети"),
+    (
+        "How much the shell spends on looks, wherever no other line applies.",
+        "Сколько оболочка тратит на оформление, где не действует другая строка.",
+    ),
+    ("As on mains power", "Как от сети"),
+    ("With energy saver", "С экономией энергии"),
+    (
+        "While energy saver or battery saver is on, whatever the power source.",
+        "Пока включена экономия энергии или заряда, при любом источнике питания.",
+    ),
+    ("As for the power source", "Как для источника питания"),
+    ("Seconds between readings", "Секунды между замерами"),
+    (
+        "Of a meter that names no time of its own.",
+        "Для индикатора, у которого не задано своё время.",
+    ),
+    ("Gradient and dark hours", "Градиент и тёмные часы"),
+    ("Gradient", "Градиент"),
+    (
+        "Two colors, #rrggbb, from the top to the bottom, in place of the color.",
+        "Два цвета, #rrggbb, сверху вниз, вместо цвета.",
+    ),
+    ("Dark hours", "Тёмные часы"),
+    (
+        "Two times of day, HH:MM, from when to when the pictures for dark Windows are shown; while Windows is dark without them.",
+        "Два времени суток, ЧЧ:ММ, с какого по какое показываются картинки для тёмной Windows; без них — пока тёмная Windows.",
+    ),
 ];
 
 #[cfg(test)]
