@@ -38,7 +38,7 @@ use serde::Deserialize;
 
 use crate::actions::Actions;
 use crate::field::TextField;
-use crate::files::Files;
+use crate::files::{Files, Location};
 use crate::i18n::Language;
 use crate::icon_packs;
 use crate::icons::{AppIcons, Icon, icon_of_pixels};
@@ -1562,8 +1562,9 @@ fn shell_name(kind: VirtualKind) -> String {
     format!("shell:{}", kind.parsing_name())
 }
 
-/// Opens `item`: a folder in the file manager where the configuration
-/// gives folders to it, anything else as a double click in Explorer does.
+/// Opens `item`: a folder, the folder of the user, This PC and the Recycle
+/// Bin in the file manager where the configuration gives folders to it,
+/// anything else as a double click in Explorer does.
 pub fn open_item(item: &DesktopItem, cx: &mut App) {
     match &item.kind {
         ItemKind::File {
@@ -1578,11 +1579,8 @@ pub fn open_item(item: &DesktopItem, cx: &mut App) {
             Some(home) if Files::open_folder(&home, cx) => {}
             _ => Launch::new(shell_name(VirtualKind::UserFiles)).start(),
         },
-        ItemKind::Virtual(VirtualKind::RecycleBin) => {
-            if let Err(error) = RecycleBin::open() {
-                report!("the Recycle Bin does not open: {error}");
-            }
-        }
+        ItemKind::Virtual(VirtualKind::RecycleBin) => Files::open_recycle_bin(cx),
+        ItemKind::Virtual(VirtualKind::Computer) if Files::open_owned(Location::Computer, cx) => {}
         ItemKind::Virtual(kind) => Launch::new(shell_name(*kind))
             .named(format!("`{}`", item.name))
             .start(),

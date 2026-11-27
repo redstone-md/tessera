@@ -28,6 +28,7 @@ use gpui::{
 };
 use serde::Deserialize;
 
+use model::RECYCLE_BIN;
 pub use model::{Grouping, Location, Look, size_text};
 use session::{Opening, Session};
 pub use thumbs::FileViewConfig;
@@ -44,8 +45,8 @@ use crate::modules::devices::{Drives, letter_of as drive_letter_of};
 use crate::modules::windows::FILES_APP;
 use crate::platform::Place;
 use crate::platform::{
-    AppWindow, DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, ShellWindows,
-    known_folder_path, reveal_with, shell_mode, start_explorer,
+    AppWindow, DriveDialog, FolderHandler, NetworkDrives, RecycleBin, SharePackage, ShellThread,
+    ShellWindows, known_folder_path, reveal_with, shell_mode, start_explorer,
 };
 use crate::theme::Theme;
 use crate::ui::{icon, pill};
@@ -347,11 +348,30 @@ impl Files {
     /// gives folders to it, and says whether it did; the caller has the
     /// Shell open it otherwise.
     pub fn open_folder(path: &Path, cx: &mut App) -> bool {
-        if !Self::config(cx).own || !path.is_dir() {
+        path.is_dir() && Self::open_owned(Location::Folder(path.to_owned()), cx)
+    }
+
+    /// Opens `location` in the file manager when the configuration gives
+    /// folders to it, and says whether it did; the caller has the Shell
+    /// open it otherwise.
+    pub fn open_owned(location: Location, cx: &mut App) -> bool {
+        if !Self::opens_folders(cx) {
             return false;
         }
-        Self::open(Location::Folder(path.to_owned()), cx);
+        Self::open(location, cx);
         true
+    }
+
+    /// Opens the Recycle Bin: in the file manager when the configuration
+    /// gives folders to it, and in Explorer otherwise; a failure is
+    /// reported.
+    pub fn open_recycle_bin(cx: &mut App) {
+        if Self::open_owned(Location::RecycleBin, cx) {
+            return;
+        }
+        if let Err(error) = RecycleBin::open() {
+            report!("the Recycle Bin was not opened: {error:#}");
+        }
     }
 
     /// Opens what `words` name, read as Explorer reads its command line
@@ -409,7 +429,8 @@ impl Files {
 
     /// The location a command or a key names: nothing or `~` for the
     /// folder of the user, `home` for Home (Quick access and the files
-    /// used lately), `computer` for the drives, or a path, with a leading
+    /// used lately), `computer` for the drives, `recycle-bin` for the
+    /// Recycle Bin, or a path, with a leading
     /// `~` standing for the folder of the user.
     pub fn named(name: &str) -> Location {
         let name = name.trim();
@@ -417,6 +438,7 @@ impl Files {
             "" | "~" => Self::home(),
             "computer" => Location::Computer,
             "home" => Location::Home,
+            RECYCLE_BIN => Location::RecycleBin,
             _ => match name.strip_prefix("~\\").or(name.strip_prefix("~/")) {
                 Some(rest) => match Place::Home.path() {
                     Some(home) => Location::Folder(home.join(rest)),
@@ -710,5 +732,12 @@ mod tests {
         assert_eq!(keys[0].action.as_deref(), Some("files"));
         assert_eq!(keys[0].arg, None);
         assert!(actions.takes_reserved_keys("files"));
+    }
+
+    #[test]
+    fn the_drives_and_the_recycle_bin_have_names() {
+        assert_eq!(Files::named("computer"), Location::Computer);
+        assert_eq!(Files::named(" recycle-bin "), Location::RecycleBin);
+        assert_eq!(Files::named("home"), Location::Home);
     }
 }

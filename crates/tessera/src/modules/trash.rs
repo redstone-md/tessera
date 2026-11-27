@@ -14,7 +14,7 @@ use gpui::{
 };
 
 use crate::actions::{Action, Actions};
-use crate::files::size_text;
+use crate::files::{Files, size_text};
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
@@ -60,7 +60,8 @@ impl Module for TrashModule {
 /// What can be done with the whole bin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BinDeed {
-    /// Has Explorer show it.
+    /// Shows it in the file manager where it takes folders, else in
+    /// Explorer.
     Open,
     /// Brings every item back to where it was deleted from, once the user
     /// said yes in a question of Windows.
@@ -85,11 +86,7 @@ impl BinDeed {
     /// to count again once the bin has changed.
     fn run(self, widget: Option<WeakEntity<Trash>>, cx: &mut App) {
         match self {
-            Self::Open => {
-                if let Err(error) = RecycleBin::open() {
-                    report!("the Recycle Bin was not opened: {error:#}");
-                }
-            }
+            Self::Open => Files::open_recycle_bin(cx),
             Self::Restore => {
                 let language = Language::of(cx);
                 let title = language.say("Restore all items").to_owned();

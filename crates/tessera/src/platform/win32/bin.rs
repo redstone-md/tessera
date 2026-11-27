@@ -122,8 +122,8 @@ impl RecycleBin {
         })
     }
 
-    /// Has Explorer open a window on the bin. Tessera's file manager has no
-    /// view of the bin yet.
+    /// Has Explorer open a window on the bin. `Files::open_recycle_bin`
+    /// shows it in Tessera's file manager instead where `[files] own` is on.
     pub fn open() -> io::Result<()> {
         Command::new("explorer.exe")
             .arg("shell:RecycleBinFolder")
