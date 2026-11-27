@@ -5,14 +5,27 @@
 //! `Shell_NotifyIcon`.
 //!
 //! Applications deliver those icons to the first window of the class
-//! `Shell_TrayWnd`. The shell creates such a window above Explorer's,
-//! records what arrives and passes every message on to Explorer, so
-//! Explorer's own notification area stays complete for when the shell
-//! exits.
+//! `Shell_TrayWnd`. The shell creates such a window above Explorer's and
+//! records what arrives. Beside Explorer it passes every message on to
+//! Explorer, so Explorer's own notification area stays complete for when
+//! the shell exits, and Explorer gives the answers.
+//!
+//! Where no taskbar of Explorer exists, as when Tessera is the shell of the
+//! session, the window answers itself, which it decides anew with every
+//! message: it accepts icons and their versions, tells applications where
+//! their icons are, and serves the edge bars (see `appbar.rs`). When Explorer's
+//! taskbar appears again the window goes back to passing messages on.
 //!
 //! Edge bars reach Explorer through the same window, the shell's own
-//! surfaces among them, so their requests are passed on as well.
+//! surfaces among them, so their requests are passed on as well. The
+//! private messages of `ITaskbarList` do not come here but to the window
+//! the shell registers as the task manager.
+//!
+//! A message posted to an application that runs with higher privileges
+//! than the shell is dropped by Windows, so such an application does not
+//! hear of clicks on its icon.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -26,17 +39,19 @@ use windows::Win32::UI::Shell::{
     NIN_POPUPCLOSE, NIN_POPUPOPEN, SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW,
-    GetClassNameW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST,
-    HWND_TOPMOST, IsWindow, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SendNotifyMessageW, SetForegroundWindow,
-    SetTimer, SetWindowPos, TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDBLCLK,
+    AllowSetForegroundWindow, ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW,
+    DispatchMessageW, FindWindowExW, GetClassNameW, GetCursorPos, GetMessageW,
+    GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST, IsWindow, MSG, MSGFLT_ALLOW,
+    PostMessageW, RegisterClassW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SendMessageW, SendNotifyMessageW, SetForegroundWindow, SetTimer, SetWindowPos,
+    TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER,
     WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
 use super::ScreenRect;
+use super::appbar::{self, Request};
 use super::icon::IconPixels;
 
 /// The class of the window Windows gives its Bluetooth icon for.
@@ -62,11 +77,6 @@ const PLACE_SIZE: u32 = 2;
 
 /// Marks a `WM_COPYDATA` message that carries the request of an edge bar.
 const EDGE_BAR_DATA: usize = 0;
-
-/// Where the request of an edge bar names the shared memory that holds its
-/// `APPBARDATA`: the handle, then the process the handle is valid in.
-const SHARED_HANDLE: usize = 48;
-const SHARED_OWNER: usize = 56;
 
 /// Milliseconds between checks that the window is still found first and
 /// that the owners of the icons still exist.
@@ -577,6 +587,19 @@ impl Tray {
             .clone()
     }
 
+    /// Starts the tray before the shell opens its surfaces where no taskbar
+    /// of Explorer exists: the surfaces reserve their screen edges through
+    /// its window then, and edge bars started before the shell find it.
+    /// Beside Explorer the tray starts with the first `tray` widget.
+    pub fn start_before_surfaces() {
+        if super::explorer_running() {
+            return;
+        }
+        if let Err(error) = Self::start() {
+            report!("edge bars and notification icons have nothing to answer them: {error}");
+        }
+    }
+
     /// The icons to show, oldest first, and a number that grows whenever
     /// they change.
     pub fn icons() -> (u64, Vec<TrayIcon>) {
@@ -633,9 +656,35 @@ impl Tray {
 /// before it exists.
 static HOST: AtomicU32 = AtomicU32::new(0);
 
+thread_local! {
+    /// Whether the window answered itself at its last upkeep, as no
+    /// taskbar of Explorer existed.
+    static SERVING: Cell<bool> = const { Cell::new(false) };
+}
+
 /// The handle a 32-bit value of a notification stands for.
 fn handle(value: u32) -> HWND {
     HWND(value as usize as *mut c_void)
+}
+
+/// The message that tells applications a taskbar was created; 0 if
+/// Windows did not give one.
+fn taskbar_created() -> u32 {
+    static CREATED: OnceLock<u32> = OnceLock::new();
+    // SAFETY: the name is a NUL-terminated literal.
+    *CREATED.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })
+}
+
+/// Tells every application that a taskbar was created, which has them add
+/// their icons and register their edge bars again.
+fn announce() {
+    let created = taskbar_created();
+    if created != 0 {
+        // SAFETY: the broadcast passes no pointers and does not wait.
+        unsafe {
+            let _ = SendNotifyMessageW(HWND_BROADCAST, created, WPARAM(0), LPARAM(0));
+        }
+    }
 }
 
 /// Creates the window and serves it until the process exits.
@@ -648,16 +697,14 @@ fn run(ready: &mpsc::Sender<Result<()>>) {
         }
     };
     HOST.store(window.0 as usize as u32, Ordering::Relaxed);
+    SERVING.set(explorer_tray(window).is_none());
     let _ = ready.send(Ok(()));
 
-    // SAFETY: the window belongs to this thread; `message` outlives the
-    // loop, and the broadcast passes no pointers.
+    // SAFETY: the window belongs to this thread, and `message` outlives
+    // the loop.
     unsafe {
         SetTimer(Some(window), 1, UPKEEP_INTERVAL, None);
-        let created = RegisterWindowMessageW(w!("TaskbarCreated"));
-        if created != 0 {
-            let _ = SendNotifyMessageW(HWND_BROADCAST, created, WPARAM(0), LPARAM(0));
-        }
+        announce();
         let mut message = MSG::default();
         while GetMessageW(&raw mut message, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&raw const message);
@@ -695,6 +742,13 @@ fn create_window() -> Result<HWND> {
             None,
         )
         .context("the window could not be created")?;
+        // A shell started with higher privileges than the applications
+        // still hears from them. Failing that, it hears from its equals.
+        for message in [WM_COPYDATA, taskbar_created()] {
+            if message != 0 {
+                let _ = ChangeWindowMessageFilterEx(window, message, MSGFLT_ALLOW, None);
+            }
+        }
         raise(window);
         Ok(window)
     }
@@ -769,15 +823,8 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     // SAFETY: the caller guarantees the buffer.
     let bytes =
         unsafe { std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize) };
-    let handle = bytes
-        .get(SHARED_HANDLE..SHARED_HANDLE + 8)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map_or(0, u64::from_le_bytes);
-    let owner = bytes
-        .get(SHARED_OWNER..SHARED_OWNER + 4)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map_or(0, u32::from_le_bytes);
-    if handle == 0 {
+    let request = Request::parse(bytes);
+    if request.shared == 0 || bytes.len() < appbar::SHARED_OWNER + 4 {
         return send(data);
     }
 
@@ -786,17 +833,16 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     // as handles are 32 bits wide in a request, and not a byte more may be
     // written: the memory of a request from this very process is not
     // mapped but lies among its other allocations.
-    let stated = bytes
-        .get(..4)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map_or(0, u32::from_le_bytes);
-    let size = (stated as usize).min(SHARED_HANDLE);
+    let size = (request.size as usize).min(appbar::SHARED_HANDLE);
     // SAFETY: the shared memory functions accept any handle and answer
     // null for one that is not theirs. A block they hand out holds the
     // structure its sender put there, of the length that structure
     // states, and both blocks stay valid until they are unlocked below.
     unsafe {
-        let ours = SHLockShared(HANDLE(handle as usize as *mut c_void), owner);
+        let ours = SHLockShared(
+            HANDLE(request.shared as usize as *mut c_void),
+            request.owner,
+        );
         if ours.is_null() {
             return send(data);
         }
@@ -808,14 +854,15 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
             return send(data);
         }
 
-        let mut request = bytes.to_vec();
-        request[SHARED_HANDLE..SHARED_HANDLE + 8]
+        let mut forwarded = bytes.to_vec();
+        forwarded[appbar::SHARED_HANDLE..appbar::SHARED_HANDLE + 8]
             .copy_from_slice(&(shared.0 as usize as u64).to_le_bytes());
-        request[SHARED_OWNER..SHARED_OWNER + 4].copy_from_slice(&process.to_le_bytes());
+        forwarded[appbar::SHARED_OWNER..appbar::SHARED_OWNER + 4]
+            .copy_from_slice(&process.to_le_bytes());
         let result = send(&COPYDATASTRUCT {
             dwData: data.dwData,
             cbData: data.cbData,
-            lpData: request.as_mut_ptr().cast(),
+            lpData: forwarded.as_mut_ptr().cast(),
         });
 
         let theirs = SHLockShared(shared, process);
@@ -829,8 +876,42 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     }
 }
 
+/// Records the notification in `data` and says whether it was accepted.
+fn record(data: &[u8]) -> bool {
+    icons().apply(&Notice::parse(data), load_icon)
+}
+
+/// Keeps the window first, forgets the icons and bars of closed windows,
+/// and follows Explorer's taskbar coming and going.
+fn upkeep(window: HWND) {
+    // SAFETY: the calls only read window state.
+    unsafe {
+        let first = FindWindowExW(None, None, CLASS, PCWSTR::null());
+        if first.ok() != Some(window) {
+            raise(window);
+        }
+    }
+    let serving = explorer_tray(window).is_none();
+    // SAFETY: the call only reads whether a window exists.
+    icons().prune(|owner| unsafe { IsWindow(Some(handle(owner))) }.as_bool());
+
+    if SERVING.replace(serving) != serving {
+        if serving {
+            // Explorer went: the applications that knew only Explorer
+            // bring their icons and bars here.
+            announce();
+        } else {
+            // Explorer came back and keeps the bars from now on.
+            appbar::forget();
+        }
+    }
+    if serving {
+        appbar::upkeep(window);
+    }
+}
+
 /// The window procedure: records icons, keeps the window first, and passes
-/// what applications sent on to Explorer.
+/// what applications sent on to Explorer, or answers itself without it.
 unsafe extern "system" fn receive(
     window: HWND,
     message: u32,
@@ -842,55 +923,57 @@ unsafe extern "system" fn receive(
             // SAFETY: for this message the system guarantees that `lparam`
             // points to a COPYDATASTRUCT whose buffer is readable for the
             // length it states, until the procedure returns.
-            let notice = unsafe {
+            let (kind, bytes) = unsafe {
                 let data = &*(lparam.0 as *const COPYDATASTRUCT);
-                (data.dwData == ICON_DATA && !data.lpData.is_null()).then(|| {
-                    let bytes =
-                        std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize);
-                    Notice::parse(bytes)
-                })
+                let bytes = (!data.lpData.is_null()).then(|| {
+                    std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize)
+                });
+                (data.dwData, bytes)
             };
-            if let Some(notice) = notice {
-                icons().apply(&notice, load_icon);
+            let explorer = explorer_tray(window);
+            // What the window answers when it serves the icons itself.
+            let mut own = 0;
+            match (kind, bytes) {
+                (ICON_DATA, Some(bytes)) => own = record(bytes).into(),
+                // Explorer would answer with the place in its own, hidden
+                // taskbar, where the application would then open its menu.
+                (PLACE_DATA, Some(bytes)) => {
+                    let corner = place_request(bytes)
+                        .and_then(|(corner, identity)| icons().corner(corner, identity));
+                    if let Some(corner) = corner {
+                        return LRESULT(corner);
+                    }
+                }
+                (EDGE_BAR_DATA, Some(bytes)) if explorer.is_none() => {
+                    return appbar::serve(window, bytes);
+                }
+                _ => {}
             }
-            // SAFETY: as above.
-            let corner = unsafe {
-                let data = &*(lparam.0 as *const COPYDATASTRUCT);
-                (data.dwData == PLACE_DATA && !data.lpData.is_null())
-                    .then(|| {
-                        let bytes = std::slice::from_raw_parts(
-                            data.lpData.cast::<u8>(),
-                            data.cbData as usize,
-                        );
-                        place_request(bytes)
-                    })
-                    .flatten()
-            };
-            // Explorer would answer with the place in its own, hidden
-            // taskbar, where the application would then open its menu.
-            let corner = corner.and_then(|(corner, identity)| icons().corner(corner, identity));
-            if let Some(corner) = corner {
-                return LRESULT(corner);
-            }
-            match explorer_tray(window) {
+            match explorer {
                 // SAFETY: `lparam` points to the COPYDATASTRUCT of this
                 // message, which stays readable until the procedure returns.
                 Some(explorer) => unsafe {
                     pass_on(explorer, wparam, &*(lparam.0 as *const COPYDATASTRUCT))
                 },
-                None => LRESULT(1),
+                None => LRESULT(own),
             }
         }
         WM_TIMER => {
-            // SAFETY: the calls only read window state.
-            unsafe {
-                let first = FindWindowExW(None, None, CLASS, PCWSTR::null());
-                if first.ok() != Some(window) {
-                    raise(window);
-                }
-                icons().prune(|owner| IsWindow(Some(handle(owner))).as_bool());
+            upkeep(window);
+            LRESULT(0)
+        }
+        appbar::WORK_AREAS => {
+            if SERVING.get() {
+                appbar::set_work_areas();
             }
             LRESULT(0)
+        }
+        WM_DISPLAYCHANGE => {
+            if SERVING.get() {
+                appbar::displays_changed(window);
+            }
+            // SAFETY: the default procedure accepts any message of a window.
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         // Applications also talk to the taskbar with private messages.
         // Registered messages are broadcast, so Explorer has its own copy.

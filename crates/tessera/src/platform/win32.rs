@@ -8,6 +8,7 @@
 mod accent;
 mod account;
 mod app_windows;
+mod appbar;
 mod audio;
 mod backdrop;
 mod bin;
