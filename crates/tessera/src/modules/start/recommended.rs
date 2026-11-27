@@ -13,6 +13,8 @@ use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use gpui::{
@@ -240,13 +242,7 @@ impl Recommended {
                 let remembered = Remembered {
                     hidden: self.hidden.clone(),
                 };
-                cx.background_executor()
-                    .spawn(async move {
-                        if let Err(error) = write(&remembered) {
-                            report!("{FILE} was not written: {error}");
-                        }
-                    })
-                    .detach();
+                write_later(remembered, cx);
             }
         }
     }
@@ -363,6 +359,27 @@ impl Recommended {
 fn folder_of(path: &Path) -> Option<String> {
     let folder = path.parent()?.file_name()?;
     Some(folder.to_string_lossy().into_owned())
+}
+
+/// Writes `remembered` on a thread of the background, unless what was
+/// asked after it has been written already: of two removals close
+/// together, the second one stays.
+fn write_later(remembered: Remembered, cx: &App) {
+    static ASKED: AtomicU64 = AtomicU64::new(0);
+    static WRITTEN: Mutex<u64> = Mutex::new(0);
+    let asked = ASKED.fetch_add(1, Ordering::Relaxed) + 1;
+    cx.background_executor()
+        .spawn(async move {
+            let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
+            if *written > asked {
+                return;
+            }
+            match write(&remembered) {
+                Ok(()) => *written = asked,
+                Err(error) => report!("{FILE} was not written: {error}"),
+            }
+        })
+        .detach();
 }
 
 /// Writes what is remembered to its file.
