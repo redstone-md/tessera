@@ -3,6 +3,7 @@
 
 //! The modules the shell is assembled from.
 
+mod airplane;
 mod bluetooth;
 mod brightness;
 mod calendar;
@@ -81,6 +82,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
         Box::new(quick::QuickModule),
+        Box::new(airplane::AirplaneModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),
