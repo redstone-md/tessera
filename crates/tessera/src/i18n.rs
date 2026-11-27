@@ -674,7 +674,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     (
         "The program is written in the file by hand.",
         "Программа пишется в файле вручную.",
-    ), // The file manager.
+    ),
+    // The file manager.
+    ("File manager", "Файловый менеджер"),
+    ("Open folders in Tessera", "Открывать папки в Tessera"),
     ("Filter", "Фильтр"),
     ("This PC", "Этот компьютер"),
     ("New folder", "Новая папка"),
