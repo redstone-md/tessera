@@ -28,7 +28,7 @@ use serde::Deserialize;
 use crate::actions::{Action, Actions};
 use crate::platform::{
     ActiveTracking, AppWindow, AppWindowId, Display, GrabKey, MouseHook, PointerButton,
-    PointerEvent, ScreenRect, pointer_at,
+    PointerEvent, ScreenRect, pointer_at, pointer_held,
 };
 use crate::rules::Rules;
 use crate::snap::unsnapped;
@@ -268,6 +268,28 @@ fn shifted(rect: ScreenRect, (x, y): (i32, i32)) -> ScreenRect {
     }
 }
 
+/// Where a maximized window of `frame` goes when it is grabbed with the
+/// pointer at `at` and takes the size of `restored` again: the pointer
+/// stays at the same share of the way across it and down it, and it is
+/// kept within `work`.
+fn restored_around(
+    restored: ScreenRect,
+    frame: ScreenRect,
+    at: (i32, i32),
+    work: ScreenRect,
+) -> ScreenRect {
+    let across = unsnapped(restored, frame, at, work);
+    let height = restored.bottom - restored.top;
+    let down = (at.1 - frame.top) as f32 / (frame.bottom - frame.top).max(1) as f32;
+    let top = at.1 - (height as f32 * down.clamp(0., 1.)).round() as i32;
+    let top = top.clamp(work.top, (work.bottom - height).max(work.top));
+    ScreenRect {
+        top,
+        bottom: top + height,
+        ..across
+    }
+}
+
 /// A window being moved or resized with the pointer.
 struct Drag {
     window: AppWindowId,
@@ -428,7 +450,7 @@ impl WindowActions {
         }
         if maximized {
             let restored = window.restored_frame().unwrap_or(frame);
-            frame = unsnapped(restored, frame, at, display.work);
+            frame = restored_around(restored, frame, at, display.work);
             window.place_restored(frame, false);
         }
         let scale = display.scale.max(0.1);
@@ -493,7 +515,10 @@ impl WindowActions {
 
     /// Puts the window of the drag `serial` where the pointer, at
     /// `pointer` or where it is now, has it. Whether the drag goes on is
-    /// returned.
+    /// returned. A drag whose button is no longer held ends as if it was
+    /// let go, as when it was let go over a window of a program that runs
+    /// with more rights than Tessera, which Windows does not show the
+    /// hook.
     fn step(serial: u64, pointer: Option<(i32, i32)>, cx: &mut App) -> bool {
         let this = cx.global_mut::<Self>();
         let Some(drag) = this.drag.as_mut().filter(|drag| drag.serial == serial) else {
@@ -501,6 +526,15 @@ impl WindowActions {
         };
         if !drag.window.exists() {
             this.drag = None;
+            return false;
+        }
+        // Either button counts, as the hook and the state of the buttons
+        // may tell them apart differently where they are swapped.
+        if pointer.is_none() && !pointer_held() {
+            MouseHook::end_grab(drag.button);
+            if let Some(drag) = this.drag.take() {
+                Rules::move_ended(drag.window, cx);
+            }
             return false;
         }
         let Some(pointer) = pointer.or_else(pointer_at) else {
@@ -662,6 +696,19 @@ mod tests {
         // The window keeps its least size.
         let (small, _) = resized_from_corner(frame, (450, 350), (0, 0), 50);
         assert_eq!(small, rect(100, 100, 150, 150));
+    }
+
+    #[test]
+    fn a_restored_window_stays_around_the_pointer() {
+        let work = rect(0, 0, 1920, 1040);
+        let restored = rect(400, 300, 1200, 900);
+        // Grabbed three quarters across and down the maximized window.
+        let placed = restored_around(restored, work, (1440, 780), work);
+        assert_eq!(placed, rect(840, 330, 1640, 930));
+        // Near the bottom it is kept within the work area.
+        let low = restored_around(restored, work, (960, 1039), work);
+        assert_eq!(low.bottom, 1040);
+        assert_eq!(low.bottom - low.top, 600);
     }
 
     #[test]

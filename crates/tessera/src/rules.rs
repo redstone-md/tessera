@@ -761,8 +761,8 @@ impl Rules {
     /// Does again what the rules that apply always say, as far as it
     /// differs, puts a window that moved right after it was placed back
     /// where its rules put it, draws a window as opaque as it is to be in
-    /// front or not, and remembers where a window is whose frame a rule
-    /// remembers.
+    /// front or not, and remembers where a window in front is whose frame
+    /// a rule remembers.
     fn once_more(window: &AppWindow, cx: &mut App) {
         let Some(seen) = cx.global::<Self>().seen.get(&window.id) else {
             return;
@@ -796,7 +796,9 @@ impl Rules {
         if effective.inactive_opacity.is_some() {
             Self::shade(id, &effective);
         }
-        if placed.is_none() {
+        // Only the window in front is remembered: of several windows one
+        // rule names, the one used last, and not each in turn.
+        if placed.is_none() && AppWindowId::foreground() == Some(id) {
             Self::remember(id, &effective, cx);
         }
     }

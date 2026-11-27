@@ -31,8 +31,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetMessageW, HTCAPTION, HWND_BOTTOM, MSG,
-    PostMessageW, SC_MOVE, SC_SIZE, SET_WINDOW_POS_FLAGS, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, FindWindowExW, GetMessageW, HTCAPTION, HWND_BOTTOM,
+    MSG, PostMessageW, SC_MOVE, SC_SIZE, SET_WINDOW_POS_FLAGS, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
     SWP_NOZORDER, ShowWindow, TranslateMessage, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
     WM_SYSCOMMAND, WS_CAPTION,
 };
@@ -46,6 +46,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPlacement, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WS_DLGFRAME, WS_EX_LAYERED,
     WS_EX_TOPMOST, WS_THICKFRAME,
 };
+
+use windows::core::{PCWSTR, w};
 
 use super::{AppWindowId, ScreenRect};
 
@@ -405,15 +407,38 @@ impl AppWindowId {
 }
 
 /// What Tessera took from the style of a window of another program, so
-/// that it gives it back: the style the window had, whether its title bar
-/// is away, and where the whole window was before it was made to fill its
-/// display.
+/// that it gives it back: the title bar and frame the window had (only
+/// those bits of its style, so that what the window became since, such as
+/// maximized, hidden or disabled, is never set back), whether its title
+/// bar is away, where the whole window was before it was made to fill its
+/// display, and the process it belongs to, so that another window that
+/// later gets the same handle is not taken for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Restyled {
     style: isize,
     untitled: bool,
     filled_from: Option<ScreenRect>,
+    process: u32,
 }
+
+impl Restyled {
+    /// Whether the window this was taken from is still the one `raw`
+    /// names.
+    fn still_of(&self, raw: isize) -> bool {
+        let id = AppWindowId::from_raw(raw);
+        id.exists() && id.process() == self.process
+    }
+}
+
+/// The class of the windows of the frame host of the applications of the
+/// Universal Windows Platform, and of the window within each that the
+/// application itself shows.
+const FRAME_CLASS: &str = "ApplicationFrameWindow";
+const CONTENT_CLASS: PCWSTR = w!("Windows.UI.Core.CoreWindow");
+
+/// The bits of the style of a window Tessera takes: its title bar and its
+/// frame.
+const TAKEN: isize = (WS_CAPTION.0 | WS_THICKFRAME.0) as isize;
 
 /// The windows Tessera restyled, by window.
 static RESTYLED: Mutex<Option<HashMap<isize, Restyled>>> = Mutex::new(None);
@@ -425,9 +450,10 @@ static BELOW: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
 /// it stops waiting for programs that do not answer.
 const GIVING_BACK: Duration = Duration::from_millis(500);
 
-/// The style a window of `style` has without its title bar where
-/// `untitled`, and without any frame where `filled`.
-fn restyled(style: isize, untitled: bool, filled: bool) -> isize {
+/// The style a window of `current` style has with the title bar and frame
+/// of `original`, without its title bar where `untitled`, and without any
+/// frame where `filled`; every other bit stays as it is now.
+fn restyled(current: isize, original: isize, untitled: bool, filled: bool) -> isize {
     let mut taken = 0;
     if untitled || filled {
         taken |= WS_CAPTION.0 as isize;
@@ -435,7 +461,7 @@ fn restyled(style: isize, untitled: bool, filled: bool) -> isize {
     if filled {
         taken |= WS_THICKFRAME.0 as isize;
     }
-    style & !taken
+    (current & !TAKEN) | (original & TAKEN & !taken)
 }
 
 /// The flags that change a window without bringing it in front or waiting
@@ -520,7 +546,8 @@ impl AppWindowId {
 
     fn restyled(self) -> Option<Restyled> {
         let restyled = RESTYLED.lock().unwrap_or_else(PoisonError::into_inner);
-        restyled.as_ref()?.get(&self.raw()).copied()
+        let restyled = restyled.as_ref()?.get(&self.raw()).copied()?;
+        restyled.still_of(self.raw()).then_some(restyled)
     }
 
     /// Takes the title bar of the window away, keeping the border that
@@ -576,10 +603,12 @@ impl AppWindowId {
         let (original, after) = {
             let mut all = RESTYLED.lock().unwrap_or_else(PoisonError::into_inner);
             let all = all.get_or_insert_with(HashMap::new);
+            all.retain(|&raw, restyled| restyled.still_of(raw));
             let entry = all.entry(self.raw()).or_insert(Restyled {
-                style,
+                style: style & TAKEN,
                 untitled: false,
                 filled_from: None,
+                process: self.process(),
             });
             change(entry);
             let after = *entry;
@@ -589,7 +618,7 @@ impl AppWindowId {
             (after.style, after)
         };
         let filled = after.filled_from.is_some();
-        let wanted = restyled(original, after.untitled, filled);
+        let wanted = restyled(style, original, after.untitled, filled);
         let (after_window, order) = match filled {
             true => (Some(HWND_TOP), SET_WINDOW_POS_FLAGS(0)),
             false => (None, SWP_NOZORDER),
@@ -635,8 +664,10 @@ impl AppWindowId {
             kept.clear();
         }
         let restyled: Vec<(isize, Option<ScreenRect>)> = {
-            let all = RESTYLED.lock().unwrap_or_else(PoisonError::into_inner);
-            { all.iter().flatten() }
+            let mut all = RESTYLED.lock().unwrap_or_else(PoisonError::into_inner);
+            let all = all.get_or_insert_with(HashMap::new);
+            all.retain(|&raw, restyled| restyled.still_of(raw));
+            { all.iter() }
                 .map(|(&raw, taken)| (raw, taken.filled_from))
                 .collect()
         };
@@ -649,7 +680,7 @@ impl AppWindowId {
             .spawn(move || {
                 for (raw, before) in restyled {
                     let id = AppWindowId::from_raw(raw);
-                    if id.exists() && !id.is_hung() {
+                    if !id.is_hung() && id.restyled().is_some() {
                         let back = |restyled: &mut Restyled| {
                             restyled.untitled = false;
                             restyled.filled_from = None;
@@ -682,6 +713,38 @@ impl AppWindowId {
     /// system menu does, until Enter or Esc.
     pub fn resize_with_keys(self) {
         self.system_command(SC_SIZE);
+    }
+
+    /// The process that shows what is in the window, which is ended to
+    /// end its program: the window's own, except for a window of the frame
+    /// host of the applications of the Universal Windows Platform, which
+    /// shows an application that runs in a process of its own, in a window
+    /// within. `None` when that window is not found, as while the
+    /// application is suspended or closing, and for a window that is gone.
+    /// Finding it asks no window anything.
+    pub fn content_process(self) -> Option<u32> {
+        let own = self.process();
+        if own == 0 {
+            return None;
+        }
+        if self.class() != FRAME_CLASS {
+            return Some(own);
+        }
+        let mut child = None;
+        loop {
+            // SAFETY: the call only reads the windows within the window,
+            // by their class, and fails for a window that is gone.
+            let next = unsafe { FindWindowExW(Some(self.hwnd()), child, CONTENT_CLASS, None) };
+            let next = match next {
+                Ok(next) if !next.is_invalid() => next,
+                _ => return None,
+            };
+            let process = AppWindowId::from_raw(next.0 as isize).process();
+            if process != 0 && process != own {
+                return Some(process);
+            }
+            child = Some(next);
+        }
     }
 
     fn system_command(self, command: u32) {
@@ -755,15 +818,25 @@ mod tests {
     #[test]
     fn a_title_bar_and_a_frame_are_taken_and_given_back() {
         let other = 0x0001_0000_isize;
-        let style = (WS_CAPTION.0 | WS_THICKFRAME.0) as isize | other;
-        let untitled = restyled(style, true, false);
+        let style = TAKEN | other;
+        let original = style & TAKEN;
+        let untitled = restyled(style, original, true, false);
         assert_eq!(untitled & WS_CAPTION.0 as isize, 0);
         assert_ne!(untitled & WS_THICKFRAME.0 as isize, 0);
         assert_ne!(untitled & other, 0);
-        let filled = restyled(style, false, true);
-        assert_eq!(filled & (WS_CAPTION.0 | WS_THICKFRAME.0) as isize, 0);
+        let filled = restyled(style, original, false, true);
+        assert_eq!(filled & TAKEN, 0);
         assert_ne!(filled & other, 0);
-        assert_eq!(restyled(style, false, false), style);
+        assert_eq!(restyled(style, original, false, false), style);
+    }
+
+    #[test]
+    fn giving_a_style_back_keeps_what_the_window_became_since() {
+        let maximized = 0x0100_0000_isize;
+        let hidden_before = TAKEN;
+        let now = maximized | WS_THICKFRAME.0 as isize;
+        let back = restyled(now, hidden_before & TAKEN, false, false);
+        assert_eq!(back, maximized | TAKEN);
     }
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> ScreenRect {

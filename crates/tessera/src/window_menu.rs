@@ -20,6 +20,7 @@ use crate::platform::{AppWindow, AppWindowId, Display, Launch};
 use crate::rules::write_rule_for;
 use crate::shell::Shell;
 use crate::snap::{Snapper, anchor_at};
+use crate::tiling::Tiler;
 use crate::window_actions::ask_to_kill;
 use crate::workspaces::Workspaces;
 
@@ -164,7 +165,9 @@ pub fn open(id: AppWindowId, cx: &mut App) {
 
 /// The entries that change the shape of the window `id` on `display`:
 /// fill the display or no longer, take the title bar away or give it back,
-/// and move or resize it with the arrow keys.
+/// and move or resize it with the arrow keys. A window the tiling places
+/// is not made to fill its display, as the tiling would put it back in its
+/// tile.
 fn shape_entries(id: AppWindowId, display: Display, cx: &App) -> Vec<MenuEntry> {
     let say = |text: &'static str| Language::of(cx).say(text);
     let filled = id.fills_display();
@@ -196,7 +199,10 @@ fn shape_entries(id: AppWindowId, display: Display, cx: &App) -> Vec<MenuEntry> 
             id.resize_with_keys();
         });
     });
-    vec![fill, title_bar, moving, resizing]
+    let fill = (filled || !Tiler::manages(id, cx)).then_some(fill);
+    fill.into_iter()
+        .chain([title_bar, moving, resizing])
+        .collect()
 }
 
 /// An entry for each workspace of Tessera's own other than the one of

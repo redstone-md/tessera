@@ -41,6 +41,8 @@ struct Candidate {
     /// The file name of its program, or the packaged application.
     program: String,
     title: String,
+    /// The process that shows what is in the window, which is ended; 0
+    /// where it is not found, and nothing is ended.
     process: u32,
 }
 
@@ -51,18 +53,37 @@ impl Candidate {
         if window.id.is_minimized() {
             return None;
         }
-        let program = { window.executable.as_deref() }
+        let file = { window.executable.as_deref() }
             .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .or_else(|| window.app_id.clone())
-            .unwrap_or_default();
+            .map(|name| name.to_string_lossy().into_owned());
+        let process = window.id.content_process().unwrap_or(0);
+        // A window of the frame host of packaged applications is named by
+        // the application it shows, whose process is ended, not the host.
+        let program = match process == window.id.process() {
+            true => file.or_else(|| window.app_id.clone()),
+            false => window.app_id.clone().or(file),
+        };
         Some(Self {
             id: window.id,
             frame: window.id.frame()?,
-            program,
+            program: program.unwrap_or_default(),
             title: window.id.title(),
-            process: window.id.process(),
+            process,
         })
+    }
+
+    /// What the program is called where it is told that it is not ended.
+    fn named(&self) -> String {
+        match self.program.is_empty() {
+            true => format!("the process {}", self.process),
+            false => self.program.clone(),
+        }
+    }
+
+    /// Whether the window is still there and shown by the same process,
+    /// so that a number Windows gave another process since is not ended.
+    fn still_there(&self) -> bool {
+        self.id.content_process() == Some(self.process)
     }
 
     /// The windows there are, in their order on the screen, the one in
@@ -139,7 +160,14 @@ impl Killing {
         let Some(chosen) = under(&killing.candidates, point) else {
             return;
         };
-        killing.asking = killing.candidates.get(chosen).cloned();
+        let Some(asked) = killing.candidates.get(chosen).cloned() else {
+            return;
+        };
+        if asked.process == 0 {
+            report!("the program of the window is not found, so nothing is ended");
+            return Self::close(cx);
+        }
+        killing.asking = Some(asked);
         let others: Vec<_> = { killing.veils.iter() }
             .copied()
             .filter(|other| *other != veil)
@@ -150,6 +178,14 @@ impl Killing {
                 .update(cx, |_, window, cx| retire_floating(window, cx))
                 .ok();
         }
+        // The veil clicked may not be the one that had the keyboard, and
+        // the question is answered with Enter and Esc.
+        veil.update(cx, |_, window, cx| {
+            if let Ok(native) = NativeSurface::of(window) {
+                cx.spawn(async move |_, _| native.take_keyboard()).detach();
+            }
+        })
+        .ok();
         Self::redraw(cx);
     }
 
@@ -161,8 +197,10 @@ impl Killing {
         Self::close(cx);
         cx.background_executor()
             .spawn(async move {
-                if let Err(error) = RunningProcess::kill(asked.process) {
-                    report!("{} is not ended: {error:#}", asked.program);
+                if !asked.still_there() {
+                    report!("{} is not ended: its window is gone", asked.named());
+                } else if let Err(error) = RunningProcess::kill(asked.process) {
+                    report!("{} is not ended: {error:#}", asked.named());
                 }
             })
             .detach();
@@ -220,14 +258,18 @@ pub fn ask_to_kill(id: AppWindowId, cx: &mut App) {
                 frame: id.frame()?,
                 program: String::new(),
                 title: id.title(),
-                process: id.process(),
+                process: id.content_process().unwrap_or(0),
             })
         })
     });
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let Some(candidate) = read.await.filter(|candidate| candidate.process != 0) else {
+        let Some(candidate) = read.await else {
             return;
         };
+        if candidate.process == 0 {
+            report!("the program of the window is not found, so nothing is ended");
+            return;
+        }
         cx.update(|cx| match open_veil(display, true, cx) {
             Ok(veil) => {
                 let killing = cx.default_global::<Killing>();
@@ -277,12 +319,10 @@ fn open_veil(
 }
 
 /// Gives the veil `native` its styles, places it over `frame` and shows
-/// it, taking the keyboard where `keyboard`.
+/// it, taking the keyboard where `keyboard`. Every veil can take the
+/// keyboard, as the one a window is chosen on asks the question.
 fn settle(native: NativeSurface, frame: ScreenRect, keyboard: bool) -> anyhow::Result<()> {
-    match keyboard {
-        true => native.adopt_as_popup()?,
-        false => native.adopt_as_shell_surface()?,
-    }
+    native.adopt_as_popup()?;
     native.place(frame)?;
     native.reveal(false);
     if keyboard {

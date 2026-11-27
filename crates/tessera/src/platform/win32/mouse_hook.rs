@@ -27,7 +27,10 @@ use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 use std::thread;
 
 use async_channel::{Receiver, Sender};
-use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SAM_FLAGS};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -35,12 +38,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_LWIN, VK_MENU, VK_RWIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetClassNameW, GetMessageW, HC_ACTION, IsWindowVisible, LLMHF_INJECTED, MSG,
-    MSLLHOOKSTRUCT, PostThreadMessageW, SPI_GETACTIVEWINDOWTRACKING, SPI_GETACTIVEWNDTRKTIMEOUT,
-    SPI_GETACTIVEWNDTRKZORDER, SPI_SETACTIVEWINDOWTRACKING, SPI_SETACTIVEWNDTRKTIMEOUT,
-    SPI_SETACTIVEWNDTRKZORDER, SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    CallNextHookEx, GetClassNameW, GetMessageW, GetWindowRect, HC_ACTION, IsIconic,
+    IsWindowVisible, IsZoomed, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PostThreadMessageW,
+    SPI_GETACTIVEWINDOWTRACKING, SPI_GETACTIVEWNDTRKTIMEOUT, SPI_GETACTIVEWNDTRKZORDER,
+    SPI_SETACTIVEWINDOWTRACKING, SPI_SETACTIVEWNDTRKTIMEOUT, SPI_SETACTIVEWNDTRKZORDER,
+    SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowsHookExW,
+    SystemParametersInfoW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
 };
 use windows::core::BOOL;
 
@@ -132,13 +136,24 @@ static GRABBED: AtomicU8 = AtomicU8::new(0);
 static HOOK_THREAD: Mutex<Option<u32>> = Mutex::new(None);
 
 /// The classes of the windows that are no windows to move: the desktop
-/// and the taskbars of Explorer.
-const NOT_MOVED: [&str; 4] = [
+/// and the taskbars of Explorer, its window switcher and task view, the
+/// start menu and search of Windows, and menus that pop up.
+const NOT_MOVED: [&str; 9] = [
     "Progman",
     "WorkerW",
     "Shell_TrayWnd",
     "Shell_SecondaryTrayWnd",
+    "XamlExplorerHostIslandWindow",
+    "MultitaskingViewFrame",
+    "Windows.UI.Core.CoreWindow",
+    "#32768",
+    "ForegroundStaging",
 ];
+
+/// Whether a window of the class `class` is one to move.
+fn moves_class(class: &str) -> bool {
+    !NOT_MOVED.contains(&class)
+}
 
 fn channel() -> &'static (Sender<PointerEvent>, Receiver<PointerEvent>) {
     static CHANNEL: OnceLock<(Sender<PointerEvent>, Receiver<PointerEvent>)> = OnceLock::new();
@@ -181,6 +196,15 @@ impl MouseHook {
                 }
             },
         }
+    }
+
+    /// Has the hook no longer take the release of the grab under way, as
+    /// when the button was let go where Windows did not show the hook:
+    /// over a window of a program that runs with more rights than
+    /// Tessera. The next press and release go to the windows as they
+    /// come.
+    pub fn end_grab(button: PointerButton) {
+        let _ = GRABBED.compare_exchange(button.code(), 0, Ordering::Relaxed, Ordering::Relaxed);
     }
 
     /// Where what the hook saw arrives, in the order it happened. Every
@@ -293,7 +317,11 @@ fn taken(message: u32, POINT { x, y }: POINT) -> bool {
         send(PointerEvent::Release { at });
         return true;
     }
-    if grabbed != 0 {
+    // The button of the grab pressed again was let go where the hook did
+    // not see it: that grab is over.
+    if grabbed == button.code() {
+        GRABBED.store(0, Ordering::Relaxed);
+    } else if grabbed != 0 {
         return false;
     }
     let Some(key) = GrabKey::of_code(GRAB_KEY.load(Ordering::Relaxed)) else {
@@ -302,7 +330,7 @@ fn taken(message: u32, POINT { x, y }: POINT) -> bool {
     if !key.is_held() {
         return false;
     }
-    let Some(window) = movable_at(at) else {
+    let Some(window) = movable_at(at).filter(|&window| grabbable(window)) else {
         return false;
     };
     GRABBED.store(button.code(), Ordering::Relaxed);
@@ -311,7 +339,7 @@ fn taken(message: u32, POINT { x, y }: POINT) -> bool {
 }
 
 /// The window of another program under `point` that can be moved: one
-/// that is shown and is not the desktop or a taskbar. Finding it asks no
+/// that is shown and is no part of the shell of Windows. Finding it asks no
 /// window anything, as the hook may not wait.
 fn movable_at(point: (i32, i32)) -> Option<AppWindowId> {
     let window = window_at(point)?;
@@ -321,11 +349,46 @@ fn movable_at(point: (i32, i32)) -> Option<AppWindowId> {
         if !IsWindowVisible(window.hwnd()).as_bool() {
             return None;
         }
-        let mut name = [0u16; 32];
+        let mut name = [0u16; 64];
         let length = GetClassNameW(window.hwnd(), &mut name).max(0) as usize;
         let class = String::from_utf16_lossy(&name[..length]);
-        (!NOT_MOVED.contains(&class.as_str())).then_some(window)
+        moves_class(&class).then_some(window)
     }
+}
+
+/// Whether a press on `window` with the key held is taken to move or
+/// resize it: not when it is minimized, nor when it covers its display
+/// without being maximized, as a game or a video shown full screen does,
+/// which then gets the press as it came. Telling asks no window anything.
+fn grabbable(window: AppWindowId) -> bool {
+    let hwnd = window.hwnd();
+    let mut whole = RECT::default();
+    let mut monitor = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: the calls only read the state and the place of a window and
+    // of its display, into structures that are sized as the calls are
+    // told and outlive them; a window that is gone makes them fail.
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            return false;
+        }
+        if IsZoomed(hwnd).as_bool() {
+            return true;
+        }
+        let display = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if GetWindowRect(hwnd, &raw mut whole).is_err()
+            || !GetMonitorInfoW(display, &raw mut monitor).as_bool()
+        {
+            return true;
+        }
+    }
+    let display = monitor.rcMonitor;
+    !(whole.left <= display.left
+        && whole.top <= display.top
+        && whole.right >= display.right
+        && whole.bottom >= display.bottom)
 }
 
 /// Whether Windows gives the keyboard to the window under the pointer
@@ -431,5 +494,14 @@ mod tests {
         }
         assert_eq!(GrabKey::of_code(0), None);
         assert_ne!(PointerButton::Left.code(), PointerButton::Right.code());
+    }
+
+    #[test]
+    fn the_shell_of_windows_is_not_moved() {
+        for class in ["XamlExplorerHostIslandWindow", "Shell_TrayWnd", "#32768"] {
+            assert!(!moves_class(class));
+        }
+        assert!(moves_class("Notepad"));
+        assert!(moves_class("ApplicationFrameWindow"));
     }
 }
