@@ -125,11 +125,13 @@ pub use win32::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+pub use win32::{Libraries, Reading, ShellChild, ShellFailure, ShellFolder, ShellPath, ShellRead};
 #[allow(
     unused_imports,
     reason = "bound by shortcuts-editor, reported by window-rules-editor"
 )]
 pub use win32::{MouseBinding, MouseButtonName, MouseButtons};
+pub use win32::{NetworkLocation, RememberedDrive};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{Poster, VideoLook, VideoOverlay};
 pub use win32::{PowerMode, PowerModeState};
@@ -148,4 +150,5 @@ pub use win32::{expand_variables, find_program, recent_folder};
     reason = "for the features that ask Explorer while it runs"
 )]
 pub use win32::{explorer_running, shell_mode};
+pub use win32::{open_folder_options, set_extensions_shown, show_properties_of};
 pub use win32::{terminal, windows_terminal};

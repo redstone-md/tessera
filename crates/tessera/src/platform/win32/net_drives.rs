@@ -10,6 +10,13 @@
 //!
 //! The dialogs are modal and are shown on the shell thread, owned by its
 //! hidden window, so the user interface goes on meanwhile.
+//!
+//! This PC lists the network locations and the drives remembered for the
+//! next sign-in ([`NetworkDrives::locations`], [`NetworkDrives::remembered`]),
+//! one of which that is not connected is connected again before it opens
+//! ([`NetworkDrives::reconnect`]); and a bare `\\server` that the Shell
+//! cannot list has its shares asked of the server itself
+//! ([`NetworkDrives::shares`]).
 #![allow(unsafe_code)]
 
 use std::fs;
@@ -19,22 +26,29 @@ use std::process::Command;
 
 use anyhow::{Context as _, Result, bail};
 use async_channel::Receiver;
-use windows::Win32::Foundation::{ERROR_CANCELLED, NO_ERROR, WIN32_ERROR};
+use windows::Win32::Foundation::{
+    ERROR_CANCELLED, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HANDLE, NO_ERROR, WIN32_ERROR,
+};
+use windows::Win32::NetworkManagement::NetManagement::{MAX_PREFERRED_LENGTH, NetApiBufferFree};
 use windows::Win32::NetworkManagement::WNet::{
-    CONNDLG_PERSIST, CONNDLG_USE_MRU, CONNECTDLGSTRUCTW, DISC_UPDATE_PROFILE, DISCDLGSTRUCTW,
-    NETRESOURCEW, RESOURCETYPE_DISK, WNetConnectionDialog1W, WNetDisconnectDialog,
-    WNetDisconnectDialog1W,
+    CONNDLG_PERSIST, CONNDLG_USE_MRU, CONNECT_INTERACTIVE, CONNECTDLGSTRUCTW, DISC_UPDATE_PROFILE,
+    DISCDLGSTRUCTW, NETRESOURCEW, RESOURCE_REMEMBERED, RESOURCETYPE_DISK, RESOURCEUSAGE_ALL,
+    WNetAddConnection3W, WNetCloseEnum, WNetConnectionDialog1W, WNetDisconnectDialog,
+    WNetDisconnectDialog1W, WNetEnumResourceW, WNetGetConnectionW, WNetOpenEnumW,
 };
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM, SetFileAttributesW,
+};
+use windows::Win32::Storage::FileSystem::{
+    NetShareEnum, SHARE_INFO_1, STYPE_DISKTREE, STYPE_MASK, STYPE_SPECIAL,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoTaskMemFree, CoUninitialize, IPersistFile,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_NetHood, IShellLinkW, KF_FLAG_CREATE, SHGetKnownFolderPath, SHParseDisplayName,
-    ShellLink,
+    FOLDERID_NetHood, IShellLinkW, KF_FLAG_CREATE, SHGetKnownFolderPath, SHGetNameFromIDList,
+    SHParseDisplayName, SIGDN_DESKTOPABSOLUTEPARSING, ShellLink,
 };
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR};
 
@@ -64,6 +78,28 @@ impl DriveDialog {
             status => Self::Failed(windows::core::Error::from(status).message()),
         }
     }
+}
+
+/// A network location under This PC: a folder shortcut of the Network
+/// Shortcuts folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkLocation {
+    /// What it is called.
+    pub name: String,
+    /// Where it leads: a share (`\\server\share`), or the parsing name of
+    /// a web or FTP folder.
+    pub target: String,
+}
+
+/// A drive of the network remembered for the next sign-in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RememberedDrive {
+    pub letter: char,
+    /// The share it is, `\\server\share`.
+    pub remote: String,
+    /// Whether it is connected now; one that is not shows with a red cross
+    /// and is connected again before it opens.
+    pub connected: bool,
 }
 
 /// The dialogs of network drives and the network locations.
@@ -147,6 +183,110 @@ impl NetworkDrives {
         made.map(|()| folder)
     }
 
+    /// The network locations under This PC, by name. They are read from
+    /// the disk and their shortcuts, away from the user interface: it may
+    /// wait.
+    pub fn locations() -> Receiver<Vec<NetworkLocation>> {
+        ShellThread::call_alone("network locations", || {
+            let Ok(folder) = network_shortcuts() else {
+                return Vec::new();
+            };
+            let Ok(read) = fs::read_dir(folder) else {
+                return Vec::new();
+            };
+            let mut locations: Vec<NetworkLocation> = { read.flatten() }
+                .filter(|item| item.path().is_dir())
+                .filter_map(|item| {
+                    let target = link_target(&item.path().join("target.lnk"))?;
+                    let name = item.file_name().to_string_lossy().into_owned();
+                    Some(NetworkLocation { name, target })
+                })
+                .collect();
+            locations.sort_by_key(|location| location.name.to_lowercase());
+            locations
+        })
+    }
+
+    /// The drives of the network remembered for the next sign-in, with
+    /// whether each is connected now, in the order of their letters.
+    pub fn remembered() -> Receiver<Vec<RememberedDrive>> {
+        ShellThread::call_alone("remembered drives", || {
+            let mut drives = remembered_drives();
+            drives.sort_by_key(|drive| drive.letter);
+            drives
+        })
+    }
+
+    /// Connects the remembered drive `letter` to `remote` again, asking for
+    /// a password where the server wants one, as Explorer does when a
+    /// drive with a red cross is opened.
+    pub fn reconnect(letter: char, remote: String) -> Receiver<Result<(), String>> {
+        ShellThread::call_alone("reconnect drive", move || {
+            let mut local: Vec<u16> = format!("{letter}:").encode_utf16().chain([0]).collect();
+            let mut remote: Vec<u16> = remote.encode_utf16().chain([0]).collect();
+            let resource = NETRESOURCEW {
+                dwType: RESOURCETYPE_DISK,
+                lpLocalName: PWSTR(local.as_mut_ptr()),
+                lpRemoteName: PWSTR(remote.as_mut_ptr()),
+                ..Default::default()
+            };
+            let owner = super::shell_items::dialog_owner();
+            // SAFETY: the resource and its names outlive the call, which
+            // may show the dialog that asks for a password on this thread.
+            let status = unsafe {
+                WNetAddConnection3W(
+                    Some(owner),
+                    &raw const resource,
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    CONNECT_INTERACTIVE,
+                )
+            };
+            match DriveDialog::of(status, Some(letter)) {
+                DriveDialog::Done(_) => Ok(()),
+                DriveDialog::Cancelled => Err("the drive was not connected".to_owned()),
+                DriveDialog::Failed(why) => Err(why),
+            }
+        })
+    }
+
+    /// The shares the server `server` (`\\server`) offers, as the server
+    /// itself lists them, without the hidden ones (`C$`, `ADMIN$`): where
+    /// the Shell cannot list a bare server. It waits for the server, so it
+    /// is not done on the thread of the user interface.
+    pub fn shares(server: &str) -> Result<Vec<String>> {
+        let name = HSTRING::from(server.trim_end_matches('\\'));
+        let mut buffer = std::ptr::null_mut::<u8>();
+        let (mut read, mut total) = (0u32, 0u32);
+        // SAFETY: the name outlives the call; the buffer the call
+        // allocates holds `read` entries of level 1 and is freed once.
+        unsafe {
+            let status = NetShareEnum(
+                &name,
+                1,
+                &raw mut buffer,
+                MAX_PREFERRED_LENGTH,
+                &raw mut read,
+                &raw mut total,
+                None,
+            );
+            if status != NO_ERROR.0 && status != ERROR_MORE_DATA.0 {
+                bail!(
+                    "{server} lists no shares: {}",
+                    windows::core::Error::from(WIN32_ERROR(status)).message()
+                );
+            }
+            let entries = std::slice::from_raw_parts(buffer.cast::<SHARE_INFO_1>(), read as usize);
+            let shares = { entries.iter() }
+                .filter(|share| shown_share(share.shi1_type.0))
+                .filter_map(|share| share.shi1_netname.to_string().ok())
+                .map(|share| format!("{}\\{share}", server.trim_end_matches('\\')))
+                .collect();
+            let _ = NetApiBufferFree(Some(buffer.cast_const().cast()));
+            Ok(shares)
+        }
+    }
+
     /// Opens the wizard of Windows that adds a network location, where one
     /// is to be chosen rather than named.
     pub fn add_location_wizard() -> Result<()> {
@@ -156,6 +296,122 @@ impl NetworkDrives {
             .context("the wizard of network locations did not start")?;
         Ok(())
     }
+}
+
+/// Whether a share of the type `kind` is one a folder shows: a disk that
+/// is not hidden.
+fn shown_share(kind: u32) -> bool {
+    kind & STYPE_MASK.0 == STYPE_DISKTREE.0 && kind & STYPE_SPECIAL.0 == 0
+}
+
+/// Where the shortcut `file` leads: its path, or else the parsing name of
+/// the item it holds.
+fn link_target(file: &Path) -> Option<String> {
+    // SAFETY: the link object is made and used on this thread, which has
+    // COM; the path buffer is given with its length, and the identifier
+    // list the shortcut gives is freed once.
+    unsafe {
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let path = HSTRING::from(file.as_os_str());
+        link.cast::<IPersistFile>()
+            .ok()?
+            .Load(&path, Default::default())
+            .ok()?;
+        let mut target = [0u16; 1024];
+        if link.GetPath(&mut target, std::ptr::null_mut(), 0).is_ok() {
+            let length = target.iter().position(|&unit| unit == 0).unwrap_or(0);
+            if length > 0 {
+                return Some(String::from_utf16_lossy(&target[..length]));
+            }
+        }
+        let list = link.GetIDList().ok()?;
+        let name = SHGetNameFromIDList(list, SIGDN_DESKTOPABSOLUTEPARSING);
+        CoTaskMemFree(Some(list.cast_const().cast()));
+        let name = name.ok()?;
+        let text = name.to_string().ok();
+        CoTaskMemFree(Some(name.0.cast_const().cast()));
+        text
+    }
+}
+
+/// The drives of the network remembered for the next sign-in.
+fn remembered_drives() -> Vec<RememberedDrive> {
+    let mut drives = Vec::new();
+    let mut handle = HANDLE::default();
+    // SAFETY: the handle is written by the call and closed once below.
+    let opened = unsafe {
+        WNetOpenEnumW(
+            RESOURCE_REMEMBERED,
+            RESOURCETYPE_DISK,
+            RESOURCEUSAGE_ALL,
+            None,
+            &raw mut handle,
+        )
+    };
+    if opened != NO_ERROR {
+        return drives;
+    }
+    // 16 KB, as the documentation of WNetEnumResource advises, in u64 for
+    // the alignment of the structures written into it.
+    let mut buffer = vec![0u64; 2048];
+    loop {
+        let mut count = u32::MAX;
+        let mut size = (buffer.len() * size_of::<u64>()) as u32;
+        // SAFETY: the buffer is given with its size in bytes; the call
+        // writes `count` resources at its start, whose texts lie in it.
+        let status = unsafe {
+            WNetEnumResourceW(
+                handle,
+                &raw mut count,
+                buffer.as_mut_ptr().cast(),
+                &raw mut size,
+            )
+        };
+        if status != NO_ERROR {
+            if status != ERROR_NO_MORE_ITEMS {
+                report!("the remembered network drives are not read: {}", status.0);
+            }
+            break;
+        }
+        // SAFETY: as above; the texts are read before the buffer is used
+        // again.
+        let resources = unsafe {
+            std::slice::from_raw_parts(buffer.as_ptr().cast::<NETRESOURCEW>(), count as usize)
+        };
+        for resource in resources {
+            // SAFETY: the texts are NUL-terminated within the buffer, or null.
+            let (local, remote) = unsafe {
+                (
+                    resource.lpLocalName.to_string().ok(),
+                    resource.lpRemoteName.to_string().ok(),
+                )
+            };
+            let letter = { local.as_deref() }
+                .and_then(|local| local.chars().next())
+                .filter(char::is_ascii_alphabetic);
+            if let (Some(letter), Some(remote)) = (letter, remote) {
+                drives.push(RememberedDrive {
+                    letter: letter.to_ascii_uppercase(),
+                    remote,
+                    connected: is_connected(letter),
+                });
+            }
+        }
+    }
+    // SAFETY: the handle was opened above and is closed once.
+    let _ = unsafe { WNetCloseEnum(handle) };
+    drives
+}
+
+/// Whether the drive `letter` is connected to its share now.
+fn is_connected(letter: char) -> bool {
+    let local = HSTRING::from(format!("{letter}:"));
+    let mut remote = [0u16; 512];
+    let mut length = remote.len() as u32;
+    // SAFETY: the buffer is given with its length in characters.
+    let status =
+        unsafe { WNetGetConnectionW(&local, Some(PWSTR(remote.as_mut_ptr())), &raw mut length) };
+    status == NO_ERROR
 }
 
 /// The letter of the drive number a dialog gives, 1 for `A`.
@@ -286,6 +542,14 @@ mod tests {
             "files (cloud.example.com)"
         );
         assert_eq!(safe_name("a:b?c. "), "a_b_c");
+    }
+
+    #[test]
+    fn hidden_shares_and_printers_are_left_out() {
+        assert!(shown_share(STYPE_DISKTREE.0));
+        assert!(!shown_share(STYPE_DISKTREE.0 | STYPE_SPECIAL.0));
+        // A printer queue.
+        assert!(!shown_share(1));
     }
 
     #[test]
