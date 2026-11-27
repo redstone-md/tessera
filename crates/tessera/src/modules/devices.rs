@@ -251,6 +251,9 @@ impl Drives {
                 title: language.say("The device was not ejected").to_owned(),
                 body: format!("{name}: {}", refusal_text(refusal, language)),
                 glyph: Some(ICON_USB),
+                // The user is waiting to pull the device out, and must
+                // not miss that it is not safe yet.
+                urgent: true,
                 ..Notice::default()
             },
         };
