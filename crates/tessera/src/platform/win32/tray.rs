@@ -304,13 +304,25 @@ struct Icons {
 
 impl Icons {
     /// Records `notice` and says whether it was accepted: whether the icon
-    /// it names is known after it, or was before it. `load` reads the
-    /// pixels of an icon handle.
-    fn apply(&mut self, notice: &Notice, mut load: impl FnMut(u32) -> Option<IconPixels>) -> bool {
+    /// it names is known after it, or was before it. `serving` says whether
+    /// the shell serves the icons itself, and `load` reads the pixels of an
+    /// icon handle.
+    fn apply(
+        &mut self,
+        notice: &Notice,
+        serving: bool,
+        mut load: impl FnMut(u32) -> Option<IconPixels>,
+    ) -> bool {
         let identity = notice.identity();
         match notice.message {
-            // An application may modify an icon it added before the shell
-            // started, so a modification of an unknown icon adds it.
+            // Applications that bring their icons on `TaskbarCreated` try
+            // to modify them first and add them, with their version, only
+            // if that fails, so a modification of an unknown icon fails
+            // while the shell serves the icons, as Explorer would answer.
+            NIM_MODIFY if serving && !self.entries.contains_key(&identity) => return false,
+            // Beside Explorer an application may modify an icon it added
+            // before the shell started, so a modification of an unknown
+            // icon adds it.
             NIM_ADD | NIM_MODIFY => {
                 let entry = self.entries.entry(identity).or_insert_with(|| {
                     self.next_id += 1;
@@ -997,7 +1009,7 @@ fn record(data: &[u8], serving: bool) -> bool {
     let notice = Notice::parse(data);
     let (accepted, balloons) = {
         let mut icons = icons();
-        let accepted = icons.apply(&notice, load_icon);
+        let accepted = icons.apply(&notice, serving, load_icon);
         (accepted, icons.take_balloons(serving))
     };
     balloons.into_iter().for_each(balloon::publish);
@@ -1196,7 +1208,7 @@ mod tests {
         assert_eq!(place_request(&[0; 40]), None);
 
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 7, 3, 0, ""), pixels);
+        icons.apply(&notice(NIM_ADD, 7, 3, 0, ""), false, pixels);
         assert_eq!(icons.corner(PLACE_SIZE, identity), None);
         let id = icons.shown()[0].id;
         let frame = ScreenRect {
@@ -1234,8 +1246,8 @@ mod tests {
     fn icons_are_added_changed_and_removed() {
         let mut icons = Icons::default();
         let flags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        icons.apply(&notice(NIM_ADD, 10, 1, flags, "First"), pixels);
-        icons.apply(&notice(NIM_MODIFY, 20, 1, flags, "Second"), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, flags, "First"), false, pixels);
+        icons.apply(&notice(NIM_MODIFY, 20, 1, flags, "Second"), false, pixels);
         let shown = icons.shown();
         assert_eq!(shown.len(), 2);
         assert_eq!(
@@ -1245,37 +1257,56 @@ mod tests {
         assert!(shown[0].pixels.is_some());
 
         // Only what the flags name changes.
-        icons.apply(&notice(NIM_MODIFY, 10, 1, NIF_TIP, "Renamed"), |_| None);
+        icons.apply(
+            &notice(NIM_MODIFY, 10, 1, NIF_TIP, "Renamed"),
+            false,
+            |_| None,
+        );
         let first = &icons.shown()[0];
         assert_eq!((first.tip.as_str(), first.image_version), ("Renamed", 1));
         assert!(first.pixels.is_some());
 
         let generation = icons.generation;
-        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels);
         assert_eq!(icons.shown().len(), 1);
         assert!(icons.generation > generation);
     }
 
     #[test]
+    fn an_unknown_icon_is_modified_only_beside_explorer() {
+        let modify = notice(NIM_MODIFY, 10, 1, NIF_TIP, "Late");
+        let mut icons = Icons::default();
+        assert!(!icons.apply(&modify, true, pixels));
+        assert!(icons.shown().is_empty());
+        assert!(icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), true, pixels));
+        assert!(icons.apply(&modify, true, pixels));
+        assert_eq!(icons.shown()[0].tip, "Late");
+
+        let mut icons = Icons::default();
+        assert!(icons.apply(&modify, false, pixels));
+        assert_eq!(icons.shown().len(), 1);
+    }
+
+    #[test]
     fn hidden_icons_are_not_shown() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Shy"), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Shy"), false, pixels);
         let mut data = bytes(NIM_MODIFY, 10, 1, NIF_STATE, "");
         data[288..292].copy_from_slice(&NIS_HIDDEN.to_le_bytes());
         data[292..296].copy_from_slice(&NIS_HIDDEN.to_le_bytes());
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert!(icons.shown().is_empty());
 
         data[288..292].copy_from_slice(&0u32.to_le_bytes());
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert_eq!(icons.shown().len(), 1);
     }
 
     #[test]
     fn icons_of_closed_windows_are_forgotten() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), pixels);
-        icons.apply(&notice(NIM_ADD, 20, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels);
+        icons.apply(&notice(NIM_ADD, 20, 1, 0, ""), false, pixels);
         let generation = icons.generation;
         icons.prune(|window| window == 20);
         assert_eq!(icons.shown().len(), 1);
@@ -1287,10 +1318,10 @@ mod tests {
     #[test]
     fn the_version_is_remembered_for_a_known_icon() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels);
         let mut data = bytes(NIM_SETVERSION, 10, 1, 0, "");
         data[808..812].copy_from_slice(&4u32.to_le_bytes());
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert_eq!(icons.entries[&Identity::Numbered(10, 1)].version, 4);
     }
 
@@ -1338,6 +1369,7 @@ mod tests {
         let mut icons = Icons::default();
         icons.apply(
             &Notice::parse(&balloon_bytes(NIM_ADD, 1, "Hello", 1)),
+            false,
             pixels,
         );
         let balloons = icons.take_balloons(true);
@@ -1356,24 +1388,37 @@ mod tests {
         assert!(icons.take_balloons(true).is_empty());
 
         // An empty text takes the balloon back.
-        icons.apply(&Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)), pixels);
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)),
+            false,
+            pixels,
+        );
         let balloons = icons.take_balloons(true);
         assert!(balloons.len() == 1 && balloons[0].is_withdrawal());
-        icons.apply(&Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)), pixels);
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)),
+            false,
+            pixels,
+        );
         assert!(icons.take_balloons(true).is_empty());
 
         // Removing the icon ends its balloon, as does closing its window.
         icons.apply(
             &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "Again", 4)),
+            false,
             pixels,
         );
         let balloons = icons.take_balloons(true);
         assert_eq!(balloons[0].kind, BalloonKind::User);
         assert!(balloons[0].icon.is_some(), "the picture of the icon");
-        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels);
         assert!(icons.take_balloons(true)[0].is_withdrawal());
 
-        icons.apply(&Notice::parse(&balloon_bytes(NIM_ADD, 2, "Bye", 0)), pixels);
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_ADD, 2, "Bye", 0)),
+            false,
+            pixels,
+        );
         icons.take_balloons(true);
         icons.prune(|_| false);
         assert!(icons.take_balloons(true)[0].is_withdrawal());
@@ -1383,53 +1428,54 @@ mod tests {
     fn beside_explorer_only_ends_of_published_balloons_are_handed_on() {
         let mut icons = Icons::default();
         let shown = |text: &str| Notice::parse(&balloon_bytes(NIM_MODIFY, 1, text, 1));
-        icons.apply(&shown("Hello"), pixels);
+        icons.apply(&shown("Hello"), false, pixels);
         assert_eq!(icons.take_balloons(true).len(), 1);
         // Explorer shows the next one, which ends the first.
-        icons.apply(&shown("Again"), pixels);
+        icons.apply(&shown("Again"), false, pixels);
         let ended = icons.take_balloons(false);
         assert!(ended.len() == 1 && ended[0].is_withdrawal());
         // The end of one only Explorer showed is no news.
-        icons.apply(&shown(""), pixels);
+        icons.apply(&shown(""), false, pixels);
         assert!(icons.take_balloons(false).is_empty());
         // Nor is it once the shell serves the icons again.
-        icons.apply(&shown("Third"), pixels);
+        icons.apply(&shown("Third"), false, pixels);
         icons.take_balloons(false);
-        icons.apply(&shown(""), pixels);
+        icons.apply(&shown(""), false, pixels);
         assert!(icons.take_balloons(true).is_empty());
     }
 
     #[test]
     fn a_notification_is_accepted_for_a_known_icon() {
         let mut icons = Icons::default();
-        assert!(!icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels));
-        assert!(!icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), pixels));
-        assert!(icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), pixels));
-        assert!(icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), pixels));
+        assert!(!icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels));
+        assert!(!icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), false, pixels));
+        assert!(icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels));
+        assert!(icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), false, pixels));
         let mut data = bytes(NIM_SETVERSION, 10, 1, 0, "");
         put(&mut data, at::VERSION, 5);
-        assert!(!icons.apply(&Notice::parse(&data), pixels));
-        assert!(!icons.apply(&notice(9, 10, 1, 0, ""), pixels));
-        assert!(icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels));
+        assert!(!icons.apply(&Notice::parse(&data), false, pixels));
+        assert!(!icons.apply(&notice(9, 10, 1, 0, ""), false, pixels));
+        assert!(icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels));
     }
 
     #[test]
     fn an_icon_of_version_4_draws_its_own_description_unless_it_asks() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Volume"), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Volume"), false, pixels);
         assert!(!icons.shown()[0].draws_own_tip);
         let mut data = bytes(NIM_SETVERSION, 10, 1, 0, "");
         put(&mut data, at::VERSION, 4);
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert!(icons.shown()[0].draws_own_tip);
 
         icons.apply(
             &notice(NIM_MODIFY, 10, 1, NIF_TIP | NIF_SHOWTIP, "Volume"),
+            false,
             pixels,
         );
         assert!(!icons.shown()[0].draws_own_tip);
         // A change that does not touch the description keeps the choice.
-        icons.apply(&notice(NIM_MODIFY, 10, 1, NIF_ICON, ""), pixels);
+        icons.apply(&notice(NIM_MODIFY, 10, 1, NIF_ICON, ""), false, pixels);
         assert!(!icons.shown()[0].draws_own_tip);
     }
 
