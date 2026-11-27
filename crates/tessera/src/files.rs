@@ -217,11 +217,15 @@ impl Module for FilesModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        // Windows keeps Win+E, which opens Explorer, to itself.
+        // Windows keeps Win+E, which opens Explorer, to itself; it is
+        // taken where the keys of Windows are in use, as in shell mode,
+        // where nothing else answers it.
         let open = |folder: Option<&str>, cx: &mut App| {
             Files::open_named(folder.unwrap_or_default(), cx);
         };
-        let open = Action::new(open).taking_any_arg().taking_reserved_keys();
+        let open = { Action::new(open).taking_any_arg() }
+            .taking_reserved_keys()
+            .by_default("win+e", None);
         actions.register("files", open)
     }
 }
@@ -245,5 +249,22 @@ impl Render for FilesButton {
                     .child(icon(theme, ICON_FOLDER)),
             )
             .on_click(move |_, _, cx| Files::open_named(&folder, cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn win_e_opens_the_file_manager_where_the_keys_of_windows_are_in_use() {
+        let mut actions = Actions::default();
+        FilesModule.actions(&mut actions).unwrap();
+        let keys = actions.default_keys();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].press, "win+e");
+        assert_eq!(keys[0].action.as_deref(), Some("files"));
+        assert_eq!(keys[0].arg, None);
+        assert!(actions.takes_reserved_keys("files"));
     }
 }
