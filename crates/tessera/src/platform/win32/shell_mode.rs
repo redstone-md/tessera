@@ -26,6 +26,7 @@
 use std::env;
 use std::path::Path;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
@@ -38,16 +39,30 @@ use super::Taskbar;
 use super::app_windows::executable_of;
 
 /// The key whose `Shell` value names the shell Winlogon starts.
-const WINLOGON: &str = r"Software\Microsoft\Windows NT\CurrentVersion\Winlogon";
+pub(super) const WINLOGON: &str = r"Software\Microsoft\Windows NT\CurrentVersion\Winlogon";
 
 /// The longest `Shell` value that is read, in UTF-16 units.
 const VALUE_LENGTH: usize = 1024;
+
+/// Whether Tessera was started with `--shell`, as the value
+/// `tessera shell install` writes starts it; see [`started_as_shell`].
+static STARTED_AS_SHELL: AtomicBool = AtomicBool::new(false);
 
 /// Whether Tessera is the shell of the session; decided once, at the
 /// first call.
 pub fn shell_mode() -> bool {
     static SHELL: OnceLock<bool> = OnceLock::new();
-    *SHELL.get_or_init(|| named_by_winlogon() && !explorer_running())
+    *SHELL.get_or_init(|| {
+        (STARTED_AS_SHELL.load(Ordering::Relaxed) || named_by_winlogon()) && !explorer_running()
+    })
+}
+
+/// Tells [`shell_mode`] that Tessera was started as the shell, with
+/// `--shell`, before it is first asked: Winlogon may start it through a
+/// policy or a mapping its value does not show. Without a taskbar of
+/// Explorer it is then the shell even if the value does not name it.
+pub fn started_as_shell() {
+    STARTED_AS_SHELL.store(true, Ordering::Relaxed);
 }
 
 /// Whether Explorer runs as the shell at this moment: a taskbar window
@@ -108,7 +123,7 @@ fn shell_value(root: HKEY) -> Option<String> {
 /// Whether the command line `shell` starts the program file `program`:
 /// its name stands at the start, or after a separator of a path, a quote
 /// or a space, and ends there or before a quote or a space.
-fn names_program(shell: &str, program: &str) -> bool {
+pub(super) fn names_program(shell: &str, program: &str) -> bool {
     let shell = shell.to_ascii_lowercase();
     let program = program.to_ascii_lowercase();
     shell.match_indices(&program).any(|(at, _)| {
