@@ -32,12 +32,10 @@
 //! work lasts; the thread of GPUI never waits for it.
 #![allow(unsafe_code)]
 
-use std::cell::RefCell;
 use std::ffi::{OsStr, OsString, c_void};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result, bail};
 use async_channel::Receiver;
@@ -551,11 +549,15 @@ impl FileOperation {
         if self.steps.is_empty() {
             return done(Outcome::default());
         }
+        // Ctrl+Z waits until this work is in the journal, so that it takes
+        // this work back and not the one before.
+        let running = (!self.unjournaled).then(Running::start);
         ShellThread::run_alone("file operation", move || {
             let outcome = self.perform();
             if !self.unjournaled {
                 UndoJournal::note(outcome.deeds.clone());
             }
+            drop(running);
             done(outcome);
         });
     }
@@ -610,7 +612,7 @@ fn shell_pass(steps: &[Step], recycle: bool, owner: HWND, outcome: &mut Outcome)
         .filter_map(Step::asked)
         .map(Path::to_owned)
         .collect();
-    let deeds = Rc::new(RefCell::new(Vec::new()));
+    let deeds = Arc::new(Mutex::new(Vec::new()));
     let sink: IFileOperationProgressSink = Sink {
         asked,
         deeds: deeds.clone(),
@@ -642,7 +644,7 @@ fn shell_pass(steps: &[Step], recycle: bool, owner: HWND, outcome: &mut Outcome)
         let _ = operation.Unadvise(cookie);
         (performed, aborted)
     };
-    outcome.deeds.extend(deeds.take());
+    outcome.deeds.extend(std::mem::take(&mut *lock(&deeds)));
     outcome.aborted |= aborted;
     if let Err(error) = performed {
         if cancelled(error.code()) {
@@ -824,17 +826,19 @@ fn restore(step: &Step, owner: HWND, outcome: &mut Outcome) -> Result<()> {
         let mut moved = Outcome::default();
         shell_pass(std::slice::from_ref(&back), true, owner, &mut moved)?;
         outcome.problems.append(&mut moved.problems);
-        outcome.aborted |= moved.aborted;
-        if moved.deeds.is_empty() {
-            return Ok(());
+        if !moved.deeds.is_empty() {
+            // The record only tells the bin what the file was.
+            let _ = std::fs::remove_file(record);
         }
-        // The record only tells the bin what the file was.
-        let _ = std::fs::remove_file(record);
     }
-    match to.symlink_metadata() {
-        Ok(_) => outcome.deeds.push(FileDeed::Restored { to: to.clone() }),
-        // The user chose to keep what is there now.
-        Err(_) => outcome.aborted = true,
+    // The item came back only where it left the bin: where it is still
+    // there, the user kept what is in its place now, or skipped it.
+    let in_bin = { IdList::of_id(item).and_then(|list| list.item()).ok() }
+        .and_then(|item| path_of_item(&item))
+        .is_some_and(|file| file.exists());
+    match !in_bin && to.symlink_metadata().is_ok() {
+        true => outcome.deeds.push(FileDeed::Restored { to: to.clone() }),
+        false => outcome.aborted = true,
     }
     Ok(())
 }
@@ -865,13 +869,22 @@ fn own_window_in_front() -> Option<isize> {
 }
 
 /// The listener of an `IFileOperation`, which writes down what the Shell
-/// did with the items it was asked about.
+/// did with the items it was asked about. It is agile, as `#[implement]`
+/// makes it, so the Shell may call it from any thread: what it writes is
+/// behind a lock.
 #[implement(IFileOperationProgressSink)]
 struct Sink {
     /// The paths the steps name; what the Shell does to the items inside
     /// a folder is not written down apart.
     asked: Vec<PathBuf>,
-    deeds: Rc<RefCell<Vec<FileDeed>>>,
+    deeds: Arc<Mutex<Vec<FileDeed>>>,
+}
+
+/// What `mutex` holds, also where a thread panicked while it held it.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Sink {
@@ -898,7 +911,7 @@ impl Sink {
         }
         let made = made.as_ref().and_then(path_of_item);
         if let (Some(from), Some(to)) = (self.asked_path(item), made) {
-            self.deeds.borrow_mut().push(deed(from, to));
+            lock(&self.deeds).push(deed(from, to));
         }
     }
 }
@@ -1009,7 +1022,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
             },
             None => FileDeed::Erased { from },
         };
-        self.deeds.borrow_mut().push(deed);
+        lock(&self.deeds).push(deed);
         Ok(())
     }
 
@@ -1049,9 +1062,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
                     .filter(|template| !template.is_empty()),
             },
         };
-        self.deeds
-            .borrow_mut()
-            .push(FileDeed::Created { path, made });
+        lock(&self.deeds).push(FileDeed::Created { path, made });
         Ok(())
     }
 
@@ -1082,13 +1093,40 @@ pub struct UndoJournal {
     done: Vec<Vec<FileDeed>>,
     /// What was taken back and can be done again, the newest last.
     undone: Vec<Vec<FileDeed>>,
+    /// How many times new work was written down.
+    generation: u64,
+    /// How many pieces of work are running that the journal waits for:
+    /// work that will be written down, and undoing or redoing.
+    running: usize,
 }
 
 /// The journal of the process.
 static JOURNAL: Mutex<UndoJournal> = Mutex::new(UndoJournal {
     done: Vec::new(),
     undone: Vec::new(),
+    generation: 0,
+    running: 0,
 });
+
+/// Work on files that the [`UndoJournal`] waits for while this exists:
+/// meanwhile Ctrl+Z and Ctrl+Y do nothing, so that they take back the
+/// newest work and not the one before it, one at a time.
+#[derive(Debug)]
+pub(super) struct Running(());
+
+impl Running {
+    /// Counts work that has started.
+    pub(super) fn start() -> Self {
+        UndoJournal::shared(|journal| journal.running += 1);
+        Self(())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        UndoJournal::shared(|journal| journal.running = journal.running.saturating_sub(1));
+    }
+}
 
 impl UndoJournal {
     /// Writes down new work: what of `deeds` can be taken back. Anything
@@ -1098,8 +1136,61 @@ impl UndoJournal {
         if deeds.is_empty() {
             return;
         }
+        self.generation += 1;
         self.undone.clear();
         self.push_done(deeds);
+    }
+
+    /// Takes the newest entry to undo, or with `again` to redo, with the
+    /// generation it is taken in, and counts the work on it as running.
+    /// `None` where there is none, or other work is running.
+    fn take(&mut self, again: bool) -> Option<(Vec<FileDeed>, u64)> {
+        if self.running > 0 {
+            return None;
+        }
+        let deeds = match again {
+            true => self.undone.pop(),
+            false => self.done.pop(),
+        }?;
+        self.running += 1;
+        Some((deeds, self.generation))
+    }
+
+    /// Puts back the entry `deeds` that an undo took in `generation`:
+    /// with what can be done again, or where the user stopped the undo
+    /// before anything was done, with what can be taken back. Where new
+    /// work was written down meanwhile, the entry is dropped, as it no
+    /// longer follows the newest work.
+    fn after_undo(&mut self, deeds: Vec<FileDeed>, generation: u64, stopped: bool) {
+        if self.generation != generation {
+            return;
+        }
+        match stopped {
+            true => self.push_done(deeds),
+            false => self.undone.push(deeds),
+        }
+    }
+
+    /// Puts back what a redo of the entry `deeds`, taken in `generation`,
+    /// did (`again`): with what can be taken back, or where the user
+    /// stopped it before anything was done, the entry with what can be
+    /// done again. Where new work was written down meanwhile, both are
+    /// dropped, as [`Self::after_undo`] drops its entry.
+    fn after_redo(
+        &mut self,
+        deeds: Vec<FileDeed>,
+        again: Vec<FileDeed>,
+        generation: u64,
+        stopped: bool,
+    ) {
+        if self.generation != generation {
+            return;
+        }
+        if stopped {
+            self.undone.push(deeds);
+        } else if !again.is_empty() {
+            self.push_done(again);
+        }
     }
 
     fn push_done(&mut self, deeds: Vec<FileDeed>) {
@@ -1148,40 +1239,41 @@ impl UndoJournal {
 
     /// Takes back the last work that can be, with the Shell's dialogs, and
     /// returns at once; the receiver yields what was done for it. `None`
-    /// where there is nothing to take back. Where the user stops it before
-    /// anything is done, the work stays in the journal to take back later;
-    /// where it fails, it is dropped, so that the work before it can be
-    /// taken back next.
+    /// where there is nothing to take back, or while other work on files
+    /// that goes into the journal, or another undo or redo, still runs.
+    /// Where the user stops it before anything is done, the work stays in
+    /// the journal to take back later; where it fails, it is dropped, so
+    /// that the work before it can be taken back next.
     pub fn undo() -> Option<Receiver<Outcome>> {
-        let deeds = Self::shared(|journal| journal.done.pop())?;
+        let (deeds, generation) = Self::shared(|journal| journal.take(false))?;
+        // `take` counted it.
+        let running = Running(());
         let (answer, answered) = async_channel::bounded(1);
         Self::reversal(&deeds).then(move |outcome| {
-            Self::shared(|journal| match outcome.stopped_at_once() {
-                true => journal.push_done(deeds),
-                false => journal.undone.push(deeds),
-            });
+            let stopped = outcome.stopped_at_once();
+            Self::shared(|journal| journal.after_undo(deeds, generation, stopped));
+            drop(running);
             answer.try_send(outcome).ok();
         });
         Some(answered)
     }
 
     /// Does again the last work that was taken back, as [`Self::undo`]
-    /// takes it back. `None` where there is nothing to do again.
+    /// takes it back. `None` where there is nothing to do again, or while
+    /// other work runs.
     pub fn redo() -> Option<Receiver<Outcome>> {
-        let deeds = Self::shared(|journal| journal.undone.pop())?;
+        let (deeds, generation) = Self::shared(|journal| journal.take(true))?;
+        // `take` counted it.
+        let running = Running(());
         let (answer, answered) = async_channel::bounded(1);
         Self::repetition(&deeds).then(move |outcome| {
             let again: Vec<FileDeed> = { outcome.deeds.iter() }
                 .filter(|deed| deed.reversible())
                 .cloned()
                 .collect();
-            Self::shared(|journal| {
-                if outcome.stopped_at_once() {
-                    journal.undone.push(deeds);
-                } else if !again.is_empty() {
-                    journal.push_done(again);
-                }
-            });
+            let stopped = outcome.stopped_at_once();
+            Self::shared(|journal| journal.after_redo(deeds, again, generation, stopped));
+            drop(running);
             answer.try_send(outcome).ok();
         });
         Some(answered)
@@ -1189,10 +1281,7 @@ impl UndoJournal {
 
     /// Does `work` with the journal of the process.
     fn shared<R>(work: impl FnOnce(&mut Self) -> R) -> R {
-        let mut journal = JOURNAL
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        work(&mut journal)
+        work(&mut lock(&JOURNAL))
     }
 }
 
@@ -1341,6 +1430,58 @@ mod tests {
             }]);
         }
         assert_eq!(journal.done.len(), JOURNAL_DEPTH);
+    }
+
+    fn folder(text: &str) -> Vec<FileDeed> {
+        vec![FileDeed::Created {
+            path: path(text),
+            made: Made::Folder,
+        }]
+    }
+
+    #[test]
+    fn nothing_is_taken_back_while_work_runs() {
+        let mut journal = UndoJournal::default();
+        journal.record(folder(r"C:\a"));
+        journal.running = 1;
+        assert_eq!(journal.take(false), None);
+        journal.running = 0;
+        let (deeds, generation) = journal.take(false).unwrap();
+        assert_eq!(deeds, folder(r"C:\a"));
+        assert_eq!(journal.running, 1, "the undo itself runs");
+        assert_eq!(journal.take(false), None);
+        journal.after_undo(deeds, generation, false);
+        assert_eq!(journal.undone, [folder(r"C:\a")]);
+    }
+
+    #[test]
+    fn an_undo_that_ends_after_new_work_is_dropped() {
+        let mut journal = UndoJournal::default();
+        journal.record(folder(r"C:\a"));
+        let (deeds, generation) = journal.take(false).unwrap();
+        journal.record(folder(r"C:\b"));
+        journal.after_undo(deeds, generation, false);
+        assert!(journal.undone.is_empty(), "nothing older is redone");
+        assert_eq!(journal.done, [folder(r"C:\b")]);
+        journal.running = 0;
+        let (deeds, generation) = journal.take(false).unwrap();
+        journal.record(folder(r"C:\c"));
+        journal.after_undo(deeds, generation, true);
+        assert_eq!(journal.done, [folder(r"C:\c")]);
+    }
+
+    #[test]
+    fn a_redo_goes_back_where_it_was_taken_from() {
+        let mut journal = UndoJournal::default();
+        journal.undone.push(folder(r"C:\a"));
+        let (deeds, generation) = journal.take(true).unwrap();
+        journal.after_redo(deeds.clone(), Vec::new(), generation, true);
+        assert_eq!(journal.undone, [folder(r"C:\a")]);
+        journal.running = 0;
+        let (deeds, generation) = journal.take(true).unwrap();
+        journal.after_redo(deeds, folder(r"C:\a (2)"), generation, false);
+        assert_eq!(journal.done, [folder(r"C:\a (2)")]);
+        assert!(journal.undone.is_empty());
     }
 
     #[test]
