@@ -131,8 +131,7 @@ fn process_of(window: &AppWindow) -> Option<u32> {
     if explorer && !shell_mode() {
         return None;
     }
-    let process = window.id.content_process();
-    (process != 0 && process != std::process::id()).then_some(process)
+    { window.id.content_process() }.filter(|&process| process != std::process::id())
 }
 
 /// The processes the windows `windows` would be ended with.

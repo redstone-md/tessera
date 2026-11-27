@@ -316,11 +316,16 @@ impl AppWindowId {
         (!core.1.is_invalid()).then_some(Self(core.1.0 as isize))
     }
 
-    /// The process that runs what the window shows: that of the packaged
-    /// application inside a frame of ApplicationFrameHost, or else the
-    /// process of the window; 0 if there is none or the window is gone.
-    pub fn content_process(self) -> u32 {
-        self.content().map_or(0, Self::process)
+    /// The process that runs what the window shows, which is ended to end
+    /// its program: that of the packaged application inside a frame of
+    /// ApplicationFrameHost, or else the process of the window. `None`
+    /// when a frame holds no application, as while it is suspended or
+    /// closing, and for a window that is gone. Finding it asks no window
+    /// anything.
+    pub fn content_process(self) -> Option<u32> {
+        self.content()
+            .map(Self::process)
+            .filter(|&process| process != 0)
     }
 }
 

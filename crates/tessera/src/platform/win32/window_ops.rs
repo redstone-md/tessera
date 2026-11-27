@@ -31,8 +31,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, FindWindowExW, GetMessageW, HTCAPTION, HWND_BOTTOM,
-    MSG, PostMessageW, SC_MOVE, SC_SIZE, SET_WINDOW_POS_FLAGS, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetMessageW, HTCAPTION, HWND_BOTTOM, MSG,
+    PostMessageW, SC_MOVE, SC_SIZE, SET_WINDOW_POS_FLAGS, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
     SWP_NOZORDER, ShowWindow, TranslateMessage, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
     WM_SYSCOMMAND, WS_CAPTION,
 };
@@ -46,8 +46,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowPlacement, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WS_DLGFRAME, WS_EX_LAYERED,
     WS_EX_TOPMOST, WS_THICKFRAME,
 };
-
-use windows::core::{PCWSTR, w};
 
 use super::{AppWindowId, ScreenRect};
 
@@ -430,12 +428,6 @@ impl Restyled {
     }
 }
 
-/// The class of the windows of the frame host of the applications of the
-/// Universal Windows Platform, and of the window within each that the
-/// application itself shows.
-const FRAME_CLASS: &str = "ApplicationFrameWindow";
-const CONTENT_CLASS: PCWSTR = w!("Windows.UI.Core.CoreWindow");
-
 /// The bits of the style of a window Tessera takes: its title bar and its
 /// frame.
 const TAKEN: isize = (WS_CAPTION.0 | WS_THICKFRAME.0) as isize;
@@ -713,38 +705,6 @@ impl AppWindowId {
     /// system menu does, until Enter or Esc.
     pub fn resize_with_keys(self) {
         self.system_command(SC_SIZE);
-    }
-
-    /// The process that shows what is in the window, which is ended to
-    /// end its program: the window's own, except for a window of the frame
-    /// host of the applications of the Universal Windows Platform, which
-    /// shows an application that runs in a process of its own, in a window
-    /// within. `None` when that window is not found, as while the
-    /// application is suspended or closing, and for a window that is gone.
-    /// Finding it asks no window anything.
-    pub fn content_process(self) -> Option<u32> {
-        let own = self.process();
-        if own == 0 {
-            return None;
-        }
-        if self.class() != FRAME_CLASS {
-            return Some(own);
-        }
-        let mut child = None;
-        loop {
-            // SAFETY: the call only reads the windows within the window,
-            // by their class, and fails for a window that is gone.
-            let next = unsafe { FindWindowExW(Some(self.hwnd()), child, CONTENT_CLASS, None) };
-            let next = match next {
-                Ok(next) if !next.is_invalid() => next,
-                _ => return None,
-            };
-            let process = AppWindowId::from_raw(next.0 as isize).process();
-            if process != 0 && process != own {
-                return Some(process);
-            }
-            child = Some(next);
-        }
     }
 
     fn system_command(self, command: u32) {
