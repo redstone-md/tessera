@@ -281,16 +281,19 @@ impl Module for SystemModule {
             };
             cx.new(|cx| Meter::new(Box::new(gauge), context, cx)).into()
         })?;
+        // Before the network meter, whose name is also that of the
+        // connection widget of the network module: that module comes
+        // first and keeps the name, and the refusal ends this list.
+        widgets.register("gpu", |context, cx| {
+            let gauge = GpuGauge {
+                amount: one_of(context, "show", &["percent", "memory"]) == 1,
+            };
+            cx.new(|cx| Meter::new(Box::new(gauge), context, cx)).into()
+        })?;
         widgets.register("network", |context, cx| {
             let megabits = context.number("megabits").unwrap_or(100.).max(1.);
             let gauge = NetworkGauge {
                 full: megabits * 1_000_000. / 8.,
-            };
-            cx.new(|cx| Meter::new(Box::new(gauge), context, cx)).into()
-        })?;
-        widgets.register("gpu", |context, cx| {
-            let gauge = GpuGauge {
-                amount: one_of(context, "show", &["percent", "memory"]) == 1,
             };
             cx.new(|cx| Meter::new(Box::new(gauge), context, cx)).into()
         })
