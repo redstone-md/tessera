@@ -348,12 +348,9 @@ impl Workspaces {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let anchor = match vertical(window, cx) {
-            // Beside a column, the menu hangs from the pointer.
-            true => PopupAnchor::under(window, event.position, cx),
-            false => PopupAnchor::at(window, event.position.x, cx),
-        };
-        match anchor {
+        // The menu opens away from the edge the surface is docked to, at
+        // the pointer: beside a bar at the left or the right.
+        match PopupAnchor::at_point(window, event.position, cx) {
             Ok(anchor) => {
                 let entries = menu_entries(index, self.display, anchor, cx);
                 Menus::open(entries, anchor, cx);
