@@ -735,3 +735,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+# Wave 2, workspaces-dynamic.
+"Send window here" = "Надіслати вікно сюди"
+"No icon" = "Без піктограми"

@@ -1384,6 +1384,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // Wave 2, workspaces-dynamic.
+    ("Send window here", "Отправить окно сюда"),
+    ("No icon", "Без значка"),
 ];
 
 #[cfg(test)]

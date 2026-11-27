@@ -735,3 +735,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Kill process" = "Arrêter le processus"
 "Media" = "Médias"
 "Personalize" = "Personnaliser"
+# Wave 2, workspaces-dynamic.
+"Send window here" = "Envoyer la fenêtre ici"
+"No icon" = "Aucune icône"
