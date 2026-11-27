@@ -93,8 +93,7 @@ impl StackBars {
     pub fn show(looks: Vec<BarLook>, act: fn(StackDeed, &mut App), cx: &mut App) {
         let mut shown = std::mem::take(&mut cx.default_global::<Self>().shown);
         let mut kept = Vec::with_capacity(looks.len());
-        let mut looks = looks.into_iter();
-        for look in looks.by_ref() {
+        for look in looks {
             let Some((handle, before)) = shown.pop() else {
                 if let Some(opened) = open(look.clone(), act, cx) {
                     kept.push((opened, look));
