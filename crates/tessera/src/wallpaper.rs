@@ -379,7 +379,7 @@ impl Wallpaper {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos() as u64);
-        let mut turn = 0_usize;
+        let mut turn = 0_i64;
         let mut turned = Instant::now();
         let mut windows: Option<WindowsNow> = None;
         let mut painted = true;
@@ -411,10 +411,10 @@ impl Wallpaper {
 
             let step = cx.update(|cx| std::mem::take(&mut cx.global_mut::<Self>().step))?;
             if step != 0 {
-                turn = turn.wrapping_add_signed(step);
+                turn = turn.saturating_add(step as i64);
                 turned = now;
             } else if looks.rotates() && turned.elapsed() >= looks.interval {
-                turn = turn.wrapping_add(1);
+                turn = turn.saturating_add(1);
                 turned = now;
             }
 

@@ -167,8 +167,9 @@ pub struct Looks {
 pub struct Moment<'a> {
     /// Whether the dark pictures are shown.
     pub dark: bool,
-    /// How many times the pictures have changed.
-    pub turn: usize,
+    /// How many times the pictures have changed: less than 0 where they
+    /// went back from the first.
+    pub turn: i64,
     /// What the random order of the pictures and the videos comes from.
     pub seed: u64,
     /// The wallpaper of Windows, where it was read.
@@ -547,14 +548,19 @@ pub fn is_dark(now: u32, (from, until): (u32, u32)) -> bool {
 
 /// Which of `length` pictures is shown at the `turn`th change: one after
 /// the other, or with `shuffle` in an order drawn from `seed` that is
-/// drawn anew each time all were shown.
-pub fn pick(length: usize, turn: usize, shuffle: bool, seed: u64) -> usize {
-    let length = length.max(1);
+/// drawn anew each time all were shown. A `turn` below 0 counts back
+/// from the first, to the last and on.
+pub fn pick(length: usize, turn: i64, shuffle: bool, seed: u64) -> usize {
+    let count = i64::try_from(length.max(1)).unwrap_or(i64::MAX);
+    let at = turn.rem_euclid(count) as usize;
     if !shuffle {
-        return turn % length;
+        return at;
     }
-    let round = (turn / length) as u64;
-    permutation(length, seed ^ round.wrapping_mul(0x9E37_79B9_7F4A_7C15))[turn % length]
+    let round = turn.div_euclid(count) as u64;
+    permutation(
+        length.max(1),
+        seed ^ round.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    )[at]
 }
 
 /// The numbers from 0 to `length` in an order drawn from `seed`.
@@ -821,9 +827,20 @@ mod tests {
         }
         assert_eq!(pick(3, 4, false, 0), 1);
         assert_eq!(pick(0, 4, true, 0), 0);
+        let before: HashSet<usize> = (-5..0).map(|turn| pick(5, turn, true, 3)).collect();
+        assert_eq!(before.len(), 5);
         let mut order = permutation(6, 42);
         order.sort_unstable();
         assert_eq!(order, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn going_back_from_the_first_picture_shows_the_last() {
+        for length in [1, 2, 3, 5, 7] {
+            assert_eq!(pick(length, -1, false, 0), length - 1);
+            assert_eq!(pick(length, 0, false, 0), 0);
+        }
+        assert_eq!(pick(3, -4, false, 0), 2);
     }
 
     #[test]
