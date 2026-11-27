@@ -54,5 +54,39 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `focus` | `toggle`, `on`, `off`, `morning`, a number of minutes, or none | switches [do not disturb](#notifications): without `arg` or with `toggle` the other way than it is, `on` until it is switched off, `morning` until eight in the morning, `30` for thirty minutes; `off` also lets go of what holds it by itself until that ends |
+| `notify` | the text of a notice | posts a notice of Tessera's own, listed with the notifications and shown as a banner where banners are: `tessera do notify Backup done \| 3 files copied` has the title before ` \| ` and the text after it |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Notifications
+
+Tessera reads the notification center of Windows every two seconds and keeps what it read: the list of notifications, the banners, the bell of the bar and the badges of the dock all show that one reading. Notifications that leave the notification center without being dismissed in Tessera, as when Windows lets them expire, stay as a history in `notifications.toml` of `%LOCALAPPDATA%\tessera`.
+
+```toml
+[notifications]
+banners = true        # a notification that arrives comes as a banner
+seconds = 6           # how long a banner stays, 2 to 60
+corner = "top-right"  # or "top-left", "bottom-right", "bottom-left"
+stack = 4             # banners shown at once, 1 to 8
+history = 200         # notifications kept after they left Windows, at most 1000
+quiet = false         # do not disturb until switched off
+quiet_when = ["fullscreen", "game", "presenting", "duplicating"]  # the default
+schedule = { from = "22:00", to = "07:00", days = ["fri", "sat"] }
+
+[[notification_rule]]
+app = "Microsoft Teams*"  # the name or the identifier, with * and ?
+priority = true           # banners even during do not disturb
+
+[[notification_rule]]
+app = "*OneDrive*"
+banners = false           # listed, but no banners
+badge = false             # not counted by the dock
+# show = false            # not listed, kept, shown or counted at all
+```
+
+Do not disturb holds the banners back; what arrives meanwhile is listed but not shown later. It holds while `quiet = true` (which the settings, the moon button of the list of notifications, the `focus` widget and the `focus` action write), until a time chosen under the moon button (for an hour, until morning) or given to `focus`, during the hours of `schedule` (`days` are the days the hours start on; `from` equal to `to` is the whole day), and while the user is busy in one of the ways `quiet_when` names: an application that fills the display, a game drawn full screen with Direct3D, presentation mode, or a display that shows the picture of another. Switching it off while the schedule or being busy holds it lets go of that reason until it ends. The banners of an application whose rule has `priority = true` come all the same.
+
+The first `[[notification_rule]]` whose `app` names an application decides for it; small and capital letters are alike. The name is the one its notifications show; the identifier is the one it posts under, which for a packaged application is its application user model ID, such as `Microsoft.WindowsStore_8wekyb3d8bbwe!App`.
+
+The widget `notifications-button` is a bell for a bar: it counts the notifications that came since a list of them was last open and opens the popup `notifications`. The widget `focus` is a switch for do not disturb, for a popup.

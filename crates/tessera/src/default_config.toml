@@ -140,6 +140,11 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             focus    do not disturb: arg "on", "off", "morning" (until
+#                      eight), a number of minutes, or "toggle" as without
+#                      one
+#             notify   posts a notice of Tessera's own: arg is its title,
+#                      and after " | " its text
 #
 # [[key]]
 # press = "win+v"
@@ -183,9 +188,15 @@
 # Built-in widgets:
 #   "clock"     date and time; option format, a strftime pattern
 #   "calendar"  a month to page through; option week_start, "monday" or "sunday"
-#   "notifications"  the notifications of the Windows notification center,
-#               each with a button that dismisses it; fills the height left
-#               in its popup and scrolls
+#   "notifications"  the notifications Tessera keeps: those of the Windows
+#               notification center and the history of those that left it,
+#               grouped by application, each with a button that dismisses
+#               it; a click on one opens its application. Fills the height
+#               left in its popup and scrolls
+#   "notifications-button"  a bell with the number of notifications that
+#               came since a list of them was last open, a moon while do
+#               not disturb holds; a click opens the popup "notifications"
+#   "focus"     a switch for do not disturb, with why it holds
 #   "cpu"       how busy the processors are, as a wavy line and a percentage;
 #               option style, "wave" (default) or "text" for the value alone
 #   "memory"    the physical memory in use; option style as for "cpu", and
@@ -468,20 +479,60 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # names = ["web", "code", "chat"]
 # except = ["taskmgr.exe"]
 
-# [notifications] has Tessera show a notification that arrives as a banner,
-# in the upper right corner of the display the pointer is on, for seconds
-# seconds (6, between 2 and 60); the pointer on the banners keeps them, a
-# click on one puts it away, and the notification stays in the notification
-# center either way. quiet = true holds the banners back: do not disturb.
-# The button with the moon in the "notifications" widget writes quiet too.
+# [notifications] with banners = true has Tessera show a notification that
+# arrives as a banner, in a corner of the display the pointer is on, for
+# seconds seconds (6, between 2 and 60); the pointer on the banners keeps
+# them, a click on one opens its application and takes the notification out
+# of the notification center, and the cross on it only puts it away.
+#   corner      "top-right" (default), "top-left", "bottom-right" or
+#               "bottom-left"
+#   stack       how many banners are shown at once (4, between 1 and 8)
+#   history     how many notifications that left the notification center
+#               without being dismissed here are kept (200, at most 1000),
+#               in notifications.toml of %LOCALAPPDATA%\tessera
+#   quiet       true: do not disturb holds the banners back until it is
+#               switched off; the moon button of the "notifications" widget,
+#               the "focus" widget and the action focus write it too
+#   quiet_when  what keeps the user busy so that do not disturb holds by
+#               itself: "fullscreen" (an application fills the display),
+#               "game", "presenting" and "duplicating" (a display shows the
+#               picture of another); all four without the key, none with []
+#   schedule    the hours do not disturb holds each day: from and to as
+#               "22:00", to may be on the next day; days, the days they
+#               start on ("mon" ... "sun"), every day without them
 # Tessera learns of a notification by reading the notification center every
 # two seconds, so a banner may come that much late, and Windows shows a
-# banner of its own as well unless its settings tell it not to.
+# banner of its own as well unless its settings tell it not to. Windows does
+# not tell what the buttons of a notification do, so a banner has none.
 #
 # [notifications]
 # banners = true
 # quiet = false
 # seconds = 6
+# corner = "bottom-right"
+# stack = 3
+# history = 200
+# quiet_when = ["fullscreen", "game", "presenting", "duplicating"]
+# schedule = { from = "22:00", to = "07:00", days = ["mon", "tue", "wed", "thu", "fri"] }
+#
+# [[notification_rule]] says what is done with the notifications of one
+# application, named in app by its name or the identifier it posts under,
+# with * for any letters and ? for one; the first rule that names an
+# application decides.
+#   banners   false: no banners, but listed
+#   show      false: not listed, kept, shown or counted at all; the
+#             notifications stay in the notification center of Windows
+#   priority  true: banners even while do not disturb holds
+#   badge     false: the buttons of the dock do not count them
+#
+# [[notification_rule]]
+# app = "Microsoft Teams*"
+# priority = true
+#
+# [[notification_rule]]
+# app = "*OneDrive*"
+# banners = false
+# badge = false
 
 # [switcher] with previews = true has each tile of the window switcher (see
 # switch of [[key]] above) show a picture of its window, which Windows
