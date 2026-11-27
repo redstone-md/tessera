@@ -2,18 +2,16 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! How many notifications of each application wait in the notification
-//! center of Windows, for the badges of the `windows` widget.
+//! center of Windows, for the badges of the `windows` widget. They are
+//! counted from what the notification store read, leaving out the
+//! applications a `[[notification_rule]]` gives `badge = false`.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
-use gpui::{App, AsyncApp, BorrowAppContext, Global, Task};
+use gpui::{App, BorrowAppContext, Global};
 
-use crate::platform::{Notification, Notifications};
-
-/// How often the notification center is read.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+use crate::notifications_store::{Entry, NotificationRule, NotificationStore, rule_for};
 
 /// The waiting notifications, counted by the application that posted them.
 #[derive(Default)]
@@ -21,52 +19,33 @@ pub struct Badges {
     /// The identifier each application posts under, in small letters, with
     /// how many of its notifications wait.
     counts: HashMap<String, usize>,
-    /// Whether the last reading failed, which is reported once.
-    failed: bool,
-    watch: Option<Task<()>>,
 }
 
 impl Global for Badges {}
 
 impl Badges {
-    /// Starts reading the notification center, unless it is read already.
+    /// Starts counting, unless it is counted already. The notification
+    /// center is read by the store, which the shell starts.
     pub fn watch(cx: &mut App) {
-        if cx.default_global::<Self>().watch.is_some() {
+        if cx.has_global::<Self>() {
             return;
         }
-        let watch = cx.spawn(async move |cx: &mut AsyncApp| {
-            loop {
-                let listed = cx
-                    .background_executor()
-                    .spawn(async { Notifications::list() })
-                    .await;
-                if cx.update(|cx| Self::take(listed, cx)).is_err() {
-                    break;
-                }
-                cx.background_executor().timer(REFRESH_INTERVAL).await;
-            }
-        });
-        cx.global_mut::<Self>().watch = Some(watch);
+        cx.set_global(Self::default());
+        Self::count(cx);
     }
 
-    /// Takes in what was read; those who observe are told only of a change.
-    fn take(listed: Result<Vec<Notification>, String>, cx: &mut App) {
-        let this = cx.global::<Self>();
-        let counts = match listed {
-            Ok(listed) => count(&listed),
-            Err(error) => {
-                if !this.failed {
-                    report!("there are no badges: {error}");
-                    cx.update_global(|this: &mut Self, _| this.failed = true);
-                }
-                return;
-            }
+    /// Counts again what the store holds, where the badges are counted;
+    /// those who observe are told only of a change.
+    pub fn count(cx: &mut App) {
+        let Some(this) = cx.try_global::<Self>() else {
+            return;
         };
-        if counts != this.counts || this.failed {
-            cx.update_global(|this: &mut Self, _| {
-                this.counts = counts;
-                this.failed = false;
-            });
+        let counts = match cx.try_global::<NotificationStore>() {
+            Some(store) => count(store.entries(), store.rules()),
+            None => HashMap::new(),
+        };
+        if counts != this.counts {
+            cx.update_global(|this: &mut Self, _| this.counts = counts);
         }
     }
 
@@ -77,13 +56,18 @@ impl Badges {
     }
 }
 
-/// The notifications of each application that says what it posts under.
-fn count(listed: &[Notification]) -> HashMap<String, usize> {
+/// The notifications of each application that says what it posts under,
+/// of those the notification center holds, but for the applications
+/// `rules` keep from being counted.
+fn count(entries: &[Entry], rules: &[NotificationRule]) -> HashMap<String, usize> {
     let mut counts = HashMap::new();
-    for notification in listed.iter().filter(|one| !one.app_id.is_empty()) {
-        *counts
-            .entry(notification.app_id.to_lowercase())
-            .or_default() += 1;
+    let counted = |entry: &&Entry| {
+        entry.present
+            && !entry.app_id.is_empty()
+            && rule_for(rules, &entry.app, &entry.app_id).is_none_or(|rule| rule.badge)
+    };
+    for entry in entries.iter().filter(counted) {
+        *counts.entry(entry.app_id.to_lowercase()).or_default() += 1;
     }
     counts
 }
@@ -119,29 +103,35 @@ impl Owner<'_> {
 mod tests {
     use super::*;
 
-    fn notification(app_id: &str) -> Notification {
-        Notification {
-            id: 0,
+    fn entry(app_id: &str) -> Entry {
+        Entry {
+            key: 0,
+            id: Some(0),
             app: String::new(),
             app_id: app_id.to_owned(),
             title: String::new(),
             body: String::new(),
             posted: 0,
+            present: true,
         }
     }
 
     #[test]
     fn notifications_are_counted_for_the_application_that_posted_them() {
+        let gone = Entry {
+            present: false,
+            ..entry("com.example.Chat")
+        };
         let listed = [
-            notification("Microsoft.WindowsStore_8wekyb3d8bbwe!App"),
-            notification("{1AC14E77}\\WindowsPowerShell\\v1.0\\PowerShell.exe"),
-            notification("{1AC14E77}\\WindowsPowerShell\\v1.0\\powershell.exe"),
-            notification("com.example.Chat"),
-            notification(""),
+            entry("Microsoft.WindowsStore_8wekyb3d8bbwe!App"),
+            entry("{1AC14E77}\\WindowsPowerShell\\v1.0\\PowerShell.exe"),
+            entry("{1AC14E77}\\WindowsPowerShell\\v1.0\\powershell.exe"),
+            entry("com.example.Chat"),
+            entry(""),
+            gone,
         ];
         let badges = Badges {
-            counts: count(&listed),
-            ..Badges::default()
+            counts: count(&listed, &[]),
         };
         let app = |app| Owner {
             app: Some(app),
@@ -162,5 +152,18 @@ mod tests {
         assert_eq!(badges.of(&program("C:/apps/com.example.Chat")), 0);
         assert_eq!(badges.of(&program("C:/apps/shell.exe")), 0);
         assert_eq!(badges.of(&Owner::default()), 0);
+    }
+
+    #[test]
+    fn a_rule_keeps_an_application_from_being_counted() {
+        let rules = [NotificationRule {
+            app: "com.example.*".to_owned(),
+            banners: true,
+            show: true,
+            priority: false,
+            badge: false,
+        }];
+        let counts = count(&[entry("com.example.Chat"), entry("other")], &rules);
+        assert_eq!(counts, HashMap::from([("other".to_owned(), 1)]));
     }
 }

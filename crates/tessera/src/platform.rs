@@ -9,6 +9,7 @@ pub use win32::BinUsage;
 pub use win32::DesktopClose;
 pub use win32::DisplayMode;
 pub use win32::InputName;
+pub use win32::Occupation;
 pub use win32::OwnInput;
 pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]

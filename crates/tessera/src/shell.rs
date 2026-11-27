@@ -24,6 +24,7 @@ use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::modules::DesktopClosing;
+use crate::notifications_store::NotificationStore;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
@@ -90,6 +91,7 @@ impl Shell {
         crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
+        NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
@@ -299,6 +301,7 @@ impl Shell {
         DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
+        NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);

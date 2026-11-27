@@ -1,22 +1,58 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The notifications Windows keeps in its notification center.
+//! The notifications Windows keeps in its notification center, the logos
+//! of the applications that post them, and whether the user is busy with
+//! something that notifications should not interrupt.
 //!
 //! Every call waits for Windows to answer, so none belongs on the thread
 //! that draws.
+//!
+//! What Windows lets another program read of a notification is its texts,
+//! its application and when it was posted. The buttons, pictures, input
+//! fields and the arguments the application would be started with are not
+//! given out (`UserNotificationListener` has no such properties), so a
+//! notification can only open its application, not do what its buttons
+//! would.
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+
+use serde::Deserialize;
+use windows::Foundation::Size;
+use windows::Storage::Streams::DataReader;
 use windows::UI::Notifications::Management::{
     UserNotificationListener, UserNotificationListenerAccessStatus,
 };
 use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, UserNotification};
+use windows::Win32::UI::Shell::{
+    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
+};
 use windows::core::Result as WindowsResult;
+
+use super::execute::own_window_in_front;
+use super::hdr::paths;
 
 /// Seconds between 1601, where Windows starts counting, and 1970.
 const WINDOWS_EPOCH_OFFSET: i64 = 11_644_473_600;
 
 /// The units of a Windows timestamp in a second.
 const TICKS_PER_SECOND: i64 = 10_000_000;
+
+/// The side of the square the logos of applications are asked for in, in
+/// pixels; Windows gives the nearest size it has.
+const LOGO_SIDE: f32 = 64.;
+
+/// The largest logo file that is read, in bytes.
+const LOGO_LIMIT: u64 = 1 << 20;
+
+/// The logo files of the applications, by the identifier they post under,
+/// as they were read with their first notification; `None` for one that
+/// has none. A logo is read once per run.
+static LOGOS: LazyLock<Mutex<HashMap<String, Logo>>> = LazyLock::new(Mutex::default);
+
+/// An image file of a logo, or none.
+type Logo = Option<Arc<[u8]>>;
 
 /// A notification as its application wrote it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,24 +101,15 @@ impl Notifications {
             .map_err(|error| format!("the notification could not be dismissed: {error}"))
     }
 
-    /// Removes every notification from the notification center. Windows
-    /// has been seen to refuse removing all at once and to leave them all,
-    /// so they are then removed one by one.
-    pub fn clear() -> Result<(), String> {
-        let listener = listener()?;
-        if listener.ClearNotifications().is_ok() {
-            return Ok(());
-        }
-        let mut refused = None;
-        for notification in Self::list()? {
-            if let Err(error) = listener.RemoveNotification(notification.id) {
-                refused = Some(error);
-            }
-        }
-        match refused {
-            Some(error) => Err(format!("not every notification could be cleared: {error}")),
-            None => Ok(()),
-        }
+    /// The image file of the logo of the application that posts under
+    /// `app_id`, as Windows gave it with a notification of the application
+    /// that [`Notifications::list`] read; `None` before that, and for an
+    /// application Windows has no logo of. It asks Windows nothing.
+    pub fn logo(app_id: &str) -> Option<Arc<[u8]>> {
+        let logos = LOGOS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        logos.get(app_id).cloned().flatten()
     }
 }
 
@@ -127,6 +154,7 @@ fn read(item: &UserNotification) -> WindowsResult<Notification> {
         .map(|text| text.to_string())
         .collect();
     let (title, body) = split(&lines);
+    remember_logo(item, &app_id);
     Ok(Notification {
         id: item.Id()?,
         app,
@@ -135,6 +163,109 @@ fn read(item: &UserNotification) -> WindowsResult<Notification> {
         body,
         posted: unix_seconds(item.CreationTime()?.UniversalTime),
     })
+}
+
+/// Reads the logo of the application of `item`, which posts under
+/// `app_id`, unless it was read before.
+fn remember_logo(item: &UserNotification, app_id: &str) {
+    if app_id.is_empty() {
+        return;
+    }
+    let known = |logos: &HashMap<String, _>| logos.contains_key(app_id);
+    if known(
+        &LOGOS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    ) {
+        return;
+    }
+    let read = || -> WindowsResult<Logo> {
+        let size = Size {
+            Width: LOGO_SIDE,
+            Height: LOGO_SIDE,
+        };
+        let logo = item.AppInfo()?.DisplayInfo()?.GetLogo(size)?;
+        let stream = logo.OpenReadAsync()?.get()?;
+        let length = stream.Size()?;
+        if length == 0 || length > LOGO_LIMIT {
+            return Ok(None);
+        }
+        let reader = DataReader::CreateDataReader(&stream)?;
+        reader.LoadAsync(length as u32)?.get()?;
+        let mut bytes = vec![0; length as usize];
+        reader.ReadBytes(&mut bytes)?;
+        Ok(Some(bytes.into()))
+    };
+    // An application without a logo of its own, as many programs are, is
+    // drawn without one; the shell may still have an icon for it.
+    let logo = read().unwrap_or(None);
+    LOGOS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(app_id.to_owned(), logo);
+}
+
+/// What keeps the user busy, of the things during which Windows holds its
+/// own notifications back where its settings ask for it. The
+/// configuration names them in `quiet_when`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Occupation {
+    /// An application fills the display, as a video shown full screen
+    /// does.
+    Fullscreen,
+    /// A game draws full screen with Direct3D.
+    Game,
+    /// Windows is in presentation mode, which presentation programs and
+    /// the mobility center switch on.
+    Presenting,
+    /// A display shows the same picture as another, as a projector does
+    /// that duplicates the screen.
+    Duplicating,
+}
+
+impl Occupation {
+    /// What keeps the user busy now, if anything does; whether a display
+    /// is duplicated is only asked with `duplicating`. A window of Tessera
+    /// in front is no application that fills the display, whatever its
+    /// size: a popup in the middle of the display, or the window of the
+    /// desktop, would otherwise count as one.
+    pub fn now(duplicating: bool) -> Option<Self> {
+        // SAFETY: the call only fills in the state it returns.
+        let state = unsafe { SHQueryUserNotificationState() }.ok();
+        let busy = match state {
+            Some(QUNS_RUNNING_D3D_FULL_SCREEN) => Some(Self::Game),
+            Some(QUNS_PRESENTATION_MODE) => Some(Self::Presenting),
+            Some(QUNS_BUSY) if own_window_in_front().is_none() => Some(Self::Fullscreen),
+            _ => None,
+        };
+        busy.or_else(|| (duplicating && display_duplicated()).then_some(Self::Duplicating))
+    }
+}
+
+/// Whether two displays in use show the picture of one source, which is
+/// what duplicating a display is.
+fn display_duplicated() -> bool {
+    let sources: Vec<_> = paths()
+        .iter()
+        .map(|path| {
+            let source = &path.sourceInfo;
+            (
+                source.adapterId.LowPart,
+                source.adapterId.HighPart,
+                source.id,
+            )
+        })
+        .collect();
+    shares_a_source(&sources)
+}
+
+/// Whether two of `sources` are the same.
+fn shares_a_source<T: PartialEq>(sources: &[T]) -> bool {
+    sources
+        .iter()
+        .enumerate()
+        .any(|(at, source)| sources[at + 1..].contains(source))
 }
 
 /// The first line as the title and the others as the body.
@@ -160,6 +291,13 @@ mod tests {
         assert_eq!(split(&lines), ("Ada".to_owned(), "Hello\nthere".to_owned()));
         assert_eq!(split(&lines[..1]), ("Ada".to_owned(), String::new()));
         assert_eq!(split(&[]), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn a_display_is_duplicated_where_two_paths_share_a_source() {
+        assert!(!shares_a_source::<u32>(&[]));
+        assert!(!shares_a_source(&[(1, 0, 0), (1, 0, 1)]));
+        assert!(shares_a_source(&[(1, 0, 0), (2, 0, 3), (1, 0, 0)]));
     }
 
     #[test]

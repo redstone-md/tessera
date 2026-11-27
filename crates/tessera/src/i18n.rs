@@ -1139,6 +1139,21 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Создать правило для этого окна",
     ),
     ("Move to workspace", "Перенести на рабочий стол"),
+    // Notifications: history, do not disturb and the bell.
+    ("For 1 hour", "На 1 час"),
+    ("Until morning", "До утра"),
+    ("Until turned off", "Пока не выключено"),
+    ("On until", "Включено до"),
+    ("As scheduled, until", "По расписанию, до"),
+    (
+        "While an app fills the screen",
+        "Пока приложение на весь экран",
+    ),
+    ("While a game runs", "Пока идёт игра"),
+    ("While presenting", "Во время презентации"),
+    ("While a display is duplicated", "Пока экран дублируется"),
+    ("Unknown application", "Неизвестное приложение"),
+    ("Banners are switched off", "Баннеры выключены"),
 ];
 
 #[cfg(test)]

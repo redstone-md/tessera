@@ -370,7 +370,7 @@ impl Drop for Process {
 }
 
 /// The window in front, as a number, where it is a window of Tessera.
-fn own_window_in_front() -> Option<isize> {
+pub(super) fn own_window_in_front() -> Option<isize> {
     let mut process = 0u32;
     // SAFETY: the calls only read which window is in front and whose it
     // is; `process` outlives the call that fills it.

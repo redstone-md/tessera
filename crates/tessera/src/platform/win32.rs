@@ -110,6 +110,7 @@ pub use keyboard::{InputLanguage, Typing};
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use move_watch::{MoveEvent, MoveWatch};
 pub use network::{Link, Network};
+pub use notifications::Occupation;
 pub use notifications::{Notification, Notifications};
 pub use open_with::{OpenWithHandler, choose_app};
 pub use pace::Pace;
