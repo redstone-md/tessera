@@ -6,10 +6,10 @@
 //! its identifier, the documents the user pinned there, and the
 //! categories and tasks an application put in its list.
 //!
-//! Windows reads none of this out for another application but the recent
-//! documents ([`RecentDocument`]). The rest is read from the two files
-//! Explorer keeps for each application below the roaming profile, named by
-//! a checksum of the identifier of the application:
+//! Windows reads none of this out for another application, so it is read
+//! from the two files Explorer keeps for each application below the
+//! roaming profile, named by a checksum of the identifier of the
+//! application:
 //!
 //! - `AutomaticDestinations\<checksum>.automaticDestinations-ms`, what
 //!   Windows recorded by itself: a compound file (the format of the old
@@ -40,12 +40,10 @@ use anyhow::{Context as _, bail};
 use windows::Win32::Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_Title};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistStream};
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
-use windows::Win32::UI::Shell::Common::IObjectArray;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::Shell::{
-    ADLT_RECENT, ApplicationDestinations, ApplicationDocumentLists, IApplicationDestinations,
-    IApplicationDocumentLists, ILFree, IShellItem, IShellLinkW, SHCreateItemFromIDList,
-    SHCreateItemFromParsingName, SHCreateMemStream, SHLoadIndirectString,
+    ApplicationDestinations, IApplicationDestinations, ILFree, IShellItem, IShellLinkW,
+    SHCreateItemFromIDList, SHCreateItemFromParsingName, SHCreateMemStream, SHLoadIndirectString,
     SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellItem, ShellLink,
 };
 use windows::core::{BSTR, HSTRING, IUnknown, Interface, PCWSTR};
@@ -168,30 +166,6 @@ pub struct JumpTask {
     pub name: String,
     pub program: PathBuf,
     pub arguments: String,
-}
-
-impl JumpTask {
-    /// The tasks the application `app_id` put in its jump list; empty
-    /// when it made no list or the list cannot be read.
-    pub fn of_app(app_id: &str) -> Vec<Self> {
-        let Some(list) = read_list(CUSTOM_LISTS, "customDestinations-ms", app_id) else {
-            return Vec::new();
-        };
-        let tasks = custom_parts(&list).into_iter().find_map(|part| match part {
-            Part::Tasks(links) => Some(links),
-            _ => None,
-        });
-        { tasks.unwrap_or_default().into_iter() }
-            .filter_map(Saved::link)
-            .filter_map(LinkFacts::load)
-            .filter_map(|facts| facts.task())
-            .collect()
-    }
-
-    /// Does the task, as the jump list would. A failure is reported.
-    pub fn start(&self) {
-        execute(&self.program, &self.arguments, &self.name);
-    }
 }
 
 /// A known category of a jump list, which Windows fills from its record.
@@ -1014,14 +988,6 @@ fn execute(program: &Path, arguments: &str, name: &str) {
 /// The identifier Explorer goes by.
 const EXPLORER: &str = "Microsoft.Windows.Explorer";
 
-/// A document an application opened lately.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecentDocument {
-    /// The name the shell shows for it.
-    pub name: String,
-    pub path: PathBuf,
-}
-
 impl AppWindowId {
     /// The identifier the application gave this window or its process to
     /// be told from others by; `None` for the many that give none.
@@ -1071,50 +1037,6 @@ fn relative_to_known<'a>(
         }
     }
     whole.into_owned()
-}
-
-impl RecentDocument {
-    /// Up to `most` documents the application `app_id` opened lately, the
-    /// latest first, as Windows recorded them; empty when it recorded
-    /// none, does not tell, or the user switched the record off.
-    pub fn of_app(app_id: &str, most: u32) -> Vec<Self> {
-        Self::read(app_id, most).unwrap_or_default()
-    }
-
-    fn read(app_id: &str, most: u32) -> windows::core::Result<Vec<Self>> {
-        let mut documents = Vec::new();
-        // SAFETY: COM is initialized on the calling thread; every interface
-        // is released when it goes out of scope.
-        unsafe {
-            let lists: IApplicationDocumentLists =
-                CoCreateInstance(&ApplicationDocumentLists, None, CLSCTX_INPROC_SERVER)?;
-            lists.SetAppID(&HSTRING::from(app_id))?;
-            let items: IObjectArray = lists.GetList(ADLT_RECENT, most)?;
-            for index in 0..items.GetCount()? {
-                // What is not a file, such as a link with a command line,
-                // is left out.
-                let Ok(item) = items.GetAt::<IShellItem>(index) else {
-                    continue;
-                };
-                let path = item.GetDisplayName(SIGDN_FILESYSPATH).ok().and_then(take);
-                let name = item.GetDisplayName(SIGDN_NORMALDISPLAY).ok().and_then(take);
-                if let (Some(path), Some(name)) = (path, name) {
-                    documents.push(Self {
-                        name,
-                        path: path.into(),
-                    });
-                }
-            }
-        }
-        Ok(documents)
-    }
-
-    /// Opens the document with `program`, as the jump list of that
-    /// program would. A failure is reported.
-    pub fn open_with(&self, program: &Path) {
-        let document = format!("\"{}\"", self.path.display());
-        execute(program, &document, &self.name);
-    }
 }
 
 #[cfg(test)]
@@ -1480,42 +1402,6 @@ otes.txt",
         assert!(recorded_links(Cursor::new(vec![0; 600])).is_none());
     }
 
-    /// Prints how many tasks the applications of the open windows put in
-    /// their jump lists. Run with `--ignored --nocapture`.
-    #[test]
-    #[ignore = "reads the record of the machine it runs on"]
-    fn tasks_of_open_windows() {
-        // SAFETY: COM is initialized once for the thread of the test.
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(
-                None,
-                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-            );
-        }
-        for window in super::super::AppWindow::enumerate() {
-            let stated = window.id.stated_app_id();
-            let made_up = window.executable.as_deref().map(app_id_of_program);
-            let packaged = window.app_id.clone();
-            for (kind, id) in [
-                ("packaged", packaged),
-                ("stated", stated),
-                ("made up", made_up),
-            ] {
-                if let Some(id) = id {
-                    let tasks = JumpTask::of_app(&id);
-                    let named = tasks.iter().filter(|task| !task.name.starts_with('@'));
-                    let with_arguments = tasks.iter().filter(|task| !task.arguments.is_empty());
-                    println!(
-                        "{kind}: {} tasks, {} named in words, {} with arguments",
-                        tasks.len(),
-                        named.count(),
-                        with_arguments.count()
-                    );
-                }
-            }
-        }
-    }
-
     /// Prints what the jump lists of the applications of the open windows
     /// hold, as counts. Run with `--ignored --nocapture`.
     #[test]
@@ -1543,30 +1429,6 @@ otes.txt",
                     list.categories.len(),
                     list.tasks.len()
                 );
-            }
-        }
-    }
-
-    /// Prints how many recent documents Windows has on record for the
-    /// windows that are open. Run with `--ignored --nocapture`.
-    #[test]
-    #[ignore = "reads the record of the machine it runs on"]
-    fn recent_documents_of_open_windows() {
-        // SAFETY: COM is initialized once for the thread of the test.
-        unsafe {
-            let _ = windows::Win32::System::Com::CoInitializeEx(
-                None,
-                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
-            );
-        }
-        for window in super::super::AppWindow::enumerate() {
-            let stated = window.id.stated_app_id();
-            let made_up = window.executable.as_deref().map(app_id_of_program);
-            for (kind, id) in [("stated", stated), ("made up", made_up)] {
-                if let Some(id) = id {
-                    let found = RecentDocument::of_app(&id, 10).len();
-                    println!("{kind}: {found} for {} characters of id", id.len());
-                }
             }
         }
     }

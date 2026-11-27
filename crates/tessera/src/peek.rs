@@ -77,7 +77,6 @@ impl Global for Peek {}
 impl Peek {
     /// Shows `id` where it is, in front of the other windows, over dimmed
     /// displays, until [`Self::hide`] or another peek.
-    #[allow(dead_code, reason = "the previews of the dock call it once they peek")]
     pub fn show(id: AppWindowId, cx: &mut App) {
         Self::look(Looking::Window(id), cx);
     }

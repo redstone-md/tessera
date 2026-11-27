@@ -17,13 +17,9 @@ use crate::actions::Actions;
 use crate::i18n::Language;
 use crate::menu::MenuEntry;
 use crate::platform::{
-    AppWindow, AppWindowId, JumpTask, Launch, RecentDocument, RunningProcess, Shortcut,
-    app_id_of_program, reveal_in_explorer, shell_mode,
+    AppWindow, AppWindowId, Launch, RunningProcess, Shortcut, app_id_of_program,
+    reveal_in_explorer, shell_mode,
 };
-
-/// How many of the documents an application opened lately its menu
-/// offers.
-const RECENT_SHOWN: u32 = 5;
 
 /// How long End task waits for a window to close before it ends its
 /// process: as long as Windows waits before it calls a window not
@@ -31,8 +27,6 @@ const RECENT_SHOWN: u32 = 5;
 const HUNG_WAIT: Duration = Duration::from_secs(5);
 
 const ICON_CLOSE: &str = "\u{e8bb}";
-const ICON_DOCUMENT: &str = "\u{e8a5}";
-const ICON_TASK: &str = "\u{e945}";
 const ICON_NEW_WINDOW: &str = "\u{e78b}";
 const ICON_PIN: &str = "\u{e718}";
 const ICON_UNPIN: &str = "\u{e77a}";
@@ -43,9 +37,11 @@ const ICON_WINDOW_MENU: &str = "\u{e700}";
 const ICON_END: &str = "\u{e711}";
 const ICON_KILL: &str = "\u{e7ba}";
 
-/// The documents the application of `item` opened lately, each to be
-/// opened again by it, and then the tasks it put in its jump list.
-fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
+/// The identifier of the application of `item` that Windows keeps its
+/// jump list by, and the program a document of the list opens with: the
+/// packaged application, else the identifier its window states, else the
+/// one Windows makes of its program file. `None` where nothing is known.
+pub(super) fn jump_app(item: &DockItem) -> Option<(String, Option<PathBuf>)> {
     let window = item.front();
     let pin = item.pin.as_ref();
     let packaged = window
@@ -60,28 +56,18 @@ fn recent_entries(item: &DockItem) -> Vec<MenuEntry> {
     };
     let app = packaged
         .or_else(|| window.and_then(|window| window.id.stated_app_id()))
-        .or_else(|| program.as_deref().map(app_id_of_program));
-    let Some(app) = app else {
-        return Vec::new();
-    };
-    let documents = RecentDocument::of_app(&app, RECENT_SHOWN);
-    let documents = documents.into_iter().map(|document| {
-        let program = program.clone();
-        let label = document.name.clone();
-        MenuEntry::new(ICON_DOCUMENT, label, move |_| match &program {
-            Some(program) => document.open_with(program),
-            None => Shortcut {
-                name: document.name.clone(),
-                path: document.path.clone(),
-            }
-            .launch(),
-        })
-    });
-    let tasks = JumpTask::of_app(&app).into_iter().map(|task| {
-        let label = task.name.clone();
-        MenuEntry::new(ICON_TASK, label, move |_| task.start())
-    });
-    documents.chain(tasks).collect()
+        .or_else(|| program.as_deref().map(app_id_of_program))?;
+    Some((app, program))
+}
+
+/// The jump list of the application of `item`: its pinned, frequent,
+/// recent and own categories and its tasks, each under its title, as it
+/// was read last (it is read again meanwhile).
+fn jump_entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
+    match jump_app(item) {
+        Some((app, program)) => crate::jump_menu::entries(&app, program.as_deref(), cx),
+        None => Vec::new(),
+    }
 }
 
 /// What starts another window of the application of `item`: the pinned
@@ -184,15 +170,14 @@ fn end_task(windows: Vec<AppWindowId>, cx: &mut App) {
         .detach();
 }
 
-/// What the menu of `item` offers: the documents its application opened
-/// lately and its tasks, its windows if it has several, another window,
+/// What the menu of `item` offers: the jump list of its application, its windows if it has several, another window,
 /// starting it as an administrator, its file, the window menu of its
 /// window, pinning or unpinning it, closing its windows, and ending its
 /// task or its process.
-pub(super) fn entries(item: &DockItem, cx: &App) -> Vec<MenuEntry> {
+pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
+    let mut entries = jump_entries(item, cx);
     let language = Language::of(cx);
     let say = |text: &'static str| language.say(text);
-    let mut entries = recent_entries(item);
     if item.windows.len() > 1 {
         entries.extend(item.windows.iter().map(|window| {
             let id = window.id;

@@ -18,6 +18,7 @@ use gpui::{
 
 use crate::icons::{Icon, icon_of_pixels};
 use crate::motion::{Interaction, Spring};
+use crate::peek::Peek;
 use crate::platform::{
     AppWindowId, Media, MediaCommand, NativeSurface, ScreenEdge, ScreenRect, SessionKey,
     TaskbarList, ThumbButton, Thumbnail,
@@ -34,6 +35,10 @@ const OPEN_DELAY: Duration = Duration::from_millis(400);
 
 /// How long it rests before an open preview shows another window.
 const SWITCH_DELAY: Duration = Duration::from_millis(120);
+
+/// How long the pointer rests on the picture of a window before the
+/// other windows are faded for a peek at it, as Aero Peek waits.
+const PEEK_DELAY: Duration = Duration::from_millis(400);
 
 /// How long after the pointer left a preview stays, so that the pointer
 /// can travel onto it.
@@ -271,6 +276,9 @@ impl Previews {
                 closing: false,
                 media: None,
                 told: None,
+                hovered: None,
+                hovers: 0,
+                peeking: false,
             };
             view.take_told(&theme.motion);
             let (width, height) = view.extent(padding);
@@ -366,11 +374,53 @@ pub struct PreviewView {
     media: Option<MediaRow>,
     /// What the applications had told when it was read last.
     told: Option<u64>,
+    /// The window whose picture the pointer is on, and how many times the
+    /// pointer came onto or left a picture, so that a wait for a peek
+    /// meant for an earlier one does nothing.
+    hovered: Option<AppWindowId>,
+    hovers: u64,
+    /// Whether the preview has a peek at a window shown.
+    peeking: bool,
 }
 
 impl PreviewView {
+    /// The pointer came onto the picture of the window `id`, or left it:
+    /// once it has rested there a moment, every other window is faded for
+    /// a peek at it, which ends when it leaves.
+    fn hover_tile(&mut self, id: AppWindowId, hovered: bool, cx: &mut Context<Self>) {
+        self.hovers += 1;
+        let hovers = self.hovers;
+        if !hovered {
+            if self.hovered == Some(id) {
+                self.hovered = None;
+                self.end_peek(cx);
+            }
+            return;
+        }
+        self.hovered = Some(id);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            cx.background_executor().timer(PEEK_DELAY).await;
+            this.update(cx, |this, cx| {
+                if this.hovers == hovers && this.hovered == Some(id) && !this.closing {
+                    this.peeking = true;
+                    Peek::show(id, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Ends the peek the preview showed, if it showed one.
+    fn end_peek(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.peeking) {
+            Peek::hide(cx);
+        }
+    }
+
     /// Starts closing; the window goes away once the motion has finished.
     fn close(&mut self, cx: &mut Context<Self>) {
+        self.end_peek(cx);
         self.closing = true;
         self.visibility.animate_to(0.);
         cx.notify();
@@ -605,8 +655,12 @@ impl PreviewView {
         let buttons = buttons_row.then(|| self.render_buttons(index, theme, window, cx));
         let tile = &self.tiles[index];
         // The ids inside are those of this tile's window.
+        let id = tile.id;
         div()
             .id(("preview-tile", tile.id.raw() as u64))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hover_tile(id, *hovered, cx);
+            }))
             .w(px(tile_width(tile.picture.0, factor)))
             .flex_none()
             .flex()

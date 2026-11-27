@@ -82,10 +82,6 @@ impl Global for JumpLists {}
 
 /// Reads the jump list of the application `app_id` on a thread of its own, or
 /// again where its files changed, for [`entries`] to give.
-#[allow(
-    dead_code,
-    reason = "the dock calls it once its menu is built from the jump list"
-)]
 pub fn prefetch(app_id: &str, cx: &mut App) {
     if !cx
         .default_global::<JumpLists>()
@@ -154,10 +150,6 @@ fn read_icons(list: &JumpList, cx: &mut App) {
 /// was not read yet. A document opens with `program`, the program of the
 /// application, or else the way the Shell opens it. The list is read again
 /// meanwhile, for the next time.
-#[allow(
-    dead_code,
-    reason = "the dock calls it once its menu is built from the jump list"
-)]
 pub fn entries(app_id: &str, program: Option<&Path>, cx: &mut App) -> Vec<MenuEntry> {
     prefetch(app_id, cx);
     let Some(list) = cx.default_global::<JumpLists>().lists.get(app_id).cloned() else {

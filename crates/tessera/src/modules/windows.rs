@@ -923,6 +923,11 @@ impl WindowList {
             return;
         };
         let (ids, owner) = (item.ids(), item.preview_owner());
+        // The jump list is read while the pointer rests, so that the menu
+        // has it when it opens.
+        if let Some((app, _)) = entries::jump_app(item) {
+            crate::jump_menu::prefetch(&app, cx);
+        }
         if let Some(anchor) = self.anchor(key, window, cx) {
             Previews::request_group(ids, owner, anchor, cx);
         }
