@@ -223,8 +223,40 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `present-windows` | `workspace`, `all`, `app`, or none | the same without the workspaces along the top; it brings no key |
 | `peek-desktop` | none | shows the desktop in front of every window, with a thin outline where each window is, until the keys to hold of its `press` are let go; done by `tessera do peek-desktop`, or by a `press` without keys to hold, it shows the desktop until it is done again or a click lands on it. The desktop is the wallpaper Tessera shows on each display (its picture with the adjustments, or a still of its video), or, where Tessera draws none, the picture Windows paints behind the windows (`PaintDesktop`); the icons of the desktop are not in it. Its keys are taken from Windows, and it brings Win+comma where the keys of Windows are in use |
 | `tray-focus` | none | puts the keyboard on the [notification area](#the-notification-area) of the display the pointer is on; Win+B is bound to it by default where the keys of Windows are in use |
+| `none` | none | does nothing; a `[[key]]` of it turns off a key an action brings, which then stays with Windows or whoever holds it (Tessera holds nothing for it). The Shortcuts page writes one for **Turn off** |
+| `pause-keys` | `on`, `off`, or none | pauses every key combination of Tessera, those of the workspaces and the mouse buttons included, but the keys of `pause-keys` itself, with `on`; holds them again with `off`; does the other of the two without `arg`. It brings no key; give it one, as `press = "ctrl+alt+win+p"`, to have a way back |
+| `activate-window` | `exe:` and a program (`exe:code.exe`, `.exe` may be left out, a path stands for its file name), `class:` and a window class, `title:` and a title where `*` stands for any letters and `?` for one, or `app:` and an AppUserModelID; with `,start` after `exe:` or `app:` | brings forward the window it names that was used last (the one nearest the top, then those hidden on Tessera's other workspaces), restored if it is minimized, going to its workspace first; with `,start` it starts the program, or the packaged application through `shell:AppsFolder`, where no window matches. The window menu writes one with **Shortcut for this window…**. It brings no key |
+| `date-and-time` | none | opens the popup `calendar`, or closes it. Brings Win+Alt+D |
+| `notifications-keyboard` | none | opens the popup `calendar`, the notification center, as Win+N does. Brings Win+Shift+V |
+| `sound-output` | none | opens the popup `sound`, with the outputs to choose from. Brings Win+Ctrl+V |
+| `window-height` | `full` or `back` | `full` stretches the window in front from the top to the bottom of the work area of its display, keeping its sides, and `back` gives it the height it had before (kept while Tessera runs). Brings Win+Shift+Up (`full`) and Win+Shift+Down (`back`) |
+| `window-half` | `top` or `bottom` | puts the window in front in the top or the bottom half of the work area of its display; through `snap` where `snap` takes `top-half` and `bottom-half`. Brings Win+Alt+Up (`top`) and Win+Alt+Down (`bottom`) |
+| `magnifier` | `in`, `out` or `close` | `in` starts Magnifier (`magnify.exe`) where it is not running; once it runs, Magnifier answers Win+Plus and Win+Minus itself. `close` closes the windows of Magnifier. Brings Win+Plus (`in`), Win+Minus (`out`) and Win+Esc (`close`) |
+| `narrator` | none | starts Narrator (`narrator.exe`); Narrator is turned off by its own keys. Brings Win+Ctrl+Enter |
+| `color-filters` | none | opens the page of the color filters in Settings (`ms-settings:easeofaccess-colorfilter`); Windows has no documented way to switch them. Brings Win+Ctrl+C |
+| `quick-assist` | none | opens Quick Assist (`ms-quick-assist:`). Brings Win+Ctrl+Q |
+| `feedback-hub` | none | opens Feedback Hub (`feedback-hub:`). Brings Win+F |
+| `copilot` | none | opens Copilot (`ms-copilot:`). Brings Win+C |
+| `bar-settings` | none | opens Tessera's settings at **Bars**. Brings Win+Alt+Enter |
+| `find-computers` | none | opens the search for computers of the network (`::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}`) in Tessera's file manager where it takes that place, and in Explorer otherwise. Brings Win+Ctrl+F |
+| `emoji-panel` | none | opens the popup `emoji-panel`, the runner with only its emoji runner: type `:` and a name, as `:heart`. It brings no key; bind Win+period to it where the emoji panel of Windows does not open without Explorer |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+A `press` can also end with the keys of the number pad, `num0` to `num9`, `multiply`, `add`, `subtract`, `decimal` and `divide`, with `semicolon`, `slash`, `backslash`, `leftbracket`, `rightbracket` and `quote` (as on a US layout), `scrolllock` and `menu` (the key of the context menu). Up to four combinations pressed one after the other, written with commas between them, make a sequence, as KDE Plasma has: `press = "ctrl+alt+k, t"`. The first holds keys; a later one may be a key by itself. Only the first is held; once it is pressed, the next ones are held for a second and a half, a tip at the pointer shows what was pressed so far, and Esc or the time running out ends it. A sequence whose beginning is the whole `press` of another entry never comes to its end, as that entry is done at once; the Shortcuts page marks both. Keys held with `middle`, `back` or `forward` press a mouse button: `press = "ctrl+back"`. Those are bound through Tessera's mouse hook, which does not take them yet, so they do nothing so far, and the Shortcuts page says so.
+
+```toml
+[[key]]
+press = "ctrl+alt+k, t"   # Ctrl+Alt+K, then T
+action = "activate-window"
+arg = "exe:WindowsTerminal.exe,start"
+
+[[key]]
+press = "win+d"           # gives Win+D back to Windows
+action = "none"
+```
+
+The settings have a page of their own for the keys, **Keys > Shortcuts** (also the popup `shortcuts`, as `tessera do popup shortcuts`): every action, by its title, with the keys that do it, those the actions bring marked, and what became of each: in use, given way to a key of the user, held by another program, taken from Windows, paused, or off because `windows_keys` is off. Keys that clash are marked with the other row. The search finds rows by title, action and keys. A click on a row opens it: **Change** records the new keys as they are pressed (every combination of Tessera is given up meanwhile, and the next keys pressed reach no program), **Add another key** records one more, **Turn off** writes a `[[key]]` of `none` for a key an action brings, **Reset** takes the user's entry out again, and **Edit** changes a key of the user whole. **Add a shortcut** makes a new key: any action, found by typing, with its argument checked as it is typed, a program with **Browse** and its arguments, a popup, the words of `tiling`, a side, a way through the windows, a button of the dock or a folder. **Export…** writes the user's `[[key]]` entries to a TOML file of their own, and **Import…** reads one back, added to them (an entry of the file takes the place of one that presses the same keys) or in their place. The page writes `config.toml` as the other settings do, keeping its comments, and leaves an entry alone where the file changed meanwhile. The titles of the actions are the `[[action]]` entries of the rows files of the settings; the shortcuts of extensions are listed by their names under **Extensions**.
 
 ## The shell of the session
 
@@ -350,7 +382,26 @@ action = "quick-settings"
 arg = "sound"         # the popup Win+A opens instead of `quick-settings`
 ```
 
-Win+L locks the session through Windows itself, and Ctrl+Shift+Esc, Alt+Shift and Ctrl+Shift are answered by Windows too, so they keep working in shell mode and Tessera does not take them. While `windows_key` takes over the Windows key, Ctrl+Esc opens the same popup, as it opens the Start menu in Windows, through `start` above, unless a `[[key]]` holds it or gives `start` another popup as `arg`. Without `windows_key` the Windows key by itself opens nothing, in shell mode as well; set `windows_key = "launcher"` for it to open the launcher. Win+E belongs to the file manager (`files`), Win+R to the Run dialog, Win+V to the clipboard history and Win+1 to Win+9 and Win+T to the dock, and Win+B to the notification area (`tray-focus`), which bring their own keys. Not answered by Tessera: Win+period (the emoji panel of Windows; whether Windows still opens it without Explorer is not known), Win+Tab, Win+Ctrl+D and the other keys of the virtual desktops of Windows, which need Explorer.
+Win+L locks the session through Windows itself, and Ctrl+Shift+Esc, Alt+Shift and Ctrl+Shift are answered by Windows too, so they keep working in shell mode and Tessera does not take them. While `windows_key` takes over the Windows key, Ctrl+Esc opens the same popup, as it opens the Start menu in Windows, through `start` above, unless a `[[key]]` holds it or gives `start` another popup as `arg`. Without `windows_key` the Windows key by itself opens nothing, in shell mode as well; set `windows_key = "launcher"` for it to open the launcher. Win+E belongs to the file manager (`files`), Win+R to the Run dialog, Win+V to the clipboard history, Win+1 to Win+9 and Win+T to the dock, Win+B to the notification area (`tray-focus`), Win+Tab to Task View (`taskview`) and Win+Ctrl with the arrows, D and F4 to the workspaces (`workspace`), which press Explorer's own keys where the workspaces are the virtual desktops of Windows; each brings its own keys. The other keys Explorer answers are brought by the actions of the table below. Win+H (voice typing), Win+W (Widgets) and Win+period and Win+semicolon (the emoji panel) belong to components of Windows, not to Explorer, and are left to Windows; whether each still answers without Explorer is not known yet. In shell mode `emoji-panel` can be bound to Win+period, as `press = "win+period"` with `action = "emoji-panel"`.
+
+| Keys | Action | What they do |
+| --- | --- | --- |
+| Win+Alt+D | `date-and-time` | the popup `calendar` |
+| Win+Shift+V | `notifications-keyboard` | the popup `calendar`, the notification center |
+| Win+Ctrl+V | `sound-output` | the popup `sound`, with the outputs |
+| Win+Shift+Up, Win+Shift+Down | `window-height` | the window in front stretched to the full height, and its height given back |
+| Win+Alt+Up, Win+Alt+Down | `window-half` | the window in front in the top half, or the bottom half |
+| Win+Plus, Win+Minus, Win+Esc | `magnifier` | Magnifier started (it then answers Win+Plus and Win+Minus itself), and closed |
+| Win+Ctrl+Enter | `narrator` | Narrator started |
+| Win+Ctrl+C | `color-filters` | the page of the color filters in Settings |
+| Win+Ctrl+Q | `quick-assist` | Quick Assist |
+| Win+F | `feedback-hub` | Feedback Hub |
+| Win+C | `copilot` | Copilot |
+| Win+Alt+Enter | `bar-settings` | Tessera's settings at Bars |
+| Win+Ctrl+F | `find-computers` | the search for computers of the network |
+| Win+H | none | left to Windows (voice typing); not known to answer without Explorer |
+| Win+W | none | left to Windows (Widgets); not known to answer without Explorer |
+| Win+period, Win+semicolon | none | left to Windows (the emoji panel); not known to answer without Explorer; `emoji-panel` can be bound to them |
 
 Win+comma belongs to the peek at the desktop (`peek-desktop`), which shows the desktop while the keys are held.
 
