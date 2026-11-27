@@ -9,7 +9,9 @@
 //!
 //! The arrangement is read and set with `QueryDisplayConfig` and
 //! `SetDisplayConfig`, each configuration checked with `SDC_VALIDATE`
-//! before it is applied. The modes a display offers come from
+//! before it is applied. A configuration applied is not saved for the
+//! next start until it is kept, so that one the display cannot show is
+//! gone after a restart. The modes a display offers come from
 //! `EnumDisplaySettingsExW`. The scale goes through
 //! `DisplayConfigGetDeviceInfo` and `DisplayConfigSetDeviceInfo` with the
 //! two packet types the Windows settings use, which Microsoft does not
@@ -337,7 +339,10 @@ impl DisplaySetup {
 
     /// Shows the desktop on the displays as `wanted` says: those of this
     /// setup, changed. The configuration is checked before it is applied;
-    /// one Windows refuses changes nothing and is the error. The scale of
+    /// one Windows refuses changes nothing and is the error. It is not
+    /// saved for the next start: [`DisplaySetup::save`] does that once it
+    /// is kept, so that a restart while it is tried brings the old one
+    /// back. The scale of
     /// each display is set after; the scales Windows did not take are
     /// what the answer lists, the rest having been applied.
     pub fn apply(&self, wanted: &[DisplayOutput]) -> Result<Vec<String>> {
@@ -350,7 +355,7 @@ impl DisplaySetup {
             let supplied = SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
             set(&paths, &modes, SDC_VALIDATE | supplied)
                 .map_err(|error| error.context("Windows refuses this arrangement"))?;
-            set(&paths, &modes, SDC_APPLY | SDC_SAVE_TO_DATABASE | supplied)?;
+            set(&paths, &modes, SDC_APPLY | supplied)?;
         }
         let mut problems = Vec::new();
         for output in wanted {
@@ -370,7 +375,17 @@ impl DisplaySetup {
         Ok(problems)
     }
 
-    /// Puts the configuration back as it was read, scales and all.
+    /// Saves the configuration the displays show now for the next start,
+    /// as Windows does with one that is kept.
+    pub fn save() -> Result<()> {
+        let (paths, modes) = query(QDC_ONLY_ACTIVE_PATHS)?;
+        let flags =
+            SDC_APPLY | SDC_SAVE_TO_DATABASE | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
+        set(&paths, &modes, flags)
+    }
+
+    /// Puts the configuration back as it was read, scales and all, and
+    /// saves it for the next start.
     pub fn restore(&self) -> Result<()> {
         let flags =
             SDC_APPLY | SDC_SAVE_TO_DATABASE | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;

@@ -13,8 +13,10 @@
 //! Nothing changes before Apply. After it the displays show the new
 //! configuration for 15 seconds, with a banner and a bar here asking
 //! whether to keep it; without an answer the old one comes back, as in
-//! Windows, so that a mode the display cannot show undoes itself. Win+P
-//! stays with the popup `display-mode`.
+//! Windows, so that a mode the display cannot show undoes itself. It is
+//! saved for the next start only once kept, and the shell puts the old one
+//! back when it quits during the trial. Win+P stays with the popup
+//! `display-mode`.
 //!
 //! The displays are called by the number Windows gives their desktop,
 //! "Display 1" for `\\.\DISPLAY1`, and a display that is off by the next
@@ -361,6 +363,23 @@ impl Trial {
             restored: 0,
         });
         cx.set_global(SharedTrial(trial.clone()));
+        let ending = trial.downgrade();
+        // A configuration tried when the shell quits is not kept: the old
+        // one is put back before it goes, as it would be without an answer.
+        // The quit waits for nothing longer, so this is done here.
+        cx.on_app_quit(move |cx| {
+            let previous = ending
+                .update(cx, |this, _| this.previous.take())
+                .ok()
+                .flatten();
+            if let Some(previous) = previous
+                && let Err(error) = previous.restore()
+            {
+                report!("the displays were not set back: {error:#}");
+            }
+            async {}
+        })
+        .detach();
         trial
     }
 
@@ -428,12 +447,22 @@ impl Trial {
         cx.notify();
     }
 
-    /// Keeps what is tried.
+    /// Keeps what is tried, and saves it for the next start away from the
+    /// thread that draws.
     fn keep(&mut self, cx: &mut Context<Self>) {
-        self.previous = None;
+        let tried = self.previous.take().is_some();
         self.until = None;
         self.end_notice(cx);
         cx.notify();
+        if tried {
+            cx.background_executor()
+                .spawn(async {
+                    if let Err(error) = DisplaySetup::save() {
+                        report!("the display settings were not saved: {error:#}");
+                    }
+                })
+                .detach();
+        }
     }
 
     /// Puts the old configuration back, away from the thread that draws.
