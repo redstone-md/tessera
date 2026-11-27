@@ -74,28 +74,36 @@ fn is_valid_format(format: &str) -> bool {
     !StrftimeItems::new(format).any(|item| item == Item::Error)
 }
 
-/// The zones the clocks name, for the calendar, in the order they are
-/// named; each once.
+/// The zones the clocks that are shown name, for the calendar, in the
+/// order they are named; each once. A clock that is gone, as after the
+/// configuration was read again, names none.
 #[derive(Default)]
-pub struct ClockZones(Vec<Zone>);
+pub struct ClockZones(Vec<(WeakEntity<Clock>, Vec<Zone>)>);
 
 impl Global for ClockZones {}
 
 impl ClockZones {
     /// The zones the clocks name.
     pub fn named(cx: &App) -> Vec<Zone> {
-        cx.try_global::<Self>()
-            .map(|zones| zones.0.clone())
-            .unwrap_or_default()
-    }
-
-    /// Adds `zones` to those named, after them.
-    fn add(zones: &[Zone], cx: &mut App) {
-        let named = &mut cx.default_global::<Self>().0;
-        for zone in zones {
+        let Some(this) = cx.try_global::<Self>() else {
+            return Vec::new();
+        };
+        let mut named: Vec<Zone> = Vec::new();
+        let shown = { this.0.iter() }.filter(|(clock, _)| clock.upgrade().is_some());
+        for zone in shown.flat_map(|(_, zones)| zones) {
             if !named.contains(zone) {
                 named.push(zone.clone());
             }
+        }
+        named
+    }
+
+    /// Has `clock` name `zones` from now on, while it is shown.
+    fn add(clock: WeakEntity<Clock>, zones: Vec<Zone>, cx: &mut App) {
+        let this = &mut cx.default_global::<Self>().0;
+        this.retain(|(clock, _)| clock.upgrade().is_some());
+        if !zones.is_empty() {
+            this.push((clock, zones));
         }
     }
 }
@@ -144,7 +152,7 @@ fn tip_text(now: NaiveDateTime, zones: &[String], language: Language) -> String 
 
 /// Displays the local date and time to minute precision, in the `strftime`
 /// pattern the `format` option gives.
-struct Clock {
+pub struct Clock {
     format: String,
     /// The zones its tip gives, once they were found.
     zones: Vec<Zone>,
@@ -157,7 +165,7 @@ impl Clock {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let zones = resolve(names, cx).await;
             let taken = this.update(cx, |this, cx| {
-                ClockZones::add(&zones, cx);
+                ClockZones::add(cx.weak_entity(), zones.clone(), cx);
                 this.zones = zones;
             });
             if taken.is_err() {
