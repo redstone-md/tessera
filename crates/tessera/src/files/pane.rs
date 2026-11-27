@@ -59,7 +59,8 @@ use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
 
-use super::sidebar::ICON_HOME;
+use super::places::PlaceGroup;
+use super::sidebar::{ICON_HOME, add_to_places};
 
 mod header;
 mod search_bar;
@@ -2315,6 +2316,13 @@ impl FolderPane {
                 }
             }
             entries.extend(self.library_entries(None, cx));
+            // The place shown is kept at the side.
+            let current = self.history.current();
+            if matches!(current, Location::Folder(_) | Location::Shell(_)) {
+                let group = PlaceGroup::of_location(&current.name());
+                let name = self.title_of_location(current);
+                entries.push(add_to_places(name, current, group, language));
+            }
             entries.push(entry(ICON_SELECT_ALL, "Select all", |this, cx| {
                 this.choose_all(cx)
             }));
@@ -2349,6 +2357,10 @@ impl FolderPane {
             _ => None,
         };
         let one_folder = place.as_ref().is_some_and(|place| place.folder().is_some());
+        if let (Some(place), [one]) = (&place, chosen_entries.as_slice()) {
+            let group = PlaceGroup::of_location(&place.name());
+            entries.push(add_to_places(one.display.clone(), place, group, language));
+        }
         if let Some(place) = place.filter(|place| place.folder().is_none()) {
             // A place of the Shell, as a phone or a library, opens in a tab or
             // a window of its own too.

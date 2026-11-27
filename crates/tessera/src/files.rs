@@ -9,6 +9,7 @@ mod columns;
 mod details_pane;
 mod model;
 mod pane;
+mod places;
 mod preview_pane;
 mod recycle_view;
 mod rename;
