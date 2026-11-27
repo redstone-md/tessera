@@ -508,7 +508,12 @@
 #   "volume"    the output volume, as an icon and a percentage
 #   "workspaces"  a numbered button for each virtual desktop of Windows,
 #               or for each workspace of [workspaces], the shown one
-#               standing out; a click goes there
+#               standing out; a click goes there;
+#               the wheel goes to the next or previous one, a click with
+#               the right button opens a menu: Rename, Icon, Remove and
+#               Send window here; rows of buttons where [workspaces] has
+#               rows and the bar has room, a column on a bar at the left
+#               or right
 #   "overview"  a card for each workspace of [workspaces] with the icons
 #               of its windows, for a popup; a click on a card goes to
 #               that workspace, a click on an icon to that window, and
@@ -978,9 +983,11 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # run = ["wt.exe"]
 
 # [workspaces] makes the "workspaces" widget show workspaces of Tessera's
-# own instead of the virtual desktops of Windows: own is how many, 2 to 9.
+# own instead of the virtual desktops of Windows: own is how many at first,
+# 1 to 16.
 # Going to a workspace hides the windows of the one left; a click with the
-# right button on a button of the widget sends the window in front there.
+# right button on a button of the widget opens its menu, whose Send window
+# here sends the window in front there.
 # only and except list programs by the file name of their executable: the
 # only ones whose windows belong to a workspace, and the ones whose windows
 # are seen on every workspace. keys names the keys that, held with a digit,
@@ -994,6 +1001,17 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # per_display = true gives every display workspaces of its own: a bar shows
 # and changes those of its display, the keys those of the display the
 # window in front is on, and a window belongs to the display it is seen on.
+# min and max (1 and 16) bound how many a row has as workspaces are made
+# (the action workspace with add, Win+Ctrl+D where the keys of Windows are
+# bound, or the + of the widget with add_button = true) and removed
+# (workspace remove, Win+Ctrl+F4); the windows of a removed workspace go to
+# the one before it. rows lays them out in rows for workspace up and down
+# (Win+Ctrl+Up, Win+Ctrl+Down) and the widget; wrap = true goes round the
+# ends. icons is a character of the icon font for each workspace, drawn
+# beside its name or instead of its number. Rename and Icon in the menu of
+# the widget write names and icons here. Which window lives where is kept
+# in workspaces-state.toml, so windows go back to their workspaces at the
+# next start.
 #
 # [workspaces]
 # own = 3
@@ -1001,6 +1019,12 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # keys = "alt"
 # names = ["web", "code", "chat"]
 # except = ["taskmgr.exe"]
+# min = 2
+# max = 8
+# rows = 2
+# wrap = true
+# add_button = true
+# icons = ["\uE774", "\uE943", "\uE8BD"]
 
 # [notifications] with banners = true has Tessera show a notification that
 # arrives as a banner, in a corner of the display the pointer is on, for

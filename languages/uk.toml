@@ -849,3 +849,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Add bar" = "Додати панель"
 "Remove bar" = "Видалити панель"
 "Remove this bar?" = "Видалити цю панель?"
+# Wave 2, workspaces-dynamic.
+"Send window here" = "Надіслати вікно сюди"
+"No icon" = "Без піктограми"

@@ -849,3 +849,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Add bar" = "Ajouter une barre"
 "Remove bar" = "Supprimer la barre"
 "Remove this bar?" = "Supprimer cette barre ?"
+# Wave 2, workspaces-dynamic.
+"Send window here" = "Envoyer la fenêtre ici"
+"No icon" = "Aucune icône"

@@ -1595,6 +1595,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Add bar", "Добавить панель"),
     ("Remove bar", "Удалить панель"),
     ("Remove this bar?", "Удалить эту панель?"),
+    // Wave 2, workspaces-dynamic.
+    ("Send window here", "Отправить окно сюда"),
+    ("No icon", "Без значка"),
 ];
 
 #[cfg(test)]

@@ -150,6 +150,9 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `extension-answer` | an extension and the id of one of its answers | tells the extension that its answer was chosen in the launcher, which starts `tessera do extension-answer` for an answer whose action is `run`; it brings no key |
 | `switcher` | `next`, `previous`, `app-next`, `app-previous`, or none | opens the [window switcher](#the-window-switcher), or goes one window on (`next`, or none) or back (`previous`) in the open one; `app-next` and `app-previous` go through the windows of one application only. The choice is taken when the keys to hold of the `press` that did it are let go; for a `press` with none, the switcher stays open until a window is chosen. Done by `tessera do switcher`, it waits for the keys that are down as it is done, which are usually none. Its keys are taken from Windows, and it brings Alt+Tab (`next`), Alt+Shift+Tab (`previous`), Alt+` (`app-next`) and Alt+Shift+` (`app-previous`) where the keys of Windows are in use |
 | `install-resource` | a `tessera://` link | follows the link: `tessera://install?registry=…&kind=…&id=…` opens the popup `install-resource`, which shows what that registry offers under that name and installs it only with a click; `tessera://open?settings=…&item=…` opens the settings at that part and card. Registered links of a browser come here; see [links that install](EXTENSIONS.md#links-that-install). Brings no key |
+| `workspace` | `next`, `previous`, `left`, `right`, `up`, `down`, a number from 1 to 16, `add`, `remove` or `rename` | goes to the workspace after or before the one shown, beside it in its row or above or below it in its column (see `rows` and `wrap` under [workspaces](#workspaces)), or to the one of that number, on the display of the window in front; `add` makes a workspace at the end of the row and goes there, `remove` removes the one shown, `rename` opens the field that names it. For the virtual desktops of Windows the steps press Explorer's shortcuts, `add` and `remove` press Win+Ctrl+D and Win+Ctrl+F4, and `rename` is not offered. Its keys are taken from Windows, and it brings Win+Ctrl+Right (`next`), Win+Ctrl+Left (`previous`), Win+Ctrl+Up (`up`), Win+Ctrl+Down (`down`), Win+Ctrl+D (`add`) and Win+Ctrl+F4 (`remove`) where the keys of Windows are in use |
+| `send-window` | `next`, `previous`, `left`, `right`, `up`, `down` or a number from 1 to 16 | sends the window that was last in front to that workspace of Tessera's own without going there; the virtual desktops of Windows take no window of another program. Brings Win+Ctrl+Shift+Right (`next`) and Win+Ctrl+Shift+Left (`previous`) |
+| `sticky` | none | has the window in front seen on every workspace of Tessera's own, or, when it is, live on the workspace shown again. Brings no key |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -500,3 +503,29 @@ end = ["devices", "privacy", "tray", "volume"]
 ```
 
 `devices` is an icon that is there only while something can be taken out of the machine; a click opens the popup `devices` with `devices-list`, a row for each drive and device with **Open** and **Eject**. `privacy` shows an icon for the microphone, the camera and the location while an application uses it, with a tip that names the applications; a click opens the popup `privacy` with `privacy-list`. Both popups can be replaced by a `[[popup]]` of the same name, or the lists put into another one.
+
+## Workspaces
+
+`[workspaces]` with `own` keeps workspaces of Tessera's own instead of the virtual desktops of Windows; as the shell, four are kept without it. The widget `workspaces` shows a button for each, the action `workspace` goes between them (see [actions](#actions)), and the overview, the window switcher and the task view list their windows.
+
+```toml
+[workspaces]
+own = 4               # how many there are at first, 1 to 16
+min = 1               # the fewest a row keeps when workspaces are removed
+max = 16              # the most a row has when workspaces are made
+rows = 2              # laid out in two rows, for Win+Ctrl+Up and Down and for the widget
+wrap = true           # a step past the end comes round to the other end
+add_button = true     # the widget ends with a button that makes a workspace
+names = ["web", "code", "", "chat"]   # what the buttons say; an empty one keeps the number
+icons = ["\uE774", "\uE943"]       # a character of the icon font for each, beside the name or instead of the number
+per_display = false   # true: every display has its own row
+keys = "alt"          # Alt+digit goes to a workspace, Alt+Shift+digit sends the window in front there
+only = []             # the only programs whose windows belong to a workspace
+except = ["taskmgr.exe"]   # programs whose windows are seen on every workspace
+```
+
+Workspaces are made with `workspace add` (Win+Ctrl+D where the keys of Windows are bound) or the `+` of the widget, and removed with `workspace remove` (Win+Ctrl+F4) or **Remove** in the menu of a button; the windows of a removed workspace go to the one before it, or after it for the first. A click with the right button on a button opens its menu: **Rename** writes `names`, **Icon** writes `icons`, both in this file, and **Send window here** sends the window that was last in front there. `names`, `icons` and `[[wallpaper.workspace]]` follow the place of a workspace: removing the second makes the third the second; where all displays share one row, the name and icon of a removed workspace are taken out of the lists. Changing `own`, `per_display`, `only`, `except` or `keys` shows every window and starts over on the first workspace; the other keys take effect at once.
+
+Tessera writes `workspaces-state.toml` next to this file: the workspaces of each row by a number that stays while each exists, the one each row shows, and which window lives where, and which windows are sticky (the action `sticky`). At its next start the windows that are still there go back to their workspaces; quitting shows every window first. A state written for another `own` or `per_display` is not taken up. The file is Tessera's own and is not meant to be edited.
+
+Without `own`, beside Explorer, the widget shows the virtual desktops of Windows, with the names given to them in the task view of Windows where `names` gives none. Tessera cannot rename them, show a window on all of them or move a window of another program between them, as Windows offers programs no documented way; making and removing one presses Explorer's shortcuts and works only while Explorer runs.
