@@ -428,6 +428,8 @@ pub(crate) fn start_program(command: &[String]) {
 /// The `[[key]]` entries in use.
 #[derive(Default)]
 pub struct Shortcuts {
+    /// The entries of the user and `windows_keys`, as last configured.
+    asked: (Vec<KeyConfig>, Option<bool>),
     config: Vec<KeyConfig>,
     /// What each entry does; `None` for one that cannot be used.
     deeds: Vec<Option<Deed>>,
@@ -495,8 +497,10 @@ impl Shortcuts {
     /// Tessera is the shell).
     pub fn configure(keys: &[KeyConfig], windows_keys: Option<bool>, cx: &mut App) {
         let defaults = windows_keys.unwrap_or_else(shell_mode);
+        let asked = (keys.to_vec(), windows_keys);
         let keys = Self::in_use(keys, defaults, Self::actions(cx));
         let this = cx.global_mut::<Self>();
+        this.asked = asked;
         if this.config == keys {
             return;
         }
@@ -533,6 +537,17 @@ impl Shortcuts {
             report!("the keys Windows keeps to itself stay with it: {error:#}");
         }
         cx.global_mut::<Self>().deeds = deeds;
+    }
+
+    /// Configures the entries last configured again, after an action
+    /// began or stopped resting its keys by default. Nothing is done
+    /// before the entries are first configured.
+    pub fn again(cx: &mut App) {
+        let Some(this) = cx.try_global::<Self>() else {
+            return;
+        };
+        let (keys, windows_keys) = this.asked.clone();
+        Self::configure(&keys, windows_keys, cx);
     }
 
     /// The entries of the user, and after them, where `defaults`, the
