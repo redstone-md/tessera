@@ -249,7 +249,7 @@ impl Previews {
                         .map(|source| fit(source, scale))
                 })
                 .collect();
-            let pictures = lay_out(&sources, room);
+            let (pictures, factor) = lay_out(&sources, room);
             let theme = cx.global::<Theme>();
             let tiles: Vec<Tile> = { targets.iter().zip(thumbnails).zip(pictures) }
                 .map(|((&id, thumbnail), picture)| Tile {
@@ -265,6 +265,7 @@ impl Previews {
             visibility.animate_to(1.);
             let mut view = PreviewView {
                 tiles,
+                factor,
                 edge,
                 visibility,
                 closing: false,
@@ -298,8 +299,9 @@ fn fit((width, height): (i32, i32), scale: f32) -> (f32, f32) {
 
 /// The pictures `pictures` shrunk alike until they fit side by side into
 /// `room`, each as wide as [`LEAST_WIDTH`] at least; a missing picture
-/// takes that width.
-fn lay_out(pictures: &[Option<(f32, f32)>], room: f32) -> Vec<Option<(f32, f32)>> {
+/// takes that width. The factor they were shrunk by comes with them, 1
+/// where they fit as they are.
+fn lay_out(pictures: &[Option<(f32, f32)>], room: f32) -> (Vec<Option<(f32, f32)>>, f32) {
     let width =
         |picture: &Option<(f32, f32)>| picture.map_or(LEAST_WIDTH, |(w, _)| w.max(LEAST_WIDTH));
     let whole: f32 = pictures.iter().map(width).sum();
@@ -307,18 +309,17 @@ fn lay_out(pictures: &[Option<(f32, f32)>], room: f32) -> Vec<Option<(f32, f32)>
         true => (room / whole).max(0.1),
         false => 1.,
     };
-    { pictures.iter() }
+    let shrunk = { pictures.iter() }
         .map(|picture| picture.map(|(width, height)| (width * factor, height * factor)))
-        .collect()
+        .collect();
+    (shrunk, factor)
 }
 
-/// The width of the tile of a picture `picture` wide, at least
-/// [`LEAST_WIDTH`] where it was not shrunk to fit.
-fn tile_width(picture: f32, shrunk: bool) -> f32 {
-    match shrunk {
-        true => picture,
-        false => picture.max(LEAST_WIDTH),
-    }
+/// The width of the tile of a picture `picture` wide, 0 for a tile without
+/// one, where the pictures were shrunk by `factor`: [`LEAST_WIDTH`] at
+/// least, shrunk alike.
+fn tile_width(picture: f32, factor: f32) -> f32 {
+    picture.max(LEAST_WIDTH * factor)
 }
 
 /// The height of a tile: the title, the picture and, where any tile has
@@ -354,6 +355,9 @@ struct Tile {
 /// under them the controls of what their application plays.
 pub struct PreviewView {
     tiles: Vec<Tile>,
+    /// The factor the pictures were shrunk by to fit the display, 1 where
+    /// they were not.
+    factor: f32,
     /// The edge the preview's surface is docked to; it moves in from there.
     edge: ScreenEdge,
     /// 0 while hidden, 1 when fully open.
@@ -377,19 +381,12 @@ impl PreviewView {
         { self.tiles.iter() }.any(|tile| tile.buttons.iter().any(|(button, ..)| !button.hidden))
     }
 
-    /// Whether the pictures were shrunk to fit the display.
-    fn shrunk(&self) -> bool {
-        { self.tiles.iter() }.any(|tile| tile.thumbnail.is_some() && tile.picture.0 < LEAST_WIDTH)
-            && self.tiles.len() > 1
-    }
-
     /// The logical width and height of the panel around the tiles.
     fn extent(&self, padding: f32) -> (f32, f32) {
-        let shrunk = self.shrunk();
         let widths = self
             .tiles
             .iter()
-            .map(|tile| tile_width(tile.picture.0, shrunk));
+            .map(|tile| tile_width(tile.picture.0, self.factor));
         let count = self.tiles.len().max(1) as f32;
         let width = widths.sum::<f32>() + padding * (count - 1.);
         let tallest = { self.tiles.iter() }
@@ -519,13 +516,12 @@ impl PreviewView {
         visibility: f32,
         window: &Window,
     ) -> ScreenRect {
-        let shrunk = self.shrunk();
         let before: f32 = { self.tiles[..index].iter() }
-            .map(|tile| tile_width(tile.picture.0, shrunk) + padding)
+            .map(|tile| tile_width(tile.picture.0, self.factor) + padding)
             .sum();
         let tile = &self.tiles[index];
         let (width, height) = tile.picture;
-        let inner = tile_width(width, shrunk);
+        let inner = tile_width(width, self.factor);
         let left = MARGIN + padding + before + (inner - width) / 2.;
         let travel = floating_travel(self.edge, visibility) / px(1.);
         let top = MARGIN + travel + padding + TITLE_HEIGHT + padding;
@@ -547,7 +543,7 @@ impl PreviewView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let shrunk = self.shrunk();
+        let factor = self.factor;
         let buttons_row = self.has_buttons();
         let tallest = { self.tiles.iter() }
             .filter(|tile| tile.thumbnail.is_some())
@@ -608,8 +604,10 @@ impl PreviewView {
             .then(|| div().h(px(tallest - height)).flex_none());
         let buttons = buttons_row.then(|| self.render_buttons(index, theme, window, cx));
         let tile = &self.tiles[index];
+        // The ids inside are those of this tile's window.
         div()
-            .w(px(tile_width(tile.picture.0, shrunk)))
+            .id(("preview-tile", tile.id.raw() as u64))
+            .w(px(tile_width(tile.picture.0, factor)))
             .flex_none()
             .flex()
             .flex_col()
@@ -856,11 +854,17 @@ mod tests {
     fn pictures_side_by_side_shrink_alike_to_fit_the_display() {
         let pictures = [Some((260., 100.)), Some((260., 160.)), None];
         let room = 260. * 2. + LEAST_WIDTH;
-        assert_eq!(lay_out(&pictures, room), pictures.to_vec());
-        let halved = lay_out(&pictures, room / 2.);
+        assert_eq!(lay_out(&pictures, room), (pictures.to_vec(), 1.));
+        let (halved, factor) = lay_out(&pictures, room / 2.);
+        assert_eq!(factor, 0.5);
         assert_eq!(halved[0], Some((130., 50.)));
         assert_eq!(halved[1], Some((130., 80.)));
         assert_eq!(halved[2], None);
+        // The tiles, the one without a picture too, fill the room.
+        let tiles: f32 = { halved.iter() }
+            .map(|picture| tile_width(picture.map_or(0., |(width, _)| width), factor))
+            .sum();
+        assert_eq!(tiles, room / 2.);
     }
 
     #[test]
@@ -870,8 +874,12 @@ mod tests {
             tile_height(100., true, 12.),
             TITLE_HEIGHT + 124. + BUTTON_SIDE
         );
-        assert_eq!(tile_width(80., false), LEAST_WIDTH);
-        assert_eq!(tile_width(80., true), 80.);
+        // A narrow picture that was not shrunk, as that of a tall window,
+        // gets a tile of the least width, as a tile without a picture does.
+        assert_eq!(tile_width(80., 1.), LEAST_WIDTH);
+        assert_eq!(tile_width(0., 1.), LEAST_WIDTH);
+        assert_eq!(tile_width(80., 0.25), 80.);
+        assert_eq!(tile_width(0., 0.5), LEAST_WIDTH / 2.);
     }
 
     #[test]
