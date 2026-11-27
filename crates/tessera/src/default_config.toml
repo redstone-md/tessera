@@ -32,6 +32,11 @@
 # repository; an empty list reads none.
 # registries = ["https://example.org/registry.toml"]
 
+# The icon packs in use, by the names of their directories in
+# %APPDATA%\tessera\icon-packs; for each icon the first pack that has one
+# gives it, below [icons]. See docs/ICON-PACKS.md. The marketplace writes it.
+# icon_packs = ["line"]
+
 # The [[popup]] the Windows key opens and closes when it is pressed by itself,
 # instead of the Start menu of Windows. Combinations with the key stay as
 # they are. Without the key in this file, the Windows key is left to Windows.
@@ -193,6 +198,9 @@
 #                      counted on as Windows counts (win+printscreen)
 #             dock     what dock above does with the number arg names,
 #                      1 to 9; it brings no key
+#             install-resource  follows the tessera:// link arg names:
+#                      an install link opens the popup install-resource,
+#                      which installs only with a click; it brings no key
 #           The keys in brackets are bound to the actions where
 #           windows_keys is on (see above), unless a [[key]] presses the
 #           same keys, and they are taken from Windows. win+l,
@@ -623,11 +631,13 @@
 #               that window for it. For the popup keyboard-list
 #   "winx-menu" the menu of Win+X, for the popup winx
 #   "winx"      a button that opens the menu of Win+X under it
-#   "marketplace"  the extensions the registries offer, to install, update
-#               and remove; contacts the registries when it is shown. Fills
-#               the height left in its popup and scrolls. Option show,
-#               "extensions" (default) or "themes" for the themes they
-#               offer; option columns, 1 (default) to 4
+#   "marketplace"  what the registries offer, to install, update and
+#               remove; the registries are read at the start, daily and with
+#               Check for updates. Fills the height left in its popup and
+#               scrolls. Option show, one kind or a list of "extensions",
+#               "themes", "icon-packs", "wallpapers", "tiling-layouts"
+#               (every kind, with a tab each, without it); option columns,
+#               1 (default) to 4. Its foot registers tessera:// links
 #
 # Widgets of the quick settings:
 #   "tiles"     tiles in a grid, as the quick settings of Windows 11 show
@@ -704,6 +714,8 @@ center = [{ widget = "windows", start = "launcher" }]
 # quick-settings (360 by 420: connections, the radio-switch of wifi and of
 # bluetooth, volume-slider and brightness-slider). A
 # [[popup]] of the same name here is used instead.
+# The marketplace brings install-resource (in the middle, 420 by 320),
+# holding the widget of the same name, which shows a tessera:// link.
 
 [[popup]]
 name = "launcher"

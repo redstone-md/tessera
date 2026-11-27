@@ -24,7 +24,9 @@ The limits of that:
 
 ## Registries
 
-The `marketplace` widget lists the extensions that registries offer and installs, updates and removes them; with the option `show = "themes"` it does the same for the themes they offer, and `columns` says in how many columns the offers stand (1 to 4, 1 unless said). The settings show both, under **Extensions** and **Themes**. It contacts the registries when it is shown and when `Refresh` is pressed, not before.
+The `marketplace` widget lists what registries offer and installs, updates and removes it: extensions, themes, icon packs, wallpapers and tiling layouts. Its option `show` names the kinds it shows, one (`show = "themes"`) or a list (`show = ["icon-packs", "wallpapers"]`), each of `extensions`, `themes`, `icon-packs`, `wallpapers` and `tiling-layouts`; without the option it shows every kind, with a tab for each and the number of updates on the tab. `columns` says in how many columns the offers stand (1 to 4, 1 unless said). The settings show the extensions under **Extensions** and the themes under **Themes**; the other kinds are shown by a `marketplace` widget placed in a popup of one's own, as the settings do not list them yet.
+
+The registries are read when Tessera starts, once a day after that, and when **Check for updates** is pressed; every marketplace shows that one reading, and one that opens more than an hour after it reads them again. Their number of updates (offers whose version differs from the installed one) is shown next to **Update all**, which downloads every update shown and installs it at once, except that an extension whose new version asks for other things than the installed one asks first, as an install does. Nothing is updated without a click.
 
 `registries` in `config.toml` lists the registries to read, each an `https://` address or an absolute path of a file on this machine. Without the key it is the [registry of this repository](../registry/registry.toml); `registries = []` reads none. A registry is a TOML file:
 
@@ -42,6 +44,7 @@ wasm = "lights/extension.wasm"
 wasm_sha256 = "…"
 preview = "lights/icon.png"     # optional: shown as its icon
 preview_sha256 = "…"
+place = { surface = "bar", slot = "end" }   # optional, see below
 
 [[theme]]
 id = "night"
@@ -53,26 +56,68 @@ sha256 = "…"
 preview = "previews/night.jpg"  # optional: shown above it
 preview_sha256 = "…"
 
+[[icon_pack]]
+id = "line"
+name = "Line"
+version = "1.0.0"
+manifest = "icon-packs/line/icon-pack.toml"
+manifest_sha256 = "…"
+files = [
+    { path = "apps/notepad.svg", sha256 = "…" },   # relative to the manifest
+]
+preview = "icon-packs/line.png"
+preview_sha256 = "…"
+
+[[wallpaper]]
+id = "aurora"
+name = "Aurora"
+version = "1.0.0"
+file = "wallpapers/aurora.jpg"    # JPEG, PNG, BMP or WebP
+sha256 = "…"
+
+[[tiling_layout]]
+id = "wide"
+name = "Wide"
+version = "1.0.0"
+file = "tiling-layouts/wide.toml"
+sha256 = "…"
+
 [[registry]]
 url = "https://example.org/more/registry.toml"
 ```
 
-`manifest`, `wasm`, `file` and `url` are `https://` addresses or paths relative to the registry file, which cannot lead out of its directory; a registry on the web cannot name files of this machine. A registry can name further registries, and those are read as well, down to three steps from a listed one and at most 16 registries in all; each is read once. When two registries offer an extension or a theme of the same `id`, the one read first wins, and the listed ones are read before those they name.
+`manifest`, `wasm`, `file` and `url` are `https://` addresses or paths relative to the registry file, which cannot lead out of its directory; a registry on the web cannot name files of this machine. A registry can name further registries, and those are read as well, down to three steps from a listed one and at most 16 registries in all; each is read once. When two registries offer something of the same kind and `id`, the one read first wins, and the listed ones are read before those they name. A Tessera from before icon packs, wallpapers and tiling layouts were offered reads such a registry and skips what it does not know.
 
 What this does and does not guard:
 
-- Both files are checked against the SHA-256 sums in the registry, and the `id` in the manifest has to be the offered one. That catches a damaged or swapped download; it says nothing about the author, because whoever controls a registry controls the sums too. There are no signatures and no review.
-- Before installing or updating, the widget names the hosts and files the manifest asks for and waits for `Allow and install`. Nothing else of the extension is inspected.
-- Installing writes `extension.wasm`, `extension.toml` and `installed.toml` (the version and the registry it came from) to `%APPDATA%\tessera\extensions\<id>\`. It does not change the layout: the widget lists the names to put into `config.toml`, such as `counter.total`, and that is still done by hand.
-- `Update` is offered when the version of the registry differs from the installed one; nothing checks for updates on its own.
-- `Remove` deletes those files and the extension's `state.txt`. An extension without `installed.toml` was copied in by hand and is neither replaced nor removed. What is installed and offered by no registry that was read is listed before the offers, with its name and the widgets it gives a layout, and with no buttons; this was not tried on a running shell.
+- Every file is checked against the SHA-256 sum in the registry, and the `id` in a manifest has to be the offered one. That catches a damaged or swapped download; it says nothing about the author, because whoever controls a registry controls the sums too. There are no signatures and no review.
+- Before installing or updating an extension, the widget says what the manifest asks for (the hosts to contact, the files to read, the devices to be told of) and waits for `Allow and install`. Nothing else of the extension is inspected. The other kinds say what they change and wait for `Install`.
+- Installing an extension writes `extension.wasm`, `extension.toml` and `installed.toml` (the version and the registry it came from) to `%APPDATA%\tessera\extensions\<id>\`. It does not change the layout: the widget lists the names to put into `config.toml`, such as `counter.total`. Where the registry entry has `place = { surface = "bar", slot = "end" }` (`surface` is `bar`, the first surface along the top of a display, or `dock`, the first along the bottom, `bar` unless said; `slot` is `start`, `center` or `end`; `widget` may name which of the extension's widgets, the first unless said), the widget offers **Add to the bar** or **Add to the dock** after the install, which puts the widget there with one more click. A place that names no widget of the extension, or no slot, is reported and not offered.
+- An icon pack is written to `%APPDATA%\tessera\icon-packs\<id>\`; see [icon packs](ICON-PACKS.md) for what is checked and what an update and a removal delete. **Use** puts it first in `icon_packs`, **Stop using** takes it out; removing a pack in use takes it out as well.
+- A wallpaper is written to `%APPDATA%\tessera\wallpapers\<id>.<extension>` with `<id>.installed`, and has to be a picture. **Apply** makes it the only picture of `[wallpaper] images`, sets `source = "files"` and takes out `video`, `videos`, `images_light` and `images_dark`, which would show in its place; the other keys of `[wallpaper]` stay.
+- A tiling layout is written to `%APPDATA%\tessera\tiling-layouts\<id>.toml` with `<id>.installed`, and has to be a TOML file of at most 64 KiB; whether the tiling can use it is only known when it is chosen, by the name the marketplace shows under it.
+- `Update` is offered when the version of the registry differs from the installed one.
+- `Remove` deletes those files, and an extension's `state.txt`. What was put there by hand (an extension without `installed.toml`, a file without its `.installed` file) is neither replaced nor removed. What is installed and offered by no registry that was read is listed before the offers, with its name and the widgets it gives a layout, and with no buttons; this was not tried on a running shell.
 - A registry or an offer that cannot be used is listed at the top of the widget with the reason.
-- A `preview` (a PNG or JPEG of at most 2 MiB) is checked against its `preview_sha256` like the other files and drawn above a theme, or as the icon of an extension. One that cannot be had leaves the initial of the name in its place. [`registry/preview.py`](../registry/preview.py) draws the pictures of this repository: a desktop mock-up in the colors and shapes of each theme over its wallpaper, and the icon of each extension.
-- A theme is checked against its SHA-256 sum and has to parse as a theme file, at most 64 KiB of it. Installing writes `<id>.toml` and `<id>.installed` (the version and the registry) to `%APPDATA%\tessera\themes\`; it does not choose the theme, which the settings or `theme = "<id>"` do. A theme file without its `.installed` file was written by hand and is neither replaced nor removed. Removing the theme in use leaves the layout naming a missing file, which is reported, and the built-in theme shows.
+- A `preview` (a PNG or JPEG of at most 2 MiB) is checked against its `preview_sha256` like the other files and drawn above a theme, an icon pack, a wallpaper or a layout, or as the icon of an extension. One that cannot be had leaves the initial of the name in its place. [`registry/preview.py`](../registry/preview.py) draws the pictures of the themes and extensions of this repository: a desktop mock-up in the colors and shapes of each theme over its wallpaper, and the icon of each extension.
+- A theme is checked against its SHA-256 sum and has to parse as a theme file, at most 64 KiB of it. Installing writes `<id>.toml` and `<id>.installed` (the version and the registry) to `%APPDATA%\tessera\themes\`; it does not choose the theme, which the settings or `theme = "<id>"` do. Removing the theme in use leaves the layout naming a missing file, which is reported, and the built-in theme shows.
 
-Tried on a running shell: listing, installing and removing the `counter` example, from a registry file on disk and from the registry of this repository on the web, with the widgets appearing in and leaving the bar. Installing the theme `void` from a registry file on disk was tried too, after which the settings offered it. `Update`, failed downloads, nested registries and removing a theme are covered by tests only.
+### Links that install
 
-[`registry/update.sh`](../registry/update.sh) rebuilds the examples, copies the themes of [`themes/`](../themes) and rewrites the registry of this repository. [`registry/preview.py`](../registry/preview.py) draws the pictures it lists; run it first.
+A web page can offer something of a registry for a one-click install with a `tessera://` link, as Seelen UI's `seelen-ui://` links do:
+
+```text
+tessera://install?registry=<https address of the registry>&kind=<kind>&id=<id>
+tessera://open?settings=<part>&item=<id>
+```
+
+`kind` is `extension` (unless said), `theme`, `icon-pack`, `wallpaper` or `tiling-layout`, and the address is written with its `:` and `/` escaped (`%3A`, `%2F`) or as is. The links reach Tessera once **Register tessera:// links** at the foot of the marketplace was pressed: that writes `HKCU\Software\Classes\tessera`, whose command is `"<tessera.exe>" do install-resource "%1"`, and **Unregister tessera:// links** takes the key away again. Nothing is registered before. The same can be asked without a browser with `tessera do install-resource "tessera://install?…"`. A link is only taken by a Tessera that runs; with none running, nothing happens.
+
+An install link never installs by itself. It opens the popup `install-resource` in the middle of the display, which reads that one registry, downloads and checks the offer as the marketplace does, and shows the address of the registry, what is offered and what it asks for, with **Install** (**Allow and install** for an extension) and **Cancel**. A registry that `registries` does not name is marked as such, with a warning to install only what one trusts. Only `https://` registries are taken from links. After the install the popup offers the next step: **Use** for an icon pack, **Apply** for a wallpaper, or the place its registry suggests for the widget of an extension. An open link opens the settings; until they can be opened at a part, they open as the gear opens them, and `item` is not used yet.
+
+Tried on a running shell: listing, installing and removing the `counter` example, from a registry file on disk and from the registry of this repository on the web, with the widgets appearing in and leaving the bar. Installing the theme `void` from a registry file on disk was tried too, after which the settings offered it. `Update`, failed downloads, nested registries and removing a theme are covered by tests only. Icon packs, wallpapers, tiling layouts, the update checks, the places, the links and their registration were written against the Windows API and checked to build for Windows; they were not run on Windows yet, and what can be was tried in tests only.
+
+[`registry/update.sh`](../registry/update.sh) rebuilds the examples, copies the themes of [`themes/`](../themes) and the tiling layouts that come with Tessera, lists the icon packs of `registry/icon-packs/` and some pictures of `registry/wallpapers/`, and rewrites the registry of this repository. [`registry/preview.py`](../registry/preview.py) draws the pictures it lists for themes and extensions; run it first.
 
 ## By hand
 
