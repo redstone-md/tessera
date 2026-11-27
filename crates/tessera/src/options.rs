@@ -252,6 +252,33 @@ pub fn is_color(text: &str) -> bool {
 }
 
 impl OptionDecl {
+    /// An optional number from `min` to `max` in steps of `step` that
+    /// starts at `start`, for a row of Tessera's own settings to step as a
+    /// declared number steps.
+    pub fn counter(min: f64, max: f64, step: f64, start: f64) -> Self {
+        Self {
+            key: String::new(),
+            kind: Kind::Number,
+            label: Label::Plain(String::new()),
+            description: None,
+            section: None,
+            default: Some(toml::Value::Float(start)),
+            optional: true,
+            unset_label: None,
+            visible_if: None,
+            affects: Vec::new(),
+            scale: Vec::new(),
+            placeholder: None,
+            max_length: None,
+            min: Some(min),
+            max: Some(max),
+            step: Some(step),
+            unit: None,
+            choices: Vec::new(),
+            pick: None,
+        }
+    }
+
     /// Whether the declaration itself is usable: what is wrong with it, as
     /// the end of a sentence that starts with the setting's key.
     pub fn check(&self) -> Result<(), String> {

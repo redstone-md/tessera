@@ -28,6 +28,7 @@ use crate::keys::{HELD, KEYS, Press, key_label};
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::marketplace::{Changed, Marketplace};
 use crate::motion::{Interaction, Spring, mix, staggered};
+use crate::options::OptionDecl;
 use crate::panel::Arranging;
 use crate::platform::{AppWindow, Modifiers, ScreenEdge};
 use crate::popup::Popups;
@@ -234,7 +235,8 @@ impl Kind {
         }
     }
 
-    /// The answer one step from `current`, up or down.
+    /// The answer one step from `current`, up or down, by the rule a
+    /// declared number steps by.
     fn stepped(self, current: Option<i64>, up: bool) -> Option<Answer> {
         let Self::Count {
             min,
@@ -246,13 +248,12 @@ impl Kind {
         else {
             return None;
         };
-        Some(match (current, up) {
-            (None, true) => Answer::Number(start),
-            (None, false) => Answer::Unset,
-            (Some(number), true) => Answer::Number((number + step).clamp(min, max)),
-            (Some(number), false) if number - step < min => Answer::Unset,
-            (Some(number), false) => Answer::Number((number - step).min(max)),
-        })
+        let decl = OptionDecl::counter(min as f64, max as f64, step as f64, start as f64);
+        let number = decl.stepped(current.map(|number| number as f64), up);
+        Some(number.map_or(
+            Answer::Unset,
+            |number| Answer::Number(number.round() as i64),
+        ))
     }
 }
 
