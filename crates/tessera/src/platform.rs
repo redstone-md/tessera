@@ -30,6 +30,11 @@ pub use win32::{
 };
 #[allow(
     unused_imports,
+    reason = "for the menus New, Open with and Send to of the file manager and the desktop"
+)]
+pub use win32::{IconPlace, NewTemplate};
+#[allow(
+    unused_imports,
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
