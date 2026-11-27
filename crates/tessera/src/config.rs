@@ -344,6 +344,10 @@ pub struct Config {
     /// Whether a change of the volume is shown for a moment.
     #[serde(default)]
     pub flyout: FlyoutConfig,
+    /// The notices Tessera gives in place of Explorer: drives that are
+    /// plugged in, batteries that run low.
+    #[serde(default)]
+    pub notices: crate::notices::NoticesConfig,
     /// How the window switcher looks.
     #[serde(default)]
     pub switcher: SwitcherConfig,

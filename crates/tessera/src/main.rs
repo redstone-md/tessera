@@ -24,6 +24,7 @@ mod menu;
 mod module;
 mod modules;
 mod motion;
+mod notices;
 mod panel;
 mod platform;
 mod popup;
