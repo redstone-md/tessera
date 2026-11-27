@@ -363,6 +363,18 @@
 #   autoplay       when AutoPlay is done for drives that arrive: "shell"
 #                  (default; only as the shell, as Explorer does it
 #                  otherwise), "always" or "off"
+#   archives       what opening a ZIP file, or another archive Windows opens
+#                  as a folder, does: "browse" (default) shows what it holds
+#                  as a folder, "open" opens it with its program
+#   home           which Home Quick access at the side leads to: "tessera"
+#                  (default), Tessera's own with the files used lately, or
+#                  "windows", Windows' own Home
+# The file manager also browses the places of the Shell that are no folders:
+# Control Panel, the libraries, Network, phones and cameras, the Gallery
+# (`tessera files control-panel`, `libraries`, `network`, `gallery`, or a
+# parsing name such as `shell:::{26EE0668-A00A-44D7-9371-BEB064C98683}`).
+# The places kept at its side are in files-places.toml beside this file,
+# which the file manager writes itself.
 # `tessera files install` has other programs open folders and drives here
 # (`tessera files revert` undoes it, `tessera files status` shows it; see
 # docs/SHELL.md); `tessera files` also takes Explorer's command lines, as
@@ -375,6 +387,8 @@
 # restore = false
 # explorer = true
 # autoplay = "shell"
+# archives = "browse"
+# home = "tessera"
 
 # [file_view] says how the file manager pictures files and what it shows
 # beside its panes.
