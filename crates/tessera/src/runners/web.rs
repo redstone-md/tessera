@@ -150,6 +150,11 @@ impl Web {
         Self { engines, engine }
     }
 
+    /// The keywords of the engines, built in and added by the options.
+    pub fn keywords(&self) -> impl Iterator<Item = &str> {
+        self.engines.iter().map(|engine| engine.keyword.as_str())
+    }
+
     /// The runner of the search offered for anything.
     pub fn fallback(&self) -> Fallback {
         let engine = { self.engines.iter() }

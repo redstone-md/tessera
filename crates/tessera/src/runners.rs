@@ -6,6 +6,11 @@
 //! at the text and offers what it can do with it, such as the result of
 //! a calculation, a conversion of units, a search on the web, a window to
 //! switch to, a command to run, a page of the settings or an emoji.
+//! A bookmark of a browser, the spelling of a word, the time in another
+//! zone, a profile of Windows Terminal, a folder opened in Visual Studio
+//! Code and a Unicode character are answered too, and `?` lists them all
+//! with how each is asked. The name of a runner and a colon before the
+//! text, as `calc: 2 + 2`, ask that runner alone (see runners/help.rs).
 //!
 //! The runners are asked on the background executor, each on its own,
 //! so that one that reads the disk or the network holds up neither the
@@ -17,12 +22,20 @@
 //! their names ([`ALL`]), and tunes them with the options `web`, `engine`,
 //! `currency`, `recent` and `settings`.
 
+mod bookmarks;
 mod calc;
 mod command;
 mod emoji;
+mod help;
 mod history;
+mod json;
 mod recent;
+mod sessions;
+mod spell;
 mod system;
+mod terminal;
+mod time;
+mod unicode;
 mod units;
 mod web;
 mod windows;
@@ -42,7 +55,7 @@ pub use command::{Command, completions};
 pub use history::History;
 
 /// The names of the runners, in the order they are asked.
-pub const ALL: [&str; 11] = [
+pub const ALL: [&str; 19] = [
     "calculator",
     "units",
     "command",
@@ -54,6 +67,14 @@ pub const ALL: [&str; 11] = [
     "emoji",
     "recent",
     "search",
+    "bookmarks",
+    "spell",
+    "time",
+    "terminal",
+    "sessions",
+    "unicode",
+    "help",
+    "extensions",
 ];
 
 /// The score from which an answer stands above the applications in the
@@ -123,6 +144,10 @@ pub enum AnswerAction {
     /// Locks, sleeps, signs out, restarts or shuts down, after the user
     /// confirms it, but locking.
     Power(PowerAction),
+    /// Puts the text into the field the question is typed in, as the
+    /// help puts the name of a runner there; where there is no such
+    /// field, as in the Task View, nothing is done.
+    Insert(String),
 }
 
 impl AnswerAction {
@@ -169,6 +194,7 @@ impl AnswerAction {
                     .detach();
             }
             Self::Power(action) => action.perform(),
+            Self::Insert(_) => {}
         }
     }
 }
@@ -280,6 +306,9 @@ pub struct RunnerOptions {
 #[derive(Clone)]
 pub struct Runners {
     list: Arc<[Box<dyn Runner>]>,
+    /// The keywords of the web shortcuts, which a colon after them makes
+    /// a web search rather than a question for one runner.
+    keywords: Arc<[String]>,
 }
 
 impl Runners {
@@ -310,7 +339,8 @@ impl Runners {
         let web = web::Web::of_widget(context);
         let currency = context.flag("currency").unwrap_or(true);
         let recent = context.flag("recent").unwrap_or(defaults.recent_when_empty);
-        let all: Vec<Box<dyn Runner>> = vec![
+        let keywords: Arc<[String]> = web.keywords().map(str::to_owned).collect();
+        let mut all: Vec<Box<dyn Runner>> = vec![
             Box::new(calc::Calculator),
             Box::new(units::Units::new(currency)),
             Box::new(command::Commands),
@@ -322,14 +352,44 @@ impl Runners {
             Box::new(emoji::Emoji),
             Box::new(recent::Recent::new(recent)),
             Box::new(web.fallback()),
+            Box::new(bookmarks::Bookmarks),
+            Box::new(spell::Spell),
+            Box::new(time::Time),
+            Box::new(terminal::Terminal),
+            Box::new(sessions::Sessions),
+            Box::new(unicode::Unicode),
         ];
+        // The help tells of the runners there are, itself included.
+        let mut told: Vec<&'static str> = all.iter().map(|runner| runner.id()).collect();
+        told.push("help");
+        told.retain(|id| chosen.contains(id));
+        all.push(Box::new(help::Help::new(told)));
         let list: Vec<Box<dyn Runner>> = { all.into_iter() }
             .filter(|runner| chosen.contains(&runner.id()))
             .collect();
-        Self { list: list.into() }
+        Self {
+            list: list.into(),
+            keywords,
+        }
     }
 
-    /// Asks every runner about `query` on `executor`. The receiver gives
+    /// The names of the runners asked, in their order.
+    pub fn ids(&self) -> Vec<&'static str> {
+        self.list.iter().map(|runner| runner.id()).collect()
+    }
+
+    /// The runner `query` is limited to, by its place among these, and
+    /// what it is asked, where the name of one of these and a colon come
+    /// first.
+    fn scoped(&self, query: &Query) -> Option<(usize, Query)> {
+        let ids = self.ids();
+        let (id, asked) = help::scope(query.text(), &ids, &self.keywords)?;
+        let index = ids.iter().position(|known| *known == id)?;
+        Some((index, Query::new(&asked, query.language())))
+    }
+
+    /// Asks every runner about `query` on `executor`, or the one its name
+    /// and a colon before the text name alone. The receiver gives
     /// the answers of one runner at a time, as they come, each with the
     /// place of its runner among these, and closes when all have
     /// answered; dropping it leaves the answers unread.
@@ -339,8 +399,16 @@ impl Runners {
         executor: &BackgroundExecutor,
     ) -> Receiver<(usize, Vec<Answer>)> {
         let (send, answers) = async_channel::unbounded();
+        // Asked alone, a runner answers what follows the colon.
+        let (only, query) = match self.scoped(&query) {
+            Some((index, asked)) => (Some(index), asked),
+            None => (None, query),
+        };
         let query = Arc::new(query);
         for index in 0..self.list.len() {
+            if only.is_some_and(|only| only != index) {
+                continue;
+            }
             let (list, query, send) = (self.list.clone(), query.clone(), send.clone());
             executor
                 .spawn(async move {

@@ -26,6 +26,7 @@ pub use win32::SessionKey;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::SpellCheck;
 pub use win32::decode_with_wic;
 pub use win32::display_at;
 pub use win32::on_resizing_border;

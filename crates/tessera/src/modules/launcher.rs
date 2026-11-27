@@ -739,6 +739,12 @@ impl Launcher {
                 if action == AnswerAction::Nothing {
                     return;
                 }
+                // The help puts the name of a runner in the field, to go
+                // on typing after it.
+                if let AnswerAction::Insert(text) = &action {
+                    self.field.update(cx, |field, cx| field.put_text(text, cx));
+                    return;
+                }
                 History::chose(&answer.key, cx);
                 action.perform(admin, terminal, cx);
             }
