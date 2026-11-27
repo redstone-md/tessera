@@ -2122,6 +2122,24 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // settings-core: the settings drawn through the schema, search and backups.
+    ("Not written:", "Не записано:"),
+    ("Every side", "Все стороны"),
+    ("Each side", "Каждая сторона"),
+    ("Placed widgets", "Размещённые виджеты"),
+    (
+        "Every widget placed on a bar, in a popup of the configuration file or on a card of the desktop. Its options are set for it alone.",
+        "Каждый виджет на панели, во всплывающем окне файла конфигурации или на карточке рабочего стола. Его параметры задаются только для него.",
+    ),
+    (
+        "These options are set in config.toml:",
+        "Эти параметры задаются в config.toml:",
+    ),
+    (
+        "This widget declares no options; what it reads is written in config.toml.",
+        "Этот виджет не объявляет параметров; то, что он читает, пишется в config.toml.",
+    ),
+    ("The other displays", "Другие дисплеи"),
 ];
 
 #[cfg(test)]

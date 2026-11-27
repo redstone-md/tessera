@@ -1180,3 +1180,12 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Clipboard and screenshots" = "Буфер обміну та знімки екрана"
 "Displays and power" = "Дисплеї та живлення"
 "Session" = "Сеанс"
+# settings-core: the settings drawn through the schema, search and backups.
+"Not written:" = "Не записано:"
+"Every side" = "Усі сторони"
+"Each side" = "Кожна сторона"
+"Placed widgets" = "Розміщені віджети"
+"Every widget placed on a bar, in a popup of the configuration file or on a card of the desktop. Its options are set for it alone." = "Кожен віджет на панелі, у спливному вікні файлу конфігурації чи на картці робочого столу. Його параметри задаються лише для нього."
+"These options are set in config.toml:" = "Ці параметри задаються в config.toml:"
+"This widget declares no options; what it reads is written in config.toml." = "Цей віджет не оголошує параметрів; те, що він читає, пишеться в config.toml."
+"The other displays" = "Інші дисплеї"

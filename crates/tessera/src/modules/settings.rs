@@ -7,7 +7,10 @@
 //! The settings that extensions and themes declare are drawn by the
 //! controls of [`controls`].
 
+mod builtin;
 mod controls;
+mod dynamic;
+mod placed;
 pub(super) mod rows;
 
 #[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
@@ -23,7 +26,7 @@ use gpui::{
     Styled, Window, div, img, px, transparent_black,
 };
 
-use crate::config::edit::{CardLength, ConfigFile, DEEDS, LAYOUTS, Place, Slot};
+use crate::config::edit::{CardLength, ConfigFile, DEEDS, LAYOUTS, Place, Slot, WidgetPlace};
 use crate::config::{Config, Displays, Hiding, KeyConfig, SurfaceConfig, WidgetSpec, config_dir};
 use crate::desk::{CardConfig, Corner};
 use crate::flyout::FlyoutPlace;
@@ -42,7 +45,7 @@ use crate::theme::WALLPAPER_THEME;
 use crate::theme::{ACCENT_THEME, Theme};
 use crate::tiling::TileLayout;
 use crate::ui::{icon, state_layer, switch};
-use controls::{DeclaredState, Deed, Owner, RowKey};
+use controls::{CHANGED, DeclaredState, Deed, RowKey};
 
 /// The directory of the configuration directory that holds theme files.
 const THEMES_DIRECTORY: &str = "themes";
@@ -88,6 +91,8 @@ const ICON_LESS: &str = "\u{e738}";
 const ICON_MORE: &str = "\u{e710}";
 const ICON_QUIT: &str = "\u{e7e8}";
 const ICON_RESTART: &str = "\u{e72c}";
+const ICON_CHECKED: &str = "\u{e73a}";
+const ICON_UNCHECKED: &str = "\u{e739}";
 
 /// The widget that offers what the registries hold, and its option that
 /// says what of it.
@@ -98,62 +103,98 @@ const MARKETPLACE_COLUMNS: &str = "columns";
 /// In how many columns the marketplace of the settings stands.
 const MARKET_COLUMNS: i64 = 2;
 
-/// The parts the settings are divided into, in the order of the rail.
+/// The page of the Keys section that takes the place of its key cards.
+const SHORTCUTS: &str = "shortcuts";
+
+/// The parts the settings are divided into, in the order of the rail,
+/// which is the order of [`rows::SECTIONS`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Section {
+pub(super) enum Section {
     General,
     Bars,
     Desktop,
+    Wallpaper,
     Widgets,
     Dock,
     Tray,
+    Notifications,
     Windows,
+    WindowRules,
+    ScreenEdges,
+    Workspaces,
     Keys,
+    Search,
+    Files,
+    Clipboard,
+    Displays,
+    Session,
     Themes,
     Extensions,
+    About,
 }
 
 impl Section {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 21] = [
         Self::General,
         Self::Bars,
         Self::Desktop,
+        Self::Wallpaper,
         Self::Widgets,
         Self::Dock,
         Self::Tray,
+        Self::Notifications,
         Self::Windows,
+        Self::WindowRules,
+        Self::ScreenEdges,
+        Self::Workspaces,
         Self::Keys,
+        Self::Search,
+        Self::Files,
+        Self::Clipboard,
+        Self::Displays,
+        Self::Session,
         Self::Themes,
         Self::Extensions,
+        Self::About,
     ];
 
+    /// Its English title, as `open_at` and the rows files name it.
     fn title(self) -> &'static str {
-        match self {
-            Self::General => "General",
-            Self::Bars => "Bars",
-            Self::Desktop => "Desktop",
-            Self::Widgets => "Widgets",
-            Self::Dock => "Dock",
-            Self::Tray => "Tray",
-            Self::Windows => "Windows",
-            Self::Keys => "Keys",
-            Self::Themes => "Themes",
-            Self::Extensions => "Extensions",
-        }
+        let at = Self::ALL.iter().position(|known| *known == self);
+        at.and_then(|at| rows::SECTIONS.get(at))
+            .copied()
+            .unwrap_or_default()
     }
 
+    /// The section of the English title `title`, in any case.
+    fn named(title: &str) -> Option<Self> {
+        { Self::ALL.into_iter() }.find(|known| known.title().eq_ignore_ascii_case(title.trim()))
+    }
+
+    /// The character of Segoe Fluent Icons it is shown with.
     fn glyph(self) -> &'static str {
         match self {
             Self::General => "\u{e713}",
             Self::Bars => "\u{e700}",
             Self::Desktop => "\u{e7f4}",
+            Self::Wallpaper => "\u{e8b9}",
             Self::Widgets => "\u{e71d}",
             Self::Dock => "\u{e7c4}",
             Self::Tray => "\u{e712}",
+            Self::Notifications => "\u{ea8f}",
             Self::Windows => "\u{e8a7}",
+            Self::WindowRules => "\u{e71c}",
+            Self::ScreenEdges => "\u{e740}",
+            Self::Workspaces => "\u{e8a9}",
             Self::Keys => "\u{e765}",
+            Self::Search => "\u{e721}",
+            Self::Files => "\u{e8b7}",
+            Self::Clipboard => "\u{e77f}",
+            Self::Displays => "\u{e7f8}",
+            Self::Session => "\u{e77b}",
             Self::Themes => "\u{e790}",
             Self::Extensions => "\u{e719}",
+            Self::About => "\u{e946}",
         }
     }
 
@@ -702,9 +743,14 @@ enum Control {
     KeyValue(usize, usize),
     /// Does this to a setting an extension or a theme declares.
     Declared(RowKey, Deed),
-    /// Takes every declared setting of an extension or a theme out of the
-    /// file.
-    ResetAll(Owner),
+    /// Takes these declared settings out of the file: those of a card
+    /// that the file sets.
+    ResetAll(Vec<RowKey>),
+    /// Runs the action of a link row, with its argument.
+    Link(String, Option<String>),
+    /// Opens the card of the options of the widget at this place, or
+    /// closes it.
+    Expand(WidgetPlace),
     /// Puts what is at this place of what can be stacked at the end of
     /// the stack: a theme over the others, or an icon pack after those in
     /// use.
@@ -862,6 +908,8 @@ enum Face {
     Glyph(&'static str),
     /// A chip with a text, tinted while `selected`.
     Chip { text: SharedString, selected: bool },
+    /// A box, ticked while `checked`, with a text.
+    Check { text: SharedString, checked: bool },
 }
 
 /// What the widgets of Tessera are called, by the names a layout has for
@@ -1093,6 +1141,8 @@ pub struct Settings {
     startup: Option<AnyView>,
     /// What extensions and themes declare can be set, and their controls.
     declared: DeclaredState,
+    /// The placed widget whose options are shown in the Widgets section.
+    expanded: Option<WidgetPlace>,
 }
 
 impl Settings {
@@ -1101,6 +1151,22 @@ impl Settings {
     #[allow(dead_code, reason = "for windows-selftest, which opens each section")]
     pub fn section_titles() -> &'static [&'static str] {
         rows::SECTIONS
+    }
+
+    /// Whether `section` has cards drawn by hand, besides those of the
+    /// rows files.
+    fn hand_drawn(&self, section: Section) -> bool {
+        match section {
+            Section::General
+            | Section::Bars
+            | Section::Desktop
+            | Section::Widgets
+            | Section::Dock
+            | Section::Themes
+            | Section::Extensions => true,
+            Section::Keys => !self.available.iter().any(|name| name == SHORTCUTS),
+            _ => false,
+        }
     }
 
     fn new(cx: &mut Context<Self>) -> Self {
@@ -1135,6 +1201,7 @@ impl Settings {
             interactions: HashMap::new(),
             startup: None,
             declared: DeclaredState::new(),
+            expanded: None,
         };
         match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
             Ok((config, table)) => (this.config, this.table) = (Some(config), table),
@@ -1183,9 +1250,22 @@ impl Settings {
     /// Reads the file, applies `change` to it, writes it and has the shell
     /// take it over. A change that no longer fits the file is not made.
     fn change(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ConfigFile) -> bool) {
+        self.change_row(None, cx, change);
+    }
+
+    /// The same, for the setting `row`: what kept the change from being
+    /// made is said under it. The file as `change` leaves it is read as
+    /// the shell reads it before anything is written, so that a value the
+    /// shell cannot use never makes the whole file unusable.
+    fn change_row(
+        &mut self,
+        row: Option<&RowKey>,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut ConfigFile) -> bool,
+    ) {
         let changed = ConfigFile::change(|file| {
             if !change(file) {
-                return Err("the configuration has changed in the meantime".to_owned());
+                return Err(CHANGED.to_owned());
             }
             Ok((file.config()?, file.table()))
         });
@@ -1194,13 +1274,19 @@ impl Settings {
                 self.config = Some(config);
                 self.table = table;
                 self.failure = None;
+                if let Some(row) = row {
+                    self.clear_refusal(row, cx);
+                }
                 // The controls now stand for other things.
                 self.interactions.clear();
                 cx.defer(Shell::config_changed);
             }
             Err(error) => {
                 report!("{error}");
-                self.failure = Some(error.into());
+                match row {
+                    Some(row) => self.refuse(row, &error, cx),
+                    None => self.failure = Some(error.into()),
+                }
             }
         }
         self.look_around(cx);
@@ -1238,8 +1324,10 @@ impl Settings {
         // One handle scrolls the page of every section, which opens at
         // its top.
         self.declared.scroll.set_offset(gpui::Point::default());
-        let place = Section::ALL.iter().position(|other| *other == section);
-        self.mark.animate_to(place.unwrap_or_default() as f32);
+        // The pages of a section are built each time it is shown, and
+        // dropped once another is.
+        self.declared.pages.clear();
+        self.declared.page_item = None;
         self.arrival.jump_to(0.);
         self.arrival.animate_to(1.);
         if let Some(shown) = section.market()
@@ -1493,9 +1581,15 @@ impl Settings {
                     true
                 });
             }
+            Control::Expand(ref place) => {
+                let open = self.expanded.as_ref() == Some(place);
+                self.expanded = (!open).then(|| place.clone());
+                cx.notify();
+            }
             // Done above.
             Control::Declared(..)
             | Control::ResetAll(_)
+            | Control::Link(..)
             | Control::AddLayer(..)
             | Control::DropLayer(..)
             | Control::ShiftLayer(..) => {}
@@ -1552,6 +1646,24 @@ impl Settings {
                     .bg(state_layer(&theme, base, state))
                     .text_color(color)
                     .child(text)
+            }
+            Face::Check { text, checked } => {
+                let (glyph, color) = if checked {
+                    (ICON_CHECKED, theme.colors.primary)
+                } else {
+                    (ICON_UNCHECKED, theme.colors.on_surface_variant)
+                };
+                button
+                    .h(CHIP_HEIGHT)
+                    .px(theme.spacing.small)
+                    .gap(theme.spacing.small)
+                    .bg(state_layer(
+                        &theme,
+                        theme.colors.surface_container_highest,
+                        state,
+                    ))
+                    .child(icon(&theme, glyph).text_color(color))
+                    .child(div().text_color(theme.colors.on_surface).child(text))
             }
         };
         let action = control.clone();
@@ -2481,9 +2593,18 @@ impl Settings {
     fn rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
+        // A section with nothing to draw is left out of the rail.
+        let shown: Vec<Section> = { Section::ALL.into_iter() }
+            .filter(|section| *section == self.section || self.section_drawn(*section, cx))
+            .collect();
+        let place = shown.iter().position(|section| *section == self.section);
+        let place = place.unwrap_or_default() as f32;
+        if self.mark.target() != place {
+            self.mark.animate_to(place);
+        }
         let mark = self.mark.value(window);
         let mut parts = Vec::new();
-        for section in Section::ALL {
+        for section in shown {
             parts.push(self.rail_item(
                 Control::Section(section),
                 section.glyph(),
@@ -2524,6 +2645,10 @@ impl Settings {
             )
             .child(
                 div()
+                    .id("rail")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
                     .relative()
                     .flex()
                     .flex_col()
@@ -2540,7 +2665,6 @@ impl Settings {
                     )
                     .children(parts),
             )
-            .child(div().flex_1())
             .child(restart)
             .child(quit)
             .into_any_element()
@@ -2633,11 +2757,16 @@ impl Settings {
                         .into_any_element()
                 }
             }),
-            Section::Keys => {
+            // The key cards stand until the Shortcuts page is there.
+            Section::Keys if !self.available.iter().any(|name| name == SHORTCUTS) => {
                 wide.push(self.keys(config, window, cx));
                 for (index, key) in config.keys.iter().enumerate() {
                     wide.push(self.key_card(index, key, window, cx));
                 }
+            }
+            Section::Widgets => {
+                let first = usize::from(self.failure.is_some());
+                wide.extend(self.placed_widgets(config, first, window, cx));
             }
             Section::Themes => {
                 wide.push(self.themes(config.theme.as_deref(), window, cx));
@@ -2646,10 +2775,13 @@ impl Settings {
             }
             Section::Extensions => {
                 let first = usize::from(self.failure.is_some()) + wide.len();
-                wide.extend(self.extension_cards(config, first, window, cx));
+                wide.extend(self.extension_cards(first, window, cx));
             }
-            Section::Widgets | Section::Tray | Section::Windows => {}
+            _ => {}
         }
+        let (pages, rows) = self.builtin_cards(config, window, cx);
+        wide.extend(pages);
+        shared.extend(rows);
         shared.extend(self.setting_cards(section, config, window, cx));
         (wide, shared)
     }
@@ -2736,6 +2868,13 @@ impl Render for Settings {
             let (wide, shared) = self.cards(&config, window, cx);
             let count = wide.len() + shared.len() + 1;
             let before = wide.len();
+            // A card asked for among those that share the width is
+            // brought into sight with them.
+            if std::mem::take(&mut self.declared.sought_shared) {
+                let place = usize::from(self.failure.is_some()) + before;
+                self.declared.scroll.scroll_to_item(place);
+                self.declared.seek = None;
+            }
             let wide = wide.into_iter().enumerate();
             page = page.children(wide.map(|(index, card)| arriving(index, count, card)));
             if !shared.is_empty() {
@@ -2879,6 +3018,27 @@ mod tests {
                 !earlier || last == Some(card),
                 "`{}` is split",
                 setting.card
+            );
+        }
+    }
+
+    #[test]
+    fn the_sections_stand_in_the_order_of_their_titles() {
+        let titles: Vec<&str> = Section::ALL.iter().map(|section| section.title()).collect();
+        assert_eq!(titles, rows::SECTIONS);
+        assert_eq!(Section::named("window rules"), Some(Section::WindowRules));
+        assert_eq!(
+            Section::named(" Displays and power "),
+            Some(Section::Displays)
+        );
+        assert_eq!(Section::named("nowhere"), None);
+        for section in Section::ALL {
+            let russian = Language::Russian.say(section.title());
+            assert_ne!(
+                russian,
+                section.title(),
+                "`{}` is not translated",
+                section.title()
             );
         }
     }

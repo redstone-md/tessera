@@ -1,3 +1,22 @@
 # Rows of the settings filled by settings-core. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The popups of the wallpaper, the displays and the power, drawn as pages
+# of their sections.
+[[card]]
+section = "Wallpaper"
+title = "Wallpaper settings"
+page = "wallpaper-settings"
+search = ["Wallpaper"]
+
+[[card]]
+section = "Displays and power"
+title = "Display settings"
+page = "display-settings"
+search = ["Displays"]
+
+[[card]]
+section = "Displays and power"
+title = "Power settings"
+page = "power-settings"

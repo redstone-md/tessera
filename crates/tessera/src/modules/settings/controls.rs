@@ -13,24 +13,27 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Global,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement, PathPromptOptions,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Task,
-    UniformListScrollHandle, WeakEntity, Window, div, px, rgb, transparent_black, uniform_list,
+    AnyElement, AnyView, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
+    Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement,
+    PathPromptOptions, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    Task, UniformListScrollHandle, WeakEntity, Window, div, px, rgb, transparent_black,
+    uniform_list,
 };
 
+use super::builtin::{BuiltinRows, RowTarget};
+use super::dynamic::{self, Scanned};
 use super::{
     CAPTION_SHARE, CHIP_HEIGHT, CHIP_TINT, Control, Face, ICON_LESS, ICON_MORE, ICON_REMOVE,
     LIFTED, Lifted, SMALL_BUTTON, Section, Settings, Stack, card, note, wrap,
 };
+use crate::actions::Actions;
 use crate::config::Config;
-use crate::config::edit::ConfigFile;
+use crate::config::edit::{ConfigFile, WidgetPlace};
 use crate::extension::{InstalledExtension, installed_extensions};
 use crate::field::TextField;
 use crate::i18n::Language;
-use crate::icon_packs;
 use crate::motion::{Spring, SpringSpec, mix};
-use crate::options::{Kind, OptionDecl, OptionSet, PathPick, SEGMENTS, is_color, text_of};
+use crate::options::{Kind, OptionDecl, OptionSet, PathPick, SEGMENTS, is_color, same, text_of};
 use crate::platform::font_families;
 use crate::popup::Popups;
 use crate::shell::Shell;
@@ -71,6 +74,10 @@ const ICON_DOWN: &str = "\u{e70d}";
 const ICON_OPEN: &str = "\u{e70d}";
 const ICON_DRAG: &str = "\u{e76f}";
 const ICON_FOLDER: &str = "\u{e8b7}";
+const ICON_WARNING: &str = "\u{e7ba}";
+
+/// How wide the field of a time is.
+const TIME_WIDTH: f32 = 64.;
 
 /// The widget the settings are, which a popup holds.
 const WIDGET: &str = "settings";
@@ -82,22 +89,37 @@ pub(super) enum Owner {
     Extension(String),
     /// Under `[theme_options.<name>]`.
     Theme(String),
+    /// A key of Tessera's own, as a rows file declares it.
+    Builtin(RowTarget),
+    /// An option of the one widget at this place.
+    Widget(WidgetPlace),
 }
 
 impl Owner {
-    /// What the file holds for it.
+    /// What the file holds for an extension or a theme.
     fn values<'a>(&self, config: &'a Config) -> Option<&'a toml::Table> {
         match self {
             Self::Extension(id) => config.extensions.get(id),
             Self::Theme(name) => config.theme_options.get(name),
+            Self::Builtin(_) | Self::Widget(_) => None,
         }
     }
 
-    /// The extension or theme by its name, as [`Settings::open_at`] names it.
-    fn item(&self) -> &str {
+    /// What [`Settings::open_at`] names it by: an extension by its
+    /// identifier, a theme by its name, a key of Tessera's own by its path
+    /// and a placed widget by its place.
+    pub(super) fn item(&self) -> String {
         match self {
-            Self::Extension(id) | Self::Theme(id) => id,
+            Self::Extension(id) | Self::Theme(id) => id.clone(),
+            Self::Builtin(target) => target.item(),
+            Self::Widget(place) => place.item(),
         }
+    }
+
+    /// Whether it is a setting of Tessera's own, whose key leaves the file
+    /// when it is set to its default.
+    fn is_tessera(&self) -> bool {
+        matches!(self, Self::Builtin(_) | Self::Widget(_))
     }
 
     /// Writes `value` at `key`, as the file holds the values of this
@@ -112,12 +134,14 @@ impl Owner {
                 file.set_extension_setting(id, key, value)
             }
             Self::Theme(name) => file.set_theme_option(name, key, value.map(edit_value)),
+            Self::Builtin(target) => target.write(file, value.map(edit_value)),
+            Self::Widget(place) => file.set_widget_option(place, key, value.map(edit_value)),
         }
     }
 }
 
 /// A value of the file as the writer of the file takes it.
-fn edit_value(value: &toml::Value) -> toml_edit::Value {
+pub(super) fn edit_value(value: &toml::Value) -> toml_edit::Value {
     match value {
         toml::Value::String(text) => text.as_str().into(),
         toml::Value::Integer(number) => (*number).into(),
@@ -127,6 +151,14 @@ fn edit_value(value: &toml::Value) -> toml_edit::Value {
             let items: toml_edit::Array = items.iter().map(edit_value).collect();
             toml_edit::Value::Array(items)
         }
+        toml::Value::Table(entries) => {
+            let mut table = toml_edit::InlineTable::new();
+            for (key, value) in entries {
+                table.insert(key, edit_value(value));
+            }
+            table.fmt();
+            toml_edit::Value::InlineTable(table)
+        }
         other => { other.to_string().parse() }.unwrap_or_else(|_| other.to_string().into()),
     }
 }
@@ -134,8 +166,106 @@ fn edit_value(value: &toml::Value) -> toml_edit::Value {
 /// A declared setting: whose it is, and its key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct RowKey {
-    owner: Owner,
-    key: String,
+    pub(super) owner: Owner,
+    pub(super) key: String,
+}
+
+impl RowKey {
+    pub(super) fn new(owner: Owner, key: &str) -> Self {
+        Self {
+            owner,
+            key: key.to_owned(),
+        }
+    }
+}
+
+/// The rows of the settings `set` declares for `owner`, in order.
+pub(super) fn owned_rows(owner: &Owner, set: &OptionSet) -> Vec<(RowKey, OptionDecl)> {
+    { set.decls.iter() }
+        .map(|decl| (RowKey::new(owner.clone(), &decl.key), decl.clone()))
+        .collect()
+}
+
+/// Whether a number counts from no value, which its `unset_label` names,
+/// a step under its least: it shows that while the file holds none.
+fn counts_from_unset(decl: &OptionDecl) -> bool {
+    decl.optional && decl.unset_label.is_some()
+}
+
+/// What a card of declared settings is made of.
+pub(super) struct CardParts<'a> {
+    /// What [`Settings::open_at`] names the card by, to light it.
+    pub item: String,
+    pub title: SharedString,
+    /// Its settings, each with whose it is, in order.
+    pub rows: Vec<(RowKey, OptionDecl)>,
+    /// The declarations left out, each said as a sentence.
+    pub problems: &'a [String],
+    /// Said under the settings, such as that there is nothing to set.
+    pub remark: Option<&'static str>,
+    /// Drawn under the remark.
+    pub footer: Vec<AnyElement>,
+    /// What each setting affects, as it is said under it.
+    pub affects: &'a dyn Fn(&OptionDecl) -> Vec<String>,
+}
+
+/// Pads a time typed with a one-digit hour, `7:30`, to the `HH:MM` the
+/// file holds; anything else is given back as it is.
+pub(super) fn padded_time(text: &str) -> String {
+    let text = text.trim();
+    match text.split_once(':') {
+        Some((hours, minutes))
+            if hours.len() == 1 && hours.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            format!("0{hours}:{minutes}")
+        }
+        _ => text.to_owned(),
+    }
+}
+
+/// The time `text` holds, `HH:MM`, moved by an hour, or to the next or
+/// the last full [`TIME_STEP`] minutes, around the clock; midnight where
+/// it holds none.
+pub(super) fn stepped_time(text: Option<&str>, hours: bool, up: bool) -> String {
+    let minutes_of = |text: &str| -> Option<i32> {
+        let (hours, minutes) = text.split_once(':')?;
+        Some(hours.parse::<i32>().ok()? * 60 + minutes.parse::<i32>().ok()?)
+    };
+    let now = text.and_then(minutes_of).unwrap_or(0);
+    let step = TIME_STEP;
+    let moved = match (hours, up) {
+        (true, true) => now + 60,
+        (true, false) => now - 60,
+        (false, true) => (now / step + 1) * step,
+        (false, false) => (now + step - 1) / step * step - step,
+    };
+    let moved = moved.rem_euclid(24 * 60);
+    format!("{:02}:{:02}", moved / 60, moved % 60)
+}
+
+/// How many minutes the steppers of a time move it.
+const TIME_STEP: i32 = 5;
+
+/// The items `value` holds in order of `choices` with the one at `index`
+/// added or taken out, as a multi-choice writes them.
+pub(super) fn toggled_items(
+    choices: &[crate::options::Choice],
+    value: Option<&toml::Value>,
+    index: usize,
+) -> Vec<String> {
+    let held: Vec<String> = match value {
+        Some(value) => crate::options::parse_list(&text_of(value)),
+        None => Vec::new(),
+    };
+    let values: Vec<String> = { choices.iter() }
+        .filter(|choice| !choice.is_unset())
+        .map(|choice| text_of(&choice.value))
+        .collect();
+    let toggled = values.get(index);
+    { values.iter() }
+        .filter(|one| held.contains(one) != (Some(*one) == toggled))
+        .cloned()
+        .collect()
 }
 
 /// What a button of a declared setting does.
@@ -156,6 +286,10 @@ pub(super) enum Deed {
     Swatch(usize),
     /// Asks for a file or a folder.
     Browse,
+    /// Puts the choice at this place in the list, or takes it out.
+    Check(usize),
+    /// Moves a time an hour, or some minutes, up or down.
+    StepTime { hours: bool, up: bool },
 }
 
 /// What extensions and the themes in use declare, as read away from the
@@ -184,6 +318,7 @@ enum Held {
     Slider(Entity<DeclaredSlider>),
     List(Entity<DeclaredList>),
     Fonts(Entity<FontPicker>),
+    Sides(Entity<DeclaredSides>),
 }
 
 /// What the settings keep of the declared settings.
@@ -197,9 +332,23 @@ pub(super) struct DeclaredState {
     /// The card that was asked for, lit while the light fades.
     lit: Option<(String, Spring)>,
     /// The card to bring into sight once it is drawn.
-    seek: Option<String>,
+    pub(super) seek: Option<String>,
+    /// Whether that card stands among the cards that share the width,
+    /// which are brought into sight together.
+    pub(super) sought_shared: bool,
     /// The page of cards, scrolled to that card.
     pub(super) scroll: ScrollHandle,
+    /// The rows of Tessera's own settings, as the rows files declare them.
+    pub(super) builtin: BuiltinRows,
+    /// The options each widget declares, by widget name, as last read.
+    widget_decls: HashMap<String, Vec<OptionDecl>>,
+    /// The setting whose last change was not made, and why, said under it.
+    row_error: Option<(RowKey, SharedString)>,
+    /// The pages of the section shown, by widget name, built when the
+    /// section is shown.
+    pub(super) pages: HashMap<String, AnyView>,
+    /// What the pages of the section shown are given as their `item`.
+    pub(super) page_item: Option<String>,
 }
 
 impl DeclaredState {
@@ -210,8 +359,19 @@ impl DeclaredState {
             opened: None,
             lit: None,
             seek: None,
+            sought_shared: false,
             scroll: ScrollHandle::new(),
+            builtin: BuiltinRows::default(),
+            widget_decls: HashMap::new(),
+            row_error: None,
+            pages: HashMap::new(),
+            page_item: None,
         }
+    }
+
+    /// Whether `item` was asked for and is lit.
+    pub(super) fn is_lit(&self, item: &str) -> bool {
+        self.lit.as_ref().is_some_and(|(lit, _)| lit == item)
     }
 }
 
@@ -271,13 +431,14 @@ fn themes_in_use(config: &Config) -> Vec<String> {
 }
 
 /// Writes `value` at the declared setting `row` straight to the file, for
-/// a change made while the settings are not shown.
+/// a change made while the settings are not shown. What the shell could
+/// not read is not written.
 fn write_now(row: &RowKey, value: Option<&toml::Value>, cx: &mut App) {
     let written = ConfigFile::change(|file| {
         if !row.owner.write(file, &row.key, value) {
-            return Err("the configuration has changed in the meantime".to_owned());
+            return Err(CHANGED.to_owned());
         }
-        Ok(())
+        file.config().map(drop)
     });
     match written {
         Ok(()) => Shell::config_changed(cx),
@@ -285,16 +446,37 @@ fn write_now(row: &RowKey, value: Option<&toml::Value>, cx: &mut App) {
     }
 }
 
+/// Why a change that no longer fits the file is not made.
+pub(super) const CHANGED: &str = "the configuration has changed in the meantime";
+
+/// What the `arg` of a link row stands for when it is run: `{config}` is
+/// the path of the configuration file.
+fn link_argument(arg: &str) -> String {
+    match arg {
+        CONFIG_ARG => ConfigFile::location()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        other => other.to_owned(),
+    }
+}
+
+/// The `arg` of a link row that stands for the configuration file.
+const CONFIG_ARG: &str = "{config}";
+
 impl Settings {
     /// Opens the settings at `section`, named by its English title in any
-    /// case, such as `extensions`, and brings the card of `item` into
-    /// sight, lit for a moment: an extension by its identifier or a theme
-    /// by its name. Settings that are shown go there; otherwise the popup
-    /// that holds them opens.
+    /// case, spaces included, such as `window rules`, and brings the card
+    /// of `item` into sight, lit for a moment: an extension by its
+    /// identifier, a theme by its name, a card of Tessera's own by its
+    /// English title, a key of Tessera's own by its path (`tiling.gap`), a
+    /// placed widget in Widgets by `surface/<n>/<start|center|end>/<i>`,
+    /// `popup/<name>/<i>` or `card/<i>`. The pages of the section are given
+    /// `item` as their `item` option. Settings that are shown go there;
+    /// otherwise the popup that holds them opens.
     pub fn open_at(section: &str, item: Option<&str>, cx: &mut App) {
         let found = Section::ALL
             .into_iter()
-            .find(|known| known.title().eq_ignore_ascii_case(section));
+            .find(|known| known.title().eq_ignore_ascii_case(section.trim()));
         let Some(section) = found else {
             report!("the settings have no part `{section}`");
             return;
@@ -329,10 +511,25 @@ impl Settings {
         }
     }
 
-    /// Shows `section`, and the card of `item` lit.
-    fn go_to(&mut self, (section, item): (Section, Option<String>), cx: &mut Context<Self>) {
+    /// Shows `section`, and the card of `item` lit; a placed widget of the
+    /// Widgets section opened, and the pages of the section given `item`.
+    pub(super) fn go_to(
+        &mut self,
+        (section, item): (Section, Option<String>),
+        cx: &mut Context<Self>,
+    ) {
         self.show(section, cx);
+        if self.declared.page_item != item {
+            // The pages are built again for what they are to show.
+            self.declared.page_item.clone_from(&item);
+            self.declared.pages.clear();
+        }
         if let Some(item) = item {
+            if section == Section::Widgets
+                && let Some(place) = WidgetPlace::parse(&item)
+            {
+                self.expanded = Some(place);
+            }
             let mut light = Spring::new(FADE, 1.);
             light.animate_to(0.);
             self.declared.lit = Some((item.clone(), light));
@@ -342,7 +539,8 @@ impl Settings {
     }
 
     /// Reads again, away from the thread that draws, what the extensions
-    /// and the themes in use declare.
+    /// and the themes in use declare, and the lists the rows of Tessera's
+    /// own settings choose from.
     pub(super) fn read_declared(&mut self, cx: &mut Context<Self>) {
         let names = self.config.as_ref().map(themes_in_use).unwrap_or_default();
         self.declared.read.read_for = names.clone();
@@ -354,18 +552,39 @@ impl Settings {
                         (name, declared)
                     })
                     .collect();
-                (installed_extensions(), themes, icon_packs::installed_ids())
+                (installed_extensions(), themes, Scanned::read())
             });
-            let (extensions, themes, packs) = read.await;
+            let (extensions, themes, scanned) = read.await;
             this.update(cx, |this, cx| {
                 this.declared.read.extensions = Some(extensions);
                 this.declared.read.themes = themes;
-                this.declared.read.icon_packs = packs;
+                this.declared.read.icon_packs = scanned.icon_packs.clone();
+                cx.set_global(scanned);
+                this.declared.builtin = BuiltinRows::read(cx);
+                this.declared.widget_decls.clear();
                 cx.notify();
             })
             .ok();
         });
         self.declared.read.reading = Some(reading);
+    }
+
+    /// The options the widget `name` declares, with the choices only the
+    /// running shell knows, read once and kept.
+    pub(super) fn widget_declarations(&mut self, name: &str, cx: &App) -> Vec<OptionDecl> {
+        let made = self.declared.widget_decls.entry(name.to_owned());
+        made.or_insert_with(|| {
+            let decls = crate::widget_options::of(name);
+            { decls.into_iter() }
+                .map(|mut decl| {
+                    if let Some(choices) = crate::widget_options::dynamic(name, &decl.key, cx) {
+                        dynamic::merge(&mut decl, choices);
+                    }
+                    decl
+                })
+                .collect()
+        })
+        .clone()
     }
 
     /// The declaration of the setting `row`, as last read.
@@ -383,44 +602,93 @@ impl Settings {
                 let (_, declared) = read.themes.iter().find(|(known, _)| known == name)?;
                 &declared.as_ref()?.0
             }
+            Owner::Builtin(target) => return self.declared.builtin.declaration(target).cloned(),
+            Owner::Widget(place) => {
+                let spec = place.spec(self.config.as_ref()?)?;
+                let decls = self.declared.widget_decls.get(&spec.widget)?;
+                return decls.iter().find(|decl| decl.key == row.key).cloned();
+            }
         };
         set.get(&row.key).cloned()
     }
 
     /// What the file holds at `row`, as written.
-    fn written(&self, row: &RowKey) -> Option<toml::Value> {
+    pub(super) fn written(&self, row: &RowKey) -> Option<toml::Value> {
         let config = self.config.as_ref()?;
-        row.owner.values(config)?.get(&row.key).cloned()
+        match &row.owner {
+            Owner::Extension(_) | Owner::Theme(_) => {
+                row.owner.values(config)?.get(&row.key).cloned()
+            }
+            Owner::Builtin(target) => target.written(self.table.as_ref(), config),
+            Owner::Widget(place) => place.spec(config)?.options.get(&row.key).cloned(),
+        }
     }
 
     /// Checks `value` against the declaration of `row` and writes it; one
-    /// that does not fit is said and not written.
+    /// that does not fit is said under the row and not written. A setting
+    /// of Tessera's own set to its default leaves the file.
     fn write_declared(&mut self, row: &RowKey, value: Option<toml::Value>, cx: &mut Context<Self>) {
         let Some(decl) = self.declaration(row) else {
             return;
         };
-        let value = match value.map(|value| decl.validate(&value)) {
+        let value = match value {
+            Some(toml::Value::String(text)) if decl.kind == Kind::Time => {
+                Some(padded_time(&text).into())
+            }
+            other => other,
+        };
+        let mut value = match value.map(|value| decl.validate(&value)) {
             Some(Ok(value)) => Some(value),
             Some(Err(error)) => {
-                self.refuse(&decl, &error, cx);
+                self.refuse(row, &error, cx);
                 return;
             }
             None => None,
         };
+        if row.owner.is_tessera() {
+            let default = decl.default.as_ref();
+            let is_default =
+                { value.as_ref().zip(default) }.is_some_and(|(one, other)| same(one, other));
+            if !decl.optional && is_default {
+                value = None;
+            }
+            // Names, each with a value, are a table of the file.
+            if decl.kind == Kind::Pairs
+                && let Some(toml::Value::String(text)) = &value
+            {
+                let pairs = crate::options::parse_pairs(text).unwrap_or_default();
+                let table = { pairs.into_iter() }.map(|(name, value)| (name, value.into()));
+                value = Some(toml::Value::Table(table.collect()));
+            }
+        }
         if value.as_ref() == self.written(row).as_ref() {
+            self.clear_refusal(row, cx);
             return;
         }
-        let row = row.clone();
-        self.change(cx, move |file| {
-            row.owner.write(file, &row.key, value.as_ref())
+        let written = row.clone();
+        self.change_row(Some(row), cx, move |file| {
+            written.owner.write(file, &written.key, value.as_ref())
         });
     }
 
-    /// Says that what the control of `decl` holds is not written, and why.
-    fn refuse(&mut self, decl: &OptionDecl, error: &str, cx: &mut Context<Self>) {
-        let label = decl.label.text(Language::of(cx));
-        self.failure = Some(format!("{label}: {error}").into());
+    /// Says under `row` that what its control holds is not written, and
+    /// why.
+    pub(super) fn refuse(&mut self, row: &RowKey, error: &str, cx: &mut Context<Self>) {
+        self.declared.row_error = Some((row.clone(), SharedString::from(error.to_owned())));
         cx.notify();
+    }
+
+    /// Takes away what was said under `row`.
+    pub(super) fn clear_refusal(&mut self, row: &RowKey, cx: &mut Context<Self>) {
+        if self
+            .declared
+            .row_error
+            .as_ref()
+            .is_some_and(|(known, _)| known == row)
+        {
+            self.declared.row_error = None;
+            cx.notify();
+        }
     }
 
     /// Does what the controls of declared settings and of the layers of
@@ -428,11 +696,10 @@ impl Settings {
     pub(super) fn act_declared(&mut self, control: &Control, cx: &mut Context<Self>) -> bool {
         match control {
             Control::Declared(row, deed) => self.deed(row, deed, cx),
-            Control::ResetAll(owner) => {
-                let keys = self.declared_keys(owner);
-                let owner = owner.clone();
+            Control::ResetAll(rows) => {
+                let rows = rows.clone();
                 self.change(cx, move |file| {
-                    keys.iter().all(|key| owner.write(file, key, None))
+                    rows.iter().all(|row| row.owner.write(file, &row.key, None))
                 });
             }
             Control::AddLayer(stack, index) => {
@@ -462,6 +729,15 @@ impl Settings {
                     self.restack(*stack, stacked, cx);
                 }
             }
+            Control::Link(action, arg) => {
+                let (action, arg) = (action.clone(), arg.clone());
+                // The action may open a popup in place of the settings,
+                // which cannot be done while they handle the click.
+                cx.defer(move |cx| {
+                    let arg = arg.map(|arg| link_argument(&arg));
+                    Actions::run(&action, arg.as_deref(), cx);
+                });
+            }
             _ => return false,
         }
         true
@@ -469,7 +745,7 @@ impl Settings {
 
     /// Brings the card at `place` of the page into sight if it is the card
     /// of `item` that was asked for.
-    fn seek(&mut self, item: &str, place: usize) {
+    pub(super) fn seek(&mut self, item: &str, place: usize) {
         if self.declared.seek.as_deref() == Some(item) {
             self.declared.scroll.scroll_to_item(place);
             self.declared.seek = None;
@@ -504,21 +780,6 @@ impl Settings {
         });
     }
 
-    /// The keys `owner` declares that the file holds.
-    fn declared_keys(&self, owner: &Owner) -> Vec<String> {
-        let Some(values) = self.config.as_ref().and_then(|config| owner.values(config)) else {
-            return Vec::new();
-        };
-        let declared = |key: &String| {
-            let row = RowKey {
-                owner: owner.clone(),
-                key: key.clone(),
-            };
-            self.declaration(&row).is_some()
-        };
-        values.keys().filter(|key| declared(key)).cloned().collect()
-    }
-
     fn deed(&mut self, row: &RowKey, deed: &Deed, cx: &mut Context<Self>) {
         let Some(decl) = self.declaration(row) else {
             return;
@@ -528,7 +789,14 @@ impl Settings {
         match deed {
             Deed::Toggle => {
                 let on = shown.and_then(|value| value.as_bool()).unwrap_or(false);
-                self.write_declared(row, Some((!on).into()), cx);
+                // A switch that may be unset and has no default is off
+                // without the key, and leaves the file when it is switched
+                // off.
+                let value = match (on, decl.optional && decl.default.is_none()) {
+                    (true, true) => None,
+                    _ => Some((!on).into()),
+                };
+                self.write_declared(row, value, cx);
             }
             Deed::Choose(index) => {
                 let value = match decl.kind {
@@ -555,7 +823,10 @@ impl Settings {
                 cx.notify();
             }
             Deed::Step(up) => {
-                let now = shown.as_ref().and_then(OptionDecl::number);
+                let now = match counts_from_unset(&decl) {
+                    true => written.as_ref().and_then(OptionDecl::number),
+                    false => shown.as_ref().and_then(OptionDecl::number),
+                };
                 let next = decl
                     .stepped(now, *up)
                     .map(|number| decl.number_value(number));
@@ -567,6 +838,18 @@ impl Settings {
                 }
             }
             Deed::Browse => self.browse(row, &decl, cx),
+            Deed::Check(index) => {
+                let items = toggled_items(&decl.choices, shown.as_ref(), *index);
+                let empty = items.is_empty();
+                let items = toml::Value::Array(items.into_iter().map(Into::into).collect());
+                let value = (!empty || !decl.optional).then_some(items);
+                self.write_declared(row, value, cx);
+            }
+            Deed::StepTime { hours, up } => {
+                let now = shown.as_ref().and_then(toml::Value::as_str);
+                let next = stepped_time(now, *hours, *up);
+                self.write_declared(row, Some(next.into()), cx);
+            }
         }
     }
 
@@ -604,7 +887,7 @@ impl Settings {
                     Some(Err(error)) => report!("{}: {error}", decl.label.english()),
                     None => {}
                 }
-                Self::open_at(section.title(), Some(row.owner.item()), cx);
+                Self::open_at(section.title(), Some(&row.owner.item()), cx);
             })
             .ok();
         })
@@ -633,7 +916,11 @@ impl Settings {
                 }
                 Kind::List | Kind::Pairs => {
                     let pairs = decl.kind == Kind::Pairs;
-                    let list = cx.new(|cx| DeclaredList::new(pairs, cx));
+                    let bounds = (
+                        decl.min.map_or(0, |least| least as usize),
+                        decl.max.map(|most| most as usize),
+                    );
+                    let list = cx.new(|cx| DeclaredList::new(pairs, bounds, cx));
                     self.listen(row, &list, cx);
                     Held::List(list)
                 }
@@ -642,8 +929,17 @@ impl Settings {
                     self.listen(row, &fonts, cx);
                     Held::Fonts(fonts)
                 }
+                Kind::Sides => {
+                    let decl = decl.clone();
+                    let sides = cx.new(|cx| DeclaredSides::new(decl, cx));
+                    self.listen(row, &sides, cx);
+                    Held::Sides(sides)
+                }
                 _ => {
-                    let field = cx.new(|cx| DeclaredField::new(placeholder.into(), cx));
+                    // A time is written once it is whole: when Enter is
+                    // pressed or the field is left, not while typing pauses.
+                    let on_pause = decl.kind != Kind::Time;
+                    let field = cx.new(|cx| DeclaredField::new(placeholder.into(), on_pause, cx));
                     self.listen(row, &field, cx);
                     Held::Field(field)
                 }
@@ -666,11 +962,7 @@ impl Settings {
             move |this: &mut Self, _: Entity<C>, commit: &Commit, cx: &mut Context<Self>| {
                 match &commit.0 {
                     Ok(value) => this.write_declared(&row, value.clone(), cx),
-                    Err(error) => {
-                        if let Some(decl) = this.declaration(&row) {
-                            this.refuse(&decl, error, cx);
-                        }
-                    }
+                    Err(error) => this.refuse(&row, error, cx),
                 }
             };
         cx.subscribe(control, commit).detach();
@@ -682,7 +974,6 @@ impl Settings {
     /// page, for the one asked for to be brought into sight.
     pub(super) fn extension_cards(
         &mut self,
-        config: &Config,
         first: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -707,18 +998,18 @@ impl Settings {
             let remark = extension.settings.is_empty().then_some(
                 "This extension declares no settings; what it reads is written in config.toml.",
             );
-            cards.push(self.declared_card(
-                owner,
-                extension.id.clone().into(),
-                &extension.settings,
-                &[],
+            let parts = CardParts {
+                item: extension.id.clone(),
+                title: extension.id.clone().into(),
+                rows: owned_rows(&owner, &extension.settings),
+                problems: &[],
                 remark,
-                shortcuts_of(extension, &theme, language),
-                &affects,
-                config,
-                window,
-                cx,
-            ));
+                footer: shortcuts_of(extension, &theme, language)
+                    .into_iter()
+                    .collect(),
+                affects: &affects,
+            };
+            cards.push(self.declared_card(parts, window, cx));
         }
         if extensions.is_empty() {
             let none = card(&theme, language.say("Installed extensions"))
@@ -766,18 +1057,16 @@ impl Settings {
             };
             let lacking = set.is_empty().then_some("This theme declares no settings.");
             let owner = Owner::Theme(name.clone());
-            cards.push(self.declared_card(
-                owner,
-                title.into(),
-                set,
+            let parts = CardParts {
+                item: name.clone(),
+                title: title.into(),
+                rows: owned_rows(&owner, set),
                 problems,
-                lacking,
-                None,
-                &affects,
-                config,
-                window,
-                cx,
-            ));
+                remark: lacking,
+                footer: Vec::new(),
+                affects: &affects,
+            };
+            cards.push(self.declared_card(parts, window, cx));
         }
         self.declared.read.themes = themes;
         cards
@@ -875,44 +1164,50 @@ impl Settings {
         section.into_any_element()
     }
 
-    /// A card of the settings `set` declares for `owner`: each row with
-    /// its control, what it affects as `affects` names it, and Reset where
-    /// the file sets it; Reset all over them. `remark` is said under the
-    /// settings, such as that there is nothing to set, and `problems` are
-    /// the declarations left out.
-    #[allow(clippy::too_many_arguments, reason = "the parts of one card")]
-    fn declared_card(
+    /// A card of declared settings: each row with its control, what it
+    /// affects as `affects` names it, Reset where the file sets it and
+    /// what kept a change from being made under it; Reset all over them.
+    /// The remark is said under the settings, such as that there is
+    /// nothing to set, then the footer, then the declarations left out.
+    pub(super) fn declared_card(
         &mut self,
-        owner: Owner,
-        title: SharedString,
-        set: &OptionSet,
-        problems: &[String],
-        remark: Option<&'static str>,
-        footer: Option<AnyElement>,
-        affects: &dyn Fn(&OptionDecl) -> Vec<String>,
-        config: &Config,
+        parts: CardParts,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
-        let empty = toml::Table::new();
-        let written = owner.values(config).unwrap_or(&empty).clone();
-        let resolved = set.resolve_table(&written).values;
-        let any_written = set.decls.iter().any(|decl| written.contains_key(&decl.key));
-        let reset_all = any_written.then(|| {
+        // What the file holds at each row, and what holds there: what the
+        // file holds where it fits the row, its default otherwise.
+        let values: Vec<(Option<toml::Value>, Option<toml::Value>)> = { parts.rows.iter() }
+            .map(|(row, decl)| {
+                let written = self.written(row);
+                let fitting = written.as_ref().and_then(|value| decl.validate(value).ok());
+                let resolved = fitting.or_else(|| decl.default.clone());
+                (written, resolved)
+            })
+            .collect();
+        // What the conditions of the rows look at, by key.
+        let resolved: toml::Table = { parts.rows.iter().zip(&values) }
+            .filter_map(|((_, decl), (_, resolved))| Some((decl.key.clone(), resolved.clone()?)))
+            .collect();
+        let set_rows: Vec<RowKey> = { parts.rows.iter().zip(&values) }
+            .filter(|(_, (written, _))| written.is_some())
+            .map(|((row, _), _)| row.clone())
+            .collect();
+        let reset_all = (!set_rows.is_empty()).then(|| {
             let face = Face::Chip {
                 text: language.say("Reset all").into(),
                 selected: false,
             };
-            self.control(Control::ResetAll(owner.clone()), face, window, cx)
+            self.control(Control::ResetAll(set_rows), face, window, cx)
         });
         let header = div()
             .flex()
             .items_center()
             .justify_between()
             .gap(theme.spacing.small)
-            .child(super::heading(&theme, title))
+            .child(super::heading(&theme, parts.title))
             .children(reset_all);
         let mut body = div()
             .flex()
@@ -920,7 +1215,8 @@ impl Settings {
             .gap(theme.spacing.small + theme.spacing.tiny)
             .child(header);
         let mut group: Option<String> = None;
-        for decl in &set.decls {
+        let mut lit = self.declared.is_lit(&parts.item);
+        for ((row, decl), (written, value)) in parts.rows.iter().zip(&values) {
             if !OptionSet::visible(decl, &resolved) {
                 continue;
             }
@@ -929,32 +1225,33 @@ impl Settings {
                 group.clone_from(&section);
                 body = body.children(section.map(|section| caption(&theme, section)));
             }
-            let row = RowKey {
-                owner: owner.clone(),
-                key: decl.key.clone(),
-            };
+            lit |= self.declared.is_lit(&row.owner.item());
             let line = self.declared_row(
-                &row,
+                row,
                 decl,
-                written.get(&decl.key),
-                resolved.get(&decl.key),
-                affects(decl),
+                written.as_ref(),
+                value.as_ref(),
+                (parts.affects)(decl),
                 window,
                 cx,
             );
             body = body.child(line);
         }
-        body = body.children(remark.map(|remark| note(&theme, language.say(remark))));
-        body = body.children(footer);
-        if !problems.is_empty() {
+        body = body.children(
+            parts
+                .remark
+                .map(|remark| note(&theme, language.say(remark))),
+        );
+        body = body.children(parts.footer);
+        if !parts.problems.is_empty() {
             let left_out = language.say("Some settings are declared wrongly and are left out:");
             body = body.child(note(&theme, left_out));
-            for problem in problems {
+            for problem in parts.problems {
                 body = body.child(note(&theme, problem.clone()).text_size(small_text(&theme)));
             }
         }
-        let light = match &mut self.declared.lit {
-            Some((item, light)) if item == owner.item() => light.value(window).clamp(0., 1.),
+        let light = match (&mut self.declared.lit, lit) {
+            (Some((_, light)), true) => light.value(window).clamp(0., 1.),
             _ => 0.,
         };
         div()
@@ -968,7 +1265,8 @@ impl Settings {
     }
 
     /// One declared setting: its label, Reset where the file sets it, its
-    /// control, what it does and what it affects.
+    /// control, what it does and what it affects, and why its last change
+    /// was not made. It is lit while it is the one asked for.
     #[allow(clippy::too_many_arguments, reason = "the parts of one row")]
     fn declared_row(
         &mut self,
@@ -1016,14 +1314,37 @@ impl Settings {
             let said = format!("{} {}", language.say("Affects:"), affected.join(", "));
             note(&theme, said).text_size(small)
         });
+        let refused = { self.declared.row_error.as_ref() }
+            .filter(|(known, _)| known == row)
+            .map(|(_, error)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.tiny)
+                    .text_size(small)
+                    .text_color(theme.colors.primary)
+                    .child(icon(&theme, ICON_WARNING).text_size(small))
+                    .child(format!("{} {error}", language.say("Not written:")))
+            });
+        let light = match &mut self.declared.lit {
+            Some((item, light)) if *item == row.owner.item() => light.value(window).clamp(0., 1.),
+            _ => 0.,
+        };
         div()
             .flex()
             .flex_col()
             .gap(theme.spacing.tiny)
+            .rounded(theme.shape.medium)
+            .bg(mix(
+                transparent_black(),
+                theme.colors.secondary_container,
+                light,
+            ))
             .child(line)
             .children(description)
             .children(affects)
             .children(below)
+            .children(refused)
             .into_any_element()
     }
 
@@ -1047,6 +1368,7 @@ impl Settings {
             )
         };
         let deed = |deed: Deed| Control::Declared(row.clone(), deed);
+        let beside = |element: gpui::Div| (Some(element.into_any_element()), None);
         match decl.kind {
             Kind::Toggle if decl.optional && decl.unset_label.is_some() => {
                 let now = written.and_then(toml::Value::as_bool);
@@ -1063,15 +1385,7 @@ impl Settings {
                     };
                     chips.push(self.control(deed(Deed::Choose(index)), face, window, cx));
                 }
-                (
-                    Some(
-                        wrap(&theme)
-                            .justify_end()
-                            .children(chips)
-                            .into_any_element(),
-                    ),
-                    None,
-                )
+                beside(wrap(&theme).justify_end().children(chips))
             }
             Kind::Toggle => {
                 let on = resolved.and_then(toml::Value::as_bool).unwrap_or(false);
@@ -1133,15 +1447,7 @@ impl Settings {
                     chips.push(self.control(deed, face, window, cx));
                 }
                 if count <= SEGMENTS {
-                    return (
-                        Some(
-                            wrap(&theme)
-                                .justify_end()
-                                .children(chips)
-                                .into_any_element(),
-                        ),
-                        None,
-                    );
+                    return beside(wrap(&theme).justify_end().children(chips));
                 }
                 let current = { answers.iter() }
                     .find(|(_, selected)| *selected)
@@ -1152,30 +1458,26 @@ impl Settings {
                 (Some(opener), list)
             }
             Kind::Number => {
-                let shown = resolved.and_then(OptionDecl::number).map(|number| {
+                // A number that a step under its least takes out of the
+                // file shows what that means until it has one.
+                let value = if counts_from_unset(decl) {
+                    written
+                } else {
+                    resolved
+                };
+                let shown = value.and_then(OptionDecl::number).map(|number| {
                     let mut plain = decl.clone();
                     plain.unit = None;
                     plain.shown_number(number)
                 });
                 let field = self.field(row, decl, shown.unwrap_or_default(), cx);
-                let [less, more] = [(false, ICON_LESS), (true, ICON_MORE)].map(|(up, glyph)| {
-                    self.control(deed(Deed::Step(up)), Face::Glyph(glyph), window, cx)
-                });
+                let stepper = self.stepper(row, Deed::Step, field, window, cx);
                 let unit = decl.unit.clone().filter(|unit| !unit.is_empty());
-                let stepper = div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(theme.spacing.tiny)
-                    .child(less)
-                    .child(div().w(px(NUMBER_WIDTH)).flex().child(field))
-                    .child(more)
-                    .children(unit.map(|unit| {
-                        div()
-                            .text_color(theme.colors.on_surface_variant)
-                            .child(unit)
-                    }));
-                (Some(stepper.into_any_element()), None)
+                beside(stepper.children(unit.map(|unit| {
+                    div()
+                        .text_color(theme.colors.on_surface_variant)
+                        .child(unit)
+                })))
             }
             Kind::Slider => {
                 let share = resolved.and_then(OptionDecl::number);
@@ -1186,24 +1488,42 @@ impl Settings {
                 if let Some(number) = share {
                     slider.update(cx, |slider, cx| slider.show(number, cx));
                 }
-                let track = div().w(px(SLIDER_WIDTH)).flex().child(slider);
-                (Some(track.into_any_element()), None)
+                beside(div().w(px(SLIDER_WIDTH)).flex().child(slider))
             }
-            // A time and sides are typed as text until settings-core gives
-            // them controls of their own.
-            Kind::Text | Kind::Time | Kind::Sides => {
+            Kind::Text => {
                 let text = resolved.map(text_of).unwrap_or_default();
                 let field = self.field(row, decl, text, cx);
-                (
-                    Some(
-                        div()
-                            .w(px(FIELD_WIDTH))
-                            .flex()
-                            .child(field)
-                            .into_any_element(),
-                    ),
-                    None,
-                )
+                beside(div().w(px(FIELD_WIDTH)).flex().child(field))
+            }
+            Kind::Time => {
+                let text = resolved.map(text_of).unwrap_or_default();
+                let field = self.field(row, decl, text, cx);
+                // The hour is stepped on the left of the field, the
+                // minutes on its right.
+                let [hours, minutes] = [true, false].map(|hours| {
+                    [(false, ICON_LESS), (true, ICON_MORE)].map(|(up, glyph)| {
+                        let step = deed(Deed::StepTime { hours, up });
+                        self.control(step, Face::Glyph(glyph), window, cx)
+                    })
+                });
+                let clock = div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.tiny)
+                    .children(hours)
+                    .child(div().w(px(TIME_WIDTH)).flex().child(field))
+                    .children(minutes);
+                beside(clock)
+            }
+            Kind::Sides => {
+                let Held::Sides(sides) = self.held(row, decl, cx) else {
+                    return (None, None);
+                };
+                let sides = sides.clone();
+                let value = resolved.cloned();
+                sides.update(cx, |sides, cx| sides.show(value, cx));
+                (None, Some(sides.into_any_element()))
             }
             Kind::Color => {
                 let text = resolved.map(text_of).unwrap_or_default();
@@ -1282,8 +1602,29 @@ impl Settings {
                 };
                 (Some(inline.into_any_element()), list)
             }
+            // A list with choices is a choice of several: a box for each,
+            // written in the order of the choices.
+            Kind::List if !decl.choices.is_empty() => {
+                let held = match resolved {
+                    Some(value) => crate::options::parse_list(&text_of(value)),
+                    None => Vec::new(),
+                };
+                let mut boxes = Vec::new();
+                let offered = { decl.choices.iter() }.filter(|choice| !choice.is_unset());
+                for (index, choice) in offered.enumerate() {
+                    let face = Face::Check {
+                        text: choice.label(language).into(),
+                        checked: held.contains(&text_of(&choice.value)),
+                    };
+                    boxes.push(self.control(deed(Deed::Check(index)), face, window, cx));
+                }
+                (None, Some(wrap(&theme).children(boxes).into_any_element()))
+            }
             Kind::List | Kind::Pairs => {
                 let items = match (decl.kind, resolved) {
+                    (Kind::Pairs, Some(toml::Value::Table(table))) => { table.iter() }
+                        .map(|(name, value)| (name.clone(), text_of(value)))
+                        .collect(),
                     (Kind::Pairs, Some(value)) => {
                         crate::options::parse_pairs(&text_of(value)).unwrap_or_default()
                     }
@@ -1300,6 +1641,31 @@ impl Settings {
                 (None, Some(list.into_any_element()))
             }
         }
+    }
+
+    /// A number between the buttons that take it a step down and up, which
+    /// `step` makes the deeds of.
+    fn stepper(
+        &mut self,
+        row: &RowKey,
+        step: fn(bool) -> Deed,
+        field: AnyElement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = *cx.global::<Theme>();
+        let [less, more] = [(false, ICON_LESS), (true, ICON_MORE)].map(|(up, glyph)| {
+            let control = Control::Declared(row.clone(), step(up));
+            self.control(control, Face::Glyph(glyph), window, cx)
+        });
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(theme.spacing.tiny)
+            .child(less)
+            .child(div().w(px(NUMBER_WIDTH)).flex().child(field))
+            .child(more)
     }
 
     /// The field of `row`, showing `text` unless something is being typed
@@ -1412,14 +1778,19 @@ pub(super) struct DeclaredField {
 impl EventEmitter<Commit> for DeclaredField {}
 
 impl DeclaredField {
-    fn new(placeholder: SharedString, cx: &mut Context<Self>) -> Self {
+    /// A field that says `placeholder` while it is empty, and that writes
+    /// what is typed once typing pauses where `on_pause` says so.
+    fn new(placeholder: SharedString, on_pause: bool, cx: &mut Context<Self>) -> Self {
         let field = cx.new(|cx| TextField::new(placeholder, cx));
-        cx.observe(&field, |this: &mut Self, field, cx| {
+        cx.observe(&field, move |this: &mut Self, field, cx| {
             let text = field.read(cx).text();
             if text == this.written {
                 return;
             }
             this.typed = true;
+            if !on_pause {
+                return;
+            }
             this.pause = Some(
                 cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                     cx.background_executor().timer(TYPING_PAUSE).await;
@@ -1646,6 +2017,9 @@ struct CarriedRow {
 /// that takes it out, and a button that adds one.
 pub(super) struct DeclaredList {
     pairs: bool,
+    /// The fewest and the most items it may have; it shows at least the
+    /// fewest rows, and offers no more than the most.
+    bounds: (usize, Option<usize>),
     rows: Vec<ListRow>,
     /// What the file held when it was shown last.
     written: Vec<(String, String)>,
@@ -1660,9 +2034,10 @@ pub(super) struct DeclaredList {
 impl EventEmitter<Commit> for DeclaredList {}
 
 impl DeclaredList {
-    fn new(pairs: bool, cx: &mut Context<Self>) -> Self {
+    fn new(pairs: bool, bounds: (usize, Option<usize>), cx: &mut Context<Self>) -> Self {
         Self {
             pairs,
+            bounds,
             rows: Vec::new(),
             written: Vec::new(),
             typed: false,
@@ -1718,8 +2093,18 @@ impl DeclaredList {
             return;
         }
         self.rows = items.iter().map(|item| self.row(item, cx)).collect();
+        // Rows to fill in up to the fewest there may be.
+        while self.rows.len() < self.bounds.0 {
+            let empty = self.row(&(String::new(), String::new()), cx);
+            self.rows.push(empty);
+        }
         self.written = items;
         cx.notify();
+    }
+
+    /// Whether `count` items may be written.
+    fn fits(&self, count: usize) -> bool {
+        count >= self.bounds.0 && self.bounds.1.is_none_or(|most| count <= most)
     }
 
     fn typing(&mut self, cx: &mut Context<Self>) {
@@ -1753,6 +2138,12 @@ impl DeclaredList {
             cx.emit(Commit(Err(error)));
             return;
         }
+        // A list of a bounded length is written once it has enough items;
+        // the rows stay as typed until then.
+        if !self.fits(items.len()) && !items.is_empty() {
+            self.typed = true;
+            return;
+        }
         self.typed = false;
         self.written = items.clone();
         let value = (!items.is_empty()).then(|| {
@@ -1773,7 +2164,7 @@ impl DeclaredList {
     }
 
     fn remove(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.rows.len() {
+        if index < self.rows.len() && self.rows.len() > self.bounds.0 {
             self.rows.remove(index);
             self.commit(cx);
             cx.notify();
@@ -1842,8 +2233,11 @@ impl Render for DeclaredList {
                     let title = carried.title.clone();
                     cx.new(|_| Lifted { title })
                 });
-            let remove = list_button(&theme, ("list-remove", index), ICON_REMOVE)
-                .on_click(cx.listener(move |this, _, _, cx| this.remove(index, cx)));
+            // A list cut to its fewest items keeps them.
+            let remove = (self.rows.len() > self.bounds.0).then(|| {
+                list_button(&theme, ("list-remove", index), ICON_REMOVE)
+                    .on_click(cx.listener(move |this, _, _, cx| this.remove(index, cx)))
+            });
             let fields = div()
                 .flex_1()
                 .min_w_0()
@@ -1874,24 +2268,27 @@ impl Render for DeclaredList {
                     }))
                     .child(handle)
                     .child(fields)
-                    .child(remove),
+                    .children(remove),
             );
         }
         let count = self.rows.len();
-        let add = div()
-            .id("list-add")
-            .flex()
-            .items_center()
-            .gap(theme.spacing.tiny)
-            .text_color(theme.colors.primary)
-            .cursor_pointer()
-            .child(icon(&theme, ICON_MORE).text_size(theme.typography.label_size))
-            .child(language.say("Add"))
-            .on_click(cx.listener(|this, _, window, cx| this.add(window, cx)))
-            .drag_over::<CarriedRow>(move |style, _, _, _| style.text_color(mark))
-            .on_drop(cx.listener(move |this, carried: &CarriedRow, _, cx| {
-                this.land(carried.from, count, cx);
-            }));
+        let full = self.bounds.1.is_some_and(|most| count >= most);
+        let add = (!full).then(|| {
+            div()
+                .id("list-add")
+                .flex()
+                .items_center()
+                .gap(theme.spacing.tiny)
+                .text_color(theme.colors.primary)
+                .cursor_pointer()
+                .child(icon(&theme, ICON_MORE).text_size(theme.typography.label_size))
+                .child(language.say("Add"))
+                .on_click(cx.listener(|this, _, window, cx| this.add(window, cx)))
+                .drag_over::<CarriedRow>(move |style, _, _, _| style.text_color(mark))
+                .on_drop(cx.listener(move |this, carried: &CarriedRow, _, cx| {
+                    this.land(carried.from, count, cx);
+                }))
+        });
         div()
             .track_focus(&self.focus)
             .flex()
@@ -1899,10 +2296,227 @@ impl Render for DeclaredList {
             .gap(theme.spacing.tiny)
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
             .children(rows)
-            .child(add)
+            .children(add)
     }
 }
 
+/// The sides of a setting of the kind `sides`, in the order of the table
+/// the file holds, each with what its field says while it is empty.
+const SIDES: [(&str, &str); 4] = [
+    ("top", "Top"),
+    ("right", "Right"),
+    ("bottom", "Bottom"),
+    ("left", "Left"),
+];
+
+/// The room at the sides of something: one number for every side, or a
+/// number for each of top, right, bottom and left. What is typed is
+/// written once typing pauses or Enter is pressed; a
+/// text that is no number is said and not written.
+pub(super) struct DeclaredSides {
+    decl: OptionDecl,
+    /// Whether each side has a number of its own.
+    each: bool,
+    /// The field of the number of every side.
+    all: Entity<TextField>,
+    /// The fields of top, right, bottom and left.
+    sides: [Entity<TextField>; 4],
+    /// What the file held when it was shown last.
+    written: Option<toml::Value>,
+    /// Whether what is typed has not been written yet.
+    typed: bool,
+    pause: Option<Task<()>>,
+}
+
+impl EventEmitter<Commit> for DeclaredSides {}
+
+impl DeclaredSides {
+    fn new(decl: OptionDecl, cx: &mut Context<Self>) -> Self {
+        let language = Language::of(cx);
+        let placeholder = { decl.placeholder.as_ref().or(decl.unset_label.as_ref()) }
+            .map(|label| label.text(language))
+            .unwrap_or_default();
+        let all = Self::field(placeholder.into(), cx);
+        let sides = SIDES.map(|(_, title)| Self::field(language.say(title).into(), cx));
+        Self {
+            decl,
+            each: false,
+            all,
+            sides,
+            written: None,
+            typed: false,
+            pause: None,
+        }
+    }
+
+    /// A field that is watched for what is typed in it.
+    fn field(placeholder: SharedString, cx: &mut Context<Self>) -> Entity<TextField> {
+        let field = cx.new(|cx| TextField::new(placeholder, cx));
+        cx.observe(&field, |this: &mut Self, _, cx| this.typing(cx))
+            .detach();
+        field
+    }
+
+    /// The number `value` holds as the field shows it.
+    fn shown(&self, value: Option<&toml::Value>) -> String {
+        { value.and_then(OptionDecl::number) }
+            .map(|number| self.decl.shown_number(number))
+            .map(|text| text.trim_end_matches(['%', ' ']).to_owned())
+            .unwrap_or_default()
+    }
+
+    /// Shows `value`, what the file holds, unless something is typed.
+    fn show(&mut self, value: Option<toml::Value>, cx: &mut Context<Self>) {
+        if self.typed || self.written == value {
+            return;
+        }
+        self.each = matches!(value, Some(toml::Value::Table(_)));
+        let all = match &value {
+            Some(toml::Value::Table(_)) => String::new(),
+            other => self.shown(other.as_ref()),
+        };
+        let texts = SIDES.map(|(side, _)| match &value {
+            Some(toml::Value::Table(table)) => self.shown(table.get(side)),
+            other => self.shown(other.as_ref()),
+        });
+        self.all.update(cx, |field, cx| field.put_text(&all, cx));
+        for (field, text) in self.sides.iter().zip(texts) {
+            field.update(cx, |field, cx| field.put_text(&text, cx));
+        }
+        self.written = value;
+        self.typed = false;
+        cx.notify();
+    }
+
+    fn typing(&mut self, cx: &mut Context<Self>) {
+        self.typed = true;
+        self.pause = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                cx.background_executor().timer(TYPING_PAUSE).await;
+                this.update(cx, |this, cx| this.commit(cx)).ok();
+            }),
+        );
+    }
+
+    /// What the fields hold, as the file is to hold it: the number of
+    /// every side, or a table of the sides that have one; no value where
+    /// nothing is typed.
+    fn value(&self, cx: &App) -> Result<Option<toml::Value>, String> {
+        let number = |field: &Entity<TextField>| -> Result<Option<toml::Value>, String> {
+            let text = field.read(cx).text();
+            let text = text.trim();
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let number: f64 = { text.parse() }.map_err(|_| format!("`{text}` is no number"))?;
+            Ok(Some(self.decl.number_value(self.decl.fit(number))))
+        };
+        if !self.each {
+            return number(&self.all);
+        }
+        let mut table = toml::Table::new();
+        for ((side, _), field) in SIDES.iter().zip(&self.sides) {
+            if let Some(room) = number(field)? {
+                table.insert((*side).to_owned(), room);
+            }
+        }
+        Ok((!table.is_empty()).then_some(toml::Value::Table(table)))
+    }
+
+    /// Asks for what the fields hold to be written.
+    fn commit(&mut self, cx: &mut Context<Self>) {
+        self.pause = None;
+        if !self.typed {
+            return;
+        }
+        let value = self.value(cx);
+        if let Ok(value) = &value {
+            self.typed = false;
+            self.written.clone_from(value);
+        }
+        cx.emit(Commit(value));
+    }
+
+    /// Gives each side a number of its own, starting from the number of
+    /// every side, or one number for all, starting from the top.
+    fn split(&mut self, each: bool, cx: &mut Context<Self>) {
+        if self.each == each {
+            return;
+        }
+        self.each = each;
+        if each {
+            let all = self.all.read(cx).text();
+            for field in &self.sides {
+                field.update(cx, |field, cx| field.put_text(&all, cx));
+            }
+        } else {
+            let top = self.sides[0].read(cx).text();
+            self.all.update(cx, |field, cx| field.put_text(&top, cx));
+        }
+        self.typed = true;
+        self.commit(cx);
+        cx.notify();
+    }
+
+    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if event.keystroke.key == "enter" {
+            self.commit(cx);
+        }
+    }
+}
+
+impl Render for DeclaredSides {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let mut modes = Vec::new();
+        for (each, title) in [(false, "Every side"), (true, "Each side")] {
+            let selected = self.each == each;
+            let (ground, color) = if selected {
+                (theme.colors.secondary_container, theme.colors.primary)
+            } else {
+                (theme.colors.surface_container, theme.colors.on_surface)
+            };
+            let hover = mix(ground, theme.colors.on_surface, crate::ui::HOVER_LAYER);
+            modes.push(
+                div()
+                    .id(("sides-mode", usize::from(each)))
+                    .h(CHIP_HEIGHT)
+                    .px(theme.spacing.small + theme.spacing.tiny)
+                    .flex()
+                    .items_center()
+                    .rounded(theme.shape.full)
+                    .bg(ground)
+                    .hover(move |style| style.bg(hover))
+                    .text_color(color)
+                    .cursor_pointer()
+                    .child(language.say(title))
+                    .on_click(cx.listener(move |this, _, _, cx| this.split(each, cx))),
+            );
+        }
+        let unit = self.decl.unit.clone().filter(|unit| !unit.is_empty());
+        let fields = if self.each {
+            let sides = self
+                .sides
+                .iter()
+                .map(|field| div().w(px(NUMBER_WIDTH)).flex().child(field.clone()));
+            wrap(&theme).children(sides)
+        } else {
+            wrap(&theme).child(div().w(px(NUMBER_WIDTH)).flex().child(self.all.clone()))
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.tiny)
+            .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
+            .child(wrap(&theme).children(modes))
+            .child(fields.children(unit.map(|unit| {
+                div()
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(unit)
+            })))
+    }
+}
 /// The installed font families to choose one of, with a field that
 /// narrows them down.
 pub(super) struct FontPicker {
@@ -2039,5 +2653,64 @@ impl Render for FontPicker {
             .bg(theme.colors.surface_container)
             .child(div().flex().child(self.filter.clone()))
             .child(list)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::Choice;
+
+    #[test]
+    fn a_time_typed_with_one_digit_of_hours_is_padded() {
+        assert_eq!(padded_time("7:30"), "07:30");
+        assert_eq!(padded_time(" 21:05 "), "21:05");
+        assert_eq!(padded_time("7"), "7");
+        assert_eq!(padded_time("x:30"), "x:30");
+    }
+
+    #[test]
+    fn a_time_steps_by_hours_and_by_whole_minutes_around_the_clock() {
+        assert_eq!(stepped_time(Some("07:30"), true, true), "08:30");
+        assert_eq!(stepped_time(Some("00:15"), true, false), "23:15");
+        assert_eq!(stepped_time(Some("07:32"), false, true), "07:35");
+        assert_eq!(stepped_time(Some("07:32"), false, false), "07:30");
+        assert_eq!(stepped_time(Some("07:30"), false, false), "07:25");
+        assert_eq!(stepped_time(Some("23:55"), false, true), "00:00");
+        assert_eq!(stepped_time(None, false, false), "23:55");
+        assert_eq!(stepped_time(Some("late"), true, true), "01:00");
+    }
+
+    #[test]
+    fn a_choice_of_several_is_written_in_the_order_of_its_choices() {
+        let choices: Vec<Choice> = ["mon", "tue", "sun"]
+            .iter()
+            .map(|value| Choice {
+                value: (*value).into(),
+                label: None,
+                overlay: None,
+            })
+            .collect();
+        let held: toml::Value = toml::Value::Array(vec!["sun".into(), "mon".into()]);
+        assert_eq!(
+            toggled_items(&choices, Some(&held), 1),
+            ["mon", "tue", "sun"]
+        );
+        assert_eq!(toggled_items(&choices, Some(&held), 2), ["mon"]);
+        assert_eq!(toggled_items(&choices, None, 2), ["sun"]);
+        // A list written as text by hand reads the same.
+        let text: toml::Value = "tue; sun".into();
+        assert_eq!(toggled_items(&choices, Some(&text), 1), ["sun"]);
+    }
+
+    #[test]
+    fn a_value_is_written_as_the_file_writes_it() {
+        let sides: toml::Value =
+            toml::from_str::<toml::Table>("v = { top = 4, left = 2.5 }").unwrap()["v"].clone();
+        let written = edit_value(&sides).to_string();
+        assert!(written.contains("top = 4"), "{written}");
+        assert!(written.contains("left = 2.5"), "{written}");
+        let list = toml::Value::Array(vec!["a".into(), "b".into()]);
+        assert_eq!(edit_value(&list).to_string(), r#"["a", "b"]"#);
     }
 }

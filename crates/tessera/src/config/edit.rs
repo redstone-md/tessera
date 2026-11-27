@@ -568,12 +568,16 @@ impl ConfigFile {
         found
     }
 
-    /// Sets the option `key` of every widget `name`, wherever it is placed;
-    /// `None` takes it away. Whether there is such a widget is returned.
+    /// Sets the option `key` of every widget `name`, wherever it is placed:
+    /// on a surface, in a popup (both its columns) or on a card of the
+    /// desktop; `None` takes it away. Whether there is such a widget is
+    /// returned.
     pub fn set_option(&mut self, name: &str, key: &str, value: Option<Value>) -> bool {
         let placed = self.on_surfaces(name, key, value.as_ref());
         let shown = self.in_popups(name, key, value.as_ref());
-        placed || shown
+        let beside = self.in_popup_sides(name, key, value.as_ref());
+        let lying = self.on_desktop_cards(name, key, value.as_ref());
+        placed || shown || beside || lying
     }
 
     /// Sets `key` at the top of the file; `None` takes it away.
@@ -1771,5 +1775,346 @@ mod wallpaper_tests {
             Source::Files
         );
         assert_eq!(colored("[wallpaper]\nsource = \"color\"\n"), Source::Color);
+    }
+}
+
+// settings-core: keys at any depth of a table, the options of one placed
+// widget, and of widgets named so on popups' second column and on cards.
+
+/// One placed widget, as the Widgets section of the settings and its
+/// `open_at` item name it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum WidgetPlace {
+    /// The widget at `index` of a slot of the surface at `surface`.
+    Surface {
+        surface: usize,
+        slot: Slot,
+        index: usize,
+    },
+    /// The widget at `index` of the popup `name`, counting its `content`
+    /// and then its `side`.
+    Popup { name: String, index: usize },
+    /// The widget at `widget` of the card of the desktop at `index`.
+    Card { index: usize, widget: usize },
+}
+
+impl WidgetPlace {
+    /// The place an item of `Settings::open_at` names:
+    /// `surface/<n>/<start|center|end>/<i>`, `popup/<name>/<i>`, or
+    /// `card/<i>` for the first widget of a card and `card/<i>/<j>`.
+    pub fn parse(item: &str) -> Option<Self> {
+        let parts: Vec<&str> = item.split('/').collect();
+        let number = |text: &str| text.parse::<usize>().ok();
+        match parts.as_slice() {
+            ["surface", surface, slot, index] => Some(Self::Surface {
+                surface: number(surface)?,
+                slot: Slot::ALL.into_iter().find(|known| known.key() == *slot)?,
+                index: number(index)?,
+            }),
+            ["popup", name, index] if !name.is_empty() => Some(Self::Popup {
+                name: (*name).to_owned(),
+                index: number(index)?,
+            }),
+            ["card", index] => Some(Self::Card {
+                index: number(index)?,
+                widget: 0,
+            }),
+            ["card", index, widget] => Some(Self::Card {
+                index: number(index)?,
+                widget: number(widget)?,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The item that names it, as [`Self::parse`] reads it.
+    pub fn item(&self) -> String {
+        match self {
+            Self::Surface {
+                surface,
+                slot,
+                index,
+            } => format!("surface/{surface}/{}/{index}", slot.key()),
+            Self::Popup { name, index } => format!("popup/{name}/{index}"),
+            Self::Card { index, widget: 0 } => format!("card/{index}"),
+            Self::Card { index, widget } => format!("card/{index}/{widget}"),
+        }
+    }
+
+    /// The widget at this place of `config`.
+    pub fn spec<'a>(&self, config: &'a Config) -> Option<&'a super::WidgetSpec> {
+        match self {
+            Self::Surface {
+                surface,
+                slot,
+                index,
+            } => {
+                let surface = config.surfaces.get(*surface)?;
+                let widgets = match slot {
+                    Slot::Start => &surface.start,
+                    Slot::Center => &surface.center,
+                    Slot::End => &surface.end,
+                };
+                widgets.get(*index)
+            }
+            Self::Popup { name, index } => {
+                let popup = config.popups.iter().find(|popup| popup.name == *name)?;
+                popup.widgets().nth(*index)
+            }
+            Self::Card { index, widget } => config.cards.get(*index)?.content.get(*widget),
+        }
+    }
+}
+
+impl ConfigFile {
+    /// Sets the key at `path`, each part below the one before, as
+    /// `["tiling", "border", "width"]`; the tables on the way are made
+    /// where they are missing, and those left empty are taken away with
+    /// the key. `None` takes the key away. Comments stay. Whether every
+    /// part on the way is a table keys can be set in is returned.
+    pub fn set_at(&mut self, path: &[&str], value: Option<Value>) -> bool {
+        fn set(table: &mut dyn toml_edit::TableLike, path: &[&str], value: Option<Value>) -> bool {
+            let Some((first, rest)) = path.split_first() else {
+                return false;
+            };
+            if rest.is_empty() {
+                match value {
+                    Some(value) => {
+                        table.insert(first, Item::Value(value));
+                    }
+                    None => {
+                        table.remove(first);
+                    }
+                }
+                return true;
+            }
+            if value.is_none() && table.get(first).is_none() {
+                return true;
+            }
+            let item = table.entry(first).or_insert_with(|| {
+                let mut made = Table::new();
+                // `[outer.inner]` is written without an empty `[outer]`.
+                made.set_implicit(true);
+                Item::Table(made)
+            });
+            let Some(inner) = item.as_table_like_mut() else {
+                return false;
+            };
+            let done = set(inner, rest, value);
+            if inner.is_empty() {
+                table.remove(first);
+            }
+            done
+        }
+        set(self.document.as_table_mut(), path, value)
+    }
+
+    /// Sets the option `key` of the one widget at `place`, which becomes
+    /// an inline table where it is written by its name alone and its name
+    /// again once it has no other option; `None` takes the option away.
+    /// Whether there is a widget at `place` is returned.
+    pub fn set_widget_option(
+        &mut self,
+        place: &WidgetPlace,
+        key: &str,
+        value: Option<Value>,
+    ) -> bool {
+        let Some(widget) = self.widget_at_place(place) else {
+            return false;
+        };
+        let name = match widget {
+            Value::String(name) => name.value().clone(),
+            Value::InlineTable(table) => match table.get("widget").and_then(Value::as_str) {
+                Some(name) => name.to_owned(),
+                None => return false,
+            },
+            _ => return false,
+        };
+        Self::option(widget, &name, key, value.as_ref())
+    }
+
+    /// The entry of the widget at `place` in the file.
+    fn widget_at_place(&mut self, place: &WidgetPlace) -> Option<&mut Value> {
+        let document = &mut self.document;
+        match place {
+            WidgetPlace::Surface {
+                surface,
+                slot,
+                index,
+            } => {
+                let surfaces = document.get_mut("surface")?.as_array_of_tables_mut()?;
+                let widgets = surfaces.get_mut(*surface)?.get_mut(slot.key())?;
+                widgets.as_array_mut()?.get_mut(*index)
+            }
+            WidgetPlace::Popup { name, index } => {
+                let popups = document.get_mut("popup")?.as_array_of_tables_mut()?;
+                let popup = { popups.iter_mut() }
+                    .find(|popup| popup.get("name").and_then(Item::as_str) == Some(name))?;
+                let content = popup
+                    .get("content")
+                    .and_then(Item::as_array)
+                    .map_or(0, Array::len);
+                let (column, at) = match index.checked_sub(content) {
+                    Some(at) => ("side", at),
+                    None => ("content", *index),
+                };
+                popup.get_mut(column)?.as_array_mut()?.get_mut(at)
+            }
+            WidgetPlace::Card { index, widget } => {
+                let cards = document.get_mut("card")?.as_array_of_tables_mut()?;
+                let content = cards.get_mut(*index)?.get_mut("content")?;
+                content.as_array_mut()?.get_mut(*widget)
+            }
+        }
+    }
+
+    /// Sets the option `key` of every widget `name` in the second column
+    /// of a popup. Whether there is such a widget is returned.
+    fn in_popup_sides(&mut self, name: &str, key: &str, value: Option<&Value>) -> bool {
+        let popups = self.document.get_mut("popup");
+        let Some(popups) = popups.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        let mut found = false;
+        for popup in popups.iter_mut() {
+            let Some(widgets) = popup.get_mut("side").and_then(Item::as_array_mut) else {
+                continue;
+            };
+            for widget in widgets.iter_mut() {
+                found |= Self::option(widget, name, key, value);
+            }
+            widgets.fmt();
+        }
+        found
+    }
+
+    /// Sets the option `key` of every widget `name` on a card of the
+    /// desktop. Whether there is such a widget is returned.
+    fn on_desktop_cards(&mut self, name: &str, key: &str, value: Option<&Value>) -> bool {
+        let cards = self.document.get_mut("card");
+        let Some(cards) = cards.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        let mut found = false;
+        for card in cards.iter_mut() {
+            let Some(widgets) = card.get_mut("content").and_then(Item::as_array_mut) else {
+                continue;
+            };
+            for widget in widgets.iter_mut() {
+                found |= Self::option(widget, name, key, value);
+            }
+            widgets.fmt();
+        }
+        found
+    }
+}
+
+#[cfg(test)]
+mod settings_core_tests {
+    use super::*;
+
+    fn file(text: &str) -> ConfigFile {
+        ConfigFile::parse(text).unwrap()
+    }
+
+    #[test]
+    fn a_key_at_a_path_makes_its_tables_and_takes_them_away_again() {
+        let mut edited = file("# Mine.\n[tiling]\ngap = 8 # kept\n");
+        assert!(edited.set_at(&["tiling", "border", "width"], Some(4.into())));
+        assert!(edited.set_at(&["night_light", "from"], Some("21:30".into())));
+        assert!(edited.set_at(&["contrast"], Some(false.into())));
+        let text = edited.document.to_string();
+        assert!(text.contains("# kept"), "{text}");
+        assert!(text.contains("[tiling.border]\nwidth = 4"), "{text}");
+        assert!(text.contains("[night_light]\nfrom = \"21:30\""), "{text}");
+        assert!(text.contains("contrast = false"), "{text}");
+        let config = edited.config().expect("it stays usable");
+        assert!(!config.contrast);
+        assert!(edited.set_at(&["tiling", "border", "width"], None));
+        assert!(edited.set_at(&["night_light", "from"], None));
+        let text = edited.document.to_string();
+        assert!(!text.contains("border"), "{text}");
+        assert!(!text.contains("night_light"), "{text}");
+        assert!(text.contains("gap = 8 # kept"), "{text}");
+        // Taking away what is not there changes nothing.
+        let mut empty = file("");
+        assert!(empty.set_at(&["snap", "zones", "gap"], None));
+        assert_eq!(empty.document.to_string(), "");
+        // A value is no table to set a key in.
+        let mut flag = file("[tiling]\nborder = true\n");
+        assert!(!flag.set_at(&["tiling", "border", "width"], Some(2.into())));
+    }
+
+    #[test]
+    fn a_placed_widget_is_named_by_its_item() {
+        for item in ["surface/1/center/0", "popup/sound/3", "card/2", "card/2/1"] {
+            let place = WidgetPlace::parse(item).expect(item);
+            assert_eq!(place.item(), item);
+        }
+        assert_eq!(WidgetPlace::parse("card/0/0"), WidgetPlace::parse("card/0"));
+        for wrong in ["surface/1/middle/0", "popup//1", "card/x", "dock/1", ""] {
+            assert_eq!(WidgetPlace::parse(wrong), None, "{wrong}");
+        }
+    }
+
+    const PLACED: &str = r#"[[surface]]
+edge = "top"
+thickness = 40
+end = ["clock", { widget = "clock", format = "%H:%M" }]
+
+[[popup]]
+name = "info"
+width = 300
+height = 200
+content = ["cpu"]
+side = ["clock"]
+
+[[card]]
+corner = "top-left"
+width = 200
+height = 100
+content = ["memory", "clock"]
+"#;
+
+    #[test]
+    fn one_widget_gets_an_option_of_its_own() {
+        let mut edited = file(PLACED);
+        let second = WidgetPlace::parse("surface/0/end/1").unwrap();
+        assert!(edited.set_widget_option(&second, "format", Some("%H".into())));
+        let first = WidgetPlace::parse("surface/0/end/0").unwrap();
+        assert!(edited.set_widget_option(&first, "seconds", Some(true.into())));
+        let side = WidgetPlace::parse("popup/info/1").unwrap();
+        assert!(edited.set_widget_option(&side, "format", Some("%M".into())));
+        let card = WidgetPlace::parse("card/0/1").unwrap();
+        assert!(edited.set_widget_option(&card, "format", Some("%S".into())));
+        let config = edited.config().expect("it stays usable");
+        let option = |place: &WidgetPlace, key: &str| {
+            let spec = place.spec(&config)?;
+            spec.options.get(key).cloned()
+        };
+        assert_eq!(option(&second, "format"), Some("%H".into()));
+        assert_eq!(option(&first, "seconds"), Some(true.into()));
+        assert_eq!(option(&first, "format"), None);
+        assert_eq!(option(&side, "format"), Some("%M".into()));
+        assert_eq!(option(&card, "format"), Some("%S".into()));
+        // Without its last option a widget is written by its name again.
+        assert!(edited.set_widget_option(&first, "seconds", None));
+        assert!(edited.document.to_string().contains("end = [\"clock\","));
+        let nowhere = WidgetPlace::parse("popup/info/5").unwrap();
+        assert!(!edited.set_widget_option(&nowhere, "format", None));
+    }
+
+    #[test]
+    fn an_option_of_every_widget_of_a_name_reaches_cards_and_second_columns() {
+        let mut edited = file(PLACED);
+        assert!(edited.set_option("clock", "format", Some("%T".into())));
+        let config = edited.config().expect("it stays usable");
+        let clocks = { config.surfaces[0].end.iter() }
+            .chain(&config.popups[0].side)
+            .chain(&config.cards[0].content[1..]);
+        for clock in clocks {
+            assert_eq!(clock.options.get("format"), Some(&"%T".into()));
+        }
+        assert!(!edited.set_option("weather", "unit", None));
     }
 }

@@ -1180,3 +1180,12 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Clipboard and screenshots" = "Presse-papiers et captures d'écran"
 "Displays and power" = "Écrans et alimentation"
 "Session" = "Session"
+# settings-core: the settings drawn through the schema, search and backups.
+"Not written:" = "Non écrit :"
+"Every side" = "Tous les côtés"
+"Each side" = "Chaque côté"
+"Placed widgets" = "Widgets placés"
+"Every widget placed on a bar, in a popup of the configuration file or on a card of the desktop. Its options are set for it alone." = "Chaque widget placé sur une barre, dans une fenêtre surgissante du fichier de configuration ou sur une carte du bureau. Ses options ne valent que pour lui."
+"These options are set in config.toml:" = "Ces options se règlent dans config.toml :"
+"This widget declares no options; what it reads is written in config.toml." = "Ce widget ne déclare aucune option ; ce qu'il lit s'écrit dans config.toml."
+"The other displays" = "Les autres écrans"
