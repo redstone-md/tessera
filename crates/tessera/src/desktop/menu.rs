@@ -3,22 +3,22 @@
 
 //! The menus of the desktop, in Tessera's style: the menu of the icons
 //! chosen (Open, Open with, Cut, Copy, Create shortcut, Rename, Delete,
-//! Properties, and the menu of the Shell as Windows draws it under "Show
-//! more options"), and the menu of the desktop itself (how the icons are
-//! shown and sorted, pasting, undoing, New, widgets and cards, the
-//! wallpaper, the settings of the displays and of the look, a terminal,
-//! and the menu of the Shell for the desktop folder).
+//! Properties, Send to, the verbs of the Shell and the menu of the Shell
+//! as Windows draws it under "Show more options"), and the menu of the
+//! desktop itself (how the icons are shown and sorted, pasting, undoing,
+//! New, widgets and cards, the wallpaper, the settings of the displays
+//! and of the look, a terminal, and the verbs and the menu of the Shell
+//! for the desktop folder).
 //!
-//! What only the Shell knows (the programs that open a file, the kinds of
-//! new files) is asked when its submenu is opened, so that the menu opens
-//! at once. The verbs the menu of the Shell hands back ([`Intercept`])
-//! are done by the desktop itself, so that they stay in the undo journal.
+//! What the Shell adds is built by [`crate::shell_entries`], as for the
+//! file manager: the menu opens once the Shell answered, or without it
+//! after a moment. The verbs the menu of the Shell hands back
+//! ([`Intercept`](crate::platform::Intercept)) are done by the desktop
+//! itself, so that they stay in the undo journal.
 
 use std::path::PathBuf;
-use std::rc::Rc;
 
-use async_channel::Receiver;
-use gpui::{AnyWindowHandle, App, AsyncApp, Entity, Pixels, Point, Window};
+use gpui::{AnyWindowHandle, App, AsyncApp, Context, Entity, Pixels, Point, Window};
 
 use super::grid::{Arrangement, Spot};
 use super::items::SortBy;
@@ -28,15 +28,12 @@ use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::module::WidgetRegistry;
 use crate::panel::{Arranging, rewrite};
-use crate::platform::{
-    Intercept, Launch, MenuOutcome, NewTemplate, OpenWithHandler, RecycleBin, ShellMenu,
-    UndoJournal, VirtualKind, choose_app, terminal,
-};
+use crate::platform::{Launch, NewTemplate, RecycleBin, UndoJournal, VirtualKind, terminal};
 use crate::popup::PopupAnchor;
+use crate::shell_entries::{FileMenu, MenuTarget, ShellChoices, ShellEntries, one_kind, submenu};
 
 /// Characters of the icon font.
 const ICON_OPEN: &str = "\u{e8e5}";
-const ICON_OPEN_WITH: &str = "\u{e7ac}";
 const ICON_CUT: &str = "\u{e8c6}";
 const ICON_COPY: &str = "\u{e8c8}";
 const ICON_PASTE: &str = "\u{e77f}";
@@ -45,14 +42,11 @@ const ICON_SHARE: &str = "\u{e72d}";
 const ICON_RENAME: &str = "\u{e8ac}";
 const ICON_DELETE: &str = "\u{e74d}";
 const ICON_PROPERTIES: &str = "\u{e946}";
-const ICON_MORE: &str = "\u{e712}";
 const ICON_VIEW: &str = "\u{e890}";
 const ICON_SORT: &str = "\u{e8cb}";
 const ICON_REFRESH: &str = "\u{e72c}";
 const ICON_UNDO: &str = "\u{e7a7}";
 const ICON_REDO: &str = "\u{e7a6}";
-const ICON_NEW: &str = "\u{e710}";
-const ICON_FOLDER: &str = "\u{e8b7}";
 const ICON_WIDGETS: &str = "\u{f0e2}";
 const ICON_ARRANGE: &str = "\u{e8a9}";
 const ICON_WALLPAPER: &str = "\u{e91b}";
@@ -89,40 +83,75 @@ fn checked(on: bool) -> &'static str {
     if on { ICON_CHECK } else { ICON_NONE }
 }
 
-/// An entry that opens the menu `entries` in place of the one it is in.
-fn submenu(
-    glyph: &'static str,
-    label: &'static str,
-    entries: Vec<MenuEntry>,
-    anchor: PopupAnchor,
-    language: Language,
-) -> MenuEntry {
-    later_submenu(glyph, label, anchor, language, move |_| {
-        let (sent, entries_ready) = async_channel::bounded(1);
-        sent.try_send(entries.clone()).ok();
-        entries_ready
-    })
+impl FileMenu for DesktopModel {
+    /// Where the menu of the desktop was opened, where new icons go.
+    type Place = Option<Spot>;
+
+    const OWN_NEW_FOLDER: bool = false;
+
+    /// Create shortcut, and Empty the Recycle Bin of the bin's own menu.
+    const OWN_VERBS: &'static [&'static str] = &["link", "empty"];
+
+    fn chosen_files(&self) -> Vec<PathBuf> {
+        self.chosen_paths()
+    }
+
+    fn make_new(
+        &mut self,
+        template: Option<NewTemplate>,
+        place: &Option<Spot>,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_item(template, *place, window, cx);
+    }
+
+    fn start_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_chosen(window, cx);
+    }
+
+    fn delete_chosen(&mut self, cx: &mut Context<Self>) {
+        self.delete(false, cx);
+    }
+
+    fn paste_here(&mut self, link: bool, place: &Option<Spot>, cx: &mut Context<Self>) {
+        self.place_new_at(*place);
+        self.paste(link, cx);
+    }
+
+    fn read_again(&mut self, cx: &mut Context<Self>) {
+        self.reload(cx);
+    }
+
+    fn refresh_all(&mut self, cx: &mut Context<Self>) {
+        self.refresh(cx);
+    }
+
+    fn take_back(&mut self, again: bool, cx: &mut Context<Self>) {
+        self.undo(again, cx);
+    }
 }
 
-/// An entry that opens a menu of what `entries` yields once it is asked
-/// for, as what only the Shell knows takes a moment.
-fn later_submenu(
-    glyph: &'static str,
-    label: &'static str,
-    anchor: PopupAnchor,
-    language: Language,
-    entries: impl Fn(&mut App) -> Receiver<Vec<MenuEntry>> + 'static,
-) -> MenuEntry {
-    MenuEntry::new(glyph, language.say(label), move |cx| {
-        let ready = entries(cx);
-        // The menu that holds the entry closes once the click is handled.
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            if let Ok(entries) = ready.recv().await {
-                cx.update(|cx| Menus::open(entries, anchor, cx)).ok();
-            }
+/// Asks the Shell what it adds for `chosen`, or for the background of
+/// `folder` where nothing is chosen, and opens the menu once it answered
+/// or the wait is over, with what `arrange` makes of the desktop's own
+/// entries and those of the Shell.
+fn open_with_shell(
+    target: MenuTarget<DesktopModel>,
+    (chosen, open_with, folder): (Vec<PathBuf>, Option<PathBuf>, Option<PathBuf>),
+    extended: bool,
+    arrange: impl FnOnce(ShellEntries) -> Vec<MenuEntry> + 'static,
+    cx: &mut App,
+) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let choices = ShellChoices::read(chosen, open_with, folder, extended, cx).await;
+        cx.update(|cx| {
+            let entries = arrange(target.entries(choices, Language::of(cx)));
+            Menus::open(entries, target.anchor, cx);
         })
-        .detach();
+        .ok();
     })
+    .detach();
 }
 
 /// Does `deed`, which needs the window of the icons, once the menu that
@@ -153,15 +182,54 @@ pub fn open_item_menu(
             return;
         }
     };
-    let entries = item_entries(model, anchor, extended, window.window_handle(), cx);
-    Menus::open(entries, anchor, cx);
+    let handle = window.window_handle();
+    let mut own = item_entries(model, handle, cx);
+    let read = model.read(cx);
+    let chosen = read.chosen();
+    let kinds: Vec<(PathBuf, bool)> = { chosen.iter() }
+        .filter_map(|key| {
+            let item = read.item(key)?;
+            Some((item.path()?.to_owned(), item.is_folder()))
+        })
+        .collect();
+    let open_with = one_kind(&kinds);
+    // The Shell's own verbs, of the files and of the items of the Shell
+    // (This PC, the Recycle Bin...) by the names it parses them by.
+    let virtuals = { chosen.iter() }
+        .filter_map(|key| read.item(key)?.virtual_kind())
+        .map(|kind| PathBuf::from(kind.parsing_name()));
+    let shell_items: Vec<PathBuf> = { kinds.into_iter().map(|(path, _)| path) }
+        .chain(virtuals)
+        .collect();
+    let target = MenuTarget {
+        host: model.downgrade(),
+        window: handle,
+        place: None,
+        anchor,
+    };
+    if shell_items.is_empty() {
+        Menus::open(own, anchor, cx);
+        return;
+    }
+    let asked = (shell_items, open_with, None);
+    open_with_shell(
+        target,
+        asked,
+        extended,
+        move |shell| {
+            // Open with goes right after Open, as in Explorer.
+            let at = own.len().min(1);
+            own.splice(at..at, shell.open_with);
+            own.extend(shell.rest);
+            own
+        },
+        cx,
+    );
 }
 
-/// The entries of the menu of the icons chosen.
+/// The desktop's own entries of the menu of the icons chosen.
 fn item_entries(
     model: &Entity<DesktopModel>,
-    anchor: PopupAnchor,
-    extended: bool,
     window: AnyWindowHandle,
     cx: &mut App,
 ) -> Vec<MenuEntry> {
@@ -182,9 +250,6 @@ fn item_entries(
         .filter_map(|key| read.item(key)?.virtual_kind())
         .collect();
     let mut entries = vec![entry(ICON_OPEN, "Open", |model, cx| model.open_chosen(cx))];
-    if let Some(path) = one_kind(&paths, read) {
-        entries.push(open_with(path, weak.clone(), anchor, language));
-    }
     if !paths.is_empty() {
         entries.push(entry(ICON_CUT, "Cut", |model, _| {
             model.put_on_clipboard(true)
@@ -244,142 +309,7 @@ fn item_entries(
     entries.push(entry(ICON_PROPERTIES, "Properties", |model, _| {
         model.properties()
     }));
-    // The Shell's own menu, of the files and of the items of the Shell
-    // (This PC, the Recycle Bin...) by the names it parses them by.
-    let shell_items: Vec<PathBuf> = { paths.iter().cloned() }
-        .chain(kinds.iter().map(|kind| PathBuf::from(kind.parsing_name())))
-        .collect();
-    if !shell_items.is_empty() {
-        let model = weak.clone();
-        entries.push(MenuEntry::new(
-            ICON_MORE,
-            language.say("Show more options"),
-            move |cx| {
-                let built = ShellMenu::for_items(shell_items.clone(), extended);
-                show_shell_menu(built, model.clone(), window, cx);
-            },
-        ));
-    }
     entries
-}
-
-/// The first of `paths` where all are files of one kind, by extension,
-/// which "Open with" is offered for.
-fn one_kind(paths: &[PathBuf], model: &DesktopModel) -> Option<PathBuf> {
-    let kind = |path: &PathBuf| {
-        let folder = { model.items().iter() }
-            .any(|item| item.path() == Some(path.as_path()) && item.is_folder());
-        let extension = path.extension()?.to_string_lossy().to_lowercase();
-        (!folder).then_some(extension)
-    };
-    let first = paths.first()?;
-    let wanted = kind(first)?;
-    { paths.iter() }
-        .all(|path| kind(path).as_ref() == Some(&wanted))
-        .then(|| first.clone())
-}
-
-/// "Open with": the programs that open files of the kind of `path`,
-/// asked of the Shell when the submenu opens, and "Choose another app".
-fn open_with(
-    path: PathBuf,
-    model: gpui::WeakEntity<DesktopModel>,
-    anchor: PopupAnchor,
-    language: Language,
-) -> MenuEntry {
-    later_submenu(ICON_OPEN_WITH, "Open with", anchor, language, move |cx| {
-        let handlers = OpenWithHandler::of(&path);
-        let (ready, entries) = async_channel::bounded(1);
-        let (path, model) = (path.clone(), model.clone());
-        cx.spawn(async move |_: &mut AsyncApp| {
-            let handlers = handlers.recv().await.unwrap_or_default();
-            let mut programs: Vec<MenuEntry> = { handlers.into_iter() }
-                .map(|handler| {
-                    let model = model.clone();
-                    MenuEntry::new(ICON_OPEN_WITH, handler.name.clone(), move |cx| {
-                        if let Ok(paths) = model.read_with(cx, |model, _| model.chosen_paths()) {
-                            handler.open(paths);
-                        }
-                    })
-                })
-                .collect();
-            programs.push(MenuEntry::new(
-                ICON_OPEN_WITH,
-                language.say("Choose another app"),
-                move |_| choose_app(&path),
-            ));
-            ready.try_send(programs).ok();
-        })
-        .detach();
-        entries
-    })
-}
-
-/// Shows the menu of the Shell `built` as Windows draws it, once the menu
-/// of Tessera is gone, and does what is chosen there.
-fn show_shell_menu(
-    built: Receiver<Result<ShellMenu, String>>,
-    model: gpui::WeakEntity<DesktopModel>,
-    window: AnyWindowHandle,
-    cx: &mut App,
-) {
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let menu = match built.recv().await {
-            Ok(Ok(menu)) => Rc::new(menu),
-            Ok(Err(error)) => {
-                report!("the menu of the Shell is not shown: {error}");
-                return;
-            }
-            Err(_) => return,
-        };
-        let shown = window.update(cx, |_, window, _| menu.show(None, Some(window)));
-        let Ok(done) = shown else {
-            return;
-        };
-        let outcome = done.recv().await;
-        drop(menu);
-        match outcome {
-            Ok(Ok(MenuOutcome::Intercepted(intercept))) => {
-                window
-                    .update(cx, |_, window, cx| {
-                        intercepted(intercept, &model, window, cx)
-                    })
-                    .ok();
-            }
-            Ok(Ok(MenuOutcome::Invoked { .. })) => {
-                model.update(cx, |model, cx| model.reload(cx)).ok();
-            }
-            Ok(Ok(MenuOutcome::Dismissed)) => {}
-            Ok(Err(error)) => report!("{error}"),
-            Err(_) => report!("the thread of the Shell is gone"),
-        }
-    })
-    .detach();
-}
-
-/// Does a verb the menu of the Shell handed back as the desktop's own
-/// entry for it does, so that it is undone like that one.
-fn intercepted(
-    intercept: Intercept,
-    model: &gpui::WeakEntity<DesktopModel>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let handle = window.window_handle();
-    model
-        .update(cx, |model, cx| match intercept {
-            Intercept::Rename => model.rename_chosen(window, cx),
-            Intercept::NewFolder => model.new_item(None, None, handle, cx),
-            Intercept::Delete => model.delete(false, cx),
-            Intercept::Paste => model.paste(false, cx),
-            Intercept::PasteLink => model.paste(true, cx),
-            Intercept::Refresh => model.refresh(cx),
-            Intercept::Undo => model.undo(false, cx),
-            Intercept::Redo => model.undo(true, cx),
-            // The desktop's own View and Sort by stand for these.
-            Intercept::View | Intercept::Sort | Intercept::Group => {}
-        })
-        .ok();
 }
 
 /// Opens the menu of the desktop under `position` of `window`; what is
@@ -399,19 +329,41 @@ pub fn open_background_menu(
             return;
         }
     };
-    let entries = background_entries(model, anchor, at, extended, window.window_handle(), cx);
-    Menus::open(entries, anchor, cx);
+    let handle = window.window_handle();
+    let (mut own, after_new) = background_entries(model, anchor, at, cx);
+    let target = MenuTarget {
+        host: model.downgrade(),
+        window: handle,
+        place: at,
+        anchor,
+    };
+    let Some(folder) = model.read(cx).folder() else {
+        own.extend(after_new);
+        Menus::open(own, anchor, cx);
+        return;
+    };
+    open_with_shell(
+        target,
+        (Vec::new(), None, Some(folder)),
+        extended,
+        move |shell| {
+            own.extend(shell.new);
+            own.extend(after_new);
+            own.extend(shell.rest);
+            own
+        },
+        cx,
+    );
 }
 
-/// The entries of the menu of the desktop.
+/// The desktop's own entries of the menu of the desktop: those before
+/// New, and those after it.
 fn background_entries(
     model: &Entity<DesktopModel>,
     anchor: PopupAnchor,
     at: Option<Spot>,
-    extended: bool,
-    window: AnyWindowHandle,
     cx: &mut App,
-) -> Vec<MenuEntry> {
+) -> (Vec<MenuEntry>, Vec<MenuEntry>) {
     let language = Language::of(cx);
     let weak = model.downgrade();
     let config = model.read(cx).config();
@@ -419,17 +371,15 @@ fn background_entries(
     let mut entries = vec![
         submenu(
             ICON_VIEW,
-            "View",
+            language.say("View"),
             view_entries(config, language),
             anchor,
-            language,
         ),
         submenu(
             ICON_SORT,
-            "Sort by",
+            language.say("Sort by"),
             sort_entries(&weak, config.sort, language),
             anchor,
-            language,
         ),
     ];
     let refresh = weak.clone();
@@ -465,20 +415,17 @@ fn background_entries(
             model.update(cx, |model, cx| model.undo(again, cx)).ok();
         }));
     }
-    if folder.is_some() {
-        entries.push(new_entries(weak.clone(), at, window, anchor, language));
-    }
+    let mut after_new = Vec::new();
     let widgets = widget_entries(cx, language);
     if !widgets.is_empty() {
-        entries.push(submenu(
+        after_new.push(submenu(
             ICON_WIDGETS,
-            "Add widgets",
+            language.say("Add widgets"),
             widgets,
             anchor,
-            language,
         ));
     }
-    entries.push(MenuEntry::new(
+    after_new.push(MenuEntry::new(
         ICON_ARRANGE,
         language.say("Arrange cards"),
         |cx| {
@@ -486,8 +433,8 @@ fn background_entries(
             cx.defer(|cx| Arranging::set(true, cx));
         },
     ));
-    entries.extend(wallpaper_entry(cx, language));
-    entries.push(MenuEntry::new(
+    after_new.extend(wallpaper_entry(cx, language));
+    after_new.push(MenuEntry::new(
         ICON_DISPLAY,
         language.say("Display settings"),
         // Tessera's own popup, where it is there, as Windows' page needs
@@ -500,34 +447,24 @@ fn background_entries(
             None => Launch::new("ms-settings:display").start(),
         },
     ));
-    entries.push(MenuEntry::new(
+    after_new.push(MenuEntry::new(
         ICON_PERSONALIZE,
         language.say("Personalize"),
         |_| Launch::new("ms-settings:personalization").start(),
     ));
     if let Some(folder) = folder {
-        let here = folder.clone();
-        entries.push(MenuEntry::new(
+        after_new.push(MenuEntry::new(
             ICON_TERMINAL,
             language.say("Open in terminal"),
             move |cx| {
-                let folder = here.clone();
+                let folder = folder.clone();
                 { cx.background_executor() }
                     .spawn(async move { terminal(Some(&folder), None, false).start() })
                     .detach();
             },
         ));
-        let model = weak.clone();
-        entries.push(MenuEntry::new(
-            ICON_MORE,
-            language.say("Show more options"),
-            move |cx| {
-                let built = ShellMenu::for_background(folder.clone(), extended);
-                show_shell_menu(built, model.clone(), window, cx);
-            },
-        ));
     }
-    entries
+    (entries, after_new)
 }
 
 /// View: the sizes, the arrangement and whether the icons are shown, the
@@ -600,45 +537,6 @@ fn sort_entries(
             )
         })
         .collect()
-}
-
-/// New: a folder, a shortcut and the kinds of files Windows offers, read
-/// when the submenu opens.
-fn new_entries(
-    model: gpui::WeakEntity<DesktopModel>,
-    at: Option<Spot>,
-    window: AnyWindowHandle,
-    anchor: PopupAnchor,
-    language: Language,
-) -> MenuEntry {
-    later_submenu(ICON_NEW, "New", anchor, language, move |cx| {
-        let (ready, entries) = async_channel::bounded(1);
-        let model = model.clone();
-        let templates = { cx.background_executor() }.spawn(async { NewTemplate::all() });
-        cx.spawn(async move |_: &mut AsyncApp| {
-            let made = { templates.await.into_iter() }
-                .map(|template| {
-                    let model = model.clone();
-                    let glyph = if template.is_folder() {
-                        ICON_FOLDER
-                    } else {
-                        ICON_NEW
-                    };
-                    MenuEntry::new(glyph, template.name.clone(), move |cx| {
-                        let template = template.clone();
-                        model
-                            .update(cx, |model, cx| {
-                                model.new_item(Some(template), at, window, cx)
-                            })
-                            .ok();
-                    })
-                })
-                .collect();
-            ready.try_send(made).ok();
-        })
-        .detach();
-        entries
-    })
 }
 
 /// Add widgets: a card of its own with one of the widgets for cards.

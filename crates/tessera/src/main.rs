@@ -47,6 +47,7 @@ mod rules;
 mod runners;
 mod session;
 mod shell;
+mod shell_entries;
 mod snap;
 mod startup;
 mod surface;

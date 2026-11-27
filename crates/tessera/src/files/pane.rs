@@ -57,8 +57,8 @@ use super::sidebar::ICON_HOME;
 mod header;
 mod verbs;
 
-use verbs::ShellChoices;
-pub(super) use verbs::within;
+pub(super) use crate::shell_entries::within;
+use crate::shell_entries::{ShellChoices, one_kind};
 
 /// Measures of a pane, in logical pixels.
 const HEADER_HEIGHT: f32 = 30.;
@@ -1832,7 +1832,7 @@ impl FolderPane {
         let kinds: Vec<(PathBuf, bool)> = { self.chosen_entries().into_iter() }
             .map(|entry| (entry.path, entry.folder))
             .collect();
-        let open_with = verbs::one_kind(&kinds);
+        let open_with = one_kind(&kinds);
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let choices = ShellChoices::read(chosen, open_with, folder, extended, cx).await;
             this.update(cx, |this, cx| {
