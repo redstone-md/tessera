@@ -581,6 +581,8 @@
 #               the names of those to ask ("calculator", "units",
 #               "command", "web", "search", "windows", "processes",
 #               "power", "settings", "emoji", "recent"; all without it),
+#               and "extensions", the answers of extensions that have a
+#               [runner] table in their manifest,
 #               web, a table of more keywords as { so =
 #               "https://stackoverflow.com/search?q={}" }, engine, the
 #               keyword the last row searches the web with ("ddg"),
@@ -1157,6 +1159,14 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 
 # [extension.<id>] holds the settings of the extension with that id; the
 # extension decides which keys it understands.
+#
+# A [[shortcut]] in the manifest of an extension is the action
+# "<id>.<shortcut id>", bound to the keys the manifest gives where the keys
+# of Windows are in use; a [[key]] binds it to others:
+#
+# [[key]]
+# press = "ctrl+alt+m"
+# action = "system-monitor.panel"
 #
 # [extension.ai-limits]
 # providers = ["claude", "codex"]
