@@ -321,7 +321,7 @@ pub enum FocusChoice {
 }
 
 impl FocusChoice {
-    /// The choice `arg` of the action `focus` names: `on`, `off`,
+    /// The choice `arg` of the action `quiet` names: `on`, `off`,
     /// `morning` or a number of minutes; `None` for `toggle` or nothing.
     pub fn parse(arg: Option<&str>) -> Result<Option<Self>, String> {
         match arg.map(str::trim) {
@@ -332,7 +332,7 @@ impl FocusChoice {
             Some(minutes) => match minutes.parse::<u32>() {
                 Ok(minutes) if minutes > 0 => Ok(Some(Self::Minutes(minutes))),
                 _ => Err(
-                    "`focus` takes `toggle`, `on`, `off`, `morning`, a number of minutes or no `arg`"
+                    "`quiet` takes `toggle`, `on`, `off`, `morning`, a number of minutes or no `arg`"
                         .to_owned(),
                 ),
             },
@@ -1278,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_takes_a_choice_or_a_number_of_minutes() {
+    fn quiet_takes_a_choice_or_a_number_of_minutes() {
         assert_eq!(FocusChoice::parse(None), Ok(None));
         assert_eq!(FocusChoice::parse(Some("toggle")), Ok(None));
         assert_eq!(FocusChoice::parse(Some("on")), Ok(Some(FocusChoice::On)));

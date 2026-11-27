@@ -6,7 +6,7 @@
 //! the list, grouped by application, for a popup; `notifications-button`,
 //! a bell in the bar with the count of notifications that came since the
 //! list was last open, which opens the popup `notifications`; and `focus`,
-//! a switch for do not disturb. Actions: `focus`, which switches do not
+//! a switch for do not disturb. Actions: `quiet`, which switches do not
 //! disturb, and `notify`, which posts a notice of Tessera's own.
 
 use std::collections::{HashMap, HashSet};
@@ -110,12 +110,12 @@ impl Module for NotificationsModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        let focus = Action::new(|arg, cx| match FocusChoice::parse(arg) {
+        let quiet = Action::new(|arg, cx| match FocusChoice::parse(arg) {
             Ok(choice) => Banners::focus(choice, cx),
             Err(error) => report!("{error}"),
         })
         .checking(|arg| FocusChoice::parse(arg).map(drop));
-        actions.register("focus", focus)?;
+        actions.register("quiet", quiet)?;
         let notify = Action::new(|arg, cx| {
             if let Some(notice) = notice_of(arg) {
                 Banners::post(notice, cx);

@@ -140,7 +140,7 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
-#             focus    do not disturb: arg "on", "off", "morning" (until
+#             quiet    do not disturb: arg "on", "off", "morning" (until
 #                      eight), a number of minutes, or "toggle" as without
 #                      one
 #             notify   posts a notice of Tessera's own: arg is its title,
@@ -492,7 +492,7 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 #               in notifications.toml of %LOCALAPPDATA%\tessera
 #   quiet       true: do not disturb holds the banners back until it is
 #               switched off; the moon button of the "notifications" widget,
-#               the "focus" widget and the action focus write it too
+#               the "focus" widget and the action quiet write it too
 #   quiet_when  what keeps the user busy so that do not disturb holds by
 #               itself: "fullscreen" (an application fills the display),
 #               "game", "presenting" and "duplicating" (a display shows the
