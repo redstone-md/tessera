@@ -33,8 +33,10 @@ use crate::icons::Icon;
 use crate::menu::{MenuEntry, Menus};
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, InteractionState, Spring, mix};
-use crate::platform::{AppWindowId, NativeSurface, ScreenRect, Tray, TrayButton, pointer_at};
-use crate::popup::{MARGIN, PopupAnchor};
+use crate::platform::{
+    AppWindowId, NativeSurface, ScreenEdge, ScreenRect, Tray, TrayButton, pointer_at,
+};
+use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::tip::Tips;
 use crate::tray_settings::{Place, TraySettings};
@@ -64,13 +66,6 @@ const DRAGGED_OPACITY: f32 = 0.35;
 
 /// The longest description shown, in characters.
 const TIP_LENGTH: usize = 64;
-
-/// About how wide a character of a description is, to open it beside a
-/// bar that is higher than wide.
-const TIP_CHARACTER: f32 = 7.;
-
-/// How wide a menu is, to open it beside such a bar.
-const MENU_WIDTH: f32 = 208.;
 
 /// What the tips of the icons are told apart from other tips by.
 const TIP_KIND: &str = "tray";
@@ -218,6 +213,19 @@ enum Side {
 }
 
 impl Side {
+    /// The side of its display the surface in `window` is docked to, as
+    /// the surfaces tell; for a window that is no surface, as an overflow,
+    /// the side `surface` stands at of `screen`.
+    fn of_window(window: &Window, surface: ScreenRect, screen: ScreenRect, cx: &App) -> Self {
+        match crate::surface::edge_of(window, cx) {
+            Some(ScreenEdge::Top) => Self::Top,
+            Some(ScreenEdge::Bottom) => Self::Bottom,
+            Some(ScreenEdge::Left) => Self::Left,
+            Some(ScreenEdge::Right) => Self::Right,
+            None => Self::of(surface, screen),
+        }
+    }
+
     /// The side of `screen` that `surface` stands at: a surface higher than
     /// wide stands at the left or right, others at the top or bottom.
     fn of(surface: ScreenRect, screen: ScreenRect) -> Self {
@@ -257,13 +265,13 @@ struct SurfacePlace {
 }
 
 impl SurfacePlace {
-    fn of_window(window: &Window) -> Option<Self> {
+    fn of_window(window: &Window, cx: &App) -> Option<Self> {
         let native = NativeSurface::of(window).ok()?;
         let (surface, screen) = (native.frame().ok()?, native.display_frame().ok()?);
         Some(Self {
             surface,
             screen,
-            side: Side::of(surface, screen),
+            side: Side::of_window(window, surface, screen, cx),
             scale: window.scale_factor(),
         })
     }
@@ -305,46 +313,15 @@ impl SurfacePlace {
         })
     }
 
-    /// Where something `width` logical pixels wide opens beside the icon at
-    /// `bounds` of a surface that is higher than wide: its panel starts at
-    /// the edge of the surface that faces the display, level with the icon.
-    fn beside(self, bounds: Bounds<Pixels>, width: f32, window: &Window, cx: &App) -> PopupAnchor {
-        let frame = self.frame_of(bounds);
-        let half = ((width / 2. + MARGIN) * self.scale).round() as i32;
-        let (edge, x) = match self.side {
-            Side::Right => (self.surface.left, self.surface.left - half),
-            _ => (self.surface.right, self.surface.right + half),
-        };
-        PopupAnchor {
-            surface: ScreenRect {
-                left: edge,
-                top: frame.top,
-                right: edge,
-                bottom: frame.top,
-            },
-            edge: crate::platform::ScreenEdge::Top,
-            x,
-            screen: self.screen,
-            scale: self.scale,
-            display_id: window.display(cx).map(|display| display.id()),
-            display: NativeSurface::of(window).ok().map(NativeSurface::display),
-        }
-    }
-
-    /// Where something `width` logical pixels wide opens for the icon at
-    /// `bounds`: under or over it on a bar that is wider than high, beside
-    /// it on one that is higher than wide.
+    /// Where what opens for the icon at `bounds` opens: away from the
+    /// edge of the surface, centered on the icon along it.
     fn anchor(
         self,
         bounds: Bounds<Pixels>,
-        width: f32,
         window: &Window,
         cx: &App,
     ) -> anyhow::Result<PopupAnchor> {
-        match self.side.is_vertical() {
-            true => Ok(self.beside(bounds, width, window, cx)),
-            false => PopupAnchor::at(window, bounds.origin.x + bounds.size.width / 2., cx),
-        }
+        PopupAnchor::at_point(window, bounds.center(), cx)
     }
 }
 
@@ -671,7 +648,7 @@ impl IconHost for TrayStrip {
         };
         let shown = self.items.iter().any(|item| item.id == id && !item.leaving);
         let entries = own_menu_entries(self.model(), id, shown, cx);
-        match place.anchor(bounds, MENU_WIDTH, window, cx) {
+        match place.anchor(bounds, window, cx) {
             Ok(anchor) => Menus::open(entries, anchor, cx),
             Err(error) => report!("the menu of a notification icon has nowhere to open: {error:#}"),
         }
@@ -991,7 +968,7 @@ impl TrayStrip {
         };
         // The strip of every display shows the icon; the application is
         // told the place in the one the pointer is on.
-        let place = SurfacePlace::of_window(window);
+        let place = SurfacePlace::of_window(window, cx);
         if let Some(place) = place {
             let (frame, menu) = place.of(drawn);
             Tray::locate(id, frame, menu);
@@ -1001,9 +978,8 @@ impl TrayStrip {
             return;
         }
         let tip = tip_line(&icon.icon.tip);
-        let width = tip.chars().count() as f32 * TIP_CHARACTER;
         let anchor = match place {
-            Some(place) => place.anchor(drawn, width, window, cx),
+            Some(place) => place.anchor(drawn, window, cx),
             None => PopupAnchor::at(window, drawn.origin.x + drawn.size.width / 2., cx),
         };
         match anchor {
@@ -1255,8 +1231,7 @@ impl TrayStrip {
             return;
         };
         let text = Language::of(cx).say("Show hidden icons");
-        let width = text.chars().count() as f32 * TIP_CHARACTER;
-        if let Ok(anchor) = place.anchor(drawn, width, window, cx) {
+        if let Ok(anchor) = place.anchor(drawn, window, cx) {
             Tips::request(TIP_MORE, SharedString::new(text), anchor, cx);
         }
     }
@@ -1305,7 +1280,7 @@ impl Render for TrayStrip {
         self.attach(window, cx);
         let theme = *cx.global::<Theme>();
         self.side = button_side(&theme);
-        self.place = SurfacePlace::of_window(window);
+        self.place = SurfacePlace::of_window(window, cx);
 
         let viewport = window.viewport_size();
         let side_of = match self.place {

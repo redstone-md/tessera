@@ -515,6 +515,7 @@ impl Host {
                     title,
                     body,
                     glyph: Some(ICON_EXTENSION),
+                    picture: None,
                     actions: Vec::new(),
                     urgent: false,
                     on_gone: OnGone::default(),

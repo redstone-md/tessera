@@ -170,7 +170,7 @@ impl TrayOverflow {
             return false;
         };
         let taken = window.update(cx, |view, window, cx| {
-            let local = SurfacePlace::of_window(window)?.local(point)?;
+            let local = SurfacePlace::of_window(window, cx)?.local(point)?;
             view.put(id, local, window, cx);
             Some(())
         });
@@ -496,7 +496,7 @@ impl OverflowView {
             Tray::hover(id, false);
             return;
         };
-        Self::locate(id, drawn, window);
+        Self::locate(id, drawn, window, cx);
         Tray::hover(id, true);
         if icon.icon.draws_own_tip {
             return;
@@ -511,8 +511,8 @@ impl OverflowView {
     /// Tells the application of the icon `id`, drawn at `drawn` of the
     /// window, where the icon is on the screen; what it opens for the icon
     /// opens at its middle.
-    fn locate(id: u64, drawn: Bounds<Pixels>, window: &Window) {
-        if let Some(place) = SurfacePlace::of_window(window) {
+    fn locate(id: u64, drawn: Bounds<Pixels>, window: &Window, cx: &App) {
+        if let Some(place) = SurfacePlace::of_window(window, cx) {
             let frame = place.frame_of(drawn);
             Tray::locate(id, frame, middle(frame));
         }
@@ -552,7 +552,7 @@ impl OverflowView {
                 // The location of the icon is told before the application
                 // opens anything there.
                 if let Some(drawn) = self.drawn(id) {
-                    Self::locate(id, drawn, window);
+                    Self::locate(id, drawn, window, cx);
                 }
                 let strip = self.opening.strip.entity_id();
                 press_with_keyboard(id, button, self.model(), strip, cx);
