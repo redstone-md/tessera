@@ -54,9 +54,10 @@ const SLIDE: Duration = Duration::from_millis(450);
 const CALLING_EDGE: i32 = 2;
 
 /// How far, in physical pixels, a maximized window may be from a surface
-/// and still touch it: Windows lets a maximized window reach a few pixels
-/// past the room it gives it, under its invisible borders.
-const SOLID_REACH: i32 = 16;
+/// and still touch it. What is seen of a maximized window is the room the
+/// display gives it, which begins where a surface that keeps its edge
+/// ends.
+const SOLID_REACH: i32 = 2;
 
 /// How a surface looks, beyond what the theme says.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -528,9 +529,18 @@ impl<V: Render> EdgeSurfaceView<V> {
             }
             return HIDE_CHECK;
         }
-        let touched = native.band(self.band).is_ok_and(|band| {
+        // A surface that keeps its edge stands where whoever keeps the edge
+        // bars put it, past the other bars there; one that hides stands in
+        // its band.
+        let place = match self.surface.hide.hides() {
+            true => native.band(self.band),
+            false => native.frame(),
+        };
+        let display = native.display();
+        let touched = place.is_ok_and(|band| {
             AppWindow::enumerate().iter().any(|window| {
-                window.id.is_maximized()
+                window.display == display
+                    && window.id.is_maximized()
                     && window
                         .id
                         .frame()
@@ -655,6 +665,13 @@ impl<V: Render> Render for EdgeSurfaceView<V> {
 /// use is put back after each. What a widget reads of the theme as it is
 /// drawn follows; what it read before, in a handler of the pointer, does
 /// not.
+///
+/// GPUI tells the observers of a global of every change to it, and has no
+/// way to change one without telling them, so the observers of [`Theme`]
+/// hear of these swaps on every frame of such a bar. No observer of
+/// [`Theme`] may therefore draw again or refresh the windows because it
+/// heard of a change: one that does draws without end. The shell sets a
+/// new theme with `set_global` and refreshes the windows itself.
 struct ThemeScope {
     theme: Theme,
     child: AnyElement,
@@ -791,10 +808,10 @@ mod tests {
     #[test]
     fn a_window_touches_a_strip_it_reaches_near() {
         let bar = rect(0, 0, 1920, 48);
-        // A maximized window starts a few pixels above the room it is given.
+        // A maximized window begins where a bar that keeps its edge ends.
+        assert!(touches(rect(0, 48, 1920, 1080), bar, SOLID_REACH));
         assert!(touches(rect(-8, 40, 1928, 1088), bar, SOLID_REACH));
-        assert!(touches(rect(0, 60, 1920, 1080), bar, SOLID_REACH));
-        assert!(!touches(rect(0, 100, 1920, 1080), bar, SOLID_REACH));
+        assert!(!touches(rect(0, 60, 1920, 1080), bar, SOLID_REACH));
         assert!(!touches(rect(0, 48, 1920, 1080), bar, 0));
         assert!(touches(rect(0, 47, 1920, 1080), bar, 0));
     }
