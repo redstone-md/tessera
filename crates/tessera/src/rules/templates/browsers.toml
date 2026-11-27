@@ -1,0 +1,32 @@
+# Browsers: their windows belong to the category "browser", and the small
+# windows of Firefox that are no pages (the library, page information)
+# float. Picture-in-picture windows have a set of their own,
+# "picture-in-picture".
+
+[[rule]]
+any = [
+    { exe = "chrome.exe" },
+    { exe = "chromium.exe" },
+    { exe = "msedge.exe" },
+    { exe = "brave.exe" },
+    { exe = "vivaldi.exe" },
+    { exe = "opera.exe" },
+    { exe = "opera_gx.exe" },
+    { exe = "arc.exe" },
+    { exe = "firefox.exe" },
+    { exe = "librewolf.exe" },
+    { exe = "floorp.exe" },
+    { exe = "waterfox.exe" },
+    { exe = "zen.exe" },
+]
+match = "equals"
+category = "browser"
+
+[[rule]]
+exe = "firefox.exe"
+any = [
+    { title = "Library" },
+    { title = "Page Info*" },
+    { title = "About Mozilla Firefox" },
+]
+float = true

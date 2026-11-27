@@ -1,0 +1,28 @@
+# Dialogs of Windows and of every program float: windows of the dialog
+# class of Windows, the progress of copying and deleting, Task Manager,
+# the prompts for passwords and the installers of Windows.
+
+[[rule]]
+any = [
+    { class = "#32770" },
+    { class = "OperationStatusWindow" },
+    { class = "Credential Dialog Xaml Host" },
+]
+match = "equals"
+float = true
+category = "dialog"
+
+[[rule]]
+any = [
+    { exe = "Taskmgr.exe" },
+    { exe = "rundll32.exe" },
+    { exe = "msiexec.exe" },
+    { exe = "CredentialUIBroker.exe" },
+    { exe = "SystemSettingsAdminFlows.exe" },
+    { exe = "mmc.exe" },
+    { exe = "control.exe" },
+    { exe = "SnippingTool.exe" },
+]
+match = "equals"
+float = true
+category = "dialog"

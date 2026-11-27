@@ -1,0 +1,9 @@
+# Picture-in-picture: the small video windows of browsers ("Picture in
+# picture" in Chromium and Edge, "Picture-in-Picture" in Firefox) float
+# above the other windows, also when their title comes late.
+
+[[rule]]
+title = "Picture?in?picture"
+float = true
+above = true
+apply = "always"

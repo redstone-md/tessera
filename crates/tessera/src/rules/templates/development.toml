@@ -1,0 +1,46 @@
+# Development tools: editors and integrated environments belong to the
+# category "editor" and terminals to "terminal"; the dialogs and splash
+# windows that JetBrains tools draw as windows of their own float.
+
+[[rule]]
+any = [
+    { exe = "Code.exe" },
+    { exe = "Code - Insiders.exe" },
+    { exe = "VSCodium.exe" },
+    { exe = "Cursor.exe" },
+    { exe = "Windsurf.exe" },
+    { exe = "zed.exe" },
+    { exe = "devenv.exe" },
+    { exe = "sublime_text.exe" },
+    { exe = "notepad++.exe" },
+    { exe = "nvim-qt.exe" },
+    { exe = "neovide.exe" },
+    { exe = "studio64.exe" },
+    { exe = "idea64.exe" },
+    { exe = "pycharm64.exe" },
+    { exe = "rider64.exe" },
+    { exe = "clion64.exe" },
+    { exe = "webstorm64.exe" },
+    { exe = "goland64.exe" },
+    { exe = "rustrover64.exe" },
+    { exe = "phpstorm64.exe" },
+    { exe = "datagrip64.exe" },
+]
+match = "equals"
+category = "editor"
+
+[[rule]]
+any = [
+    { exe = "WindowsTerminal.exe" },
+    { exe = "wezterm-gui.exe" },
+    { exe = "alacritty.exe" },
+    { exe = "kitty.exe" },
+    { exe = "mintty.exe" },
+]
+match = "equals"
+category = "terminal"
+
+[[rule]]
+path = "*\\JetBrains\\*"
+any = [{ class = "SunAwtDialog" }, { class = "SunAwtWindow" }]
+float = true

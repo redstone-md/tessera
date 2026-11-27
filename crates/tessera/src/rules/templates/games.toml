@@ -1,0 +1,40 @@
+# Games: the launchers of the stores float and belong to the category
+# "game-launcher", and so do the windows of anti-cheat services and of
+# the overlays drawn over games, which are not to be tiled.
+
+[[rule]]
+any = [
+    { exe = "steam.exe" },
+    { exe = "steamwebhelper.exe" },
+    { exe = "EpicGamesLauncher.exe" },
+    { exe = "Battle.net.exe" },
+    { exe = "EADesktop.exe" },
+    { exe = "EALauncher.exe" },
+    { exe = "upc.exe" },
+    { exe = "UbisoftConnect.exe" },
+    { exe = "GalaxyClient.exe" },
+    { exe = "RiotClientServices.exe" },
+    { exe = "RiotClientUx.exe" },
+    { exe = "Playnite.DesktopApp.exe" },
+    { exe = "Playnite.FullscreenApp.exe" },
+    { exe = "itch.exe" },
+    { exe = "XboxPcApp.exe" },
+]
+match = "equals"
+float = true
+category = "game-launcher"
+
+[[rule]]
+any = [
+    { exe = "EasyAntiCheat*.exe" },
+    { exe = "BEService*.exe" },
+    { exe = "BattlEye*.exe" },
+    { exe = "vgtray.exe" },
+    { exe = "FACEIT*.exe" },
+    { exe = "GameOverlayUI.exe" },
+    { exe = "NVIDIA Overlay.exe" },
+    { exe = "NVIDIA Share.exe" },
+    { exe = "GameBar.exe" },
+]
+float = true
+category = "game-overlay"
