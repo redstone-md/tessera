@@ -16,6 +16,7 @@ use crate::config::{Config, DisplaySelector, Displays, Hiding, SpanAlign, Surfac
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::module::WidgetRegistry;
+use crate::modules::Settings;
 use crate::panel::{Arranging, rewrite};
 use crate::platform::{DisplayName, ScreenEdge};
 use crate::popup::PopupAnchor;
@@ -47,9 +48,6 @@ const LENGTHS: [f32; 4] = [1., 0.75, 0.5, 0.3];
 
 /// How thick a bar is that the menu adds.
 const NEW_THICKNESS: f32 = 40.;
-
-/// The popup the settings are in until they can be opened at a page.
-const SETTINGS_POPUP: &str = "settings";
 
 /// What the right button was clicked on.
 #[derive(Clone, Debug)]
@@ -274,7 +272,7 @@ impl BarMenu {
         }
         entries.push(MenuEntry::new(ICON_SETTINGS, say("Settings"), |cx| {
             // The menu is still handling the click that chose this.
-            cx.defer(|cx| Shell::toggle_popup(SETTINGS_POPUP, cx));
+            cx.defer(|cx| Settings::open_at("bars", None, cx));
         }));
         entries
     }

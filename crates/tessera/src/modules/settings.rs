@@ -1859,7 +1859,13 @@ impl Settings {
         for (label, primary) in [("All displays", false), ("Primary display", true)] {
             let face = Face::Chip {
                 text: language.say(label).into(),
-                selected: (config.displays == Displays::Primary) == primary,
+                // Others and chosen displays are neither of these.
+                selected: config.displays
+                    == if primary {
+                        Displays::Primary
+                    } else {
+                        Displays::All
+                    },
             };
             displays.push(self.control(Control::CardDisplays(index, primary), face, window, cx));
         }
