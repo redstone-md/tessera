@@ -13,8 +13,9 @@
 //! with [`Flyouts::show`].
 //!
 //! In shell mode, where no Explorer answers them, the keys of the keyboard
-//! for sound and media are answered here too: each runs the action that
-//! does the same, `volume` or `media`.
+//! for sound and media are to be answered by the actions that do the same,
+//! `volume` or `media`, whose flyouts show what came of them: the shell
+//! host, which is told of the keys, hands each to [`Flyouts::answer`].
 
 use std::time::Duration;
 
@@ -28,8 +29,8 @@ use crate::actions::Actions;
 use crate::i18n::Language;
 use crate::motion::Spring;
 use crate::platform::{
-    AppCommand, AppCommands, AudioOutput, KeyLocks, NativeSurface, ScreenBrightness, ScreenRect,
-    Typing, shell_mode, window_in_front,
+    AppCommand, AudioOutput, InputLanguage, KeyLocks, NativeSurface, ScreenBrightness, ScreenRect,
+    Typing, window_in_front,
 };
 use crate::popup::{MARGIN, Popups, open_floating, retire_floating};
 use crate::shell::Shell;
@@ -335,31 +336,29 @@ impl Gauge for NumLockGauge {
     }
 }
 
-/// The layout the window in front is typed in, with that window.
+/// The layout the window in front is typed in, with that window. The
+/// layout itself is compared, so a switch between two layouts of the same
+/// language shows too; its letters are asked for only then.
 #[derive(Default)]
-struct LayoutGauge(Option<(isize, String)>);
+struct LayoutGauge(Option<(isize, InputLanguage)>);
 
 impl Gauge for LayoutGauge {
     const EVERY: Duration = KEYS_INTERVAL;
 
     fn next(&mut self) -> Option<Reading> {
         let window = window_in_front();
-        let now = Typing::in_front().map(|typing| (window, typing.language.code()));
-        let before = std::mem::replace(&mut self.0, now.clone());
-        layout_switched(before, now).map(Reading::Layout)
+        let now = Typing::in_front().map(|typing| (window, typing.language));
+        let before = std::mem::replace(&mut self.0, now);
+        layout_switched(before, now).map(|layout| Reading::Layout(layout.code()))
     }
 }
 
-/// The letters of the new layout, when the window in front was switched
-/// to another one. Going to another window that is typed in another
-/// language is no switch, and neither is a window of Tessera in front,
-/// which tells no layout.
-fn layout_switched(
-    before: Option<(isize, String)>,
-    now: Option<(isize, String)>,
-) -> Option<String> {
-    let ((window, letters), (now_window, now_letters)) = (before?, now?);
-    (window == now_window && letters != now_letters).then_some(now_letters)
+/// The new layout, when the window in front was switched to another one.
+/// Going to another window that is typed in another layout is no switch,
+/// and neither is a window of Tessera in front, which tells no layout.
+fn layout_switched<L: PartialEq>(before: Option<(isize, L)>, now: Option<(isize, L)>) -> Option<L> {
+    let ((window, layout), (now_window, now_layout)) = (before?, now?);
+    (window == now_window && layout != now_layout).then_some(now_layout)
 }
 
 /// The flyout, what looks out for changes to show, and what answers the
@@ -370,8 +369,6 @@ pub struct Flyouts {
     open: Option<WindowHandle<FlyoutView>>,
     /// A task for each kind that is wanted, which reads its gauge.
     watches: Vec<(Kind, Task<()>)>,
-    /// Whether the keys for sound and media are answered.
-    answering: bool,
 }
 
 impl Global for Flyouts {}
@@ -399,27 +396,16 @@ impl Flyouts {
             };
             cx.global_mut::<Self>().watches.push((kind, watch));
         }
-        Self::answer_keys(cx);
     }
 
-    /// In shell mode, has the keys for sound and media do what Explorer
-    /// would: each runs the action that does the same, whose flyout shows
-    /// what came of it.
-    fn answer_keys(cx: &mut App) {
-        if cx.global::<Self>().answering || !shell_mode() {
-            return;
-        }
-        cx.global_mut::<Self>().answering = true;
-        let pressed = AppCommands::answer();
-        cx.spawn(async move |cx: &mut AsyncApp| {
-            while let Ok(command) = pressed.recv().await {
-                let (action, arg) = action_of(command);
-                if cx.update(|cx| Actions::run(action, Some(arg), cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
+    /// Does what Explorer would for the key `command` of the keyboard: runs
+    /// the action that does the same, whose flyout shows what came of it.
+    /// For shell mode, where the shell host is told of the keys and no
+    /// Explorer answers them; the shell host then leaves them to this.
+    #[allow(dead_code, reason = "the shell host hands its keys to it")]
+    pub fn answer(command: AppCommand, cx: &mut App) {
+        let (action, arg) = action_of(command);
+        Actions::run(action, Some(arg), cx);
     }
 
     /// Shows `reading`, if its kind is wanted and no popup is open, whose
@@ -767,14 +753,27 @@ mod tests {
 
     #[test]
     fn a_layout_is_switched_only_in_the_same_window() {
-        let typing = |window, letters: &str| Some((window, letters.to_owned()));
+        // Layouts by their number, as Windows tells them apart.
+        let typing = |window, layout: isize| Some((window, layout));
+        let (english, dvorak, russian) = (0x0409_0409, -0x0fe5_fbf7, 0x0419_0419);
         assert_eq!(
-            layout_switched(typing(1, "EN"), typing(1, "RU")),
-            Some("RU".to_owned())
+            layout_switched(typing(1, english), typing(1, russian)),
+            Some(russian)
         );
-        assert_eq!(layout_switched(typing(1, "EN"), typing(2, "RU")), None);
-        assert_eq!(layout_switched(typing(1, "EN"), typing(1, "EN")), None);
-        assert_eq!(layout_switched(None, typing(1, "RU")), None);
+        // Two layouts of the same language are a switch too.
+        assert_eq!(
+            layout_switched(typing(1, english), typing(1, dvorak)),
+            Some(dvorak)
+        );
+        assert_eq!(
+            layout_switched(typing(1, english), typing(2, russian)),
+            None
+        );
+        assert_eq!(
+            layout_switched(typing(1, english), typing(1, english)),
+            None
+        );
+        assert_eq!(layout_switched(None, typing(1, russian)), None);
     }
 
     #[test]

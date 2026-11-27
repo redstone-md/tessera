@@ -15,8 +15,10 @@ pub struct KeyLocks {
 }
 
 impl KeyLocks {
-    /// Reads the keys. Windows keeps their state for the whole session, so
-    /// it is right on any thread, whichever window has the keyboard.
+    /// Reads the keys, as `GetKeyState` tells them to the calling thread.
+    /// That is the state as of the last keyboard input the thread took; on
+    /// a thread that takes none, as the flyouts read it on, that it still
+    /// follows the keys is believed but not verified.
     pub fn read() -> Self {
         // The lowest bit of the answer tells whether the key is toggled on.
         // SAFETY: the calls only read the state of the keyboard.

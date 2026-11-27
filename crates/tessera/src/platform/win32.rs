@@ -49,7 +49,7 @@ mod windows_key;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
-pub use app_commands::{AppCommand, AppCommands};
+pub use app_commands::AppCommand;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::spatial_sound;
 pub use audio::{AppSound, AudioDevice, AudioOutput};
