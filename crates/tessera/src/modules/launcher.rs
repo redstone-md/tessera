@@ -397,10 +397,9 @@ struct Launcher {
     asked: Option<Task<()>>,
     /// What was written when Windows Search gave the files held now.
     answered: Option<String>,
-    /// The menu of an application or a file, while it is open, and
-    /// whether it was when the launcher was drawn last.
+    /// The menu of an application or a file, while it is open; it gives
+    /// the keys back to the field when it goes.
     menu: MenuSlot,
-    menu_shown: bool,
     /// What is shown while nothing is typed, and whether the tabs that
     /// switch it are there.
     view: View,
@@ -455,7 +454,6 @@ impl Launcher {
             asked: None,
             answered: None,
             menu: MenuSlot::default(),
-            menu_shown: false,
             view: setup.view,
             tabs: setup.tabs,
             groups,
@@ -1370,11 +1368,7 @@ fn round_button(
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        // The keys come back to the field once its menu has taken them;
-        // the menu of another widget of the popup keeps them.
-        let closed = self.menu_shown && !self.menu.is_open();
-        self.menu_shown = self.menu.is_open();
-        if !self.focused || closed {
+        if !self.focused {
             self.focused = true;
             self.field.read(cx).focus(window);
         }

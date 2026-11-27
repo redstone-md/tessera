@@ -19,8 +19,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, DismissEvent, Entity, EventEmitter,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, anchored, deferred, div, px,
+    FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point,
+    Render, StatefulInteractiveElement, Styled, WeakEntity, Window, anchored, deferred, div, px,
 };
 
 use super::Pins;
@@ -252,6 +252,9 @@ pub struct AppMenu {
     /// What takes the entry out of the list it stands in, where it can be.
     remove: Option<Remover>,
     chooser: Chooser,
+    /// What had the keys before the menu took them, which gets them back
+    /// once it goes; `None` until the menu is drawn.
+    before: Option<Option<FocusHandle>>,
     /// Whether uninstalling waits for its confirmation.
     armed: bool,
 }
@@ -302,6 +305,7 @@ impl AppMenu {
             pins,
             remove,
             chooser: Chooser::new(cx),
+            before: None,
             armed: false,
         }
     }
@@ -310,13 +314,21 @@ impl AppMenu {
         deeds(self.kind, self.standing)
     }
 
-    fn dismiss(&mut self, cx: &mut Context<Self>) {
+    /// Closes the menu and gives the keys back to what had them before,
+    /// such as the search field of the launcher, unless something else
+    /// has taken them since.
+    fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Some(before)) = self.before.take()
+            && (self.chooser.focus().is_focused(window) || window.focused(cx).is_none())
+        {
+            window.focus(&before);
+        }
         cx.emit(DismissEvent);
     }
 
     /// Does `deed`, and closes the menu, or the popup where the deed
     /// leaves it; uninstalling waits for a second time.
-    fn take(&mut self, deed: Deed, cx: &mut Context<Self>) {
+    fn take(&mut self, deed: Deed, window: &mut Window, cx: &mut Context<Self>) {
         if deed == Deed::Uninstall && !self.armed {
             self.armed = true;
             cx.notify();
@@ -401,23 +413,23 @@ impl AppMenu {
                 false
             }
         };
-        self.dismiss(cx);
+        self.dismiss(window, cx);
         if leaves {
             cx.defer(Popups::close);
         }
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pick) = Pick::of(event) else {
             return;
         };
         cx.stop_propagation();
         let deeds = self.deeds();
         match pick {
-            Pick::Leave => self.dismiss(cx),
+            Pick::Leave => self.dismiss(window, cx),
             Pick::Take => {
                 if let Some(&deed) = deeds.get(self.chooser.chosen) {
-                    self.take(deed, cx);
+                    self.take(deed, window, cx);
                 }
             }
             Pick::Letter(_) => {}
@@ -444,6 +456,7 @@ impl Render for AppMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
+        self.before.get_or_insert_with(|| window.focused(cx));
         self.chooser.take_focus(window);
         let deeds = self.deeds();
         let rows: Vec<AnyElement> = { deeds.iter().enumerate() }
@@ -464,7 +477,7 @@ impl Render for AppMenu {
                             cx.notify();
                         }
                     }))
-                    .on_click(cx.listener(move |this, _, _, cx| this.take(deed, cx)));
+                    .on_click(cx.listener(move |this, _, window, cx| this.take(deed, window, cx)));
                 Chooser::track(row, index, cx, |this: &mut Self| &mut this.chooser)
                     .into_any_element()
             })
@@ -483,8 +496,8 @@ impl Render for AppMenu {
             .bg(theme.colors.surface_container)
             .font_family(theme.typography.family)
             .text_size(theme.typography.label_size)
-            .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss(cx)))
+            .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| this.dismiss(window, cx)))
             .children(rows)
     }
 }
@@ -504,7 +517,14 @@ impl MenuSlot {
         find: fn(&mut V) -> &mut Self,
         cx: &mut Context<V>,
     ) {
+        // A menu shown in place of another gives the keys back to what
+        // had them before the first.
+        let before = { self.0.take() }
+            .and_then(|(shown, _)| shown.update(cx, |shown, _| shown.before.take()));
         let menu = cx.new(make);
+        if let Some(before) = before {
+            menu.update(cx, |menu, _| menu.before = Some(before));
+        }
         cx.subscribe(&menu, move |view, menu, _: &DismissEvent, cx| {
             let slot = find(view);
             if slot.0.as_ref().is_some_and(|(shown, _)| *shown == menu) {
@@ -515,10 +535,6 @@ impl MenuSlot {
         .detach();
         self.0 = Some((menu, at));
         cx.notify();
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.0.is_some()
     }
 
     /// The menu shown, in front of the view.
