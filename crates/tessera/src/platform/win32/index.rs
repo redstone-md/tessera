@@ -1,21 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The index of Windows Search, asked for files by a part of their names.
+//! The index of Windows Search, asked for files by a part of their names,
+//! anywhere or below a folder.
 
 use std::mem::offset_of;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED, CoCreateInstance,
-    CoInitializeEx, CoUninitialize,
+    CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 use windows::Win32::System::Search::{
-    DBACCESSOR_ROWDATA, DBBINDING, DBMEMOWNER_CLIENTOWNED, DBPARAMIO_NOTPARAM, DBPART_LENGTH,
-    DBPART_STATUS, DBPART_VALUE, DBSTATUS_S_OK, DBTYPE_WSTR, HACCESSOR, IAccessor, ICommandText,
-    IDBCreateCommand, IDBCreateSession, IDBInitialize, IDataInitialize, IRowset, MSDAINITIALIZE,
+    CSearchManager, DBACCESSOR_ROWDATA, DBBINDING, DBMEMOWNER_CLIENTOWNED, DBPARAMIO_NOTPARAM,
+    DBPART_LENGTH, DBPART_STATUS, DBPART_VALUE, DBSTATUS_S_OK, DBTYPE_WSTR, HACCESSOR, IAccessor,
+    ICommandText, IDBCreateCommand, IDBCreateSession, IDBInitialize, IDataInitialize, IRowset,
+    ISearchManager, MSDAINITIALIZE,
 };
 use windows::core::{GUID, HSTRING, IUnknown, Interface, w};
 
@@ -30,6 +33,9 @@ const ROWS_AT_ONCE: usize = 16;
 
 /// What begins the address of a file in the index.
 const FILE_SCHEME: &str = "file:";
+
+/// The catalog of the index that holds the files of the user.
+const CATALOG: &str = "SystemIndex";
 
 /// One row of the answer as the provider writes it.
 #[repr(C)]
@@ -49,7 +55,54 @@ impl SearchIndex {
     /// them, those changed last first. Fails where the index cannot be
     /// asked, as when its service does not run.
     pub fn files_named(text: &str, limit: usize) -> Result<Vec<PathBuf>> {
-        let Some(question) = question(text, limit) else {
+        Self::answer(question(text, limit, None), limit)
+    }
+
+    /// The same for the files and folders below the folder `root`, at any
+    /// depth. Only what the index holds is found: see [`Self::covers`].
+    pub fn files_under(root: &Path, text: &str, limit: usize) -> Result<Vec<PathBuf>> {
+        Self::answer(question(text, limit, Some(root)), limit)
+    }
+
+    /// Whether the index holds the files below `root`, as the places it
+    /// is told to index say; `false` also where it cannot be asked.
+    pub fn covers(root: &Path) -> bool {
+        let address = HSTRING::from(scope_address(root));
+        // SAFETY: COM is initialized for the duration of the call on this
+        // thread and released only when that succeeded, after everything
+        // made with it is gone; the address outlives the call.
+        unsafe {
+            let initialized =
+                CoInitializeEx(None, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE).is_ok();
+            let covered = (|| -> Result<bool> {
+                // The search manager is served by the service of Windows
+                // Search, out of this process.
+                let manager: ISearchManager =
+                    CoCreateInstance(&CSearchManager, None, CLSCTX_LOCAL_SERVER)
+                        .context("the search manager of Windows Search cannot be made")?;
+                let scopes = manager
+                    .GetCatalog(&HSTRING::from(CATALOG))?
+                    .GetCrawlScopeManager()?;
+                Ok(scopes.IncludedInCrawlScope(&address)?.as_bool())
+            })();
+            if initialized {
+                CoUninitialize();
+            }
+            covered.unwrap_or_else(|error| {
+                // Told once, as every search asks.
+                static TOLD: AtomicBool = AtomicBool::new(false);
+                if !TOLD.swap(true, Ordering::Relaxed) {
+                    report!("Windows Search cannot be asked what it indexes: {error:#}");
+                }
+                false
+            })
+        }
+    }
+
+    /// Asks the index `question`, where there is one, for at most `limit`
+    /// files.
+    fn answer(question: Option<String>, limit: usize) -> Result<Vec<PathBuf>> {
+        let Some(question) = question else {
             return Ok(Vec::new());
         };
         let question = HSTRING::from(question);
@@ -66,6 +119,25 @@ impl SearchIndex {
             found
         }
     }
+}
+
+/// The address the places the index is told to index name `root` by.
+fn scope_address(root: &Path) -> String {
+    let path = root.to_string_lossy();
+    let path = path.trim_end_matches('\\');
+    format!("file:///{path}\\")
+}
+
+/// What a query of the index names the folder `root` by in its `SCOPE`,
+/// with forward slashes and the quotes of the query doubled.
+fn scope_of(root: &Path) -> String {
+    let path = root.to_string_lossy().replace('\\', "/");
+    // The root of a drive keeps its slash, as `file:C:/`.
+    let path = match path.len() > 3 {
+        true => path.trim_end_matches('/'),
+        false => &path,
+    };
+    format!("{FILE_SCHEME}{path}").replace('\'', "''")
 }
 
 /// Asks the index `question` and reads at most `limit` addresses of the
@@ -168,10 +240,11 @@ unsafe fn ask(question: &HSTRING, limit: usize) -> Result<Vec<PathBuf>> {
 }
 
 /// What the index is asked for the files whose names have, for every
-/// word of `text`, a word that begins with it; `None` where `text` has
-/// no word. Asking for letters anywhere in a name instead makes the
-/// index read every name, which took it up to twenty seconds.
-fn question(text: &str, limit: usize) -> Option<String> {
+/// word of `text`, a word that begins with it, below `root` where one is
+/// given; `None` where `text` has no word. Asking for letters anywhere in
+/// a name instead makes the index read every name, which took it up to
+/// twenty seconds.
+fn question(text: &str, limit: usize, root: Option<&Path>) -> Option<String> {
     let words: Vec<String> = text
         .split_whitespace()
         // A quote of either kind would end the text it stands in, and a
@@ -184,9 +257,10 @@ fn question(text: &str, limit: usize) -> Option<String> {
         return None;
     }
     let words = words.join(" AND ");
+    let scope = root.map_or_else(|| FILE_SCHEME.to_owned(), scope_of);
     Some(format!(
         "SELECT TOP {limit} System.ItemUrl FROM SystemIndex \
-         WHERE SCOPE='{FILE_SCHEME}' AND CONTAINS(System.FileName, '{words}') \
+         WHERE SCOPE='{scope}' AND CONTAINS(System.FileName, '{words}') \
          ORDER BY System.DateModified DESC"
     ))
 }
@@ -205,10 +279,19 @@ mod tests {
 
     #[test]
     fn the_question_asks_for_a_word_beginning_with_each_word_written() {
-        let asked = question(" it's  \"my*\" ", 30).expect("there are words");
+        let asked = question(" it's  \"my*\" ", 30, None).expect("there are words");
         assert!(asked.starts_with("SELECT TOP 30 System.ItemUrl FROM SystemIndex"));
+        assert!(asked.contains("SCOPE='file:'"));
         assert!(asked.contains("CONTAINS(System.FileName, '\"it''s*\" AND \"my*\"')"));
-        assert_eq!(question(" \" * ", 30), None);
+        assert_eq!(question(" \" * ", 30, None), None);
+    }
+
+    #[test]
+    fn a_question_below_a_folder_names_it_in_its_scope() {
+        let root = Path::new(r"C:\Users\O'Neil\Documents\");
+        let asked = question("report", 10, Some(root)).expect("there is a word");
+        assert!(asked.contains("SCOPE='file:C:/Users/O''Neil/Documents'"));
+        assert_eq!(scope_address(Path::new(r"D:\Work")), r"file:///D:\Work\");
     }
 
     #[test]

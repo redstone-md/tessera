@@ -7,12 +7,14 @@ mod win32;
 
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
+pub use win32::QuickFolder;
 #[allow(
     unused_imports,
     reason = "for the packages that hand work to the Shell"
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::rename_new;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,
@@ -28,6 +30,7 @@ pub use win32::{
     pointer_held, pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer,
     set_light_mode, show_properties,
 };
+pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 #[allow(
     unused_imports,
     reason = "for the notifications that show the balloons of the tray"
@@ -44,6 +47,7 @@ pub use win32::{HostOptions, ShellEvent, ShellHost};
 )]
 pub use win32::{Launch, Show};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
+pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 #[allow(
     unused_imports,
     reason = "for the features that ask Explorer while it runs"

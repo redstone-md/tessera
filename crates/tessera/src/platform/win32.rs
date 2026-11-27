@@ -18,6 +18,7 @@ mod commands;
 mod connections;
 mod desktops;
 mod execute;
+mod explorer_view;
 mod files;
 mod hdr;
 mod hotkeys;
@@ -34,6 +35,8 @@ mod passage;
 mod plans;
 mod power;
 mod shell_host;
+mod quick_access;
+mod renaming;
 mod shell_mode;
 mod shell_thread;
 mod shortcuts;
@@ -65,6 +68,9 @@ pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
 pub use execute::Process;
 pub use execute::{Launch, Show};
+pub use explorer_view::{
+    Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
+};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
     reveal_in_explorer, show_properties,
@@ -85,6 +91,9 @@ pub use plans::PowerPlan;
 pub use power::PowerAction;
 pub use shell_host::{HostOptions, ShellEvent, ShellHost};
 pub use shell_mode::started_as_shell;
+pub use quick_access::QuickFolder;
+pub use quick_access::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
+pub use renaming::rename_new;
 pub use shell_mode::{explorer_running, shell_mode};
 pub use shell_thread::ShellThread;
 pub use shortcuts::Shortcut;

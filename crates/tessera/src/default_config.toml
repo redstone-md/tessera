@@ -159,9 +159,24 @@
 #   hidden         whether hidden and system files are shown (false)
 #   folders_first  whether folders stand before files (true)
 #   view           "details" (default) or "tiles"
+#                  "list" or "icons" (large icons) too; "tiles" shows the
+#                  type and size beside each icon, as Explorer's tiles do
+#   group          what a folder is first grouped by: "none" (default),
+#                  "type" or "date"
+#   per_folder     whether each folder keeps its own look, zoom, order and
+#                  groups, as last set there (false)
+#   restore        whether a window opened without a folder opens with the
+#                  tabs of the last window closed (false)
+#   explorer       whether the folder options of Explorer are followed:
+#                  hidden extensions, hidden and protected files, and the
+#                  names a desktop.ini gives (true)
 # [files]
 # own = true
 # view = "details"
+# group = "none"
+# per_folder = false
+# restore = false
+# explorer = true
 
 # [shell] says what Tessera does as the shell of the session, in the place of
 # Explorer (`tessera shell install` makes it that at the next sign-in,

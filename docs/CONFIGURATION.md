@@ -28,6 +28,11 @@ own = true            # the folders of the user menu and the launcher open here,
 hidden = false        # show hidden and system files
 folders_first = true  # folders before files, whatever the order
 view = "details"      # or "tiles"
+# view may also be "list" or "icons"; "tiles" shows the type and size beside each icon
+group = "none"        # or "type" or "date": what a folder is first grouped by
+per_folder = false    # each folder keeps its own look, zoom, order and groups
+restore = false       # a window opened without a folder opens with the tabs of the last one closed
+explorer = true       # follow Explorer's folder options: extensions, hidden and protected files, desktop.ini names
 
 [[key]]
 press = "win+e"
@@ -35,6 +40,8 @@ files = "~"           # a path, "~" for the folder of the user, or "computer"
 ```
 
 From a console, `tessera files`, `tessera files computer` and `tessera files D:\Projects` open a window in the running shell.
+
+`tessera files home` (or `files = "home"`) opens Quick access: the folders Explorer keeps there and the files used lately. With `restore = true`, `tessera files` and a `files` key without a folder open the tabs of the last window closed instead of the folder of the user; they are kept in `%LOCALAPPDATA%\tessera\files-session.toml`, with the shares of other computers visited, which the side shows under Network. With `per_folder = true` the looks of the folders are kept in `%LOCALAPPDATA%\tessera\files-views.toml`, the 500 seen last; neither file is configuration, and either can be deleted to forget what it holds. `explorer = true` reads the folder options of Explorer (`HideFileExt`, `Hidden` and `ShowSuperHidden` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced`) each time a folder is read; with `explorer = false` every name is shown as it is and protected files of the system show with the hidden ones. `hidden = true` shows hidden files whatever Explorer says; Ctrl+H switches them for a pane.
 
 ## Actions
 

@@ -6,6 +6,12 @@
 //! rename and delete it, through the Shell where Explorer would.
 
 mod model;
+mod pane;
+mod rename;
+mod search;
+mod session;
+mod sidebar;
+mod tabs;
 mod view;
 
 use std::path::{Path, PathBuf};
@@ -16,7 +22,8 @@ use gpui::{
 };
 use serde::Deserialize;
 
-pub use model::{Location, size_text};
+pub use model::{Grouping, Location, Look, size_text};
+use session::{Opening, Session};
 use view::FilesView;
 
 use crate::actions::{Action, Actions};
@@ -33,17 +40,6 @@ const LEAST_SIZE: (f32, f32) = (560., 360.);
 /// The folder character of the icon font.
 const ICON_FOLDER: &str = "\u{e8b7}";
 
-/// How a folder is first shown.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Look {
-    /// A row per item with its details.
-    #[default]
-    Details,
-    /// Tiles of large icons.
-    Tiles,
-}
-
 /// What `[files]` of the configuration says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -58,6 +54,18 @@ pub struct FilesConfig {
     pub folders_first: bool,
     /// How a folder is first shown.
     pub view: Look,
+    /// What a folder is first grouped by.
+    pub group: Grouping,
+    /// Whether each folder keeps its own look, zoom, order and groups,
+    /// as the user last set them there.
+    pub per_folder: bool,
+    /// Whether a window opened without a folder opens with the tabs of
+    /// the last window closed.
+    pub restore: bool,
+    /// Whether the folder options of Explorer are followed: extensions of
+    /// known types hidden, hidden and protected files shown as Explorer
+    /// shows them, and the names a `desktop.ini` gives.
+    pub explorer: bool,
 }
 
 impl Default for FilesConfig {
@@ -67,6 +75,10 @@ impl Default for FilesConfig {
             hidden: false,
             folders_first: true,
             view: Look::Details,
+            group: Grouping::None,
+            per_folder: false,
+            restore: false,
+            explorer: true,
         }
     }
 }
@@ -92,6 +104,35 @@ impl Files {
 
     /// Opens a window of the file manager at `location`.
     pub fn open(location: Location, cx: &mut App) {
+        Self::open_with(Opening::at(location), cx);
+    }
+
+    /// Opens a window of the file manager at the folder `name` names, as
+    /// `named` reads it; without a name, with the tabs of the last window
+    /// closed where the configuration asks for that, and else at home.
+    pub fn open_named(name: &str, cx: &mut App) {
+        if !name.trim().is_empty() || !Self::config(cx).restore {
+            Self::open(Self::named(name), cx);
+            return;
+        }
+        cx.spawn(async move |cx| {
+            let session = cx
+                .background_executor()
+                .spawn(async { Session::load() })
+                .await;
+            cx.update(|cx| {
+                let opening = session
+                    .opening(Self::named)
+                    .unwrap_or_else(|| Opening::at(Self::home()));
+                Self::open_with(opening, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens a window of the file manager with the tabs of `opening`.
+    fn open_with(opening: Opening, cx: &mut App) {
         let config = Self::config(cx);
         let bounds = Bounds::centered(None, size(px(OPEN_SIZE.0), px(OPEN_SIZE.1)), cx);
         let options = WindowOptions {
@@ -112,7 +153,7 @@ impl Files {
             ..Default::default()
         };
         let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| FilesView::new(location, config, window, cx))
+            cx.new(|cx| FilesView::new(opening, config, window, cx))
         });
         if let Err(error) = opened {
             report!("the file manager did not open: {error:#}");
@@ -138,13 +179,15 @@ impl Files {
     }
 
     /// The location a command or a key names: nothing or `~` for the
-    /// folder of the user, `computer` for the drives, or a path, with a
-    /// leading `~` standing for the folder of the user.
+    /// folder of the user, `home` for Home (Quick access and the files
+    /// used lately), `computer` for the drives, or a path, with a leading
+    /// `~` standing for the folder of the user.
     pub fn named(name: &str) -> Location {
         let name = name.trim();
         match name {
             "" | "~" => Self::home(),
             "computer" => Location::Computer,
+            "home" => Location::Home,
             _ => match name.strip_prefix("~\\").or(name.strip_prefix("~/")) {
                 Some(rest) => match Place::Home.path() {
                     Some(home) => Location::Folder(home.join(rest)),
@@ -176,7 +219,7 @@ impl Module for FilesModule {
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
         // Windows keeps Win+E, which opens Explorer, to itself.
         let open = |folder: Option<&str>, cx: &mut App| {
-            Files::open(Files::named(folder.unwrap_or_default()), cx);
+            Files::open_named(folder.unwrap_or_default(), cx);
         };
         let open = Action::new(open).taking_any_arg().taking_reserved_keys();
         actions.register("files", open)
@@ -201,6 +244,6 @@ impl Render for FilesButton {
                     .text_color(theme.colors.primary)
                     .child(icon(theme, ICON_FOLDER)),
             )
-            .on_click(move |_, _, cx| Files::open(Files::named(&folder), cx))
+            .on_click(move |_, _, cx| Files::open_named(&folder, cx))
     }
 }
