@@ -101,6 +101,7 @@ impl EdgeSurface {
                     away: None,
                     concealed: false,
                     placed_on: native.and_then(|native| native.display_frame().ok()),
+                    placed_for: EdgeReservation::generation(),
                 }
             })
         })
@@ -199,6 +200,8 @@ pub struct EdgeSurfaceView<V> {
     concealed: bool,
     /// The bounds of the display the surface was last placed on.
     placed_on: Option<ScreenRect>,
+    /// What [`EdgeReservation::generation`] said when it was placed.
+    placed_for: u64,
 }
 
 impl<V: Render> EdgeSurfaceView<V> {
@@ -289,15 +292,18 @@ impl<V: Render> EdgeSurfaceView<V> {
     }
 
     /// Puts the surface back at its screen edge after its display changed,
-    /// as it does when the resolution is set anew.
+    /// as it does when the resolution is set anew, or after the other edge
+    /// bars moved.
     fn realign(&mut self, native: NativeSurface, cx: &mut Context<Self>) {
         let Ok(display) = native.display_frame() else {
             return;
         };
-        if self.placed_on == Some(display) {
+        let bars = EdgeReservation::generation();
+        if self.placed_on == Some(display) && self.placed_for == bars {
             return;
         }
         self.placed_on = Some(display);
+        self.placed_for = bars;
         let edge = self.surface.edge;
         let moved = match &self.reservation {
             Some(reservation) => reservation.occupy(edge, self.depth),

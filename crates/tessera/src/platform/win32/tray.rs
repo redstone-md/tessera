@@ -5,37 +5,63 @@
 //! `Shell_NotifyIcon`.
 //!
 //! Applications deliver those icons to the first window of the class
-//! `Shell_TrayWnd`. The shell creates such a window above Explorer's,
-//! records what arrives and passes every message on to Explorer, so
-//! Explorer's own notification area stays complete for when the shell
-//! exits.
+//! `Shell_TrayWnd`. The shell creates such a window above Explorer's and
+//! records what arrives. Beside Explorer it passes every message on to
+//! Explorer, so Explorer's own notification area stays complete for when
+//! the shell exits, and Explorer gives the answers.
+//!
+//! Where no taskbar of Explorer exists, as when Tessera is the shell of the
+//! session, the window answers itself, which it decides anew with every
+//! message: it accepts icons and their versions, publishes their balloons
+//! for the notifications of the shell, tells applications where their
+//! icons are, and serves the edge bars (see `appbar.rs`). When Explorer's
+//! taskbar appears again the window goes back to passing messages on.
 //!
 //! Edge bars reach Explorer through the same window, the shell's own
-//! surfaces among them, so their requests are passed on as well.
+//! surfaces among them, so their requests are passed on as well. The
+//! private messages of `ITaskbarList` do not come here but to the window
+//! the shell registers as the task manager.
+//!
+//! A message posted to an application that runs with higher privileges
+//! than the shell is dropped by Windows, so such an application does not
+//! hear of clicks on its icon or of what became of its balloons. A shell
+//! that runs with higher privileges than an application does not hear
+//! from it in turn.
 
-use std::collections::HashMap;
+mod balloon;
+
+pub use balloon::{Balloon, BalloonEvent, BalloonKind};
+
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use anyhow::{Context as _, Result, anyhow};
+use async_channel::Receiver;
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Shell::{SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared};
+use windows::Win32::UI::Shell::{
+    NIN_POPUPCLOSE, NIN_POPUPOPEN, SHAllocShared, SHFreeShared, SHLockShared, SHUnlockShared,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowExW,
-    GetClassNameW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, HWND_BROADCAST,
-    HWND_TOPMOST, IsWindow, MSG, PostMessageW, RegisterClassW, RegisterWindowMessageW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SendNotifyMessageW, SetForegroundWindow,
-    SetTimer, SetWindowPos, TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER, WNDCLASSW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    AllowSetForegroundWindow, ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW,
+    DispatchMessageW, FindWindowExW, GetClassNameW, GetCursorPos, GetMessageW,
+    GetWindowThreadProcessId, HICON, HWND_BROADCAST, HWND_TOPMOST, IsWindow, MSG, MSGFLT_ALLOW,
+    PostMessageW, RegisterClassW, RegisterWindowMessageW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SendMessageW, SendNotifyMessageW, SetForegroundWindow, SetTimer, SetWindowPos,
+    TranslateMessage, WM_CONTEXTMENU, WM_COPYDATA, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WM_USER,
+    WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
 use super::ScreenRect;
+use super::appbar::{self, Request};
 use super::icon::IconPixels;
+use balloon::NIF_REALTIME;
 
 /// The class of the window Windows gives its Bluetooth icon for.
 const BLUETOOTH_CLASS: &str = "BluetoothNotificationAreaIconWindowClass";
@@ -61,11 +87,6 @@ const PLACE_SIZE: u32 = 2;
 /// Marks a `WM_COPYDATA` message that carries the request of an edge bar.
 const EDGE_BAR_DATA: usize = 0;
 
-/// Where the request of an edge bar names the shared memory that holds its
-/// `APPBARDATA`: the handle, then the process the handle is valid in.
-const SHARED_HANDLE: usize = 48;
-const SHARED_OWNER: usize = 56;
-
 /// Milliseconds between checks that the window is still found first and
 /// that the owners of the icons still exist.
 const UPKEEP_INTERVAL: u32 = 1000;
@@ -76,22 +97,52 @@ const REGISTERED_MESSAGES: u32 = 0xC000;
 const NIM_ADD: u32 = 0;
 const NIM_MODIFY: u32 = 1;
 const NIM_DELETE: u32 = 2;
+const NIM_SETFOCUS: u32 = 3;
 const NIM_SETVERSION: u32 = 4;
 
 const NIF_MESSAGE: u32 = 0x01;
 const NIF_ICON: u32 = 0x02;
 const NIF_TIP: u32 = 0x04;
 const NIF_STATE: u32 = 0x08;
+const NIF_INFO: u32 = 0x10;
 const NIF_GUID: u32 = 0x20;
+const NIF_SHOWTIP: u32 = 0x80;
 
 const NIS_HIDDEN: u32 = 0x01;
 
+/// From this version on, an icon is told when it is chosen with a click or
+/// with the keyboard, and when its menu is asked for.
+const VERSION_3: u32 = 3;
+
 /// From this version on, an icon is told the pointer position and its own
-/// identifier with every event.
+/// identifier with every event, and draws its own description.
 const VERSION_4: u32 = 4;
 
-/// Sent to version 4 icons after a click, in addition to the button events.
+/// Sent after a click on an icon of version 3 or later, in addition to the
+/// button events, and after it was chosen with the keyboard.
 const NIN_SELECT: u32 = WM_USER;
+const NIN_KEYSELECT: u32 = WM_USER + 1;
+
+/// Where the parts of a notification lie in its bytes: a signature and
+/// the message number, then a `NOTIFYICONDATAW` whose handles are 32 bits
+/// wide. The texts are of UTF-16 units, as many as given.
+mod at {
+    pub const MESSAGE: usize = 4;
+    pub const WINDOW: usize = 12;
+    pub const UID: usize = 16;
+    pub const FLAGS: usize = 20;
+    pub const CALLBACK: usize = 24;
+    pub const ICON: usize = 28;
+    pub const TIP: (usize, usize) = (32, 128);
+    pub const STATE: usize = 288;
+    pub const STATE_MASK: usize = 292;
+    pub const INFO: (usize, usize) = (296, 256);
+    pub const VERSION: usize = 808;
+    pub const INFO_TITLE: (usize, usize) = (812, 64);
+    pub const INFO_FLAGS: usize = 940;
+    pub const GUID: usize = 944;
+    pub const BALLOON_ICON: usize = 960;
+}
 
 /// What an application asked of the notification area, as it arrives in a
 /// `WM_COPYDATA` message.
@@ -106,41 +157,56 @@ struct Notice {
     tip: String,
     state: u32,
     state_mask: u32,
+    /// The text of a balloon.
+    info: String,
+    /// Shares its place with the time a balloon was to be shown for, which
+    /// Windows has long ignored.
     version: u32,
+    info_title: String,
+    info_flags: u32,
     guid: [u8; 16],
+    /// The picture of a balloon, if it has its own.
+    balloon_icon: u32,
 }
 
 impl Notice {
-    /// Reads the structure Windows sends: a signature and the message
-    /// number, then a `NOTIFYICONDATAW` whose handles are 32 bits wide.
-    /// Applications built against old headers send a shorter one; what is
-    /// missing reads as zero.
+    /// Reads the structure Windows sends. Applications built against old
+    /// headers send a shorter one; what is missing reads as zero.
     fn parse(data: &[u8]) -> Self {
         let number = |at: usize| {
             let bytes = data.get(at..at + 4).and_then(|bytes| bytes.try_into().ok());
             bytes.map_or(0, u32::from_le_bytes)
         };
-        let tip = data.get(32..).unwrap_or_default();
-        let tip: Vec<u16> = tip[..tip.len().min(256)]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| u16::from_le_bytes(*pair))
-            .take_while(|&unit| unit != 0)
-            .collect();
-        let guid = data.get(944..960).and_then(|bytes| bytes.try_into().ok());
+        let text = |(at, units): (usize, usize)| {
+            let bytes = data.get(at..).unwrap_or_default();
+            let units: Vec<u16> = bytes[..bytes.len().min(units * 2)]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair))
+                .take_while(|&unit| unit != 0)
+                .collect();
+            String::from_utf16_lossy(&units)
+        };
+        let guid = data.get(at::GUID..at::GUID + 16);
         Self {
-            message: number(4),
-            window: number(12),
-            uid: number(16),
-            flags: number(20),
-            callback: number(24),
-            icon: number(28),
-            tip: String::from_utf16_lossy(&tip),
-            state: number(288),
-            state_mask: number(292),
-            version: number(808),
-            guid: guid.unwrap_or_default(),
+            message: number(at::MESSAGE),
+            window: number(at::WINDOW),
+            uid: number(at::UID),
+            flags: number(at::FLAGS),
+            callback: number(at::CALLBACK),
+            icon: number(at::ICON),
+            tip: text(at::TIP),
+            state: number(at::STATE),
+            state_mask: number(at::STATE_MASK),
+            info: text(at::INFO),
+            version: number(at::VERSION),
+            info_title: text(at::INFO_TITLE),
+            info_flags: number(at::INFO_FLAGS),
+            guid: guid
+                .and_then(|bytes| bytes.try_into().ok())
+                .unwrap_or_default(),
+            balloon_icon: number(at::BALLOON_ICON),
         }
     }
 
@@ -204,8 +270,21 @@ struct Entry {
     version: u32,
     hidden: bool,
     tip: String,
+    /// Whether an icon of version 4 asked for the description to be shown
+    /// for it; otherwise it draws its own.
+    show_tip: bool,
     pixels: Option<Arc<IconPixels>>,
     image_version: u64,
+    /// Whether a balloon of the icon was published and not yet ended.
+    balloon: bool,
+}
+
+impl Entry {
+    /// Whether the application draws what describes its icon, and is told
+    /// when the pointer comes onto the icon and leaves it.
+    fn draws_own_tip(&self) -> bool {
+        self.version >= VERSION_4 && !self.show_tip
+    }
 }
 
 /// The icons applications currently have in the notification area.
@@ -217,15 +296,33 @@ struct Icons {
     next_id: u64,
     /// Grows with every change.
     generation: u64,
+    /// The balloons that began or ended since they were last taken.
+    balloons: Vec<Balloon>,
+    /// The icons whose balloon was handed to the reader and not yet ended.
+    published: HashSet<u64>,
 }
 
 impl Icons {
-    /// Records `notice`. `load` reads the pixels of an icon handle.
-    fn apply(&mut self, notice: &Notice, load: impl FnOnce(u32) -> Option<IconPixels>) {
+    /// Records `notice` and says whether it was accepted: whether the icon
+    /// it names is known after it, or was before it. `serving` says whether
+    /// the shell serves the icons itself, and `load` reads the pixels of an
+    /// icon handle.
+    fn apply(
+        &mut self,
+        notice: &Notice,
+        serving: bool,
+        mut load: impl FnMut(u32) -> Option<IconPixels>,
+    ) -> bool {
         let identity = notice.identity();
         match notice.message {
-            // An application may modify an icon it added before the shell
-            // started, so a modification of an unknown icon adds it.
+            // Applications that bring their icons on `TaskbarCreated` try
+            // to modify them first and add them, with their version, only
+            // if that fails, so a modification of an unknown icon fails
+            // while the shell serves the icons, as Explorer would answer.
+            NIM_MODIFY if serving && !self.entries.contains_key(&identity) => return false,
+            // Beside Explorer an application may modify an icon it added
+            // before the shell started, so a modification of an unknown
+            // icon adds it.
             NIM_ADD | NIM_MODIFY => {
                 let entry = self.entries.entry(identity).or_insert_with(|| {
                     self.next_id += 1;
@@ -237,8 +334,10 @@ impl Icons {
                         version: 0,
                         hidden: false,
                         tip: String::new(),
+                        show_tip: false,
                         pixels: None,
                         image_version: 0,
+                        balloon: false,
                     }
                 });
                 (entry.window, entry.uid) = (notice.window, notice.uid);
@@ -249,36 +348,107 @@ impl Icons {
                     entry.pixels = load(notice.icon).map(Arc::new);
                     entry.image_version += 1;
                 }
+                // Whether the description is shown is said with it.
+                if notice.message == NIM_ADD || notice.flags & NIF_TIP != 0 {
+                    entry.show_tip = notice.flags & NIF_SHOWTIP != 0;
+                }
                 if notice.flags & NIF_TIP != 0 {
                     entry.tip.clone_from(&notice.tip);
                 }
                 if notice.flags & NIF_STATE != 0 && notice.state_mask & NIS_HIDDEN != 0 {
                     entry.hidden = notice.state & NIS_HIDDEN != 0;
                 }
-            }
-            NIM_DELETE => {
-                self.entries.remove(&identity);
-            }
-            NIM_SETVERSION => {
-                if let Some(entry) = self.entries.get_mut(&identity) {
-                    entry.version = notice.version;
+                if notice.flags & NIF_INFO != 0 {
+                    if notice.info.is_empty() {
+                        if entry.balloon {
+                            self.balloons.push(Balloon::withdrawal(entry.id));
+                        }
+                        entry.balloon = false;
+                    } else {
+                        let mut balloon = Balloon::new(
+                            entry.id,
+                            notice.info_title.clone(),
+                            notice.info.clone(),
+                            notice.info_flags,
+                            notice.flags & NIF_REALTIME != 0,
+                        );
+                        if balloon.kind == BalloonKind::User {
+                            let own = (notice.balloon_icon != 0)
+                                .then(|| load(notice.balloon_icon).map(Arc::new))
+                                .flatten();
+                            balloon.icon = own.or_else(|| entry.pixels.clone());
+                        }
+                        balloon.tip.clone_from(&entry.tip);
+                        self.balloons.push(balloon);
+                        entry.balloon = true;
+                    }
                 }
             }
-            _ => return,
+            NIM_DELETE => {
+                let Some(entry) = self.entries.remove(&identity) else {
+                    return false;
+                };
+                if entry.balloon {
+                    self.balloons.push(Balloon::withdrawal(entry.id));
+                }
+            }
+            NIM_SETVERSION => {
+                let Some(entry) = self.entries.get_mut(&identity) else {
+                    return false;
+                };
+                if notice.version > VERSION_4 {
+                    return false;
+                }
+                entry.version = notice.version;
+            }
+            // The keyboard stays where it is: the strip of icons takes no
+            // focus.
+            NIM_SETFOCUS => return self.entries.contains_key(&identity),
+            _ => return false,
         }
         self.generation += 1;
+        true
     }
 
     /// Forgets the icons whose window `exists` denies.
     fn prune(&mut self, exists: impl Fn(u32) -> bool) {
         let before = self.entries.len();
-        self.entries.retain(|_, entry| exists(entry.window));
+        let balloons = &mut self.balloons;
+        self.entries.retain(|_, entry| {
+            let keep = exists(entry.window);
+            if !keep && entry.balloon {
+                balloons.push(Balloon::withdrawal(entry.id));
+            }
+            keep
+        });
         if self.entries.len() != before {
             self.generation += 1;
         }
         let entries = &self.entries;
         self.places
             .retain(|id, _| entries.values().any(|entry| entry.id == *id));
+    }
+
+    /// The balloons that began or ended since this was last asked, as far
+    /// as their reader is to hear of them: those that began while the shell
+    /// serves the icons, as `serving` says, and their ends. Explorer shows
+    /// the others; one that replaces a balloon the reader has ends that.
+    fn take_balloons(&mut self, serving: bool) -> Vec<Balloon> {
+        let published = &mut self.published;
+        let balloons = std::mem::take(&mut self.balloons).into_iter();
+        balloons
+            .filter_map(|balloon| {
+                if balloon.is_withdrawal() {
+                    published.remove(&balloon.id).then_some(balloon)
+                } else if serving {
+                    published.insert(balloon.id);
+                    Some(balloon)
+                } else {
+                    let id = balloon.id;
+                    published.remove(&id).then(|| Balloon::withdrawal(id))
+                }
+            })
+            .collect()
     }
 
     /// The answer to the request for the part `corner` of the place of the
@@ -303,6 +473,7 @@ impl Icons {
                 id: entry.id,
                 owner: entry.window,
                 tip: entry.tip.clone(),
+                draws_own_tip: entry.draws_own_tip(),
                 pixels: entry.pixels.clone(),
                 image_version: entry.image_version,
             })
@@ -321,6 +492,9 @@ pub struct TrayIcon {
     owner: u32,
     /// What the application says about the icon; may be empty.
     pub tip: String,
+    /// Whether the application shows what describes the icon itself when
+    /// the pointer is on it, so the shell shows no description.
+    pub draws_own_tip: bool,
     pub pixels: Option<Arc<IconPixels>>,
     /// Grows whenever the application replaces the image.
     pub image_version: u64,
@@ -337,11 +511,147 @@ impl TrayIcon {
     }
 }
 
-/// A mouse button pressed and released on an icon.
+/// What the user did to an icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayButton {
+    /// The left button was pressed and released on it.
     Left,
+    /// The left button was pressed and released on it a second time, soon
+    /// after the first.
+    Double,
+    /// The right button was pressed and released on it.
     Right,
+    /// It was chosen with the keyboard.
+    #[allow(dead_code, reason = "for the keys that move through the bar")]
+    Keyboard,
+}
+
+/// The messages an icon of `version` is sent for `button`.
+fn events(button: TrayButton, version: u32) -> &'static [u32] {
+    match (button, version >= VERSION_3) {
+        (TrayButton::Left, false) => &[WM_LBUTTONDOWN, WM_LBUTTONUP],
+        (TrayButton::Left, true) => &[WM_LBUTTONDOWN, WM_LBUTTONUP, NIN_SELECT],
+        (TrayButton::Double, _) => &[WM_LBUTTONDBLCLK, WM_LBUTTONUP],
+        (TrayButton::Right, false) => &[WM_RBUTTONDOWN, WM_RBUTTONUP],
+        (TrayButton::Right, true) => &[WM_RBUTTONDOWN, WM_RBUTTONUP, WM_CONTEXTMENU],
+        (TrayButton::Keyboard, false) => &[WM_LBUTTONDOWN, WM_LBUTTONUP],
+        (TrayButton::Keyboard, true) => &[NIN_KEYSELECT],
+    }
+}
+
+/// The parameters of the message `event` to an icon of `version` whose
+/// number is `uid`, with `point` the place it happened at. From version 4
+/// on, the point comes first and the event and the number share the second;
+/// before, the number comes first and the event alone second.
+fn parameters(version: u32, uid: u32, event: u32, point: (i32, i32)) -> (usize, isize) {
+    if version >= VERSION_4 {
+        let position = (point.0 as u16 as usize) | ((point.1 as u16 as usize) << 16);
+        let event = (event & 0xffff) | ((uid & 0xffff) << 16);
+        (position, event as isize)
+    } else {
+        (uid as usize, event as isize)
+    }
+}
+
+/// The application of an icon, as it is told what happened to the icon.
+struct Target {
+    window: HWND,
+    callback: u32,
+    uid: u32,
+    /// The version the icon is treated as.
+    version: u32,
+    process: u32,
+    /// Where it happened: the point under the icon where a menu of it
+    /// belongs, or the pointer's if the shell never said where the icon is.
+    point: POINT,
+    draws_own_tip: bool,
+}
+
+impl Target {
+    /// The application of the icon `id`, unless the icon is gone or never
+    /// said which message it wants: an icon added before the shell started
+    /// and only modified since.
+    fn of(id: u64) -> Option<Self> {
+        let (entry, place) = {
+            let icons = icons();
+            let entry = icons.entries.values().find(|entry| entry.id == id).cloned();
+            (entry, icons.places.get(&id).copied())
+        };
+        let entry = entry.filter(|entry| entry.callback != 0)?;
+        let window = handle(entry.window);
+        let mut point = POINT::default();
+        let mut process = 0;
+        // SAFETY: both out-parameters outlive the calls, which tolerate a
+        // window that has been destroyed.
+        unsafe {
+            match place {
+                Some(place) => (point.x, point.y) = place.menu,
+                None => {
+                    let _ = GetCursorPos(&raw mut point);
+                }
+            }
+            GetWindowThreadProcessId(window, Some(&raw mut process));
+        }
+        // Explorer's own icons were added before the shell started, so
+        // their version was never told; they use the current one.
+        let version = if entry.version == 0 && explorer_process() == Some(process) {
+            VERSION_4
+        } else {
+            entry.version
+        };
+        Some(Self {
+            window,
+            callback: entry.callback,
+            uid: entry.uid,
+            version,
+            process,
+            point,
+            draws_own_tip: entry.draws_own_tip(),
+        })
+    }
+
+    /// Lets the application put a window in front, as it may want to
+    /// after what it is told.
+    fn allow_front(&self) {
+        // SAFETY: the call passes a process number and fails harmlessly
+        // for one that is gone.
+        unsafe {
+            let _ = AllowSetForegroundWindow(self.process);
+        }
+    }
+
+    /// Prepares for a click: the application will want to show a menu or
+    /// a window, which it may put in front only if the shell, which lets
+    /// it, is in front itself. The shell may come to the front, having just
+    /// been clicked. A menu that is not in front stays open when something
+    /// else is clicked.
+    fn bring_forward(&self) {
+        let host = HOST.load(Ordering::Relaxed);
+        // SAFETY: the window is the shell's own or none; the call fails
+        // harmlessly for one that is gone.
+        unsafe {
+            let _ = SetForegroundWindow(handle(host));
+        }
+        self.allow_front();
+    }
+
+    /// Posts `events` to the application, in that order.
+    fn tell(&self, events: &[u32]) {
+        let point = (self.point.x, self.point.y);
+        for &event in events {
+            let (wparam, lparam) = parameters(self.version, self.uid, event, point);
+            // SAFETY: posting a message to another process passes plain
+            // numbers and fails harmlessly if the window is gone.
+            unsafe {
+                let _ = PostMessageW(
+                    Some(self.window),
+                    self.callback,
+                    WPARAM(wparam),
+                    LPARAM(lparam),
+                );
+            }
+        }
+    }
 }
 
 static ICONS: OnceLock<Mutex<Icons>> = OnceLock::new();
@@ -379,6 +689,19 @@ impl Tray {
             .clone()
     }
 
+    /// Starts the tray before the shell opens its surfaces where no taskbar
+    /// of Explorer exists: the surfaces reserve their screen edges through
+    /// its window then, and edge bars started before the shell find it.
+    /// Beside Explorer the tray starts with the first `tray` widget.
+    pub fn start_before_surfaces() {
+        if super::explorer_running() {
+            return;
+        }
+        if let Err(error) = Self::start() {
+            report!("edge bars and notification icons have nothing to answer them: {error}");
+        }
+    }
+
     /// The icons to show, oldest first, and a number that grows whenever
     /// they change.
     pub fn icons() -> (u64, Vec<TrayIcon>) {
@@ -391,6 +714,29 @@ impl Tray {
         icons().generation
     }
 
+    /// The balloons applications show at their icons, and their ends, as
+    /// they arrive while the shell serves the icons itself. Beside Explorer,
+    /// which shows the balloons, only the ends of those that arrived before
+    /// do. Nothing arrives that came before the first call. The stream is
+    /// one for the whole process, so one reader is meant to take it.
+    #[allow(dead_code, reason = "for the notifications that show balloons")]
+    pub fn balloons() -> Receiver<Balloon> {
+        balloon::subscribe()
+    }
+
+    /// Tells the application of the icon `id` what became of the balloon
+    /// it showed there. A click lets it put a window in front.
+    #[allow(dead_code, reason = "for the notifications that show balloons")]
+    pub fn balloon_event(id: u64, event: BalloonEvent) {
+        let Some(target) = Target::of(id) else {
+            return;
+        };
+        if event == BalloonEvent::Clicked {
+            target.allow_front();
+        }
+        target.tell(&[event.message()]);
+    }
+
     /// Says where the shell shows the icon `id`: its `frame` on the screen
     /// and the point `menu` under it where a menu of it belongs. An
     /// application that asks Windows where its icon is gets that frame.
@@ -398,75 +744,36 @@ impl Tray {
         icons().places.insert(id, Place { frame, menu });
     }
 
-    /// Tells the application of the icon `id` that `button` was clicked on
+    /// Tells the application of the icon `id` that the pointer came onto
+    /// it, or left it. One that draws its own description is told to show
+    /// it there, or to take it away.
+    pub fn hover(id: u64, entered: bool) {
+        let Some(target) = Target::of(id) else {
+            return;
+        };
+        match (entered, target.draws_own_tip) {
+            (true, false) => target.tell(&[WM_MOUSEMOVE]),
+            (true, true) => {
+                target.allow_front();
+                target.tell(&[WM_MOUSEMOVE, NIN_POPUPOPEN]);
+            }
+            (false, true) => target.tell(&[NIN_POPUPCLOSE]),
+            (false, false) => {}
+        }
+    }
+
+    /// Tells the application of the icon `id` that `button` was used on
     /// it. The position it is told is the point under the icon where a
     /// menu belongs, or the pointer's if the shell never said where the
     /// icon is; an application may ignore it and ask for the pointer's. An
     /// application running with higher privileges than the shell does not
     /// receive the click.
     pub fn press(id: u64, button: TrayButton) {
-        let (entry, place) = {
-            let icons = icons();
-            let entry = icons.entries.values().find(|entry| entry.id == id).cloned();
-            (entry, icons.places.get(&id).copied())
-        };
-        // An icon that was added before the shell started and is only
-        // modified since never said which message it wants.
-        let Some(mut entry) = entry.filter(|entry| entry.callback != 0) else {
+        let Some(target) = Target::of(id) else {
             return;
         };
-        let window = handle(entry.window);
-        let mut pointer = POINT::default();
-        let mut process = 0;
-        // SAFETY: both out-parameters outlive the calls, which tolerate a
-        // window that has been destroyed.
-        unsafe {
-            match place {
-                Some(place) => (pointer.x, pointer.y) = place.menu,
-                None => {
-                    let _ = GetCursorPos(&raw mut pointer);
-                }
-            }
-            GetWindowThreadProcessId(window, Some(&raw mut process));
-            // The application will want to show a menu or a window, which
-            // it may put in front only if the shell, which lets it, is in
-            // front itself. The shell may come to the front, having just
-            // been clicked. A menu that is not in front stays open when
-            // something else is clicked.
-            let host = HOST.load(Ordering::Relaxed);
-            let _ = SetForegroundWindow(handle(host));
-            let _ = AllowSetForegroundWindow(process);
-        }
-
-        // Explorer's own icons were added before the shell started, so
-        // their version was never told; they use the current one.
-        if entry.version == 0 && explorer_process() == Some(process) {
-            entry.version = VERSION_4;
-        }
-        let events: &[u32] = match (button, entry.version >= VERSION_4) {
-            (TrayButton::Left, false) => &[WM_LBUTTONDOWN, WM_LBUTTONUP],
-            (TrayButton::Left, true) => &[WM_LBUTTONDOWN, WM_LBUTTONUP, NIN_SELECT],
-            (TrayButton::Right, false) => &[WM_RBUTTONDOWN, WM_RBUTTONUP],
-            (TrayButton::Right, true) => &[WM_RBUTTONDOWN, WM_RBUTTONUP, WM_CONTEXTMENU],
-        };
-        for &event in events {
-            let (wparam, lparam) = if entry.version >= VERSION_4 {
-                let position = (pointer.x as u16 as usize) | ((pointer.y as u16 as usize) << 16);
-                (position, (event & 0xffff) | ((entry.uid & 0xffff) << 16))
-            } else {
-                (entry.uid as usize, event)
-            };
-            // SAFETY: posting a message to another process passes plain
-            // numbers and fails harmlessly if the window is gone.
-            unsafe {
-                let _ = PostMessageW(
-                    Some(window),
-                    entry.callback,
-                    WPARAM(wparam),
-                    LPARAM(lparam as isize),
-                );
-            }
-        }
+        target.bring_forward();
+        target.tell(events(button, target.version));
     }
 }
 
@@ -474,9 +781,35 @@ impl Tray {
 /// before it exists.
 static HOST: AtomicU32 = AtomicU32::new(0);
 
+thread_local! {
+    /// Whether the window answered itself at its last upkeep, as no
+    /// taskbar of Explorer existed.
+    static SERVING: Cell<bool> = const { Cell::new(false) };
+}
+
 /// The handle a 32-bit value of a notification stands for.
 fn handle(value: u32) -> HWND {
     HWND(value as usize as *mut c_void)
+}
+
+/// The message that tells applications a taskbar was created; 0 if
+/// Windows did not give one.
+fn taskbar_created() -> u32 {
+    static CREATED: OnceLock<u32> = OnceLock::new();
+    // SAFETY: the name is a NUL-terminated literal.
+    *CREATED.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })
+}
+
+/// Tells every application that a taskbar was created, which has them add
+/// their icons and register their edge bars again.
+fn announce() {
+    let created = taskbar_created();
+    if created != 0 {
+        // SAFETY: the broadcast passes no pointers and does not wait.
+        unsafe {
+            let _ = SendNotifyMessageW(HWND_BROADCAST, created, WPARAM(0), LPARAM(0));
+        }
+    }
 }
 
 /// Creates the window and serves it until the process exits.
@@ -489,16 +822,14 @@ fn run(ready: &mpsc::Sender<Result<()>>) {
         }
     };
     HOST.store(window.0 as usize as u32, Ordering::Relaxed);
+    SERVING.set(explorer_tray(window).is_none());
     let _ = ready.send(Ok(()));
 
-    // SAFETY: the window belongs to this thread; `message` outlives the
-    // loop, and the broadcast passes no pointers.
+    // SAFETY: the window belongs to this thread, and `message` outlives
+    // the loop.
     unsafe {
         SetTimer(Some(window), 1, UPKEEP_INTERVAL, None);
-        let created = RegisterWindowMessageW(w!("TaskbarCreated"));
-        if created != 0 {
-            let _ = SendNotifyMessageW(HWND_BROADCAST, created, WPARAM(0), LPARAM(0));
-        }
+        announce();
         let mut message = MSG::default();
         while GetMessageW(&raw mut message, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&raw const message);
@@ -536,6 +867,15 @@ fn create_window() -> Result<HWND> {
             None,
         )
         .context("the window could not be created")?;
+        // A shell started with higher privileges than the applications
+        // hears that a taskbar was created from them. Their icons and bars
+        // it does not hear: a bar's request names a process and memory in
+        // it that the shell writes to, which a program of lower privileges
+        // must not have done for it in another elevated process.
+        let created = taskbar_created();
+        if created != 0 {
+            let _ = ChangeWindowMessageFilterEx(window, created, MSGFLT_ALLOW, None);
+        }
         raise(window);
         Ok(window)
     }
@@ -610,15 +950,8 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     // SAFETY: the caller guarantees the buffer.
     let bytes =
         unsafe { std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize) };
-    let handle = bytes
-        .get(SHARED_HANDLE..SHARED_HANDLE + 8)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map_or(0, u64::from_le_bytes);
-    let owner = bytes
-        .get(SHARED_OWNER..SHARED_OWNER + 4)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map_or(0, u32::from_le_bytes);
-    if handle == 0 {
+    let request = Request::parse(bytes);
+    if request.shared == 0 || bytes.len() < appbar::SHARED_OWNER + 4 {
         return send(data);
     }
 
@@ -627,17 +960,16 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     // as handles are 32 bits wide in a request, and not a byte more may be
     // written: the memory of a request from this very process is not
     // mapped but lies among its other allocations.
-    let stated = bytes
-        .get(..4)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map_or(0, u32::from_le_bytes);
-    let size = (stated as usize).min(SHARED_HANDLE);
+    let size = (request.size as usize).min(appbar::SHARED_HANDLE);
     // SAFETY: the shared memory functions accept any handle and answer
     // null for one that is not theirs. A block they hand out holds the
     // structure its sender put there, of the length that structure
     // states, and both blocks stay valid until they are unlocked below.
     unsafe {
-        let ours = SHLockShared(HANDLE(handle as usize as *mut c_void), owner);
+        let ours = SHLockShared(
+            HANDLE(request.shared as usize as *mut c_void),
+            request.owner,
+        );
         if ours.is_null() {
             return send(data);
         }
@@ -649,14 +981,15 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
             return send(data);
         }
 
-        let mut request = bytes.to_vec();
-        request[SHARED_HANDLE..SHARED_HANDLE + 8]
+        let mut forwarded = bytes.to_vec();
+        forwarded[appbar::SHARED_HANDLE..appbar::SHARED_HANDLE + 8]
             .copy_from_slice(&(shared.0 as usize as u64).to_le_bytes());
-        request[SHARED_OWNER..SHARED_OWNER + 4].copy_from_slice(&process.to_le_bytes());
+        forwarded[appbar::SHARED_OWNER..appbar::SHARED_OWNER + 4]
+            .copy_from_slice(&process.to_le_bytes());
         let result = send(&COPYDATASTRUCT {
             dwData: data.dwData,
             cbData: data.cbData,
-            lpData: request.as_mut_ptr().cast(),
+            lpData: forwarded.as_mut_ptr().cast(),
         });
 
         let theirs = SHLockShared(shared, process);
@@ -670,8 +1003,56 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     }
 }
 
+/// Records the notification in `data` and says whether it was accepted;
+/// `serving` says whether the shell serves the icons itself.
+fn record(data: &[u8], serving: bool) -> bool {
+    let notice = Notice::parse(data);
+    let (accepted, balloons) = {
+        let mut icons = icons();
+        let accepted = icons.apply(&notice, serving, load_icon);
+        (accepted, icons.take_balloons(serving))
+    };
+    balloons.into_iter().for_each(balloon::publish);
+    accepted
+}
+
+/// Keeps the window first, forgets the icons and bars of closed windows,
+/// and follows Explorer's taskbar coming and going.
+fn upkeep(window: HWND) {
+    // SAFETY: the calls only read window state.
+    unsafe {
+        let first = FindWindowExW(None, None, CLASS, PCWSTR::null());
+        if first.ok() != Some(window) {
+            raise(window);
+        }
+    }
+    let serving = explorer_tray(window).is_none();
+    let balloons = {
+        let mut icons = icons();
+        // SAFETY: the call only reads whether a window exists.
+        icons.prune(|owner| unsafe { IsWindow(Some(handle(owner))) }.as_bool());
+        icons.take_balloons(serving)
+    };
+    balloons.into_iter().for_each(balloon::publish);
+
+    if SERVING.replace(serving) != serving {
+        if serving {
+            // Explorer went: the applications that knew only Explorer
+            // bring their icons and bars here, Tessera's surfaces too.
+            announce();
+            appbar::begin(window);
+        } else {
+            // Explorer came back and keeps the bars from now on.
+            appbar::forget();
+        }
+    }
+    if serving {
+        appbar::upkeep(window);
+    }
+}
+
 /// The window procedure: records icons, keeps the window first, and passes
-/// what applications sent on to Explorer.
+/// what applications sent on to Explorer, or answers itself without it.
 unsafe extern "system" fn receive(
     window: HWND,
     message: u32,
@@ -683,55 +1064,57 @@ unsafe extern "system" fn receive(
             // SAFETY: for this message the system guarantees that `lparam`
             // points to a COPYDATASTRUCT whose buffer is readable for the
             // length it states, until the procedure returns.
-            let notice = unsafe {
+            let (kind, bytes) = unsafe {
                 let data = &*(lparam.0 as *const COPYDATASTRUCT);
-                (data.dwData == ICON_DATA && !data.lpData.is_null()).then(|| {
-                    let bytes =
-                        std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize);
-                    Notice::parse(bytes)
-                })
+                let bytes = (!data.lpData.is_null()).then(|| {
+                    std::slice::from_raw_parts(data.lpData.cast::<u8>(), data.cbData as usize)
+                });
+                (data.dwData, bytes)
             };
-            if let Some(notice) = notice {
-                icons().apply(&notice, load_icon);
+            let explorer = explorer_tray(window);
+            // What the window answers when it serves the icons itself.
+            let mut own = 0;
+            match (kind, bytes) {
+                (ICON_DATA, Some(bytes)) => own = record(bytes, explorer.is_none()).into(),
+                // Explorer would answer with the place in its own, hidden
+                // taskbar, where the application would then open its menu.
+                (PLACE_DATA, Some(bytes)) => {
+                    let corner = place_request(bytes)
+                        .and_then(|(corner, identity)| icons().corner(corner, identity));
+                    if let Some(corner) = corner {
+                        return LRESULT(corner);
+                    }
+                }
+                (EDGE_BAR_DATA, Some(bytes)) if explorer.is_none() => {
+                    return appbar::serve(window, bytes);
+                }
+                _ => {}
             }
-            // SAFETY: as above.
-            let corner = unsafe {
-                let data = &*(lparam.0 as *const COPYDATASTRUCT);
-                (data.dwData == PLACE_DATA && !data.lpData.is_null())
-                    .then(|| {
-                        let bytes = std::slice::from_raw_parts(
-                            data.lpData.cast::<u8>(),
-                            data.cbData as usize,
-                        );
-                        place_request(bytes)
-                    })
-                    .flatten()
-            };
-            // Explorer would answer with the place in its own, hidden
-            // taskbar, where the application would then open its menu.
-            let corner = corner.and_then(|(corner, identity)| icons().corner(corner, identity));
-            if let Some(corner) = corner {
-                return LRESULT(corner);
-            }
-            match explorer_tray(window) {
+            match explorer {
                 // SAFETY: `lparam` points to the COPYDATASTRUCT of this
                 // message, which stays readable until the procedure returns.
                 Some(explorer) => unsafe {
                     pass_on(explorer, wparam, &*(lparam.0 as *const COPYDATASTRUCT))
                 },
-                None => LRESULT(1),
+                None => LRESULT(own),
             }
         }
         WM_TIMER => {
-            // SAFETY: the calls only read window state.
-            unsafe {
-                let first = FindWindowExW(None, None, CLASS, PCWSTR::null());
-                if first.ok() != Some(window) {
-                    raise(window);
-                }
-                icons().prune(|owner| IsWindow(Some(handle(owner))).as_bool());
-            }
+            upkeep(window);
             LRESULT(0)
+        }
+        // Decided as for the requests of the bars, not by the last upkeep:
+        // a request answered since then posted this message.
+        appbar::WORK_AREAS => {
+            appbar::work_areas_due(explorer_tray(window).is_none());
+            LRESULT(0)
+        }
+        WM_DISPLAYCHANGE => {
+            if SERVING.get() {
+                appbar::displays_changed(window);
+            }
+            // SAFETY: the default procedure accepts any message of a window.
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         // Applications also talk to the taskbar with private messages.
         // Registered messages are broadcast, so Explorer has its own copy.
@@ -825,7 +1208,7 @@ mod tests {
         assert_eq!(place_request(&[0; 40]), None);
 
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 7, 3, 0, ""), pixels);
+        icons.apply(&notice(NIM_ADD, 7, 3, 0, ""), false, pixels);
         assert_eq!(icons.corner(PLACE_SIZE, identity), None);
         let id = icons.shown()[0].id;
         let frame = ScreenRect {
@@ -863,8 +1246,8 @@ mod tests {
     fn icons_are_added_changed_and_removed() {
         let mut icons = Icons::default();
         let flags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        icons.apply(&notice(NIM_ADD, 10, 1, flags, "First"), pixels);
-        icons.apply(&notice(NIM_MODIFY, 20, 1, flags, "Second"), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, flags, "First"), false, pixels);
+        icons.apply(&notice(NIM_MODIFY, 20, 1, flags, "Second"), false, pixels);
         let shown = icons.shown();
         assert_eq!(shown.len(), 2);
         assert_eq!(
@@ -874,37 +1257,56 @@ mod tests {
         assert!(shown[0].pixels.is_some());
 
         // Only what the flags name changes.
-        icons.apply(&notice(NIM_MODIFY, 10, 1, NIF_TIP, "Renamed"), |_| None);
+        icons.apply(
+            &notice(NIM_MODIFY, 10, 1, NIF_TIP, "Renamed"),
+            false,
+            |_| None,
+        );
         let first = &icons.shown()[0];
         assert_eq!((first.tip.as_str(), first.image_version), ("Renamed", 1));
         assert!(first.pixels.is_some());
 
         let generation = icons.generation;
-        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels);
         assert_eq!(icons.shown().len(), 1);
         assert!(icons.generation > generation);
     }
 
     #[test]
+    fn an_unknown_icon_is_modified_only_beside_explorer() {
+        let modify = notice(NIM_MODIFY, 10, 1, NIF_TIP, "Late");
+        let mut icons = Icons::default();
+        assert!(!icons.apply(&modify, true, pixels));
+        assert!(icons.shown().is_empty());
+        assert!(icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), true, pixels));
+        assert!(icons.apply(&modify, true, pixels));
+        assert_eq!(icons.shown()[0].tip, "Late");
+
+        let mut icons = Icons::default();
+        assert!(icons.apply(&modify, false, pixels));
+        assert_eq!(icons.shown().len(), 1);
+    }
+
+    #[test]
     fn hidden_icons_are_not_shown() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Shy"), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Shy"), false, pixels);
         let mut data = bytes(NIM_MODIFY, 10, 1, NIF_STATE, "");
         data[288..292].copy_from_slice(&NIS_HIDDEN.to_le_bytes());
         data[292..296].copy_from_slice(&NIS_HIDDEN.to_le_bytes());
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert!(icons.shown().is_empty());
 
         data[288..292].copy_from_slice(&0u32.to_le_bytes());
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert_eq!(icons.shown().len(), 1);
     }
 
     #[test]
     fn icons_of_closed_windows_are_forgotten() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), pixels);
-        icons.apply(&notice(NIM_ADD, 20, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels);
+        icons.apply(&notice(NIM_ADD, 20, 1, 0, ""), false, pixels);
         let generation = icons.generation;
         icons.prune(|window| window == 20);
         assert_eq!(icons.shown().len(), 1);
@@ -916,10 +1318,194 @@ mod tests {
     #[test]
     fn the_version_is_remembered_for_a_known_icon() {
         let mut icons = Icons::default();
-        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), pixels);
+        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels);
         let mut data = bytes(NIM_SETVERSION, 10, 1, 0, "");
         data[808..812].copy_from_slice(&4u32.to_le_bytes());
-        icons.apply(&Notice::parse(&data), pixels);
+        icons.apply(&Notice::parse(&data), false, pixels);
         assert_eq!(icons.entries[&Identity::Numbered(10, 1)].version, 4);
+    }
+
+    /// Puts `text` at `at` as UTF-16.
+    fn put_text(data: &mut [u8], at: usize, text: &str) {
+        for (index, unit) in text.encode_utf16().enumerate() {
+            data[at + index * 2..at + 2 + index * 2].copy_from_slice(&unit.to_le_bytes());
+        }
+    }
+
+    fn put(data: &mut [u8], at: usize, value: u32) {
+        data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// A notification that shows the balloon `text` of the kind `flags`.
+    fn balloon_bytes(message: u32, uid: u32, text: &str, flags: u32) -> Vec<u8> {
+        let mut data = bytes(message, 10, uid, NIF_INFO | NIF_ICON | NIF_TIP, "App");
+        put_text(&mut data, at::INFO.0, text);
+        put_text(&mut data, at::INFO_TITLE.0, "Title");
+        put(&mut data, at::INFO_FLAGS, flags);
+        data
+    }
+
+    #[test]
+    fn a_balloon_is_read_from_the_end_of_a_notification() {
+        let mut data = balloon_bytes(NIM_MODIFY, 1, "Update ready", 4);
+        put(&mut data, at::BALLOON_ICON, 99);
+        let read = Notice::parse(&data);
+        assert_eq!(read.info, "Update ready");
+        assert_eq!(read.info_title, "Title");
+        assert_eq!((read.info_flags, read.balloon_icon), (4, 99));
+        assert_eq!(read.tip, "App");
+
+        // A text that fills its field has no terminating zero.
+        let mut data = vec![0u8; 964];
+        put_text(&mut data, at::INFO_TITLE.0, &"x".repeat(64));
+        put(&mut data, at::INFO_FLAGS, 1);
+        assert_eq!(Notice::parse(&data).info_title.len(), 64);
+        // A notification of old headers has no balloon icon.
+        assert_eq!(Notice::parse(&data[..944]).balloon_icon, 0);
+    }
+
+    #[test]
+    fn balloons_begin_and_end_with_their_icon() {
+        let mut icons = Icons::default();
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_ADD, 1, "Hello", 1)),
+            false,
+            pixels,
+        );
+        let balloons = icons.take_balloons(true);
+        assert_eq!(balloons.len(), 1);
+        let first = &balloons[0];
+        assert_eq!(
+            (
+                first.title.as_str(),
+                first.text.as_str(),
+                first.tip.as_str()
+            ),
+            ("Title", "Hello", "App")
+        );
+        assert_eq!(first.kind, BalloonKind::Info);
+        assert!(first.icon.is_none());
+        assert!(icons.take_balloons(true).is_empty());
+
+        // An empty text takes the balloon back.
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)),
+            false,
+            pixels,
+        );
+        let balloons = icons.take_balloons(true);
+        assert!(balloons.len() == 1 && balloons[0].is_withdrawal());
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)),
+            false,
+            pixels,
+        );
+        assert!(icons.take_balloons(true).is_empty());
+
+        // Removing the icon ends its balloon, as does closing its window.
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "Again", 4)),
+            false,
+            pixels,
+        );
+        let balloons = icons.take_balloons(true);
+        assert_eq!(balloons[0].kind, BalloonKind::User);
+        assert!(balloons[0].icon.is_some(), "the picture of the icon");
+        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels);
+        assert!(icons.take_balloons(true)[0].is_withdrawal());
+
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_ADD, 2, "Bye", 0)),
+            false,
+            pixels,
+        );
+        icons.take_balloons(true);
+        icons.prune(|_| false);
+        assert!(icons.take_balloons(true)[0].is_withdrawal());
+    }
+
+    #[test]
+    fn beside_explorer_only_ends_of_published_balloons_are_handed_on() {
+        let mut icons = Icons::default();
+        let shown = |text: &str| Notice::parse(&balloon_bytes(NIM_MODIFY, 1, text, 1));
+        icons.apply(&shown("Hello"), false, pixels);
+        assert_eq!(icons.take_balloons(true).len(), 1);
+        // Explorer shows the next one, which ends the first.
+        icons.apply(&shown("Again"), false, pixels);
+        let ended = icons.take_balloons(false);
+        assert!(ended.len() == 1 && ended[0].is_withdrawal());
+        // The end of one only Explorer showed is no news.
+        icons.apply(&shown(""), false, pixels);
+        assert!(icons.take_balloons(false).is_empty());
+        // Nor is it once the shell serves the icons again.
+        icons.apply(&shown("Third"), false, pixels);
+        icons.take_balloons(false);
+        icons.apply(&shown(""), false, pixels);
+        assert!(icons.take_balloons(true).is_empty());
+    }
+
+    #[test]
+    fn a_notification_is_accepted_for_a_known_icon() {
+        let mut icons = Icons::default();
+        assert!(!icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels));
+        assert!(!icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), false, pixels));
+        assert!(icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels));
+        assert!(icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), false, pixels));
+        let mut data = bytes(NIM_SETVERSION, 10, 1, 0, "");
+        put(&mut data, at::VERSION, 5);
+        assert!(!icons.apply(&Notice::parse(&data), false, pixels));
+        assert!(!icons.apply(&notice(9, 10, 1, 0, ""), false, pixels));
+        assert!(icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), false, pixels));
+    }
+
+    #[test]
+    fn an_icon_of_version_4_draws_its_own_description_unless_it_asks() {
+        let mut icons = Icons::default();
+        icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Volume"), false, pixels);
+        assert!(!icons.shown()[0].draws_own_tip);
+        let mut data = bytes(NIM_SETVERSION, 10, 1, 0, "");
+        put(&mut data, at::VERSION, 4);
+        icons.apply(&Notice::parse(&data), false, pixels);
+        assert!(icons.shown()[0].draws_own_tip);
+
+        icons.apply(
+            &notice(NIM_MODIFY, 10, 1, NIF_TIP | NIF_SHOWTIP, "Volume"),
+            false,
+            pixels,
+        );
+        assert!(!icons.shown()[0].draws_own_tip);
+        // A change that does not touch the description keeps the choice.
+        icons.apply(&notice(NIM_MODIFY, 10, 1, NIF_ICON, ""), false, pixels);
+        assert!(!icons.shown()[0].draws_own_tip);
+    }
+
+    #[test]
+    fn each_version_is_told_of_clicks_in_its_way() {
+        assert_eq!(events(TrayButton::Left, 0), &[WM_LBUTTONDOWN, WM_LBUTTONUP]);
+        assert_eq!(
+            events(TrayButton::Left, 3),
+            &[WM_LBUTTONDOWN, WM_LBUTTONUP, NIN_SELECT]
+        );
+        assert_eq!(
+            events(TrayButton::Right, 4),
+            &[WM_RBUTTONDOWN, WM_RBUTTONUP, WM_CONTEXTMENU]
+        );
+        assert_eq!(
+            events(TrayButton::Double, 4),
+            &[WM_LBUTTONDBLCLK, WM_LBUTTONUP]
+        );
+        assert_eq!(events(TrayButton::Keyboard, 4), &[NIN_KEYSELECT]);
+        assert_eq!(
+            events(TrayButton::Keyboard, 0),
+            &[WM_LBUTTONDOWN, WM_LBUTTONUP]
+        );
+
+        assert_eq!(
+            parameters(3, 7, WM_LBUTTONUP, (5, 6)),
+            (7, WM_LBUTTONUP as isize)
+        );
+        let (wparam, lparam) = parameters(4, 7, WM_CONTEXTMENU, (-2, 1040));
+        assert_eq!(wparam, 0x0410_fffe);
+        assert_eq!(lparam, (0x0007_0000 | WM_CONTEXTMENU) as isize);
     }
 }

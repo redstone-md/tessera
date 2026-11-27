@@ -77,6 +77,8 @@ impl Shell {
         cx.set_global(Tips::default());
         cx.set_global(Menus::default());
         cx.set_global(AppIcons::new(&config.icons));
+        // Without Explorer the surfaces reserve their edges through the tray.
+        crate::platform::Tray::start_before_surfaces();
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);
         if surfaces.is_empty() {
             bail!("the layout opened no surface");

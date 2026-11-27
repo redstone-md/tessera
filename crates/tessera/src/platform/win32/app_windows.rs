@@ -435,19 +435,40 @@ impl AppWindow {
     }
 
     fn read() -> Vec<Self> {
+        Self::handles()
+            .into_iter()
+            .map(|(hwnd, process)| Self::describe(hwnd, process))
+            .collect()
+    }
+
+    /// The windows [`Self::enumerate`] lists, in z-order, topmost first,
+    /// each with its process, without looking into the processes and
+    /// without the list kept for the bars. No window of this process is
+    /// asked anything, so a thread may call it without waiting for another
+    /// thread of the shell.
+    pub(super) fn handles() -> Vec<(HWND, u32)> {
         let mut handles: Vec<HWND> = Vec::new();
         // SAFETY: `collect` receives the pointer to `handles`, which outlives
         // the synchronous enumeration.
         unsafe {
             let _ = EnumWindows(Some(collect), LPARAM(&raw mut handles as isize));
         }
-        handles.into_iter().filter_map(Self::describe).collect()
+        handles.into_iter().filter_map(Self::listed).collect()
     }
 
-    fn describe(hwnd: HWND) -> Option<Self> {
+    /// The process of `hwnd` if the window is one a task switcher shows.
+    /// The windows of this process are left out before anything else is
+    /// read: asking one of them for its text sends it a message and waits
+    /// for its thread.
+    fn listed(hwnd: HWND) -> Option<(HWND, u32)> {
         // SAFETY: the calls only read window state and tolerate a handle
         // whose window has since been destroyed.
         unsafe {
+            let mut process = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&raw mut process));
+            if process == GetCurrentProcessId() {
+                return None;
+            }
             if !IsWindowVisible(hwnd).as_bool() || GetWindowTextLengthW(hwnd) <= 0 {
                 return None;
             }
@@ -468,18 +489,17 @@ impl AppWindow {
             if cloaked != 0 {
                 return None;
             }
-            let mut process = 0u32;
-            GetWindowThreadProcessId(hwnd, Some(&raw mut process));
-            if process == GetCurrentProcessId() {
-                return None;
-            }
-            let (executable, app_id) = program_of(hwnd, process);
-            Some(Self {
-                id: AppWindowId(hwnd.0 as isize),
-                display: display_of(hwnd),
-                executable,
-                app_id,
-            })
+            Some((hwnd, process))
+        }
+    }
+
+    fn describe(hwnd: HWND, process: u32) -> Self {
+        let (executable, app_id) = program_of(hwnd, process);
+        Self {
+            id: AppWindowId(hwnd.0 as isize),
+            display: display_of(hwnd),
+            executable,
+            app_id,
         }
     }
 }
