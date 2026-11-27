@@ -1252,6 +1252,33 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # match = "starts"
 # fullscreen = true
 # inactive_opacity = 0.85
+#
+# More of a rule (window-rules-editor); the editor under Window rules in the
+# settings writes all of it, and Pick a window reads a window to name:
+#   enabled = false     keep the rule in the file and out of use
+#   type                the kind of window: "normal", "dialog", "utility",
+#                       "tool", "splash" or "popup", as its styles tell
+#   apply = "now"       once, to the windows open when the rules are read;
+#                       apply = "force" is another word for "always"
+#   accept_focus = false  the window does not take the keyboard when clicked
+#   closeable = false   its close button and Close are greyed; Alt+F4, which
+#                       the program answers, still closes it
+#   icon = "<file>"     the picture the dock shows for it
+#   app_id = "<id>"     the application the dock groups it with
+#   focus               keeps it from taking the foreground by itself:
+#                       "none" (Windows decides), "low", "medium", "high" or
+#                       "extreme" (only a click lets it in front)
+#
+# [[rule]]
+# type = "splash"
+# above = true
+# position = "center"
+#
+# [[rule]]
+# exe = "chat.exe"
+# focus = "high"
+# accept_focus = false
+# apply = "now"
 
 # [window_actions] moves and resizes windows with the pointer while a key is
 # held, as KWin does, and more; all of it is off without the table.
@@ -1280,6 +1307,31 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # focus_follows_mouse = true
 # focus_delay = 300
 # focus_raises = false
+#
+# More of [window_actions] (window-rules-editor):
+#   placement            where a new window goes: "windows" (default),
+#                        "centered", "under-pointer", "zero-corner", "smart"
+#                        (where it covers the least), "maximized" or "cascade"
+#   titlebar_double      a double click on a title bar: "windows" (default),
+#                        "maximize", "minimize", "close", "lower", "above" or
+#                        "nothing"
+#   titlebar_wheel       the wheel on a title bar: "nothing" (default),
+#                        "opacity", "above-below", "workspace" or
+#                        "minimize-restore"
+#   modifier_wheel       the wheel with modifier held: "nothing", "opacity",
+#                        "workspace" or "volume"
+#   modifier_middle      the middle button with modifier held: "nothing",
+#                        "close", "minimize", "lower" or "window-menu"
+#   inactive_click       a click on a window not in front: "windows"
+#                        (default, passes the click) or "activate-only"
+#
+# [window_actions]
+# placement = "smart"
+# titlebar_double = "above"
+# titlebar_wheel = "opacity"
+# modifier_wheel = "volume"
+# modifier_middle = "window-menu"
+# inactive_click = "activate-only"
 
 # Each [[corner]] is a corner or an edge of the displays that does
 # something when the pointer rests there: at is "top-left", "top-right",
