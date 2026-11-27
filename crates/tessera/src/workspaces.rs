@@ -88,6 +88,11 @@ const SURVEY_WANTED: Duration = Duration::from_secs(5);
 /// How often the virtual desktops of Windows are looked at at most.
 const SURVEY_INTERVAL: Duration = Duration::from_millis(500);
 
+/// How often the windows of the virtual desktops of Windows are looked at
+/// once something asked which window is on which, when nothing asks now
+/// and no window changed.
+const SURVEY_AGAIN: Duration = Duration::from_secs(2);
+
 /// What the configuration says about workspaces.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -387,8 +392,11 @@ struct Survey {
     /// asked which window is on which.
     wanted: Cell<Option<Instant>>,
     windows_wanted: Cell<Option<Instant>>,
+    /// Whether something ever asked which window is on which desktop, so
+    /// that the windows are kept up to date for when it asks again.
+    windows_ever: Cell<bool>,
     /// Whether the desktops are being looked at.
-    asking: bool,
+    asking: Cell<bool>,
 }
 
 impl Survey {
@@ -403,6 +411,29 @@ impl Survey {
     fn want_windows(&self) {
         self.want();
         self.windows_wanted.set(Some(Instant::now()));
+        self.windows_ever.set(true);
+    }
+
+    /// Whether the desktops are to be looked at now, the last look being
+    /// `looked` ago and a window having changed since where `changed`.
+    /// While something asks they are looked at every
+    /// [`SURVEY_INTERVAL`]; once something asked which window is on
+    /// which, they are looked at when a window changes and every
+    /// [`SURVEY_AGAIN`] after that, so that what asks again finds the
+    /// windows as they are.
+    fn due(&self, looked: Duration, changed: bool) -> bool {
+        if self.asking.get() || looked < SURVEY_INTERVAL {
+            return false;
+        }
+        if Self::recently(&self.wanted) {
+            return changed || looked >= LOOK_INTERVAL;
+        }
+        self.windows_ever.get() && (changed || looked >= SURVEY_AGAIN)
+    }
+
+    /// Whether the next look is to say which window is on which desktop.
+    fn with_windows(&self) -> bool {
+        Self::recently(&self.windows_wanted) || self.windows_ever.get()
     }
 
     fn recently(asked: &Cell<Option<Instant>>) -> bool {
@@ -724,8 +755,11 @@ impl Workspaces {
             this.adopt(restored);
         }
         this.set_keys();
+        // Beside the desktops of Windows the window changes tell when to
+        // look again at which window is on which.
+        let watched = WindowEvents::watch();
         if this.owned() {
-            if !WindowEvents::watch() {
+            if !watched {
                 report!("Windows does not report window changes, so workspaces follow them late");
             }
             this.save_soon();
@@ -833,35 +867,50 @@ impl Workspaces {
     /// Windows where something wants to know. Whether the task `task` goes
     /// on is returned.
     fn tick(task: u64, seen: &mut Option<u64>, looked: &mut Instant, cx: &mut App) -> bool {
-        let this = cx.global_mut::<Self>();
+        // Read first: the global is taken to change only where something
+        // is to change, since taking it tells everything that observes the
+        // workspaces.
+        let this = cx.global::<Self>();
         if this.task != task {
             return false;
         }
         let now = WindowEvents::generation();
-        let due = *seen != Some(now) || looked.elapsed() >= LOOK_INTERVAL;
+        let changed = *seen != Some(now);
         if !this.owned() {
-            let survey = &mut this.survey;
-            let due = due && looked.elapsed() >= SURVEY_INTERVAL;
-            if due && Survey::recently(&survey.wanted) && !survey.asking {
+            let survey = &this.survey;
+            if survey.due(looked.elapsed(), changed) {
                 (*seen, *looked) = (Some(now), Instant::now());
-                survey.asking = true;
-                let windows = Survey::recently(&survey.windows_wanted);
+                let windows = survey.with_windows();
+                survey.asking.set(true);
                 Self::ask_survey(task, windows, cx);
             }
             return true;
         }
+        let due = changed || looked.elapsed() >= LOOK_INTERVAL;
+        let elapsed = |when: Option<Instant>| when.is_some_and(|when| when <= Instant::now());
+        let record = elapsed(this.record_due);
+        let state = elapsed(this.state_due);
+        if !(due || record || state || this.stills.dropped()) {
+            return true;
+        }
+        let this = cx.global_mut::<Self>();
         if due {
             (*seen, *looked) = (Some(now), Instant::now());
             this.look();
         }
-        let elapsed = |when: Option<Instant>| when.is_some_and(|when| when <= Instant::now());
-        if elapsed(this.record_due) {
+        if record {
             this.record_due = None;
             this.write_record();
         }
-        if elapsed(this.state_due) {
+        let draft = state.then(|| {
             this.state_due = None;
-            let draft = this.draft();
+            this.draft()
+        });
+        // GPUI keeps what it drew of an image until it is told to let go.
+        for image in this.stills.take_dropped() {
+            cx.drop_image(image, None);
+        }
+        if let Some(draft) = draft {
             cx.background_executor()
                 .spawn(async move { draft.write() })
                 .detach();
@@ -870,20 +919,31 @@ impl Workspaces {
     }
 
     /// Asks of the virtual desktops of Windows, and with `windows` which
-    /// window is on which, and keeps the answer for the task `task`.
+    /// window is on which, and keeps the answer for the task `task`. Where
+    /// desktops were made or removed, [`Self::generation`] is raised.
     fn ask_survey(task: u64, windows: bool, cx: &mut App) {
         let answer = VirtualDesktops::survey(windows);
         cx.spawn(async move |cx: &mut AsyncApp| {
             let found = answer.recv().await.ok();
             cx.update(|cx| {
-                let this = cx.global_mut::<Self>();
+                let this = cx.global::<Self>();
                 if this.task != task {
                     return;
                 }
-                this.survey.asking = false;
-                if found.is_some() {
-                    this.survey.found = found;
+                this.survey.asking.set(false);
+                let Some(found) = found else {
+                    return;
+                };
+                if this.survey.found.as_ref() == Some(&found) {
+                    return;
                 }
+                let before = this.survey.found.as_ref().map(|found| &found.ids);
+                let remade = before != Some(&found.ids);
+                let this = cx.global_mut::<Self>();
+                if remade {
+                    this.generation += 1;
+                }
+                this.survey.found = Some(found);
             })
             .ok();
         })
@@ -1063,6 +1123,8 @@ impl Workspaces {
         reason = "for the task view, the overview and the switcher, which show hidden windows"
     )]
     pub fn still(id: AppWindowId, cx: &mut App) -> Option<Arc<RenderImage>> {
+        // The images let go of here are dropped from what GPUI drew by the
+        // next look at the windows, when no window of GPUI is being drawn.
         cx.global_mut::<Self>().stills.of(id)
     }
 
@@ -1268,21 +1330,18 @@ impl Workspaces {
         }
     }
 
-    /// The windows of every workspace, the first list for the first
-    /// workspace, a sticky window on each. Where every display has its own
-    /// workspaces they are those of `display`. For the virtual desktops of
-    /// Windows they are the windows as they were last looked at, which is
-    /// done while something asks; at first, and where Windows does not
-    /// tell, the lists are empty.
+    /// The windows of every workspace of Tessera's own, the first list for
+    /// the first workspace, a sticky window on each; `None` when Tessera
+    /// keeps none, so that what offers to move a window to a workspace
+    /// offers nothing beside the virtual desktops of Windows, which take no
+    /// window of another program. Where every display has its own
+    /// workspaces they are those of `display`. What only shows the windows
+    /// asks [`Self::windows_by_workspace`], which answers for the desktops
+    /// of Windows too.
     pub fn residents(display: Option<DisplayKey>, cx: &App) -> Option<Vec<Vec<Resident>>> {
         let this = cx.global::<Self>();
         if !this.owned() {
-            this.survey.want_windows();
-            let rows = match &this.survey.found {
-                Some(found) => survey_rows(found),
-                None => vec![Vec::new(); VirtualDesktops::now().count],
-            };
-            return Some(rows);
+            return None;
         }
         let resident = |id: AppWindowId| Resident {
             id,
@@ -1305,6 +1364,30 @@ impl Workspaces {
                 })
                 .collect(),
         )
+    }
+
+    /// The windows of every workspace, the first list for the first
+    /// workspace: those of [`Self::residents`] for the workspaces of
+    /// Tessera's own, and for the virtual desktops of Windows the windows
+    /// as they were last looked at. They are looked at while something
+    /// asks, and afterwards every few seconds and when a window changes;
+    /// the first time, and where Windows does not tell, the lists are
+    /// empty. Moving a window between the desktops of Windows is not
+    /// possible ([`Self::own`] says whether it is).
+    #[allow(
+        dead_code,
+        reason = "for the task view, the overview, the switcher and the dock, which list the windows of every desktop"
+    )]
+    pub fn windows_by_workspace(display: Option<DisplayKey>, cx: &App) -> Vec<Vec<Resident>> {
+        let this = cx.global::<Self>();
+        if this.owned() {
+            return Self::residents(display, cx).unwrap_or_default();
+        }
+        this.survey.want_windows();
+        match &this.survey.found {
+            Some(found) => survey_rows(found),
+            None => vec![Vec::new(); VirtualDesktops::now().count],
+        }
     }
 
     /// Goes to the workspace of the window `id` and brings it forward. A

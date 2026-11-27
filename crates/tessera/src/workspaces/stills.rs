@@ -7,7 +7,9 @@
 //! keeps of a window it hid ([`Passage::still`]); it is made into an image
 //! once and kept until its window is shown or gone, the images least
 //! lately asked for going first once together they are larger than
-//! [`MOST_BYTES`].
+//! [`MOST_BYTES`]. GPUI keeps what it drew of an image until it is told
+//! to let go, so the images let go of are handed back
+//! ([`Stills::take_dropped`]) for that.
 
 use std::sync::Arc;
 
@@ -22,6 +24,8 @@ const MOST_BYTES: usize = 64 << 20;
 #[derive(Default)]
 pub struct Stills {
     kept: Vec<(AppWindowId, Arc<RenderImage>, usize)>,
+    /// The images let go of, which GPUI is still to drop.
+    dropped: Vec<Arc<RenderImage>>,
 }
 
 impl Stills {
@@ -40,13 +44,30 @@ impl Stills {
         let image = Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]));
         self.kept.push((id, image.clone(), bytes));
         let sizes: Vec<usize> = self.kept.iter().map(|(.., bytes)| *bytes).collect();
-        self.kept.drain(..first_to_go(&sizes, MOST_BYTES));
+        let gone = self.kept.drain(..first_to_go(&sizes, MOST_BYTES));
+        self.dropped.extend(gone.map(|(_, image, _)| image));
         Some(image)
     }
 
     /// Lets go of the images of the windows `keep` says no to.
     pub fn retain(&mut self, keep: impl Fn(AppWindowId) -> bool) {
-        self.kept.retain(|(id, ..)| keep(*id));
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.kept)
+            .into_iter()
+            .partition(|(id, ..)| keep(*id));
+        self.kept = kept;
+        self.dropped
+            .extend(gone.into_iter().map(|(_, image, _)| image));
+    }
+
+    /// Whether there are images let go of that GPUI is still to drop.
+    pub fn dropped(&self) -> bool {
+        !self.dropped.is_empty()
+    }
+
+    /// The images let go of since this was last asked, for GPUI to drop
+    /// what it drew of them.
+    pub fn take_dropped(&mut self) -> Vec<Arc<RenderImage>> {
+        std::mem::take(&mut self.dropped)
     }
 }
 
