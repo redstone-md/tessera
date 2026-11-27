@@ -8,14 +8,15 @@
 //! day). A bookmark is found by a part of its title or its address and
 //! opened with the browser Windows opens addresses with.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use std::{env, fs};
 
 use super::command::Command;
 use super::json::Json;
-use super::{Answer, AnswerAction, Query, Runner, fill, rank, ranked_score};
+use super::{Answer, AnswerAction, Kept, Query, Runner, fill, rank, ranked_score};
 
 const ICON_BOOKMARK: &str = "\u{e728}";
 
@@ -194,38 +195,29 @@ fn read_all() -> Vec<Bookmark> {
 }
 
 /// The bookmarks, read again once what was read is older than [`KEPT`].
-fn bookmarks() -> Vec<Bookmark> {
-    static READ: Mutex<Option<(Instant, Vec<Bookmark>)>> = Mutex::new(None);
-    let mut read = READ.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((at, bookmarks)) = read.as_ref()
-        && at.elapsed() < KEPT
-    {
-        return bookmarks.clone();
-    }
-    let bookmarks = read_all();
-    *read = Some((Instant::now(), bookmarks.clone()));
-    bookmarks
+fn bookmarks() -> Arc<Vec<Bookmark>> {
+    static READ: Kept<Vec<Bookmark>> = Kept::new(KEPT);
+    READ.get(read_all)
 }
 
 /// The bookmarks of `all` that `lower` finds, by the title or else the
 /// address, the best first, each address once.
-fn matching(all: Vec<Bookmark>, lower: &str) -> Vec<(u8, Bookmark)> {
-    let mut found: Vec<(u8, Bookmark)> = { all.into_iter() }
+fn matching(all: &[Bookmark], lower: &str) -> Vec<(u8, Bookmark)> {
+    let mut found: Vec<(u8, &Bookmark)> = { all.iter() }
         .filter_map(|bookmark| {
             let by_title = rank(&bookmark.title, lower);
             let by_address = || bookmark.address.to_lowercase().contains(lower).then_some(3);
             Some((by_title.or_else(by_address)?, bookmark))
         })
         .collect();
+    // Stable, so of the same rank the first read comes first.
     found.sort_by_key(|&(rank, _)| rank);
-    let mut seen: Vec<String> = Vec::new();
-    found.retain(|(_, bookmark)| {
-        let fresh = !seen.contains(&bookmark.address);
-        seen.push(bookmark.address.clone());
-        fresh
-    });
-    found.truncate(SHOWN);
-    found
+    let mut seen: HashSet<&str> = HashSet::new();
+    { found.into_iter() }
+        .filter(|(_, bookmark)| seen.insert(&bookmark.address))
+        .take(SHOWN)
+        .map(|(rank, bookmark)| (rank, bookmark.clone()))
+        .collect()
 }
 
 pub struct Bookmarks;
@@ -239,7 +231,7 @@ impl Runner for Bookmarks {
         if query.letters() < LETTERS {
             return Vec::new();
         }
-        { matching(bookmarks(), query.lower()).into_iter() }
+        { matching(&bookmarks(), query.lower()).into_iter() }
             .map(|(rank, bookmark)| {
                 let command = Command {
                     target: bookmark.address.clone(),
@@ -325,7 +317,7 @@ mod tests {
             bookmark("Home", "https://rustacean.example/"),
             bookmark("Rust again", "https://www.rust-lang.org/"),
         ];
-        let found = matching(all, "rust");
+        let found = matching(&all, "rust");
         let titles: Vec<&str> = found.iter().map(|(_, b)| b.title.as_str()).collect();
         assert_eq!(titles, ["Rust", "Docs of Rust", "Home"]);
     }

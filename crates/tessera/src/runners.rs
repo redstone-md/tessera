@@ -42,6 +42,8 @@ mod windows;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use async_channel::Receiver;
 use gpui::{App, BackgroundExecutor, ClipboardItem};
@@ -465,6 +467,38 @@ pub fn fill(template: &str, parts: &[&str]) -> String {
 /// the name of its shortcut.
 pub fn app_key(name: &str) -> String {
     format!("app:{}", name.to_lowercase())
+}
+
+/// What a runner read from the disk, kept for a while so that a key
+/// pressed does not read it again, and shared rather than copied.
+pub struct Kept<T> {
+    read: Mutex<Option<(Instant, Arc<T>)>>,
+    /// How long what was read is kept.
+    lasting: Duration,
+}
+
+impl<T> Kept<T> {
+    /// Nothing read yet, what will be kept for `lasting`.
+    pub const fn new(lasting: Duration) -> Self {
+        Self {
+            read: Mutex::new(None),
+            lasting,
+        }
+    }
+
+    /// What was read, or what `read` reads once that is older than it is
+    /// kept for.
+    pub fn get(&self, read: impl FnOnce() -> T) -> Arc<T> {
+        let mut kept = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, value)) = kept.as_ref()
+            && at.elapsed() < self.lasting
+        {
+            return Arc::clone(value);
+        }
+        let value = Arc::new(read());
+        *kept = Some((Instant::now(), Arc::clone(&value)));
+        value
+    }
 }
 
 #[cfg(test)]

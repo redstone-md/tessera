@@ -8,13 +8,13 @@
 //! a folder offers to open it in that editor again.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 use std::{env, fs};
 
 use super::command::Command;
 use super::json::Json;
-use super::{Answer, AnswerAction, Query, Runner, fill, rank, ranked_score};
+use super::{Answer, AnswerAction, Kept, Query, Runner, fill, rank, ranked_score};
 
 const ICON_CODE: &str = "\u{e943}";
 
@@ -218,15 +218,14 @@ fn opened_in(storage: &str) -> Vec<Opened> {
 
 /// What was opened in each editor that is installed, with the editor
 /// and its program, read again once older than [`KEPT`].
-fn sessions() -> Vec<(&'static str, PathBuf, Opened)> {
-    type Read = Vec<(&'static str, PathBuf, Opened)>;
-    static READ: Mutex<Option<(Instant, Read)>> = Mutex::new(None);
-    let mut read = READ.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((at, sessions)) = read.as_ref()
-        && at.elapsed() < KEPT
-    {
-        return sessions.clone();
-    }
+fn sessions() -> Arc<Vec<(&'static str, PathBuf, Opened)>> {
+    static READ: Kept<Vec<(&'static str, PathBuf, Opened)>> = Kept::new(KEPT);
+    READ.get(read_sessions)
+}
+
+/// What was opened in each editor that is installed, with the editor
+/// and its program, read from the disk.
+fn read_sessions() -> Vec<(&'static str, PathBuf, Opened)> {
     let mut sessions = Vec::new();
     for editor in &EDITORS {
         let (Some(storage), Some(program)) = (editor.storage(), editor.program()) else {
@@ -239,7 +238,6 @@ fn sessions() -> Vec<(&'static str, PathBuf, Opened)> {
             sessions.push((editor.name, program.clone(), opened));
         }
     }
-    *read = Some((Instant::now(), sessions.clone()));
     sessions
 }
 
@@ -254,7 +252,8 @@ impl Runner for Sessions {
         if query.letters() < LETTERS {
             return Vec::new();
         }
-        let mut found: Vec<(u8, usize, (&str, PathBuf, Opened))> = { sessions().into_iter() }
+        let sessions = sessions();
+        let mut found: Vec<(u8, usize, &(&str, PathBuf, Opened))> = { sessions.iter() }
             .enumerate()
             .filter_map(|(order, session)| {
                 let name = session.2.name();
@@ -267,6 +266,7 @@ impl Runner for Sessions {
         found.sort_by_key(|&(rank, order, _)| (rank, order));
         { found.into_iter().take(SHOWN) }
             .map(|(rank, _, (editor, program, opened))| {
+                let program = program.clone();
                 let flag = if opened.workspace {
                     "--file-uri"
                 } else {

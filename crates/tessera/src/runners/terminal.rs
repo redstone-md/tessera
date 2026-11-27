@@ -8,15 +8,15 @@
 //! without the Store are read; hidden profiles are left out.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 use std::{env, fs};
 
 use crate::platform::windows_terminal;
 
 use super::command::Command;
 use super::json::Json;
-use super::{Answer, AnswerAction, Query, Runner, fill, rank, ranked_score};
+use super::{Answer, AnswerAction, Kept, Query, Runner, fill, rank, ranked_score};
 
 const ICON_TERMINAL: &str = "\u{e756}";
 
@@ -69,14 +69,14 @@ fn profiles_in(text: &str) -> Vec<Profile> {
 
 /// The profiles of every settings file there is, each name once, read
 /// again once what was read is older than [`KEPT`].
-fn profiles() -> Vec<Profile> {
-    static READ: Mutex<Option<(Instant, Vec<Profile>)>> = Mutex::new(None);
-    let mut read = READ.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((at, profiles)) = read.as_ref()
-        && at.elapsed() < KEPT
-    {
-        return profiles.clone();
-    }
+fn profiles() -> Arc<Vec<Profile>> {
+    static READ: Kept<Vec<Profile>> = Kept::new(KEPT);
+    READ.get(read_profiles)
+}
+
+/// The profiles of every settings file there is, each name once, read
+/// from the disk.
+fn read_profiles() -> Vec<Profile> {
     let local = env::var_os("LOCALAPPDATA").map(PathBuf::from);
     let mut found: Vec<Profile> = Vec::new();
     for file in SETTINGS
@@ -92,7 +92,6 @@ fn profiles() -> Vec<Profile> {
             }
         }
     }
-    *read = Some((Instant::now(), found.clone()));
     found
 }
 
@@ -112,7 +111,8 @@ impl Runner for Terminal {
         if query.letters() < LETTERS {
             return Vec::new();
         }
-        let found: Vec<(u8, Profile)> = { profiles().into_iter() }
+        let profiles = profiles();
+        let found: Vec<(u8, &Profile)> = { profiles.iter() }
             .filter_map(|profile| Some((rank(&profile.name, query.lower())?, profile)))
             .collect();
         if found.is_empty() {
@@ -135,6 +135,7 @@ impl Runner for Terminal {
                 let title = fill(query.say("Open {} in Windows Terminal"), &[&profile.name]);
                 let detail = profile
                     .command
+                    .clone()
                     .unwrap_or_else(|| query.say("Terminal profile").to_owned());
                 let key = format!("terminal:{}", profile.name.to_lowercase());
                 Answer::new(title, detail, ICON_TERMINAL, ranked_score(SCORE, rank), {
