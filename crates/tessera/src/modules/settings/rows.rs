@@ -14,10 +14,6 @@ use crate::options::{Label, OptionDecl};
 /// One `[[card]]` of a rows file.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "drawn by the settings once settings-core reads the rows"
-)]
 pub(super) struct RowCard {
     /// The English title of the section it stands in (see [`SECTIONS`]).
     pub section: String,
@@ -51,10 +47,6 @@ pub(super) struct RowCard {
 /// A row of a card that runs an action when it is clicked.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-#[allow(
-    dead_code,
-    reason = "drawn by the settings once settings-core reads the rows"
-)]
 pub(super) struct LinkRow {
     pub label: Label,
     #[serde(default)]
@@ -182,10 +174,6 @@ fn files() -> &'static [RowFile] {
 
 /// The cards of every rows file, in file order; a file that does not parse
 /// is reported and skipped.
-#[allow(
-    dead_code,
-    reason = "drawn by the settings once settings-core reads the rows"
-)]
 pub(super) fn cards() -> Vec<RowCard> {
     { files().iter() }
         .flat_map(|file| file.card.iter().cloned())
