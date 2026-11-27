@@ -22,6 +22,7 @@ mod notifications;
 mod overview;
 mod plan;
 mod problems;
+mod quick;
 mod session;
 mod settings;
 mod sound;
@@ -79,6 +80,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(windows::WindowsModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
+        Box::new(quick::QuickModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),
