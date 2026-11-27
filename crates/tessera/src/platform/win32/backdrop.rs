@@ -414,6 +414,14 @@ impl DesktopBackdrop {
         })
     }
 
+    /// Whether there is a desktop window to open one under: without one,
+    /// as in shell mode before Tessera's own is there, none can be opened
+    /// and nothing is to be made for it.
+    pub fn possible() -> bool {
+        // SAFETY: the call only looks a window up by its class.
+        unsafe { FindWindowW(w!("Progman"), None) }.is_ok()
+    }
+
     /// The size of the window, which a picture for it must have.
     pub fn size(&self) -> (u32, u32) {
         (self.width.unsigned_abs(), self.height.unsigned_abs())

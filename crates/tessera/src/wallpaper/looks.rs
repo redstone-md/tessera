@@ -174,7 +174,8 @@ pub struct Moment<'a> {
     pub seed: u64,
     /// The wallpaper of Windows, where it was read.
     pub windows: Option<&'a WindowsNow>,
-    /// Whether the desktop window draws the wallpaper of Windows itself.
+    /// Whether the wallpaper of Windows is left to the desktop window:
+    /// it draws it itself, or there is none for Tessera to draw it under.
     pub painted: bool,
     /// The picture of the day, where there is one.
     pub daily: Option<&'a Path>,

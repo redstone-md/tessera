@@ -20,6 +20,7 @@
 //! or another thread with COM, never for the thread of the interface.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::{COLORREF, LPARAM, WPARAM};
@@ -53,6 +54,11 @@ const COLORS: PCWSTR = w!("Control Panel\\Colors");
 
 /// How long a program gets to take in that the wallpaper changed.
 const TOLD_WITHIN_MS: u32 = 200;
+
+/// Whether Tessera's own desktop window, in shell mode, draws the
+/// wallpaper of Windows with `PaintDesktop`; it says so itself with
+/// [`SystemWallpaper::set_painted_by_own_desktop`].
+static OWN_DESKTOP_PAINTS: AtomicBool = AtomicBool::new(false);
 
 /// How the wallpaper of Windows fits a picture to a display, with the
 /// names the settings give.
@@ -375,10 +381,19 @@ impl SystemWallpaper {
         Ok(())
     }
 
+    /// Has [`Self::painted_by_desktop`] say whether Tessera's own desktop
+    /// window, the `Progman` of shell mode, draws the wallpaper of Windows
+    /// with `PaintDesktop`. That window is to say so once it does; until
+    /// then Tessera takes it that it does not.
+    #[allow(dead_code, reason = "for the desktop window of shell mode")]
+    pub fn set_painted_by_own_desktop(painted: bool) {
+        OWN_DESKTOP_PAINTS.store(painted, Ordering::Relaxed);
+    }
+
     /// Whether the desktop window draws the wallpaper of Windows itself:
     /// it is that of Explorer, or Tessera's own desktop window in shell
-    /// mode, which paints with `PaintDesktop`. Where it does, Tessera
-    /// need not draw that wallpaper again over it.
+    /// mode where that said it paints with `PaintDesktop`. Where it does,
+    /// Tessera need not draw that wallpaper again over it.
     pub fn painted_by_desktop() -> bool {
         // SAFETY: the calls look a window up by class and read which
         // process it belongs to; `process` outlives the call.
@@ -389,7 +404,7 @@ impl SystemWallpaper {
             let mut process = 0_u32;
             GetWindowThreadProcessId(desktop, Some(&raw mut process));
             if process == GetCurrentProcessId() {
-                return true;
+                return OWN_DESKTOP_PAINTS.load(Ordering::Relaxed);
             }
             executable_of(process)
                 .as_deref()

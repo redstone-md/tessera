@@ -14,9 +14,10 @@
 //! Windows.
 //!
 //! The wallpaper of Windows itself is drawn by the desktop window: that
-//! of Explorer, or in shell mode Tessera's own, which paints it with
-//! `PaintDesktop`. Tessera opens no window for it there, and draws it
-//! itself only where another program's desktop window is in its place.
+//! of Explorer, or in shell mode Tessera's own once it says it paints it
+//! with `PaintDesktop`. Tessera opens no window for it there, nor where
+//! there is no desktop window at all, and draws it itself only where
+//! another desktop window is in its place.
 //!
 //! A task looks at the displays, the workspaces, the time of day and the
 //! wallpaper of Windows every few seconds, works out what each display is
@@ -398,9 +399,13 @@ impl Wallpaper {
             let now = Instant::now();
             if looked.is_none_or(|looked| now >= looked + DISPLAY_CHECK) {
                 looked = Some(now);
+                // Where no window can be opened for the wallpaper of
+                // Windows, it is neither read nor made for one.
                 painted = cx
                     .background_executor()
-                    .spawn(async { SystemWallpaper::painted_by_desktop() })
+                    .spawn(async {
+                        SystemWallpaper::painted_by_desktop() || !DesktopBackdrop::possible()
+                    })
                     .await;
                 let follows = cx.update(|cx| cx.global::<Theme>().follows_wallpaper())?;
                 if looks.shows_windows() && (!painted || follows) {
