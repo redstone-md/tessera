@@ -7,6 +7,7 @@
 
 mod accent;
 mod account;
+mod app_commands;
 mod app_windows;
 mod audio;
 mod backdrop;
@@ -23,6 +24,7 @@ mod hotkeys;
 mod icon;
 mod index;
 mod jump;
+mod key_locks;
 mod keyboard;
 mod media;
 mod network;
@@ -47,6 +49,7 @@ mod windows_key;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
+pub use app_commands::{AppCommand, AppCommands};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::{AppSound, AudioDevice, AudioOutput};
 pub use backdrop::{
@@ -71,6 +74,7 @@ pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
 pub use icon::IconPixels;
 pub use index::SearchIndex;
 pub use jump::{JumpTask, RecentDocument, app_id_of_program};
+pub use key_locks::{KeyLocks, window_in_front};
 pub use keyboard::{InputLanguage, Typing};
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use network::{Link, Network};
