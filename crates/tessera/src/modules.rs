@@ -57,6 +57,7 @@ use crate::extension::ExtensionsModule;
 use crate::files::FilesModule;
 use crate::module::Module;
 use crate::session::ShellModule;
+pub use marketplace::Updates;
 pub use power_dialog::DesktopClosing;
 
 /// Every module the shell starts with; the last one loads extensions.

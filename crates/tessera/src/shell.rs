@@ -26,6 +26,7 @@ use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::modules::DesktopClosing;
+use crate::modules::Updates;
 use crate::modules::night::Night;
 use crate::notices::Notices;
 use crate::notifications_store::NotificationStore;
@@ -96,6 +97,7 @@ impl Shell {
         }
         crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
+        Updates::start(config.registries(), cx);
         Banners::configure(&config.notifications, cx);
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
@@ -308,6 +310,7 @@ impl Shell {
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
         DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);
+        Updates::configure(config.registries(), cx);
         Banners::configure(&config.notifications, cx);
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
