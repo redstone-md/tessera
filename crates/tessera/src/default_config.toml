@@ -369,15 +369,51 @@
 # battery = true
 
 # Each [[surface]] is a strip docked to a screen edge.
-#   edge       "top" or "bottom"
+#   edge       "top", "bottom", "left" or "right"
 #   thickness  reserved screen space, in logical pixels
-#   displays   "all" (default) or "primary"
+#   displays   "all" (default), "primary", "others" (every display but the
+#              primary one), or a display or a list of them: its position
+#              from the left, the first being 1; the output GDI names, as
+#              '\\.\DISPLAY2'; or the name of the monitor, as the display
+#              settings of Windows show it, where * stands for any text and
+#              ? for one character: displays = [1, "DELL*"]
 #   hide       true to have the strip slide away while the pointer is
 #              elsewhere and come back when the pointer reaches that edge
 #              of the display; "overlap" to have it do so only while a
 #              window lies where the strip would be. Either way it reserves
 #              no screen space
-#   start, center, end  widgets to place
+#   start, center, end  widgets to place; on a strip at the left or the
+#              right they stand from the top down
+#   show_delay  milliseconds the pointer rests at the edge before a strip
+#              that hides comes back (0)
+#   hide_delay  milliseconds the pointer is elsewhere before it goes (700)
+#   opacity    how much of a background the strip draws behind its widgets,
+#              0.3 to 1; without it the strip has none
+#   length     the share of its edge the strip takes, 0.2 to 1 (1)
+#   align      where a shorter strip stands: "start" (top or left),
+#              "center" (default) or "end"
+#   floating   true or false: whether the widgets have fields of their own,
+#              instead of what the theme's `flat` says
+#   solid_when "maximized": the background turns opaque while a maximized
+#              window touches the strip
+#   [surface.per_display."<display>"]  thickness, hide, start, center and
+#              end the strip has instead on the displays "<display>" names,
+#              as one entry of displays names them
+# Several strips may share an edge of a display: those that keep their edge
+# stand one after the other from it in the order of this file, and so do
+# those that hide. A click with the right button on a strip opens its menu:
+# on a widget, to move it to another slot, remove it or add another; on the
+# strip, to change its edge, thickness, hiding, length and displays, add a
+# strip at a free edge or remove this one.
+# [[surface]]
+# edge = "left"
+# thickness = 48
+# displays = "others"
+# hide = true
+# length = 0.6
+# opacity = 0.8
+# start = ["workspaces", "separator", { widget = "spacer", flexible = true }]
+# end = ["tray"]
 #
 # A widget is its name, or a table: { widget = "name", popup = "name", ... }.
 #   popup   the [[popup]] a click on the widget opens; any widget can have one.
@@ -553,6 +589,10 @@
 #   "label"     fixed content; options text and icon, a character of the
 #               Segoe Fluent Icons font such as "\uE71D", or "tessera"
 #               for the mark of Tessera
+#   "spacer"    empty room along the strip; option size, in logical pixels
+#               (12), or flexible = true to take all the room its slot of
+#               the start or the end has left
+#   "separator" a thin line across the strip between the widgets beside it
 #   "command"   the first line a program prints, run again and again without
 #               a window; options command, the program and its arguments as
 #               a list such as ["cmd", "/C", "echo hello"], interval, the
