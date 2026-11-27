@@ -622,6 +622,8 @@ pub struct TrayStrip {
     more: Interaction,
     /// Where the button of the overflow was drawn.
     more_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the strip itself was drawn in its window.
+    strip_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     place: Option<SurfacePlace>,
     focus: FocusHandle,
     /// The place the keyboard is on while the strip has it: an icon of the
@@ -691,6 +693,7 @@ impl TrayStrip {
             crowded: Spring::new(motion.spatial, 0.),
             more: Interaction::new(&motion),
             more_drawn: Rc::default(),
+            strip_drawn: Rc::default(),
             place: None,
             focus: cx.focus_handle(),
             keyboard: None,
@@ -1048,6 +1051,14 @@ impl TrayStrip {
         self.put(id, index, cx);
     }
 
+    /// Whether `point` of the screen is on the strip, not only on its bar.
+    fn covers(&self, point: (i32, i32)) -> bool {
+        match (self.place, self.strip_drawn.get()) {
+            (Some(place), Some(drawn)) => contains(place.frame_of(drawn), point),
+            _ => false,
+        }
+    }
+
     /// An icon dragged from this strip was let go off it, at `position` of
     /// its window: where that is on another strip or in the overflow, it
     /// goes there.
@@ -1167,6 +1178,9 @@ impl TrayStrip {
                 this.open_overflow(false, window, cx);
             }))
             .on_drop(cx.listener(|this, drag: &TrayDrag, _, cx| {
+                // The drop goes no further, to the strip that would forget
+                // the drag otherwise.
+                this.dragged = None;
                 this.aim = None;
                 if let Some(model) = this.model.clone() {
                     let arranged = (
@@ -1237,8 +1251,9 @@ impl TrayStrip {
 }
 
 /// An icon dragged from a strip or the overflow was let go at `point` of
-/// the screen, off the window it came from: it goes to the strip or the
-/// overflow that is there.
+/// the screen, off the strip or the overflow it came from: it goes to the
+/// strip or the overflow that is there, and stays where it was when the
+/// point is on neither, as on the rest of a bar.
 fn drop_at(id: u64, point: (i32, i32), cx: &mut App) {
     if TrayOverflow::take_drop(id, point, cx) {
         return;
@@ -1248,11 +1263,7 @@ fn drop_at(id: u64, point: (i32, i32), cx: &mut App) {
         let Some(strip) = strip.upgrade() else {
             continue;
         };
-        let over = strip
-            .read(cx)
-            .place
-            .is_some_and(|place| contains(place.surface, point));
-        if over {
+        if strip.read(cx).covers(point) {
             let _ = window.update(cx, |_, window, cx| {
                 strip.update(cx, |strip, cx| {
                     strip.dropped_from_outside(id, point, window, cx)
@@ -1334,7 +1345,9 @@ impl Render for TrayStrip {
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    if let Some(id) = this.dragged.take() {
+                    // Only a drag that is still going is let go here.
+                    let dragged = this.dragged.take().filter(|_| cx.has_active_drag());
+                    if let Some(id) = dragged {
                         this.released_outside(id, event.position, window, cx);
                     }
                 }),
@@ -1347,7 +1360,9 @@ impl Render for TrayStrip {
                 .p(padding)
                 .flex_wrap(),
         };
-        root.child(press_watch(cx.entity_id())).children(elements)
+        root.child(press_watch(cx.entity_id()))
+            .child(measure(self.strip_drawn.clone(), |_| {}))
+            .children(elements)
     }
 }
 

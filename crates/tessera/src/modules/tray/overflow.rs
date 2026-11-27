@@ -700,7 +700,7 @@ impl Render for OverflowView {
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
                     this.aim = None;
-                    if let Some(id) = this.dragged.take()
+                    if let Some(id) = this.dragged.take().filter(|_| cx.has_active_drag())
                         && let Some(point) = screen_point(window, event.position)
                     {
                         cx.defer(move |cx| drop_at(id, point, cx));
