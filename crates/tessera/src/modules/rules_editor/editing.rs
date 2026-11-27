@@ -167,14 +167,16 @@ impl RulesEditor {
             Slot::Name(path, key) => draft.set_text_at(path, key, text),
             Slot::Text(key) => draft.set_text_at(&[], key, text.trim()),
             Slot::Pair(key, _) => {
-                let texts: Vec<String> = { (0..2).map(|at| Slot::Pair(key, at)) }
+                // Both fields are read together, once both are there.
+                let texts: Option<Vec<String>> = { (0..2).map(|at| Slot::Pair(key, at)) }
                     .map(|slot| {
-                        self.fields
-                            .get(&slot)
-                            .map(|field| field.read(cx).text().trim().to_owned())
-                            .unwrap_or_default()
+                        let field = self.fields.get(&slot)?;
+                        Some(field.read(cx).text().trim().to_owned())
                     })
                     .collect();
+                let Some(texts) = texts else {
+                    return;
+                };
                 let whole = matches!(*key, "min_size" | "max_size");
                 let value = pair_value(&texts[0], &texts[1], whole);
                 match value {
