@@ -2122,6 +2122,95 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // dock-pins: pins of anything, dragging, drops, speakers.
+    ("Web address", "Веб-адрес"),
+    ("Pin a file…", "Закрепить файл…"),
+    ("Pin a folder…", "Закрепить папку…"),
+    ("Pin a web address…", "Закрепить веб-адрес…"),
+    ("Add separator", "Добавить разделитель"),
+    ("Remove separator", "Убрать разделитель"),
+    (
+        "Import the pins of the Windows taskbar",
+        "Импортировать закреплённое на панели задач Windows",
+    ),
+    (
+        "The taskbar of Windows has no pins.",
+        "На панели задач Windows ничего не закреплено.",
+    ),
+    (
+        "Pins found on the taskbar of Windows: {}",
+        "Найдено закреплённого на панели задач Windows: {}",
+    ),
+    ("Pin to Tessera dock", "Закрепить на доке Tessera"),
+    (
+        "The menus of files and folders offer Pin to Tessera dock",
+        "В меню файлов и папок есть «Закрепить на доке Tessera»",
+    ),
+    (
+        "The menus of files and folders no longer offer Pin to Tessera dock",
+        "В меню файлов и папок больше нет «Закрепить на доке Tessera»",
+    ),
+    (
+        "The menus of files and folders were not changed",
+        "Меню файлов и папок не изменены",
+    ),
+    (
+        "Muted; a click gives the sound back",
+        "Звук выключен; щелчок включает его",
+    ),
+    (
+        "Plays sound; a click mutes it",
+        "Воспроизводит звук; щелчок выключает его",
+    ),
+    (
+        "Pins of Windows and Explorer",
+        "Закреплённое в Windows и Проводнике",
+    ),
+    (
+        "Appends the programs pinned to the taskbar of Windows that are not pinned yet.",
+        "Добавляет в конец программы, закреплённые на панели задач Windows и ещё не закреплённые здесь.",
+    ),
+    (
+        "Offer Pin to Tessera dock in the menus of files",
+        "Добавить «Закрепить на доке Tessera» в меню файлов",
+    ),
+    (
+        "Files, folders and shortcuts get Pin to Tessera dock in the menus of Explorer and other programs.",
+        "У файлов, папок и ярлыков появляется «Закрепить на доке Tessera» в меню Проводника и других программ.",
+    ),
+    (
+        "Take Pin to Tessera dock out of the menus of files",
+        "Убрать «Закрепить на доке Tessera» из меню файлов",
+    ),
+    ("A path or a web address", "Путь или веб-адрес"),
+    (
+        "Pin to Tessera dock in the menus of files",
+        "«Закрепить на доке Tessera» в меню файлов",
+    ),
+    ("on or off", "on или off"),
+    ("Order of the buttons", "Порядок кнопок"),
+    (
+        "Pins first and the rest as they opened, all as they opened, by name, or pins first and the rest as they were dragged.",
+        "Сначала закреплённые, остальные по открытию; все по открытию; по имени; или сначала закреплённые, остальные в том порядке, куда их перетащили.",
+    ),
+    ("Pins first", "Сначала закреплённые"),
+    ("As opened", "По открытию"),
+    ("By name", "По имени"),
+    ("As dragged", "Как перетащили"),
+    ("Pins stand on", "Закреплённые стоят на"),
+    (
+        "The dock of every display, or only that of the primary display, where the others show only what runs.",
+        "Док каждого экрана или только основного; остальные показывают только запущенное.",
+    ),
+    ("Every display", "Каждый экран"),
+    (
+        "Speaker on applications that play",
+        "Динамик у приложений, которые воспроизводят звук",
+    ),
+    (
+        "A speaker on the button of an application that plays sound: a click mutes it, the wheel turns its volume.",
+        "Динамик на кнопке приложения, воспроизводящего звук: щелчок выключает звук, колесо меняет громкость.",
+    ),
 ];
 
 #[cfg(test)]

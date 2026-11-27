@@ -1,3 +1,42 @@
 # Rows of the settings filled by dock-pins. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+[[card]]
+section = "Dock"
+title = "Pins of Windows and Explorer"
+
+[[card.link]]
+label = "Import the pins of the Windows taskbar"
+description = "Appends the programs pinned to the taskbar of Windows that are not pinned yet."
+action = "import-taskbar-pins"
+
+[[card.link]]
+label = "Offer Pin to Tessera dock in the menus of files"
+description = "Files, folders and shortcuts get Pin to Tessera dock in the menus of Explorer and other programs."
+action = "pin-verb"
+arg = "on"
+
+[[card.link]]
+label = "Take Pin to Tessera dock out of the menus of files"
+action = "pin-verb"
+arg = "off"
+
+[[action]]
+name = "import-taskbar-pins"
+title = "Import the pins of the Windows taskbar"
+
+[[action]]
+name = "pin"
+title = "Pin to the dock"
+arg = "A path or a web address"
+
+[[action]]
+name = "unpin"
+title = "Unpin from the dock"
+arg = "A path or a web address"
+
+[[action]]
+name = "pin-verb"
+title = "Pin to Tessera dock in the menus of files"
+arg = "on or off"
