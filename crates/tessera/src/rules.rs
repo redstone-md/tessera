@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! Window rules: each `[[rule]]` of the configuration names windows by the
-//! file name of their program, their title or their window class, and
+//! file name of their program, the packaged application they belong to,
+//! their title or their window class, and
 //! says what is done to them when they are first seen: whether they are
 //! tiled, the workspace and the display they go to, where they are placed
 //! and how large, whether they are maximized, kept above the others or
@@ -19,7 +20,7 @@
 //! What the rules say of tiling, of the dock and of the window switcher
 //! is asked for with [`Rules::of`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -185,8 +186,14 @@ impl TryFrom<PositionText> for Position {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleConfig {
-    /// The file name of the program of the window, as `notepad.exe`.
+    /// The file name of the program of the window, as `notepad.exe`. For
+    /// an application of the Universal Windows Platform it is that of the
+    /// frame host, ApplicationFrameHost.exe, the same for all of them.
     exe: Option<Pattern>,
+    /// The identifier of the packaged (Store) application the window
+    /// belongs to, its AppUserModelID, as
+    /// `Microsoft.WindowsCalculator_8wekyb3d8bbwe!App`.
+    app: Option<Pattern>,
     /// What the title bar of the window says.
     title: Option<Pattern>,
     /// The window class the program made the window of.
@@ -222,6 +229,8 @@ pub struct RuleConfig {
 pub struct Named {
     /// The file name of its program.
     pub exe: Option<String>,
+    /// The packaged application it belongs to.
+    pub app: Option<String>,
     pub title: String,
     pub class: String,
 }
@@ -231,6 +240,7 @@ impl Named {
         let exe = window.executable.as_deref().and_then(Path::file_name);
         Self {
             exe: exe.map(|name| name.to_string_lossy().into_owned()),
+            app: window.app_id.clone(),
             title: window.id.title(),
             class: window.id.class(),
         }
@@ -241,8 +251,9 @@ impl RuleConfig {
     /// Why the rule cannot be used, if it cannot.
     fn fault(&self) -> Option<&'static str> {
         let share = |value: f32| value.is_finite() && value > 0. && value <= 1.;
-        if self.exe.is_none() && self.title.is_none() && self.class.is_none() {
-            return Some("it names no windows: it needs `exe`, `title` or `class`");
+        let names = [&self.exe, &self.app, &self.title, &self.class];
+        if names.iter().all(|name| name.is_none()) {
+            return Some("it names no windows: it needs `exe`, `app`, `title` or `class`");
         }
         if self
             .opacity
@@ -269,6 +280,7 @@ impl RuleConfig {
             Some(pattern) => name.is_some_and(|name| pattern.matches(name)),
         };
         fits(&self.exe, named.exe.as_deref())
+            && fits(&self.app, named.app.as_deref())
             && fits(&self.title, Some(&named.title))
             && fits(&self.class, Some(&named.class))
     }
@@ -311,6 +323,27 @@ impl Effective {
             take(&mut effective.skip_switcher, rule.skip_switcher);
         }
         effective
+    }
+
+    /// What this says that `before` did not: each of its parts that
+    /// differs from that of `before`, and nothing else.
+    fn newly_said(&self, before: &Self) -> Self {
+        fn new<T: Copy + PartialEq>(now: Option<T>, before: Option<T>) -> Option<T> {
+            now.filter(|_| now != before)
+        }
+        Self {
+            tile: new(self.tile, before.tile),
+            workspace: new(self.workspace, before.workspace),
+            display: new(self.display, before.display),
+            position: new(self.position, before.position),
+            size: new(self.size, before.size),
+            maximize: new(self.maximize, before.maximize),
+            above: new(self.above, before.above),
+            opacity: new(self.opacity, before.opacity),
+            border: new(self.border, before.border),
+            skip_dock: new(self.skip_dock, before.skip_dock),
+            skip_switcher: new(self.skip_switcher, before.skip_switcher),
+        }
     }
 
     /// Whether the window is to be placed at all.
@@ -496,6 +529,14 @@ impl Rules {
         let mut new = Vec::new();
         let mut again = Vec::new();
         let rules = std::mem::take(&mut this.rules);
+        // A window is put back only while it settles, also one that is no
+        // longer listed, as one hidden on another workspace is not.
+        for seen in this.seen.values_mut() {
+            if now.duration_since(seen.first) >= SETTLING {
+                seen.placed = None;
+            }
+        }
+        let mut late = Vec::new();
         for window in &windows {
             match this.seen.get_mut(&window.id) {
                 None => {
@@ -515,16 +556,21 @@ impl Rules {
                     new.push(window.clone());
                 }
                 Some(seen) => {
-                    // A title changes, and with it what the rules say.
+                    // A title changes, and with it what the rules say. Many
+                    // programs give their window its title a moment after
+                    // showing it: while it settles, what a rule now says
+                    // of it that none said before is done as at first sight.
                     let title = window.id.title();
                     if title != seen.named.title {
                         seen.named.title = title;
+                        let before = seen.effective;
                         seen.effective = Effective::of(&rules, &seen.named);
                         seen.always = Effective::of(always(&rules), &seen.named);
-                    }
-                    let settling = now.duration_since(seen.first) < SETTLING;
-                    if !settling {
-                        seen.placed = None;
+                        let newly = seen.effective.newly_said(&before);
+                        let settling = now.duration_since(seen.first) < SETTLING;
+                        if settling && newly != Effective::default() {
+                            late.push((window.clone(), newly));
+                        }
                     }
                     if seen.always != Effective::default() || seen.placed.is_some() {
                         again.push(window.clone());
@@ -535,7 +581,17 @@ impl Rules {
         this.rules = rules;
         Self::hand_over_tiling(cx);
         for window in new {
-            Self::first_sight(&window, cx);
+            let effective = cx
+                .global::<Self>()
+                .seen
+                .get(&window.id)
+                .map(|seen| seen.effective);
+            if let Some(effective) = effective {
+                Self::first_sight(&window, &effective, cx);
+            }
+        }
+        for (window, newly) in late {
+            Self::first_sight(&window, &newly, cx);
         }
         for window in again {
             Self::once_more(&window, cx);
@@ -543,20 +599,22 @@ impl Rules {
     }
 
     /// Tells the tiling which windows the rules tile and which they leave
-    /// alone.
+    /// alone, and which have no border, so that it does not give them one.
     fn hand_over_tiling(cx: &mut App) {
-        let ruled: HashMap<AppWindowId, bool> = { cx.global::<Self>().seen.iter() }
+        let seen = &cx.global::<Self>().seen;
+        let ruled: HashMap<AppWindowId, bool> = { seen.iter() }
             .filter_map(|(&id, seen)| Some((id, seen.effective.tile?)))
             .collect();
-        Tiler::rule(ruled, cx);
+        let borderless: HashSet<AppWindowId> = { seen.iter() }
+            .filter(|(_, seen)| seen.effective.border == Some(false))
+            .map(|(&id, _)| id)
+            .collect();
+        Tiler::rule(ruled, borderless, cx);
     }
 
-    /// Does what the rules say to a window seen for the first time.
-    fn first_sight(window: &AppWindow, cx: &mut App) {
-        let Some(seen) = cx.global::<Self>().seen.get(&window.id) else {
-            return;
-        };
-        let effective = seen.effective;
+    /// Does what the rules `effective` say to a window seen for the first
+    /// time.
+    fn first_sight(window: &AppWindow, effective: &Effective, cx: &mut App) {
         let id = window.id;
         if let Some(workspace) = effective.workspace {
             let own = Workspaces::residents(None, cx).map_or(0, |rows| rows.len());
@@ -564,11 +622,13 @@ impl Rules {
                 Workspaces::move_window(id, workspace - 1, cx);
             }
         }
-        let placed = Self::place(window, &effective, cx);
-        if let Some(seen) = cx.global_mut::<Self>().seen.get_mut(&id) {
+        let placed = Self::place(window, effective, cx);
+        if let Some(seen) = cx.global_mut::<Self>().seen.get_mut(&id)
+            && placed.is_some()
+        {
             seen.placed = placed;
         }
-        Self::dress(id, &effective, true);
+        Self::dress(id, effective, true);
     }
 
     /// Does again what the rules that apply always say, as far as it
@@ -661,7 +721,7 @@ impl Rules {
     /// Keeps the window `id` above the others, draws it see-through or
     /// without its border as `effective` says, as far as that differs
     /// from how it is. The border is taken away only when the window is
-    /// first seen, or it would flicker as the tiling colors it.
+    /// first seen; the tiling leaves it away from then on.
     fn dress(id: AppWindowId, effective: &Effective, first: bool) {
         if let Some(above) = effective.above
             && above != id.is_topmost()
@@ -685,7 +745,8 @@ fn always(rules: &[RuleConfig]) -> impl Iterator<Item = &RuleConfig> {
 }
 
 /// Writes a `[[rule]]` for the window `id` into the configuration: one that
-/// names its program and its window class and puts it where it is now, as
+/// names its program and its window class, or the packaged application it
+/// belongs to, and puts it where it is now, as
 /// large as it is, above the others and as see-through as it is now. Where
 /// the file is is returned.
 pub fn write_rule_for(id: AppWindowId) -> Result<PathBuf, String> {
@@ -696,16 +757,8 @@ pub fn write_rule_for(id: AppWindowId) -> Result<PathBuf, String> {
     let display = Display::of_window(id).ok_or("the window is on no display")?;
     let frame = id.frame().ok_or("the window is gone")?;
     let mut rule = Table::new();
-    match &named.exe {
-        Some(exe) => {
-            rule.insert("exe", value(exe.as_str()));
-        }
-        None => {
-            rule.insert("title", value(named.title.as_str()));
-        }
-    }
-    if !named.class.is_empty() {
-        rule.insert("class", value(named.class.as_str()));
+    for (key, name) in naming(&named) {
+        rule.insert(key, value(name));
     }
     if !id.is_maximized() {
         let [x, y, width, height] = Zone::of(frame, display.work).written();
@@ -737,6 +790,31 @@ pub fn write_rule_for(id: AppWindowId) -> Result<PathBuf, String> {
     }
     file.save()?;
     ConfigFile::location()
+}
+
+/// The program of the windows of the applications of the Universal
+/// Windows Platform, whatever application they show.
+const FRAME_HOST: &str = "ApplicationFrameHost.exe";
+
+/// How a rule written for the window `named` names it: by the packaged
+/// application it belongs to, for which the program and the window class
+/// are those of the frame host or say nothing more; else by its program
+/// and its window class. A window of the frame host whose application is
+/// not known, or of a program that cannot be read, is named by its title,
+/// word for word.
+fn naming(named: &Named) -> Vec<(&'static str, String)> {
+    if let Some(app) = &named.app {
+        return vec![("app", app.clone())];
+    }
+    let exe = { named.exe.as_ref() }.filter(|exe| !exe.eq_ignore_ascii_case(FRAME_HOST));
+    let mut naming = match exe {
+        Some(exe) => vec![("exe", exe.clone())],
+        None => vec![("title", format!("re:^{}$", regex::escape(&named.title)))],
+    };
+    if !named.class.is_empty() {
+        naming.push(("class", named.class.clone()));
+    }
+    naming
 }
 
 #[cfg(test)]
@@ -781,7 +859,7 @@ mod tests {
             opacity = 0.9
 
             [[rule]]
-            exe = "calc*.exe"
+            app = "Microsoft.WindowsCalculator_*"
             title = "Calculator"
             float = true
             opacity = 0.8
@@ -797,7 +875,8 @@ mod tests {
         .remove("rule")
         .unwrap();
         let calculator = Named {
-            exe: Some("CalculatorApp.exe".to_owned()),
+            exe: Some("ApplicationFrameHost.exe".to_owned()),
+            app: Some("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".to_owned()),
             title: "Calculator".to_owned(),
             class: "ApplicationFrameWindow".to_owned(),
         };
@@ -808,6 +887,7 @@ mod tests {
         assert_eq!(effective.position, Some(Position::Center));
         let browser = Named {
             exe: Some("chrome.exe".to_owned()),
+            app: None,
             title: "New Tab".to_owned(),
             class: "Chrome_WidgetWin_1".to_owned(),
         };
@@ -823,6 +903,29 @@ mod tests {
             ..calculator
         };
         assert_eq!(Effective::of(&rules[..1], &unknown), Effective::default());
+    }
+
+    #[test]
+    fn a_written_rule_names_a_packaged_window_by_its_application() {
+        let calculator = Named {
+            exe: Some("ApplicationFrameHost.exe".to_owned()),
+            app: Some("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".to_owned()),
+            title: "Calculator".to_owned(),
+            class: "ApplicationFrameWindow".to_owned(),
+        };
+        let app = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".to_owned();
+        assert_eq!(naming(&calculator), vec![("app", app)]);
+        let unknown = Named {
+            app: None,
+            title: "Settings (1)".to_owned(),
+            ..calculator
+        };
+        let naming = naming(&unknown);
+        assert_eq!(naming[0], ("title", "re:^Settings \\(1\\)$".to_owned()));
+        assert_eq!(naming[1], ("class", "ApplicationFrameWindow".to_owned()));
+        let pattern = Pattern::parse(&naming[0].1).unwrap();
+        assert!(pattern.matches("Settings (1)"));
+        assert!(!pattern.matches("Settings (1) - Edge"));
     }
 
     #[test]

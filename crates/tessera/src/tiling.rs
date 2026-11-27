@@ -588,6 +588,9 @@ pub struct Tiler {
     /// whatever the configuration of tiling says of it, `false` for one
     /// that is left alone.
     ruled: HashMap<AppWindowId, bool>,
+    /// The windows the rules have Windows draw no border around, which
+    /// the tiling neither colors nor gives their border back.
+    borderless: HashSet<AppWindowId>,
 }
 
 impl Global for Tiler {}
@@ -608,6 +611,7 @@ impl Tiler {
             carried: false,
             task: 0,
             ruled: HashMap::new(),
+            borderless: HashSet::new(),
         });
         cx.on_app_quit(|cx| {
             cx.global_mut::<Self>().put_back_at_once();
@@ -686,12 +690,15 @@ impl Tiler {
         .detach();
     }
 
-    /// Takes over what the window rules say of tiling windows, by window.
-    pub fn rule(ruled: HashMap<AppWindowId, bool>, cx: &mut App) {
+    /// Takes over what the window rules say of tiling windows, by window,
+    /// and which windows they have drawn without a border.
+    pub fn rule(ruled: HashMap<AppWindowId, bool>, borderless: HashSet<AppWindowId>, cx: &mut App) {
         if let Some(this) = cx.try_global::<Self>()
-            && this.ruled != ruled
+            && (this.ruled != ruled || this.borderless != borderless)
         {
-            cx.global_mut::<Self>().ruled = ruled;
+            let this = cx.global_mut::<Self>();
+            this.ruled = ruled;
+            this.borderless = borderless;
         }
     }
 
@@ -871,7 +878,7 @@ impl Tiler {
         let front = (enabled && self.config.border)
             .then(AppWindowId::foreground)
             .flatten()
-            .filter(|id| self.order.contains(id));
+            .filter(|id| self.order.contains(id) && !self.borderless.contains(id));
         if self.marked.as_ref().map(|marked| marked.id) != front {
             self.unmark();
             self.marked = front.map(|id| {
@@ -896,10 +903,14 @@ impl Tiler {
         !marked.shown.is_settled()
     }
 
-    /// Gives the window whose border is colored its own border back.
+    /// Gives the window whose border is colored its own border back, or
+    /// none, where the rules say it has none.
     fn unmark(&mut self) {
         if let Some(marked) = self.marked.take() {
-            marked.id.set_border(None);
+            match self.borderless.contains(&marked.id) {
+                true => marked.id.hide_border(),
+                false => marked.id.set_border(None),
+            };
         }
     }
 
