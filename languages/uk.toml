@@ -350,3 +350,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Second screen only" = "Лише другий екран"
 "Connect to a wireless display" = "Під’єднатися до бездротового дисплея"
 "Only one display is connected." = "Під’єднано лише один дисплей."
+
+# The keyboard layouts (winx-hotkeys).
+"No window is typed into." = "Немає вікна, у якому йде введення."

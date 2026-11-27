@@ -758,8 +758,16 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Duplicate", "Повторяющийся"),
     ("Extend", "Расширить"),
     ("Second screen only", "Только второй экран"),
-    ("Connect to a wireless display", "Подключиться к беспроводному дисплею"),
-    ("Only one display is connected.", "Подключён только один дисплей."),
+    (
+        "Connect to a wireless display",
+        "Подключиться к беспроводному дисплею",
+    ),
+    (
+        "Only one display is connected.",
+        "Подключён только один дисплей.",
+    ),
+    // The keyboard layouts (winx-hotkeys).
+    ("No window is typed into.", "Нет окна, в котором идёт ввод."),
 ];
 
 #[cfg(test)]

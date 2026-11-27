@@ -349,3 +349,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Second screen only" = "Nur zweiter Bildschirm"
 "Connect to a wireless display" = "Mit einer drahtlosen Anzeige verbinden"
 "Only one display is connected." = "Nur eine Anzeige ist angeschlossen."
+
+# The keyboard layouts (winx-hotkeys).
+"No window is typed into." = "Kein Fenster nimmt Eingaben entgegen."

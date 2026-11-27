@@ -3,21 +3,46 @@
 
 //! The `keyboard` widget: the language the window in front is typed in,
 //! and a click that asks that window for the next one.
+//!
+//! The widget `keyboard-list`, in the popup of the same name, lists the
+//! keyboard layouts with the names Windows gives them, the one in use
+//! marked; choosing one asks the window that was in front for it. The
+//! action `input-language` asks that window for the next layout (Win+Space
+//! where the keys of Windows are in use), for the one before (`previous`,
+//! Win+Shift+Space) or opens the list (`list`). The switcher of Win+Space
+//! is part of Explorer; Ctrl+Shift and Alt+Shift are switched by Windows
+//! itself and stay with it.
 
 use std::time::Duration;
 
 use gpui::{
-    AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
+    App, AppContext, AsyncApp, Context, FontWeight, Global, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    div, px,
 };
 
+use crate::actions::{Action, Actions};
+use crate::config::{PopupConfig, WidgetSpec};
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{InputLanguage, Typing};
+use crate::platform::{InputLanguage, InputName, Typing};
+use crate::popup::Popups;
+use crate::shell::Shell;
 use crate::theme::Theme;
-use crate::ui::{icon, pill, state_layer};
+use crate::ui::{Chooser, Pick, choice_row_of, icon, one_line, pill, state_layer};
 
 const ICON_KEYBOARD: &str = "\u{e765}";
+const ICON_CHECK: &str = "\u{e73e}";
+
+/// The name of the popup of the layouts and of its widget.
+const LIST: &str = "keyboard-list";
+
+/// The name of the action.
+const ACTION: &str = "input-language";
+
+/// How high a row of the list is: a name over a note.
+const LAYOUT_ROW: f32 = 52.;
 
 /// How often the language is looked at: Windows announces a change only to
 /// the window it happens in.
@@ -31,7 +56,96 @@ impl Module for KeyboardModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("keyboard", |_, cx| cx.new(Keyboard::new).into())
+        widgets.register("keyboard", |_, cx| cx.new(Keyboard::new).into())?;
+        widgets.register_panel(LIST, |_, cx| {
+            let typing = TypedInto::window(cx);
+            cx.new(|cx| LayoutList::new(typing, cx)).into()
+        })?;
+        widgets.register_popup(PopupConfig {
+            name: LIST.to_owned(),
+            place: Default::default(),
+            width: 340.,
+            height: 360.,
+            content: vec![WidgetSpec {
+                widget: LIST.to_owned(),
+                popup: None,
+                options: toml::Table::new(),
+            }],
+            side: Vec::new(),
+        })
+    }
+
+    fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
+        // Explorer keeps Win+Space to itself while it runs.
+        let action = Action::new(input_language)
+            .taking_reserved_keys()
+            .checking(|arg| match arg {
+                None | Some("next" | "previous" | "list") => Ok(()),
+                Some(_) => Err(format!(
+                    "`{ACTION}` takes `next`, `previous`, `list` or no `arg`"
+                )),
+            })
+            .by_default("win+space", None)
+            .by_default("win+shift+space", Some("previous"));
+        actions.register(ACTION, action)
+    }
+}
+
+/// The window last seen in front that is typed into and is no window of
+/// Tessera: the one a choice of the list is for, once a popup of Tessera
+/// is in front.
+#[derive(Default)]
+struct TypedInto(Option<Typing>);
+
+impl Global for TypedInto {}
+
+impl TypedInto {
+    /// The window in front, or where one of Tessera is, the one seen
+    /// before it.
+    fn window(cx: &mut App) -> Option<Typing> {
+        Self::seen(Typing::in_front(), cx);
+        cx.default_global::<Self>().0
+    }
+
+    fn seen(typing: Option<Typing>, cx: &mut App) {
+        if typing.is_some() {
+            cx.default_global::<Self>().0 = typing;
+        }
+    }
+}
+
+/// The layout after `language` among `languages`, or before it when
+/// `back`, going round at the ends.
+fn step(language: InputLanguage, languages: &[InputLanguage], back: bool) -> Option<InputLanguage> {
+    if back {
+        let reversed: Vec<InputLanguage> = languages.iter().rev().copied().collect();
+        language.next_of(&reversed)
+    } else {
+        language.next_of(languages)
+    }
+}
+
+/// Asks `typing` for the layout after its own, or before it when `back`.
+fn switch_next(typing: Typing, back: bool) {
+    let Some(next) = step(typing.language, &InputLanguage::installed(), back) else {
+        return;
+    };
+    if let Err(error) = typing.switch_to(next) {
+        report!("the input language was not switched: {error:#}");
+    }
+}
+
+/// Does the action `input-language` with `arg`.
+fn input_language(arg: Option<&str>, cx: &mut App) {
+    let typing = TypedInto::window(cx);
+    match arg {
+        Some("list") => Shell::toggle_popup(LIST, cx),
+        Some("previous") => typing
+            .into_iter()
+            .for_each(|typing| switch_next(typing, true)),
+        _ => typing
+            .into_iter()
+            .for_each(|typing| switch_next(typing, false)),
     }
 }
 
@@ -68,6 +182,7 @@ impl Keyboard {
         let Some(typing) = Typing::in_front() else {
             return;
         };
+        TypedInto::seen(Some(typing), cx);
         if self.typing == Some(typing) {
             return;
         }
@@ -81,14 +196,8 @@ impl Keyboard {
     }
 
     fn switch(&self) {
-        let Some(typing) = self.typing else {
-            return;
-        };
-        let Some(next) = typing.language.next_of(&InputLanguage::installed()) else {
-            return;
-        };
-        if let Err(error) = typing.switch_to(next) {
-            report!("the input language was not switched: {error:#}");
+        if let Some(typing) = self.typing {
+            switch_next(typing, false);
         }
     }
 }
@@ -114,5 +223,215 @@ impl Render for Keyboard {
             .child(icon(&theme, ICON_KEYBOARD))
             .child(div().font_weight(FontWeight::MEDIUM).child(code));
         Interaction::track(button, cx, |this: &mut Self| Some(&mut this.interaction))
+    }
+}
+
+/// A layout the list offers: what it is and what Windows calls it.
+#[derive(Clone, Debug, PartialEq)]
+struct Layout {
+    language: InputLanguage,
+    name: InputName,
+}
+
+/// The layouts of Windows with their names, paired in the order both
+/// come in. Where the two lists differ in length, as when a layout was
+/// added in between, the names are left out and the letters of the
+/// language stand for them.
+fn layouts(languages: Vec<InputLanguage>, names: Vec<InputName>) -> Vec<Layout> {
+    let paired = languages.len() == names.len();
+    let mut names = names.into_iter().filter(|_| paired);
+    languages
+        .into_iter()
+        .map(|language| Layout {
+            language,
+            name: names.next().unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// The layouts to choose from for the window that was in front.
+struct LayoutList {
+    typing: Option<Typing>,
+    /// `None` until the names have been read.
+    layouts: Option<Vec<Layout>>,
+    chooser: Chooser,
+}
+
+impl LayoutList {
+    fn new(typing: Option<Typing>, cx: &mut Context<Self>) -> Self {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let read = cx
+                .background_executor()
+                .spawn(async { layouts(InputLanguage::installed(), InputName::installed()) });
+            let layouts = read.await;
+            this.update(cx, |this, cx| {
+                let current = this.typing.map(|typing| typing.language);
+                let index = { layouts.iter() }.position(|layout| Some(layout.language) == current);
+                this.chooser.chosen = index.unwrap_or(0);
+                this.layouts = Some(layouts);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        Self {
+            typing,
+            layouts: None,
+            chooser: Chooser::new(cx),
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.layouts.as_ref().map_or(0, Vec::len)
+    }
+
+    /// Asks the window for the layout `index` and closes the list.
+    fn take(&mut self, index: usize, cx: &mut Context<Self>) {
+        let layout = { self.layouts.as_ref() }.and_then(|layouts| layouts.get(index));
+        if let (Some(typing), Some(layout)) = (self.typing, layout)
+            && let Err(error) = typing.switch_to(layout.language)
+        {
+            report!("the input language was not switched: {error:#}");
+        }
+        cx.defer(Popups::close);
+    }
+
+    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        match Pick::of(event) {
+            Some(Pick::Take) => self.take(self.chooser.chosen, cx),
+            Some(Pick::Leave) => cx.defer(Popups::close),
+            Some(Pick::Letter(_)) | None => return,
+            Some(pick) => self.chooser.pick(pick, self.count()),
+        }
+        cx.notify();
+    }
+}
+
+impl Render for LayoutList {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        self.chooser.take_focus(window);
+        let current = self.typing.map(|typing| typing.language);
+        let layouts = self.layouts.clone().unwrap_or_default();
+        let mut rows = Vec::with_capacity(layouts.len());
+        for (index, layout) in layouts.iter().enumerate() {
+            let state = self.chooser.state(index, &theme, window);
+            let chosen = index == self.chooser.chosen;
+            let code = layout.language.code();
+            let title = match layout.name.language.is_empty() {
+                true => code.clone(),
+                false => layout.name.language.clone(),
+            };
+            let note = (!layout.name.layout.is_empty()).then(|| {
+                div()
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(one_line(layout.name.layout.clone()))
+            });
+            let label = div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(one_line(title))
+                .children(note);
+            let row = choice_row_of(&theme, ICON_KEYBOARD, label, None, chosen, state)
+                .h(px(LAYOUT_ROW))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.colors.on_surface_variant)
+                        .child(code),
+                )
+                .children((Some(layout.language) == current).then(|| {
+                    icon(&theme, ICON_CHECK)
+                        .flex_none()
+                        .text_size(theme.typography.label_size)
+                        .text_color(theme.colors.primary)
+                }))
+                .id(("keyboard-layout", index))
+                .on_click(cx.listener(move |this, _, _, cx| this.take(index, cx)));
+            rows.push(Chooser::track(row, index, cx, |this: &mut Self| {
+                &mut this.chooser
+            }));
+        }
+        let note = match (&self.layouts, self.typing) {
+            (None, _) => Some(language.say("Reading…")),
+            (_, None) => Some(language.say("No window is typed into.")),
+            _ => None,
+        };
+        div()
+            .id(LIST)
+            .track_focus(self.chooser.focus())
+            .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.tiny)
+            .child(
+                div()
+                    .flex_none()
+                    .px(theme.spacing.small)
+                    .pb(theme.spacing.tiny)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(one_line(language.say("Keyboard layout"))),
+            )
+            .child(
+                div()
+                    .id("keyboard-layouts")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .flex()
+                    .flex_col()
+                    .gap(theme.spacing.tiny)
+                    .overflow_y_scroll()
+                    .children(rows),
+            )
+            .children(note.map(|note| {
+                div()
+                    .flex_none()
+                    .px(theme.spacing.small)
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(one_line(note))
+            }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_action_goes_either_way_or_opens_the_list() {
+        let mut actions = Actions::default();
+        KeyboardModule.actions(&mut actions).unwrap();
+        for arg in [None, Some("next"), Some("previous"), Some("list")] {
+            assert_eq!(actions.check(ACTION, arg), Ok(()));
+        }
+        assert!(actions.check(ACTION, Some("ru")).is_err());
+        let presses: Vec<String> = { actions.default_keys().into_iter() }
+            .map(|key| key.press)
+            .collect();
+        assert_eq!(presses, ["win+space", "win+shift+space"]);
+    }
+
+    #[test]
+    fn names_are_paired_with_layouts_only_when_both_lists_agree() {
+        let name = |language: &str| InputName {
+            language: language.to_owned(),
+            layout: String::new(),
+        };
+        let languages = InputLanguage::installed();
+        let names: Vec<InputName> = languages.iter().map(|_| name("x")).collect();
+        let paired = layouts(languages.clone(), names);
+        assert!(paired.iter().all(|layout| layout.name.language == "x"));
+        let unpaired = layouts(languages.clone(), vec![name("x"); languages.len() + 1]);
+        assert!(
+            unpaired
+                .iter()
+                .all(|layout| layout.name.language.is_empty())
+        );
     }
 }

@@ -6,6 +6,7 @@
 mod win32;
 
 pub use win32::DisplayMode;
+pub use win32::InputName;
 pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;

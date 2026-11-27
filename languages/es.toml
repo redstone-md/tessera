@@ -350,3 +350,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Second screen only" = "Solo segunda pantalla"
 "Connect to a wireless display" = "Conectar a una pantalla inalámbrica"
 "Only one display is connected." = "Solo hay una pantalla conectada."
+
+# The keyboard layouts (winx-hotkeys).
+"No window is typed into." = "No hay ninguna ventana en la que se escriba."

@@ -161,6 +161,21 @@ pub fn choice_row(
     chosen: bool,
     state: InteractionState,
 ) -> Div {
+    let label = div().flex_1().min_w_0().child(one_line(label));
+    choice_row_of(theme, glyph, label, letter, chosen, state)
+}
+
+/// A row of a list of choices as [`choice_row`] draws it, with `label`
+/// made by the caller, such as a name over a note; it is to fill the
+/// width the row leaves.
+pub fn choice_row_of(
+    theme: &Theme,
+    glyph: &'static str,
+    label: Div,
+    letter: Option<char>,
+    chosen: bool,
+    state: InteractionState,
+) -> Div {
     let (ground, mark) = if chosen {
         (theme.colors.secondary_container, theme.colors.primary)
     } else {
@@ -199,7 +214,7 @@ pub fn choice_row(
                 .text_size(theme.typography.label_size)
                 .text_color(mark),
         )
-        .child(div().flex_1().min_w_0().child(one_line(label)))
+        .child(label)
         .children(key)
 }
 

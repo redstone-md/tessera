@@ -350,3 +350,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Second screen only" = "Deuxième écran uniquement"
 "Connect to a wireless display" = "Se connecter à un écran sans fil"
 "Only one display is connected." = "Un seul écran est connecté."
+
+# The keyboard layouts (winx-hotkeys).
+"No window is typed into." = "Aucune fenêtre ne reçoit la saisie."
