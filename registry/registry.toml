@@ -199,11 +199,11 @@ preview_sha256 = "ebbdbdb77e5ef5a6d863207efe6aa42a4b0973fa286384bf73ed19ef382d48
 id = "system-monitor"
 name = "System monitor"
 description = "An example of the interface 0.4: the processor and the memory in the bar; the network, the battery, what plays and the open windows in a popup; sys in the launcher."
-version = "0.1.0"
+version = "0.1.1"
 manifest = "system-monitor/extension.toml"
-manifest_sha256 = "a1bd101802ec1f487591c2160295eb9a382f543a71229cf550e2571aaf505cb8"
+manifest_sha256 = "639f1565840cfc8d954b91b2d6226b70f408d8cf29f5463abc4bcf2921bb3567"
 wasm = "system-monitor/extension.wasm"
-wasm_sha256 = "40d152b27063e2aadcfe9b0fd4e610762081c0c8cb9fde810e2ad8db1b07c7bc"
+wasm_sha256 = "fd397d0c5a77f4f5c221c2617ed94783c0f634bef3a079f4954b8781ceddabad"
 
 [[theme]]
 id = "void"

@@ -41,5 +41,16 @@ id = "panel"
 label = "Open the system monitor"
 keys = "win+alt+m"
 
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "windows"
+kind = "number"
+label = { en = "Windows listed", ru = "Окон в списке" }
+min = 1
+max = 50
+default = 8
+affects = ["panel"]
+
 [permissions]
 system = ["meters", "media", "media-control", "windows", "window-control", "popups"]
