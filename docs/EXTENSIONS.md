@@ -109,7 +109,7 @@ label = "Open the system monitor"  # what it does, for whoever reads the manifes
 keys = "win+alt+m"               # optional: its keys unless the user binds them otherwise
 ```
 
-Each `[[shortcut]]` becomes the [action](CONFIGURATION.md#actions) `<extension id>.<shortcut id>`, which calls `shortcut` with the `id`. Its `keys` are a combination as a `[[key]]` writes it (a manifest with keys Tessera cannot hold is refused), and are bound by default where Tessera takes the keys of Windows (`windows_keys`, on by default when Tessera is the shell), as the keys actions bring are; otherwise, or for other keys, a `[[key]]` names the action: `press = "ctrl+alt+m"`, `action = "system-monitor.panel"`. `tessera do system-monitor.panel` does it from a console. The shortcuts are read once, when Tessera starts: those of an extension installed later work from the next start. Tessera shows the `label` nowhere yet.
+Each `[[shortcut]]` becomes the [action](CONFIGURATION.md#actions) `<extension id>.<shortcut id>`, which calls `shortcut` with the `id`. Its `keys` are a combination as a `[[key]]` writes it (a manifest with keys Tessera cannot hold is refused), and are bound by default where Tessera takes the keys of Windows (`windows_keys`, on by default when Tessera is the shell), as the keys actions bring are; otherwise, or for other keys, a `[[key]]` names the action: `press = "ctrl+alt+m"`, `action = "system-monitor.panel"`. `tessera do system-monitor.panel` does it from a console. The shortcuts are read once, when Tessera starts: those of an extension installed later work from the next start. The card of the extension under **Extensions** in the settings lists its shortcuts, each with its `label`, its keys and its action.
 
 ### Permissions
 

@@ -75,6 +75,18 @@ pub struct InstalledExtension {
     pub settings: OptionSet,
     /// The names of its widgets.
     pub widgets: Vec<String>,
+    /// The keys it declares, which it is told of.
+    pub shortcuts: Vec<ExtensionShortcut>,
+}
+
+/// A shortcut an extension declares, as the settings show it.
+pub struct ExtensionShortcut {
+    /// The action it is, `<extension id>.<shortcut id>`.
+    pub action: String,
+    /// What pressing it does, as the manifest says.
+    pub label: String,
+    /// The keys it has unless the user binds others.
+    pub keys: Option<String>,
 }
 
 impl InstalledExtension {
@@ -106,6 +118,13 @@ pub fn installed_extensions() -> Vec<InstalledExtension> {
                 settings: manifest.declared(),
                 widgets: { manifest.widgets.iter() }
                     .map(|widget| widget.name.clone())
+                    .collect(),
+                shortcuts: { manifest.shortcuts.iter() }
+                    .map(|shortcut| ExtensionShortcut {
+                        action: manifest.qualified(&shortcut.id),
+                        label: shortcut.label.clone(),
+                        keys: shortcut.keys.clone(),
+                    })
                     .collect(),
                 id: manifest.id,
             }),
@@ -686,6 +705,7 @@ mod tests {
             id: manifest.id.clone(),
             settings: manifest.declared(),
             widgets: vec!["now".to_owned(), "forecast".to_owned()],
+            shortcuts: Vec::new(),
         };
         assert_eq!(installed.affected("unit"), ["now"]);
         assert_eq!(installed.affected("coins"), ["now", "forecast"]);

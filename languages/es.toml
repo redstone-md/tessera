@@ -867,3 +867,8 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "No icon pack is in use." = "No se usa ningún paquete de iconos."
 "No icon pack is installed; the marketplace offers them." = "No hay ningún paquete de iconos instalado; el mercado los ofrece."
 "Use an icon pack" = "Usar un paquete de iconos"
+
+# integration of wave 2: the shortcuts of extensions in the settings.
+"Shortcuts" = "Atajos"
+"no keys" = "sin teclas"
+"Other keys are bound to these actions with a [[key]] in config.toml." = "Otras teclas se asignan a estas acciones con un [[key]] en config.toml."

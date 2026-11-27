@@ -1618,6 +1618,13 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Наборы значков не установлены; их предлагает магазин.",
     ),
     ("Use an icon pack", "Использовать набор значков"),
+    // integration of wave 2: the shortcuts of extensions in the settings.
+    ("Shortcuts", "Сочетания клавиш"),
+    ("no keys", "без клавиш"),
+    (
+        "Other keys are bound to these actions with a [[key]] in config.toml.",
+        "Другие клавиши назначаются этим действиям записью [[key]] в config.toml.",
+    ),
 ];
 
 #[cfg(test)]

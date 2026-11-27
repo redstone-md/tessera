@@ -230,6 +230,34 @@ impl Global for Destination {}
 /// says why what the control holds cannot be written.
 pub(super) struct Commit(Result<Option<toml::Value>, String>);
 
+/// The shortcuts `extension` declares, each with what it does, the keys it
+/// has unless others are bound and the action to bind others to; `None`
+/// where it declares none.
+fn shortcuts_of(
+    extension: &InstalledExtension,
+    theme: &Theme,
+    language: Language,
+) -> Option<AnyElement> {
+    if extension.shortcuts.is_empty() {
+        return None;
+    }
+    let mut list = div()
+        .flex()
+        .flex_col()
+        .gap(theme.spacing.tiny)
+        .child(caption(theme, language.say("Shortcuts")));
+    for shortcut in &extension.shortcuts {
+        let keys = shortcut.keys.as_deref().unwrap_or(language.say("no keys"));
+        let line = format!("{}: {keys} \u{b7} {}", shortcut.label, shortcut.action);
+        list = list.child(note(theme, line));
+    }
+    let bind = "Other keys are bound to these actions with a [[key]] in config.toml.";
+    Some(
+        list.child(note(theme, language.say(bind)))
+            .into_any_element(),
+    )
+}
+
 /// The names of the themes in use: the base, or the built-in one, and
 /// those stacked over it.
 fn themes_in_use(config: &Config) -> Vec<String> {
@@ -685,6 +713,7 @@ impl Settings {
                 &extension.settings,
                 &[],
                 remark,
+                shortcuts_of(extension, &theme, language),
                 &affects,
                 config,
                 window,
@@ -743,6 +772,7 @@ impl Settings {
                 set,
                 problems,
                 lacking,
+                None,
                 &affects,
                 config,
                 window,
@@ -858,6 +888,7 @@ impl Settings {
         set: &OptionSet,
         problems: &[String],
         remark: Option<&'static str>,
+        footer: Option<AnyElement>,
         affects: &dyn Fn(&OptionDecl) -> Vec<String>,
         config: &Config,
         window: &mut Window,
@@ -914,6 +945,7 @@ impl Settings {
             body = body.child(line);
         }
         body = body.children(remark.map(|remark| note(&theme, language.say(remark))));
+        body = body.children(footer);
         if !problems.is_empty() {
             let left_out = language.say("Some settings are declared wrongly and are left out:");
             body = body.child(note(&theme, left_out));

@@ -867,3 +867,8 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "No icon pack is in use." = "Набори значків не використовуються."
 "No icon pack is installed; the marketplace offers them." = "Набори значків не встановлено; їх пропонує крамниця."
 "Use an icon pack" = "Використовувати набір значків"
+
+# integration of wave 2: the shortcuts of extensions in the settings.
+"Shortcuts" = "Сполучення клавіш"
+"no keys" = "без клавіш"
+"Other keys are bound to these actions with a [[key]] in config.toml." = "Інші клавіші призначаються цим діям записом [[key]] у config.toml."
