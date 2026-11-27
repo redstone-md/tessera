@@ -31,6 +31,18 @@ const STEPS: (f32, f32) = (0.01, 0.5);
 const DEFAULT_BORDER: f32 = 3.;
 const WIDEST_BORDER: f32 = 50.;
 
+/// How high the bar of tabs over a stack is when the configuration says
+/// nothing, and the range it may say, in pixels of the screen.
+const DEFAULT_BAR: f32 = 32.;
+const BARS: (f32, f32) = (16., 96.);
+
+/// The share of the space a floated window takes along a side the
+/// configuration gives no share for.
+const DEFAULT_FLOAT: f32 = 0.6;
+
+/// The category that stands for every category in `auto_stack`.
+const EVERY_CATEGORY: &str = "*";
+
 /// What the configuration says about tiling.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +83,16 @@ pub struct TilingConfig {
     drag: DragMode,
     /// How much of its room a tile gains or gives with each step.
     resize_step: Option<f32>,
+    /// When a tile shows a bar of tabs over its windows.
+    #[serde(default)]
+    stack_bar: StackBarShown,
+    /// How high that bar is, in pixels of the screen.
+    stack_bar_height: Option<f32>,
+    /// Which new windows join the stack of a tiled window of the same
+    /// category of the window rules, on the same workspace of the same
+    /// display.
+    #[serde(default)]
+    auto_stack: AutoStack,
     /// What is other on some displays.
     #[serde(default)]
     display: Vec<DisplayTiling>,
@@ -208,8 +230,82 @@ pub enum Marking {
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FloatSize {
+    #[serde(default = "float_share")]
     width: f32,
+    #[serde(default = "float_share")]
     height: f32,
+}
+
+fn float_share() -> f32 {
+    DEFAULT_FLOAT
+}
+
+/// When a tile shows a bar of tabs over its windows, as Seelen UI's
+/// `WmStackBarVisibility` says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StackBarShown {
+    /// Over every tile, also one of a single window.
+    Always,
+    /// Over a stack of two windows or more.
+    #[default]
+    AsNeeded,
+    Never,
+}
+
+/// The bars of tabs over the stacks, as they are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bars {
+    pub shown: StackBarShown,
+    /// In pixels of the screen.
+    pub height: i32,
+}
+
+impl Bars {
+    /// How much of the top of a tile of `count` windows the bar takes.
+    pub fn over(self, count: usize) -> i32 {
+        let shown = match self.shown {
+            StackBarShown::Always => count >= 1,
+            StackBarShown::AsNeeded => count >= 2,
+            StackBarShown::Never => false,
+        };
+        if shown { self.height } else { 0 }
+    }
+}
+
+/// Which new windows join a stack by their category: `true` for every
+/// category, or the categories by name; `"*"` among them is every one.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum AutoStack {
+    All(bool),
+    Categories(Vec<String>),
+}
+
+impl Default for AutoStack {
+    fn default() -> Self {
+        Self::All(false)
+    }
+}
+
+impl AutoStack {
+    /// Whether a new window of `category` joins a window of that category.
+    pub fn takes(&self, category: &str) -> bool {
+        match self {
+            Self::All(all) => *all,
+            Self::Categories(names) => names
+                .iter()
+                .any(|name| name == EVERY_CATEGORY || name.eq_ignore_ascii_case(category)),
+        }
+    }
+
+    /// Whether any window joins a stack by its category.
+    pub fn any(&self) -> bool {
+        match self {
+            Self::All(all) => *all,
+            Self::Categories(names) => !names.is_empty(),
+        }
+    }
 }
 
 /// What dropping a tile on another does.
@@ -248,6 +344,57 @@ pub struct WorkspaceTiling {
     gap: Option<f32>,
     padding: Option<Sides>,
     margin: Option<Sides>,
+}
+
+/// A list of entries that say what is other somewhere:
+/// `[[tiling.display]]` or `[[tiling.workspace]]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OverrideKind {
+    Display,
+    Workspace,
+}
+
+impl OverrideKind {
+    pub const ALL: [Self; 2] = [Self::Display, Self::Workspace];
+
+    /// The key of the list in `[tiling]`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Display => "display",
+            Self::Workspace => "workspace",
+        }
+    }
+
+    /// The key of an entry that says where it holds: `match` for a
+    /// display, `number` for a workspace.
+    pub fn selector(self) -> &'static str {
+        match self {
+            Self::Display => "match",
+            Self::Workspace => "number",
+        }
+    }
+
+    /// An entry as one is added: for the first display, or the first
+    /// workspace, saying nothing other yet.
+    pub fn new_entry(self) -> toml::Table {
+        let mut entry = toml::Table::new();
+        let selector = match self {
+            Self::Display => toml::Value::String("1".to_owned()),
+            Self::Workspace => toml::Value::Integer(1),
+        };
+        entry.insert(self.selector().to_owned(), selector);
+        entry
+    }
+
+    /// Whether `entry` is an entry of this list the tiling can use, or
+    /// why it is not.
+    pub fn check(self, entry: &toml::Table) -> Result<(), String> {
+        let list = toml::Value::Array(vec![toml::Value::Table(entry.clone())]);
+        let mut tiling = toml::Table::new();
+        tiling.insert(self.key().to_owned(), list);
+        let read: Result<TilingConfig, _> = toml::Value::Table(tiling).try_into();
+        read.map(drop).map_err(|error| error.message().to_owned())
+    }
 }
 
 /// What an entry of `[[tiling.display]]` or `[[tiling.workspace]]` says.
@@ -306,6 +453,7 @@ pub struct Knobs {
     pub float: Option<(f32, f32)>,
     pub drag: DragMode,
     pub step: f32,
+    pub bars: Bars,
 }
 
 /// A gap, or `None` where it is not usable, which is reported as `what`
@@ -344,6 +492,11 @@ impl TilingConfig {
     /// does not let be moved either.
     pub fn covers(&self, executable: Option<&Path>) -> bool {
         super::listed(&self.only, &self.except, executable)
+    }
+
+    /// Which new windows join a stack by their category.
+    pub fn auto_stack(&self) -> &AutoStack {
+        &self.auto_stack
     }
 
     /// The pieces of titles and of class names that leave a window alone.
@@ -421,11 +574,26 @@ impl TilingConfig {
                 DEFAULT_STEP
             }
         };
+        let height = self.stack_bar_height.unwrap_or(DEFAULT_BAR);
+        let (low, high) = BARS;
+        let height = match height.is_finite() && (low..=high).contains(&height) {
+            true => height.round() as i32,
+            false => {
+                report!(
+                    "`tiling.stack_bar_height` is not a number from {low} to {high}, so it is {DEFAULT_BAR}"
+                );
+                DEFAULT_BAR as i32
+            }
+        };
         Knobs {
             marking,
             float,
             drag: self.drag,
             step,
+            bars: Bars {
+                shown: self.stack_bar,
+                height,
+            },
         }
     }
 
@@ -641,6 +809,64 @@ mod tests {
         let unusable = config("float = { width = 2, height = 0.5 }\nresize_step = 3").knobs();
         assert_eq!((unusable.float, unusable.step), (None, DEFAULT_STEP));
         assert_eq!(config("").knobs().drag, DragMode::Swap);
+        // A share that is not given is the one built in.
+        let wide = config("float = { width = 0.9 }").knobs();
+        assert_eq!(wide.float, Some((0.9, DEFAULT_FLOAT)));
+    }
+
+    #[test]
+    fn entries_of_displays_and_workspaces_are_checked() {
+        for kind in OverrideKind::ALL {
+            assert_eq!(kind.check(&kind.new_entry()), Ok(()));
+        }
+        let entry = |text: &str| toml::from_str::<toml::Table>(text).unwrap();
+        let display = OverrideKind::Display;
+        assert!(
+            display
+                .check(&entry("match = \"2\"\nlayout = \"rows\"\ngap = 4"))
+                .is_ok()
+        );
+        assert!(display.check(&entry("match = \"0\"")).is_err());
+        assert!(display.check(&entry("number = 1")).is_err());
+        let workspace = OverrideKind::Workspace;
+        assert!(
+            workspace
+                .check(&entry("number = 3\npadding = { top = 2 }"))
+                .is_ok()
+        );
+        assert!(workspace.check(&entry("number = 3\nwidth = 2")).is_err());
+        assert!(workspace.check(&entry("layout = \"rows\"")).is_err());
+    }
+
+    #[test]
+    fn the_stack_bar_and_automatic_stacks_are_read() {
+        let built_in = config("").knobs().bars;
+        assert_eq!(
+            built_in,
+            Bars {
+                shown: StackBarShown::AsNeeded,
+                height: 32,
+            }
+        );
+        assert_eq!((built_in.over(1), built_in.over(2)), (0, 32));
+        let always = config("stack_bar = \"always\"\nstack_bar_height = 24")
+            .knobs()
+            .bars;
+        assert_eq!((always.over(1), always.height), (24, 24));
+        let never = config("stack_bar = \"never\"").knobs().bars;
+        assert_eq!(never.over(5), 0);
+        assert_eq!(config("stack_bar_height = 2").knobs().bars.height, 32);
+        assert!(toml::from_str::<TilingConfig>("stack_bar = \"sometimes\"").is_err());
+
+        assert!(!config("").auto_stack().any());
+        let all = config("auto_stack = true");
+        assert!(all.auto_stack().any() && all.auto_stack().takes("browser"));
+        let some = config("auto_stack = [\"Browser\", \"terminal\"]");
+        assert!(some.auto_stack().takes("browser"));
+        assert!(!some.auto_stack().takes("editor"));
+        assert!(config("auto_stack = [\"*\"]").auto_stack().takes("editor"));
+        assert!(!config("auto_stack = []").auto_stack().any());
+        assert!(toml::from_str::<TilingConfig>("auto_stack = 3").is_err());
     }
 
     #[test]
