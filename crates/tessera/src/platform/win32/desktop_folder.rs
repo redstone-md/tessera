@@ -29,7 +29,7 @@
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 
 use anyhow::{Context as _, Result, bail};
@@ -240,18 +240,34 @@ impl IconPixels {
 /// one of them holds changes, until it is dropped. Changes come in bursts
 /// (a copy of many files); the receiver holds at most one waiting.
 pub struct FolderWatch {
-    /// The event that ends the watching thread, as a number.
-    stop: isize,
+    /// The event that ends the watching thread, which holds it too.
+    stop: Arc<Event>,
+}
+
+/// An event of Windows, closed when the last holder lets go of it.
+struct Event(HANDLE);
+
+// SAFETY: an event is a kernel object that any thread may set and wait
+// for; it is closed once, by the last holder.
+unsafe impl Send for Event {}
+unsafe impl Sync for Event {}
+
+impl Drop for Event {
+    fn drop(&mut self) {
+        // SAFETY: the handle was made for this value and is closed once.
+        let _ = unsafe { CloseHandle(self.0) };
+    }
 }
 
 impl FolderWatch {
     /// Watches `folders` on a thread of its own. A folder that cannot be
     /// opened is reported and left out; with none left, the watch fails.
     pub fn start(folders: &[PathBuf]) -> Result<(Self, Receiver<()>)> {
-        // SAFETY: the event is made without a name and closed by the
-        // thread once it ends.
+        // SAFETY: the event is made without a name, and closed when both
+        // this and the thread let go of it.
         let stop = unsafe { CreateEventW(None, true, false, PCWSTR::null()) }
             .context("the watch on the desktop cannot be stopped")?;
+        let stop = Arc::new(Event(stop));
         let mut watched = Vec::new();
         for folder in folders {
             match Watched::open(folder) {
@@ -260,25 +276,22 @@ impl FolderWatch {
             }
         }
         if watched.is_empty() {
-            // SAFETY: the event was made above and is used nowhere else.
-            let _ = unsafe { CloseHandle(stop) };
             bail!("no folder of the desktop can be watched");
         }
         let (changed, told) = async_channel::bounded(1);
-        let stopping = stop.0 as isize;
+        let stopping = stop.clone();
         thread::Builder::new()
             .name("desktop watch".to_owned())
-            .spawn(move || watch(watched, stopping, changed))
+            .spawn(move || watch(watched, &stopping, &changed))
             .context("the watch on the desktop does not start")?;
-        Ok((Self { stop: stopping }, told))
+        Ok((Self { stop }, told))
     }
 }
 
 impl Drop for FolderWatch {
     fn drop(&mut self) {
-        // SAFETY: the event lives until the thread, which this wakes,
-        // closes it.
-        let _ = unsafe { SetEvent(HANDLE(self.stop as *mut c_void)) };
+        // SAFETY: the event is open while this holds it.
+        let _ = unsafe { SetEvent(self.stop.0) };
     }
 }
 
@@ -403,8 +416,8 @@ impl Drop for Watched {
 
 /// The body of the watching thread: tells `changed` whenever a folder of
 /// `watched` changes, until the event `stop` is set.
-fn watch(mut watched: Vec<Watched>, stop: isize, changed: Sender<()>) {
-    let stop = HANDLE(stop as *mut c_void);
+fn watch(mut watched: Vec<Watched>, stop: &Event, changed: &Sender<()>) {
+    let stop = stop.0;
     watched.retain_mut(|one| {
         one.arm()
             .inspect_err(|error| report!("a folder of the desktop is not watched: {error:#}"))
@@ -432,9 +445,6 @@ fn watch(mut watched: Vec<Watched>, stop: isize, changed: Sender<()>) {
             break;
         }
     }
-    drop(watched);
-    // SAFETY: the event was made for this thread, which closes it once.
-    let _ = unsafe { CloseHandle(stop) };
 }
 
 /// Explorer's own icons of the desktop, which are hidden while Tessera
