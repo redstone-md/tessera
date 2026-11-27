@@ -13,14 +13,17 @@
 //!    32-bit view) that is installed and newer than what the user's
 //!    record says has its `StubPath` run, one after the other, each
 //!    waited for up to [`WAIT`]; the user's record then gets the version.
-//! 2. `RunOnce` of the machine, one after the other, each waited for;
-//!    only where Tessera may delete its values, because a medium process
-//!    may not, and they would otherwise run at every sign-in.
+//! 2. `RunOnce` of the machine, in its 64-bit view and then its 32-bit
+//!    one (`WOW6432Node`), one after the other, each waited for; only
+//!    where Tessera may delete its values, because a medium process may
+//!    not, and they would otherwise run at every sign-in.
 //! 3. `Run` and `Policies\Explorer\Run` of the machine (and the 32-bit
 //!    `Run`), then of the user, then the Startup folders of all users and
-//!    of the user, without waiting, skipping what the user switched off
-//!    in `Explorer\StartupApproved` (`Run`, `Run32`, `StartupFolder`, in
-//!    either hive: a first byte that is odd means off).
+//!    of the user, without waiting, skipping what was switched off in
+//!    `Explorer\StartupApproved` (`Run`, `Run32`, `StartupFolder`) of the
+//!    hive of the program, where a first byte that is odd means off, and,
+//!    for a program of the machine, what the user switched off for
+//!    themselves in Tessera's own `HKCU\Software\Tessera\StartupApproved`.
 //! 4. `RunOnce` of the user, without waiting.
 //! 5. The startup tasks of packaged applications (see [`tasks`]).
 //!
@@ -34,7 +37,11 @@
 //! Once per session: a volatile key under `HKCU\Software\Tessera\Startup`,
 //! named by the session and the logon, is made before anything starts;
 //! when it is there already, as after Tessera restarted, nothing starts
-//! again. Windows deletes volatile keys at sign-out.
+//! again. Windows deletes volatile keys at sign-out. A Tessera that runs
+//! elevated, with the full token of an administrator whose other token is
+//! filtered, starts nothing and makes no mark: its logon is not the one
+//! of the session, and every program would get the administrator's
+//! token.
 //!
 //! Not used: `runonce.exe /AlternateShellStartup`, which is said to run
 //! Active Setup and `RunOnce` for shells other than Explorer but is not
@@ -56,7 +63,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
 use windows::Win32::Security::{
-    GetTokenInformation, TOKEN_QUERY, TOKEN_STATISTICS, TokenStatistics,
+    GetTokenInformation, TOKEN_ELEVATION_TYPE, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
+    TOKEN_STATISTICS, TokenElevationType, TokenElevationTypeFull, TokenStatistics,
 };
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_32KEY,
@@ -88,6 +96,11 @@ const POLICY_RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Ex
 
 /// Where the choices of the user (and of Task Manager) are kept.
 const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved";
+
+/// Where Tessera keeps what a user switched off for themselves of the
+/// programs of the machine, apart from the marks Explorer keeps of the
+/// user's own programs under the same names.
+const OWN_APPROVED: &str = r"Software\Tessera\StartupApproved";
 
 /// The components of Active Setup, of the machine and as the user has
 /// them.
@@ -177,17 +190,28 @@ impl StartupSource {
         }
     }
 
+    /// The last part of the keys that hold the choices for its programs;
+    /// `None` for a policy, which the user cannot switch off.
+    fn approval_leaf(self) -> Option<&'static str> {
+        match self {
+            Self::MachineRun | Self::UserRun => Some("Run"),
+            Self::MachineRun32 => Some("Run32"),
+            Self::CommonFolder | Self::UserFolder => Some("StartupFolder"),
+            Self::MachinePolicy | Self::UserPolicy | Self::Packaged => None,
+        }
+    }
+
     /// The key of `StartupApproved` that holds the choices for its
-    /// programs, under the root of the source; `None` for a policy, which
-    /// the user cannot switch off.
+    /// programs, under the root of the source.
     fn approvals(self) -> Option<String> {
-        let leaf = match self {
-            Self::MachineRun | Self::UserRun => "Run",
-            Self::MachineRun32 => "Run32",
-            Self::CommonFolder | Self::UserFolder => "StartupFolder",
-            Self::MachinePolicy | Self::UserPolicy | Self::Packaged => return None,
-        };
-        Some(format!(r"{APPROVED}\{leaf}"))
+        Some(format!(r"{APPROVED}\{}", self.approval_leaf()?))
+    }
+
+    /// For a source of the machine, the key of the user under which
+    /// Tessera keeps what the user switched off for themselves.
+    fn overrides(self) -> Option<String> {
+        let leaf = self.approval_leaf().filter(|_| self.for_all_users())?;
+        Some(format!(r"{OWN_APPROVED}\{leaf}"))
     }
 
     fn root(self) -> HKEY {
@@ -321,10 +345,12 @@ impl StartupEntry {
     }
 
     /// Switches the entry on or off, where Task Manager does: in
-    /// `StartupApproved` of its own hive, and for a program of the
-    /// machine, which only an administrator may change there, also in
-    /// that of the user, which Tessera reads as well. A startup task has
-    /// its state written as the user's choice.
+    /// `StartupApproved` of its own hive. A program of the machine, which
+    /// only an administrator may switch there, is switched off for the
+    /// user alone in Tessera's own key where the machine's is refused,
+    /// and the user's choice there is dropped whenever the machine's is
+    /// written or the program is switched back on. A startup task has its
+    /// state written as the user's choice.
     pub fn set_enabled(&self, on: bool) -> Result<(), SwitchRefusal> {
         if !self.switchable {
             return Err(SwitchRefusal::Fixed);
@@ -337,27 +363,49 @@ impl StartupEntry {
         };
         let mark = approval_mark(on, now());
         let own = write_mark(self.source.root(), &approvals, &name, &mark);
-        if !self.source.for_all_users() {
+        let Some(overrides) = self.source.overrides() else {
             return own.map_err(refusal);
-        }
-        // The user's own mark goes with the machine's, so that switching
-        // a program back on does not leave it off by a mark of the user.
-        let user = write_mark(HKEY_CURRENT_USER, &approvals, &name, &mark);
+        };
+        let off_for_user = |off: bool| {
+            let written = match off {
+                true => write_mark(HKEY_CURRENT_USER, &overrides, &name, &mark),
+                false => clear_mark(HKEY_CURRENT_USER, &overrides, &name),
+            };
+            written.map_err(refusal)
+        };
         match own {
-            Ok(()) => Ok(()),
+            // The machine's mark now decides for this user as well.
+            Ok(()) => off_for_user(false),
             // Off for this user, though not for the others.
-            Err(Failure::Denied) if !on => user.map_err(refusal),
+            Err(Failure::Denied) if !on => off_for_user(true),
             Err(Failure::Denied) => {
-                let off_for_all = Key::read(HKEY_LOCAL_MACHINE, &approvals, REG_SAM_FLAGS(0))
-                    .and_then(|key| key.bytes(&name))
+                let off_for_all = read_mark(HKEY_LOCAL_MACHINE, &approvals, &name)
                     .is_some_and(|mark| !approved(Some(&mark)));
                 match off_for_all {
                     true => Err(SwitchRefusal::NeedsAdministrator),
-                    false => user.map_err(refusal),
+                    false => off_for_user(false),
                 }
             }
             Err(failure) => Err(refusal(failure)),
         }
+    }
+
+    /// The entry as it stands now: whether it is on read again, the rest
+    /// as it was.
+    pub fn refreshed(&self) -> Self {
+        let mut entry = self.clone();
+        match &mut entry.origin {
+            Origin::Task(task) => {
+                *task = task.refreshed();
+                (entry.enabled, entry.switchable) = (task.on, task.switchable);
+            }
+            Origin::Value(_) | Origin::File(_) => {
+                if let Some(name) = self.approval_name() {
+                    entry.enabled = approved_by(self.source, &name);
+                }
+            }
+        }
+        entry
     }
 
     /// What starts the entry.
@@ -385,21 +433,31 @@ fn write_mark(root: HKEY, approvals: &str, name: &str, mark: &[u8]) -> Result<()
     key.set_bytes(name, mark)
 }
 
+/// Removes the mark of `name` from the key `approvals` of `root`, where
+/// there is one.
+fn clear_mark(root: HKEY, approvals: &str, name: &str) -> Result<(), Failure> {
+    match Key::open(root, approvals, KEY_SET_VALUE)? {
+        Some(key) => key.delete(name),
+        None => Ok(()),
+    }
+}
+
+/// The mark of `name` in the key `approvals` of `root`.
+fn read_mark(root: HKEY, approvals: &str, name: &str) -> Option<Vec<u8>> {
+    Key::read(root, approvals, REG_SAM_FLAGS(0))?.bytes(name)
+}
+
 /// Whether the program `name` of `source` is on: neither the key of
 /// `StartupApproved` of its own hive nor, for a program of the machine,
-/// that of the user marks it off.
+/// Tessera's key of the user marks it off.
 fn approved_by(source: StartupSource, name: &str) -> bool {
     let Some(approvals) = source.approvals() else {
         return true;
     };
-    let mut roots = vec![source.root()];
-    if source.for_all_users() {
-        roots.push(HKEY_CURRENT_USER);
-    }
-    roots.into_iter().all(|root| {
-        let mark = Key::read(root, &approvals, REG_SAM_FLAGS(0)).and_then(|key| key.bytes(name));
-        approved(mark.as_deref())
-    })
+    let user = source.overrides().map(|path| (HKEY_CURRENT_USER, path));
+    let keys = [Some((source.root(), approvals)), user];
+    { keys.into_iter().flatten() }
+        .all(|(root, path)| approved(read_mark(root, &path, name).as_deref()))
 }
 
 /// Whether a mark of `StartupApproved` leaves a program on: none does,
@@ -553,29 +611,64 @@ fn in_safe_mode() -> bool {
     unsafe { GetSystemMetrics(SM_CLEANBOOT) != 0 }
 }
 
-/// The logon of this process, which is new at every sign-in.
-fn logon() -> Result<LUID> {
-    let mut token = HANDLE::default();
-    // SAFETY: `token` outlives the call and is closed below.
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) }
-        .context("the token of Tessera did not open")?;
-    let mut statistics = TOKEN_STATISTICS::default();
-    let mut length = 0u32;
-    // SAFETY: the buffer is a TOKEN_STATISTICS of the size given; the
-    // token is open and closed once afterwards.
-    let read = unsafe {
-        let read = GetTokenInformation(
-            token,
-            TokenStatistics,
-            Some((&raw mut statistics).cast()),
-            size_of::<TOKEN_STATISTICS>() as u32,
-            &raw mut length,
-        );
-        let _ = CloseHandle(token);
-        read
-    };
-    read.context("the logon of Tessera is not known")?;
-    Ok(statistics.AuthenticationId)
+/// The token of this process, open to be read, closed when dropped.
+struct Token(HANDLE);
+
+impl Token {
+    fn of_process() -> Result<Self> {
+        let mut token = HANDLE::default();
+        // SAFETY: `token` outlives the call and is closed once, on drop.
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) }
+            .context("the token of Tessera did not open")?;
+        Ok(Self(token))
+    }
+
+    /// The logon of the token, which is new at every sign-in.
+    fn logon(&self) -> Result<LUID> {
+        let statistics: TOKEN_STATISTICS = self
+            .information(TokenStatistics)
+            .context("the logon of Tessera is not known")?;
+        Ok(statistics.AuthenticationId)
+    }
+
+    /// Whether it is the full token of an administrator whose sign-in
+    /// also has a filtered one, as a program run as administrator has.
+    fn elevated(&self) -> Result<bool> {
+        let kind: TOKEN_ELEVATION_TYPE = self
+            .information(TokenElevationType)
+            .context("whether Tessera runs elevated is not known")?;
+        Ok(kind == TokenElevationTypeFull)
+    }
+
+    /// What Windows tells of the token for `class`, whose answer must be
+    /// a `T` of fixed size: `TOKEN_STATISTICS` for `TokenStatistics`,
+    /// `TOKEN_ELEVATION_TYPE` for `TokenElevationType`.
+    fn information<T: Default>(&self, class: TOKEN_INFORMATION_CLASS) -> Result<T> {
+        let mut information = T::default();
+        let mut length = 0u32;
+        // SAFETY: the buffer is a `T` of the size given, which is what
+        // Windows writes for `class` as the callers above ask it; the
+        // token is open.
+        unsafe {
+            GetTokenInformation(
+                self.0,
+                class,
+                Some((&raw mut information).cast()),
+                size_of::<T>() as u32,
+                &raw mut length,
+            )
+        }?;
+        Ok(information)
+    }
+}
+
+impl Drop for Token {
+    fn drop(&mut self) {
+        // SAFETY: the handle was opened by this value and is closed once.
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
 }
 
 /// Starts the programs of the session, in the order of the module.
@@ -588,15 +681,23 @@ pub struct SessionStartup {
 }
 
 impl SessionStartup {
-    /// Starts the programs, unless this session started them already or
-    /// Explorer runs as the shell, which starts them itself; tells
-    /// whether it started them. It waits for some of them: call it on a
-    /// thread of its own.
+    /// Starts the programs, unless this session started them already,
+    /// Explorer runs as the shell, which starts them itself, or Tessera
+    /// runs elevated; tells whether it started them. It waits for some of
+    /// them: call it on a thread of its own.
     pub fn run_once_per_session(self) -> Result<bool> {
         if explorer_running() {
             return Ok(false);
         }
-        if !Self::first_of_session()? {
+        let token = Token::of_process()?;
+        if token.elevated()? {
+            report!(
+                "Tessera runs as administrator and starts none of the programs of the session, \
+                 which would all get its token; they start when Tessera runs without it"
+            );
+            return Ok(false);
+        }
+        if !Self::first_of_session(&token)? {
             return Ok(false);
         }
         self.run();
@@ -604,12 +705,12 @@ impl SessionStartup {
     }
 
     /// Marks the session as started, and tells whether it was not yet.
-    fn first_of_session() -> Result<bool> {
+    fn first_of_session(token: &Token) -> Result<bool> {
         let mut session = 0u32;
         // SAFETY: `session` outlives the call.
         unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &raw mut session) }
             .context("the session of Tessera is not known")?;
-        let name = mark_name(session, logon()?);
+        let name = mark_name(session, token.logon()?);
         // The key of Tessera is made lasting first: a key made under a
         // volatile one must be volatile as well.
         let lasting = Key::create(
@@ -637,7 +738,8 @@ impl SessionStartup {
             Self::active_setup(KEY_WOW64_64KEY, ACTIVE_SETUP);
             Self::active_setup(KEY_WOW64_32KEY, ACTIVE_SETUP_32);
         }
-        Self::run_once(HKEY_LOCAL_MACHINE, true, safe);
+        Self::run_once(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, true, safe);
+        Self::run_once(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, true, safe);
         let start = |source: StartupSource| {
             let entries = StartupEntry::of(source).into_iter();
             for entry in entries.filter(|entry| entry.enabled) {
@@ -651,7 +753,7 @@ impl SessionStartup {
                 .for_each(start);
         }
         // The user's `RunOnce` comes after the Startup folders.
-        Self::run_once(HKEY_CURRENT_USER, false, safe);
+        Self::run_once(HKEY_CURRENT_USER, REG_SAM_FLAGS(0), false, safe);
         if self.packaged && !safe {
             start(StartupSource::Packaged);
         }
@@ -718,15 +820,15 @@ impl SessionStartup {
         Ok(())
     }
 
-    /// Runs the programs of `RunOnce` under `root` and deletes their
-    /// values; waits for each with `wait`. A key whose values Tessera may
-    /// not delete is left alone.
-    fn run_once(root: HKEY, wait: bool, safe: bool) {
-        let key = match Key::open(root, RUN_ONCE, KEY_READ | KEY_SET_VALUE) {
+    /// Runs the programs of `RunOnce` under `root`, in the view `view`,
+    /// and deletes their values; waits for each with `wait`. A key whose
+    /// values Tessera may not delete is left alone.
+    fn run_once(root: HKEY, view: REG_SAM_FLAGS, wait: bool, safe: bool) {
+        let key = match Key::open(root, RUN_ONCE, KEY_READ | KEY_SET_VALUE | view) {
             Ok(Some(key)) => key,
             Ok(None) => return,
             Err(Failure::Denied) => {
-                let waiting = Key::read(root, RUN_ONCE, REG_SAM_FLAGS(0))
+                let waiting = Key::read(root, RUN_ONCE, view)
                     .map(|key| key.values().len())
                     .unwrap_or(0);
                 if waiting > 0 {
@@ -910,6 +1012,15 @@ mod tests {
                 StartupSource::MachinePolicy | StartupSource::UserPolicy | StartupSource::Packaged
             );
             assert_eq!(source.approvals().is_none(), fixed);
+            // Tessera's own choices of the user are kept for the
+            // programs of the machine alone, apart from Explorer's.
+            assert_eq!(
+                source.overrides().is_some(),
+                !fixed && source.for_all_users()
+            );
+            if let Some(overrides) = source.overrides() {
+                assert!(overrides.starts_with(OWN_APPROVED));
+            }
         }
     }
 }

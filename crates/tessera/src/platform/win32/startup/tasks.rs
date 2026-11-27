@@ -14,6 +14,11 @@
 //! application through `shell:AppsFolder`, which is not the activation
 //! of a startup task: an application that shows nothing when Windows
 //! starts it at sign-in may open its window.
+//!
+//! `Enabled="true"` in a manifest has a task on before any state is kept
+//! only for a full-trust (desktop) application; Windows ignores it for a
+//! UWP application, whose task stays off until the application asks for
+//! it, so Tessera reads it the same way.
 
 use std::fs;
 use std::path::Path;
@@ -33,6 +38,13 @@ const STATES: &str = r"Software\Classes\Local Settings\Software\Microsoft\Window
 /// The category of the extension that declares a startup task.
 const CATEGORY: &str = "windows.startupTask";
 
+/// The entry point of a full-trust (desktop) application.
+const FULL_TRUST: &str = "Windows.FullTrustApplication";
+
+/// The namespace of the `desktop:` extensions, which only full-trust
+/// applications have.
+const DESKTOP_NAMESPACE: &str = "http://schemas.microsoft.com/appx/manifest/desktop/windows10";
+
 /// The longest name a resource is read into, in UTF-16 units.
 const NAME_LENGTH: usize = 512;
 
@@ -43,7 +55,8 @@ pub(super) struct DeclaredTask {
     pub app_id: String,
     pub task_id: String,
     /// Whether the manifest has it on before the user or the application
-    /// chose.
+    /// chose: `Enabled="true"`, which Windows honours for a full-trust
+    /// application alone.
     pub enabled: bool,
     /// The name it shows, which may be a reference to a resource.
     pub display_name: Option<String>,
@@ -67,12 +80,18 @@ pub(super) fn declared_tasks(text: &str) -> Vec<DeclaredTask> {
             let task = extension
                 .children()
                 .find(|node| node.tag_name().name() == "StartupTask")?;
+            // The extension's entry point, or else the application's.
+            let entry_point = { extension.attribute("EntryPoint") }
+                .or_else(|| application.attribute("EntryPoint"));
+            let full_trust = entry_point == Some(FULL_TRUST)
+                || extension.tag_name().namespace() == Some(DESKTOP_NAMESPACE);
+            let enabled = task
+                .attribute("Enabled")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"));
             Some(DeclaredTask {
                 app_id: application.attribute("Id")?.to_owned(),
                 task_id: task.attribute("TaskId")?.to_owned(),
-                enabled: task
-                    .attribute("Enabled")
-                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                enabled: enabled && full_trust,
                 display_name: task.attribute("DisplayName").map(str::to_owned),
             })
         })
@@ -118,6 +137,8 @@ pub(super) struct PackageTask {
     pub name: String,
     pub on: bool,
     pub switchable: bool,
+    /// Whether the manifest has it on before any state is kept.
+    declared: bool,
 }
 
 impl PackageTask {
@@ -174,9 +195,20 @@ impl PackageTask {
                 name: shown,
                 on,
                 switchable,
+                declared: task.enabled,
             }
         });
         Ok(tasks.collect())
+    }
+
+    /// The task with its state read again.
+    pub fn refreshed(&self) -> Self {
+        let (on, switchable) = task_on(state(&self.family, &self.task_id), self.declared);
+        Self {
+            on,
+            switchable,
+            ..self.clone()
+        }
     }
 
     /// Switches the task on or off as the user's choice, as the
@@ -229,6 +261,20 @@ mod tests {
         </desktop:Extension>
       </Extensions>
     </Application>
+    <Application Id="Tray" Executable="tray.exe">
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask" Executable="tray.exe">
+          <desktop:StartupTask TaskId="TrayTask" Enabled="true" DisplayName="Tray" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+    <Application Id="Uwp" EntryPoint="App.App">
+      <Extensions>
+        <uap5:Extension Category="windows.startupTask" EntryPoint="App.App">
+          <uap5:StartupTask TaskId="UwpTask" Enabled="true" DisplayName="Uwp" />
+        </uap5:Extension>
+      </Extensions>
+    </Application>
   </Applications>
 </Package>"#;
 
@@ -249,6 +295,19 @@ mod tests {
                     task_id: "HelperTask".to_owned(),
                     enabled: false,
                     display_name: Some("Helper".to_owned()),
+                },
+                DeclaredTask {
+                    app_id: "Tray".to_owned(),
+                    task_id: "TrayTask".to_owned(),
+                    enabled: true,
+                    display_name: Some("Tray".to_owned()),
+                },
+                // Windows ignores `Enabled` for a UWP application.
+                DeclaredTask {
+                    app_id: "Uwp".to_owned(),
+                    task_id: "UwpTask".to_owned(),
+                    enabled: false,
+                    display_name: Some("Uwp".to_owned()),
                 },
             ]
         );
