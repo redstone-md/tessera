@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use image::RgbImage;
 use serde::{Deserialize, Serialize};
 
+use super::adjust::{Adjustments, Anchor};
 use crate::platform::{BackdropPicture, ScreenRect, WallpaperPosition};
 
 /// A part of a picture or of a display: its left, top, width and height.
@@ -66,11 +67,13 @@ impl Fit {
     /// The part of a picture of `width` by `height` pixels that is shown
     /// on a display of `over_width` by `over_height`, and the part of the
     /// display it is shown in, each as left, top, width and height. Only
-    /// for the ways that scale: covering, containing and stretching.
+    /// for the ways that scale: covering, containing and stretching. What
+    /// is cut off, or left of the display, is shared out as `anchor` says.
     pub fn parts(
         self,
         (width, height): (u32, u32),
         (over_width, over_height): (u32, u32),
+        anchor: Anchor,
     ) -> (Part, Part) {
         let whole = (0, 0, width, height);
         let all = (0, 0, over_width, over_height);
@@ -78,9 +81,43 @@ impl Fit {
             Self::Stretch => (whole, all),
             // The part of the display with the shape of the picture is
             // found as the part of a picture with the shape of a display.
-            Self::Contain => (whole, covering_part(over_width, over_height, width, height)),
-            _ => (covering_part(width, height, over_width, over_height), all),
+            Self::Contain => (
+                whole,
+                covering_part_at(over_width, over_height, width, height, anchor),
+            ),
+            _ => (
+                covering_part_at(width, height, over_width, over_height, anchor),
+                all,
+            ),
         }
+    }
+
+    /// Every way, in the order the settings offer them.
+    pub const ALL: [Self; 6] = [
+        Self::Cover,
+        Self::Contain,
+        Self::Stretch,
+        Self::Center,
+        Self::Tile,
+        Self::Span,
+    ];
+
+    /// The name the configuration gives it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cover => "cover",
+            Self::Contain => "contain",
+            Self::Stretch => "stretch",
+            Self::Center => "center",
+            Self::Tile => "tile",
+            Self::Span => "span",
+        }
+    }
+
+    /// Whether a picture fitted this way can lie elsewhere than in the
+    /// middle: where it is cut, or does not fill its display.
+    pub fn takes_position(self) -> bool {
+        matches!(self, Self::Cover | Self::Contain | Self::Center)
     }
 }
 
@@ -132,12 +169,31 @@ impl Ground {
 /// The scaling is done here, a few rows at a time: that of the `image`
 /// crate first makes a copy of the whole picture that is four times its
 /// size in memory.
+///
+/// A picture that is cut to cover its display, or does not fill it, lies
+/// where `anchor` says; then `adjust`ments are made to the whole.
 pub fn compose(
+    image: Option<&RgbImage>,
+    display: ScreenRect,
+    desktop: ScreenRect,
+    (fit, ground): (Fit, Ground),
+    adjust: &Adjustments,
+) -> BackdropPicture {
+    let mut picture = fitted(image, display, desktop, fit, ground, adjust.anchor);
+    if adjust.changes_pixels() {
+        adjust.apply(&mut picture);
+    }
+    picture
+}
+
+/// The picture of a display before the adjustments: see [`compose`].
+fn fitted(
     image: Option<&RgbImage>,
     display: ScreenRect,
     desktop: ScreenRect,
     fit: Fit,
     ground: Ground,
+    anchor: Anchor,
 ) -> BackdropPicture {
     let (width, height) = size(display);
     let stride = BackdropPicture::stride(width);
@@ -153,14 +209,14 @@ pub fn compose(
     };
     let picture = (image.width(), image.height());
     match fit {
-        Fit::Center => center(image, (width, height), &mut pixels, stride),
+        Fit::Center => center(image, (width, height), &mut pixels, stride, anchor),
         Fit::Tile => tile(image, (width, height), &mut pixels, stride),
         Fit::Span => {
             let part = span_part(picture, display, desktop);
             scale_into(image, part, (0, 0, width, height), &mut pixels, stride);
         }
         Fit::Cover | Fit::Contain | Fit::Stretch => {
-            let (part, place) = fit.parts(picture, (width, height));
+            let (part, place) = fit.parts(picture, (width, height), anchor);
             scale_into(image, part, place, &mut pixels, stride);
         }
     }
@@ -195,12 +251,25 @@ fn put_row(from: &[u8], to: &mut [u8]) {
     }
 }
 
-/// Puts `image` in its own size in the middle of a display of `width` by
-/// `height`, cutting off what is larger.
-fn center(image: &RgbImage, (width, height): (u32, u32), pixels: &mut [u8], stride: usize) {
+/// Puts `image` in its own size in a display of `width` by `height`, in
+/// the middle or where `anchor` says, cutting off what is larger.
+fn center(
+    image: &RgbImage,
+    (width, height): (u32, u32),
+    pixels: &mut [u8],
+    stride: usize,
+    anchor: Anchor,
+) {
     let (wide, high) = (i64::from(image.width()), i64::from(image.height()));
-    let left = (i64::from(width) - wide) / 2;
-    let top = (i64::from(height) - high) / 2;
+    let place = |share: f32, left_over: i64| {
+        if share == 0.5 {
+            left_over / 2
+        } else {
+            Anchor::offset(share, left_over as f32).round() as i64
+        }
+    };
+    let left = place(anchor.x, i64::from(width) - wide);
+    let top = place(anchor.y, i64::from(height) - high);
     let columns = left.max(0)..(left + wide).min(i64::from(width));
     let rows = top.max(0)..(top + high).min(i64::from(height));
     if columns.is_empty() {
@@ -290,73 +359,235 @@ pub fn shares(from: u32, to: u32) -> Vec<(usize, Vec<f32>)> {
 /// Scales the `part` of `image` into the `place` of a picture whose rows
 /// of `stride` bytes are `pixels`.
 fn scale_into(image: &RgbImage, part: Part, place: Part, pixels: &mut [u8], stride: usize) {
-    let (left, top, wide, high) = part;
     let (place_left, place_top, place_wide, place_high) = place;
-    if wide == 0 || high == 0 || place_wide == 0 || place_high == 0 {
-        return;
-    }
-    let across = shares(wide, place_wide);
-    let down = shares(high, place_high);
-    let source = image.as_raw();
-    let source_row = image.width() as usize * 3;
     let row = place_wide as usize * 3;
-    let rows = pixels.chunks_exact_mut(stride).skip(place_top as usize);
-    let rows = rows.map(|line| &mut line[place_left as usize * 3..][..row]);
-    // Rows of the source scaled across, with their number, kept as long
-    // as a row of the picture is still mixed from them.
-    let mut scaled: VecDeque<(usize, Vec<f32>)> = VecDeque::new();
-    let mut mixed = vec![0.; row];
-    for ((first, shares), out) in down.iter().zip(rows) {
-        while scaled.front().is_some_and(|(number, _)| number < first) {
-            scaled.pop_front();
+    let mut rows = pixels.chunks_exact_mut(stride).skip(place_top as usize);
+    let source = Source {
+        bytes: image.as_raw(),
+        stride: image.width() as usize * 3,
+        // Windows expects blue first.
+        swapped: true,
+    };
+    source.scale(part, (place_wide, place_high), |mixed| {
+        if let Some(line) = rows.next() {
+            let out = &mut line[place_left as usize * 3..][..row];
+            for (to, from) in out.iter_mut().zip(mixed) {
+                *to = from.round().clamp(0., 255.) as u8;
+            }
         }
-        let mut next = scaled.back().map_or(*first, |(number, _)| number + 1);
-        while next < first + shares.len() {
-            let start = (top as usize + next) * source_row + left as usize * 3;
-            let line = &source[start..start + wide as usize * 3];
-            let mut wide_row = vec![0.; row];
-            for ((first, shares), to) in across.iter().zip(wide_row.as_chunks_mut::<3>().0) {
-                for (share, from) in shares.iter().zip(line[first * 3..].as_chunks::<3>().0) {
-                    // Windows expects blue first.
-                    to[0] += share * f32::from(from[2]);
-                    to[1] += share * f32::from(from[1]);
-                    to[2] += share * f32::from(from[0]);
+    });
+}
+
+/// Pixels of three bytes each to scale from: rows of `stride` bytes, and
+/// whether the first and the third byte of a pixel change places on the
+/// way.
+struct Source<'a> {
+    bytes: &'a [u8],
+    stride: usize,
+    swapped: bool,
+}
+
+impl Source<'_> {
+    /// Scales the `part` of the pixels to `wide_to` by `high_to`, and
+    /// gives each row made to `put`, from the top, three numbers a pixel.
+    fn scale(&self, part: Part, (wide_to, high_to): (u32, u32), mut put: impl FnMut(&[f32])) {
+        let (left, top, wide, high) = part;
+        if wide == 0 || high == 0 || wide_to == 0 || high_to == 0 {
+            return;
+        }
+        let across = shares(wide, wide_to);
+        let down = shares(high, high_to);
+        let row = wide_to as usize * 3;
+        let order = if self.swapped { [2, 1, 0] } else { [0, 1, 2] };
+        // Rows of the source scaled across, with their number, kept as
+        // long as a row of the picture is still mixed from them.
+        let mut scaled: VecDeque<(usize, Vec<f32>)> = VecDeque::new();
+        let mut mixed = vec![0.; row];
+        for (first, shares) in &down {
+            while scaled.front().is_some_and(|(number, _)| number < first) {
+                scaled.pop_front();
+            }
+            let mut next = scaled.back().map_or(*first, |(number, _)| number + 1);
+            while next < first + shares.len() {
+                let start = (top as usize + next) * self.stride + left as usize * 3;
+                let line = &self.bytes[start..start + wide as usize * 3];
+                let mut wide_row = vec![0.; row];
+                for ((first, shares), to) in across.iter().zip(wide_row.as_chunks_mut::<3>().0) {
+                    for (share, from) in shares.iter().zip(line[first * 3..].as_chunks::<3>().0) {
+                        for (to, &at) in to.iter_mut().zip(&order) {
+                            *to += share * f32::from(from[at]);
+                        }
+                    }
+                }
+                scaled.push_back((next, wide_row));
+                next += 1;
+            }
+            mixed.fill(0.);
+            for (share, (_, line)) in shares.iter().zip(&scaled) {
+                for (to, from) in mixed.iter_mut().zip(line) {
+                    *to += share * from;
                 }
             }
-            scaled.push_back((next, wide_row));
-            next += 1;
-        }
-        mixed.fill(0.);
-        for (share, (_, line)) in shares.iter().zip(&scaled) {
-            for (to, from) in mixed.iter_mut().zip(line) {
-                *to += share * from;
-            }
-        }
-        for (to, from) in out.iter_mut().zip(&mixed) {
-            *to = from.round().clamp(0., 255.) as u8;
+            put(&mixed);
         }
     }
+}
+
+/// The size of a picture of `width` by `height` made no larger than
+/// `longest` on its longer side, its shape kept.
+pub fn shrunk_size(width: u32, height: u32, longest: u32) -> (u32, u32) {
+    let long = width.max(height);
+    if long <= longest || long == 0 {
+        return (width.max(1), height.max(1));
+    }
+    let scale = f64::from(longest) / f64::from(long);
+    let side = |length: u32| ((f64::from(length) * scale).round() as u32).max(1);
+    (side(width), side(height))
+}
+
+/// `picture` as a still for the interface to draw: no larger than
+/// `longest` on its longer side, a pixel being blue, green, red and alpha
+/// as GPUI takes it.
+pub fn still(picture: &BackdropPicture, longest: u32) -> image::RgbaImage {
+    let (width, height) = picture.size();
+    let (wide, high) = shrunk_size(width, height, longest);
+    let mut out = Vec::with_capacity(wide as usize * high as usize * 4);
+    let source = Source {
+        bytes: picture.pixels(),
+        stride: BackdropPicture::stride(width),
+        swapped: false,
+    };
+    source.scale((0, 0, width, height), (wide, high), |mixed| {
+        for pixel in mixed.as_chunks::<3>().0 {
+            let byte = |value: f32| value.round().clamp(0., 255.) as u8;
+            out.extend([byte(pixel[0]), byte(pixel[1]), byte(pixel[2]), 255]);
+        }
+    });
+    out.resize(wide as usize * high as usize * 4, 255);
+    image::RgbaImage::from_raw(wide, high, out).expect("the still has all its pixels")
 }
 
 /// The part of a picture of `width` by `height` pixels that has the shape
 /// of `over_width` by `over_height` and is as large as can be, in the
 /// middle of the picture: its left, top, width and height.
 pub fn covering_part(width: u32, height: u32, over_width: u32, over_height: u32) -> Part {
+    covering_part_at(width, height, over_width, over_height, Anchor::default())
+}
+
+/// The part [`covering_part`] gives, with what is cut off shared out on
+/// the two sides as `anchor` says instead of evenly.
+pub fn covering_part_at(
+    width: u32,
+    height: u32,
+    over_width: u32,
+    over_height: u32,
+    anchor: Anchor,
+) -> Part {
     let (wide, high) = (u64::from(width), u64::from(height));
     let (over_wide, over_high) = (u64::from(over_width.max(1)), u64::from(over_height.max(1)));
+    let start = |share: f32, left_over: u32| {
+        (Anchor::offset(share, left_over as f32).round() as u32).min(left_over)
+    };
     if wide * over_high > high * over_wide {
         // Wider in shape: the sides go.
         let kept = ((high * over_wide / over_high) as u32).clamp(1, width);
-        ((width - kept) / 2, 0, kept, height)
+        let left = if anchor.x == 0.5 {
+            (width - kept) / 2
+        } else {
+            start(anchor.x, width - kept)
+        };
+        (left, 0, kept, height)
     } else {
         let kept = ((wide * over_high / over_wide) as u32).clamp(1, height);
-        (0, (height - kept) / 2, width, kept)
+        let top = if anchor.y == 0.5 {
+            (height - kept) / 2
+        } else {
+            start(anchor.y, height - kept)
+        };
+        (0, top, width, kept)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The picture of a display without adjustments.
+    fn compose(
+        image: Option<&RgbImage>,
+        display: ScreenRect,
+        desktop: ScreenRect,
+        fit: Fit,
+        ground: Ground,
+    ) -> BackdropPicture {
+        super::compose(
+            image,
+            display,
+            desktop,
+            (fit, ground),
+            &Adjustments::default(),
+        )
+    }
+
+    #[test]
+    fn a_cut_picture_keeps_to_its_place() {
+        // A wide picture on a square display: what is cut goes from the
+        // right only, or from the left only.
+        let left = Anchor { x: 0., y: 0.5 };
+        let right = Anchor { x: 1., y: 0.5 };
+        assert_eq!(
+            covering_part_at(8000, 2000, 1000, 1000, left),
+            (0, 0, 2000, 2000)
+        );
+        assert_eq!(
+            covering_part_at(8000, 2000, 1000, 1000, right),
+            (6000, 0, 2000, 2000)
+        );
+        let top = Anchor { x: 0.5, y: 0. };
+        assert_eq!(
+            covering_part_at(4000, 6000, 2000, 1000, top),
+            (0, 0, 4000, 2000)
+        );
+        // Contained, the room left beside it lies on one side.
+        let (_, place) = Fit::Contain.parts((8, 4), (4, 4), Anchor { x: 0.5, y: 1. });
+        assert_eq!(place, (0, 2, 4, 2));
+        // Centered in its own size, it keeps to a corner.
+        let image = RgbImage::from_pixel(2, 2, image::Rgb([9, 9, 9]));
+        let display = frame(0, 0, 4, 4);
+        let adjust = Adjustments {
+            anchor: Anchor { x: 1., y: 1. },
+            ..Adjustments::default()
+        };
+        let red = [200, 0, 0];
+        let shown = super::compose(
+            Some(&image),
+            display,
+            display,
+            (Fit::Center, Ground::Solid(red)),
+            &adjust,
+        );
+        assert_eq!(row(&shown, 3), [red, red, [9; 3], [9; 3]]);
+        assert_eq!(row(&shown, 1), [red; 4]);
+    }
+
+    #[test]
+    fn a_still_is_no_larger_than_asked_and_keeps_its_shape() {
+        assert_eq!(shrunk_size(3840, 2160, 1920), (1920, 1080));
+        assert_eq!(shrunk_size(1000, 500, 1920), (1000, 500));
+        assert_eq!(shrunk_size(500, 4000, 1000), (125, 1000));
+        let display = frame(0, 0, 8, 4);
+        let picture = compose(
+            None,
+            display,
+            display,
+            Fit::Cover,
+            Ground::Solid([10, 20, 30]),
+        );
+        let small = still(&picture, 4);
+        assert_eq!(small.dimensions(), (4, 2));
+        // Blue first, and wholly opaque.
+        assert!(small.pixels().all(|pixel| pixel.0 == [30, 20, 10, 255]));
+    }
 
     fn frame(left: i32, top: i32, width: i32, height: i32) -> ScreenRect {
         ScreenRect {
@@ -407,15 +638,15 @@ mod tests {
         // Twice as wide as high, on a square display.
         let image = RgbImage::from_fn(8, 4, |x, _| image::Rgb([if x < 4 { 40 } else { 200 }; 3]));
         assert_eq!(
-            Fit::Cover.parts((8, 4), (4, 4)),
+            Fit::Cover.parts((8, 4), (4, 4), Anchor::default()),
             ((2, 0, 4, 4), (0, 0, 4, 4))
         );
         assert_eq!(
-            Fit::Contain.parts((8, 4), (4, 4)),
+            Fit::Contain.parts((8, 4), (4, 4), Anchor::default()),
             ((0, 0, 8, 4), (0, 1, 4, 2))
         );
         assert_eq!(
-            Fit::Stretch.parts((8, 4), (4, 4)),
+            Fit::Stretch.parts((8, 4), (4, 4), Anchor::default()),
             ((0, 0, 8, 4), (0, 0, 4, 4))
         );
 
