@@ -1272,9 +1272,13 @@ impl WindowList {
 
     /// Tells Windows where the windows of each button minimize to: the
     /// button, on the screen. `frame` is where the surface is, `scale` its
-    /// physical pixels per logical one.
+    /// physical pixels per logical one. Windows keeps one place for each
+    /// window, so a dock that shows the windows of every display answers
+    /// only for those of its own, and each window minimizes to the dock
+    /// beside it.
     fn tell_minimize_targets(&mut self, frame: ScreenRect, scale: f32) {
         let physical = |length: Pixels| (length / px(1.) * scale).round() as i32;
+        let display = self.display;
         for item in &mut self.items {
             let target = item.bounds.get().filter(|_| !item.leaving).map(|bounds| {
                 let left = frame.left + physical(bounds.origin.x);
@@ -1286,7 +1290,11 @@ impl WindowList {
                     bottom: top + physical(bounds.size.height),
                 }
             });
-            let wanted = target.map(|rect| (rect, item.ids()));
+            let here: Vec<AppWindowId> = { item.windows.iter() }
+                .filter(|window| display.is_none_or(|display| window.display == display))
+                .map(|window| window.id)
+                .collect();
+            let wanted = target.map(|rect| (rect, here));
             if wanted == item.minimizes_to {
                 continue;
             }
@@ -1295,7 +1303,10 @@ impl WindowList {
                     .as_ref()
                     .map(|(_, ids)| ids.as_slice())
                     .unwrap_or(&[]);
-                for id in before.iter().filter(|id| !now.contains(id)) {
+                // A window that went to another display is left to the
+                // dock there, which may have answered for it already.
+                let moved = |id: &AppWindowId| target.is_some() && item.holds(*id);
+                for id in before.iter().filter(|id| !now.contains(id) && !moved(id)) {
                     ShellHost::set_min_rect(*id, None);
                 }
             }
