@@ -311,10 +311,28 @@ impl FilesView {
                 view.update(cx, |view, cx| view.select_when_loaded(names, cx));
             }
         };
+        let this = view.downgrade();
+        let handle = self.handle;
+        let navigate = move |location: Location, cx: &mut gpui::App| {
+            let Some(view) = this.upgrade() else {
+                return;
+            };
+            let pane = view.read(cx).pane().clone();
+            // A window that closed in the meantime goes nowhere.
+            {
+                handle.update(cx, |_, window, cx| {
+                    pane.update(cx, |pane, cx| pane.go(location, window, cx))
+                })
+            }
+            .ok();
+        };
+        let pane = self.pane().read(cx);
         FilesWindow {
             handle: self.handle,
             hwnd: self.hwnd,
-            folder: self.pane().read(cx).folder(),
+            folder: pane.folder(),
+            parsing: pane.location().parsing_name(),
+            navigate: Rc::new(navigate),
             select: Rc::new(select),
         }
     }

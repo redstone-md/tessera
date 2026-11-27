@@ -155,7 +155,7 @@ impl Switcher {
     /// Alt+Shift+` where the keys of Windows are in use, as when Tessera
     /// is the shell and Explorer, whose switcher Windows opens for Alt+Tab,
     /// does not run.
-    fn action() -> Action {
+    pub(crate) fn action() -> Action {
         Action::new(|arg, cx| {
             if let Some((back, through)) = step_of(arg) {
                 let held = Actions::held(cx).unwrap_or_else(Modifiers::down_now);

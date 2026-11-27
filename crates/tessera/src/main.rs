@@ -60,6 +60,7 @@ mod tip;
 mod tray_settings;
 mod ui;
 mod wallpaper;
+mod widget_options;
 mod window_actions;
 mod window_menu;
 mod workspaces;

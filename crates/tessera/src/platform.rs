@@ -100,6 +100,11 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
+#[allow(
+    unused_imports,
+    reason = "published by the jobs on files, read by notifications-rich"
+)]
+pub use win32::{FileJobEvent, FileJobState, FileJobs};
 pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use win32::{FilesStart, start_detached};
 pub use win32::{
@@ -120,6 +125,11 @@ pub use win32::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+#[allow(
+    unused_imports,
+    reason = "bound by shortcuts-editor, reported by window-rules-editor"
+)]
+pub use win32::{MouseBinding, MouseButtonName, MouseButtons};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{Poster, VideoLook, VideoOverlay};
 pub use win32::{PowerMode, PowerModeState};

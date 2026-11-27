@@ -21,13 +21,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     OBJID_WINDOW, TranslateMessage, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
-use super::AppWindowId;
+use super::{AppWindowId, ScreenRect};
 
-/// The beginning or the end of a window being moved or resized.
+/// The beginning or the end of a window being moved or resized, and the
+/// frames it has while it is resized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MoveEvent {
     Start(AppWindowId),
     End(AppWindowId),
+    /// The window being resized has this frame now; only between its Start
+    /// and its End, at most 60 times a second. Fired by edges-snap's hook.
+    #[allow(dead_code, reason = "fired once edges-snap watches the resizing")]
+    Resizing {
+        id: AppWindowId,
+        frame: ScreenRect,
+    },
 }
 
 /// Reports the windows of other programs that the user moves or resizes.

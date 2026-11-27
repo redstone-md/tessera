@@ -55,6 +55,7 @@ use crate::ui::{icon, one_line};
 use super::sidebar::ICON_HOME;
 
 mod header;
+mod search_bar;
 mod verbs;
 
 pub(super) use crate::shell_entries::within;
