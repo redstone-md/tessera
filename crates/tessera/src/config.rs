@@ -12,12 +12,15 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::banners::NotificationsConfig;
+use crate::corners::CornerConfig;
 use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::files::FilesConfig;
 use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
 use crate::platform::ScreenEdge;
+use crate::rules::RuleConfig;
+use crate::snap::SnapConfig;
 use crate::switcher::SwitcherConfig;
 use crate::tiling::TilingConfig;
 use crate::wallpaper::WallpaperConfig;
@@ -372,6 +375,16 @@ pub struct Config {
     /// What Tessera does as the shell of the session.
     #[serde(default)]
     pub shell: crate::session::ShellConfig,
+    /// How windows snap to the edges, zones and layouts of the displays.
+    #[serde(default)]
+    pub snap: SnapConfig,
+    /// What is done to the windows each rule names.
+    #[serde(default, rename = "rule")]
+    pub rules: Vec<RuleConfig>,
+    /// The corners and edges of the displays that do something when the
+    /// pointer rests there.
+    #[serde(default, rename = "corner")]
+    pub corners: Vec<CornerConfig>,
 }
 
 impl Config {

@@ -571,3 +571,17 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # Settings: the button of the menu of Win+X (winx-hotkeys).
 "Win+X menu" = "Win+X-Menü"
+# Window snapping, rules, hot corners and the window menu.
+"Choose a window for this space" = "Wählen Sie ein Fenster für diesen Bereich"
+"Keep above other windows" = "Über anderen Fenstern halten"
+"Stop keeping above other windows" = "Nicht mehr über anderen Fenstern halten"
+"Window opacity" = "Deckkraft des Fensters"
+"Move to the next display" = "Auf den nächsten Bildschirm verschieben"
+"Snap to the left half" = "An die linke Hälfte andocken"
+"Snap to the right half" = "An die rechte Hälfte andocken"
+"Restore the size of the window" = "Fenstergröße wiederherstellen"
+"Maximize the window" = "Fenster maximieren"
+"Minimize the window" = "Fenster minimieren"
+"Close the window" = "Fenster schließen"
+"Create a rule for this window" = "Regel für dieses Fenster erstellen"
+"Move to workspace" = "In Arbeitsbereich verschieben"

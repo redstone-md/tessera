@@ -13,6 +13,7 @@ use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 use crate::actions::Actions;
 use crate::banners::Banners;
 use crate::config::{Config, Displays};
+use crate::corners::Corners;
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
 use crate::files::Files;
@@ -27,6 +28,8 @@ use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
+use crate::rules::Rules;
+use crate::snap::Snapper;
 use crate::startup::Startup;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::switcher::Switcher;
@@ -91,6 +94,9 @@ impl Shell {
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
         Startup::start(&config.startup, cx);
+        Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
+        Rules::start(&config.rules, cx);
+        Corners::start(&config.corners, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -297,6 +303,9 @@ impl Shell {
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
         Startup::configure(&config.startup, cx);
+        Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
+        Rules::configure(&config.rules, cx);
+        Corners::configure(&config.corners, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

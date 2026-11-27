@@ -26,6 +26,7 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 raw-window-handle = "0.6"
+regex = "1"
 # Reads the manifests of packaged applications for their startup tasks.
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }

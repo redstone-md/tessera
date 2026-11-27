@@ -584,6 +584,13 @@ pub struct Tiler {
     /// Counts the tasks that were started to keep the tiles; only the
     /// latest goes on.
     task: u64,
+    /// What the window rules say: `true` for a window that is tiled
+    /// whatever the configuration of tiling says of it, `false` for one
+    /// that is left alone.
+    ruled: HashMap<AppWindowId, bool>,
+    /// The windows the rules have Windows draw no border around, which
+    /// the tiling neither colors nor gives their border back.
+    borderless: HashSet<AppWindowId>,
 }
 
 impl Global for Tiler {}
@@ -603,6 +610,8 @@ impl Tiler {
             marked: None,
             carried: false,
             task: 0,
+            ruled: HashMap::new(),
+            borderless: HashSet::new(),
         });
         cx.on_app_quit(|cx| {
             cx.global_mut::<Self>().put_back_at_once();
@@ -681,6 +690,52 @@ impl Tiler {
         .detach();
     }
 
+    /// Takes over what the window rules say of tiling windows, by window,
+    /// and which windows they have drawn without a border.
+    pub fn rule(ruled: HashMap<AppWindowId, bool>, borderless: HashSet<AppWindowId>, cx: &mut App) {
+        if let Some(this) = cx.try_global::<Self>()
+            && (this.ruled != ruled || this.borderless != borderless)
+        {
+            let this = cx.global_mut::<Self>();
+            this.ruled = ruled;
+            this.borderless = borderless;
+        }
+    }
+
+    /// Whether `window` is one to tile, as the rules say or else the
+    /// configuration of tiling.
+    fn takes(&self, window: &AppWindow) -> bool {
+        match self.ruled.get(&window.id) {
+            Some(&tiled) => tiled,
+            None => self.config.takes(window),
+        }
+    }
+
+    /// Whether the window `id` is tiled now, so that it is left to the
+    /// tiling.
+    pub fn manages(id: AppWindowId, cx: &App) -> bool {
+        let enabled = cx
+            .try_global::<TilingMode>()
+            .is_some_and(|mode| mode.enabled);
+        enabled
+            && cx
+                .try_global::<Self>()
+                .is_some_and(|this| this.order.contains(&id))
+    }
+
+    /// Whether `window` is one the tiling places while it is on, or will
+    /// as soon as it can.
+    pub fn tiles(window: &AppWindow, cx: &App) -> bool {
+        let enabled = cx
+            .try_global::<TilingMode>()
+            .is_some_and(|mode| mode.enabled);
+        let taken = cx.try_global::<Self>().is_some_and(|this| {
+            this.order.contains(&window.id)
+                || (this.takes(window) && !this.floating.contains(&window.id))
+        });
+        enabled && taken
+    }
+
     /// The window in front and the window on the side `toward` of it,
     /// among the windows tiling covers, and whether both are on one
     /// display.
@@ -688,7 +743,7 @@ impl Tiler {
         let front = AppWindowId::foreground()?;
         let windows: Vec<AppWindow> = AppWindow::enumerate()
             .into_iter()
-            .filter(|window| self.config.takes(window))
+            .filter(|window| self.takes(window))
             .filter(|window| window.id.is_tileable())
             .collect();
         let display = |id| Some(windows.iter().find(|window| window.id == id)?.display);
@@ -823,7 +878,7 @@ impl Tiler {
         let front = (enabled && self.config.border)
             .then(AppWindowId::foreground)
             .flatten()
-            .filter(|id| self.order.contains(id));
+            .filter(|id| self.order.contains(id) && !self.borderless.contains(id));
         if self.marked.as_ref().map(|marked| marked.id) != front {
             self.unmark();
             self.marked = front.map(|id| {
@@ -848,10 +903,14 @@ impl Tiler {
         !marked.shown.is_settled()
     }
 
-    /// Gives the window whose border is colored its own border back.
+    /// Gives the window whose border is colored its own border back, or
+    /// none, where the rules say it has none.
     fn unmark(&mut self) {
         if let Some(marked) = self.marked.take() {
-            marked.id.set_border(None);
+            match self.borderless.contains(&marked.id) {
+                true => marked.id.hide_border(),
+                false => marked.id.set_border(None),
+            };
         }
     }
 
@@ -859,7 +918,7 @@ impl Tiler {
     fn arrange(&mut self, layout: TileLayout, spring: SpringSpec) {
         let windows: Vec<AppWindow> = AppWindow::enumerate()
             .into_iter()
-            .filter(|window| self.config.takes(window))
+            .filter(|window| self.takes(window))
             .filter(|window| window.id.is_tileable())
             .collect();
         let present = |id: &AppWindowId| windows.iter().any(|window| window.id == *id);

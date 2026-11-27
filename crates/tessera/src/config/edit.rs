@@ -353,6 +353,26 @@ impl ConfigFile {
         true
     }
 
+    /// Appends `rule` as a `[[rule]]`, with `note` as a comment above it.
+    pub fn add_rule(&mut self, mut rule: Table, note: &str) -> bool {
+        let item = self
+            .document
+            .entry("rule")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(rules) = item.as_array_of_tables_mut() else {
+            return false;
+        };
+        let note: String = note.lines().map(|line| format!("# {line}\n")).collect();
+        rule.decor_mut().set_prefix(format!("\n{note}"));
+        rules.push(rule);
+        true
+    }
+
+    /// Where the user's file is written.
+    pub fn location() -> Result<PathBuf, String> {
+        Self::path()
+    }
+
     /// Appends a card with the clock to the desktop.
     pub fn add_card(&mut self) -> bool {
         let item = self

@@ -22,6 +22,7 @@ pub use win32::RecycledItem;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::on_resizing_border;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::{
@@ -45,6 +46,9 @@ pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, s
     reason = "for the notifications that show the balloons of the tray"
 )]
 pub use win32::{Balloon, BalloonEvent, BalloonKind};
+pub use win32::{
+    Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
+};
 #[allow(
     unused_imports,
     reason = "for the file manager and the desktop, which drag files out and take drops"

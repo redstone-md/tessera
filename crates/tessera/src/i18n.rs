@@ -1116,6 +1116,29 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     // Settings: the button of the menu of Win+X (winx-hotkeys).
     ("Win+X menu", "Меню Win+X"),
+    // Window snapping, rules, hot corners and the window menu.
+    (
+        "Choose a window for this space",
+        "Выберите окно для этого места",
+    ),
+    ("Keep above other windows", "Держать поверх других окон"),
+    (
+        "Stop keeping above other windows",
+        "Не держать поверх других окон",
+    ),
+    ("Window opacity", "Непрозрачность окна"),
+    ("Move to the next display", "Переместить на следующий экран"),
+    ("Snap to the left half", "Прикрепить к левой половине"),
+    ("Snap to the right half", "Прикрепить к правой половине"),
+    ("Restore the size of the window", "Восстановить размер окна"),
+    ("Maximize the window", "Развернуть окно"),
+    ("Minimize the window", "Свернуть окно"),
+    ("Close the window", "Закрыть окно"),
+    (
+        "Create a rule for this window",
+        "Создать правило для этого окна",
+    ),
+    ("Move to workspace", "Перенести на рабочий стол"),
 ];
 
 #[cfg(test)]
