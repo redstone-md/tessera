@@ -1,5 +1,9 @@
 # The layout Tessera uses when %APPDATA%\tessera\config.toml does not exist.
 # Copy this file there to change it; Tessera applies it again whenever it is written.
+# The settings (the popup "settings") set most keys below through their rows and
+# keep the comments of the file; before each change, config.toml is copied to
+# %APPDATA%\tessera\backups (once a minute at most, the newest 20 are kept),
+# and Settings > General > Backups exports, imports, restores or resets it.
 
 # Name of a theme file, %APPDATA%\tessera\themes\<name>.toml. Optional.
 # The name "accent" is no file: it derives the colors from the accent color

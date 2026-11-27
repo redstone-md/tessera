@@ -40,14 +40,14 @@ choices = [
 | `font` | The family in use, which opens a list of the installed font families with a field to narrow it down. An optional font has a button that takes it out. | The name of a family |
 | `list` | Rows of texts, with a handle to drag a row to another place, a button that takes it out, and **Add**. | For an extension the text `a, b, c`; for Tessera itself a TOML array. An item may not hold `,` or `;`. |
 | `pairs` | Rows of a name and a value, the same way. | The text `Tokyo=+9; London=+0` |
-| `time` | A field for now; a control of its own is not done yet. | A time of day `HH:MM`, two digits each, from `00:00` to `23:59` |
-| `sides` | A field for now, which takes one number; a control of its own is not done yet. `min` and `max` bound each number. | A number for every side, or a table `{ top, right, bottom, left }` of numbers, a side left out being 0 |
+| `time` | A field between buttons that step the hour (left) and the minutes, to the next or the last full five (right), around the clock. What is typed is written when Enter is pressed or the field is left, not while typing pauses, and only as a whole time; `7:30` is written `07:30`. | A time of day `HH:MM`, two digits each, from `00:00` to `23:59` |
+| `sides` | **Every side** with one field, or **Each side** with a field for top, right, bottom and left. `min` and `max` bound each number. | A number for every side, or a table `{ top, right, bottom, left }` of numbers, a side left out being 0 |
 
-A `list` with `choices` takes only their values as items, and its `min` and `max` bound how many items it has (`min = 2` and `max = 2` for exactly two); its rows are not drawn as choices yet.
+A `list` with `choices` is a choice of several: a box for each choice, ticked while the list holds it, written in the order of the choices whatever order they were ticked in; an optional one leaves the file when no box is ticked. A `list` with `min` and `max` bounds how many items it has (`min = 2` and `max = 2` for exactly two): it shows at least `min` rows, offers no **Add** at `max`, keeps its last `min` rows, and is written only once it has enough items.
 
 There is no kind for passwords, tokens or keys: those an extension reads stay in `config.toml`, written by hand, and its description says so.
 
-What is typed in a field is written once typing pauses for 300 ms, when Enter is pressed or when the field is left; Escape gives back what the file holds. A stepper writes once per click. A value that does not fit its declaration is said above the cards and not written. Every setting the file sets has a button that takes it out again (Reset), and a card whose settings the file sets has **Reset all**.
+What is typed in a field is written once typing pauses for 300 ms, when Enter is pressed or when the field is left; Escape gives back what the file holds. A stepper writes once per click. A value that does not fit its declaration is said under its row and not written. Before anything is written, the file as the change leaves it is read as the shell reads it; what the shell could not use (a key the configuration does not know, a value its types refuse) is not written either, and why is said under the row, so that one bad value never makes the whole configuration fail to load. Every setting the file sets has a button that takes it out again (Reset), and a card whose settings the file sets has **Reset all**.
 
 ## Lists and pairs for extensions
 
@@ -93,3 +93,59 @@ A setting of a theme changes tokens of the theme, named by their path in a theme
 - A choice whose choices carry an `overlay` table brings the tokens of the choice made, written as in a theme file: `{ seed = "#3d7bd9" }`, or `{ spacing = { tiny = 3, small = 6, medium = 12 } }`.
 
 A setting of a theme that names no token, or a token that does not exist, makes the theme unusable for the registry, which refuses to install it, and is left out where the theme is already installed. Lists, pairs and paths are not kinds a token has. The settings show what a setting of a theme affects by group: Colors, Corners, Spacing, Font, Motion, Bar, Dock, Calendar, Sliders, Meters and Launcher. How the values are applied, and the settings of the built-in theme, are in [THEMES.md](THEMES.md).
+
+## Rows of the built-in settings
+
+Tessera's own settings are declared the same way, in the rows files of `crates/tessera/src/modules/settings/rows/`, one file per part of Tessera (`core.toml` for the settings, others for each package), listed in `ROW_FILES` of `rows.rs`. The settings draw every file with the controls above: one renderer for the settings of Tessera, of extensions, of themes and of a placed widget.
+
+```toml
+[[card]]
+section = "Windows"          # the English title of a section, see below
+title = "Tiling"             # cards with one title in one section are one card
+table = "tiling"             # its rows write keys of [tiling]; none for keys at the top
+# widget = "clock"           # instead: its rows set an option of every clock widget
+search = ["Tiles"]           # more English words search finds the card by
+
+[[card.row]]                 # an entry as above; `key` is a dotted path below `table`
+key = "gap"
+kind = "number"
+label = "Gap"
+min = 0
+max = 48
+step = 4
+default = 0
+optional = true
+unset_label = "Default"
+
+[[card.link]]                # a row that runs an action instead of writing a key
+label = "Open the configuration file"
+description = "config.toml, in the program that opens TOML files."
+action = "open"
+arg = "{config}"             # `{config}` stands for the path of config.toml
+
+[[card]]
+section = "Wallpaper"
+title = "Wallpaper settings"
+page = "wallpaper-settings"  # a widget drawn inside the section as a page
+
+[[action]]                   # what the Shortcuts page calls a registered action
+name = "example"
+title = "Example"
+arg = "A name"               # optional: what its argument is, in English
+```
+
+Plain labels, descriptions, unset labels, choice labels, link labels, card titles, search words and `[[action]]` titles are English texts of the RUSSIAN table in `i18n.rs` (and so of every language file); a text that is not to be translated, such as `14:05`, is written `{ en = "14:05" }`. A row writes its value with the comments of the file kept: a dotted key makes the tables on its way and takes them away once they are empty, and an option of a widget is set on every widget of that name, on the bars, in both columns of the popups and on the cards of the desktop. A row that is not optional and is set to its `default` leaves the file. A card whose widget the layout lacks says so instead of its rows.
+
+**Sections** are, in the order of the rail: General, Bars, Desktop, Wallpaper, Widgets, Dock, Tray, Notifications, Windows, Window rules, Screen edges, Workspaces, Keys, Search, Files, Clipboard and screenshots, Displays and power, Session, Themes, Extensions and About. `Settings::open_at(section, item)` takes the title in any case, spaces included. A section that has no card to draw (no rows, no link whose action is registered, no page whose widget is registered) is left out of the rail. Bars, Desktop, Dock, Themes and Extensions keep their cards drawn by hand above those of the rows files; Keys keeps its key cards until a `shortcuts` widget is registered.
+
+**Pages** are widgets drawn inside their section: built with the option `item` set to the item `open_at` was given, once each time the section is shown, and dropped when another is shown; only while that widget is registered. A page that is also a popup of its own is drawn at the height of that popup.
+
+**Items** of `open_at`: a card by its English title, a row by its path (`tiling.gap`, or `clock.format` for an option of widgets), an extension by its identifier, a theme by its name. In Widgets, `surface/<n>/<start|center|end>/<i>`, `popup/<name>/<i>` (counting `content` and then `side`), `card/<i>` and `card/<i>/<j>` open the card of the options of that one placed widget, lit. For a page, the item is passed to it.
+
+**Lists only the running shell knows** are filled in Rust by one table, `DYNAMIC` of `modules/settings/dynamic.rs`, by the table of a card (`""` for keys at the top, `*` for any table) and the key: the tiling layouts with the layout files of the user, the places of flyouts, the displays (`all`, `primary`, `others` and each display by its name), the installed icon packs and themes, and the interface languages. Their choices come after those the file lists, each once. What they need from the disk or Windows is read away from the thread that draws, when the settings open and again when the marketplace installs or removes something.
+
+**The options of one placed widget** are declared by `crate::widget_options` (`widget_options/*.toml`); the Widgets section lists every widget placed on a bar, in a popup of the configuration file or on a card, and opens a card of its declared options, written for it alone. Options its entry holds that nothing declares are listed as written.
+
+**Checks.** The tests of `modules/settings/builtin.rs` read every rows file: every row of a table or of the top writes a key the configuration reads (its default, or its first choice, its least, false, an empty text or `00:00`, parsed as the whole configuration), a row that is not optional has the default the configuration has without the key, every text is translated, every card names a known section, and no two rows write one key.
+
+**Search** finds every card and row of every section, the cards drawn by hand by their titles, and the installed extensions and themes with what they declare, by what they say in the language shown and in English. A whole word beats the start of a word, which beats any other place, and a label beats a description.
