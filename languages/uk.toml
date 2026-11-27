@@ -735,3 +735,13 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+
+# tiling-layouts: the layouts and the tiling widget.
+"Floating" = "Вільно"
+"BSP" = "Двійковий поділ"
+"Dwindle" = "Спіраль"
+"Ultrawide" = "Надширокий"
+"Centered" = "По центру"
+"Tall" = "Висока"
+"Wide" = "Широка"
+"Three columns" = "Три стовпці"

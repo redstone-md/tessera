@@ -1384,6 +1384,15 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // tiling-layouts: the layouts and the tiling widget.
+    ("Floating", "Свободно"),
+    ("BSP", "Двоичное деление"),
+    ("Dwindle", "Спираль"),
+    ("Ultrawide", "Сверхширокий"),
+    ("Centered", "По центру"),
+    ("Tall", "Высокая"),
+    ("Wide", "Широкая"),
+    ("Three columns", "Три столбца"),
 ];
 
 #[cfg(test)]

@@ -734,3 +734,13 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Kill process" = "Prozess beenden"
 "Media" = "Medien"
 "Personalize" = "Anpassen"
+
+# tiling-layouts: the layouts and the tiling widget.
+"Floating" = "Frei"
+"BSP" = "Binäre Teilung"
+"Dwindle" = "Spirale"
+"Ultrawide" = "Ultrabreit"
+"Centered" = "Zentriert"
+"Tall" = "Hoch"
+"Wide" = "Breit"
+"Three columns" = "Drei Spalten"
