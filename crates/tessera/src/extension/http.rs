@@ -94,6 +94,22 @@ pub fn download(url: &str, limit: u64) -> Result<Vec<u8>, String> {
         .map_err(describe)
 }
 
+/// What is at the HTTPS address `url`, if it is no longer than `limit`,
+/// for an extension: redirects are not followed, so that a permitted host
+/// cannot hand the request on to another one.
+pub fn fetch_bytes(url: &str, limit: u64) -> Result<Vec<u8>, String> {
+    let mut response = agent(0, false).get(url).call().map_err(describe)?;
+    if !response.status().is_success() {
+        return Err(format!("the server answered {}", response.status()));
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()
+        .map_err(describe)
+}
+
 /// Writes what is at the address `url` to `sink` as it arrives, if it is
 /// no longer than `limit`, and says how long it was. Redirects to other
 /// HTTPS addresses are followed.

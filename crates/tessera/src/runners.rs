@@ -322,6 +322,7 @@ impl Runners {
             Box::new(emoji::Emoji),
             Box::new(recent::Recent::new(recent)),
             Box::new(web.fallback()),
+            Box::new(crate::extension::runner::Extensions),
         ];
         let list: Vec<Box<dyn Runner>> = { all.into_iter() }
             .filter(|runner| chosen.contains(&runner.id()))

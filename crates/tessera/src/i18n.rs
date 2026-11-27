@@ -1384,6 +1384,30 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // Wave 2, extension-api: what an extension asks to be allowed.
+    ("know what media is playing", "знать, что играет"),
+    (
+        "play, pause and skip media",
+        "запускать, приостанавливать и переключать медиа",
+    ),
+    (
+        "read the processor, memory, battery and network meters",
+        "читать показания процессора, памяти, батареи и сети",
+    ),
+    ("know the network connection", "знать сетевое подключение"),
+    ("list the open windows", "видеть список открытых окон"),
+    (
+        "bring windows in front, minimize, close and move them",
+        "выводить окна на передний план, сворачивать, закрывать и перемещать их",
+    ),
+    ("know the workspaces", "знать рабочие пространства"),
+    ("read the colors of the theme", "читать цвета темы"),
+    (
+        "open its popups by itself",
+        "самому открывать свои всплывающие окна",
+    ),
+    ("post notices", "публиковать уведомления"),
+    ("do the actions", "выполнять действия"),
 ];
 
 #[cfg(test)]

@@ -3,9 +3,13 @@
 
 /// The contract between Tessera and an extension.
 ///
-/// This interface is unstable: it will change without a compatibility
-/// period until the package version reaches 1.0.0.
-package tessera:extension@0.3.0;
+/// This interface is unstable until the package version reaches 1.0.0.
+/// From 0.3 on, a version only adds: the imports and exports of the world
+/// are names without a version, so a new version adds imports, exports and
+/// node kinds and changes none that are there. Tessera goes on loading a
+/// component built for 0.3, which has none of the exports added in 0.4,
+/// and reads what its `render` returns with the node kinds of 0.3.
+package tessera:extension@0.4.0;
 
 world extension {
     /// A button the user can press.
@@ -13,6 +17,63 @@ world extension {
         label: string,
         /// Passed back to `activate` when the button is pressed.
         action: string,
+    }
+
+    /// Where the picture of an `image` node comes from.
+    variant image-source {
+        /// A PNG or JPEG file, at most 2 MiB of it.
+        bytes(list<u8>),
+        /// The `https://` address of a PNG or JPEG file of at most 2 MiB,
+        /// on a host the manifest lists under `permissions.network`. It is
+        /// fetched once and kept while the widget shows it; redirects are
+        /// not followed.
+        url(string),
+        /// The icon of an application: the path of its program file, or
+        /// the AppUserModelID of a packaged application, as
+        /// `Microsoft.WindowsCalculator_8wekyb3d8bbwe!App`.
+        app(string),
+    }
+
+    /// A picture.
+    record image {
+        source: image-source,
+        /// How high it is drawn, in logical pixels, from 1 to 512; 0 for
+        /// the height of a line of text. The width follows the picture.
+        height: f32,
+    }
+
+    /// A field one line of text is typed into. What is typed comes to
+    /// `activate` as `input-changed:<id>:<text>`, and Enter in the field
+    /// as `submitted:<id>:<text>`.
+    record text-input {
+        /// Made of a-z, 0-9 and `-`, and different from the other inputs,
+        /// sliders and toggles of the widget.
+        id: string,
+        /// What the empty field says.
+        placeholder: string,
+        /// The text the field shows when it is first drawn, and again
+        /// whenever `render` gives a value other than the one before.
+        value: string,
+    }
+
+    /// A track with a handle that sets a number between `min` and `max`.
+    /// A new value comes to `activate` as `slider-changed:<id>:<value>`,
+    /// the value written as a decimal number.
+    record slider {
+        /// Named as the `id` of a text input is.
+        id: string,
+        min: f32,
+        /// Greater than `min`.
+        max: f32,
+        value: f32,
+    }
+
+    /// A switch. A press comes to `activate` as `toggled:<id>:true` or
+    /// `toggled:<id>:false`, the state it was switched to.
+    record toggle {
+        /// Named as the `id` of a text input is.
+        id: string,
+        on: bool,
     }
 
     /// What a node is. Tessera draws every kind with the active theme.
@@ -32,6 +93,24 @@ world extension {
         button(button),
         /// A bar filled to the given share, from 0 to 1.
         progress(f32),
+        /// Added in 0.4: a picture.
+        image(image),
+        /// Added in 0.4: a character of the icon font of the shell,
+        /// Segoe Fluent Icons, such as "\u{e768}" for a triangle that
+        /// plays.
+        icon(string),
+        /// Added in 0.4.
+        text-input(text-input),
+        /// Added in 0.4.
+        slider(slider),
+        /// Added in 0.4.
+        toggle(toggle),
+        /// Added in 0.4: a column at most this many logical pixels high,
+        /// from 1 to 4000, that scrolls what does not fit.
+        scroll(f32),
+        /// Added in 0.4: an empty space that takes what room is left in
+        /// its row or column, pushing what comes after it to the end.
+        spacer,
     }
 
     /// One node of a widget's content tree.
@@ -75,6 +154,159 @@ world extension {
         battery: option<u8>,
     }
 
+    /// How far a piece of media has played, in seconds.
+    record media-position {
+        elapsed: u32,
+        length: u32,
+    }
+
+    /// What a media player tells Windows it plays.
+    record media {
+        title: string,
+        artist: string,
+        /// The application that plays it, as Windows names it.
+        app: string,
+        playing: bool,
+        /// Absent where the player does not tell.
+        position: option<media-position>,
+    }
+
+    /// What `media-control` asks the player of `media-now` to do.
+    enum media-command {
+        play,
+        pause,
+        toggle,
+        next,
+        previous,
+    }
+
+    record battery {
+        /// From 0 to 100.
+        percent: u8,
+        plugged-in: bool,
+    }
+
+    /// The meters of the machine, as Tessera read them last, at most a
+    /// second ago.
+    record meters {
+        /// How busy the processors were, from 0 to 1, since the reading
+        /// before; absent at the first reading.
+        cpu: option<f32>,
+        /// Bytes of memory in use and in all.
+        memory-used: u64,
+        memory-total: u64,
+        /// Absent on a machine without a battery.
+        battery: option<battery>,
+        /// Bytes per second received and sent over every network adapter
+        /// since the reading before; absent at the first reading.
+        received: option<f64>,
+        sent: option<f64>,
+    }
+
+    /// How a network connection reaches its network.
+    variant network-link {
+        wired,
+        /// Wi-Fi, with a signal of 0 to 5 bars.
+        wireless(u8),
+        /// A mobile network, with a signal of 0 to 5 bars.
+        cellular(u8),
+    }
+
+    /// The connection Windows prefers.
+    record network {
+        /// What Windows calls the network, such as the name of a Wi-Fi.
+        name: string,
+        link: network-link,
+        /// Whether the internet is reached, not only the local network.
+        internet: bool,
+    }
+
+    /// A window the user would find in a task switcher.
+    record window-info {
+        /// Names the window to `window-command` for as long as it is open.
+        id: u64,
+        title: string,
+        /// The program file of the window, or the AppUserModelID of a
+        /// packaged application; empty where Windows does not tell.
+        app: string,
+        /// The same number for windows on the same display, for as long
+        /// as the arrangement of the displays is unchanged.
+        display: u32,
+        /// The workspace of Tessera the window lives on, counted from 0;
+        /// absent where Tessera keeps no workspaces of its own, and for
+        /// windows of another display where each display has its own.
+        workspace: option<u32>,
+        minimized: bool,
+        /// Whether the window is in front and takes the keys.
+        focused: bool,
+    }
+
+    /// What `window-command` does to a window.
+    variant window-action {
+        /// Brings it in front, going to its workspace where it lives on
+        /// another one, and restores it when it is minimized.
+        focus,
+        minimize,
+        /// Asks it to close, as its close button does; the application
+        /// may ask the user first, or refuse.
+        close,
+        /// Has it live on the workspace of Tessera at this place, counted
+        /// from 0, without going there.
+        move-to-workspace(u32),
+    }
+
+    /// The workspaces of the display the pointer is on.
+    record workspaces {
+        /// How many there are; Tessera's own, or else the virtual
+        /// desktops of Windows.
+        count: u32,
+        /// The one shown, counted from 0.
+        current: u32,
+        /// What the button of each says: its name, or its number.
+        names: list<string>,
+        /// Whether they are Tessera's own, which `window-command` can move
+        /// windows between, rather than the virtual desktops of Windows.
+        tessera: bool,
+    }
+
+    /// The colors of the active theme, each as `#rrggbb`.
+    record palette {
+        surface: string,
+        surface-highest: string,
+        on-surface: string,
+        on-surface-variant: string,
+        outline: string,
+        primary: string,
+        secondary-container: string,
+    }
+
+    /// What choosing an answer in the launcher does.
+    variant answer-action {
+        /// Calls `run-answer` with the `id` of the answer.
+        run,
+        /// Puts the text on the clipboard.
+        copy(string),
+        /// Opens an `https://` address in the browser.
+        open(string),
+    }
+
+    /// Something an extension offers for what is typed into the launcher.
+    record answer {
+        /// Up to 64 letters, digits and `-`, `_` and `.`; handed to
+        /// `run-answer`.
+        id: string,
+        title: string,
+        /// Said under or beside the title.
+        detail: string,
+        /// A character of the icon font, as for an `icon` node; empty for
+        /// the icon of extensions.
+        icon: string,
+        /// How sure the extension is that this is what is wanted, up to
+        /// 1000; Tessera counts at most 800 of it.
+        score: u16,
+        action: answer-action,
+    }
+
     /// Writes a diagnostic message to the shell's log.
     import log: func(message: string);
 
@@ -110,16 +342,99 @@ world extension {
     /// the reading and fails saying so; ask again on a later `render`.
     import bluetooth-devices: func() -> result<list<bluetooth-device>, string>;
 
+    // Added in 0.4. Each of the imports below fails, saying why, unless
+    // the manifest lists its permission under `permissions.system`, or
+    // the action under `permissions.actions` for `run-action`. While
+    // `answer` runs, the imports that do something (all but those that
+    // only read) fail as well.
+
+    /// What the media player Windows shows controls for plays; none while
+    /// nothing plays. Needs `media`.
+    import media-now: func() -> result<option<media>, string>;
+
+    /// Asks the media player of `media-now` to play, pause, or skip.
+    /// Needs `media-control`.
+    import media-control: func(command: media-command) -> result<_, string>;
+
+    /// The meters of the machine. Needs `meters`.
+    import system-meters: func() -> result<meters, string>;
+
+    /// The connection Windows prefers; none while there is none. Needs
+    /// `network`.
+    import network-state: func() -> result<option<network>, string>;
+
+    /// The windows a task switcher shows, the one in front first. Needs
+    /// `windows`.
+    import windows: func() -> result<list<window-info>, string>;
+
+    /// Does `action` to the window `id` of `windows`. Needs
+    /// `window-control`. It is done once the call into the extension has
+    /// returned.
+    import window-command: func(id: u64, action: window-action) -> result<_, string>;
+
+    /// The workspaces. Needs `workspaces`.
+    import workspace-state: func() -> result<workspaces, string>;
+
+    /// The colors of the active theme. Needs `theme`.
+    import theme-colors: func() -> result<palette, string>;
+
+    /// Opens the popup `name` of the extension's manifest, unless it is
+    /// open, once the call into the extension has returned. Called from
+    /// `activate` it opens at the widget pressed; otherwise at the first
+    /// widget of the extension on the display the pointer is on, or else
+    /// in the middle of a bar of that display. Needs `popups`.
+    import open-popup: func(name: string) -> result<_, string>;
+
+    /// Closes the popup `name` of the extension's manifest, if it is the
+    /// one that is open. Needs `popups`.
+    import close-popup: func(name: string) -> result<_, string>;
+
+    /// Does the action of Tessera named `name`, with `arg`, as a `[[key]]`
+    /// does, once the call into the extension has returned. The name must
+    /// be listed under `permissions.actions`. At most ten in ten seconds.
+    import run-action: func(name: string, arg: option<string>) -> result<_, string>;
+
+    /// Posts a notice with the notifications of Tessera, which comes as a
+    /// banner where banners are shown. Needs `notify`. At most five in a
+    /// minute.
+    import notify: func(title: string, body: string) -> result<_, string>;
+
     /// Describes the current content of `widget`, one of the widgets the
-    /// extension manifest declares. The first node is the root.
+    /// extension manifest declares. The first node is the root. Tessera
+    /// calls it again when the user acts on the widget, after `fetched`,
+    /// every `refresh_seconds` of the widget, and, for a widget whose
+    /// manifest entry lists `watch`, when what it watches changed, at
+    /// most four times a second.
     export render: func(widget: string) -> list<node>;
 
-    /// Tells the extension that the user pressed a button of `widget`.
-    /// Tessera calls `render` again afterwards.
+    /// Tells the extension that the user pressed a button of `widget`, or
+    /// changed one of its inputs, sliders or toggles, as their records
+    /// describe. Tessera calls `render` again afterwards.
     export activate: func(widget: string, action: string);
 
     /// Delivers the outcome of the request that `fetch` numbered
     /// `request`: a response of any status, or why there is none. Tessera
     /// calls `render` for the extension's widgets again afterwards.
     export fetched: func(request: u32, outcome: result<response, string>);
+
+    /// Added in 0.4: the `[extension.<id>]` table of the configuration
+    /// changed, which `setting` now answers with. Tessera calls `render`
+    /// for the extension's widgets again afterwards.
+    export settings-changed: func();
+
+    /// Added in 0.4: what the extension offers for `query`, what is typed
+    /// into the launcher, without the `prefix` of its `[runner]` where
+    /// the manifest gives one. Called only for an extension whose manifest
+    /// has a `[runner]` table, on a thread other than the one that draws;
+    /// answers that take longer than 300 milliseconds are left out.
+    export answer: func(query: string) -> list<answer>;
+
+    /// Added in 0.4: the user chose the answer `id`, whose action is
+    /// `run`.
+    export run-answer: func(id: string);
+
+    /// Added in 0.4: the user pressed the keys of the shortcut `id` of the
+    /// manifest's `[[shortcut]]` entries. Tessera calls `render` for the
+    /// extension's widgets again afterwards.
+    export shortcut: func(id: string);
 }

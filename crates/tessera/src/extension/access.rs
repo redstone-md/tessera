@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::devices;
+use crate::i18n::Language;
 use crate::platform::PairedDevice;
 
 /// The most text `read-file` returns.
@@ -36,6 +37,122 @@ pub struct Permissions {
     /// The kinds of devices the extension may be told of.
     #[serde(default)]
     devices: Vec<DeviceKind>,
+    /// What of the machine and the shell the extension may read and do.
+    #[serde(default)]
+    system: Vec<SystemKind>,
+    /// The actions of Tessera the extension may do, by name.
+    #[serde(default)]
+    actions: Vec<String>,
+}
+
+/// Something of the machine or the shell an extension can ask to read or
+/// to do, under `[permissions] system`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SystemKind {
+    /// What the media player plays.
+    Media,
+    /// Playing, pausing and skipping media.
+    MediaControl,
+    /// The processor, memory, battery and network meters.
+    Meters,
+    /// The network connection Windows prefers.
+    Network,
+    /// The list of the open windows.
+    Windows,
+    /// Bringing windows in front, minimizing, closing and moving them.
+    WindowControl,
+    /// The workspaces.
+    Workspaces,
+    /// The colors of the theme.
+    Theme,
+    /// Opening and closing its own popups from its code.
+    Popups,
+    /// Notices among the notifications.
+    Notify,
+}
+
+impl SystemKind {
+    pub const ALL: [Self; 10] = [
+        Self::Media,
+        Self::MediaControl,
+        Self::Meters,
+        Self::Network,
+        Self::Windows,
+        Self::WindowControl,
+        Self::Workspaces,
+        Self::Theme,
+        Self::Popups,
+        Self::Notify,
+    ];
+
+    /// What a manifest calls it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Media => "media",
+            Self::MediaControl => "media-control",
+            Self::Meters => "meters",
+            Self::Network => "network",
+            Self::Windows => "windows",
+            Self::WindowControl => "window-control",
+            Self::Workspaces => "workspaces",
+            Self::Theme => "theme",
+            Self::Popups => "popups",
+            Self::Notify => "notify",
+        }
+    }
+
+    /// What it allows, as the end of a sentence that starts "Asks to".
+    fn wish(self) -> &'static str {
+        match self {
+            Self::Media => "know what media is playing",
+            Self::MediaControl => "play, pause and skip media",
+            Self::Meters => "read the processor, memory, battery and network meters",
+            Self::Network => "know the network connection",
+            Self::Windows => "list the open windows",
+            Self::WindowControl => "bring windows in front, minimize, close and move them",
+            Self::Workspaces => "know the workspaces",
+            Self::Theme => "read the colors of the theme",
+            Self::Popups => "open its popups by itself",
+            Self::Notify => "post notices",
+        }
+    }
+}
+
+/// What a widget of an extension can watch, under `watch` of its
+/// `[[widget]]` entry: it is drawn again when that changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WatchKind {
+    Media,
+    Meters,
+    Network,
+    Windows,
+    Workspaces,
+    Theme,
+}
+
+impl WatchKind {
+    pub const ALL: [Self; 6] = [
+        Self::Media,
+        Self::Meters,
+        Self::Network,
+        Self::Windows,
+        Self::Workspaces,
+        Self::Theme,
+    ];
+
+    /// What the manifest must permit for the widget to watch it.
+    pub fn needs(self) -> SystemKind {
+        match self {
+            Self::Media => SystemKind::Media,
+            Self::Meters => SystemKind::Meters,
+            Self::Network => SystemKind::Network,
+            Self::Windows => SystemKind::Windows,
+            Self::Workspaces => SystemKind::Workspaces,
+            Self::Theme => SystemKind::Theme,
+        }
+    }
 }
 
 /// A kind of device an extension can ask about.
@@ -70,6 +187,73 @@ impl Permissions {
     /// The kinds of devices the extension asks to be told of.
     pub fn devices(&self) -> &[DeviceKind] {
         &self.devices
+    }
+
+    /// What of the machine and the shell the extension asks for.
+    pub fn system(&self) -> &[SystemKind] {
+        &self.system
+    }
+
+    /// Fails, saying why, unless the manifest permits `kind`.
+    pub fn check_system(&self, kind: SystemKind) -> Result<(), String> {
+        match self.system.contains(&kind) {
+            true => Ok(()),
+            false => Err(format!(
+                "the manifest does not permit `{}`; list it under `[permissions] system`",
+                kind.name()
+            )),
+        }
+    }
+
+    /// Fails, saying why, unless the manifest permits the action `name`.
+    pub fn check_action(&self, name: &str) -> Result<(), String> {
+        match self.actions.iter().any(|allowed| allowed == name) {
+            true => Ok(()),
+            false => Err(format!(
+                "the manifest does not permit the action `{name}`; list it under `[permissions] actions`"
+            )),
+        }
+    }
+
+    /// What the extension asks to be allowed, one wish in `language` for
+    /// each kind, each the end of a sentence that starts "Asks to": the
+    /// hosts, the files and the devices, then the machine and the shell,
+    /// then the actions. The marketplace asks with these before it
+    /// installs an extension.
+    #[allow(
+        dead_code,
+        reason = "the install prompt of the marketplace lists these"
+    )]
+    pub fn wishes(&self, language: Language) -> Vec<String> {
+        let say = |text| language.say(text);
+        let mut wishes = Vec::new();
+        let network = self.network();
+        if !network.is_empty() {
+            wishes.push(format!("{} {}", say("contact"), network.join(", ")));
+        }
+        if !self.files.is_empty() {
+            wishes.push(format!("{} {}", say("read"), self.files.join(", ")));
+        }
+        if !self.devices.is_empty() {
+            let kinds: Vec<&str> = self.devices.iter().map(|kind| kind.name()).collect();
+            let kinds = kinds.join(", ");
+            // English names the kinds in the middle of the phrase.
+            wishes.push(match language {
+                Language::English => format!("be told of the {kinds} devices"),
+                _ => format!("{} {kinds}", say("be told of the devices")),
+            });
+        }
+        // In the order of the kinds, each once, whatever the manifest says.
+        for kind in SystemKind::ALL {
+            if self.system.contains(&kind) {
+                wishes.push(say(kind.wish()).to_owned());
+            }
+        }
+        if !self.actions.is_empty() {
+            let actions = self.actions.join(", ");
+            wishes.push(format!("{} {actions}", say("do the actions")));
+        }
+        wishes
     }
 
     /// Whether a request to `url` is permitted.
@@ -146,6 +330,8 @@ pub struct Access {
     pub settings: HashMap<String, String>,
     /// Where `save-state` writes; `None` keeps nothing.
     pub state_file: Option<PathBuf>,
+    /// The names of the popups of the manifest, as it names them.
+    pub popups: Vec<String>,
     /// Stands in for the Bluetooth devices of the machine.
     #[cfg(test)]
     pub bluetooth: Option<Vec<PairedDevice>>,
@@ -204,7 +390,59 @@ mod tests {
             local: Vec::new(),
             files: files.iter().map(|&file| file.to_owned()).collect(),
             devices: Vec::new(),
+            system: Vec::new(),
+            actions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_machine_and_the_shell_are_reached_only_as_the_manifest_permits() {
+        let permissions: Permissions =
+            toml::from_str("system = [\"media\", \"window-control\"]\nactions = [\"popup\"]")
+                .unwrap();
+        assert_eq!(permissions.check_system(SystemKind::Media), Ok(()));
+        assert_eq!(permissions.check_system(SystemKind::WindowControl), Ok(()));
+        let refused = permissions.check_system(SystemKind::Windows).unwrap_err();
+        assert!(refused.contains("`windows`"), "{refused}");
+        assert_eq!(permissions.check_action("popup"), Ok(()));
+        assert!(permissions.check_action("quit").is_err());
+        assert!(permissions.check_action("Popup").is_err());
+        assert!(toml::from_str::<Permissions>("system = [\"registry\"]").is_err());
+        for kind in SystemKind::ALL {
+            let text = format!("system = [\"{}\"]", kind.name());
+            let read: Permissions = toml::from_str(&text).unwrap();
+            assert_eq!(read.system(), [kind]);
+        }
+    }
+
+    #[test]
+    fn every_wish_is_said_once_in_order() {
+        let permissions: Permissions = toml::from_str(concat!(
+            "network = [\"api.example.com\"]\n",
+            "devices = [\"bluetooth\"]\n",
+            "system = [\"notify\", \"media\", \"media\"]\n",
+            "actions = [\"popup\", \"media\"]\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            permissions.wishes(Language::English),
+            [
+                "contact api.example.com",
+                "be told of the bluetooth devices",
+                "know what media is playing",
+                "post notices",
+                "do the actions popup, media",
+            ]
+        );
+        assert!(Permissions::default().wishes(Language::English).is_empty());
+    }
+
+    #[test]
+    fn every_kind_that_can_be_watched_needs_its_permission() {
+        let mut needed: Vec<SystemKind> = WatchKind::ALL.iter().map(|kind| kind.needs()).collect();
+        needed.dedup();
+        assert_eq!(needed.len(), WatchKind::ALL.len());
+        assert!(needed.iter().all(|kind| SystemKind::ALL.contains(kind)));
     }
 
     #[test]

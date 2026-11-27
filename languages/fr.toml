@@ -735,3 +735,16 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Kill process" = "Arrêter le processus"
 "Media" = "Médias"
 "Personalize" = "Personnaliser"
+
+# Wave 2, extension-api: what an extension asks to be allowed.
+"know what media is playing" = "savoir ce qui est lu"
+"play, pause and skip media" = "lire, mettre en pause et passer les médias"
+"read the processor, memory, battery and network meters" = "lire les mesures du processeur, de la mémoire, de la batterie et du réseau"
+"know the network connection" = "connaître la connexion réseau"
+"list the open windows" = "lister les fenêtres ouvertes"
+"bring windows in front, minimize, close and move them" = "mettre les fenêtres au premier plan, les réduire, les fermer et les déplacer"
+"know the workspaces" = "connaître les espaces de travail"
+"read the colors of the theme" = "lire les couleurs du thème"
+"open its popups by itself" = "ouvrir ses fenêtres contextuelles d’elle-même"
+"post notices" = "publier des avis"
+"do the actions" = "effectuer les actions"
