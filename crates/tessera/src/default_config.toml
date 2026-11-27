@@ -140,6 +140,9 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             trash    has Explorer open the Recycle Bin, as the widget
+#                      trash does; arg "restore" brings every item back,
+#                      "empty" empties it once Windows has asked
 #
 # [[key]]
 # press = "win+v"
@@ -149,6 +152,11 @@
 # [[key]]
 # press = "win+d"
 # action = "desktop"
+#
+# [[key]]
+# press = "win+shift+delete"
+# action = "trash"
+# arg = "empty"
 
 # The file manager of Tessera, which `tessera files [folder]`, the widget
 # `files` and the key above open. It reads folders without Explorer, opens
@@ -290,7 +298,9 @@
 #               on a display that is not capable of it
 #   "trash"     the number of items in the Recycle Bin, counted every
 #               three seconds, or the icon alone while the bin is empty;
-#               a click has Explorer open the bin. It does not empty it
+#               a click has Explorer open the bin. A right click opens
+#               a menu: open it, bring every item back, or empty it
+#               (Windows asks first)
 #   "update"    nothing until github.com lists a release of Tessera newer
 #               than the one running, then its name; a click opens its
 #               page in the browser, or with install = true downloads
