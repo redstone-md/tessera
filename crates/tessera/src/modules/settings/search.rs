@@ -37,6 +37,7 @@ const HAND_DRAWN: &[(Section, &str)] = &[
     (Section::General, "Language"),
     (Section::General, "Icon packs"),
     (Section::General, "Startup apps"),
+    (Section::General, "Backups"),
     (Section::Bars, "By hand"),
     (Section::Bars, "Hiding"),
     (Section::Desktop, "Cards"),

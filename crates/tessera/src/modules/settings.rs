@@ -7,6 +7,7 @@
 //! The settings that extensions and themes declare are drawn by the
 //! controls of [`controls`].
 
+mod backups;
 mod builtin;
 mod controls;
 mod dynamic;
@@ -44,6 +45,7 @@ use crate::theme::WALLPAPER_THEME;
 use crate::theme::{ACCENT_THEME, Theme};
 use crate::tiling::TileLayout;
 use crate::ui::{icon, state_layer};
+use backups::{BackupDeed, BackupState};
 use controls::{CHANGED, DeclaredState, Deed, RowKey};
 use search::SearchState;
 
@@ -306,6 +308,8 @@ enum Control {
     /// Opens the card of the options of the widget at this place, or
     /// closes it.
     Expand(WidgetPlace),
+    /// Does this on the Backups card.
+    Backup(BackupDeed),
     /// Puts what is at this place of what can be stacked at the end of
     /// the stack: a theme over the others, or an icon pack after those in
     /// use.
@@ -699,6 +703,8 @@ pub struct Settings {
     expanded: Option<WidgetPlace>,
     /// The search of the settings, at the top of the rail.
     search: SearchState,
+    /// What the Backups card keeps.
+    backups: BackupState,
     /// What the keys go to while nothing in the settings has them, so that
     /// Ctrl+F reaches the search.
     focus: FocusHandle,
@@ -761,6 +767,7 @@ impl Settings {
             declared: DeclaredState::new(),
             expanded: None,
             search: SearchState::new(cx),
+            backups: BackupState::default(),
             focus: cx.focus_handle(),
         };
         match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
@@ -811,6 +818,22 @@ impl Settings {
     /// take it over. A change that no longer fits the file is not made.
     fn change(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ConfigFile) -> bool) {
         self.change_row(None, cx, change);
+    }
+
+    /// Reads the file again after it was put in place whole, and has the
+    /// shell take it over.
+    fn reread(&mut self, cx: &mut Context<Self>) {
+        match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
+            Ok((config, table)) => {
+                (self.config, self.table) = (Some(config), table);
+                self.failure = None;
+            }
+            Err(error) => self.failure = Some(error.into()),
+        }
+        self.interactions.clear();
+        cx.defer(Shell::config_changed);
+        self.look_around(cx);
+        cx.notify();
     }
 
     /// The same, for the setting `row`: what kept the change from being
@@ -1089,6 +1112,7 @@ impl Settings {
                     true
                 });
             }
+            Control::Backup(deed) => self.act_backup(deed, cx),
             Control::Expand(ref place) => {
                 let open = self.expanded.as_ref() == Some(place);
                 self.expanded = (!open).then(|| place.clone());
@@ -2117,6 +2141,7 @@ impl Settings {
                 // A note, a line of packs and one of those to use.
                 shared.push((4, self.icon_packs_card(config, window, cx)));
                 shared.push(self.startup(&theme, language, cx));
+                shared.push(self.backups_card(window, cx));
             }
             Section::Bars => {
                 wide.push(self.arranging(window, cx));

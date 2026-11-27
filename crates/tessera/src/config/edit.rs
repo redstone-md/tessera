@@ -149,8 +149,14 @@ impl ConfigFile {
     /// `change` fails or the shell could not use what the file would hold;
     /// what `change` answers is answered. No other change of the file is
     /// made meanwhile, so `change` must not change the file itself.
+    /// Before the change, config.toml is copied to the backups, once a
+    /// minute at most; a backup that fails is reported and the change
+    /// made all the same.
     pub fn change<T>(change: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
         let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(error) = back_up(false) {
+            report!("config.toml is not backed up: {error}");
+        }
         let mut file = Self::open()?;
         let answer = change(&mut file)?;
         file.save()?;
@@ -575,8 +581,14 @@ impl ConfigFile {
     pub fn set_option(&mut self, name: &str, key: &str, value: Option<Value>) -> bool {
         let placed = self.on_surfaces(name, key, value.as_ref());
         let shown = self.in_popups(name, key, value.as_ref());
-        let beside = self.in_popup_sides(name, key, value.as_ref());
-        let lying = self.on_desktop_cards(name, key, value.as_ref());
+        let named = (name, key);
+        let beside = set_in_entries(&mut self.document, ("popup", "side"), named, value.as_ref());
+        let lying = set_in_entries(
+            &mut self.document,
+            ("card", "content"),
+            named,
+            value.as_ref(),
+        );
         placed || shown || beside || lying
     }
 
@@ -1919,7 +1931,7 @@ impl ConfigFile {
         key: &str,
         value: Option<Value>,
     ) -> bool {
-        let Some(widget) = self.widget_at_place(place) else {
+        let Some(widget) = widget_at_place(&mut self.document, place) else {
             return false;
         };
         let name = match widget {
@@ -1932,81 +1944,185 @@ impl ConfigFile {
         };
         Self::option(widget, &name, key, value.as_ref())
     }
+}
 
-    /// The entry of the widget at `place` in the file.
-    fn widget_at_place(&mut self, place: &WidgetPlace) -> Option<&mut Value> {
-        let document = &mut self.document;
-        match place {
-            WidgetPlace::Surface {
-                surface,
-                slot,
-                index,
-            } => {
-                let surfaces = document.get_mut("surface")?.as_array_of_tables_mut()?;
-                let widgets = surfaces.get_mut(*surface)?.get_mut(slot.key())?;
-                widgets.as_array_mut()?.get_mut(*index)
-            }
-            WidgetPlace::Popup { name, index } => {
-                let popups = document.get_mut("popup")?.as_array_of_tables_mut()?;
-                let popup = { popups.iter_mut() }
-                    .find(|popup| popup.get("name").and_then(Item::as_str) == Some(name))?;
-                let content = popup
-                    .get("content")
-                    .and_then(Item::as_array)
-                    .map_or(0, Array::len);
-                let (column, at) = match index.checked_sub(content) {
-                    Some(at) => ("side", at),
-                    None => ("content", *index),
-                };
-                popup.get_mut(column)?.as_array_mut()?.get_mut(at)
-            }
-            WidgetPlace::Card { index, widget } => {
-                let cards = document.get_mut("card")?.as_array_of_tables_mut()?;
-                let content = cards.get_mut(*index)?.get_mut("content")?;
-                content.as_array_mut()?.get_mut(*widget)
-            }
+/// The entry of the widget at `place` in `document`.
+fn widget_at_place<'a>(
+    document: &'a mut DocumentMut,
+    place: &WidgetPlace,
+) -> Option<&'a mut Value> {
+    match place {
+        WidgetPlace::Surface {
+            surface,
+            slot,
+            index,
+        } => {
+            let surfaces = document.get_mut("surface")?.as_array_of_tables_mut()?;
+            let widgets = surfaces.get_mut(*surface)?.get_mut(slot.key())?;
+            widgets.as_array_mut()?.get_mut(*index)
         }
-    }
-
-    /// Sets the option `key` of every widget `name` in the second column
-    /// of a popup. Whether there is such a widget is returned.
-    fn in_popup_sides(&mut self, name: &str, key: &str, value: Option<&Value>) -> bool {
-        let popups = self.document.get_mut("popup");
-        let Some(popups) = popups.and_then(Item::as_array_of_tables_mut) else {
-            return false;
-        };
-        let mut found = false;
-        for popup in popups.iter_mut() {
-            let Some(widgets) = popup.get_mut("side").and_then(Item::as_array_mut) else {
-                continue;
+        WidgetPlace::Popup { name, index } => {
+            let popups = document.get_mut("popup")?.as_array_of_tables_mut()?;
+            let popup = { popups.iter_mut() }
+                .find(|popup| popup.get("name").and_then(Item::as_str) == Some(name))?;
+            let content = popup
+                .get("content")
+                .and_then(Item::as_array)
+                .map_or(0, Array::len);
+            let (column, at) = match index.checked_sub(content) {
+                Some(at) => ("side", at),
+                None => ("content", *index),
             };
-            for widget in widgets.iter_mut() {
-                found |= Self::option(widget, name, key, value);
-            }
-            widgets.fmt();
+            popup.get_mut(column)?.as_array_mut()?.get_mut(at)
         }
-        found
+        WidgetPlace::Card { index, widget } => {
+            let cards = document.get_mut("card")?.as_array_of_tables_mut()?;
+            let content = cards.get_mut(*index)?.get_mut("content")?;
+            content.as_array_mut()?.get_mut(*widget)
+        }
     }
+}
 
-    /// Sets the option `key` of every widget `name` on a card of the
-    /// desktop. Whether there is such a widget is returned.
-    fn on_desktop_cards(&mut self, name: &str, key: &str, value: Option<&Value>) -> bool {
-        let cards = self.document.get_mut("card");
-        let Some(cards) = cards.and_then(Item::as_array_of_tables_mut) else {
-            return false;
+/// Sets the option `key` of every widget `name` in the list `column` of
+/// every entry of the tables `tables` of `document`, as the second column
+/// (`side`) of the popups or the widgets (`content`) of the cards. Whether
+/// there is such a widget is returned.
+fn set_in_entries(
+    document: &mut DocumentMut,
+    (tables, column): (&str, &str),
+    (name, key): (&str, &str),
+    value: Option<&Value>,
+) -> bool {
+    let entries = document.get_mut(tables);
+    let Some(entries) = entries.and_then(Item::as_array_of_tables_mut) else {
+        return false;
+    };
+    let mut found = false;
+    for entry in entries.iter_mut() {
+        let Some(widgets) = entry.get_mut(column).and_then(Item::as_array_mut) else {
+            continue;
         };
-        let mut found = false;
-        for card in cards.iter_mut() {
-            let Some(widgets) = card.get_mut("content").and_then(Item::as_array_mut) else {
-                continue;
-            };
-            for widget in widgets.iter_mut() {
-                found |= Self::option(widget, name, key, value);
-            }
-            widgets.fmt();
+        for widget in widgets.iter_mut() {
+            found |= ConfigFile::option(widget, name, key, value);
         }
-        found
+        widgets.fmt();
     }
+    found
+}
+
+/// The directory of the configuration directory that holds the backups
+/// of config.toml.
+const BACKUPS_DIRECTORY: &str = "backups";
+
+/// How many backups are kept: the newest.
+pub const BACKUPS_KEPT: usize = 20;
+
+/// How long after one backup the next is made by a change, in seconds.
+const BACKUP_EVERY: i64 = 60;
+
+/// How the time of a backup is written in its name.
+const BACKUP_TIME: &str = "%Y%m%d-%H%M%S";
+
+/// Where the backups of config.toml are kept.
+pub fn backups_dir() -> Option<PathBuf> {
+    config_dir().map(|directory| directory.join(BACKUPS_DIRECTORY))
+}
+
+/// The name of the backup made at `at`: `config-<yyyymmdd-hhmmss>.toml`,
+/// the time in UTC.
+pub fn backup_name(at: chrono::DateTime<chrono::Utc>) -> String {
+    format!("config-{}.toml", at.format(BACKUP_TIME))
+}
+
+/// When the backup named `name` was made, in UTC; none for another file.
+pub fn backup_time(name: &str) -> Option<chrono::NaiveDateTime> {
+    let stamp = name.strip_prefix("config-")?.strip_suffix(".toml")?;
+    chrono::NaiveDateTime::parse_from_str(stamp, BACKUP_TIME).ok()
+}
+
+/// Whether a change made at `now` makes a backup, the newest being made
+/// at `newest`: once a minute at most.
+fn backup_due(newest: Option<chrono::NaiveDateTime>, now: chrono::NaiveDateTime) -> bool {
+    newest.is_none_or(|newest| (now - newest).num_seconds() >= BACKUP_EVERY)
+}
+
+/// The names among `names` that are not backups, or older than the
+/// [`BACKUPS_KEPT`] newest, which are taken away.
+fn surplus_backups(names: &[String]) -> Vec<String> {
+    let mut dated: Vec<(chrono::NaiveDateTime, &String)> = { names.iter() }
+        .filter_map(|name| Some((backup_time(name)?, name)))
+        .collect();
+    dated.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+    { dated.into_iter().skip(BACKUPS_KEPT) }
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+/// The backups there are, the newest first, each with when it was made.
+pub fn list_backups() -> Vec<(PathBuf, chrono::NaiveDateTime)> {
+    let Some(directory) = backups_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+    let mut backups: Vec<(PathBuf, chrono::NaiveDateTime)> = { entries.flatten() }
+        .filter_map(|entry| {
+            let time = backup_time(entry.file_name().to_str()?)?;
+            Some((entry.path(), time))
+        })
+        .collect();
+    backups.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+    backups
+}
+
+/// Copies config.toml to the backups, unless there is none yet, or,
+/// without `always`, a backup was made less than a minute ago; takes away
+/// the backups past the newest [`BACKUPS_KEPT`]. The backup made, if any,
+/// is returned. Called with the file held by [`ConfigFile::change`] or
+/// [`replace_config`].
+fn back_up(always: bool) -> Result<Option<PathBuf>, String> {
+    let (Some(directory), Ok(path)) = (backups_dir(), ConfigFile::location()) else {
+        return Ok(None);
+    };
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let now = chrono::Utc::now();
+    let newest = list_backups().first().map(|(_, time)| *time);
+    if !always && !backup_due(newest, now.naive_utc()) {
+        return Ok(None);
+    }
+    let failed =
+        |error: std::io::Error| format!("{} cannot be written: {error}", directory.display());
+    fs::create_dir_all(&directory).map_err(failed)?;
+    let backup = directory.join(backup_name(now));
+    fs::copy(&path, &backup).map_err(failed)?;
+    let names: Vec<String> = { list_backups().into_iter() }
+        .filter_map(|(path, _)| Some(path.file_name()?.to_str()?.to_owned()))
+        .collect();
+    for name in surplus_backups(&names) {
+        fs::remove_file(directory.join(name)).ok();
+    }
+    Ok(Some(backup))
+}
+
+/// Puts `text` in place of config.toml, after backing up what it holds
+/// now: an imported file, a backup restored, or the built-in
+/// configuration. Text the shell could not use is not written. It reads
+/// and writes the disk, so it is called away from the thread of GPUI.
+pub fn replace_config(text: &str) -> Result<(), String> {
+    let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+    let file = ConfigFile::parse(text)?;
+    file.config()?;
+    back_up(true)?;
+    file.save()
+}
+
+/// Puts the built-in configuration, comments and all, in place of
+/// config.toml, after backing up what it holds now.
+pub fn reset_config() -> Result<(), String> {
+    replace_config(DEFAULT)
 }
 
 #[cfg(test)]
@@ -2102,6 +2218,39 @@ content = ["memory", "clock"]
         assert!(edited.document.to_string().contains("end = [\"clock\","));
         let nowhere = WidgetPlace::parse("popup/info/5").unwrap();
         assert!(!edited.set_widget_option(&nowhere, "format", None));
+    }
+
+    #[test]
+    fn a_backup_is_named_by_its_time_and_made_once_a_minute() {
+        use chrono::TimeZone;
+        let at = chrono::Utc.with_ymd_and_hms(2026, 11, 27, 9, 5, 3).unwrap();
+        let name = backup_name(at);
+        assert_eq!(name, "config-20261127-090503.toml");
+        assert_eq!(backup_time(&name), Some(at.naive_utc()));
+        assert_eq!(backup_time("config.toml"), None);
+        assert_eq!(backup_time("config-yesterday.toml"), None);
+        let later = |seconds| at.naive_utc() + chrono::Duration::seconds(seconds);
+        assert!(backup_due(None, later(0)));
+        assert!(!backup_due(Some(at.naive_utc()), later(59)));
+        assert!(backup_due(Some(at.naive_utc()), later(60)));
+    }
+
+    #[test]
+    fn only_the_newest_backups_are_kept() {
+        use chrono::TimeZone;
+        let start = chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        let mut names: Vec<String> = (0..BACKUPS_KEPT as i64 + 3)
+            .map(|minute| backup_name(start + chrono::Duration::minutes(minute)))
+            .collect();
+        names.reverse();
+        names.push("notes.txt".to_owned());
+        let surplus = surplus_backups(&names);
+        assert_eq!(surplus.len(), 3);
+        for minute in 0..3 {
+            let oldest = backup_name(start + chrono::Duration::minutes(minute));
+            assert!(surplus.contains(&oldest), "{oldest} is kept");
+        }
+        assert!(!surplus.contains(&"notes.txt".to_owned()));
     }
 
     #[test]

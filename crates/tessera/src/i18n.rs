@@ -2335,6 +2335,34 @@ const RUSSIAN: &[(&str, &str)] = &[
         "config.toml, in the program that opens TOML files; Tessera takes up what is saved there.",
         "config.toml, в программе, открывающей файлы TOML; Tessera подхватывает то, что там сохранено.",
     ),
+    ("Backups", "Резервные копии"),
+    ("Restore a backup…", "Восстановить копию…"),
+    ("Reset to defaults", "Сбросить к значениям по умолчанию"),
+    (
+        "Before a change is written, config.toml is copied to the backups folder, once a minute at most. Backups kept:",
+        "Перед записью изменения config.toml копируется в папку резервных копий, не чаще раза в минуту. Хранится копий:",
+    ),
+    (
+        "Every setting goes back to what Tessera comes with; config.toml is backed up first.",
+        "Все настройки вернутся к тем, с которыми поставляется Tessera; сначала делается копия config.toml.",
+    ),
+    ("Reset", "Сбросить"),
+    (
+        "The settings were exported to",
+        "Настройки экспортированы в",
+    ),
+    ("The settings were imported.", "Настройки импортированы."),
+    ("The backup was restored.", "Копия восстановлена."),
+    (
+        "Every setting is back to its default.",
+        "Все настройки вернулись к значениям по умолчанию.",
+    ),
+    ("Folder:", "Папка:"),
+    ("The backups are being read.", "Копии читаются."),
+    ("No backup has been made yet.", "Резервных копий ещё нет."),
+    ("Keys that differ:", "Отличающихся ключей:"),
+    ("It cannot be read.", "Её нельзя прочитать."),
+    ("Restore", "Восстановить"),
 ];
 
 #[cfg(test)]
