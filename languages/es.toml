@@ -321,3 +321,10 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # Settings: keys that name an action.
 "Action" = "Acción"
 "The action is written in the file by hand." = "La acción se escribe a mano en el archivo."
+
+# The history of the clipboard.
+"Search the clipboard" = "Buscar en el portapapeles"
+"Nothing was copied yet" = "Aún no se ha copiado nada"
+"Clipboard history is off" = "El historial del portapapeles está desactivado"
+"Picture" = "Imagen"
+"Pinned" = "Anclado"

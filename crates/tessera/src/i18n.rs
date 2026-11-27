@@ -706,6 +706,12 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // The history of the clipboard.
+    ("Search the clipboard", "Поиск в буфере обмена"),
+    ("Nothing was copied yet", "Ещё ничего не скопировано"),
+    ("Clipboard history is off", "Журнал буфера обмена выключен"),
+    ("Picture", "Изображение"),
+    ("Pinned", "Закреплено"),
 ];
 
 #[cfg(test)]

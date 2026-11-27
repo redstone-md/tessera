@@ -321,3 +321,10 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # Settings: keys that name an action.
 "Action" = "Action"
 "The action is written in the file by hand." = "L’action est écrite à la main dans le fichier."
+
+# The history of the clipboard.
+"Search the clipboard" = "Rechercher dans le presse-papiers"
+"Nothing was copied yet" = "Rien n’a encore été copié"
+"Clipboard history is off" = "L’historique du presse-papiers est désactivé"
+"Picture" = "Image"
+"Pinned" = "Épinglé"

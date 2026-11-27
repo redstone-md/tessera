@@ -6,6 +6,7 @@
 mod bluetooth;
 mod brightness;
 mod calendar;
+mod clipboard;
 mod clock;
 mod command;
 mod connections;
@@ -47,6 +48,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(clock::ClockModule),
         Box::new(bluetooth::BluetoothModule),
         Box::new(calendar::CalendarModule),
+        Box::new(clipboard::ClipboardModule),
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
         Box::new(FilesModule),

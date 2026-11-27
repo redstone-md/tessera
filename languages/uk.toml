@@ -321,3 +321,10 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# The history of the clipboard.
+"Search the clipboard" = "Пошук у буфері обміну"
+"Nothing was copied yet" = "Ще нічого не скопійовано"
+"Clipboard history is off" = "Журнал буфера обміну вимкнено"
+"Picture" = "Зображення"
+"Pinned" = "Закріплено"
