@@ -142,13 +142,11 @@
 #                      win+e is taken from Windows
 #             volume   arg "up" or "down" turns the default output a step,
 #                      "mute" mutes it or lifts the mute, "mute-microphone"
-#                      does that to the default microphone; in shell mode
-#                      the volume keys of a keyboard run it
+#                      does that to the default microphone
 #             brightness  arg "up" or "down": the display under the pointer
 #                      a tenth brighter or darker
 #             media    arg "toggle", "play", "pause", "stop", "next" or
-#                      "previous", for the player media-controls shows; in
-#                      shell mode the media keys of a keyboard run it
+#                      "previous", for the player media-controls shows
 #
 # [[key]]
 # press = "win+v"
@@ -436,8 +434,8 @@ content = [{ widget = "radio-switch", radio = "bluetooth" }, "bluetooth"]
 [[popup]]
 name = "sound"
 width = 360
-height = 600
-content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"]
+height = 680
+content = ["volume-slider", "microphone-slider", "audio-outputs", "audio-inputs", "spatial-sound", "volume-mixer", "sound-settings"]
 
 # [tiling] puts the windows of each display side by side in the space the
 # bars leave. layout is "master" (one window on the left half, the others
@@ -532,9 +530,7 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # place = "bottom"    or "top", "top-left", "top-right", "bottom-left",
 #                     "bottom-right"
 #
-# In shell mode Windows shows no indicator of its own, and the volume and
-# media keys of a keyboard reach Tessera, which runs the actions volume and
-# media for them.
+# In shell mode Windows shows no indicator of its own.
 
 # [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
 # every display, each scaled to cover it. images lists picture files (.jpg,
