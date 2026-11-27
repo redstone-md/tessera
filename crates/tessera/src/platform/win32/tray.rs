@@ -12,8 +12,9 @@
 //!
 //! Where no taskbar of Explorer exists, as when Tessera is the shell of the
 //! session, the window answers itself, which it decides anew with every
-//! message: it accepts icons and their versions, tells applications where
-//! their icons are, and serves the edge bars (see `appbar.rs`). When Explorer's
+//! message: it accepts icons and their versions, publishes their balloons
+//! for the notifications of the shell, tells applications where their
+//! icons are, and serves the edge bars (see `appbar.rs`). When Explorer's
 //! taskbar appears again the window goes back to passing messages on.
 //!
 //! Edge bars reach Explorer through the same window, the shell's own
@@ -23,7 +24,11 @@
 //!
 //! A message posted to an application that runs with higher privileges
 //! than the shell is dropped by Windows, so such an application does not
-//! hear of clicks on its icon.
+//! hear of clicks on its icon or of what became of its balloons.
+
+mod balloon;
+
+pub use balloon::{Balloon, BalloonEvent, BalloonKind};
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -32,6 +37,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use anyhow::{Context as _, Result, anyhow};
+use async_channel::Receiver;
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -53,6 +59,7 @@ use windows::core::{PCWSTR, w};
 use super::ScreenRect;
 use super::appbar::{self, Request};
 use super::icon::IconPixels;
+use balloon::NIF_REALTIME;
 
 /// The class of the window Windows gives its Bluetooth icon for.
 const BLUETOOTH_CLASS: &str = "BluetoothNotificationAreaIconWindowClass";
@@ -95,6 +102,7 @@ const NIF_MESSAGE: u32 = 0x01;
 const NIF_ICON: u32 = 0x02;
 const NIF_TIP: u32 = 0x04;
 const NIF_STATE: u32 = 0x08;
+const NIF_INFO: u32 = 0x10;
 const NIF_GUID: u32 = 0x20;
 const NIF_SHOWTIP: u32 = 0x80;
 
@@ -126,8 +134,12 @@ mod at {
     pub const TIP: (usize, usize) = (32, 128);
     pub const STATE: usize = 288;
     pub const STATE_MASK: usize = 292;
+    pub const INFO: (usize, usize) = (296, 256);
     pub const VERSION: usize = 808;
+    pub const INFO_TITLE: (usize, usize) = (812, 64);
+    pub const INFO_FLAGS: usize = 940;
     pub const GUID: usize = 944;
+    pub const BALLOON_ICON: usize = 960;
 }
 
 /// What an application asked of the notification area, as it arrives in a
@@ -143,8 +155,16 @@ struct Notice {
     tip: String,
     state: u32,
     state_mask: u32,
+    /// The text of a balloon.
+    info: String,
+    /// Shares its place with the time a balloon was to be shown for, which
+    /// Windows has long ignored.
     version: u32,
+    info_title: String,
+    info_flags: u32,
     guid: [u8; 16],
+    /// The picture of a balloon, if it has its own.
+    balloon_icon: u32,
 }
 
 impl Notice {
@@ -177,10 +197,14 @@ impl Notice {
             tip: text(at::TIP),
             state: number(at::STATE),
             state_mask: number(at::STATE_MASK),
+            info: text(at::INFO),
             version: number(at::VERSION),
+            info_title: text(at::INFO_TITLE),
+            info_flags: number(at::INFO_FLAGS),
             guid: guid
                 .and_then(|bytes| bytes.try_into().ok())
                 .unwrap_or_default(),
+            balloon_icon: number(at::BALLOON_ICON),
         }
     }
 
@@ -249,6 +273,8 @@ struct Entry {
     show_tip: bool,
     pixels: Option<Arc<IconPixels>>,
     image_version: u64,
+    /// Whether a balloon of the icon was published and not yet ended.
+    balloon: bool,
 }
 
 impl Entry {
@@ -268,6 +294,8 @@ struct Icons {
     next_id: u64,
     /// Grows with every change.
     generation: u64,
+    /// The balloons that began or ended since they were last taken.
+    balloons: Vec<Balloon>,
 }
 
 impl Icons {
@@ -293,6 +321,7 @@ impl Icons {
                         show_tip: false,
                         pixels: None,
                         image_version: 0,
+                        balloon: false,
                     }
                 });
                 (entry.window, entry.uid) = (notice.window, notice.uid);
@@ -313,10 +342,38 @@ impl Icons {
                 if notice.flags & NIF_STATE != 0 && notice.state_mask & NIS_HIDDEN != 0 {
                     entry.hidden = notice.state & NIS_HIDDEN != 0;
                 }
+                if notice.flags & NIF_INFO != 0 {
+                    if notice.info.is_empty() {
+                        if entry.balloon {
+                            self.balloons.push(Balloon::withdrawal(entry.id));
+                        }
+                        entry.balloon = false;
+                    } else {
+                        let mut balloon = Balloon::new(
+                            entry.id,
+                            notice.info_title.clone(),
+                            notice.info.clone(),
+                            notice.info_flags,
+                            notice.flags & NIF_REALTIME != 0,
+                        );
+                        if balloon.kind == BalloonKind::User {
+                            let own = (notice.balloon_icon != 0)
+                                .then(|| load(notice.balloon_icon).map(Arc::new))
+                                .flatten();
+                            balloon.icon = own.or_else(|| entry.pixels.clone());
+                        }
+                        balloon.tip.clone_from(&entry.tip);
+                        self.balloons.push(balloon);
+                        entry.balloon = true;
+                    }
+                }
             }
             NIM_DELETE => {
-                if self.entries.remove(&identity).is_none() {
+                let Some(entry) = self.entries.remove(&identity) else {
                     return false;
+                };
+                if entry.balloon {
+                    self.balloons.push(Balloon::withdrawal(entry.id));
                 }
             }
             NIM_SETVERSION => {
@@ -340,13 +397,25 @@ impl Icons {
     /// Forgets the icons whose window `exists` denies.
     fn prune(&mut self, exists: impl Fn(u32) -> bool) {
         let before = self.entries.len();
-        self.entries.retain(|_, entry| exists(entry.window));
+        let balloons = &mut self.balloons;
+        self.entries.retain(|_, entry| {
+            let keep = exists(entry.window);
+            if !keep && entry.balloon {
+                balloons.push(Balloon::withdrawal(entry.id));
+            }
+            keep
+        });
         if self.entries.len() != before {
             self.generation += 1;
         }
         let entries = &self.entries;
         self.places
             .retain(|id, _| entries.values().any(|entry| entry.id == *id));
+    }
+
+    /// The balloons that began or ended since this was last asked.
+    fn take_balloons(&mut self) -> Vec<Balloon> {
+        std::mem::take(&mut self.balloons)
     }
 
     /// The answer to the request for the part `corner` of the place of the
@@ -378,6 +447,17 @@ impl Icons {
             .collect();
         icons.sort_by_key(|icon| icon.id);
         icons
+    }
+}
+
+/// Hands the balloons that began or ended to their reader: all of them
+/// while the shell serves the icons, otherwise only those that ended, as
+/// Explorer shows the others.
+fn publish(balloons: Vec<Balloon>, serving: bool) {
+    for balloon in balloons {
+        if serving || balloon.is_withdrawal() {
+            balloon::publish(balloon);
+        }
     }
 }
 
@@ -610,6 +690,28 @@ impl Tray {
     /// The number that grows whenever the icons change.
     pub fn generation() -> u64 {
         icons().generation
+    }
+
+    /// The balloons applications show at their icons, and their ends, as
+    /// they arrive while the shell serves the icons itself. Beside Explorer
+    /// only ends arrive, as Explorer shows the balloons. The stream is one
+    /// for the whole process, so one reader is meant to take it.
+    #[allow(dead_code, reason = "for the notifications that show balloons")]
+    pub fn balloons() -> Receiver<Balloon> {
+        balloon::subscribe()
+    }
+
+    /// Tells the application of the icon `id` what became of the balloon
+    /// it showed there. A click lets it put a window in front.
+    #[allow(dead_code, reason = "for the notifications that show balloons")]
+    pub fn balloon_event(id: u64, event: BalloonEvent) {
+        let Some(target) = Target::of(id) else {
+            return;
+        };
+        if event == BalloonEvent::Clicked {
+            target.allow_front();
+        }
+        target.tell(&[event.message()]);
     }
 
     /// Says where the shell shows the icon `id`: its `frame` on the screen
@@ -876,9 +978,17 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
     }
 }
 
-/// Records the notification in `data` and says whether it was accepted.
-fn record(data: &[u8]) -> bool {
-    icons().apply(&Notice::parse(data), load_icon)
+/// Records the notification in `data` and says whether it was accepted;
+/// `serving` says whether the shell serves the icons itself.
+fn record(data: &[u8], serving: bool) -> bool {
+    let notice = Notice::parse(data);
+    let (accepted, balloons) = {
+        let mut icons = icons();
+        let accepted = icons.apply(&notice, load_icon);
+        (accepted, icons.take_balloons())
+    };
+    publish(balloons, serving);
+    accepted
 }
 
 /// Keeps the window first, forgets the icons and bars of closed windows,
@@ -892,8 +1002,13 @@ fn upkeep(window: HWND) {
         }
     }
     let serving = explorer_tray(window).is_none();
-    // SAFETY: the call only reads whether a window exists.
-    icons().prune(|owner| unsafe { IsWindow(Some(handle(owner))) }.as_bool());
+    let balloons = {
+        let mut icons = icons();
+        // SAFETY: the call only reads whether a window exists.
+        icons.prune(|owner| unsafe { IsWindow(Some(handle(owner))) }.as_bool());
+        icons.take_balloons()
+    };
+    publish(balloons, serving);
 
     if SERVING.replace(serving) != serving {
         if serving {
@@ -934,7 +1049,7 @@ unsafe extern "system" fn receive(
             // What the window answers when it serves the icons itself.
             let mut own = 0;
             match (kind, bytes) {
-                (ICON_DATA, Some(bytes)) => own = record(bytes).into(),
+                (ICON_DATA, Some(bytes)) => own = record(bytes, explorer.is_none()).into(),
                 // Explorer would answer with the place in its own, hidden
                 // taskbar, where the application would then open its menu.
                 (PLACE_DATA, Some(bytes)) => {
@@ -1165,8 +1280,89 @@ mod tests {
         assert_eq!(icons.entries[&Identity::Numbered(10, 1)].version, 4);
     }
 
+    /// Puts `text` at `at` as UTF-16.
+    fn put_text(data: &mut [u8], at: usize, text: &str) {
+        for (index, unit) in text.encode_utf16().enumerate() {
+            data[at + index * 2..at + 2 + index * 2].copy_from_slice(&unit.to_le_bytes());
+        }
+    }
+
     fn put(data: &mut [u8], at: usize, value: u32) {
         data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// A notification that shows the balloon `text` of the kind `flags`.
+    fn balloon_bytes(message: u32, uid: u32, text: &str, flags: u32) -> Vec<u8> {
+        let mut data = bytes(message, 10, uid, NIF_INFO | NIF_ICON | NIF_TIP, "App");
+        put_text(&mut data, at::INFO.0, text);
+        put_text(&mut data, at::INFO_TITLE.0, "Title");
+        put(&mut data, at::INFO_FLAGS, flags);
+        data
+    }
+
+    #[test]
+    fn a_balloon_is_read_from_the_end_of_a_notification() {
+        let mut data = balloon_bytes(NIM_MODIFY, 1, "Update ready", 4);
+        put(&mut data, at::BALLOON_ICON, 99);
+        let read = Notice::parse(&data);
+        assert_eq!(read.info, "Update ready");
+        assert_eq!(read.info_title, "Title");
+        assert_eq!((read.info_flags, read.balloon_icon), (4, 99));
+        assert_eq!(read.tip, "App");
+
+        // A text that fills its field has no terminating zero.
+        let mut data = vec![0u8; 964];
+        put_text(&mut data, at::INFO_TITLE.0, &"x".repeat(64));
+        put(&mut data, at::INFO_FLAGS, 1);
+        assert_eq!(Notice::parse(&data).info_title.len(), 64);
+        // A notification of old headers has no balloon icon.
+        assert_eq!(Notice::parse(&data[..944]).balloon_icon, 0);
+    }
+
+    #[test]
+    fn balloons_begin_and_end_with_their_icon() {
+        let mut icons = Icons::default();
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_ADD, 1, "Hello", 1)),
+            pixels,
+        );
+        let balloons = icons.take_balloons();
+        assert_eq!(balloons.len(), 1);
+        let first = &balloons[0];
+        assert_eq!(
+            (
+                first.title.as_str(),
+                first.text.as_str(),
+                first.tip.as_str()
+            ),
+            ("Title", "Hello", "App")
+        );
+        assert_eq!(first.kind, BalloonKind::Info);
+        assert!(first.icon.is_none());
+        assert!(icons.take_balloons().is_empty());
+
+        // An empty text takes the balloon back.
+        icons.apply(&Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)), pixels);
+        let balloons = icons.take_balloons();
+        assert!(balloons.len() == 1 && balloons[0].is_withdrawal());
+        icons.apply(&Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)), pixels);
+        assert!(icons.take_balloons().is_empty());
+
+        // Removing the icon ends its balloon, as does closing its window.
+        icons.apply(
+            &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "Again", 4)),
+            pixels,
+        );
+        let balloons = icons.take_balloons();
+        assert_eq!(balloons[0].kind, BalloonKind::User);
+        assert!(balloons[0].icon.is_some(), "the picture of the icon");
+        icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels);
+        assert!(icons.take_balloons()[0].is_withdrawal());
+
+        icons.apply(&Notice::parse(&balloon_bytes(NIM_ADD, 2, "Bye", 0)), pixels);
+        icons.take_balloons();
+        icons.prune(|_| false);
+        assert!(icons.take_balloons()[0].is_withdrawal());
     }
 
     #[test]

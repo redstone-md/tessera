@@ -87,6 +87,7 @@ pub use show_desktop::ShowDesktop;
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
+pub use tray::{Balloon, BalloonEvent, BalloonKind};
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};

@@ -30,6 +30,11 @@ pub use win32::{
 };
 #[allow(
     unused_imports,
+    reason = "for the notifications that show the balloons of the tray"
+)]
+pub use win32::{Balloon, BalloonEvent, BalloonKind};
+#[allow(
+    unused_imports,
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
