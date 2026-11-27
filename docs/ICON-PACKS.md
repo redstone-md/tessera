@@ -63,7 +63,7 @@ An icon can follow the colors of the theme in use, as the icons of the shell do,
 - `monochrome = true` draws the icon by its shape alone: every pixel in the color of text of the theme (`on_surface`), as opaque as the picture is there. Line icons drawn in any one color are meant for this.
 - A mask paints part of a picture that keeps its own colors: where the mask covers, the color of text of the theme is laid over the picture, as strongly as the mask covers. The mask is the picture `mask` names, or, without the key, a PNG next to the icon named like it with `-mask` before the extension (`folder.png` and `folder-mask.png`). How much a mask covers is its alpha channel, or its brightness where it has none.
 
-Where the icon stands for something active, such as an application that runs, it is drawn in the primary color of the theme instead; the part of Tessera that draws it has to ask for that (`AppIcons::of_executable_as`, `of_shortcut_as`), which the dock does not do yet. When the theme changes, such icons are drawn again in the new colors the next time they are asked for; a widget that kept the picture it was given shows the new colors once it is built again.
+Where the icon stands for something active, such as an application that runs, it is drawn in the primary color of the theme instead; the part of Tessera that draws it has to ask for that (`AppIcons::of_executable_as`, `of_shortcut_as`), which the dock does for the button of the application in front. When the theme changes, such icons are drawn again in the new colors the next time they are asked for; a widget that kept the picture it was given shows the new colors once it is built again.
 
 ## A pack in a registry
 
@@ -74,6 +74,6 @@ A registry offers a pack as an `[[icon_pack]]` entry with the manifest and every
 ## What is not done
 
 - No pack has been tried on a running shell: the lookup, the masks and the drawing of SVG files were tried in tests only, and the sample pack's SVG files with resvg outside Tessera.
-- The dock does not ask for the active color yet. Where the file manager shows a thumbnail of a file (a picture, a video, a document with a preview), the thumbnail is shown in place of the icon of a pack; folders, the details pane and files without a thumbnail take the icon of the pack.
+- Where the file manager shows a thumbnail of a file (a picture, a video, a document with a preview), the thumbnail is shown in place of the icon of a pack; folders, the details pane and files without a thumbnail take the icon of the pack.
 - Icons of the shell itself (`[shell]`), of the notification area, of notifications and of extensions are not replaced.
 - Light and dark variants of a picture are not chosen between; a pack that wants to fit both uses `monochrome` or a mask.
