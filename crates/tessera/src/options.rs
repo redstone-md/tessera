@@ -279,6 +279,13 @@ impl OptionDecl {
     /// An optional number from `min` to `max` in steps of `step` that
     /// starts at `start`, for a row of Tessera's own settings to step as a
     /// declared number steps.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the rows of the settings are declared in TOML now"
+        )
+    )]
     pub fn counter(min: f64, max: f64, step: f64, start: f64) -> Self {
         Self {
             key: String::new(),

@@ -2,8 +2,347 @@
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
 
+# General.
+
+[[card]]
+section = "General"
+title = "Windows key"
+search = ["Launcher"]
+
+[[card.row]]
+key = "windows_key"
+kind = "choice"
+label = "Opens the launcher"
+choices = [{ value = "unset", label = "Off" }, { value = "launcher", label = "On" }]
+
+[[card]]
+section = "General"
+title = "Contrast"
+
+[[card.row]]
+key = "contrast"
+kind = "toggle"
+label = "Keep text readable (WCAG 2.1 AA)"
+default = true
+
+# Notifications, and the flyouts that show a change for a moment.
+
+[[card]]
+section = "Notifications"
+title = "Notifications"
+table = "notifications"
+
+[[card.row]]
+key = "banners"
+kind = "toggle"
+label = "Banners"
+optional = true
+
+[[card.row]]
+key = "quiet"
+kind = "toggle"
+label = "Do not disturb"
+optional = true
+
+[[card.row]]
+key = "seconds"
+kind = "number"
+label = "Seconds shown"
+min = 2
+max = 30
+step = 2
+default = 6
+optional = true
+unset_label = "Default"
+
+[[card]]
+section = "Notifications"
+title = "Notifications"
+table = "flyout"
+
+[[card.row]]
+key = "volume"
+kind = "toggle"
+label = "Volume flyout"
+optional = true
+
+# The other places come from FlyoutPlace (modules/settings/dynamic.rs).
+[[card.row]]
+key = "place"
+kind = "choice"
+label = "Where flyouts appear"
+choices = [{ value = "unset", label = "Bottom" }]
+
+# The file manager.
+
+[[card]]
+section = "Files"
+title = "File manager"
+table = "files"
+
+[[card.row]]
+key = "own"
+kind = "toggle"
+label = "Open folders in Tessera"
+default = true
+
+[[card.row]]
+key = "hidden"
+kind = "toggle"
+label = "Show hidden files"
+optional = true
+
+# Options of every widget of a name.
+
+[[card]]
+section = "Widgets"
+title = "Clock"
+widget = "clock"
+
+[[card.row]]
+key = "format"
+kind = "choice"
+label = "Format"
+choices = [
+    { value = "unset", label = "Default" },
+    { value = "%H:%M", label = { en = "14:05" } },
+    { value = "%-I:%M %p", label = { en = "2:05 PM" } },
+    { value = "%H:%M  %d.%m.%Y", label = { en = "14:05  21.11.2026" } },
+    { value = "%a, %-d %b  %H:%M", label = { en = "Sat, 21 Nov  14:05" } },
+]
+
+[[card]]
+section = "Widgets"
+title = "Calendar"
+widget = "calendar"
+
+[[card.row]]
+key = "week_start"
+kind = "choice"
+label = "Week starts on"
+choices = [{ value = "unset", label = "Monday" }, { value = "sunday", label = "Sunday" }]
+
+[[card]]
+section = "Widgets"
+title = "Processor"
+widget = "cpu"
+
+[[card.row]]
+key = "style"
+kind = "choice"
+label = "Style"
+choices = [{ value = "unset", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[card]]
+section = "Widgets"
+title = "Memory"
+widget = "memory"
+
+[[card.row]]
+key = "style"
+kind = "choice"
+label = "Style"
+choices = [{ value = "unset", label = "Wave" }, { value = "text", label = "Text" }]
+
+[[card.row]]
+key = "show"
+kind = "choice"
+label = "Shows"
+choices = [{ value = "unset", label = "Percent" }, { value = "used", label = "Gigabytes" }]
+
+[[card]]
+section = "Widgets"
+title = "Battery"
+widget = "battery"
+
+[[card.row]]
+key = "style"
+kind = "choice"
+label = "Style"
+choices = [{ value = "unset", label = "Wave" }, { value = "text", label = "Text" }]
+
+# The connection widget; the meter of the network is `network-meter`.
+[[card]]
+section = "Widgets"
+title = "Network"
+widget = "network"
+
+[[card.row]]
+key = "show"
+kind = "choice"
+label = "Shows"
+choices = [{ value = "unset", label = "Name" }, { value = "icon", label = "Icon" }]
+
+# The dock and the Start menu.
+
+[[card]]
+section = "Dock"
+title = "Dock"
+widget = "windows"
+
+[[card.row]]
+key = "all_displays"
+kind = "toggle"
+label = "Windows of every display"
+optional = true
+
+[[card]]
+section = "Dock"
+title = "Start menu"
+widget = "apps"
+
+[[card.row]]
+key = "columns"
+kind = "number"
+label = "Columns"
+min = 3
+max = 8
+step = 1
+default = 6
+optional = true
+unset_label = "Default"
+
+# The notification area.
+
+[[card]]
+section = "Tray"
+title = "Tray"
+widget = "tray"
+
+[[card.row]]
+key = "limit"
+kind = "number"
+label = "Icons shown"
+min = 1
+max = 30
+step = 1
+default = 6
+optional = true
+unset_label = "All"
+
+[[card.row]]
+key = "tips"
+kind = "toggle"
+label = "Descriptions under the pointer"
+default = true
+
+# Windows: the tiling and the window switcher.
+
+[[card]]
+section = "Windows"
+title = "Tiling"
+table = "tiling"
+
+[[card.row]]
+key = "enabled"
+kind = "toggle"
+label = "Tile windows"
+optional = true
+
+# The other layouts, and those of files, come from dynamic.rs.
+[[card.row]]
+key = "layout"
+kind = "choice"
+label = "Layout"
+choices = [
+    { value = "unset", label = "Master" },
+    { value = "columns", label = "Columns" },
+    { value = "rows", label = "Rows" },
+    { value = "grid", label = "Grid" },
+    { value = "monocle", label = "Monocle" },
+]
+
+[[card.row]]
+key = "gap"
+kind = "number"
+label = "Gap"
+min = 0
+max = 48
+step = 4
+default = 0
+optional = true
+unset_label = "Default"
+
+[[card.row]]
+key = "border"
+kind = "toggle"
+label = "Border of the window in front"
+optional = true
+
+[[card]]
+section = "Windows"
+title = "Window switcher"
+table = "switcher"
+
+[[card.row]]
+key = "previews"
+kind = "toggle"
+label = "Window previews"
+optional = true
+
+[[card.row]]
+key = "style"
+kind = "choice"
+label = "Style"
+choices = [
+    { value = "unset", label = "Icon tiles" },
+    { value = "thumbnails", label = "Large pictures" },
+    { value = "list", label = "Compact list" },
+    { value = "icons", label = "Row of icons" },
+]
+
+[[card.row]]
+key = "scope"
+kind = "choice"
+label = "Which windows"
+choices = [
+    { value = "unset", label = "This workspace" },
+    { value = "display", label = "This display" },
+    { value = "all", label = "All workspaces" },
+]
+
+[[card.row]]
+key = "minimized"
+kind = "choice"
+label = "Minimized windows"
+choices = [
+    { value = "unset", label = "In their place" },
+    { value = "last", label = "After the others" },
+    { value = "hide", label = "Left out" },
+]
+
+# Workspaces.
+
+[[card]]
+section = "Workspaces"
+title = "Workspaces"
+table = "workspaces"
+
+[[card.row]]
+key = "own"
+kind = "number"
+label = "Own workspaces"
+min = 2
+max = 9
+step = 1
+default = 2
+optional = true
+unset_label = "Off"
+
+[[card.row]]
+key = "keys"
+kind = "choice"
+label = "Keys with a digit"
+choices = [
+    { value = "unset", label = "Off" },
+    { value = "alt", label = { en = "Alt" } },
+    { value = "ctrl+alt", label = { en = "Ctrl+Alt" } },
+    { value = "win+alt", label = { en = "Win+Alt" } },
+]
+
 # The popups of the wallpaper, the displays and the power, drawn as pages
 # of their sections.
+
 [[card]]
 section = "Wallpaper"
 title = "Wallpaper settings"
