@@ -856,6 +856,13 @@ const RUSSIAN: &[(&str, &str)] = &[
         "is the name of something else here",
         "уже носит здесь другой объект",
     ),
+    // files-verbs-extras: the menu of the Recycle Bin.
+    ("Restore all items", "Восстановить все объекты"),
+    ("Empty the Recycle Bin", "Очистить корзину"),
+    (
+        "Move every item in the Recycle Bin back to the folder it was deleted from?",
+        "Вернуть все объекты из корзины в папки, из которых они были удалены?",
+    ),
 ];
 
 #[cfg(test)]

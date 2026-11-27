@@ -397,3 +397,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "cannot be the name of a file" = "kann kein Dateiname sein"
 "would be the name of two files" = "wäre der Name zweier Dateien"
 "is the name of something else here" = "ist hier schon der Name von etwas anderem"
+# files-verbs-extras: the menu of the Recycle Bin.
+"Restore all items" = "Alle Elemente wiederherstellen"
+"Empty the Recycle Bin" = "Papierkorb leeren"
+"Move every item in the Recycle Bin back to the folder it was deleted from?" = "Alle Elemente im Papierkorb in den Ordner zurückverschieben, aus dem sie gelöscht wurden?"

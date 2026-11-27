@@ -5,9 +5,12 @@
 
 mod win32;
 
+pub use win32::BinUsage;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
 pub use win32::QuickFolder;
+#[allow(unused_imports, reason = "for the view of the bin in the file manager")]
+pub use win32::RecycledItem;
 #[allow(
     unused_imports,
     reason = "for the packages that hand work to the Shell"
@@ -61,6 +64,11 @@ pub use win32::{HostOptions, ShellEvent, ShellHost};
     reason = "for the file manager and the desktop, which show the menus of the Shell"
 )]
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
+#[allow(
+    unused_imports,
+    reason = "for the menus New, Open with and Send to of the file manager and the desktop"
+)]
+pub use win32::{IconPlace, NewTemplate, OpenWithHandler, SendToKind, SendToTarget, choose_app};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"
