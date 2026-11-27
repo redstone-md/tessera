@@ -1077,10 +1077,10 @@ unsafe extern "system" fn receive(
             upkeep(window);
             LRESULT(0)
         }
+        // Decided as for the requests of the bars, not by the last upkeep:
+        // a request answered since then posted this message.
         appbar::WORK_AREAS => {
-            if SERVING.get() {
-                appbar::set_work_areas();
-            }
+            appbar::work_areas_due(explorer_tray(window).is_none());
             LRESULT(0)
         }
         WM_DISPLAYCHANGE => {

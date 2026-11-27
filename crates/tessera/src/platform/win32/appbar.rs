@@ -694,8 +694,7 @@ fn rearrange_later(window: HWND) {
     }
     // SAFETY: the window belongs to this thread; posting passes no pointers.
     if unsafe { PostMessageW(Some(window), WORK_AREAS, WPARAM(0), LPARAM(0)) }.is_err() {
-        PENDING.set(false);
-        set_work_areas();
+        work_areas_due(true);
     }
 }
 
@@ -749,10 +748,18 @@ pub(super) fn serve(window: HWND, data: &[u8]) -> LRESULT {
     LRESULT(answer.result)
 }
 
-/// Sets the work areas the bars leave, as the tray window was asked to by
-/// the message it posted itself.
-pub(super) fn set_work_areas() {
+/// The message the tray window posted itself arrived: the work areas the
+/// bars leave are set if the window still serves the bars, as `serving`
+/// says. Either way a later change posts the message again.
+pub(super) fn work_areas_due(serving: bool) {
     PENDING.set(false);
+    if serving {
+        set_work_areas();
+    }
+}
+
+/// Sets the work areas the bars leave.
+fn set_work_areas() {
     let monitors = Monitor::all();
     let areas = SERVER.with_borrow(|server| server.work_areas(&monitors));
     let changes = changes(&monitors, &areas);
@@ -819,6 +826,7 @@ pub(super) fn displays_changed(window: HWND) {
 /// back and keeps the bars from now on.
 pub(super) fn forget() {
     SERVER.with_borrow_mut(|server| *server = AppBarServer::default());
+    PENDING.set(false);
 }
 
 #[cfg(test)]
