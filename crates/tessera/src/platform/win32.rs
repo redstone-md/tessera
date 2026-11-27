@@ -84,6 +84,7 @@ mod wifi;
 mod window_ops;
 mod windows_key;
 mod winlogon;
+mod zones;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
@@ -187,6 +188,7 @@ pub use winlogon::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held,
 };
+pub use zones::SystemZone;
 
 use std::ffi::c_void;
 use std::mem::size_of;

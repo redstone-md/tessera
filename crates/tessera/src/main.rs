@@ -43,6 +43,7 @@ mod surface;
 mod switcher;
 mod theme;
 mod tiling;
+mod time_zones;
 mod tip;
 mod ui;
 mod wallpaper;

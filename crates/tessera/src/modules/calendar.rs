@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! A month to page through. Widget: `calendar`.
+//! A month to page through. Widget: `calendar`. Under the month stand
+//! the time zones the clocks name ([`ClockZones`]), each with its time
+//! and its offset.
 
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Weekday};
 use gpui::{
@@ -11,9 +13,10 @@ use gpui::{
 
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
+use crate::modules::clock::{ClockZones, zone_line};
 use crate::motion::Interaction;
 use crate::theme::Theme;
-use crate::ui::state_layer;
+use crate::ui::{one_line, state_layer};
 
 /// Weeks shown, enough for any month.
 const WEEKS: u64 = 6;
@@ -158,6 +161,14 @@ impl Render for Calendar {
             )
         });
 
+        let zones = { ClockZones::named(cx).into_iter() }
+            .filter_map(|zone| zone_line(&zone, language))
+            .map(|line| {
+                div()
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(one_line(line))
+            })
+            .collect::<Vec<_>>();
         div()
             .flex()
             .flex_col()
@@ -165,6 +176,14 @@ impl Render for Calendar {
             .child(header)
             .child(weekdays)
             .children(weeks)
+            .children((!zones.is_empty()).then(|| {
+                div()
+                    .pt(theme.spacing.small)
+                    .flex()
+                    .flex_col()
+                    .gap(theme.spacing.tiny)
+                    .children(zones)
+            }))
     }
 }
 

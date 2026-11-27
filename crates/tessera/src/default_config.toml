@@ -387,6 +387,10 @@
 #
 # Built-in widgets:
 #   "clock"     date and time; option format, a strftime pattern
+#               and option zones, time zones its tip and the calendar
+#               give with their time and offset, as ["Europe/Berlin",
+#               "Tokyo", "Eastern Standard Time"]: an IANA identifier, a
+#               zone of Windows or a city
 #   "calendar"  a month to page through; option week_start, "monday" or "sunday"
 #   "notifications"  the notifications Tessera keeps: those of the Windows
 #               notification center and the history of those that left it,
