@@ -529,6 +529,13 @@ impl Workspaces {
         }
     }
 
+    /// Whether Tessera keeps workspaces of its own; without them the
+    /// workspaces are the virtual desktops of Windows, which are read from
+    /// the registry.
+    pub fn owned(cx: &App) -> bool {
+        cx.global::<Self>().homes.count > 0
+    }
+
     /// What the button of the workspace at `index` says: its name, or
     /// its number where it has none.
     pub fn label(index: usize, cx: &App) -> String {

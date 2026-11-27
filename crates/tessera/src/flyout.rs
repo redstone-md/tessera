@@ -6,8 +6,10 @@
 //! is a [`Gauge`]: the volume of the default output, the brightness of the
 //! built-in panel, the mute of the microphone, Caps Lock, Num Lock, the
 //! keyboard layout of the window in front and what is playing; the
-//! workspace shown is watched on the thread of the windows, where the
-//! workspaces are kept. While Win+Space is held, the action
+//! workspace shown is watched on its own, since Tessera's own workspaces
+//! are kept on the thread of the windows, while the virtual desktops of
+//! Windows are read from the registry on the background executor. While
+//! Win+Space is held, the action
 //! `input-language` has the installed layouts shown as a list, the one
 //! switched to lit ([`Flyouts::show_layouts`]).
 //!
@@ -681,19 +683,35 @@ impl Gauge for MediaGauge {
     }
 }
 
-/// Looks at the workspace shown on the display the pointer is on, on the
-/// thread of the windows, where the workspaces are kept, and shows when
-/// another one is. Going to another display is no change.
+/// Looks at the workspace shown on the display the pointer is on and
+/// shows when another one is. Tessera's own workspaces are looked at on
+/// the thread of the windows, where they are kept; the virtual desktops of
+/// Windows are read from the registry on the background executor first.
+/// Going to another display is no change.
 fn watch_workspaces(cx: &mut App) -> Task<()> {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut last: Option<(Option<DisplayKey>, VirtualDesktops)> = None;
         loop {
+            let owned =
+                cx.update(|cx| cx.has_global::<Workspaces>().then(|| Workspaces::owned(cx)));
+            let Ok(owned) = owned else {
+                break;
+            };
+            let of_windows = match owned {
+                Some(false) => {
+                    let read = cx
+                        .background_executor()
+                        .spawn(async { VirtualDesktops::now() });
+                    Some(read.await)
+                }
+                _ => None,
+            };
             let looked = cx.update(|cx| {
-                if !cx.has_global::<Workspaces>() {
+                if owned.is_none() {
                     return;
                 }
                 let display = DisplayKey::under_pointer();
-                let now = Workspaces::now(display, cx);
+                let now = of_windows.unwrap_or_else(|| Workspaces::now(display, cx));
                 let before = last.replace((display, now));
                 if !workspace_changed(before, (display, now)) {
                     return;
