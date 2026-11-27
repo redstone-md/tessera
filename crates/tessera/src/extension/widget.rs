@@ -56,8 +56,23 @@ struct Field {
     field: Entity<TextField>,
     /// The value the extension gave it last.
     given: String,
-    /// The text the extension was told of last.
-    told: String,
+    /// The texts the extension was told of lately, the last one last. A
+    /// value it gives back that is one of them is what was typed, coming
+    /// back late perhaps, and is not put into the field over what is
+    /// typed by now.
+    told: VecDeque<String>,
+}
+
+/// How many texts told to the extension a field remembers.
+const TOLD_KEPT: usize = 16;
+
+impl Field {
+    fn told(&mut self, text: String) {
+        if self.told.len() == TOLD_KEPT {
+            self.told.pop_front();
+        }
+        self.told.push_back(text);
+    }
 }
 
 /// A slider the extension described, drawn by a view of its own.
@@ -314,10 +329,10 @@ impl ExtensionWidget {
             let Some(known) = this.fields.get_mut(&id) else {
                 return;
             };
-            if known.told == text {
+            if known.told.back() == Some(&text) {
                 return;
             }
-            known.told = text.clone();
+            known.told(text.clone());
             let action = format!("input-changed:{id}:{text}");
             this.tell(action, Some(format!("input:{id}")), cx);
         })
@@ -325,7 +340,7 @@ impl ExtensionWidget {
         Field {
             field,
             given: input.value.clone(),
-            told: input.value.clone(),
+            told: VecDeque::from([input.value.clone()]),
         }
     }
 
@@ -334,11 +349,15 @@ impl ExtensionWidget {
     fn keep_field(&mut self, mut field: Field, input: &TextInput, cx: &mut Context<Self>) -> Field {
         if field.given != input.value {
             field.given = input.value.clone();
-            field.told = input.value.clone();
-            let value = input.value.clone();
-            field
-                .field
-                .update(cx, |field, cx| field.put_text(&value, cx));
+            // What was typed and given back as it is stays, caret and all.
+            let typed = field.field.read(cx).text();
+            if typed != input.value && !field.told.contains(&input.value) {
+                field.told = VecDeque::from([input.value.clone()]);
+                let value = input.value.clone();
+                field
+                    .field
+                    .update(cx, |field, cx| field.put_text(&value, cx));
+            }
         }
         field
     }
