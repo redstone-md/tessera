@@ -13,8 +13,10 @@
 //! Each display gets a window of its own that lies above the ordinary
 //! windows and under what is kept above them, so Tessera's bars, previews
 //! and popups stay in sight over a peek, and a window that is kept above
-//! the others itself stays so. The pointer and the keyboard stay where
-//! they are. The window looked at is a picture the compositor draws (a
+//! the others itself stays so. The keyboard stays where it is; a click on
+//! a peek ends it, as a click on the desktop ends the peek of Explorer, so
+//! a peek shown until the action is done again does not keep the windows
+//! out of reach. The window looked at is a picture the compositor draws (a
 //! DWM thumbnail), so it is seen live; the desktop is the picture Windows
 //! paints behind the windows, which is that of Windows: the wallpaper
 //! Tessera draws itself is not in it, nor are icons on the desktop.
@@ -23,9 +25,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, DisplayId, Global, IntoElement, ParentElement,
-    Pixels, Render, RenderImage, Styled, WeakEntity, Window, WindowHandle, black, div, img, point,
-    px, size,
+    App, AppContext, AsyncApp, Bounds, Context, DisplayId, Global, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Render, RenderImage, Styled, WeakEntity, Window,
+    WindowHandle, black, div, img, point, px, size,
 };
 
 use crate::actions::{Action, Actions};
@@ -392,7 +394,9 @@ impl Render for PeekView {
         }
         let scale = self.display.scale;
         let logical = |length: i32| px(length as f32 / scale);
-        let sheet = div().size_full().relative();
+        // This window cannot be told to close while it handles the click.
+        let sheet = { div().size_full().relative() }
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.defer(Peek::hide));
         match self.looking {
             Looking::Window(_) => sheet.bg(black().opacity(DIM * visibility)),
             Looking::Desktop => {
