@@ -93,7 +93,7 @@ content = [{ widget = "tiles", columns = 2, tiles = [
 | `airplane` | switches every radio off and later back on those that were on; lit while every radio is off. The airplane mode flag of Windows is not set, since Windows lets only its own quick settings set it |
 | `radios` | every radio of the machine with a switch of its own |
 | `hotspot` | starts and stops the mobile hotspot of the connection the machine reaches the internet through; its note counts the devices on it |
-| `hotspot-details` | the name of its network, its password (dots until a click), the devices on it, the band to send it on where the adapter has several, and a QR code a phone camera joins the network with (`qr = false` leaves it out); the name and the password are changed in the Windows settings it leads to |
+| `hotspot-details` | the name of its network, its password (dots until a click), the devices on it, the band to send it on where the adapter has several, and, while the password is shown, a QR code a phone camera joins the network with, which holds the password (`qr = false` leaves it out); the name and the password are changed in the Windows settings it leads to |
 | `power-mode` | the power mode of Windows; a click puts the next one in use. Windows offers the modes only while the Balanced plan is in use |
 | `power-modes` | the three modes to choose from, and whether battery saver is on |
 | `night-light` | switches night light; with Tessera's own and a schedule it says until when |

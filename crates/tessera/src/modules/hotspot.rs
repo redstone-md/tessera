@@ -5,8 +5,9 @@
 //! that starts and stops sharing the internet connection over Wi-Fi, and
 //! `hotspot-details`, which it unfolds: the name of the network, its
 //! password (shown on a click), how many devices are on it, the band to
-//! send it on and a QR code a phone joins the network with (option qr,
-//! false to leave it out). Both share one reading of the hotspot, asked
+//! send it on and a QR code a phone joins the network with, which holds
+//! the password and so is drawn only while the password is shown (option
+//! qr, false to leave it out). Both share one reading of the hotspot, asked
 //! every three seconds while one is shown. The name and the password are
 //! changed in the Windows settings, which the details lead to.
 
@@ -152,7 +153,7 @@ impl Face for HotspotTile {
 /// The details of the hotspot.
 struct HotspotDetails {
     reading: Entity<HotspotReading>,
-    /// Whether the QR code is shown.
+    /// Whether the QR code is shown, while the password is.
     qr: bool,
     /// Whether the password is shown instead of dots.
     revealed: bool,
@@ -342,7 +343,9 @@ impl Render for HotspotDetails {
         if info.bands.len() > 1 {
             rows.push(self.band_chips(&info, window, cx));
         }
+        // The code holds the password, so it is hidden along with it.
         if self.qr
+            && self.revealed
             && let Some(picture) = self.code(&info)
         {
             rows.push(

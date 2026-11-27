@@ -380,9 +380,11 @@
 #               "hotspot-details"
 #   "hotspot-details"  the name of the network of the hotspot, its
 #               password (shown on a click), the devices on it, the band
-#               to send it on and a QR code a phone joins it with; option
-#               qr, false to leave the code out. The name and the password
-#               are changed in the Windows settings it leads to
+#               to send it on and a QR code a phone joins it with, which
+#               holds the password and so is drawn only while the password
+#               is shown; option qr, false to leave the code out. The name
+#               and the password are changed in the Windows settings it
+#               leads to
 #   "power-mode"  a tile with the power mode of Windows (best power
 #               efficiency, balanced, best performance); a click puts the
 #               next in use. Windows offers them only with the Balanced
