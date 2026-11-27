@@ -109,8 +109,9 @@ impl Bluetooth {
     }
 
     /// The paired devices as [`Self::devices`] lists them, each with what
-    /// Windows names it by, to remove it with.
-    pub fn paired_devices() -> Result<Vec<(String, PairedDevice)>, String> {
+    /// Windows names it by, to remove it with: one name for each kind of
+    /// Bluetooth it was paired by.
+    pub fn paired_devices() -> Result<Vec<(Vec<String>, PairedDevice)>, String> {
         let read = || -> WindowsResult<Vec<Listed>> {
             let mut devices = paired(&BluetoothDevice::GetDeviceSelectorFromPairingState(true)?)?;
             let low_energy = BluetoothLEDevice::GetDeviceSelectorFromPairingState(true)?;
@@ -508,27 +509,36 @@ impl Bluetooth {
         }
     }
 
-    /// Removes the pairing of the device `id`, as Windows' settings do
-    /// with "Remove device".
-    pub fn unpair(id: &str) -> Result<(), String> {
-        let status = DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))
-            .and_then(|found| found.get())
-            .and_then(|info| info.Pairing())
-            .and_then(|pairing| pairing.UnpairAsync())
-            .and_then(|unpairing| unpairing.get())
-            .and_then(|result| result.Status())
-            .map_err(|error| format!("the device was not removed: {}", error.message()))?;
-        match status {
-            DeviceUnpairingResultStatus::Unpaired
-            | DeviceUnpairingResultStatus::AlreadyUnpaired => Ok(()),
-            DeviceUnpairingResultStatus::AccessDenied => {
-                Err("the device was not removed: Windows denied it".to_owned())
-            }
-            status => Err(format!(
-                "the device was not removed: Windows answered with status {}",
-                status.0
-            )),
+    /// Removes the pairings of the device that Windows names by `ids`, as
+    /// Windows' settings do with "Remove device": a device that speaks both
+    /// kinds of Bluetooth has one for each.
+    pub fn unpair(ids: &[String]) -> Result<(), String> {
+        // Each is tried; the first that fails is told.
+        let removed = ids.iter().map(|id| unpair(id));
+        removed.fold(Ok(()), Result::and)
+    }
+}
+
+/// Removes the pairing `id`.
+fn unpair(id: &str) -> Result<(), String> {
+    let status = DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))
+        .and_then(|found| found.get())
+        .and_then(|info| info.Pairing())
+        .and_then(|pairing| pairing.UnpairAsync())
+        .and_then(|unpairing| unpairing.get())
+        .and_then(|result| result.Status())
+        .map_err(|error| format!("the device was not removed: {}", error.message()))?;
+    match status {
+        DeviceUnpairingResultStatus::Unpaired | DeviceUnpairingResultStatus::AlreadyUnpaired => {
+            Ok(())
         }
+        DeviceUnpairingResultStatus::AccessDenied => {
+            Err("the device was not removed: Windows denied it".to_owned())
+        }
+        status => Err(format!(
+            "the device was not removed: Windows answered with status {}",
+            status.0
+        )),
     }
 }
 
@@ -624,9 +634,13 @@ fn paired(selector: &HSTRING) -> WindowsResult<Vec<Listed>> {
 
 /// `devices` in the order they are shown in, with their charge from
 /// `batteries`, which goes by address. A device that speaks both kinds of
-/// Bluetooth is listed by both and kept once, under the name of the first.
-fn arranged(devices: Vec<Listed>, batteries: &HashMap<u64, u8>) -> Vec<(String, PairedDevice)> {
-    let mut kept: Vec<Listed> = Vec::new();
+/// Bluetooth is listed by both and kept once, under the name of the first
+/// and with what Windows names both by.
+fn arranged(
+    devices: Vec<Listed>,
+    batteries: &HashMap<u64, u8>,
+) -> Vec<(Vec<String>, PairedDevice)> {
+    let mut kept: Vec<(Option<u64>, Vec<String>, PairedDevice)> = Vec::new();
     for (address, id, mut device) in devices {
         device.battery = address.and_then(|address| batteries.get(&address).copied());
         let twin = kept.iter_mut().find(|(other, _, kept)| match address {
@@ -634,16 +648,17 @@ fn arranged(devices: Vec<Listed>, batteries: &HashMap<u64, u8>) -> Vec<(String, 
             None => other.is_none() && kept.name == device.name,
         });
         match twin {
-            Some((_, _, twin)) => {
+            Some((_, ids, twin)) => {
+                ids.push(id);
                 twin.connected |= device.connected;
                 twin.audio = twin.audio.or(device.audio);
             }
-            None => kept.push((address, id, device)),
+            None => kept.push((address, vec![id], device)),
         }
     }
     let mut devices: Vec<_> = kept
         .into_iter()
-        .map(|(_, id, device)| (id, device))
+        .map(|(_, ids, device)| (ids, device))
         .collect();
     devices.sort_by(|(_, one), (_, other)| {
         let order = (!one.connected, one.name.to_lowercase());
@@ -794,12 +809,13 @@ mod tests {
         );
         let mut mouse = device("Mouse", true);
         mouse.battery = Some(80);
+        let ids = |ids: &[&str]| ids.iter().map(|&id| id.to_owned()).collect::<Vec<_>>();
         assert_eq!(
             listed,
             vec![
-                ("classic".to_owned(), mouse),
-                ("a".to_owned(), device("Alpha", false)),
-                ("s".to_owned(), device("Speaker", false))
+                (ids(&["classic", "low"]), mouse),
+                (ids(&["a"]), device("Alpha", false)),
+                (ids(&["s"]), device("Speaker", false))
             ]
         );
     }

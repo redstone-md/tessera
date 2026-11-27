@@ -66,8 +66,8 @@ const AWAY_OPACITY: f32 = 0.6;
 /// How wide the line that shows a charge is.
 const CHARGE_WIDTH: Pixels = px(48.);
 
-/// How long the dot that tells of the search takes to pulse once.
-const PULSE: Duration = Duration::from_millis(1200);
+/// The side of the dot that tells of the search.
+const SEARCH_DOT: Pixels = px(6.);
 
 const ICON_BLUETOOTH: &str = "\u{e702}";
 const ICON_ADD: &str = "\u{e710}";
@@ -191,8 +191,9 @@ fn prompt_text(prompt: Option<&PairingPrompt>, language: Language) -> String {
     }
 }
 
-/// A paired device with what Windows names it by.
-type Listed = (String, PairedDevice);
+/// A paired device with what Windows names it by, once for each kind of
+/// Bluetooth it was paired by.
+type Listed = (Vec<String>, PairedDevice);
 
 /// A device that was asked to connect or to disconnect and has not yet.
 struct Asked {
@@ -203,9 +204,10 @@ struct Asked {
     reads: u32,
 }
 
-/// A device being paired.
+/// A device being paired. Its row stays while the pairing runs, also once
+/// the device stops being found, as a device that is pairing may.
 struct Pairs {
-    id: String,
+    device: FoundDevice,
     pairing: Rc<Pairing>,
     /// What the device asks of the user now.
     prompt: Option<PairingPrompt>,
@@ -218,8 +220,6 @@ struct Search {
     /// `None` until it has started.
     scan: Option<BluetoothScan>,
     found: Vec<FoundDevice>,
-    /// When it started, for the pulse of its dot.
-    since: std::time::Instant,
 }
 
 /// Lists the devices and follows them while it is shown.
@@ -246,7 +246,7 @@ struct Devices {
     yes: Interaction,
     no: Interaction,
     /// The paired device one more click of the right button removes.
-    removing: Option<String>,
+    removing: Option<Vec<String>>,
     /// What the last thing done came to, when it did not work out, or a
     /// word on a device that cannot be connected from here.
     message: Option<String>,
@@ -333,7 +333,6 @@ impl Devices {
         self.search = Some(Search {
             scan: None,
             found: Vec::new(),
-            since: std::time::Instant::now(),
         });
         self.search_failure = None;
         cx.notify();
@@ -399,7 +398,7 @@ impl Devices {
         }
         let pairing = Rc::new(Bluetooth::pair(device.id.clone()));
         self.pairs = Some(Pairs {
-            id: device.id.clone(),
+            device: device.clone(),
             pairing: pairing.clone(),
             prompt: None,
             cancelled: false,
@@ -481,23 +480,23 @@ impl Devices {
         }
     }
 
-    /// A click of the right button on the paired device `id`: the second
-    /// one in a row removes it.
-    fn right_clicked(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.removing.as_deref() != Some(id) {
-            self.removing = Some(id.to_owned());
+    /// A click of the right button on the paired device named by `ids`:
+    /// the second one in a row removes it.
+    fn right_clicked(&mut self, ids: &[String], cx: &mut Context<Self>) {
+        if self.removing.as_deref() != Some(ids) {
+            self.removing = Some(ids.to_vec());
             cx.notify();
             return;
         }
         self.removing = None;
         self.message = None;
         cx.notify();
-        let id = id.to_owned();
+        let ids = ids.to_vec();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let removed = cx
                 .background_executor()
                 .spawn(async move {
-                    Bluetooth::unpair(&id)?;
+                    Bluetooth::unpair(&ids)?;
                     Bluetooth::paired_devices()
                 })
                 .await;
@@ -605,7 +604,7 @@ impl Devices {
         &mut self,
         index: usize,
         count: usize,
-        (id, device): &Listed,
+        (ids, device): &Listed,
         theme: &Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -635,7 +634,7 @@ impl Devices {
                 tint,
             )
         };
-        let note = match self.removing.as_deref() == Some(id.as_str()) {
+        let note = match self.removing.as_ref() == Some(ids) {
             true => language.say("Right-click again to remove it").to_owned(),
             false => note(device, asked, language),
         };
@@ -665,7 +664,7 @@ impl Devices {
             _ => row,
         };
         let row = Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index));
-        let (clicked, removed) = (device.clone(), id.clone());
+        let (clicked, removed) = (device.clone(), ids.clone());
         row.on_click(cx.listener(move |this, _, _, cx| this.clicked(&clicked, cx)))
             .on_mouse_down(
                 MouseButton::Right,
@@ -674,18 +673,15 @@ impl Devices {
             .into_any_element()
     }
 
-    /// The title over the devices in reach, with a dot that pulses while
-    /// Windows looks for them.
-    fn search_title(&self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    /// The title over the devices in reach, with a dot and a word while
+    /// Windows looks for them. The dot stands still: a pulse would draw the
+    /// whole list again on every frame while the popup is open.
+    fn search_title(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let language = Language::of(cx);
         let title = list_title(theme, language.say("Available devices"));
-        let Some(search) = &self.search else {
+        if self.search.is_none() {
             return title;
-        };
-        // The pulse needs a frame after this one.
-        window.request_animation_frame();
-        let phase = search.since.elapsed().as_secs_f32() / PULSE.as_secs_f32();
-        let pulse = 0.5 + 0.5 * (phase * std::f32::consts::TAU).sin();
+        }
         div()
             .flex_none()
             .flex()
@@ -694,10 +690,9 @@ impl Devices {
             .child(title)
             .child(
                 div()
-                    .size(px(6.))
+                    .size(SEARCH_DOT)
                     .rounded(theme.shape.full)
-                    .bg(theme.colors.primary)
-                    .opacity(0.3 + 0.7 * pulse),
+                    .bg(theme.colors.primary),
             )
             .child(
                 div()
@@ -706,6 +701,8 @@ impl Devices {
             )
     }
 
+    /// The row of the device in reach `device`, the `index`th found, which
+    /// a click pairs.
     fn found_row(
         &mut self,
         index: usize,
@@ -714,15 +711,8 @@ impl Devices {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let language = Language::of(cx);
-        let pairing = self.pairs.as_ref().filter(|pairs| pairs.id == device.id);
-        let note = match pairing {
-            Some(pairs) => prompt_text(pairs.prompt.as_ref(), language),
-            None => language.say("Ready to pair").to_owned(),
-        };
-        let prompt = pairing.and_then(|pairs| pairs.prompt.clone());
-        let lit = pairing.is_some();
-        let row = list_row(theme, ICON_ADD, lit, device.name.clone(), note)
+        let note = Language::of(cx).say("Ready to pair").to_owned();
+        let row = list_row(theme, ICON_ADD, false, device.name.clone(), note)
             .id(("bluetooth-found", index));
         let row = match self.found_rows.get_mut(index) {
             Some(interaction) if self.pairs.is_none() => row.bg(state_layer(
@@ -736,20 +726,33 @@ impl Devices {
             this.found_rows.get_mut(index)
         });
         let clicked = device.clone();
-        let row = row.on_click(cx.listener(move |this, _, _, cx| this.pair(&clicked, cx)));
-        let answer = match prompt {
+        row.on_click(cx.listener(move |this, _, _, cx| this.pair(&clicked, cx)))
+            .into_any_element()
+    }
+
+    /// The row of the device being paired, with what it asks of the user.
+    fn pairing_row(
+        &mut self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let pairs = self.pairs.as_ref()?;
+        let note = prompt_text(pairs.prompt.as_ref(), Language::of(cx));
+        let row = list_row(theme, ICON_ADD, true, pairs.device.name.clone(), note);
+        let answer = match pairs.prompt {
             Some(PairingPrompt::Confirm(_)) => Some(self.confirm_buttons(theme, window, cx)),
             Some(PairingPrompt::Enter) => Some(self.pin_line(theme, window, cx)),
             _ => None,
         };
-        div()
+        let row = div()
             .flex_none()
             .flex()
             .flex_col()
             .gap(theme.spacing.small)
             .child(row)
-            .children(answer)
-            .into_any_element()
+            .children(answer);
+        Some(row.into_any_element())
     }
 
     /// Yes and No, for a PIN the device shows too.
@@ -810,7 +813,7 @@ impl Devices {
     }
 
     /// The devices in reach, under their title, while the search runs or
-    /// could not start.
+    /// could not start, and the device being paired first, while it is.
     fn found_rows(
         &mut self,
         theme: &Theme,
@@ -818,24 +821,26 @@ impl Devices {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let mut rows = Vec::new();
-        if let Some(failure) = self.search_failure.clone() {
-            rows.push(
-                list_title(theme, Language::of(cx).say("Available devices")).into_any_element(),
-            );
+        let failure = self.search_failure.clone();
+        if failure.is_none() && self.search.is_none() && self.pairs.is_none() {
+            return rows;
+        }
+        rows.push(self.search_title(theme, cx).into_any_element());
+        rows.extend(self.pairing_row(theme, window, cx));
+        if let Some(failure) = failure {
             rows.push(self.message(theme, &failure, window).into_any_element());
             return rows;
         }
-        if self.search.is_none() {
-            return rows;
-        }
-        rows.push(self.search_title(theme, window, cx).into_any_element());
+        let pairing = self.pairs.as_ref().map(|pairs| pairs.device.id.clone());
         let found = self
             .search
             .as_ref()
             .map(|search| search.found.clone())
             .unwrap_or_default();
         for (index, device) in found.iter().enumerate() {
-            rows.push(self.found_row(index, device, theme, window, cx));
+            if pairing.as_ref() != Some(&device.id) {
+                rows.push(self.found_row(index, device, theme, window, cx));
+            }
         }
         rows
     }
