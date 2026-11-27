@@ -30,6 +30,7 @@ use crate::extension::registry::{Catalog, Installed, Kind, Offer, Package, Place
 use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon, image_of_bytes};
 use crate::module::{Module, WidgetRegistry};
+use crate::modules::Settings;
 use crate::motion::{Interaction, InteractionState, Spring};
 use crate::platform::UriScheme;
 use crate::shell::Shell;
@@ -157,6 +158,12 @@ fn directory(kind: Kind) -> Option<PathBuf> {
         Kind::Extension => extensions_dir(),
         _ => config_dir().map(|directory| directory.join(kind.name())),
     }
+}
+
+/// Whether the theme `name` is the base theme or stacked over it.
+fn theme_in_use(name: &str, cx: &App) -> bool {
+    let config = Shell::config(cx);
+    config.theme.as_deref() == Some(name) || config.theme_layers.iter().any(|layer| layer == name)
 }
 
 /// What of `kind` is installed now.
@@ -869,6 +876,21 @@ impl Marketplace {
 
     /// Uses the icon pack of the row, or takes it out of use, or applies
     /// its wallpaper.
+    /// Opens the settings at the card of the extension or theme of the row
+    /// at `index`, where what it declares is set.
+    fn open_settings(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+        let section = match row.offer.kind() {
+            Kind::Theme => "themes",
+            _ => "extensions",
+        };
+        let id = row.offer.id.clone();
+        // The click that chose this is still being handled.
+        cx.defer(move |cx| Settings::open_at(section, Some(&id), cx));
+    }
+
     fn take_step(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(row) = self.rows.get_mut(index) else {
             return;
@@ -955,7 +977,13 @@ impl Marketplace {
                 choices.push((1, Choice::other(label, Self::take_step)));
             }
             Kind::Wallpaper => choices.push((1, Choice::other("Apply", Self::take_step))),
-            Kind::Extension | Kind::Theme | Kind::TilingLayout => {}
+            // An installed extension has a card in the settings; a theme
+            // has one while it is in use.
+            Kind::Extension => choices.push((1, Choice::other("Settings", Self::open_settings))),
+            Kind::Theme if theme_in_use(&row.offer.id, cx) => {
+                choices.push((1, Choice::other("Settings", Self::open_settings)));
+            }
+            Kind::Theme | Kind::TilingLayout => {}
         }
         if known.version.is_some() {
             choices.push((2, Choice::other("Remove", Self::ask_to_remove)));

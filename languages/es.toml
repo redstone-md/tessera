@@ -861,3 +861,9 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Tall" = "Alto"
 "Wide" = "Ancho"
 "Three columns" = "Tres columnas"
+
+# integration of wave 2: the icon packs in the settings.
+"The icon packs in use, in order: the first that has an icon for a program or a kind of file gives it." = "Los paquetes de iconos en uso, en orden: el primero que tiene un icono para un programa o un tipo de archivo lo da."
+"No icon pack is in use." = "No se usa ningún paquete de iconos."
+"No icon pack is installed; the marketplace offers them." = "No hay ningún paquete de iconos instalado; el mercado los ofrece."
+"Use an icon pack" = "Usar un paquete de iconos"

@@ -69,6 +69,20 @@ pub fn icon_packs_dir() -> Option<PathBuf> {
     config_dir().map(|directory| directory.join(PACKS_DIRECTORY))
 }
 
+/// The identifiers of the installed icon packs: the directories of the
+/// icon packs that hold a manifest, in the order of their names. It reads
+/// the disk, so it is not to be called on the thread that draws.
+pub fn installed_ids() -> Vec<String> {
+    let entries = icon_packs_dir().and_then(|root| fs::read_dir(root).ok());
+    let mut ids: Vec<String> = { entries.into_iter().flatten().flatten() }
+        .filter(|entry| entry.path().join(MANIFEST_FILE).is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|id| is_plain_id(id))
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// An `icon-pack.toml` as it is written.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

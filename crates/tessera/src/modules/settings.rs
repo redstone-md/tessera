@@ -152,11 +152,13 @@ impl Section {
         }
     }
 
-    /// What the marketplace shows in this part, if it has one.
-    fn market(self) -> Option<&'static str> {
+    /// The kinds the marketplace shows in this part, if it has one: what
+    /// changes the looks under Themes, what adds to the shell under
+    /// Extensions.
+    fn market(self) -> Option<&'static [&'static str]> {
         match self {
-            Self::Themes => Some("themes"),
-            Self::Extensions => Some("extensions"),
+            Self::Themes => Some(&["themes", "icon-packs", "wallpapers"]),
+            Self::Extensions => Some(&["extensions", "tiling-layouts"]),
             _ => None,
         }
     }
@@ -674,12 +676,65 @@ enum Control {
     /// Takes every declared setting of an extension or a theme out of the
     /// file.
     ResetAll(Owner),
-    /// Stacks the theme at this place of the theme files over the others.
-    AddLayer(usize),
-    /// Takes the theme at this place of the stack off it.
-    DropLayer(usize),
-    /// Moves the theme at this place of the stack up it, or down.
-    ShiftLayer(usize, bool),
+    /// Puts what is at this place of what can be stacked at the end of
+    /// the stack: a theme over the others, or an icon pack after those in
+    /// use.
+    AddLayer(Stack, usize),
+    /// Takes what is at this place of the stack off it.
+    DropLayer(Stack, usize),
+    /// Moves what is at this place of the stack up it, or down.
+    ShiftLayer(Stack, usize, bool),
+}
+
+/// What the settings keep in an order of its own, changed by the same
+/// buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Stack {
+    /// The themes stacked over the base theme, `theme_layers`.
+    Layers,
+    /// The icon packs in use, the first one first, `icon_packs`.
+    IconPacks,
+}
+
+/// What the card of a [`Stack`] says.
+struct StackTexts {
+    title: &'static str,
+    about: &'static str,
+    /// Said when the stack holds nothing.
+    empty: &'static str,
+    /// Said when it holds nothing and nothing can be put on it.
+    nothing: &'static str,
+    /// Over what can be put on it.
+    add: &'static str,
+}
+
+impl Stack {
+    /// What `config` has on the stack, in order.
+    fn of(self, config: &Config) -> &[String] {
+        match self {
+            Self::Layers => &config.theme_layers,
+            Self::IconPacks => &config.icon_packs,
+        }
+    }
+
+    fn texts(self) -> StackTexts {
+        match self {
+            Self::Layers => StackTexts {
+                title: "Layers",
+                about: "Themes stacked over the theme, in order: each changes only what it sets, and the last one wins.",
+                empty: "Nothing is stacked over the theme.",
+                nothing: "Nothing is stacked over the theme.",
+                add: "Add a layer",
+            },
+            Self::IconPacks => StackTexts {
+                title: "Icon packs",
+                about: "The icon packs in use, in order: the first that has an icon for a program or a kind of file gives it.",
+                empty: "No icon pack is in use.",
+                nothing: "No icon pack is installed; the marketplace offers them.",
+                add: "Use an icon pack",
+            },
+        }
+    }
 }
 
 /// The deeds of a key combination as they are shown, in the order of
@@ -1153,7 +1208,11 @@ impl Settings {
             && !self.markets.contains_key(&section)
         {
             let mut options = toml::Table::new();
-            options.insert(MARKETPLACE_SHOWS.to_owned(), shown.into());
+            let shown = shown.iter().map(|&kind| toml::Value::from(kind));
+            options.insert(
+                MARKETPLACE_SHOWS.to_owned(),
+                toml::Value::Array(shown.collect()),
+            );
             options.insert(MARKETPLACE_COLUMNS.to_owned(), MARKET_COLUMNS.into());
             let spec = WidgetSpec {
                 widget: MARKETPLACE_WIDGET.to_owned(),
@@ -1399,8 +1458,8 @@ impl Settings {
             // Done above.
             Control::Declared(..)
             | Control::ResetAll(_)
-            | Control::AddLayer(_)
-            | Control::DropLayer(_)
+            | Control::AddLayer(..)
+            | Control::DropLayer(..)
             | Control::ShiftLayer(..) => {}
         }
     }
@@ -2510,6 +2569,8 @@ impl Settings {
             Section::General => {
                 shared.push(self.arrangements(config, window, cx));
                 shared.push(self.languages(window, cx));
+                // A note, a line of packs and one of those to use.
+                shared.push((4, self.icon_packs_card(config, window, cx)));
                 shared.push(self.startup(&theme, language, cx));
             }
             Section::Bars => {

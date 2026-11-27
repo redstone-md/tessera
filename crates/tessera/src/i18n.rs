@@ -1607,6 +1607,17 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Tall", "Высокая"),
     ("Wide", "Широкая"),
     ("Three columns", "Три столбца"),
+    // integration of wave 2: the icon packs in the settings.
+    (
+        "The icon packs in use, in order: the first that has an icon for a program or a kind of file gives it.",
+        "Используемые наборы значков по порядку: значок даёт первый набор, в котором он есть для программы или типа файлов.",
+    ),
+    ("No icon pack is in use.", "Наборы значков не используются."),
+    (
+        "No icon pack is installed; the marketplace offers them.",
+        "Наборы значков не установлены; их предлагает магазин.",
+    ),
+    ("Use an icon pack", "Использовать набор значков"),
 ];
 
 #[cfg(test)]

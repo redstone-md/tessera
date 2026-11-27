@@ -21,13 +21,14 @@ use gpui::{
 
 use super::{
     CAPTION_SHARE, CHIP_HEIGHT, CHIP_TINT, Control, Face, ICON_LESS, ICON_MORE, ICON_REMOVE,
-    LIFTED, Lifted, SMALL_BUTTON, Section, Settings, card, note, wrap,
+    LIFTED, Lifted, SMALL_BUTTON, Section, Settings, Stack, card, note, wrap,
 };
 use crate::config::Config;
 use crate::config::edit::ConfigFile;
 use crate::extension::{InstalledExtension, installed_extensions};
 use crate::field::TextField;
 use crate::i18n::Language;
+use crate::icon_packs;
 use crate::motion::{Spring, SpringSpec, mix};
 use crate::options::{Kind, OptionDecl, OptionSet, PathPick, SEGMENTS, is_color, text_of};
 use crate::platform::font_families;
@@ -167,6 +168,8 @@ struct Declared {
     themes: Vec<(String, ThemeDeclared)>,
     /// The themes the last reading was for.
     read_for: Vec<String>,
+    /// The installed icon packs, by identifier.
+    icon_packs: Vec<String>,
     reading: Option<Task<()>>,
 }
 
@@ -323,12 +326,13 @@ impl Settings {
                         (name, declared)
                     })
                     .collect();
-                (installed_extensions(), themes)
+                (installed_extensions(), themes, icon_packs::installed_ids())
             });
-            let (extensions, themes) = read.await;
+            let (extensions, themes, packs) = read.await;
             this.update(cx, |this, cx| {
                 this.declared.read.extensions = Some(extensions);
                 this.declared.read.themes = themes;
+                this.declared.read.icon_packs = packs;
                 cx.notify();
             })
             .ok();
@@ -403,40 +407,31 @@ impl Settings {
                     keys.iter().all(|key| owner.write(file, key, None))
                 });
             }
-            Control::AddLayer(index) => {
-                let Some(name) = self.themes.get(*index).cloned() else {
+            Control::AddLayer(stack, index) => {
+                let Some(name) = self.stackable(*stack).get(*index).cloned() else {
                     return true;
                 };
-                let mut layers = self.layers();
-                layers.push(name);
-                self.change(cx, move |file| {
-                    file.set_theme_layers(&layers);
-                    true
-                });
+                let mut stacked = self.stacked(*stack);
+                stacked.push(name);
+                self.restack(*stack, stacked, cx);
             }
-            Control::DropLayer(index) => {
-                let mut layers = self.layers();
-                if *index < layers.len() {
-                    layers.remove(*index);
-                    self.change(cx, move |file| {
-                        file.set_theme_layers(&layers);
-                        true
-                    });
+            Control::DropLayer(stack, index) => {
+                let mut stacked = self.stacked(*stack);
+                if *index < stacked.len() {
+                    stacked.remove(*index);
+                    self.restack(*stack, stacked, cx);
                 }
             }
-            Control::ShiftLayer(index, up) => {
-                let mut layers = self.layers();
+            Control::ShiftLayer(stack, index, up) => {
+                let mut stacked = self.stacked(*stack);
                 let other = if *up {
                     index.checked_sub(1)
                 } else {
                     Some(index + 1)
                 };
-                if let Some(other) = other.filter(|other| *other < layers.len()) {
-                    layers.swap(*index, other);
-                    self.change(cx, move |file| {
-                        file.set_theme_layers(&layers);
-                        true
-                    });
+                if let Some(other) = other.filter(|other| *other < stacked.len()) {
+                    stacked.swap(*index, other);
+                    self.restack(*stack, stacked, cx);
                 }
             }
             _ => return false,
@@ -453,12 +448,32 @@ impl Settings {
         }
     }
 
-    /// The themes stacked over the base theme.
-    fn layers(&self) -> Vec<String> {
+    /// What `stack` holds, in its order, as the file says.
+    fn stacked(&self, stack: Stack) -> Vec<String> {
         let config = self.config.as_ref();
         config
-            .map(|config| config.theme_layers.clone())
+            .map(|config| stack.of(config).to_vec())
             .unwrap_or_default()
+    }
+
+    /// What can be put on `stack`: the theme files, or the installed icon
+    /// packs.
+    fn stackable(&self, stack: Stack) -> &[String] {
+        match stack {
+            Stack::Layers => &self.themes,
+            Stack::IconPacks => &self.declared.read.icon_packs,
+        }
+    }
+
+    /// Writes `stacked` as what `stack` holds.
+    fn restack(&mut self, stack: Stack, stacked: Vec<String>, cx: &mut Context<Self>) {
+        self.change(cx, move |file| {
+            match stack {
+                Stack::Layers => file.set_theme_layers(&stacked),
+                Stack::IconPacks => file.set_icon_packs(&stacked),
+            }
+            true
+        });
     }
 
     /// The keys `owner` declares that the file holds.
@@ -746,54 +761,88 @@ impl Settings {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let language = Language::of(cx);
+        let base = config.theme.as_deref();
+        let titles: Vec<SharedString> = { self.themes.iter() }
+            .map(|name| super::theme_title(name, language))
+            .collect();
+        // The base theme is not stacked over itself.
+        let offered = |name: &String| Some(name.as_str()) != base;
+        self.stack_card(Stack::Layers, config, &titles, &offered, window, cx)
+    }
+
+    /// The icon packs in use, in order, with buttons that move and remove
+    /// them, and the installed packs that can be used besides.
+    pub(super) fn icon_packs_card(
+        &mut self,
+        config: &Config,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let packs = &self.declared.read.icon_packs;
+        let titles: Vec<SharedString> = packs.iter().cloned().map(SharedString::from).collect();
+        self.stack_card(Stack::IconPacks, config, &titles, &|_| true, window, cx)
+    }
+
+    /// A card of what `stack` holds, each with buttons that move it and
+    /// take it off, and chips, named by `titles`, for what can be put on it
+    /// that `offered` lets through and it does not hold yet.
+    fn stack_card(
+        &mut self,
+        stack: Stack,
+        config: &Config,
+        titles: &[SharedString],
+        offered: &dyn Fn(&String) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let language = Language::of(cx);
+        let held = stack.of(config);
         let mut stacked = Vec::new();
-        let count = config.theme_layers.len();
-        for (index, name) in config.theme_layers.iter().enumerate() {
+        for (index, name) in held.iter().enumerate() {
             let mut buttons = Vec::new();
             if index > 0 {
-                let up = Control::ShiftLayer(index, true);
+                let up = Control::ShiftLayer(stack, index, true);
                 buttons.push(self.control(up, Face::Glyph(ICON_UP), window, cx));
             }
-            if index + 1 < count {
-                let down = Control::ShiftLayer(index, false);
+            if index + 1 < held.len() {
+                let down = Control::ShiftLayer(stack, index, false);
                 buttons.push(self.control(down, Face::Glyph(ICON_DOWN), window, cx));
             }
-            let remove = Control::DropLayer(index);
+            let remove = Control::DropLayer(stack, index);
             buttons.push(self.control(remove, Face::Glyph(ICON_REMOVE), window, cx));
             stacked.push(chip(&theme, format!("{}. {name}", index + 1), buttons));
         }
-        let base = config.theme.as_deref();
         let mut offers = Vec::new();
-        for index in 0..self.themes.len() {
-            let name = self.themes[index].clone();
-            if Some(name.as_str()) == base || config.theme_layers.contains(&name) {
+        for index in 0..self.stackable(stack).len() {
+            let name = &self.stackable(stack)[index];
+            if !offered(name) || held.contains(name) {
                 continue;
             }
             let face = Face::Chip {
-                text: super::theme_title(&name, language),
+                text: titles
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| name.clone().into()),
                 selected: true,
             };
-            offers.push(self.control(Control::AddLayer(index), face, window, cx));
+            offers.push(self.control(Control::AddLayer(stack, index), face, window, cx));
         }
-        let about = "Themes stacked over the theme, in order: each changes only what it sets, and the last one wins.";
-        let mut layers =
-            card(&theme, language.say("Layers")).child(note(&theme, language.say(about)));
-        layers = if stacked.is_empty() {
-            layers.child(note(
-                &theme,
-                language.say("Nothing is stacked over the theme."),
-            ))
-        } else {
-            layers.child(wrap(&theme).children(stacked))
+        let texts = stack.texts();
+        let mut section =
+            card(&theme, language.say(texts.title)).child(note(&theme, language.say(texts.about)));
+        section = match (stacked.is_empty(), offers.is_empty()) {
+            (true, true) => section.child(note(&theme, language.say(texts.nothing))),
+            (true, false) => section.child(note(&theme, language.say(texts.empty))),
+            (false, _) => section.child(wrap(&theme).children(stacked)),
         };
         if !offers.is_empty() {
-            layers = layers
-                .child(caption(&theme, language.say("Add a layer")))
+            section = section
+                .child(caption(&theme, language.say(texts.add)))
                 .child(wrap(&theme).children(offers));
         }
-        layers.into_any_element()
+        section.into_any_element()
     }
 
     /// A card of the settings `set` declares for `owner`: each row with
