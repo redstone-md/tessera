@@ -79,34 +79,12 @@ fn stepped(share: f32, up: bool) -> f32 {
 }
 
 /// Makes the display under the pointer a step brighter or darker, and
-/// shows what it is set to.
+/// shows what it is set to. The step goes through the brightness the
+/// widgets of that display share, so it waits for the display to be done
+/// with what it was asked before, and steps in quick succession add up.
 fn step(up: bool, cx: &mut App) {
-    let display = DisplayKey::under_pointer();
-    let set = cx.background_executor().spawn(async move {
-        let level = ScreenBrightness::read(display)
-            .ok_or_else(|| anyhow::anyhow!("the display does not let its brightness be set"))?;
-        let share = stepped(level.share, up);
-        ScreenBrightness::set(display, share).map(|()| share)
-    });
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        let share = match set.await {
-            Ok(share) => share,
-            Err(error) => {
-                report!("{error:#}");
-                return;
-            }
-        };
-        cx.update(|cx| {
-            let shared = cx.try_global::<SharedBrightness>();
-            let known = shared.and_then(|shared| shared.0.get(&display)?.upgrade());
-            if let Some(brightness) = known {
-                brightness.update(cx, |brightness, cx| brightness.show(share, cx));
-            }
-            Flyouts::show(Reading::Brightness(share), cx);
-        })
-        .ok();
-    })
-    .detach();
+    let brightness = Brightness::shared(DisplayKey::under_pointer(), cx);
+    brightness.update(cx, |brightness, cx| brightness.step(up, cx));
 }
 
 /// The brightness of one display, shared by the widgets on it.
@@ -114,8 +92,18 @@ struct Brightness {
     display: Option<DisplayKey>,
     /// From 0 to 1; `None` while the display has not said, or does not.
     share: Option<f32>,
-    /// Whether the display is asked over DDC/CI, and so seldom.
+    /// Whether the display is asked over DDC/CI, and so seldom: a display
+    /// that does not say is asked as seldom.
     slow: bool,
+    /// Whether the display was the built-in panel when last asked, which
+    /// is then asked first.
+    panel: bool,
+    /// The steps of the action yet to be made, up for each above 0; they
+    /// wait for the display to say how bright it is.
+    steps: i32,
+    /// The brightness itself, while the steps of the action are made: no
+    /// widget may keep it.
+    held: Option<Entity<Self>>,
     /// What the display is to be set to once it is done with the last.
     wanted: Option<f32>,
     /// Whether the display is being asked or set now, which takes a part
@@ -133,7 +121,10 @@ impl Brightness {
     /// keeps it. The display is asked whenever a widget is built, as it is
     /// when a popup opens, and then every second (every five for a
     /// monitor), so a change made with its own buttons or keys shows.
+    /// No display is the primary one, which is shared with the widgets
+    /// that name it.
     fn shared(display: Option<DisplayKey>, cx: &mut App) -> Entity<Self> {
+        let display = display.or_else(DisplayKey::primary);
         let known = cx.default_global::<SharedBrightness>().0.get(&display);
         let brightness = match known.and_then(WeakEntity::upgrade) {
             Some(brightness) => brightness,
@@ -143,7 +134,10 @@ impl Brightness {
                     Self {
                         display,
                         share: None,
-                        slow: false,
+                        slow: true,
+                        panel: false,
+                        steps: 0,
+                        held: None,
                         wanted: None,
                         busy: false,
                     }
@@ -185,11 +179,11 @@ impl Brightness {
             return;
         }
         self.busy = true;
-        let display = self.display;
+        let (display, panel) = (self.display, self.panel);
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let read = cx
                 .background_executor()
-                .spawn(async move { ScreenBrightness::read(display) });
+                .spawn(async move { ScreenBrightness::read(display, panel) });
             let level = read.await;
             this.update(cx, |this, cx| {
                 this.busy = false;
@@ -197,7 +191,9 @@ impl Brightness {
                     this.send(cx);
                 } else {
                     this.take(level, cx);
+                    this.make_steps(cx);
                 }
+                this.settle();
             })
             .ok();
         })
@@ -205,7 +201,10 @@ impl Brightness {
     }
 
     fn take(&mut self, level: Option<BrightnessLevel>, cx: &mut Context<Self>) {
-        self.slow = level.is_some_and(|level| level.slow);
+        // A display that does not say is not asked every second either:
+        // it may be a monitor with DDC/CI switched off.
+        self.slow = level.is_none_or(|level| level.slow);
+        self.panel = level.is_some_and(|level| !level.slow);
         let share = level.map(|level| level.share);
         if self.share != share {
             self.share = share;
@@ -213,11 +212,40 @@ impl Brightness {
         }
     }
 
-    /// Shows `share`, which the display was set to elsewhere.
-    fn show(&mut self, share: f32, cx: &mut Context<Self>) {
-        if self.share != Some(share) {
-            self.share = Some(share);
-            cx.notify();
+    /// Has the display made a step brighter or darker, as soon as it is
+    /// known how bright it is, and keeps this until it is set.
+    fn step(&mut self, up: bool, cx: &mut Context<Self>) {
+        self.steps += if up { 1 } else { -1 };
+        self.held = Some(cx.entity());
+        if !self.busy || self.share.is_some() {
+            self.make_steps(cx);
+        }
+        self.settle();
+    }
+
+    /// Makes the steps of the action from the brightness last set or
+    /// read, and shows what came of them in the flyout.
+    fn make_steps(&mut self, cx: &mut Context<Self>) {
+        if self.steps == 0 {
+            return;
+        }
+        let Some(mut share) = self.share else {
+            report!("the display does not let its brightness be set");
+            self.steps = 0;
+            return;
+        };
+        for _ in 0..self.steps.unsigned_abs() {
+            share = stepped(share, self.steps > 0);
+        }
+        self.steps = 0;
+        self.set(share, cx);
+        Flyouts::show(Reading::Brightness(share), cx);
+    }
+
+    /// Lets go of itself once the steps of the action are made.
+    fn settle(&mut self) {
+        if !self.busy && self.wanted.is_none() && self.steps == 0 {
+            self.held = None;
         }
     }
 
@@ -256,6 +284,7 @@ impl Brightness {
                         this.ask(cx);
                     }
                 }
+                this.settle();
             })
             .ok();
         })

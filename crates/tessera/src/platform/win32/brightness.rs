@@ -44,19 +44,29 @@ pub struct BrightnessLevel {
 impl ScreenBrightness {
     /// How bright `display` is, or the primary one without a display.
     /// `None` when nothing there says: many monitors have DDC/CI switched
-    /// off in their own menu.
-    pub fn read(display: Option<DisplayKey>) -> Option<BrightnessLevel> {
-        let monitors = Monitors::of(display);
-        let asked = monitors.ranges().next().map(|(_, range)| BrightnessLevel {
-            share: range.share(),
-            slow: true,
-        });
-        asked.or_else(|| {
+    /// off in their own menu. A monitor is asked first, over DDC/CI, and
+    /// the built-in panel of a laptop after it; `panel_first` asks the
+    /// panel first, for a display that was the panel when last asked,
+    /// which then is not asked over DDC/CI in vain each time.
+    pub fn read(display: Option<DisplayKey>, panel_first: bool) -> Option<BrightnessLevel> {
+        let panel = || {
             Some(BrightnessLevel {
                 share: Self::panel()?,
                 slow: false,
             })
-        })
+        };
+        let monitor = || {
+            let monitors = Monitors::of(display);
+            monitors.ranges().next().map(|(_, range)| BrightnessLevel {
+                share: range.share(),
+                slow: true,
+            })
+        };
+        if panel_first {
+            panel().or_else(monitor)
+        } else {
+            monitor().or_else(panel)
+        }
     }
 
     /// How bright the built-in panel of a laptop is; `None` on a machine
@@ -81,6 +91,15 @@ impl ScreenBrightness {
         Panel::open()
             .and_then(|panel| panel.set(share))
             .context("the display does not let its brightness be set")
+    }
+}
+
+impl DisplayKey {
+    /// The primary display, the one at the origin of the screen.
+    pub fn primary() -> Option<Self> {
+        // SAFETY: the call only reads the arrangement of the displays.
+        let display = unsafe { MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY) };
+        (!display.is_invalid()).then_some(Self(display.0 as isize))
     }
 }
 
@@ -277,11 +296,11 @@ mod tests {
     #[test]
     #[ignore = "talks to the monitors of the machine"]
     fn the_primary_display_takes_the_brightness_it_has() {
-        let level = ScreenBrightness::read(None);
+        let level = ScreenBrightness::read(None, false);
         println!("the primary display says {level:?}");
         if let Some(level) = level {
             ScreenBrightness::set(None, level.share).unwrap();
-            assert_eq!(ScreenBrightness::read(None), Some(level));
+            assert_eq!(ScreenBrightness::read(None, !level.slow), Some(level));
         }
     }
 }
