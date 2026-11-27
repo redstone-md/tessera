@@ -39,8 +39,8 @@ use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BLENDFUNCTION, BeginPaint, BitBlt,
     CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
     EnumDisplayMonitors, FillRect, GdiAlphaBlend, GetDC, GetStockObject, HBITMAP, HBRUSH, HDC,
-    HGDIOBJ, HMONITOR, MapWindowPoints, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject,
-    SetViewportOrgEx,
+    HGDIOBJ, HMONITOR, MONITOR_DEFAULTTONEAREST, MapWindowPoints, MonitorFromRect, PAINTSTRUCT,
+    ReleaseDC, SRCCOPY, SelectObject, SetViewportOrgEx,
 };
 use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -55,7 +55,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR, w};
 
-use super::ScreenRect;
+use super::{DisplayKey, ScreenRect};
 
 /// The message that has `Progman` lay the desktop out with the wallpaper
 /// as a child of its own, and the parameters it is known to take.
@@ -84,6 +84,21 @@ pub fn display_frames() -> Vec<ScreenRect> {
         let _ = EnumDisplayMonitors(None, None, Some(add), LPARAM(&raw mut frames as isize));
     }
     frames
+}
+
+/// The display at `frame`, one of those [`display_frames`] gives, or the
+/// one nearest to it.
+pub fn display_at(frame: ScreenRect) -> DisplayKey {
+    let rect = RECT {
+        left: frame.left,
+        top: frame.top,
+        right: frame.right,
+        bottom: frame.bottom,
+    };
+    // SAFETY: the call only reads the arrangement of the displays, and
+    // `rect` outlives it.
+    let display = unsafe { MonitorFromRect(&raw const rect, MONITOR_DEFAULTTONEAREST) };
+    DisplayKey(display.0 as isize)
 }
 
 /// How many times a wallpaper of Tessera began to come, came to be shown
@@ -559,6 +574,26 @@ impl DesktopBackdrop {
                 );
             }
             ReleaseDC(Some(self.hwnd), screen);
+        }
+    }
+}
+
+impl DesktopBackdrop {
+    /// Moves what is on the screen away from the picture, towards what
+    /// lies under the window: `to` goes from 0, the picture as it is, to 1,
+    /// where nothing of it is seen. The window is to be dropped then.
+    pub fn recede(&self, to: f32) {
+        if !self.revealed.get() {
+            return;
+        }
+        let alpha = ((1. - to.clamp(0., 1.)) * 255.).round() as u8;
+        // SAFETY: the window belongs to this thread; the call changes how
+        // much of it the compositor shows.
+        unsafe {
+            let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), alpha, LWA_ALPHA);
+        }
+        if to >= 1. {
+            BACKDROPS_CHANGED.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

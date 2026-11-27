@@ -37,11 +37,13 @@ mod shell_thread;
 mod shortcuts;
 mod show_desktop;
 mod system;
+mod system_wallpaper;
 mod taskbar;
 mod thumbnail;
 mod tray;
 mod veil;
 mod video;
+mod wic;
 mod wifi;
 mod windows_key;
 
@@ -49,6 +51,7 @@ pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::{AppSound, AudioDevice, AudioOutput};
+pub use backdrop::display_at;
 pub use backdrop::{
     BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,
     read_desktop_if_requested,
@@ -84,11 +87,13 @@ pub use shell_thread::ShellThread;
 pub use shortcuts::Shortcut;
 pub use show_desktop::ShowDesktop;
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
+pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};
+pub use wic::decode_with_wic;
 pub use wifi::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
 pub use windows_key::{ChoiceKey, TakenKeys, WindowsKey};
 

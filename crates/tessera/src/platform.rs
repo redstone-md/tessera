@@ -13,6 +13,8 @@ pub use win32::Process;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::decode_with_wic;
+pub use win32::display_at;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,
@@ -33,6 +35,7 @@ pub use win32::{
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+pub use win32::{SystemWallpaper, WallpaperPosition, user_locale};
 #[allow(
     unused_imports,
     reason = "for the features that ask Explorer while it runs"
