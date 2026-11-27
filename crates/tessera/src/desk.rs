@@ -20,6 +20,7 @@ use crate::platform::{
     NativeSurface, ScreenEdge, ScreenRect, SmallBirth, pointer_at, pointer_held,
 };
 use crate::popup::{MARGIN, floating_panel, floating_window};
+use crate::shell::KnownDisplays;
 use crate::theme::Theme;
 use crate::ui::release_hover;
 
@@ -224,10 +225,9 @@ impl Cards {
             card.update(cx, |_, window, _| window.remove_window()).ok();
         }
         self.shown = configs.to_vec();
-        let primary = cx.primary_display().map(|display| display.id());
         for display in cx.displays() {
             for (index, config) in configs.iter().enumerate() {
-                if config.displays == Displays::Primary && Some(display.id()) != primary {
+                if !KnownDisplays::includes(&config.displays, display.id(), cx) {
                     continue;
                 }
                 // The window opens at the size of its panel: one as large

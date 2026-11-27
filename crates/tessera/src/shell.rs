@@ -13,7 +13,7 @@ use gpui::{App, AsyncApp, DisplayId, Global, Window, WindowHandle, px};
 use crate::actions::Actions;
 use crate::banners::Banners;
 use crate::clipboard::ClipHistory;
-use crate::config::Config;
+use crate::config::{Config, Displays};
 use crate::corners::Corners;
 use crate::desk::Cards;
 use crate::extension::ExtensionsModule;
@@ -101,6 +101,19 @@ impl KnownDisplays {
             { known }.find(|name| name.device.eq_ignore_ascii_case(device))
         });
         (named.cloned(), device)
+    }
+
+    /// Whether the display GPUI calls `display`, named `name`, is the
+    /// primary one: as its name says, or else as GPUI says.
+    fn is_primary(name: Option<&DisplayName>, display: DisplayId, cx: &App) -> bool {
+        let primary = cx.primary_display().map(|primary| primary.id());
+        name.map_or(primary == Some(display), |name| name.primary)
+    }
+
+    /// Whether `displays` chooses the display GPUI calls `display`.
+    pub fn includes(displays: &Displays, display: DisplayId, cx: &App) -> bool {
+        let name = Self::name_of(display, cx).0;
+        displays.includes(name.as_ref(), Self::is_primary(name.as_ref(), display, cx))
     }
 
     /// The display the surface in `window` is on, as last read.
@@ -596,13 +609,10 @@ impl Shell {
     /// the one of the same layout first, so that reading the file again
     /// moves nothing that did not change.
     fn open_surfaces(config: &Config, open: &mut Vec<Surface>, cx: &mut App) -> Vec<Surface> {
-        let primary = cx.primary_display().map(|display| display.id());
         let mut surfaces = Vec::new();
         for display in cx.displays() {
             let (name, device) = KnownDisplays::name_of(display.id(), cx);
-            let is_primary = name
-                .as_ref()
-                .map_or(Some(display.id()) == primary, |name| name.primary);
+            let is_primary = KnownDisplays::is_primary(name.as_ref(), display.id(), cx);
             let layouts: Vec<_> = config
                 .surfaces
                 .iter()
