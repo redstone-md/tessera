@@ -175,6 +175,7 @@ impl Taskbar {
     }
 
     fn restore(state: u32) {
+        super::desktop_folder::ExplorerIcons::restore();
         let windows = Self::windows();
         if let Some(&primary) = windows.first() {
             Self::set_state(primary, state);

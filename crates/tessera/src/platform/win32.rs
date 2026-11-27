@@ -18,6 +18,7 @@ mod brightness;
 mod clipboard_watch;
 mod commands;
 mod connections;
+mod desktop_folder;
 mod desktops;
 mod devices;
 mod display_mode;
@@ -104,6 +105,10 @@ pub use brightness::ScreenBrightness;
 pub use clipboard_watch::{Clip, ClipboardWatch, Offer, paste_into};
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
+pub use desktop_folder::{
+    DesktopFolders, DesktopLayer, ExplorerIcons, FolderWatch, LayerKind, VirtualKind, layer_frame,
+    virtual_items,
+};
 pub use desktops::VirtualDesktops;
 pub use devices::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
@@ -219,12 +224,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// Classes of windows that cover a display without being an application
 /// shown full screen: the desktop, and the task view and window switcher
-/// of Windows.
-const NOT_FILLING: [&str; 4] = [
+/// of Windows, and the window that holds Tessera's icons of the desktop.
+const NOT_FILLING: &[&str] = &[
     "Progman",
     "WorkerW",
     "XamlExplorerHostIslandWindow",
     "MultitaskingViewFrame",
+    desktop_folder::LAYER_CLASS,
 ];
 
 /// Message the system posts to a window that reserves a screen edge.
