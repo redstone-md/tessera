@@ -792,12 +792,14 @@ pub(super) fn upkeep(window: HWND) {
     follow(window, &answer);
 
     // Tessera's surfaces see for themselves when an application fills
-    // their display; bars of other programs are told.
+    // their display; bars of other programs are told. The windows are read
+    // without the list the surfaces share: the GPUI thread may wait for it
+    // while this thread would wait for one of its windows.
     if SERVER.with_borrow(AppBarServer::has_others) {
         let monitors = Monitor::all();
         let watched = SERVER.with_borrow(|server| server.watched(&monitors));
         for (frame, bar) in watched {
-            let filled = NativeSurface { hwnd: handle(bar) }.display_is_filled();
+            let filled = NativeSurface { hwnd: handle(bar) }.display_is_filled_apart();
             let notes =
                 SERVER.with_borrow_mut(|server| server.fullscreen(frame, filled, &monitors));
             post(&notes);

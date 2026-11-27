@@ -486,6 +486,22 @@ impl NativeSurface {
     /// the room left to windows: Windows moves a game out of an edge that
     /// gets reserved while it runs, and it stays there.
     pub fn display_is_filled(self) -> bool {
+        let windows = AppWindow::enumerate().into_iter();
+        self.filled_among(windows.map(|window| HWND(window.id.raw() as *mut c_void)))
+    }
+
+    /// Whether an application fills the display of this window, as
+    /// [`Self::display_is_filled`] says, for a thread that must never wait
+    /// for another thread of the shell, as the tray thread: it reads no
+    /// list shared with them and asks none of their windows anything.
+    fn display_is_filled_apart(self) -> bool {
+        let windows = AppWindow::handles().into_iter();
+        self.filled_among(windows.map(|(hwnd, _)| hwnd))
+    }
+
+    /// Whether the window in front, or the first of `windows`, application
+    /// windows topmost first, that lies on top on this display fills it.
+    fn filled_among(self, mut windows: impl Iterator<Item = HWND>) -> bool {
         // SAFETY: the call only reads which window is in front.
         let front = unsafe { GetForegroundWindow() };
         if self.is_filled_by(front) {
@@ -496,8 +512,7 @@ impl NativeSurface {
         // others on this display says.
         // SAFETY: the calls only read the state of windows.
         let display = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
-        let on_top = AppWindow::enumerate().into_iter().find(|window| {
-            let hwnd = HWND(window.id.raw() as *mut c_void);
+        let on_top = windows.find(|&hwnd| {
             // SAFETY: as above; a window that went away is on no display,
             // and a minimized one covers nothing.
             let (there, pinned) = unsafe {
@@ -511,7 +526,7 @@ impl NativeSurface {
             // A window kept above the others covers no application.
             there && !pinned
         });
-        on_top.is_some_and(|window| self.is_filled_by(HWND(window.id.raw() as *mut c_void)))
+        on_top.is_some_and(|window| self.is_filled_by(window))
     }
 
     /// Whether `window` is one of an application that fills the display of
