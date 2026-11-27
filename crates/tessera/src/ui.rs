@@ -4,7 +4,9 @@
 //! Building blocks shared by shell surfaces.
 
 mod list;
+pub mod qr;
 mod slider;
+mod tile;
 
 use std::f32::consts::TAU;
 
@@ -22,6 +24,7 @@ use crate::theme::Theme;
 
 pub use list::{LIST_MIN_HEIGHT, ROW_HEIGHT, list_row, list_title, switch};
 pub use slider::Slider;
+pub use tile::{TILE_HEIGHT, TileFace, tile, tile_more};
 
 /// Ends the hover of what the pointer was on when it left `window`. GPUI
 /// learns that the pointer left but goes on taking it to be where it was
