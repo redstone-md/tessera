@@ -61,6 +61,8 @@ struct Surface {
     /// the ids of GPUI count the displays anew when one comes or goes.
     device: Option<String>,
     edge: ScreenEdge,
+    /// Where its layout stands among the surfaces of the configuration.
+    index: usize,
     window: WindowHandle<EdgeSurfaceView<Panel>>,
 }
 
@@ -542,8 +544,13 @@ impl Shell {
     ///
     /// A surface appears on the displays its `displays` includes, with
     /// what the overrides that name a display give there. Surfaces that
-    /// hide at the same edge of a display stand one after the other from
-    /// the edge, in the order of the file.
+    /// keep the same edge of a display stand one after the other from the
+    /// edge, and those that hide there stand beyond them, one after the
+    /// other, in the order of the file.
+    ///
+    /// A surface already open at the edge of the display keeps its window,
+    /// the one of the same layout first, so that reading the file again
+    /// moves nothing that did not change.
     fn open_surfaces(config: &Config, open: &mut Vec<Surface>, cx: &mut App) -> Vec<Surface> {
         let primary = cx.primary_display().map(|display| display.id());
         let mut surfaces = Vec::new();
@@ -552,34 +559,37 @@ impl Shell {
             let is_primary = name
                 .as_ref()
                 .map_or(Some(display.id()) == primary, |name| name.primary);
-            // How far from each edge the next surface that hides stands.
-            let mut insets: Vec<(ScreenEdge, f32)> = Vec::new();
-            for (index, layout) in config.surfaces.iter().enumerate() {
-                if !layout.displays.includes(name.as_ref(), is_primary) {
-                    continue;
+            let layouts: Vec<_> = config
+                .surfaces
+                .iter()
+                .enumerate()
+                .filter(|(_, layout)| layout.displays.includes(name.as_ref(), is_primary))
+                .map(|(index, layout)| (index, layout.on_display(name.as_ref())))
+                .collect();
+            // How far from each edge the next surface that hides stands:
+            // past the surfaces that keep that edge.
+            let mut insets = EdgeInsets::default();
+            for (_, (placed, _)) in &layouts {
+                if !placed.hide.hides() {
+                    insets.take(placed.edge, placed.thickness);
                 }
-                let (placed, replaced) = layout.on_display(name.as_ref());
+            }
+            for (index, (placed, replaced)) in layouts {
                 let edge = placed.edge;
                 let inset = match placed.hide.hides() {
-                    true => {
-                        let taken = insets.iter_mut().find(|(at, _)| *at == edge);
-                        let inset = taken.as_ref().map_or(0., |(_, inset)| *inset);
-                        match taken {
-                            Some((_, taken)) => *taken += placed.thickness,
-                            None => insets.push((edge, placed.thickness)),
-                        }
-                        inset
-                    }
+                    true => insets.take(edge, placed.thickness),
                     false => 0.,
                 };
                 let surface = EdgeSurface::of(&placed, px(inset));
                 let placed = &placed;
+                let here = |open: &Surface| {
+                    open.is_on(display.id(), device.as_deref()) && open.edge == edge
+                };
                 let kept = open
                     .iter()
-                    .position(|open| {
-                        open.is_on(display.id(), device.as_deref()) && open.edge == edge
-                    })
-                    .map(|index| open.swap_remove(index))
+                    .position(|open| here(open) && open.index == index)
+                    .or_else(|| open.iter().position(here))
+                    .map(|at| open.remove(at))
                     .filter(|open| {
                         let refilled = open.window.update(cx, |view, window, cx| {
                             view.refill(surface, window, cx, |display, cx| {
@@ -590,6 +600,7 @@ impl Shell {
                     });
                 if let Some(mut kept) = kept {
                     (kept.display, kept.device) = (display.id(), device.clone());
+                    kept.index = index;
                     surfaces.push(kept);
                     continue;
                 }
@@ -601,6 +612,7 @@ impl Shell {
                         display: display.id(),
                         device: device.clone(),
                         edge,
+                        index,
                         window,
                     }),
                     Err(error) => report!("a surface did not open: {error:#}"),
@@ -608,6 +620,28 @@ impl Shell {
             }
         }
         surfaces
+    }
+}
+
+/// How deep the surfaces of a display already stand at each of its edges.
+#[derive(Default)]
+struct EdgeInsets(Vec<(ScreenEdge, f32)>);
+
+impl EdgeInsets {
+    /// Puts a surface `thickness` deep at `edge`, and says how far from
+    /// the edge it stands: past those put there before.
+    fn take(&mut self, edge: ScreenEdge, thickness: f32) -> f32 {
+        match self.0.iter_mut().find(|(at, _)| *at == edge) {
+            Some((_, depth)) => {
+                let inset = *depth;
+                *depth += thickness;
+                inset
+            }
+            None => {
+                self.0.push((edge, thickness));
+                0.
+            }
+        }
     }
 }
 
@@ -620,5 +654,20 @@ pub fn restart(cx: &mut App) {
     match started {
         Ok(()) => cx.quit(),
         Err(error) => report!("Tessera does not start again: {error:#}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surfaces_at_one_edge_stand_one_after_the_other() {
+        let mut insets = EdgeInsets::default();
+        assert_eq!(insets.take(ScreenEdge::Top, 48.), 0.);
+        assert_eq!(insets.take(ScreenEdge::Left, 40.), 0.);
+        assert_eq!(insets.take(ScreenEdge::Top, 32.), 48.);
+        assert_eq!(insets.take(ScreenEdge::Top, 20.), 80.);
+        assert_eq!(insets.take(ScreenEdge::Left, 40.), 40.);
     }
 }

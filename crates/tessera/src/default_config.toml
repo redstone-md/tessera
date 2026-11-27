@@ -400,8 +400,8 @@
 #              end the strip has instead on the displays "<display>" names,
 #              as one entry of displays names them
 # Several strips may share an edge of a display: those that keep their edge
-# stand one after the other from it in the order of this file, and so do
-# those that hide. A click with the right button on a strip opens its menu:
+# stand one after the other from it in the order of this file, and those
+# that hide stand one after the other beyond them. A click with the right button on a strip opens its menu:
 # on a widget, to move it to another slot, remove it or add another; on the
 # strip, to change its edge, thickness, hiding, length and displays, add a
 # strip at a free edge or remove this one.
