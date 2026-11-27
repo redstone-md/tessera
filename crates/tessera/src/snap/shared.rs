@@ -137,8 +137,9 @@ pub fn follow(
 /// The members along the line of the `side` of the one at `moved`, each
 /// with whether its own `side` lies on the line (or else its opposite
 /// side, across `gap`): those reached from `moved` along the line, a
-/// window in line touching the next across the gap, and a window across
-/// the line overlapping one on this side of it by more than `slack`.
+/// window across the line overlapping one on this side of it by more than
+/// `slack`, and a window in line touching the next across the gap where
+/// one across the line lies beside it.
 fn seam(members: &[Member], moved: usize, side: Side, gap: i32, slack: i32) -> Vec<(usize, bool)> {
     let line = side.of(members[moved].rect);
     let across = line + side.outward() * gap;
@@ -153,14 +154,27 @@ fn seam(members: &[Member], moved: usize, side: Side, gap: i32, slack: i32) -> V
             }
         })
         .collect();
-    let joined = |(one, one_same): (usize, bool), (other, other_same): (usize, bool)| {
+    let overlap = |one: usize, other: usize| {
         let (start, end) = side.span(members[one].rect);
         let (other_start, other_end) = side.span(members[other].rect);
+        end.min(other_end) - start.max(other_start) > slack
+    };
+    let touch = |one: usize, other: usize| {
+        let (start, end) = side.span(members[one].rect);
+        let (other_start, other_end) = side.span(members[other].rect);
+        start <= other_end + gap + slack && other_start <= end + gap + slack
+    };
+    // A window shares the edge only where one across the line lies
+    // beside it; two edges in line with nothing across are not shared.
+    let shares = |(one, one_same): (usize, bool)| {
+        { on_line.iter() }.any(|&(other, other_same)| other_same != one_same && overlap(one, other))
+    };
+    let joined = |(one, one_same): (usize, bool), (other, other_same): (usize, bool)| {
         match one_same == other_same {
             // In line: touching across the gap is enough.
-            true => start <= other_end + gap + slack && other_start <= end + gap + slack,
+            true => touch(one, other) && shares((other, other_same)),
             // Across the line: they are to share some of the edge.
-            false => end.min(other_end) - start.max(other_start) > slack,
+            false => overlap(one, other),
         }
     };
     let mut reached = vec![(moved, true)];
@@ -209,9 +223,18 @@ mod tests {
         assert_eq!(follow(&near, 0, rect(0, 0, 900, 1080), 10, 2)[1].left, 910);
         let apart = members(&[rect(0, 0, 955, 1080), rect(968, 0, 1920, 1080)]);
         assert_eq!(follow(&apart, 0, rect(0, 0, 900, 1080), 10, 2)[1].left, 968);
-        // An edge that does not move moves nothing.
-        let taller = follow(&group, 0, rect(0, 0, 955, 1000), 10, 2);
-        assert_eq!(taller[1], rect(965, 0, 1920, 1080));
+        // Edges in line with nothing across them are not shared.
+        let shorter = follow(&group, 0, rect(0, 0, 955, 1000), 10, 2);
+        assert_eq!(shorter[1], rect(965, 0, 1920, 1080));
+        // Nor is the line of a quarter beside which nothing lies.
+        let three = members(&[
+            rect(0, 0, 960, 540),
+            rect(960, 0, 1920, 540),
+            rect(960, 540, 1920, 1080),
+        ]);
+        let placed = follow(&three, 0, rect(0, 0, 1000, 540), 0, 2);
+        assert_eq!(placed[1], rect(1000, 0, 1920, 540));
+        assert_eq!(placed[2], rect(960, 540, 1920, 1080));
     }
 
     #[test]
