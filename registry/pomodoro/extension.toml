@@ -17,6 +17,10 @@
 # goes on while Tessera is closed. A phase that ended more than an hour
 # before Tessera looked again is not counted, and the timer waits for
 # Start. Nothing is sent anywhere.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "pomodoro"
 
 # The phase and the time left in it, for a bar. A click on it opens the
@@ -38,3 +42,54 @@ name = "panel"
 width = 300
 height = 180
 content = ["controls"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "work_minutes"
+kind = "number"
+label = { en = "Minutes of work", ru = "Минут работы" }
+min = 1
+max = 180
+default = 25
+unit = "min"
+
+[[setting]]
+key = "break_minutes"
+kind = "number"
+label = { en = "Minutes of a break", ru = "Минут перерыва" }
+min = 1
+max = 60
+default = 5
+unit = "min"
+
+[[setting]]
+key = "long_break_minutes"
+kind = "number"
+label = { en = "Minutes of a long break", ru = "Минут длинного перерыва" }
+min = 1
+max = 120
+default = 15
+unit = "min"
+
+[[setting]]
+key = "rounds"
+kind = "number"
+label = { en = "Rounds before a long break", ru = "Раундов до длинного перерыва" }
+min = 1
+max = 12
+default = 4
+
+[[setting]]
+key = "auto_start"
+kind = "toggle"
+label = { en = "Start the next phase by itself", ru = "Начинать следующую фазу самому" }
+default = true
+
+[[setting]]
+key = "utc_offset"
+kind = "text"
+label = { en = "Offset from UTC", ru = "Смещение от UTC" }
+description = { en = "Where your day begins, as +1 or -5:30; UTC where it is empty.", ru = "Где начинается ваш день, например +1 или -5:30; пусто означает UTC." }
+placeholder = "+1, -5:30"
+max_length = 9

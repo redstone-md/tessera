@@ -16,6 +16,7 @@ use crate::clipboard::ClipHistory;
 use crate::config::{Config, Displays};
 use crate::corners::Corners;
 use crate::desk::Cards;
+use crate::extension::ExtensionsModule;
 use crate::extension::installed_stamp;
 use crate::files::Files;
 use crate::flyout::Flyouts;
@@ -319,15 +320,16 @@ impl Shell {
         Night::configure(&config.night_light, cx);
         Notices::configure(&config.notices, cx);
 
+        // New settings of extensions alone keep the popups open: the
+        // settings themselves write them.
+        let (reloaded, extensions) = Self::extensions_reloaded(&config, cx);
         let old = &cx.global::<Self>().config;
-        let extensions =
-            old.extensions != config.extensions || old.registries() != config.registries();
         let icons = old.icons != config.icons;
         let surfaces = old.surfaces != config.surfaces;
         let cards = old.cards != config.cards;
         // An open popup stays while it is still what the configuration
         // describes, so that the settings do not close at every change.
-        if extensions || icons || (old.popups != config.popups && !written_here) {
+        if reloaded || icons || (old.popups != config.popups && !written_here) {
             Popups::close(cx);
             cx.set_global(Popups::new(&config.popups));
         } else {
@@ -353,6 +355,35 @@ impl Shell {
         }
         Self::take_windows_key(cx);
         cx.refresh_windows();
+    }
+
+    /// What changed of the extensions in `config`: whether they are to be
+    /// loaded again, which closes the popups, as new registries or new
+    /// files of extensions need; and whether their widgets are to be made
+    /// again. New settings alone are taken over by the extensions that
+    /// run where they can be, and otherwise only their widgets are made
+    /// again.
+    fn extensions_reloaded(config: &Config, cx: &mut App) -> (bool, bool) {
+        let this = cx.global::<Self>();
+        let old = &this.config;
+        if old.registries() != config.registries() || this.extensions != installed_stamp() {
+            return (true, true);
+        }
+        if old.extensions == config.extensions {
+            return (false, false);
+        }
+        let mut ids: Vec<String> = { old.extensions.keys() }
+            .chain(config.extensions.keys())
+            .filter(|id| old.extensions.get(*id) != config.extensions.get(*id))
+            .cloned()
+            .collect();
+        ids.sort();
+        ids.dedup();
+        let mut taken = true;
+        for id in ids {
+            taken &= ExtensionsModule::settings_changed(&id, config.extensions.get(&id), cx);
+        }
+        (false, !taken)
     }
 
     /// Takes over the configuration file right after Tessera wrote it,

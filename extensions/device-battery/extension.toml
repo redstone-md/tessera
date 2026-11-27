@@ -9,6 +9,10 @@
 # names the first paired device with `mouse` in its name, whatever the
 # case. Without it, the first connected device that reports a charge is
 # shown, or else the first one Windows remembers a charge of.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "device-battery"
 
 # The extension is told which Bluetooth devices are paired, whether they
@@ -34,3 +38,14 @@ name = "devices"
 width = 280
 height = 300
 content = ["all"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "device"
+kind = "text"
+label = { en = "Device", ru = "Устройство" }
+description = { en = "A part of the name of the paired device the bar shows; without it, the first that reports a charge.", ru = "Часть имени сопряжённого устройства для панели; без неё — первое, что сообщает заряд." }
+placeholder = "mouse"
+optional = true
+affects = ["charge"]

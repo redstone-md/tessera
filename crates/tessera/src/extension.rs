@@ -19,10 +19,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use gpui::AppContext;
+use gpui::{App, AppContext};
 use serde::Deserialize;
 
 pub use self::access::DeviceKind;
@@ -32,6 +33,7 @@ use self::runtime::Runtime;
 use self::widget::ExtensionWidget;
 use crate::config::{PopupConfig, config_dir};
 use crate::module::{Module, WidgetRegistry};
+use crate::options::{OptionDecl, OptionSet, text_of};
 
 const MANIFEST_FILE: &str = "extension.toml";
 const WASM_FILE: &str = "extension.wasm";
@@ -60,6 +62,54 @@ pub fn installed_stamp() -> u64 {
     let mut hasher = DefaultHasher::new();
     files.hash(&mut hasher);
     hasher.finish()
+}
+
+/// An installed extension as the settings show it: what it is called and
+/// what it declares can be set.
+pub struct InstalledExtension {
+    pub id: String,
+    pub settings: OptionSet,
+    /// The names of its widgets.
+    pub widgets: Vec<String>,
+}
+
+impl InstalledExtension {
+    /// The names of the widgets the setting `key` affects: those it names,
+    /// or every widget of the extension where it names none.
+    pub fn affected(&self, key: &str) -> Vec<&str> {
+        let named = self.settings.get(key).map(|setting| &setting.affects);
+        match named {
+            Some(names) if !names.is_empty() => names.iter().map(String::as_str).collect(),
+            _ => self.widgets.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
+/// The extensions in the `extensions` configuration directory, by
+/// identifier, each with what it declares; one whose manifest cannot be
+/// read is left out, and why is reported. It reads files, so it is not
+/// to be called on the thread that draws.
+pub fn installed_extensions() -> Vec<InstalledExtension> {
+    let entries = extensions_dir().and_then(|root| fs::read_dir(root).ok());
+    let mut installed = Vec::new();
+    for directory in entries.into_iter().flatten().flatten() {
+        let path = directory.path().join(MANIFEST_FILE);
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        match Manifest::parse(&text) {
+            Ok(manifest) => installed.push(InstalledExtension {
+                settings: manifest.declared(),
+                widgets: { manifest.widgets.iter() }
+                    .map(|widget| widget.name.clone())
+                    .collect(),
+                id: manifest.id,
+            }),
+            Err(error) => report!("{} is not read: {error:#}", path.display()),
+        }
+    }
+    installed.sort_by(|one, other| one.id.cmp(&other.id));
+    installed
 }
 
 /// Loads every extension in the `extensions` configuration directory. Each
@@ -117,7 +167,7 @@ impl ExtensionsModule {
         let popups = manifest.popups();
         let access = Access {
             permissions: manifest.permissions.clone(),
-            settings: self.settings_of(&manifest.id),
+            settings: self.settings_of(&manifest),
             state_file: Some(directory.join(STATE_FILE)),
             #[cfg(test)]
             bluetooth: None,
@@ -158,19 +208,60 @@ impl ExtensionsModule {
         Ok(())
     }
 
-    /// What the configuration sets for the extension `id`, as text.
-    fn settings_of(&self, id: &str) -> HashMap<String, String> {
-        let table = self.settings.get(id).into_iter().flatten();
-        table
-            .map(|(key, value)| {
-                let text = match value.as_str() {
-                    Some(text) => text.to_owned(),
-                    None => value.to_string(),
-                };
-                (key.clone(), text)
-            })
-            .collect()
+    /// What the configuration sets for the extension of `manifest`, as
+    /// text: each value it declares checked against its declaration, or
+    /// the declared default where the configuration has none or one that
+    /// does not fit, and the keys it does not declare as they are written.
+    /// What it was started with is kept, for [`Self::settings_changed`].
+    fn settings_of(&self, manifest: &Manifest) -> HashMap<String, String> {
+        let declared = manifest.declared();
+        let settings = snapshot(&manifest.id, &declared, self.settings.get(&manifest.id));
+        let mut started = STARTED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let started = started.get_or_insert_with(HashMap::new);
+        started.insert(manifest.id.clone(), (declared, settings.clone()));
+        settings
     }
+
+    /// Takes the settings `table` of the extension `id` over, as the
+    /// configuration holds them now. Whether the extension running has
+    /// them: it does where what it reads did not change, as when a value
+    /// is set to its default. Otherwise the answer is `false`, and the
+    /// widgets of the extension are to be made again: an extension that
+    /// runs is not told of new settings yet.
+    pub fn settings_changed(id: &str, table: Option<&toml::Table>, _cx: &mut App) -> bool {
+        let started = STARTED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some((declared, settings)) = started.as_ref().and_then(|started| started.get(id))
+        else {
+            // No extension of that name runs, so none is to be told.
+            return true;
+        };
+        snapshot(id, declared, table) == *settings
+    }
+}
+
+/// The settings each extension that was loaded was started with, and
+/// what it declares, by extension identifier.
+type Started = HashMap<String, (OptionSet, HashMap<String, String>)>;
+static STARTED: Mutex<Option<Started>> = Mutex::new(None);
+
+/// The settings `table` of the extension `id` as it reads them: what
+/// `declared` declares resolved, every value as text. A list is written
+/// as its items apart by commas, which `parse_list` of the kit reads.
+fn snapshot(
+    id: &str,
+    declared: &OptionSet,
+    table: Option<&toml::Table>,
+) -> HashMap<String, String> {
+    let empty = toml::Table::new();
+    let owner = format!("the extension `{id}`");
+    let resolved = declared.resolve(table.unwrap_or(&empty), &owner);
+    { resolved.iter() }
+        .map(|(key, value)| (key.clone(), text_of(value)))
+        .collect()
 }
 
 /// Describes an extension to the shell.
@@ -187,6 +278,10 @@ struct Manifest {
     popups: Vec<PopupConfig>,
     #[serde(default)]
     permissions: Permissions,
+    /// The settings the extension reads, for the settings to show and
+    /// to check.
+    #[serde(default, rename = "setting")]
+    settings: Vec<OptionDecl>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,7 +321,43 @@ impl Manifest {
                 );
             }
         }
+        for problem in manifest.unknown_affected() {
+            report!("the extension `{}`: {problem}", manifest.id);
+        }
         Ok(manifest)
+    }
+
+    /// The settings that are usable; what is wrong with the others is
+    /// reported, and they are left out.
+    fn declared(&self) -> OptionSet {
+        let (declared, problems) = OptionSet::checked(self.settings.clone());
+        for problem in problems {
+            report!("the extension `{}`: {problem}", self.id);
+        }
+        declared
+    }
+
+    /// What the settings say they affect that is not a widget of the
+    /// extension, or not something a setting of an extension affects.
+    fn unknown_affected(&self) -> Vec<String> {
+        let mut problems = Vec::new();
+        for setting in &self.settings {
+            for name in &setting.affects {
+                if !self.widgets.iter().any(|widget| widget.name == *name) {
+                    problems.push(format!(
+                        "the setting `{}` affects `{name}`, which is not a widget of the extension",
+                        setting.key
+                    ));
+                }
+            }
+            if !setting.scale.is_empty() {
+                problems.push(format!(
+                    "the setting `{}` scales tokens, which only a theme has",
+                    setting.key
+                ));
+            }
+        }
+        problems
     }
 
     /// The name layouts know the widget or popup `name` by.
@@ -318,7 +449,11 @@ mod tests {
             include_str!("../../../extensions/dice/extension.toml"),
             include_str!("../../../extensions/breaks/extension.toml"),
         ] {
-            Manifest::parse(manifest).unwrap();
+            let manifest = Manifest::parse(manifest).unwrap();
+            let (_, problems) = OptionSet::checked(manifest.settings.clone());
+            assert!(problems.is_empty(), "{}: {problems:?}", manifest.id);
+            let unknown = manifest.unknown_affected();
+            assert!(unknown.is_empty(), "{}: {unknown:?}", manifest.id);
         }
     }
 
@@ -328,11 +463,54 @@ mod tests {
         let module = ExtensionsModule {
             settings: settings.unwrap(),
         };
-        let settings = module.settings_of("probe");
+        let probe = Manifest::parse("id = \"probe\"\n").unwrap();
+        let settings = module.settings_of(&probe);
         assert_eq!(settings["name"], "value");
         assert_eq!(settings["count"], "3");
         assert_eq!(settings["shown"], "true");
-        assert!(module.settings_of("other").is_empty());
+        let other = Manifest::parse("id = \"other\"\n").unwrap();
+        assert!(module.settings_of(&other).is_empty());
+    }
+
+    const DECLARING: &str = concat!(
+        "id = \"probe\"\n",
+        "[[widget]]\nname = \"now\"\n[[widget]]\nname = \"forecast\"\n",
+        "[[setting]]\nkey = \"unit\"\nkind = \"choice\"\nlabel = \"Unit\"\ndefault = \"celsius\"\n",
+        "affects = [\"now\"]\n",
+        "choices = [{ value = \"celsius\" }, { value = \"fahrenheit\" }]\n",
+        "[[setting]]\nkey = \"coins\"\nkind = \"list\"\nlabel = \"Coins\"\n",
+        "default = [\"bitcoin\", \"ethereum\"]\n",
+        "[[setting]]\nkey = \"minutes\"\nkind = \"number\"\nlabel = \"Minutes\"\n",
+        "min = 5\nmax = 60\ndefault = 20\naffects = [\"nowhere\"]\n",
+    );
+
+    #[test]
+    fn declared_settings_answer_with_their_defaults_and_in_the_form_of_the_kit() {
+        let manifest = Manifest::parse(DECLARING).unwrap();
+        assert_eq!(manifest.unknown_affected().len(), 1);
+        let module = ExtensionsModule {
+            settings: toml::from_str("[probe]\nminutes = 900\nunit = \"kelvin\"\n").unwrap(),
+        };
+        let settings = module.settings_of(&manifest);
+        assert_eq!(settings["unit"], "celsius");
+        assert_eq!(settings["coins"], "bitcoin, ethereum");
+        assert_eq!(settings["minutes"], "60");
+        // A list written by hand as an array reaches the kit as its text.
+        let listed: toml::Table = toml::from_str("coins = [\"a\", \"b\"]\n").unwrap();
+        let declared = manifest.declared();
+        assert_eq!(snapshot("probe", &declared, Some(&listed))["coins"], "a, b");
+    }
+
+    #[test]
+    fn a_setting_affects_the_widgets_it_names_or_all_of_them() {
+        let manifest = Manifest::parse(DECLARING).unwrap();
+        let installed = InstalledExtension {
+            id: manifest.id.clone(),
+            settings: manifest.declared(),
+            widgets: vec!["now".to_owned(), "forecast".to_owned()],
+        };
+        assert_eq!(installed.affected("unit"), ["now"]);
+        assert_eq!(installed.affected("coins"), ["now", "forecast"]);
     }
 
     #[test]

@@ -11,6 +11,10 @@
 #
 # Only the names of the coins and the currency are sent, to CoinGecko and
 # to nobody else.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "crypto"
 
 # The price of the first coin and its change over a day, for a bar. A
@@ -35,3 +39,29 @@ name = "prices"
 width = 300
 height = 200
 content = ["list"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "coins"
+kind = "list"
+label = { en = "Coins", ru = "Монеты" }
+description = { en = "CoinGecko ids, as in the address of a coin's page; the bar shows the first.", ru = "Идентификаторы CoinGecko, как в адресе страницы монеты; на панели первая." }
+default = ["bitcoin", "ethereum"]
+
+[[setting]]
+key = "currency"
+kind = "text"
+label = { en = "Currency", ru = "Валюта" }
+placeholder = "usd"
+max_length = 10
+default = "usd"
+
+[[setting]]
+key = "interval_minutes"
+kind = "number"
+label = { en = "Minutes between updates", ru = "Минут между обновлениями" }
+min = 2
+max = 1440
+default = 10
+unit = "min"

@@ -15,6 +15,11 @@
 # access to the repositories' metadata is enough. It is sent to
 # api.github.com and to nobody else. GitHub counts open pull requests as
 # open issues too, so the number shown includes them.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
+# A token is not offered there and stays in config.toml.
 id = "github-stats"
 
 [permissions]
@@ -38,3 +43,20 @@ name = "repositories"
 width = 320
 height = 200
 content = ["repos"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "repos"
+kind = "list"
+label = { en = "Repositories", ru = "Репозитории" }
+description = { en = "As owner/name; the bar shows the first. A token is written in config.toml only.", ru = "В виде владелец/имя; на панели первый. Токен пишется только в config.toml." }
+
+[[setting]]
+key = "interval_minutes"
+kind = "number"
+label = { en = "Minutes between updates", ru = "Минут между обновлениями" }
+min = 10
+max = 1440
+default = 30
+unit = "min"

@@ -14,6 +14,10 @@
 # above 100 extremely poor, with fine particles (PM2.5), coarser particles
 # (PM10) and ozone. The place is sent to Open-Meteo, rounded to a
 # hundredth of a degree, and to nobody else. Without it nothing is asked.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "air-quality"
 
 [permissions]
@@ -37,3 +41,36 @@ name = "air"
 width = 300
 height = 200
 content = ["details"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "latitude"
+kind = "number"
+label = { en = "Latitude", ru = "Широта" }
+description = { en = "Degrees north, negative to the south. Without it nothing is asked.", ru = "Градусы северной широты, к югу отрицательные. Без неё ничего не запрашивается." }
+min = -90
+max = 90
+step = 0.01
+unit = "°"
+optional = true
+
+[[setting]]
+key = "longitude"
+kind = "number"
+label = { en = "Longitude", ru = "Долгота" }
+description = { en = "Degrees east, negative to the west.", ru = "Градусы восточной долготы, к западу отрицательные." }
+min = -180
+max = 180
+step = 0.01
+unit = "°"
+optional = true
+
+[[setting]]
+key = "interval_minutes"
+kind = "number"
+label = { en = "Minutes between updates", ru = "Минут между обновлениями" }
+min = 10
+max = 1440
+default = 30
+unit = "min"

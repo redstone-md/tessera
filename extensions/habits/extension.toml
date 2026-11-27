@@ -12,6 +12,10 @@
 # A habit's streak is the days in a row it was checked off; it is kept
 # while the habit is done today or was done yesterday. What was checked
 # off is kept across restarts. Nothing is sent anywhere.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "habits"
 
 # How many habits are done today, for a bar. A click on it opens the
@@ -33,3 +37,18 @@ name = "list"
 width = 300
 height = 200
 content = ["checklist"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "habits"
+kind = "list"
+label = { en = "Habits", ru = "Привычки" }
+
+[[setting]]
+key = "utc_offset"
+kind = "text"
+label = { en = "Offset from UTC", ru = "Смещение от UTC" }
+description = { en = "Where your day begins, as +1 or -5:30; UTC where it is empty.", ru = "Где начинается ваш день, например +1 или -5:30; пусто означает UTC." }
+placeholder = "+1, -5:30"
+max_length = 9

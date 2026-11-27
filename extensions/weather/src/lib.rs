@@ -5,9 +5,10 @@
 //!
 //! It asks Open-Meteo, which needs no account, for the weather at the
 //! `latitude` and `longitude` of `[extension.weather]` in the shell's
-//! configuration, on a timer, and shows the answer in two widgets: `now`
-//! for a bar and `forecast` for a popup. The place is sent to Open-Meteo
-//! and to nobody else; without it nothing is asked.
+//! configuration, set there or in Settings > Extensions, on a timer, and
+//! shows the answer in two widgets: `now` for a bar and `forecast` for a
+//! popup. The place is sent to Open-Meteo and to nobody else; without it
+//! nothing is asked.
 
 mod model;
 
