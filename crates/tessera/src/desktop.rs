@@ -60,8 +60,8 @@ const POSITIONS_FILE: &str = "desktop-icons.toml";
 /// read, as a copy brings many at once.
 const SETTLE: Duration = Duration::from_millis(250);
 
-/// How often the arrangement of the displays, Explorer's icons and the
-/// Recycle Bin are looked at.
+/// How often the arrangement of the displays and Explorer's icons are
+/// looked at; the Recycle Bin every other time.
 const LOOK_AGAIN: Duration = Duration::from_secs(2);
 
 /// How long typed letters add up to one name to find.
@@ -327,8 +327,10 @@ impl Desktop {
     /// icons again, and whether the Recycle Bin filled or emptied.
     fn look_again(cx: &mut App) {
         cx.spawn(async move |cx: &mut AsyncApp| {
+            let mut looks = 0u32;
             loop {
                 cx.background_executor().timer(LOOK_AGAIN).await;
+                looks = looks.wrapping_add(1);
                 let frames = { cx.background_executor() }
                     .spawn(async { display_set_key(&ordered_displays(display_frames())) })
                     .await;
@@ -346,7 +348,9 @@ impl Desktop {
                 let Ok(model) = looked else {
                     break;
                 };
-                if let Some(model) = model {
+                // The bin is asked every other time: it looks at every
+                // drive.
+                if let Some(model) = model.filter(|_| looks.is_multiple_of(2)) {
                     DesktopModel::look_at_bin(model, cx).await;
                 }
             }
@@ -460,6 +464,8 @@ pub struct DesktopModel {
     /// The largest scale of a display, for the size icons are fetched at.
     scale: f32,
     reading: Option<Task<()>>,
+    /// Whether the icons are fetched anew once the desktop is read.
+    refetch: bool,
     _watch: Option<(FolderWatch, Task<()>)>,
 }
 
@@ -486,6 +492,7 @@ impl DesktopModel {
             positions_read: false,
             scale: 1.,
             reading: None,
+            refetch: false,
             _watch: None,
         };
         model.read_positions(cx);
@@ -693,6 +700,13 @@ impl DesktopModel {
         self._watch = Some((watch, task));
     }
 
+    /// Reads the desktop again and fetches every icon anew, as F5 does
+    /// in Explorer.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.refetch = true;
+        self.reload(cx);
+    }
+
     /// Reads what the desktop shows, on a thread of the Shell.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let Some(folders) = self.folders.clone() else {
@@ -719,7 +733,8 @@ impl DesktopModel {
         self.items = items;
         self.order = sorted_keys(&self.items, self.config.sort);
         self.relayout(cx);
-        self.fetch_icons(false, cx);
+        let anew = std::mem::take(&mut self.refetch);
+        self.fetch_icons(anew, cx);
     }
 
     /// Fetches the icons of the items that have none at the size they are

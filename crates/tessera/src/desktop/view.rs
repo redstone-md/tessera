@@ -543,7 +543,7 @@ impl DesktopIconsView {
                 model.update(cx, |model, cx| model.rename_chosen(window, cx))
             }
             ("f5", false, false, false) | ("r", true, false, false) => {
-                model.update(cx, |model, cx| model.reload(cx))
+                model.update(cx, |model, cx| model.refresh(cx))
             }
             ("delete", false, false, erase) => {
                 model.update(cx, |model, cx| model.delete(erase, cx))
@@ -644,7 +644,7 @@ impl DesktopIconsView {
         };
         let ground = match (chosen, hovered) {
             (true, _) => theme.colors.primary.opacity(0.32),
-            (false, true) => hsla(0., 0., 1., 0.12),
+            (false, true) => theme.colors.primary.opacity(0.14),
             _ => gpui::transparent_black(),
         };
         div()

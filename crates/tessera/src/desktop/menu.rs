@@ -361,7 +361,7 @@ fn intercepted(
             Intercept::Delete => model.delete(false, cx),
             Intercept::Paste => model.paste(false, cx),
             Intercept::PasteLink => model.paste(true, cx),
-            Intercept::Refresh => model.reload(cx),
+            Intercept::Refresh => model.refresh(cx),
             Intercept::Undo => model.undo(false, cx),
             Intercept::Redo => model.undo(true, cx),
             // The desktop's own View and Sort by stand for these.
@@ -425,7 +425,7 @@ fn background_entries(
         ICON_REFRESH,
         language.say("Refresh"),
         move |cx| {
-            refresh.update(cx, |model, cx| model.reload(cx)).ok();
+            refresh.update(cx, |model, cx| model.refresh(cx)).ok();
         },
     ));
     if DesktopModel::can_paste() {
