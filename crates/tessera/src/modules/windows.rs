@@ -703,20 +703,31 @@ impl WindowList {
             CHECKS_UNWATCHED
         };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let seen_now = || (WindowEvents::generation(), TaskbarList::generation());
+            // Which windows there are changes with what happens to them
+            // and with the buttons applications add and remove.
+            let seen_now = || (WindowEvents::generation(), TaskbarList::tabs());
             let mut seen = seen_now();
+            let mut told = TaskbarList::generation();
             let mut quiet = 0;
             loop {
                 cx.background_executor().timer(CHECK_INTERVAL).await;
-                let now = seen_now();
+                let (now, told_now) = (seen_now(), TaskbarList::generation());
                 quiet += 1;
                 if now == seen && quiet < patience {
-                    if this.upgrade().is_none() {
+                    // An application that reports its progress tells
+                    // often: only what it told is read again then.
+                    let retold = told_now != told;
+                    told = told_now;
+                    let kept = match retold {
+                        true => this.update(cx, Self::retell).is_ok(),
+                        false => this.upgrade().is_some(),
+                    };
+                    if !kept {
                         break;
                     }
                     continue;
                 }
-                (seen, quiet) = (now, 0);
+                (seen, told, quiet) = (now, told_now, 0);
                 if this.update(cx, Self::refresh).is_err() {
                     break;
                 }
@@ -1154,6 +1165,21 @@ impl WindowList {
         }
     }
 
+    /// Takes in only what the applications told the taskbar, for the
+    /// windows the buttons already have.
+    fn retell(&mut self, cx: &mut Context<Self>) {
+        if !self.shell {
+            return;
+        }
+        let mut changed = false;
+        for item in &mut self.items {
+            changed |= Self::take_told(item);
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// The windows the dock shows buttons for, as its options and the
     /// rules say.
     fn shown_windows(&self, cx: &App) -> Vec<AppWindow> {
@@ -1169,16 +1195,14 @@ impl WindowList {
         };
         let mut windows = AppWindow::enumerate();
         windows.retain(|window| {
-            let told = match self.shell {
-                true => TaskbarList::state(window.id),
-                false => None,
-            };
+            let removed =
+                self.shell && TaskbarList::read(window.id, |told| told.removed).unwrap_or(false);
             let candidate = Candidate {
                 here: self.display.is_none_or(|display| window.display == display),
                 minimized: show == options::Showing::Minimized && window.id.is_minimized(),
                 in_workspace: workspace.as_ref().map(|ids| ids.contains(&window.id)),
                 skipped: Rules::of(window, cx).skip_dock == Some(true),
-                removed: told.is_some_and(|told| told.removed),
+                removed,
             };
             options::is_shown(show, candidate)
         });
@@ -1229,11 +1253,13 @@ impl WindowList {
     /// taskbar, and says whether it changed.
     fn take_told(item: &mut DockItem) -> bool {
         let told: Vec<_> = { item.windows.iter() }
-            .filter_map(|window| TaskbarList::state(window.id))
+            .filter_map(|window| {
+                TaskbarList::read(window.id, |told| (told.progress, told.overlay.clone()))
+            })
             .collect();
-        let progress = { told.iter().filter_map(|told| told.progress) }
+        let progress = { told.iter().filter_map(|(progress, _)| *progress) }
             .max_by_key(|progress| options::urgency(progress.state));
-        let overlay = told.iter().find_map(|told| told.overlay.clone());
+        let overlay = told.into_iter().find_map(|(_, overlay)| overlay);
         let mut changed = false;
         if progress != item.told.progress {
             item.told.progress = progress;

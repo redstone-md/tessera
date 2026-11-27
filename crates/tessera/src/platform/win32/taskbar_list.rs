@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
@@ -146,10 +146,11 @@ pub struct Progress {
 }
 
 /// An icon an application gave, with a number that changes whenever it
-/// gives another, so that a picture of it is made once.
+/// gives another, so that a picture of it is made once. Its pixels are
+/// shared, so that a copy of what was told copies none.
 #[derive(Clone, Debug)]
 pub struct GivenIcon {
-    pub pixels: IconPixels,
+    pub pixels: Arc<IconPixels>,
     pub stamp: u64,
 }
 
@@ -180,6 +181,8 @@ pub struct TaskbarState {
 
 static STATES: Mutex<Option<HashMap<isize, TaskbarState>>> = Mutex::new(None);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Counts the buttons added and removed, apart from everything else told.
+static TABS: AtomicU64 = AtomicU64::new(0);
 /// The hidden window, as a number; zero until it is made.
 static BAND: AtomicIsize = AtomicIsize::new(0);
 static SHELL: AtomicBool = AtomicBool::new(false);
@@ -231,11 +234,25 @@ impl TaskbarList {
         GENERATION.load(Ordering::Relaxed)
     }
 
+    /// A number that changes whenever an application added or removed the
+    /// button of a window, which changes which buttons there are; what
+    /// else it tells changes only how they look.
+    pub fn tabs() -> u64 {
+        TABS.load(Ordering::Relaxed)
+    }
+
     /// What the application of `window` told about it; `None` where it
     /// told nothing.
     pub fn state(window: AppWindowId) -> Option<TaskbarState> {
         let states = locked(&STATES);
         states.as_ref()?.get(&window.raw()).cloned()
+    }
+
+    /// What `read` makes of what the application of `window` told about
+    /// it, without a copy of the rest; `None` where it told nothing.
+    pub fn read<T>(window: AppWindowId, read: impl FnOnce(&TaskbarState) -> T) -> Option<T> {
+        let states = locked(&STATES);
+        states.as_ref()?.get(&window.raw()).map(read)
     }
 
     /// Tells the application of `window` that its button `button` under
@@ -467,6 +484,7 @@ fn tab(code: usize, window: isize) {
         _ => return,
     };
     change(window, |state| state.removed = removed);
+    TABS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// A call of `ITaskbarList3`, as its message tells it.
@@ -644,7 +662,7 @@ fn given_icon(icon: isize) -> Option<GivenIcon> {
         pixels
     }?;
     Some(GivenIcon {
-        pixels,
+        pixels: Arc::new(pixels),
         stamp: GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
     })
 }
