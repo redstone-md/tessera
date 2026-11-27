@@ -29,6 +29,7 @@ mod motion;
 mod notices;
 mod notifications_store;
 mod panel;
+mod performance;
 mod platform;
 mod popup;
 mod power_warnings;

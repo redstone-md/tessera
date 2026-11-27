@@ -48,6 +48,7 @@ mod passage;
 mod plans;
 mod power;
 mod power_mode;
+mod power_settings;
 mod power_warnings;
 mod privacy;
 mod processes;
@@ -147,6 +148,9 @@ pub use plans::PowerPlan;
 pub use power::PowerAction;
 pub use power::PowerChoices;
 pub use power_mode::{PowerMode, PowerModeState};
+pub use power_settings::{
+    ButtonAction, PowerChange, PowerSetting, PowerSettings, PowerState, SleepBlock, Supply,
+};
 pub use power_warnings::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use privacy::{Capability, CapabilityUse, PrivacyWatch};
 pub use processes::RunningProcess;
