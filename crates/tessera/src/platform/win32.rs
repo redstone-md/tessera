@@ -232,6 +232,7 @@ pub use shell_windows::ShellWindows;
 pub use shortcuts::Shortcut;
 pub use show_desktop::ShowDesktop;
 pub use snap::on_resizing_border;
+pub use snap::{Arranger, least_size};
 pub use snap::{Display, MaximizeHover, WindowArranging, front_fills, shift_held};
 pub use spell::SpellCheck;
 pub use startup::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};

@@ -23,13 +23,24 @@
 //! Tessera ends, because the two would place the same window; whether
 //! Windows still snaps without Explorer has not been seen. Windows that
 //! are tiled are left to the tiling.
+//!
+//! The windows Tessera snapped on a display share their edges: resizing
+//! one along an edge it shares with others has their touching edges
+//! follow, while it is resized and exactly once it is let go. With
+//! `edge_switch`, a window dragged against an outer edge of the displays
+//! goes to the workspace beside, and the workspace with it. The action
+//! `edit-zones` (Win+Alt+Z) opens the editor of snap zones on the screen.
 
 mod assist;
+mod editor;
 mod layouts;
 mod preview;
+mod push;
+mod shared;
+mod split;
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, AsyncApp, Bounds, Context, DisplayId, Global, Render, Window, WindowHandle, point, px,
@@ -41,15 +52,21 @@ use crate::actions::{Action, Actions};
 use crate::config::KeyConfig;
 use crate::module::{Module, WidgetRegistry};
 use crate::platform::{
-    AppWindowId, Display, MaximizeHover, MoveEvent, MoveWatch, NativeSurface, ScreenEdge,
-    ScreenRect, WindowArranging, on_resizing_border, pointer_at, shell_mode, shift_held,
+    AppWindowId, Arranger, Display, MaximizeHover, MoveEvent, MoveWatch, NativeSurface, ScreenEdge,
+    ScreenRect, WindowArranging, least_size, on_resizing_border, pointer_at, shell_mode,
+    shift_held,
 };
 use crate::popup::{PopupAnchor, open_floating};
 use crate::tiling::{Tiler, Toward};
+use crate::workspaces::{Workspaces, neighbour};
 
 use self::assist::AssistView;
+use self::editor::{Draft, ZoneEditor};
 use self::layouts::LayoutsView;
 use self::preview::PreviewView;
+use self::push::{EdgePush, pushed};
+use self::shared::{Member, follow, slack};
+pub use self::split::Split;
 
 /// The time between two looks at a window that is being dragged.
 const FRAME: Duration = Duration::from_millis(16);
@@ -72,6 +89,12 @@ const WIDEST_GAP: u32 = 64;
 /// open, when the configuration says nothing, and the range it may say.
 const DEFAULT_HOVER_DELAY: u32 = 450;
 const HOVER_DELAYS: (u32, u32) = (100, 3000);
+
+/// How long a dragged window is pushed against an edge before the
+/// workspace changes, when the configuration says nothing, and the range
+/// it may say, in milliseconds.
+const DEFAULT_EDGE_SWITCH_DELAY: u32 = 600;
+const EDGE_SWITCH_DELAYS: (u32, u32) = (100, 5000);
 
 /// How far a window has to be dragged to count as moved, in physical
 /// pixels: a click on the title bar moves it by nothing.
@@ -139,6 +162,11 @@ impl Zone {
             width,
             height,
         }
+    }
+
+    /// The zone as `[x, y, width, height]` in shares of the work area.
+    pub fn shares(self) -> [f32; 4] {
+        [self.x, self.y, self.width, self.height]
     }
 
     /// The zone `[x, y, width, height]` names, if it lies within the work
@@ -462,12 +490,20 @@ pub struct SnapConfig {
     hover: Option<bool>,
     /// How long it rests there first, in milliseconds.
     hover_delay: Option<u32>,
+    /// Whether a window dragged against the outer left or right edge of a
+    /// display, or its top or bottom where the workspaces stand in rows,
+    /// goes to the workspace beside the one shown, and the workspace with
+    /// it; Plasma's "Switch desktop on edge: only when moving windows".
+    edge_switch: Option<bool>,
+    /// How long the pointer is pushed against the edge first, in
+    /// milliseconds.
+    edge_switch_delay: Option<u32>,
     /// The zones a window snaps to when it is dragged with Shift held.
     #[serde(default, rename = "zone")]
-    zones: Vec<ZoneConfig>,
+    pub zones: Vec<ZoneConfig>,
     /// The layouts of the snap layouts, in place of the six of Windows.
     #[serde(default, rename = "layout")]
-    layouts: Vec<LayoutConfig>,
+    pub layouts: Vec<LayoutConfig>,
 }
 
 /// A `[[snap.zone]]`.
@@ -475,17 +511,69 @@ pub struct SnapConfig {
 #[serde(deny_unknown_fields)]
 pub struct ZoneConfig {
     /// The display, counted from 1 from the left; every display without.
-    display: Option<usize>,
+    pub display: Option<usize>,
     /// `[x, y, width, height]` in shares of the work area.
-    rect: [f32; 4],
+    pub rect: [f32; 4],
 }
 
 /// A `[[snap.layout]]`.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayoutConfig {
+    /// What the editor of the zones calls it; a layout without one is
+    /// called by its number among them, from 1.
+    pub name: Option<String>,
     /// Its zones, each `[x, y, width, height]` in shares of the work area.
-    zones: Vec<[f32; 4]>,
+    pub zones: Vec<[f32; 4]>,
+}
+
+impl SnapConfig {
+    /// The room left around snapped windows, as checked.
+    pub fn gap(&self) -> u32 {
+        within("gap", self.gap, (0, WIDEST_GAP), 0)
+    }
+
+    /// The layouts the snap layouts show: those of the file that can be
+    /// used, or the six of Windows without any.
+    pub fn shown_layouts(&self) -> Vec<ShownLayout> {
+        if self.layouts.is_empty() {
+            return { LAYOUTS.iter().enumerate() }
+                .map(|(index, zones)| ShownLayout {
+                    key: (index + 1).to_string(),
+                    name: None,
+                    own: false,
+                    zones: zones.to_vec(),
+                })
+                .collect();
+        }
+        { self.layouts.iter().enumerate() }
+            .filter_map(|(index, layout)| {
+                let zones: Option<Vec<Zone>> =
+                    layout.zones.iter().copied().map(Zone::parse).collect();
+                let zones = zones.filter(|zones| !zones.is_empty())?;
+                Some(ShownLayout {
+                    key: { layout.name.clone() }.unwrap_or_else(|| (index + 1).to_string()),
+                    name: layout.name.clone(),
+                    own: true,
+                    zones,
+                })
+            })
+            .collect()
+    }
+}
+
+/// A layout of the snap layouts, as the settings show it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShownLayout {
+    /// What [`Snapper::edit_zones`] and the configuration file call it:
+    /// its name, or else its number among the `[[snap.layout]]` entries
+    /// from 1; for one of the six of Windows, its number among them.
+    pub key: String,
+    /// Its own name, where the file gives one.
+    pub name: Option<String>,
+    /// Whether it is a layout of the file, not one of Windows.
+    pub own: bool,
+    pub zones: Vec<Zone>,
 }
 
 /// What the configuration comes to, checked.
@@ -497,6 +585,9 @@ struct Settings {
     gap: i32,
     assist: bool,
     hover: Option<Duration>,
+    /// How long a dragged window is pushed against an outer edge before
+    /// the workspace changes; none where it does not.
+    edge_switch: Option<Duration>,
     /// The zones of Shift and the display each is for, counted from 1.
     zones: Vec<(Option<usize>, Zone)>,
     layouts: Vec<Vec<Zone>>,
@@ -566,6 +657,12 @@ impl SnapConfig {
             true => LAYOUTS.iter().map(|zones| zones.to_vec()).collect(),
             false => layouts,
         };
+        let switch_delay = within(
+            "edge_switch_delay",
+            self.edge_switch_delay,
+            EDGE_SWITCH_DELAYS,
+            DEFAULT_EDGE_SWITCH_DELAY,
+        );
         Settings {
             dragging,
             edge: edge as i32,
@@ -576,6 +673,8 @@ impl SnapConfig {
                 .hover
                 .unwrap_or(dragging)
                 .then(|| Duration::from_millis(u64::from(delay))),
+            edge_switch: { self.edge_switch.unwrap_or(false) }
+                .then(|| Duration::from_millis(u64::from(switch_delay))),
             zones,
             layouts,
         }
@@ -640,6 +739,39 @@ struct Drag {
     aim: Option<Aim>,
     /// Counts the drags; only the loop of the latest goes on.
     task: u64,
+    /// The displays as they were when the drag began.
+    frames: Vec<ScreenRect>,
+    /// The pushing against an outer edge, which changes the workspace.
+    push: EdgePush,
+    /// The windows snapped beside this one, whose edges follow it while
+    /// it is resized.
+    group: Option<Group>,
+}
+
+/// The windows Tessera snapped on one display, while one of them is
+/// resized.
+struct Group {
+    ids: Vec<AppWindowId>,
+    /// Where each was placed, and how small it can be.
+    members: Vec<Member>,
+    /// The one being resized.
+    moved: usize,
+    /// How far apart edges may be and still touch there.
+    slack: i32,
+    /// Whether an edge it shares moved, so that others followed.
+    followed: bool,
+}
+
+impl Group {
+    /// Where the members go once the one being resized has `frame`, as
+    /// the windows to move and where.
+    fn placements(&self, frame: ScreenRect, gap: i32) -> Vec<(AppWindowId, ScreenRect)> {
+        let placed = follow(&self.members, self.moved, frame, gap, self.slack);
+        { self.ids.iter().zip(&self.members).zip(placed).enumerate() }
+            .filter(|&(index, ((_, member), rect))| index != self.moved && rect != member.rect)
+            .map(|(_, ((&id, _), rect))| (id, rect))
+            .collect()
+    }
 }
 
 /// Snaps windows.
@@ -662,6 +794,8 @@ pub struct Snapper {
     /// The window the assistant was opened beside, which the keys of
     /// snapping are for while the assistant is in front.
     assisted: Option<AppWindowId>,
+    /// The editor of snap zones, while it is open.
+    editor: Option<WindowHandle<ZoneEditor>>,
 }
 
 impl Global for Snapper {}
@@ -755,7 +889,7 @@ impl Snapper {
                 let handled = cx.update(|cx| match event {
                     MoveEvent::Start(id) => Self::begin(id, cx),
                     MoveEvent::End(id) => Self::finish(id, cx),
-                    MoveEvent::Resizing { .. } => {}
+                    MoveEvent::Resizing { id, frame } => Self::resized(id, frame, cx),
                 });
                 if handled.is_err() {
                     break;
@@ -803,6 +937,12 @@ impl Snapper {
         let snapped = { this.snapped.get(&id) }
             .is_some_and(|snapped| near(start, snapped.placed, STILL_THERE));
         let restored = this.restored_of(id).unwrap_or(start);
+        let group = snapped.then(|| this.group_of(id)).flatten();
+        let asked: Vec<AppWindowId> = group.iter().flat_map(|group| group.ids.clone()).collect();
+        let frames = Display::all()
+            .into_iter()
+            .map(|display| display.frame)
+            .collect();
         this.drag = Some(Drag {
             id,
             start,
@@ -814,7 +954,33 @@ impl Snapper {
             moved: false,
             aim: None,
             task,
+            frames,
+            push: EdgePush::default(),
+            group,
         });
+        if !asked.is_empty() {
+            // How small each window of the group can be is asked of the
+            // windows themselves, which may take a moment.
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let least = cx
+                    .background_executor()
+                    .spawn(async move { asked.into_iter().map(least_size).collect::<Vec<_>>() })
+                    .await;
+                cx.update(|cx| {
+                    let drag = cx.global_mut::<Self>().drag.as_mut();
+                    let group = drag
+                        .filter(|drag| drag.task == task)
+                        .and_then(|drag| drag.group.as_mut());
+                    if let Some(group) = group {
+                        for (member, least) in group.members.iter_mut().zip(least) {
+                            member.least = least;
+                        }
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
         // The window is asked what the pointer is on away from here, as it
         // may take a moment to answer.
         cx.spawn(async move |cx: &mut AsyncApp| {
@@ -845,6 +1011,10 @@ impl Snapper {
     /// Looks at the window that is being dragged once more, and shows
     /// where it would snap. Whether the drag goes on is returned.
     fn follow(task: u64, cx: &mut App) -> bool {
+        // The workspaces of Windows take no window of another program, so
+        // only Tessera's own are switched with one.
+        let own = Workspaces::own(cx);
+        let rows = Workspaces::grid(cx).rows > 1;
         let this = cx.global_mut::<Self>();
         let Some(drag) = this.drag.as_mut().filter(|drag| drag.task == task) else {
             return false;
@@ -862,16 +1032,117 @@ impl Snapper {
             || (pointer.1 - drag.pointer.1).abs() > MOVED;
         let settings = &this.settings;
         let resizing = drag.resizing.unwrap_or(drag.resized);
-        let aim = (settings.dragging && drag.moved && !resizing)
+        let mut switch = None;
+        if let Some(delay) = settings
+            .edge_switch
+            .filter(|_| own && drag.moved && !resizing)
+        {
+            let toward = pushed(pointer, &drag.frames, rows);
+            switch = drag.push.see(pointer, toward, delay, Instant::now());
+        }
+        // Right after the workspace changed, letting go does not snap.
+        let aim = (settings.dragging && drag.moved && !resizing && !drag.push.just_switched())
             .then(|| aim_at(pointer, settings))
             .flatten();
-        if aim == drag.aim {
-            return true;
-        }
+        let id = drag.id;
+        let changed = aim != drag.aim;
         drag.aim = aim;
         let gap = settings.gap;
-        Self::show_preview(aim.map(|aim| (aim.display, aim.rect(gap))), cx);
+        if changed {
+            Self::show_preview(aim.map(|aim| (aim.display, aim.rect(gap))), cx);
+        }
+        if let Some(toward) = switch {
+            Self::carry(id, toward, pointer, cx);
+        }
         true
+    }
+
+    /// Goes to the workspace beside the one shown, toward `toward`, on
+    /// the display at `pointer`, and takes the window `id` along: it is
+    /// seen on every workspace while they change, so that it is never
+    /// hidden while it is dragged, and lives on the new one afterwards.
+    fn carry(
+        id: AppWindowId,
+        toward: crate::workspaces::Toward,
+        pointer: (i32, i32),
+        cx: &mut App,
+    ) {
+        let Some(display) = Display::at(pointer) else {
+            return;
+        };
+        let key = Some(display.key);
+        let shown = Workspaces::now(key, cx);
+        let grid = Workspaces::grid(cx);
+        let Some(index) = neighbour(shown.current, shown.count, grid.rows, toward, grid.wrap)
+        else {
+            return;
+        };
+        let sticky = Workspaces::is_sticky(id, cx);
+        if !sticky {
+            Workspaces::toggle_sticky(id, cx);
+        }
+        Workspaces::show(index, key, cx);
+        if !sticky {
+            Workspaces::toggle_sticky(id, cx);
+        }
+    }
+
+    /// The windows snapped on the display of the window `id` that are
+    /// still where they were snapped, `id` among them.
+    fn group_of(&self, id: AppWindowId) -> Option<Group> {
+        let display = Display::of_window(id)?;
+        let mut ids = Vec::new();
+        let mut members = Vec::new();
+        let mut moved = None;
+        for (&other, snapped) in &self.snapped {
+            let there = other == id
+                || (other.exists()
+                    && Display::of_window(other).is_some_and(|its| its.key == display.key)
+                    && other
+                        .frame()
+                        .is_some_and(|frame| near(frame, snapped.placed, STILL_THERE)));
+            if !there {
+                continue;
+            }
+            if other == id {
+                moved = Some(ids.len());
+            }
+            ids.push(other);
+            members.push(Member {
+                rect: snapped.placed,
+                least: (1, 1),
+            });
+        }
+        (ids.len() > 1).then_some(Group {
+            ids,
+            members,
+            moved: moved?,
+            slack: slack(display.scale),
+            followed: false,
+        })
+    }
+
+    /// Has the edges the window `id` shares follow it, as it is resized
+    /// to `frame`.
+    fn resized(id: AppWindowId, frame: ScreenRect, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
+        let gap = this.settings.gap;
+        let Some(drag) = this.drag.as_mut().filter(|drag| drag.id == id) else {
+            return;
+        };
+        // Only a drag known to be on the border resizes the others; one
+        // onto a display of another scale changes the size as well.
+        if drag.resizing != Some(true) {
+            return;
+        }
+        let Some(group) = drag.group.as_mut() else {
+            return;
+        };
+        let placements = group.placements(frame, gap);
+        if !placements.is_empty() {
+            group.followed = true;
+            Arranger::place(placements);
+        }
     }
 
     /// Shows where a window would snap, or that it would not.
@@ -904,8 +1175,24 @@ impl Snapper {
         }
         let this = cx.global_mut::<Self>();
         if drag.resizing.unwrap_or(drag.resized) {
-            // A window resized by hand is where the user wants it.
-            this.snapped.remove(&id);
+            let gap = this.settings.gap;
+            match (drag.group, id.frame()) {
+                // The group stays, each window where it went.
+                (Some(group), Some(frame)) if group.followed => {
+                    let placements = group.placements(frame, gap);
+                    for &(other, rect) in placements.iter().chain(&[(id, frame)]) {
+                        if let Some(snapped) = this.snapped.get_mut(&other) {
+                            snapped.placed = rect;
+                            snapped.target = None;
+                        }
+                    }
+                    Arranger::place(placements);
+                }
+                // A window resized by hand is where the user wants it.
+                _ => {
+                    this.snapped.remove(&id);
+                }
+            }
             return;
         }
         if let Some(aim) = drag.aim {
@@ -1265,6 +1552,72 @@ impl Snapper {
             .collect();
         Self::assist(id, display, rest, cx);
     }
+
+    /// Opens the editor of snap zones on the display at `display` among
+    /// [`Display::all`], or the one under the pointer without one, with
+    /// what `layout` names: a `[[snap.layout]]` by its name, one of the
+    /// layouts of Windows by its number from 1 where the file has none,
+    /// or a new layout of one zone. Whether it opened is returned; a
+    /// layout that cannot be cut into zones with straight lines is
+    /// reported and not opened.
+    pub fn edit_zones(display: Option<usize>, layout: Option<&str>, cx: &mut App) -> bool {
+        let displays = Display::all();
+        let chosen = match display {
+            Some(index) => displays.get(index).copied(),
+            None => pointer_at().and_then(Display::at),
+        };
+        let Some(display) = chosen.or_else(|| displays.first().copied()) else {
+            return false;
+        };
+        let config = crate::shell::Shell::config(cx).snap.clone();
+        let shown = config.shown_layouts();
+        let found = layout.and_then(|layout| shown.iter().find(|shown| shown.key == layout));
+        let language = crate::i18n::Language::of(cx);
+        let draft = match found {
+            Some(found) => {
+                let Some(tree) = Split::from_zones(&found.zones) else {
+                    report!(
+                        "the snap layout `{}` cannot be edited on the screen: its zones are not cut by straight lines from side to side",
+                        found.key
+                    );
+                    return false;
+                };
+                // A layout of Windows becomes one of the file once saved.
+                let fresh = crate::runners::fill(language.say("Layout {}"), &[&found.key]);
+                Draft {
+                    tree,
+                    name: found.name.clone().unwrap_or(fresh),
+                    replacing: found.own.then(|| found.key.clone()),
+                    gap: config.gap(),
+                }
+            }
+            None => {
+                if let Some(layout) = layout {
+                    report!("there is no snap layout `{layout}`, so a new one is made");
+                }
+                let number = (config.layouts.len() + 1).to_string();
+                Draft {
+                    tree: Split::Zone,
+                    name: crate::runners::fill(language.say("Layout {}"), &[&number]),
+                    replacing: None,
+                    gap: config.gap(),
+                }
+            }
+        };
+        if let Some(open) = cx.global_mut::<Self>().editor.take() {
+            open.update(cx, |view, _, cx| view.close(cx)).ok();
+        }
+        match ZoneEditor::open(display, draft, cx) {
+            Ok(editor) => {
+                cx.global_mut::<Self>().editor = Some(editor);
+                true
+            }
+            Err(error) => {
+                report!("the editor of snap zones did not open: {error:#}");
+                false
+            }
+        }
+    }
 }
 
 /// Where a window dragged with the pointer at `pointer` would snap: in
@@ -1478,6 +1831,13 @@ impl Module for SnapModule {
             .taking_reserved_keys()
             .by_default("win+z", None);
         actions.register("snap-layouts", layouts)?;
+        // The name of a layout to edit, or none for a new one.
+        let edit = Action::new(|arg, cx| {
+            Snapper::edit_zones(None, arg.filter(|arg| !arg.trim().is_empty()), cx);
+        })
+        .taking_any_arg()
+        .by_default("win+alt+z", None);
+        actions.register("edit-zones", edit)?;
         crate::window_menu::register(actions)
     }
 }
@@ -1626,7 +1986,32 @@ mod tests {
         assert!(plain.settings(true).dragging);
         assert_eq!(plain.settings(true).layouts.len(), LAYOUTS.len());
         assert!(plain.settings(false).hover.is_none());
+        assert!(plain.settings(true).edge_switch.is_none());
         assert!(toml::from_str::<SnapConfig>("edges = 3").is_err());
+        let switching: SnapConfig =
+            toml::from_str("edge_switch = true\nedge_switch_delay = 20\n").unwrap();
+        assert_eq!(
+            switching.settings(false).edge_switch,
+            Some(Duration::from_millis(u64::from(DEFAULT_EDGE_SWITCH_DELAY)))
+        );
+        let named: SnapConfig =
+            toml::from_str("[[layout]]\nzones = [[0, 0, 1, 1]]\n[[layout]]\nname = \"two\"\nzones = [[0, 0, 0.5, 1], [0.5, 0, 0.5, 1]]\n").unwrap();
+        let shown = named.shown_layouts();
+        assert_eq!(
+            (shown[0].key.as_str(), shown[0].name.as_deref()),
+            ("1", None)
+        );
+        assert_eq!(
+            (shown[1].key.as_str(), shown[1].name.as_deref()),
+            ("two", Some("two"))
+        );
+        let windows = SnapConfig::default().shown_layouts();
+        assert!(
+            windows
+                .iter()
+                .all(|shown| !shown.own && shown.name.is_none())
+        );
+        assert_eq!(windows[5].key, "6");
     }
 
     #[test]
