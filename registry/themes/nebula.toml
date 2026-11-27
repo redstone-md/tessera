@@ -47,3 +47,51 @@ item_size = 50
 icon_size = 34
 indicator_height = 4
 indicator_active_width = 20
+
+# What can be changed of the theme in Settings > Themes, where the theme is
+# in use. config.toml keeps the values under [theme_options.nebula]; see
+# docs/THEMES.md.
+
+[[setting]]
+key = "variant"
+kind = "choice"
+label = "Accent variant"
+description = "Derives every color from another seed; the theme's own colors are replaced."
+choices = [
+    { value = "unset", label = { en = "Original", ru = "Исходный" } },
+    { value = "cyan", label = { en = "Cyan", ru = "Голубой" }, overlay = { seed = "#4fd9ff" } },
+    { value = "magenta", label = { en = "Magenta", ru = "Пурпурный" }, overlay = { seed = "#ff4fb8" } },
+    { value = "gold", label = { en = "Gold", ru = "Золотой" }, overlay = { seed = "#ffc94f" } },
+]
+
+[[setting]]
+key = "corners"
+kind = "slider"
+label = "Corner roundness"
+description = "Multiplies the radii of the corners; fully round ones stay round."
+min = 0
+max = 2
+step = 0.1
+default = 1.0
+unit = "×"
+scale = ["shape.small", "shape.medium", "shape.large"]
+
+[[setting]]
+key = "font"
+kind = "font"
+label = "Font"
+optional = true
+unset_label = "Default"
+affects = ["typography.family"]
+
+[[setting]]
+key = "dock_size"
+kind = "slider"
+label = "Dock size"
+description = "Multiplies the height of the dock, its buttons and their icons."
+min = 0.6
+max = 1.6
+step = 0.05
+default = 1.0
+unit = "×"
+scale = ["dock.container_height", "dock.item_size", "dock.icon_size"]

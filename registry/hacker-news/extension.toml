@@ -12,6 +12,10 @@
 # Each refresh asks for the list of top stories and then for each story
 # shown, one request each, a few at a time. Nothing about the user is
 # sent.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "hacker-news"
 
 [permissions]
@@ -35,3 +39,23 @@ name = "front-page"
 width = 400
 height = 360
 content = ["stories"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "count"
+kind = "number"
+label = { en = "Stories shown", ru = "Показывать историй" }
+min = 1
+max = 15
+default = 6
+affects = ["stories"]
+
+[[setting]]
+key = "interval_minutes"
+kind = "number"
+label = { en = "Minutes between updates", ru = "Минут между обновлениями" }
+min = 5
+max = 1440
+default = 15
+unit = "min"

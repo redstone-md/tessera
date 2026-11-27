@@ -6,8 +6,9 @@
 //! It asks each enabled service for the usage of the user's account, on a
 //! timer, and shows the answers in two widgets: `summary` for a bar and
 //! `details` for a popup. The settings in `[extension.ai-limits]` of the
-//! shell's configuration choose the services; the buttons of `details`
-//! choose what is shown and are remembered.
+//! shell's configuration, which Settings > Extensions also changes, choose
+//! the services; the buttons of `details` choose what is shown and are
+//! remembered.
 
 mod clock;
 mod model;

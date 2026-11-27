@@ -1,6 +1,6 @@
 [package]
 name = "tessera-example-countdown"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Tessera extension: the time left until named dates"

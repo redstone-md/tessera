@@ -228,6 +228,20 @@ impl Language {
         found.map_or(text, |&(_, said)| said)
     }
 
+    /// `text` in this language, or as it is where the table lacks it, for
+    /// a text that is read from a file rather than written in the code,
+    /// such as the label a setting is declared with.
+    pub fn translate(self, text: &str) -> String {
+        let said = match self {
+            Self::English => None,
+            Self::Russian => { RUSSIAN.iter() }
+                .find(|(english, _)| *english == text)
+                .map(|&(_, said)| said),
+            Self::File(tongue) => tongue.file.texts.get(text).map(String::as_str),
+        };
+        said.unwrap_or(text).to_owned()
+    }
+
     /// The word of the calendar with the number `index`, counted from
     /// January or Monday as 0; `None` where it is the English one.
     fn word(self, word: Word, index: usize) -> Option<&'static str> {
@@ -1384,6 +1398,85 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // declared-settings: settings of extensions and themes, layers of themes.
+    (
+        "A changed setting reaches the running extension when Tessera starts again.",
+        "Изменённая настройка дойдёт до работающего расширения после перезапуска Tessera.",
+    ),
+    ("Accent color", "Акцентный цвет"),
+    ("Accent variant", "Вариант акцента"),
+    ("Add a layer", "Добавить слой"),
+    ("Affects:", "Влияет на:"),
+    ("As Windows", "Как в Windows"),
+    ("Bar", "Панель"),
+    ("Browse", "Обзор"),
+    ("Comfortable", "Просторно"),
+    ("Compact", "Компактно"),
+    ("Corner roundness", "Скругление углов"),
+    ("Corners", "Углы"),
+    ("Dark", "Тёмная"),
+    ("Density", "Плотность"),
+    (
+        "Derives every color from another seed; the theme's own colors are replaced.",
+        "Выводит все цвета из другого исходного; собственные цвета темы заменяются.",
+    ),
+    ("Dock size", "Размер панели задач"),
+    (
+        "Every color is derived from it.",
+        "Из него выводятся все цвета.",
+    ),
+    ("Flat bars", "Плоские панели"),
+    ("Font", "Шрифт"),
+    ("Height of the bar fields", "Высота полей панели"),
+    ("Installed extensions", "Установленные расширения"),
+    ("Launcher", "Запуск приложений"),
+    ("Layers", "Слои"),
+    ("Light", "Светлая"),
+    ("Meters", "Индикаторы"),
+    ("Motion", "Движение"),
+    (
+        "Multiplies the height of the dock, its buttons and their icons.",
+        "Умножает высоту панели задач, её кнопок и их значков.",
+    ),
+    (
+        "Multiplies the radii of the corners; fully round ones stay round.",
+        "Умножает радиусы углов; полностью круглые остаются круглыми.",
+    ),
+    ("No extension is installed.", "Расширения не установлены."),
+    (
+        "Nothing is stacked over the theme.",
+        "Поверх темы ничего не наложено.",
+    ),
+    ("Other", "Другое"),
+    ("Reset all", "Сбросить всё"),
+    ("Scheme", "Схема"),
+    ("Sliders", "Ползунки"),
+    (
+        "Some settings are declared wrongly and are left out:",
+        "Некоторые настройки объявлены неверно и пропущены:",
+    ),
+    ("Spacing", "Отступы"),
+    (
+        "The installed fonts are being read.",
+        "Читаются установленные шрифты.",
+    ),
+    (
+        "The widgets of a bar stand on the wallpaper without fields behind them.",
+        "Виджеты панели стоят на обоях без полей за ними.",
+    ),
+    (
+        "Themes stacked over the theme, in order: each changes only what it sets, and the last one wins.",
+        "Темы, наложенные поверх темы по порядку: каждая меняет только то, что задаёт, и побеждает последняя.",
+    ),
+    (
+        "This extension declares no settings; what it reads is written in config.toml.",
+        "Это расширение не объявляет настроек; то, что оно читает, пишется в config.toml.",
+    ),
+    (
+        "This theme declares no settings.",
+        "Эта тема не объявляет настроек.",
+    ),
+    ("Value", "Значение"),
 ];
 
 #[cfg(test)]

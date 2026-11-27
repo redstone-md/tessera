@@ -47,3 +47,61 @@ item_size = 50
 icon_size = 34
 indicator_height = 4
 indicator_active_width = 20
+
+# What can be changed of the theme in Settings > Themes, where the theme is
+# in use. config.toml keeps the values under [theme_options.ocean]; see
+# docs/THEMES.md.
+
+[[setting]]
+key = "variant"
+kind = "choice"
+label = "Accent variant"
+description = "Derives every color from another seed; the theme's own colors are replaced."
+choices = [
+    { value = "unset", label = { en = "Original", ru = "Исходный" } },
+    { value = "teal", label = { en = "Teal", ru = "Бирюзовый" }, overlay = { seed = "#2fb3a8" } },
+    { value = "indigo", label = { en = "Indigo", ru = "Индиго" }, overlay = { seed = "#6b7bff" } },
+    { value = "coral", label = { en = "Coral", ru = "Коралловый" }, overlay = { seed = "#ff7a6b" } },
+]
+
+[[setting]]
+key = "corners"
+kind = "slider"
+label = "Corner roundness"
+description = "Multiplies the radii of the corners; fully round ones stay round."
+min = 0
+max = 2
+step = 0.1
+default = 1.0
+unit = "×"
+scale = ["shape.small", "shape.medium", "shape.large"]
+
+[[setting]]
+key = "density"
+kind = "choice"
+label = "Density"
+choices = [
+    { value = "unset", label = "Default" },
+    { value = "compact", label = "Compact", overlay = { spacing = { tiny = 3, small = 7, medium = 12 }, bar = { pill_height = 32 } } },
+    { value = "comfortable", label = "Comfortable", overlay = { spacing = { tiny = 5, small = 11, medium = 18 }, bar = { pill_height = 40 } } },
+]
+
+[[setting]]
+key = "font"
+kind = "font"
+label = "Font"
+optional = true
+unset_label = "Default"
+affects = ["typography.family"]
+
+[[setting]]
+key = "dock_size"
+kind = "slider"
+label = "Dock size"
+description = "Multiplies the height of the dock, its buttons and their icons."
+min = 0.6
+max = 1.6
+step = 0.05
+default = 1.0
+unit = "×"
+scale = ["dock.container_height", "dock.item_size", "dock.icon_size"]

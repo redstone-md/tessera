@@ -1,0 +1,54 @@
+# A Tessera theme meant as a layer: it makes whatever theme lies under it
+# denser, with less space between and inside things and smaller bars and
+# dock, and leaves its colors alone. Copy it to %APPDATA%\tessera\themes\
+# and add it in Settings > Themes > Layers, or write
+# `theme_layers = ["dense"]` at the top of config.toml.
+
+[spacing]
+tiny = 3
+small = 6
+medium = 11
+
+[typography]
+label_size = 13
+icon_size = 15
+
+[bar]
+pill_height = 30
+
+[dock]
+container_height = 54
+item_size = 42
+icon_size = 28
+indicator_height = 3
+indicator_active_width = 12
+
+[launcher]
+field_height = 38
+row_height = 36
+icon_size = 24
+
+# What can be changed of the layer in Settings > Themes; config.toml keeps
+# the values under [theme_options.dense]; see docs/THEMES.md.
+
+[[setting]]
+key = "text"
+kind = "choice"
+label = "Text size"
+choices = [
+    { value = "unset", label = "Default" },
+    { value = "smaller", label = { en = "Smaller", ru = "Мельче" }, overlay = { typography = { label_size = 12, icon_size = 14 } } },
+    { value = "larger", label = { en = "Larger", ru = "Крупнее" }, overlay = { typography = { label_size = 14, icon_size = 16 } } },
+]
+
+[[setting]]
+key = "bar_height"
+kind = "number"
+label = "Height of the bar fields"
+min = 22
+max = 40
+step = 2
+unit = "px"
+optional = true
+unset_label = "Default"
+affects = ["bar.pill_height"]

@@ -1,0 +1,27 @@
+# A Tessera theme meant as a layer: it rounds the corners of whatever theme
+# lies under it further, and leaves everything else alone. Copy it to
+# %APPDATA%\tessera\themes\ and add it in Settings > Themes > Layers, or
+# write `theme_layers = ["round"]` at the top of config.toml.
+
+[shape]
+small = 14
+medium = 24
+large = 34
+
+[slider]
+inner_radius = 4
+
+# What can be changed of the layer in Settings > Themes; config.toml keeps
+# the values under [theme_options.round]; see docs/THEMES.md.
+
+[[setting]]
+key = "roundness"
+kind = "slider"
+label = "Corner roundness"
+description = "Multiplies the radii of the corners; fully round ones stay round."
+min = 0.5
+max = 1.5
+step = 0.05
+default = 1.0
+unit = "×"
+scale = ["shape.small", "shape.medium", "shape.large"]

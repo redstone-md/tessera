@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "tessera-example-device-battery"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "wit-bindgen",
 ]

@@ -28,6 +28,7 @@ mod modules;
 mod motion;
 mod notices;
 mod notifications_store;
+mod options;
 mod panel;
 mod platform;
 mod popup;

@@ -12,6 +12,10 @@
 #     interval_minutes = 60      # 30 to 1440
 #
 # Only the base currency is sent, to open.er-api.com and to nobody else.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "exchange"
 
 # What one unit of the base currency buys of the first currency, for a
@@ -36,3 +40,29 @@ name = "board"
 width = 300
 height = 200
 content = ["rates"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "base"
+kind = "text"
+label = { en = "Base currency", ru = "Базовая валюта" }
+placeholder = "USD"
+max_length = 3
+default = "USD"
+
+[[setting]]
+key = "symbols"
+kind = "list"
+label = { en = "Currencies", ru = "Валюты" }
+description = { en = "Three-letter codes; the bar shows the first.", ru = "Трёхбуквенные коды; на панели первая." }
+default = ["EUR", "GBP", "JPY"]
+
+[[setting]]
+key = "interval_minutes"
+kind = "number"
+label = { en = "Minutes between updates", ru = "Минут между обновлениями" }
+min = 30
+max = 1440
+default = 60
+unit = "min"

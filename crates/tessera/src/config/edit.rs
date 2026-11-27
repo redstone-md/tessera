@@ -1011,3 +1011,122 @@ content = ["apps"]
         file.config().expect("it stays usable");
     }
 }
+
+// Wave 2, declared-settings: the values of declared settings of extensions
+// and themes, and the themes stacked over the base theme.
+impl ConfigFile {
+    /// Sets the setting `key` of the extension `id`, under
+    /// `[extension.<id>]`; `None` takes it away, and the table with its
+    /// last key.
+    pub fn set_extension_setting(&mut self, id: &str, key: &str, value: Option<Value>) -> bool {
+        self.set_nested("extension", id, key, value)
+    }
+
+    /// Sets the setting `key` of the theme `theme`, under
+    /// `[theme_options.<theme>]`; `None` takes it away, and the table with
+    /// its last key.
+    pub fn set_theme_option(&mut self, theme: &str, key: &str, value: Option<Value>) -> bool {
+        self.set_nested("theme_options", theme, key, value)
+    }
+
+    /// Names the themes stacked over the base theme, in order; none takes
+    /// the key away.
+    pub fn set_theme_layers(&mut self, layers: &[String]) {
+        self.set_key("theme_layers", list(layers));
+    }
+
+    /// Sets `key` of the table `name` within the table `outer`, both made
+    /// for it where they are missing and taken away with their last key.
+    /// Whether they are tables keys can be set in is returned.
+    fn set_nested(&mut self, outer: &str, name: &str, key: &str, value: Option<Value>) -> bool {
+        if value.is_none() && self.document.get(outer).is_none() {
+            return true;
+        }
+        let mut made = Table::new();
+        // Only `[outer.name]` is written, not `[outer]` above it.
+        made.set_implicit(true);
+        let tables = self.document.entry(outer).or_insert(Item::Table(made));
+        let Some(tables) = tables.as_table_like_mut() else {
+            return false;
+        };
+        if value.is_none() && tables.get(name).is_none() {
+            return true;
+        }
+        let table = tables.entry(name).or_insert(Item::Table(Table::new()));
+        let Some(entries) = table.as_table_like_mut() else {
+            return false;
+        };
+        match value {
+            Some(value) => {
+                entries.insert(key, Item::Value(value));
+            }
+            None => {
+                entries.remove(key);
+            }
+        }
+        if entries.is_empty() {
+            tables.remove(name);
+        }
+        if tables.is_empty() {
+            self.document.remove(outer);
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod declared_settings_tests {
+    use super::*;
+
+    const MINE: &str =
+        "# Mine.\ntheme = \"ocean\"\n\n[extension.weather]\n# Berlin.\nlatitude = 52.52\n";
+
+    #[test]
+    fn settings_of_extensions_are_set_in_their_tables_and_taken_away_again() {
+        let mut file = ConfigFile::parse(MINE).unwrap();
+        assert!(file.set_extension_setting("weather", "unit", Some("fahrenheit".into())));
+        assert!(file.set_extension_setting("crypto", "coins", Some("bitcoin, monero".into())));
+        let config = file.config().unwrap();
+        assert_eq!(
+            config.extensions["weather"]["unit"].as_str(),
+            Some("fahrenheit")
+        );
+        assert_eq!(
+            config.extensions["crypto"]["coins"].as_str(),
+            Some("bitcoin, monero")
+        );
+        let text = file.document.to_string();
+        assert!(text.contains("# Berlin."));
+        assert!(!text.contains("[extension]\n"));
+        assert!(file.set_extension_setting("weather", "unit", None));
+        assert!(file.set_extension_setting("crypto", "coins", None));
+        assert!(file.set_extension_setting("nothing", "coins", None));
+        assert_eq!(file.document.to_string(), MINE);
+        assert!(file.set_extension_setting("weather", "latitude", None));
+        assert!(!file.document.to_string().contains("extension"));
+    }
+
+    #[test]
+    fn settings_of_themes_and_layers_are_written_and_forgotten() {
+        let mut file = ConfigFile::parse(MINE).unwrap();
+        assert!(file.set_theme_option("ocean", "corners", Some(1.5.into())));
+        assert!(file.set_theme_option("builtin", "accent", Some("#3d7bd9".into())));
+        file.set_theme_layers(&["dense".to_owned(), "round".to_owned()]);
+        let config = file.config().unwrap();
+        assert_eq!(config.theme_layers, ["dense", "round"]);
+        assert_eq!(
+            config.theme_options["ocean"]["corners"].as_float(),
+            Some(1.5)
+        );
+        assert_eq!(
+            config.theme_options["builtin"]["accent"].as_str(),
+            Some("#3d7bd9")
+        );
+        assert!(file.set_theme_option("ocean", "corners", None));
+        assert!(file.set_theme_option("builtin", "accent", None));
+        file.set_theme_layers(&[]);
+        assert_eq!(file.document.to_string(), MINE);
+        let mut odd = ConfigFile::parse("theme_options = 3\n").unwrap();
+        assert!(!odd.set_theme_option("ocean", "corners", Some(1.into())));
+    }
+}

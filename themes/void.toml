@@ -48,3 +48,35 @@ width = 36
 stroke = 2
 amplitude = 2
 wavelength = 10
+
+# What can be changed of the theme in Settings > Themes, where the theme is
+# in use. config.toml keeps the values under [theme_options.void]; see
+# docs/THEMES.md.
+
+[[setting]]
+key = "flat"
+kind = "toggle"
+label = "Flat bars"
+description = "The widgets of a bar stand on the wallpaper without fields behind them."
+default = true
+affects = ["bar.flat"]
+
+[[setting]]
+key = "corners"
+kind = "slider"
+label = "Corner roundness"
+description = "Multiplies the radii of the corners; fully round ones stay round."
+min = 0
+max = 2
+step = 0.1
+default = 1.0
+unit = "×"
+scale = ["shape.small", "shape.medium", "shape.large"]
+
+[[setting]]
+key = "font"
+kind = "font"
+label = "Font"
+optional = true
+unset_label = "Default"
+affects = ["typography.family"]

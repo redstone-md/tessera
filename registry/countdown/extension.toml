@@ -11,6 +11,10 @@
 # The bar shows the nearest date ahead. The bars of the popup fill from
 # when the extension first saw a date to the date itself; when it first
 # saw each one is kept across restarts. Nothing is sent anywhere.
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "countdown"
 
 # The nearest date ahead and the time left until it, for a bar. A click
@@ -32,3 +36,11 @@ name = "dates"
 width = 300
 height = 220
 content = ["events"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "events"
+kind = "pairs"
+label = { en = "Dates", ru = "Даты" }
+description = { en = "Each a name and a date in UTC, as 2027-01-01 or 2027-03-02 14:30.", ru = "Название и дата в UTC, например 2027-01-01 или 2027-03-02 14:30." }

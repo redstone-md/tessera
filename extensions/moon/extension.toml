@@ -8,6 +8,10 @@
 #     [extension.moon]
 #     glyph = false   # true shows a moon symbol such as 🌔 in the bar,
 #                     # for fonts that have the symbols
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml as above does the same.
 id = "moon"
 
 # The phase and how much of the moon is lit, for a bar. A click on it
@@ -29,3 +33,13 @@ name = "sky"
 width = 280
 height = 170
 content = ["details"]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "glyph"
+kind = "toggle"
+label = { en = "Moon symbol in the bar", ru = "Символ луны на панели" }
+description = { en = "Such as 🌔, for fonts that have the symbols.", ru = "Например 🌔, для шрифтов, где есть такие символы." }
+default = false
+affects = ["phase"]

@@ -1,5 +1,11 @@
 # Layouts refer to the widgets below as "ai-limits.summary" and
 # "ai-limits.details".
+#
+# The settings are changed in Settings > Extensions, which checks them
+# against the declarations at the end of this file; writing them in
+# config.toml under [extension.ai-limits] does the same.
+# The keys of OpenRouter and DeepSeek are not offered there and stay in
+# config.toml, as `openrouter_key` and `deepseek_key`.
 id = "ai-limits"
 
 # One line for a bar: the tightest limit of each service.
@@ -26,3 +32,29 @@ files = [
     "~/.claude/.credentials.json",
     "~/.codex/auth.json",
 ]
+
+# What can be set, for the settings to show and to check.
+
+[[setting]]
+key = "providers"
+kind = "list"
+label = { en = "Services", ru = "Сервисы" }
+description = { en = "Of claude, codex, openrouter and deepseek. The keys of OpenRouter and DeepSeek are written in config.toml only.", ru = "Из claude, codex, openrouter и deepseek. Ключи OpenRouter и DeepSeek пишутся только в config.toml." }
+default = ["claude", "codex"]
+
+[[setting]]
+key = "summary"
+kind = "list"
+label = { en = "In the bar", ru = "На панели" }
+description = { en = "The services the bar shows; all of the above where it is empty.", ru = "Сервисы на панели; пусто — все перечисленные выше." }
+optional = true
+affects = ["summary"]
+
+[[setting]]
+key = "interval_minutes"
+kind = "number"
+label = { en = "Minutes between updates", ru = "Минут между обновлениями" }
+min = 1
+max = 1440
+default = 5
+unit = "min"

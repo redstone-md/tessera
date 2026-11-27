@@ -45,3 +45,38 @@ width = 36
 stroke = 2
 amplitude = 1.5
 wavelength = 10
+
+# What can be changed of the theme in Settings > Themes, where the theme is
+# in use. config.toml keeps the values under [theme_options.compact]; see
+# docs/THEMES.md.
+
+[[setting]]
+key = "variant"
+kind = "choice"
+label = "Accent variant"
+description = "Derives every color from another seed; the theme's own colors are replaced."
+choices = [
+    { value = "unset", label = { en = "Original", ru = "Исходный" } },
+    { value = "green", label = { en = "Green", ru = "Зелёный" }, overlay = { seed = "#8fd18b" } },
+    { value = "amber", label = { en = "Amber", ru = "Янтарный" }, overlay = { seed = "#f2b84b" } },
+]
+
+[[setting]]
+key = "corners"
+kind = "slider"
+label = "Corner roundness"
+description = "Multiplies the radii of the corners; fully round ones stay round."
+min = 0
+max = 2
+step = 0.1
+default = 1.0
+unit = "×"
+scale = ["shape.small", "shape.medium", "shape.large"]
+
+[[setting]]
+key = "font"
+kind = "font"
+label = "Font"
+optional = true
+unset_label = "Default"
+affects = ["typography.family"]

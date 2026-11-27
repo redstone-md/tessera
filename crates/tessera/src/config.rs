@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -96,9 +97,20 @@ fn modified(file: &str) -> Option<SystemTime> {
     fs::metadata(config_dir()?.join(file)).ok()?.modified().ok()
 }
 
-/// When the files a configuration is made of were last written. It differs
-/// after any of them was written, created or deleted.
-pub type Stamp = [Option<SystemTime>; 2];
+/// When the files a configuration is made of were last written: the file
+/// itself, the theme it names and each theme stacked over that. It differs
+/// after any of them was written, created or deleted, or when the themes
+/// named change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp(u64);
+
+impl Stamp {
+    fn of(times: &[Option<SystemTime>]) -> Self {
+        let mut hasher = DefaultHasher::new();
+        times.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
 
 /// Which displays a surface appears on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -404,11 +416,11 @@ pub struct Config {
     #[serde(default, rename = "corner")]
     pub corners: Vec<CornerConfig>,
     // Wave 2, declared-settings: theme files stacked over `theme`, in order.
-    // #[serde(default)]
-    // pub theme_layers: Vec<String>,
+    #[serde(default)]
+    pub theme_layers: Vec<String>,
     // Wave 2, declared-settings: the values of declared theme settings, per theme name.
-    // #[serde(default)]
-    // pub theme_options: HashMap<String, toml::Table>,
+    #[serde(default)]
+    pub theme_options: HashMap<String, toml::Table>,
     // Wave 2, resources-icon-packs: the installed icon packs, the first that has an icon wins.
     // #[serde(default)]
     // pub icon_packs: Vec<String>,
@@ -458,14 +470,15 @@ impl Config {
         }
     }
 
-    /// The state of the files this configuration is read from: the layout
-    /// and the theme it names.
+    /// The state of the files this configuration is read from: the layout,
+    /// the theme it names and the themes stacked over it.
     pub fn stamp(&self) -> Stamp {
-        let theme = self
-            .theme
-            .as_deref()
-            .and_then(|name| modified(&theme_file(name)));
-        [modified(CONFIG_FILE), theme]
+        let themes = self.theme.iter().chain(&self.theme_layers);
+        let themes = themes.map(|name| modified(&theme_file(name)));
+        let times: Vec<Option<SystemTime>> = std::iter::once(modified(CONFIG_FILE))
+            .chain(themes)
+            .collect();
+        Stamp::of(&times)
     }
 
     /// The applications the first `windows` widget pins; `None` if the
@@ -560,6 +573,24 @@ mod tests {
         assert_eq!(slot[0].popup, None);
         assert_eq!(slot[1].popup.as_deref(), Some("agenda"));
         assert_eq!(slot[1].options["format"].as_str(), Some("%H"));
+    }
+
+    #[test]
+    fn themes_are_stacked_and_given_settings() {
+        let text = concat!(
+            "theme = \"ocean\"\ntheme_layers = [\"dense\", \"round\"]\n",
+            "[theme_options.ocean]\nvariant = \"teal\"\n",
+        );
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.theme_layers, ["dense", "round"]);
+        assert_eq!(
+            config.theme_options["ocean"]["variant"].as_str(),
+            Some("teal")
+        );
+        let mut other = config.clone();
+        other.theme_layers.pop();
+        // A theme taken off the stack counts, whether its file exists or not.
+        assert_ne!(config.stamp(), other.stamp());
     }
 
     #[test]
