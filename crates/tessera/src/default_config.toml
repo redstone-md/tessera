@@ -141,15 +141,17 @@
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
 #             switcher the window switcher, as switch above, until the
-#                      keys held when it was pressed are let go (with none
-#                      held it stays open until a window is chosen); arg
-#                      "next" (or none) and "previous" go through all the
-#                      windows it offers, "app-next" and "app-previous"
-#                      through those of the application of the window in
-#                      front, as alt+backquote does on other desktops.
-#                      Where the keys of Windows are in use (windows_keys,
-#                      or Tessera being the shell) it takes alt+tab and
-#                      alt+shift+tab unless a [[key]] presses them
+#                      keys to hold of its press are let go (with none, or
+#                      done by `tessera do`, it stays open until a window
+#                      is chosen); arg "next" (or none) and "previous" go
+#                      through all the windows it offers, "app-next" and
+#                      "app-previous" through those of the application of
+#                      the window in front, as alt+backquote does on other
+#                      desktops. Where the keys of Windows are in use
+#                      (windows_keys, or Tessera being the shell) it takes
+#                      alt+tab, alt+shift+tab, alt+backquote (app-next) and
+#                      alt+shift+backquote (app-previous) unless a [[key]]
+#                      presses them
 #
 # [[key]]
 # press = "win+v"
@@ -523,7 +525,9 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # title or program has what was typed (Backspace takes a letter back, Esc
 # all of them), the wheel moves the choice, and Delete, Ctrl+W or a click
 # with the middle button asks the chosen window, or the one clicked, to
-# close.
+# close. The arrows, Enter, Esc, Delete and Backspace reach no other
+# program meanwhile; letters, Tab and Ctrl+W reach the window in front
+# where Windows refuses to bring the switcher in front of it.
 #
 # [switcher]
 # previews = true
