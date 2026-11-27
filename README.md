@@ -219,6 +219,8 @@ Releases are built and published by CI only when a tag such as `v0.3.0` is pushe
 | [docs/FEATURES.md](docs/FEATURES.md) | Every surface and widget in detail, with what was tried and what was not |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Layouts, popups, cards, themes, languages, the file manager |
 | [docs/EXTENSIONS.md](docs/EXTENSIONS.md) | The plugin model, permissions, registries and the examples |
+| [docs/DECLARED-SETTINGS.md](docs/DECLARED-SETTINGS.md) | The settings extensions and themes declare, and how the settings show them |
+| [docs/THEMES.md](docs/THEMES.md) | Theme files, layers of themes and their settings |
 | [CONTEXT.md](CONTEXT.md) | The vocabulary of the project |
 
 ## Contributing

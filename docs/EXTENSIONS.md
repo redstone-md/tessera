@@ -6,6 +6,7 @@ Besides drawing, an extension can:
 
 - read the clock and write to the shell's log;
 - read its settings, the keys of the `[extension.<id>]` table in `config.toml`;
+- declare its settings with `[[setting]]` entries in its manifest, which the settings then show under **Extensions** and check, with defaults that answer the `setting` import where the file says nothing ([DECLARED-SETTINGS.md](DECLARED-SETTINGS.md)); an extension or theme of a registry that declares settings needs a Tessera build with declared settings, as an older one refuses its manifest;
 - keep up to 64 KiB of text across restarts, stored as `state.txt` in its own directory;
 - read the files its manifest lists under `permissions.files`, and no others;
 - send HTTPS requests to the hosts its manifest lists under `permissions.network`, and no others. Requests run in the background and the answer is delivered later; redirects are not followed, a response is cut off at 1 MiB, and servers are verified against the Windows certificate store;

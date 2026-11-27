@@ -10,6 +10,20 @@
 #   [colors]            single roles as "#rrggbb", applied last
 # theme = "example"
 
+# Theme files stacked over `theme`, in order: each is applied over what the
+# ones before it made, and changes only what it sets. "dense" and "round"
+# of the themes directory of the repository are meant for this.
+# theme_layers = ["dense", "round"]
+
+# The values of the settings a theme declares with [[setting]] entries, by
+# the name of the theme; "builtin" is the built-in theme, which declares
+# accent, scheme, corners, density, font, bar_height and dock_size. The
+# settings change them under Themes; see docs/THEMES.md.
+# [theme_options.builtin]
+# accent = "#3d7bd9"
+# corners = 1.5
+# density = "compact"
+
 # Colors that are read (text, icons, the accent, outlines) are made lighter
 # or darker by as little as gives them the contrast WCAG 2.1 asks for at
 # level AA to the surfaces of the theme: 4.5 to 1, outlines 3 to 1. Colors
@@ -1157,6 +1171,10 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 
 # [extension.<id>] holds the settings of the extension with that id; the
 # extension decides which keys it understands.
+# An extension that declares its settings in its manifest shows them in
+# the settings under Extensions, which write them here; a declared value
+# that does not fit is replaced by the declared default. A list may be
+# written as an array or as the text "a, b, c".
 #
 # [extension.ai-limits]
 # providers = ["claude", "codex"]
