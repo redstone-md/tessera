@@ -45,6 +45,7 @@ mod start;
 mod startup;
 pub mod system;
 mod tiling;
+mod tiling_overrides;
 mod trash;
 mod tray;
 mod update;
@@ -104,6 +105,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),
+        Box::new(tiling_overrides::TilingOverridesModule),
         Box::new(look::LookModule),
         Box::new(hdr::HdrModule),
         Box::new(plan::PlanModule),

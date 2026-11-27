@@ -2122,6 +2122,111 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // tiling-stacks.
+    ("Room around the tiles", "Поля вокруг плиток"),
+    (
+        "The gap where nothing is given.",
+        "Если не задано, равно промежутку.",
+    ),
+    ("Room at the sides of the display", "Поля по краям экрана"),
+    (
+        "Only these programs are tiled",
+        "Раскладывать только эти программы",
+    ),
+    (
+        "Programs left floating",
+        "Программы, оставленные свободными",
+    ),
+    ("Titles left floating", "Заголовки, оставленные свободными"),
+    (
+        "A window whose title has one of them in it, whatever the case.",
+        "Окно, в заголовке которого есть одна из этих строк, без учёта регистра.",
+    ),
+    (
+        "Window classes left floating",
+        "Классы окон, оставленные свободными",
+    ),
+    (
+        "A window whose class has one of them in it, whatever the case.",
+        "Окно, в классе которого есть одна из этих строк, без учёта регистра.",
+    ),
+    ("Width of a floated window", "Ширина освобождённого окна"),
+    (
+        "A share of the room the bars leave; without one, the window goes back where it was.",
+        "Доля места, оставленного панелями; без неё окно возвращается туда, где было.",
+    ),
+    ("Height of a floated window", "Высота освобождённого окна"),
+    ("A tile dropped on another", "Плитка, брошенная на другую"),
+    ("Trades places with it", "Меняется с ней местами"),
+    (
+        "Takes its place in the order",
+        "Занимает её место по порядку",
+    ),
+    ("Resize step", "Шаг изменения размера"),
+    ("Bar of tabs over a stack", "Полоса вкладок над стопкой"),
+    ("With two windows or more", "Если окон два или больше"),
+    ("Height of the bar of tabs", "Высота полосы вкладок"),
+    (
+        "Stack new windows of these categories",
+        "Складывать в стопку новые окна этих категорий",
+    ),
+    (
+        "Categories the window rules give; * is every category.",
+        "Категории из правил окон; * — любая категория.",
+    ),
+    (
+        "Tiling of displays and workspaces",
+        "Тайлинг экранов и рабочих столов",
+    ),
+    (
+        "Each display has workspaces of its own",
+        "У каждого экрана свои рабочие столы",
+    ),
+    (
+        "Only these programs belong to a workspace",
+        "К рабочему столу относятся только эти программы",
+    ),
+    (
+        "Programs on every workspace",
+        "Программы на всех рабочих столах",
+    ),
+    ("Names of the workspaces", "Имена рабочих столов"),
+    (
+        "The first for the first workspace; an empty one leaves its number.",
+        "Первое — для первого рабочего стола; пустое оставляет номер.",
+    ),
+    ("Icons of the workspaces", "Значки рабочих столов"),
+    (
+        "A character of the icon font for each workspace, the first for the first.",
+        "Символ шрифта значков для каждого рабочего стола, первый — для первого.",
+    ),
+    ("Fewest workspaces", "Наименьшее число рабочих столов"),
+    ("Most workspaces", "Наибольшее число рабочих столов"),
+    ("Rows of workspaces", "Ряды рабочих столов"),
+    (
+        "A step past the last workspace comes to the first",
+        "Шаг за последний рабочий стол ведёт к первому",
+    ),
+    (
+        "Button that makes a workspace",
+        "Кнопка, создающая рабочий стол",
+    ),
+    ("Each side apart", "Для каждой стороны отдельно"),
+    ("Remove this entry?", "Удалить эту запись?"),
+    (
+        "No display has a tiling of its own.",
+        "Ни у одного экрана нет своего тайлинга.",
+    ),
+    ("Add a display", "Добавить экран"),
+    (
+        "No workspace has a tiling of its own.",
+        "Ни у одного рабочего стола нет своего тайлинга.",
+    ),
+    ("Add a workspace", "Добавить рабочий стол"),
+    (
+        "What is set here has the last word over the tiling of every display; a later entry over an earlier one.",
+        "Заданное здесь важнее общего тайлинга всех экранов; более поздняя запись — важнее более ранней.",
+    ),
 ];
 
 #[cfg(test)]
