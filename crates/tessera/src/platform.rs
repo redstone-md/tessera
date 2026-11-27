@@ -70,13 +70,13 @@ pub use win32::{BluetoothScan, FoundDevice, Pairing, PairingFailure, PairingProm
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
+pub use win32::{CloudState, Overlays};
 pub use win32::{DesktopSurvey, WindowMark};
 #[allow(
     unused_imports,
     reason = "named by the views that keep the windows of a survey or a still picture"
 )]
 pub use win32::{DesktopWindow, Still};
-pub use win32::{CloudState, Overlays};
 pub use win32::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
@@ -97,9 +97,9 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
+pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 #[allow(unused_imports, reason = "the parts the dock and its previews read")]
 pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton};
-pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{ImeMode, ImeState, TouchKeyboard};

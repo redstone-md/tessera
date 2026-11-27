@@ -399,10 +399,6 @@ impl IconPacks {
     /// The picture a pack gives for the kind of file `ext_or_kind` (see
     /// [`Self::file`]), fitted into a square of `size` pixels; `None`
     /// where no pack has one or its picture cannot be used.
-    #[allow(
-        dead_code,
-        reason = "for the icons of the desktop and the file manager"
-    )]
     pub fn file_icon(&self, ext_or_kind: &str, size: u32) -> Icon {
         let icon = self.file(ext_or_kind)?.clone();
         self.image(&icon, size, false)

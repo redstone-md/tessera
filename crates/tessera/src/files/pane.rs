@@ -2250,6 +2250,13 @@ impl FolderPane {
         theme: &Theme,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let icons = cx.global::<AppIcons>();
+        // A folder has the folder of the icon font unless a pack has one.
+        if entry.folder
+            && let Some(image) = icons.of_kind(crate::icon_packs::FOLDER)
+        {
+            return img(image).size(size).flex_none().into_any_element();
+        }
         if entry.folder {
             return div()
                 .size(size)
@@ -2263,7 +2270,6 @@ impl FolderPane {
                 .child(ICON_FOLDER)
                 .into_any_element();
         }
-        let icons = cx.global::<AppIcons>();
         let known = icons.has_of_file(&entry.path);
         let image = match known || self.icons_left.get() > 0 {
             true => {

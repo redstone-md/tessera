@@ -74,6 +74,6 @@ A registry offers a pack as an `[[icon_pack]]` entry with the manifest and every
 ## What is not done
 
 - No pack has been tried on a running shell: the lookup, the masks and the drawing of SVG files were tried in tests only, and the sample pack's SVG files with resvg outside Tessera.
-- The dock does not ask for the active color yet, and the icons of the desktop and the thumbnails of the file manager do not ask the packs yet, as those parts come separately.
+- The dock does not ask for the active color yet, and the icons of the desktop do not ask the packs yet, as that part comes separately. Where the file manager shows a thumbnail of a file (a picture, a video, a document with a preview), the thumbnail is shown in place of the icon of a pack; folders, the details pane and files without a thumbnail take the icon of the pack.
 - Icons of the shell itself (`[shell]`), of the notification area, of notifications and of extensions are not replaced.
 - Light and dark variants of a picture are not chosen between; a pack that wants to fit both uses `monochrome` or a mask.

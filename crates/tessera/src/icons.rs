@@ -86,6 +86,13 @@ impl AppIcons {
         &self.packs
     }
 
+    /// The icon the first pack that has one gives for `kind`, a kind of
+    /// [`IconPacks::file`] such as `folder` or `recycle-bin-full`; `None`
+    /// where no pack has one, and the caller draws its own.
+    pub fn of_kind(&self, kind: &str) -> Icon {
+        self.packs.file_icon(kind, SOURCE_SIZE)
+    }
+
     /// The icon to show for `executable`: the configured replacement, or
     /// else the one of the first icon pack that has one, or else the one
     /// embedded in the file. The path that names a packaged application

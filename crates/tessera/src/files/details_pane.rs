@@ -305,12 +305,18 @@ impl DetailsPane {
                 .size(side)
                 .object_fit(ObjectFit::Contain)
                 .into_any_element(),
-            Picture::Icon if entry.folder => div()
-                .font_family(theme.typography.icon_family)
-                .text_size(side * 0.6)
-                .text_color(theme.colors.primary)
-                .child(ICON_FOLDER)
-                .into_any_element(),
+            // A folder has the folder of the icon font unless a pack has one.
+            Picture::Icon if entry.folder => {
+                match cx.global::<AppIcons>().of_kind(crate::icon_packs::FOLDER) {
+                    Some(image) => img(image).size(side * 0.5).into_any_element(),
+                    None => div()
+                        .font_family(theme.typography.icon_family)
+                        .text_size(side * 0.6)
+                        .text_color(theme.colors.primary)
+                        .child(ICON_FOLDER)
+                        .into_any_element(),
+                }
+            }
             Picture::Icon => match cx.global::<AppIcons>().of_file(&entry.path) {
                 Some(image) => img(image).size(side * 0.5).into_any_element(),
                 None => div().into_any_element(),
