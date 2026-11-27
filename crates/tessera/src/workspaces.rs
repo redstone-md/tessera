@@ -1418,10 +1418,6 @@ impl Workspaces {
     }
 
     /// Whether the window `id` is seen on every workspace.
-    #[allow(
-        dead_code,
-        reason = "for the window menu and the rules, which make windows sticky"
-    )]
     pub fn is_sticky(id: AppWindowId, cx: &App) -> bool {
         cx.global::<Self>().sticky.contains(&id)
     }

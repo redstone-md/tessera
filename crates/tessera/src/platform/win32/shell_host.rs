@@ -367,7 +367,6 @@ impl ShellHost {
     /// Where the dock shows `window`, for the animation of minimizing it
     /// that Windows asks the shell for (`HSHELL_GETMINRECT`); `None`
     /// forgets it.
-    #[allow(dead_code, reason = "for the dock, which knows where its buttons are")]
     pub fn set_min_rect(window: AppWindowId, rect: Option<ScreenRect>) {
         let mut rects = locked(&MIN_RECTS);
         let rects = rects.get_or_insert_with(HashMap::new);

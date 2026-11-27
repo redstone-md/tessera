@@ -790,13 +790,16 @@ pub struct Config {
     // Wave 2, system-settings: how often the system meters are read.
     // #[serde(default)]
     // pub system: crate::modules::system::SystemConfig,
-    // Wave 2, window-behaviour-rules: modifier+drag, title bar clicks, focus follows mouse.
+    /// What the pointer does to windows while a key is held, what clicks
+    /// on title bars do, and whether the keyboard follows the pointer.
     #[serde(default)]
     pub window_actions: crate::window_actions::WindowActionsConfig,
-    // Wave 2, window-behaviour-rules: bundled rule sets that are switched on.
+    /// The sets of rules that come with Tessera that are switched on,
+    /// before the rules of the user.
     #[serde(default)]
     pub rule_templates: Vec<String>,
-    // Wave 2, tray-bluetooth: which notification icons are shown, hidden and in what order.
+    /// Which icons of the notification area stand in the bar, which in
+    /// its overflow, and in what order.
     #[serde(default)]
     pub tray: crate::tray_settings::TrayConfig,
 }
