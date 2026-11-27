@@ -251,7 +251,11 @@ impl WindowList {
                 let (from, entry) = (pin.place, pin.entry.clone());
                 repin(cx, move |list| pins::moved(list, from, &entry, to));
             }
-            None if index <= pins && self.pins_shown => {
+            // Right after the last pin it is pinned, but with `manual`,
+            // where it goes first among the others.
+            None if self.pins_shown
+                && (index < pins || (index == pins && self.options.sort != Sorting::Manual)) =>
+            {
                 let Some(entry) = entries::pin_entry(item) else {
                     return;
                 };
@@ -270,7 +274,7 @@ impl WindowList {
                     .filter_map(|item| item.group.clone())
                     .filter(|group| !group.starts_with("window:"))
                     .collect();
-                running.insert((index - pins).min(running.len()), group);
+                running.insert(index.saturating_sub(pins).min(running.len()), group);
                 // Every dock is told, this one too, once its update is
                 // over.
                 cx.defer(move |cx| Docks::reorder(&running, cx));
