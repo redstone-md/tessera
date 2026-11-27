@@ -228,9 +228,6 @@ pub struct Host {
     ticks: u64,
     /// Whether it writes down what only the thread that draws knows.
     reads_shell: bool,
-    /// The popup the extension opened last, by its full name, and its
-    /// window.
-    popup: Option<(String, AnyWindowHandle)>,
     /// What was said already about the content it described.
     reported: HashSet<String>,
 }
@@ -247,7 +244,6 @@ impl Host {
             ticking: false,
             ticks: 0,
             reads_shell,
-            popup: None,
             reported: HashSet::new(),
         };
         if reads_shell {
@@ -509,9 +505,8 @@ impl Host {
         match effect {
             Effect::OpenPopup(name) => Self::open_popup(host, &format!("{id}.{name}"), place, cx),
             Effect::ClosePopup(name) => {
-                if Self::is_open(host, &format!("{id}.{name}"), cx) {
+                if is_open(&format!("{id}.{name}"), cx) {
                     Popups::close(cx);
-                    host.update(cx, |host, _| host.popup = None);
                 }
             }
             Effect::RunAction { name, arg } => {
@@ -540,34 +535,20 @@ impl Host {
         }
     }
 
-    /// Whether the popup `name` is open because the extension opened it.
-    /// Only one popup is open at a time, so it is when its window is still
-    /// there and a popup is open.
-    fn is_open(host: &Entity<Self>, name: &str, cx: &App) -> bool {
-        let opened = host.read(cx).popup.as_ref();
-        opened.is_some_and(|(opened, window)| {
-            opened == name && cx.windows().contains(window) && Popups::is_open(cx)
-        })
-    }
-
-    /// Opens the popup `name`, unless the extension opened it and it is
-    /// still open.
+    /// Opens the popup `name`, unless it is open, whether the extension
+    /// or a click opened it.
     fn open_popup(host: &Entity<Self>, name: &str, place: Place, cx: &mut App) {
-        if Self::is_open(host, name, cx) {
+        if is_open(name, cx) {
             return;
         }
         let anchor = match place {
             Place::Widget(window, x) => anchor_in(window, x, cx),
             Place::Pointer => Self::pointer_anchor(host, cx),
         };
-        let before = cx.windows();
         match anchor {
             Some(anchor) => Popups::toggle(name, anchor, cx),
             None => Shell::toggle_popup(name, cx),
         }
-        let opened = { cx.windows().into_iter() }.find(|window| !before.contains(window));
-        let opened = opened.map(|window| (name.to_owned(), window));
-        host.update(cx, |host, _| host.popup = opened);
     }
 
     /// The anchor at the first widget of the extension on the display the
@@ -586,6 +567,11 @@ impl Host {
             (display.is_none() || anchor.display == display).then_some(anchor)
         })
     }
+}
+
+/// Whether the popup `name` is the one that is open.
+fn is_open(name: &str, cx: &App) -> bool {
+    Popups::open_name(cx) == Some(name)
 }
 
 /// The anchor at `x` of `window`.
