@@ -1222,3 +1222,4 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "No workspace has a tiling of its own." = "Ningún área de trabajo tiene su propio mosaico."
 "Add a workspace" = "Añadir un área de trabajo"
 "What is set here has the last word over the tiling of every display; a later entry over an earlier one." = "Lo que se ajusta aquí prevalece sobre el mosaico de todas las pantallas; una entrada posterior sobre una anterior."
+"Tall with tabs" = "Alto con pestañas"

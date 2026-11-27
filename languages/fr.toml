@@ -1222,3 +1222,4 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "No workspace has a tiling of its own." = "Aucun espace de travail n’a sa propre mosaïque."
 "Add a workspace" = "Ajouter un espace de travail"
 "What is set here has the last word over the tiling of every display; a later entry over an earlier one." = "Ce qui est réglé ici l’emporte sur la mosaïque de tous les écrans ; une entrée plus tardive sur une plus ancienne."
+"Tall with tabs" = "Haut avec onglets"

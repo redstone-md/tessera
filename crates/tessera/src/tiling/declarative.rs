@@ -2,14 +2,18 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! Layouts written in files: a tree of containers that lie side by side
-//! (`horizontal`), one above the other (`vertical`), or hold one window
-//! (`leaf`), in the shape of the layouts of Seelen UI's window manager.
+//! (`horizontal`), one above the other (`vertical`), hold one window
+//! (`leaf`), or hold windows that take turns in one tile below a bar of
+//! tabs (`stack`), in the shape of the layouts of Seelen UI's window
+//! manager.
 //!
 //! Tessera brings a few, and `%APPDATA%\tessera\tiling-layouts\*.toml`
 //! adds more; `layout = "<file name>"` chooses one. The windows go to the
 //! parts by their `priority`, the lowest first, each part taking as many
-//! as it holds: a leaf one, a container without parts of its own as many
-//! as its `max`, or all that are left without one. A part whose
+//! as it holds: a leaf one, a container without parts of its own or a
+//! stack as many as its `max`, or all that are left without one, so that
+//! a layout can say that the windows after the first few go into a stack.
+//! A part whose
 //! `condition` does not hold for the number of windows is left out, and
 //! so is one that gets no window; `grow` is what a part weighs against
 //! the others of its container.
@@ -36,15 +40,16 @@ use super::layouts::{Generated, TileLayout};
 use super::tree::{Axis, Node};
 
 /// The layouts that come with Tessera, by the name of their file.
-const BUNDLED: [(&str, &str); 3] = [
+const BUNDLED: [(&str, &str); 4] = [
     ("tall", include_str!("layouts/tall.toml")),
     ("wide", include_str!("layouts/wide.toml")),
     ("three-columns", include_str!("layouts/three-columns.toml")),
+    ("tabbed", include_str!("layouts/tabbed.toml")),
 ];
 
 /// The titles of the bundled layouts, which are shown in the language of
 /// the user.
-const BUNDLED_TITLES: [&str; 3] = ["Tall", "Wide", "Three columns"];
+const BUNDLED_TITLES: [&str; 4] = ["Tall", "Wide", "Three columns", "Tall with tabs"];
 
 /// The largest a layout file may be, and the most parts it may have.
 const LARGEST_FILE: u64 = 64 * 1024;
@@ -57,6 +62,7 @@ enum Kind {
     Horizontal,
     Vertical,
     Leaf,
+    Stack,
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,6 +190,7 @@ fn part(file: PartFile, depth: usize, parts: &mut usize) -> Result<Part, String>
     match (file.kind, file.max, file.children.is_empty()) {
         (Kind::Leaf, Some(_), _) => return Err("a leaf holds one window and has no `max`".into()),
         (Kind::Leaf, _, false) => return Err("a leaf has no parts".to_owned()),
+        (Kind::Stack, _, false) => return Err("a stack has no parts".to_owned()),
         (_, Some(0), _) => return Err("`max` is at least 1".to_owned()),
         (_, Some(_), false) => {
             return Err("`max` is for a container without parts of its own".to_owned());
@@ -236,7 +243,7 @@ fn gather(part: &Part, count: usize, holders: &mut Vec<((u32, usize), Option<usi
     }
     let held = match (part.kind, part.children.is_empty()) {
         (Kind::Leaf, _) => Some(1),
-        (_, true) => part.max,
+        (Kind::Stack, _) | (_, true) => part.max,
         (_, false) => {
             for child in &part.children {
                 gather(child, count, holders);
@@ -265,6 +272,12 @@ fn build(
     let axis = match part.kind {
         Kind::Horizontal => Axis::Horizontal,
         Kind::Vertical => Axis::Vertical,
+        Kind::Stack => {
+            let (first, taken) = given.get(*holder).copied().unwrap_or_default();
+            *holder += 1;
+            at.extend(first..first + taken);
+            return (taken > 0).then_some(Node::Stack(taken));
+        }
         Kind::Leaf => {
             let (first, taken) = given.get(*holder).copied().unwrap_or_default();
             *holder += 1;
@@ -545,6 +558,31 @@ mod tests {
     }
 
     #[test]
+    fn the_windows_after_the_first_few_go_into_a_stack() {
+        let tabbed = Declared::parse("tabbed", include_str!("layouts/tabbed.toml")).unwrap();
+        assert_eq!(
+            tabbed.generate(2).tree.map(|tree| tree.stacks()),
+            Some(vec![None, None])
+        );
+        let made = tabbed.generate(5);
+        let tree = made.tree.unwrap();
+        assert_eq!(tree.stacks(), [None, None, Some(0), Some(0), Some(0)]);
+        let placed = tiles(&tabbed, 5);
+        assert_eq!(placed[0], rect(0, 0, 720, 600));
+        assert_eq!(placed[1], rect(720, 0, 1200, 200));
+        assert_eq!(placed[2], rect(720, 200, 1200, 600));
+        assert_eq!(placed[2], placed[4]);
+        let most = "[structure]\nkind = \"horizontal\"\n[[structure.children]]\nkind = \"stack\"\nmax = 2\n[[structure.children]]\nkind = \"vertical\"";
+        let layout = Declared::parse("most", most).unwrap();
+        let tree = layout.generate(4).tree.unwrap();
+        assert_eq!(tree.stacks(), [Some(0), Some(0), None, None]);
+        let parted = "[structure]\nkind = \"stack\"\n[[structure.children]]\nkind = \"leaf\"";
+        assert!(Declared::parse("parted", parted).is_err());
+        // A stack without max takes the windows the other parts leave.
+        assert!(Declared::parse("open", "[structure]\nkind = \"stack\"").is_ok());
+    }
+
+    #[test]
     fn a_layout_that_cannot_be_used_says_why() {
         let wrong = [
             "kind = \"leaf\"",
@@ -575,7 +613,7 @@ mod tests {
         let own = Declared::parse("tall", "[structure]\nkind = \"horizontal\"").unwrap();
         let library = Library::with(vec![own.clone()]);
         assert_eq!(library.get("tall"), Some(&own));
-        assert_eq!(library.names(), ["three-columns", "wide", "tall"]);
+        assert_eq!(library.names(), ["tabbed", "three-columns", "wide", "tall"]);
         assert!(library.get("wide").is_some_and(|layout| layout.bundled));
     }
 }

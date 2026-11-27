@@ -2227,6 +2227,7 @@ const RUSSIAN: &[(&str, &str)] = &[
         "What is set here has the last word over the tiling of every display; a later entry over an earlier one.",
         "Заданное здесь важнее общего тайлинга всех экранов; более поздняя запись — важнее более ранней.",
     ),
+    ("Tall with tabs", "Высокая с вкладками"),
 ];
 
 #[cfg(test)]

@@ -1221,3 +1221,4 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "No workspace has a tiling of its own." = "Kein Arbeitsbereich hat eigene Kacheleinstellungen."
 "Add a workspace" = "Arbeitsbereich hinzufügen"
 "What is set here has the last word over the tiling of every display; a later entry over an earlier one." = "Was hier eingestellt ist, hat Vorrang vor den Kacheleinstellungen aller Bildschirme; ein späterer Eintrag vor einem früheren."
+"Tall with tabs" = "Hoch mit Tabs"

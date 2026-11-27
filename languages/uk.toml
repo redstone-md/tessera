@@ -1222,3 +1222,4 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "No workspace has a tiling of its own." = "Жодна робоча область не має власної мозаїки."
 "Add a workspace" = "Додати робочу область"
 "What is set here has the last word over the tiling of every display; a later entry over an earlier one." = "Задане тут важливіше за загальну мозаїку всіх екранів; пізніший запис — за раніший."
+"Tall with tabs" = "Висока з вкладками"
