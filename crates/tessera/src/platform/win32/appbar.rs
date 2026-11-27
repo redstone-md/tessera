@@ -32,6 +32,7 @@ use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
 };
+use windows::Win32::UI::Shell::ABS_AUTOHIDE;
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_ACTIVATE, ABM_GETAUTOHIDEBAR,
     ABM_GETAUTOHIDEBAREX, ABM_GETSTATE, ABM_GETTASKBARPOS, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE,
@@ -371,9 +372,9 @@ impl AppBarServer {
                 answer.place = Some(place);
                 answer.result = 1;
             }
-            // Tessera's surfaces that hide do so without registering as
-            // bars that hide, so the taskbar is never said to hide.
-            ABM_GETSTATE => answer.result = ABS_ALWAYSONTOP as isize,
+            // The taskbar is said to hide while a surface of Tessera that
+            // hides holds the bottom edge of the primary display.
+            ABM_GETSTATE => answer.result = self.state(monitors),
             ABM_GETTASKBARPOS => {
                 answer.place = self.taskbar(monitors);
                 answer.result = answer.place.is_some().into();
@@ -456,6 +457,21 @@ impl AppBarServer {
 
     fn hides(&self, window: u32) -> bool {
         self.hiders.iter().any(|hider| hider.window == window)
+    }
+
+    /// What the taskbar is said to do, as `ABM_GETSTATE` asks: it stays
+    /// above windows, and hides while a surface of Tessera that hides is
+    /// registered at the bottom edge of the primary display, where the
+    /// taskbar of Windows stands.
+    fn state(&self, monitors: &[Monitor]) -> isize {
+        let primary = monitors.iter().find(|monitor| monitor.primary);
+        let hides = primary.is_some_and(|primary| {
+            self.hiders.iter().any(|hider| {
+                hider.ours && hider.edge == ABE_BOTTOM && hider.display == primary.frame
+            })
+        });
+        let hiding = if hides { ABS_AUTOHIDE } else { 0 };
+        (ABS_ALWAYSONTOP | hiding) as isize
     }
 
     /// Where the bar `window` that is to lie at `edge` can, when it asked
@@ -1202,6 +1218,37 @@ mod tests {
         let hides = request(ABM_SETAUTOHIDEBAR, 1, ABE_TOP, primary, 1);
         assert_eq!(server.answer(&hides, false, &monitors).result, 1);
         assert_eq!(server.answer(&activate, false, &monitors).raised, Some(1));
+        let asked = server.answer(&state, false, &monitors);
+        assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
+    }
+
+    #[test]
+    fn the_taskbar_hides_while_a_surface_of_tessera_hides_at_the_bottom() {
+        let primary = rect(0, 0, 1920, 1080);
+        let second = rect(1920, 0, 3200, 1024);
+        let monitors = monitors();
+        let mut server = AppBarServer::default();
+        let state = request(ABM_GETSTATE, 9, 0, primary, 0);
+        let hide = |window: u32, edge: u32, display: ScreenRect, on: i64| {
+            request(ABM_SETAUTOHIDEBAREX, window, edge, display, on)
+        };
+        // Another program's bar that hides at the bottom is no taskbar.
+        server.answer(&hide(3, ABE_BOTTOM, primary, 1), false, &monitors);
+        let asked = server.answer(&state, false, &monitors);
+        assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
+        server.answer(&hide(3, ABE_BOTTOM, primary, 0), false, &monitors);
+        // Nor is a surface of Tessera that hides elsewhere.
+        server.answer(&hide(4, ABE_LEFT, primary, 1), true, &monitors);
+        server.answer(&hide(5, ABE_BOTTOM, second, 1), true, &monitors);
+        let asked = server.answer(&state, false, &monitors);
+        assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
+        // One at the bottom of the primary display is.
+        server.answer(&hide(6, ABE_BOTTOM, primary, 1), true, &monitors);
+        let asked = server.answer(&state, false, &monitors);
+        assert_eq!(asked.result, (ABS_ALWAYSONTOP | ABS_AUTOHIDE) as isize);
+        let found = request(ABM_GETAUTOHIDEBAREX, 0, ABE_BOTTOM, primary, 0);
+        assert_eq!(server.answer(&found, false, &monitors).result, 6);
+        server.answer(&hide(6, ABE_BOTTOM, primary, 0), true, &monitors);
         let asked = server.answer(&state, false, &monitors);
         assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
     }

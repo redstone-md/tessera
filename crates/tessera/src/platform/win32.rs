@@ -21,6 +21,7 @@ mod connections;
 mod desktops;
 mod devices;
 mod display_mode;
+mod display_names;
 mod drag;
 mod drop_target;
 mod execute;
@@ -109,6 +110,7 @@ pub use devices::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
 pub use display_mode::DisplayMode;
+pub use display_names::{DisplayName, display_device, display_names};
 pub use drag::DragOut;
 pub use drop_target::{DropEvent, DropTarget, DropZone, DropZones};
 pub use execute::Process;
@@ -193,6 +195,7 @@ use std::mem::size_of;
 
 use anyhow::{Context as _, Result, bail};
 use gpui::Window;
+use gpui::{Axis, Pixels, Point, point, px};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -203,6 +206,7 @@ use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId}
 use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_TOP, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE, ABM_SETPOS, APPBARDATA, SHAppBarMessage,
 };
+use windows::Win32::UI::Shell::{ABE_LEFT, ABE_RIGHT, ABM_SETAUTOHIDEBAREX};
 use windows::Win32::UI::WindowsAndMessaging::{
     CBT_CREATEWNDW, CallNextHookEx, HCBT_CREATEWND, HHOOK, SetWindowsHookExW, UnhookWindowsHookEx,
     WH_CBT,
@@ -231,19 +235,72 @@ const NOT_FILLING: [&str; 4] = [
 const EDGE_NOTIFICATION: u32 = WM_APP + 1;
 
 /// A screen edge a shell surface can reserve.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScreenEdge {
     Top,
     Bottom,
+    Left,
+    Right,
 }
 
 impl ScreenEdge {
+    /// Every edge, in the order the configuration and the menus name them.
+    pub const ALL: [Self; 4] = [Self::Top, Self::Bottom, Self::Left, Self::Right];
+
     fn as_appbar_edge(self) -> u32 {
         match self {
             Self::Top => ABE_TOP,
             Self::Bottom => ABE_BOTTOM,
+            Self::Left => ABE_LEFT,
+            Self::Right => ABE_RIGHT,
         }
+    }
+
+    /// What the configuration file calls the edge.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    /// Whether a strip at this edge runs from the top of the display to
+    /// its bottom: the left and the right edge.
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+
+    /// The direction a strip at this edge runs in.
+    pub fn along(self) -> Axis {
+        if self.is_vertical() {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        }
+    }
+
+    /// The direction a strip at this edge is thick in.
+    pub fn across(self) -> Axis {
+        self.along().invert()
+    }
+
+    /// Where something lies that is moved `distance` toward this edge, out
+    /// of the display: what slides in from the edge starts there.
+    pub fn travel(self, distance: Pixels) -> Point<Pixels> {
+        match self {
+            Self::Top => point(px(0.), -distance),
+            Self::Bottom => point(px(0.), distance),
+            Self::Left => point(-distance, px(0.)),
+            Self::Right => point(distance, px(0.)),
+        }
+    }
+
+    /// Of `x` and `y`, the one that counts along a strip at this edge.
+    pub fn along_of<T>(self, x: T, y: T) -> T {
+        if self.is_vertical() { y } else { x }
     }
 
     /// Shrinks `area` to a strip `thickness` deep along this edge.
@@ -251,6 +308,90 @@ impl ScreenEdge {
         match self {
             Self::Top => area.bottom = area.top + thickness,
             Self::Bottom => area.top = area.bottom - thickness,
+            Self::Left => area.right = area.left + thickness,
+            Self::Right => area.left = area.right - thickness,
+        }
+    }
+
+    /// Moves `area`, a strip at this edge, `by` physical pixels inward.
+    fn inset(self, area: &mut RECT, by: i32) {
+        let (x, y) = match self {
+            Self::Top => (0, by),
+            Self::Bottom => (0, -by),
+            Self::Left => (by, 0),
+            Self::Right => (-by, 0),
+        };
+        (area.left, area.right) = (area.left + x, area.right + x);
+        (area.top, area.bottom) = (area.top + y, area.bottom + y);
+    }
+}
+
+/// The part of the length of an edge a surface takes, as shares of that
+/// length counted from its top or left end: 0 to 1 is all of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeSpan {
+    pub from: f32,
+    pub to: f32,
+}
+
+impl EdgeSpan {
+    /// The whole length of the edge.
+    pub const WHOLE: Self = Self { from: 0., to: 1. };
+
+    /// Whether it is the whole length.
+    pub fn is_whole(self) -> bool {
+        self.from <= 0. && self.to >= 1.
+    }
+
+    /// Cuts `area`, a strip along `edge`, to this part of its length. A
+    /// part that would be empty keeps a pixel.
+    fn cut(self, area: &mut RECT, edge: ScreenEdge) {
+        if self.is_whole() {
+            return;
+        }
+        let (from, to) = (self.from.clamp(0., 1.), self.to.clamp(0., 1.));
+        let part = |start: &mut i32, end: &mut i32| {
+            let (first, length) = (*start, (*end - *start) as f32);
+            *start = first + (length * from).round() as i32;
+            *end = (first + (length * to).round() as i32).max(*start + 1);
+        };
+        match edge.along() {
+            Axis::Horizontal => part(&mut area.left, &mut area.right),
+            Axis::Vertical => part(&mut area.top, &mut area.bottom),
+        }
+    }
+}
+
+/// Where a strip lies at an edge of a display: how deep it is, how far it
+/// stands in from the edge, and which part of the edge's length it takes,
+/// in physical pixels and shares.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeBand {
+    pub edge: ScreenEdge,
+    pub depth: i32,
+    /// How far from the edge of the display its outer side is.
+    pub inset: i32,
+    pub span: EdgeSpan,
+}
+
+impl EdgeBand {
+    /// The band within `display`, the frame of its display.
+    pub fn within(self, display: ScreenRect) -> ScreenRect {
+        let mut area = RECT::from(display);
+        self.edge.clamp(&mut area, self.depth);
+        self.edge.inset(&mut area, self.inset);
+        self.span.cut(&mut area, self.edge);
+        area.into()
+    }
+}
+
+impl From<ScreenRect> for RECT {
+    fn from(rect: ScreenRect) -> Self {
+        Self {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
         }
     }
 }
@@ -482,27 +623,17 @@ impl NativeSurface {
         Ok(monitor.rcMonitor.into())
     }
 
-    /// The strip `thickness` physical pixels deep at `edge` of the
-    /// surface's display.
-    pub fn strip(self, edge: ScreenEdge, thickness: i32) -> Result<ScreenRect> {
-        let display = self.display_frame()?;
-        let mut strip = RECT {
-            left: display.left,
-            top: display.top,
-            right: display.right,
-            bottom: display.bottom,
-        };
-        edge.clamp(&mut strip, thickness);
-        Ok(strip.into())
+    /// Where `band` lies on the surface's display.
+    pub fn band(self, band: EdgeBand) -> Result<ScreenRect> {
+        Ok(band.within(self.display_frame()?))
     }
 
-    /// Whether the pointer is in the strip `thickness` physical pixels deep
-    /// at `edge` of the surface's display.
-    pub fn pointer_in_strip(self, edge: ScreenEdge, thickness: i32) -> bool {
-        let (Ok(strip), Some((x, y))) = (self.strip(edge, thickness), pointer_at()) else {
+    /// Whether the pointer is in `band` of the surface's display.
+    pub fn pointer_in_band(self, band: EdgeBand) -> bool {
+        let (Ok(area), Some((x, y))) = (self.band(band), pointer_at()) else {
             return false;
         };
-        (strip.left..strip.right).contains(&x) && (strip.top..strip.bottom).contains(&y)
+        (area.left..area.right).contains(&x) && (area.top..area.bottom).contains(&y)
     }
 
     /// Moves and resizes the window without activating it.
@@ -725,13 +856,14 @@ impl NativeSurface {
         .context("the window styles could not be applied")
     }
 
-    /// Reserves a strip `thickness` physical pixels deep at `edge` of the
-    /// surface's display and moves the surface into it, so maximized windows
-    /// stop at the surface instead of sliding under it.
+    /// Reserves a strip `band.depth` physical pixels deep at the edge of
+    /// `band` of the surface's display and moves the surface into the part
+    /// of it `band` takes, so maximized windows stop at the surface instead
+    /// of sliding under it.
     ///
     /// The reservation ends when the returned guard is dropped. Windows also
     /// ends it when the window is destroyed, including after a crash.
-    pub fn reserve_edge(self, edge: ScreenEdge, thickness: i32) -> Result<EdgeReservation> {
+    pub fn reserve_band(self, band: EdgeBand) -> Result<EdgeReservation> {
         let mut data = self.appbar_data();
         data.uCallbackMessage = EDGE_NOTIFICATION;
         // SAFETY: `data` is a correctly sized APPBARDATA that outlives the
@@ -740,8 +872,22 @@ impl NativeSurface {
             bail!("the system refused to register the surface as an edge bar");
         }
         let reservation = EdgeReservation { surface: self };
-        reservation.occupy(edge, thickness)?;
+        reservation.occupy_band(band)?;
         Ok(reservation)
+    }
+
+    /// Registers the surface as the bar that hides at `edge` of its
+    /// display, so that programs that ask, as browsers shown full screen
+    /// do, leave the pointer a way to it. `None` where that edge of that
+    /// display has such a bar already, which keeps it. The registration
+    /// ends when the returned guard is dropped.
+    pub fn claim_hiding_edge(self, edge: ScreenEdge) -> Option<HidingClaim> {
+        let display = self.display_frame().ok()?;
+        HidingClaim::register(self, edge, display, true).then_some(HidingClaim {
+            surface: self,
+            edge,
+            display,
+        })
     }
 
     fn appbar_data(self) -> APPBARDATA {
@@ -761,23 +907,30 @@ pub struct EdgeReservation {
 
 impl EdgeReservation {
     /// A number that grows whenever the surfaces are to take their place
-    /// again with [`Self::occupy`]: another edge bar moved, or what keeps
-    /// the bars changed, as when Explorer's taskbar went or came back.
+    /// again with [`Self::occupy_band`]: another edge bar moved, or what
+    /// keeps the bars changed, as when Explorer's taskbar went or came back.
     pub fn generation() -> u64 {
         appbar::places()
     }
 
-    /// Makes the reserved strip `thickness` physical pixels deep at `edge`
-    /// of the surface's display and moves the surface into it. The surface
-    /// registers again first, in case what keeps the bars changed since;
-    /// one that is registered already is refused, which changes nothing.
-    pub fn occupy(&self, edge: ScreenEdge, thickness: i32) -> Result<()> {
+    /// Makes the reserved strip `band.depth` physical pixels deep at the
+    /// edge of `band` and moves the surface into the part of it `band`
+    /// takes of the edge's length. The surface registers again first, in
+    /// case what keeps the bars changed since; one that is registered
+    /// already is refused, which changes nothing. The whole length is
+    /// reserved, as
+    /// Windows takes the depth of a bar off the room of windows all along
+    /// its edge; a bar stands further in where other bars are at the same
+    /// edge already, as whoever keeps the bars says, so the inset of
+    /// `band` is not used.
+    pub fn occupy_band(&self, band: EdgeBand) -> Result<()> {
         let hwnd = self.surface.hwnd;
         let mut data = self.surface.appbar_data();
         data.uCallbackMessage = EDGE_NOTIFICATION;
         // SAFETY: `data` is a correctly sized APPBARDATA that outlives the
         // call, and `hwnd` is a live window owned by this thread.
         unsafe { SHAppBarMessage(ABM_NEW, &mut data) };
+        let edge = band.edge;
         data.uEdge = edge.as_appbar_edge();
 
         // SAFETY: `data` and `monitor` are correctly sized structures that
@@ -793,15 +946,17 @@ impl EdgeReservation {
             }
             data.rc = monitor.rcMonitor;
             SHAppBarMessage(ABM_QUERYPOS, &mut data);
-            edge.clamp(&mut data.rc, thickness);
+            edge.clamp(&mut data.rc, band.depth);
             SHAppBarMessage(ABM_SETPOS, &mut data);
 
+            let mut placed = data.rc;
+            band.span.cut(&mut placed, edge);
             let RECT {
                 left,
                 top,
                 right,
                 bottom,
-            } = data.rc;
+            } = placed;
             SetWindowPos(
                 hwnd,
                 None,
@@ -824,5 +979,122 @@ impl Drop for EdgeReservation {
         unsafe {
             SHAppBarMessage(ABM_REMOVE, &mut data);
         }
+    }
+}
+
+/// Keeps a surface registered as the bar that hides at an edge of its
+/// display until dropped.
+#[derive(Debug)]
+pub struct HidingClaim {
+    surface: NativeSurface,
+    edge: ScreenEdge,
+    /// The frame of the display it is registered on.
+    display: ScreenRect,
+}
+
+impl HidingClaim {
+    /// Registers the bar at its edge of `display`, or ends that
+    /// registration; whether whoever keeps the bars agreed.
+    fn register(surface: NativeSurface, edge: ScreenEdge, display: ScreenRect, on: bool) -> bool {
+        let mut data = surface.appbar_data();
+        data.uEdge = edge.as_appbar_edge();
+        data.rc = display.into();
+        data.lParam = LPARAM(on.into());
+        // SAFETY: `data` is a correctly sized APPBARDATA that outlives the
+        // call, and `hwnd` is a live window owned by this thread.
+        unsafe { SHAppBarMessage(ABM_SETAUTOHIDEBAREX, &mut data) != 0 }
+    }
+
+    /// Registers again, at the display the surface is on now, after that
+    /// display or whoever keeps the bars changed; whether it is
+    /// registered now.
+    pub fn renew(&mut self) -> bool {
+        Self::register(self.surface, self.edge, self.display, false);
+        let Ok(display) = self.surface.display_frame() else {
+            return false;
+        };
+        self.display = display;
+        Self::register(self.surface, self.edge, display, true)
+    }
+}
+
+impl Drop for HidingClaim {
+    fn drop(&mut self) {
+        Self::register(self.surface, self.edge, self.display, false);
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    const DISPLAY: ScreenRect = ScreenRect {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+
+    fn sides(rect: ScreenRect) -> (i32, i32, i32, i32) {
+        (rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+    /// The whole strip `depth` deep right at `edge`.
+    fn whole(edge: ScreenEdge, depth: i32) -> EdgeBand {
+        EdgeBand {
+            edge,
+            depth,
+            inset: 0,
+            span: EdgeSpan::WHOLE,
+        }
+    }
+
+    #[test]
+    fn a_band_lies_at_its_edge_of_the_display() {
+        let at = |edge| sides(whole(edge, 48).within(DISPLAY));
+        assert_eq!(at(ScreenEdge::Top), (0, 0, 1920, 48));
+        assert_eq!(at(ScreenEdge::Bottom), (0, 1032, 1920, 1080));
+        assert_eq!(at(ScreenEdge::Left), (0, 0, 48, 1080));
+        assert_eq!(at(ScreenEdge::Right), (1872, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn a_band_stands_in_and_takes_a_part_of_the_length() {
+        let band = EdgeBand {
+            edge: ScreenEdge::Left,
+            depth: 40,
+            inset: 48,
+            span: EdgeSpan {
+                from: 0.25,
+                to: 0.75,
+            },
+        };
+        assert_eq!(sides(band.within(DISPLAY)), (48, 270, 88, 810));
+        let band = EdgeBand {
+            edge: ScreenEdge::Bottom,
+            depth: 40,
+            inset: 10,
+            span: EdgeSpan { from: 0.5, to: 1. },
+        };
+        assert_eq!(sides(band.within(DISPLAY)), (960, 1030, 1920, 1070));
+        // An empty part keeps a pixel.
+        let band = EdgeBand {
+            span: EdgeSpan { from: 0.5, to: 0.5 },
+            ..whole(ScreenEdge::Top, 10)
+        };
+        assert_eq!(sides(band.within(DISPLAY)), (960, 0, 961, 10));
+    }
+
+    #[test]
+    fn the_edges_say_which_way_they_run_and_slide() {
+        assert!(ScreenEdge::Left.is_vertical() && ScreenEdge::Right.is_vertical());
+        assert!(!ScreenEdge::Top.is_vertical() && !ScreenEdge::Bottom.is_vertical());
+        assert_eq!(ScreenEdge::Left.along(), Axis::Vertical);
+        assert_eq!(ScreenEdge::Top.across(), Axis::Vertical);
+        assert_eq!(ScreenEdge::Left.travel(px(5.)), point(px(-5.), px(0.)));
+        assert_eq!(ScreenEdge::Bottom.travel(px(5.)), point(px(0.), px(5.)));
+        assert_eq!(ScreenEdge::Right.along_of(1, 2), 2);
+        let names: Vec<_> = ScreenEdge::ALL.iter().map(|edge| edge.name()).collect();
+        assert_eq!(names, ["top", "bottom", "left", "right"]);
     }
 }
