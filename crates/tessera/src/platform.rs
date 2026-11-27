@@ -30,6 +30,13 @@ pub use win32::{
 };
 #[allow(
     unused_imports,
+    reason = "for the file manager and the desktop, which take work on files back"
+)]
+pub use win32::{
+    FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
+};
+#[allow(
+    unused_imports,
     reason = "for the file manager and the desktop, which show the menus of the Shell"
 )]
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};

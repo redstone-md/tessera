@@ -17,6 +17,7 @@ mod commands;
 mod connections;
 mod desktops;
 mod execute;
+mod file_op;
 mod files;
 mod hdr;
 mod hotkeys;
@@ -63,6 +64,7 @@ pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
 pub use execute::Process;
 pub use execute::{Launch, Show};
+pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
     reveal_in_explorer, show_properties,
