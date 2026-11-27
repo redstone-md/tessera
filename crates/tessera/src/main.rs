@@ -30,6 +30,7 @@ mod motion;
 mod notices;
 mod notifications_store;
 mod panel;
+mod peek;
 mod platform;
 mod popup;
 mod power_warnings;
