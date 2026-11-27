@@ -18,11 +18,10 @@
 # The values of the settings a theme declares with [[setting]] entries, by
 # the name of the theme; "builtin" is the built-in theme, which declares
 # accent, scheme, corners, density, font, bar_height and dock_size. The
-# settings change them under Themes; see docs/THEMES.md.
-# [theme_options.builtin]
-# accent = "#3d7bd9"
-# corners = 1.5
-# density = "compact"
+# settings change them under Themes; see docs/THEMES.md. Written as a
+# dotted key, so that the keys below stay at the top level once uncommented;
+# a [theme_options.builtin] table belongs after the last top-level key.
+# theme_options.builtin = { accent = "#3d7bd9", corners = 1.5, density = "compact" }
 
 # Colors that are read (text, icons, the accent, outlines) are made lighter
 # or darker by as little as gives them the contrast WCAG 2.1 asks for at
