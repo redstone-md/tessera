@@ -257,6 +257,12 @@ impl Key {
         }
     }
 
+    /// The handle of the key, for the calls of the registry this type
+    /// does not wrap, as copying or deleting a whole tree.
+    pub(super) fn raw(&self) -> HKEY {
+        self.0
+    }
+
     /// The names of the keys under this one, in the order of the registry.
     pub(super) fn subkeys(&self) -> Vec<String> {
         let mut names = Vec::new();

@@ -27,6 +27,7 @@ pub use win32::SessionKey;
     reason = "for the packages that hand work to the Shell"
 )]
 pub use win32::ShellThread;
+pub use win32::ShellWindows;
 pub use win32::ShowDesktop;
 pub use win32::SpellCheck;
 pub use win32::SystemZone;
@@ -64,6 +65,7 @@ pub use win32::{
 };
 pub use win32::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
+pub use win32::{AutoPlay, AutoPlayHandler, AutoPlayOffer, Chosen, Invoke, Medium};
 pub use win32::{Balloon, BalloonEvent};
 pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{BluetoothScan, FoundDevice, Pairing, PairingFailure, PairingPrompt};
@@ -86,6 +88,11 @@ pub use win32::{
 pub use win32::{DisplayName, display_device, display_names};
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
 pub use win32::{EdgeBand, EdgeSpan, HidingClaim};
+#[allow(
+    unused_imports,
+    reason = "reveal is for the surfaces that show a file in its folder"
+)]
+pub use win32::{DriveDialog, NetworkDrives, SharePackage, reveal, reveal_with};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,
@@ -100,6 +107,10 @@ pub use win32::{
 pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 #[allow(unused_imports, reason = "the parts the dock and its previews read")]
 pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton};
+pub use win32::{FilesStart, start_detached};
+pub use win32::{
+    FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
+};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{ImeMode, ImeState, TouchKeyboard};

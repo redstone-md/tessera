@@ -9,6 +9,7 @@
 mod report;
 
 mod actions;
+mod autoplay;
 mod badges;
 mod banners;
 mod bar_menu;
@@ -17,6 +18,7 @@ mod clipboard;
 mod config;
 mod corners;
 mod desk;
+mod explorer_args;
 mod extension;
 mod field;
 mod files;

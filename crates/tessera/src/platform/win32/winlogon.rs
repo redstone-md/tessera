@@ -367,7 +367,7 @@ impl ExplorerShell {
 }
 
 /// The path of Explorer, in the folder of Windows.
-fn explorer_program() -> PathBuf {
+pub(super) fn explorer_program() -> PathBuf {
     let windows = std::env::var_os("WINDIR")
         .or_else(|| std::env::var_os("SystemRoot"))
         .unwrap_or_else(|| OsString::from(r"C:\Windows"));

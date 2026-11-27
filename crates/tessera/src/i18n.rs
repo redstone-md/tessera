@@ -1918,6 +1918,43 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Save", "Сохранить"),
     ("Preview pane", "Область просмотра"),
     ("Details pane", "Область сведений"),
+    // files-compat.
+    (
+        "No drive is waiting for a choice.",
+        "Нет диска, ожидающего выбора.",
+    ),
+    (
+        "Choose what to do with this drive.",
+        "Выберите, что делать с этим диском.",
+    ),
+    (
+        "Choose what happens with this drive.",
+        "Выберите, что происходит с этим диском.",
+    ),
+    ("Choose what to do", "Выбрать действие"),
+    (
+        "Folders and drives opened by other programs come here; virtual folders such as Control Panel stay with Explorer.",
+        "Папки и диски, которые открывают другие программы, открываются здесь; виртуальные папки, такие как панель управления, остаются за Проводником.",
+    ),
+    ("Folders open as before", "Папки открываются как раньше"),
+    (
+        "Folders open in Tessera Files",
+        "Папки открываются в Tessera Files",
+    ),
+    ("Folders were not changed", "Открытие папок не изменено"),
+    (
+        "Other programs open folders as they did before Tessera Files took them.",
+        "Другие программы открывают папки так же, как до Tessera Files.",
+    ),
+    (
+        "Tessera Files could not open the folder, and Explorer gave it back. Start Tessera and try again, or run `tessera files revert` to have Explorer open folders.",
+        "Tessera Files не смог открыть папку, и Проводник вернул её обратно. Запустите Tessera и повторите попытку или выполните `tessera files revert`, чтобы папки открывал Проводник.",
+    ),
+    ("Tessera Files", "Tessera Files"),
+    (
+        "The choice is kept for drives of this kind; Settings > AutoPlay changes it.",
+        "Выбор сохраняется для дисков этого типа; изменить его можно в Параметрах > Автозапуск.",
+    ),
 ];
 
 #[cfg(test)]

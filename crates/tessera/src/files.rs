@@ -21,9 +21,10 @@ mod view;
 
 use std::path::{Path, PathBuf};
 
+use async_channel::Sender;
 use gpui::{
-    App, AppContext, Bounds, Global, IntoElement, ParentElement, Render, Styled, TitlebarOptions,
-    Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+    AnyWindowHandle, App, AppContext, Bounds, Entity, Global, IntoElement, ParentElement, Render,
+    Styled, TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
 };
 use serde::Deserialize;
 
@@ -33,8 +34,18 @@ pub use thumbs::FileViewConfig;
 use view::FilesView;
 
 use crate::actions::{Action, Actions};
+use crate::autoplay::{self, AutoPlayList, AutoPlayWhen};
+use crate::banners::{Banners, Notice};
+use crate::config::{PopupConfig, WidgetSpec};
+use crate::explorer_args::{Destination, ExplorerArgs, KnownPlace, Places, explorer_command_line};
+use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
+use crate::modules::devices::{Drives, letter_of as drive_letter_of};
 use crate::platform::Place;
+use crate::platform::{
+    DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, ShellWindows,
+    known_folder_path, reveal_with, shell_mode, start_explorer,
+};
 use crate::theme::Theme;
 use crate::ui::{icon, pill};
 
@@ -72,6 +83,9 @@ pub struct FilesConfig {
     /// known types hidden, hidden and protected files shown as Explorer
     /// shows them, and the names a `desktop.ini` gives.
     pub explorer: bool,
+    /// When AutoPlay is done for drives that arrive: as the shell only
+    /// (Explorer does it otherwise), always, or never.
+    pub autoplay: AutoPlayWhen,
 }
 
 impl Default for FilesConfig {
@@ -85,6 +99,7 @@ impl Default for FilesConfig {
             per_folder: false,
             restore: false,
             explorer: true,
+            autoplay: AutoPlayWhen::Shell,
         }
     }
 }
@@ -93,6 +108,12 @@ impl Default for FilesConfig {
 #[derive(Default)]
 pub struct Files {
     config: FilesConfig,
+    /// Where `platform::reveal` hands its paths, once they are taken.
+    reveals: Option<Sender<PathBuf>>,
+    /// Whether the list of folder windows of the Shell is served.
+    serving: bool,
+    /// The windows in that list, by the number of their handle.
+    listed: Vec<(isize, AnyWindowHandle)>,
 }
 
 impl Global for Files {}
@@ -100,6 +121,112 @@ impl Global for Files {}
 impl Files {
     pub fn configure(config: &FilesConfig, cx: &mut App) {
         cx.default_global::<Self>().config = *config;
+        Self::take_reveals(config.own, cx);
+        Drives::play_arrivals(config.autoplay.active(shell_mode()), cx);
+        Self::serve_shell_windows(cx);
+    }
+
+    /// Whether the folders the surfaces of Tessera open open here.
+    pub fn opens_folders(cx: &App) -> bool {
+        Self::config(cx).own
+    }
+
+    /// Has the files that `platform::reveal` shows in their folders shown
+    /// here while `own`, and in Explorer otherwise.
+    fn take_reveals(own: bool, cx: &mut App) {
+        if !own {
+            reveal_with(None);
+            return;
+        }
+        let reveals = match &cx.global::<Self>().reveals {
+            Some(reveals) => reveals.clone(),
+            None => {
+                let (reveals, revealed) = async_channel::unbounded::<PathBuf>();
+                cx.spawn(async move |cx| {
+                    while let Ok(path) = revealed.recv().await {
+                        if cx.update(|cx| Self::open_at_item(&path, cx)).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+                cx.global_mut::<Self>().reveals = Some(reveals.clone());
+                reveals
+            }
+        };
+        reveal_with(Some(reveals));
+    }
+
+    /// Opens the share window of Windows for `paths`, over the window of
+    /// Tessera in front, or else any of its windows. The files are read
+    /// away from the user interface first.
+    pub fn share(paths: Vec<PathBuf>, cx: &mut App) {
+        let many = Language::of(cx).say("items");
+        let prepared = cx
+            .background_executor()
+            .spawn(async move { SharePackage::prepare(&paths, many) });
+        cx.spawn(async move |cx| {
+            let package = match prepared.await {
+                Ok(package) => package,
+                Err(error) => return report!("nothing was shared: {error:#}"),
+            };
+            cx.update(|cx| {
+                let window = cx.active_window().or_else(|| cx.windows().first().copied());
+                let Some(window) = window else {
+                    return report!("nothing was shared: Tessera has no window to share from");
+                };
+                let shown = window.update(cx, |_, window, _| package.show(window));
+                if let Ok(Err(error)) | Err(error) = shown {
+                    report!("nothing was shared: {error:#}");
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Makes Tessera Files the handler of the folders and drives of the
+    /// file system with `on`, or gives that back, away from the user
+    /// interface, and says in a notice how it went.
+    fn set_default(on: bool, cx: &mut App) {
+        let changed = cx.background_executor().spawn(async move {
+            match on {
+                true => FolderHandler::install(),
+                false => FolderHandler::revert(),
+            }
+        });
+        cx.spawn(async move |cx| {
+            let changed = changed.await;
+            cx.update(|cx| {
+                let language = Language::of(cx);
+                let (title, body) = match (&changed, on) {
+                    (Ok(_), true) => (
+                        language.say("Folders open in Tessera Files"),
+                        language.say("Folders and drives opened by other programs come here; virtual folders such as Control Panel stay with Explorer.").to_owned(),
+                    ),
+                    (Ok(_), false) => (
+                        language.say("Folders open as before"),
+                        language.say("Other programs open folders as they did before Tessera Files took them.").to_owned(),
+                    ),
+                    (Err(error), _) => (
+                        language.say("Folders were not changed"),
+                        format!("{error:#}"),
+                    ),
+                };
+                Banners::post(
+                    Notice {
+                        app: language.say("File manager").to_owned(),
+                        title: title.to_owned(),
+                        body,
+                        glyph: Some(ICON_FOLDER),
+                        ..Notice::default()
+                    },
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn config(cx: &App) -> FilesConfig {
@@ -159,8 +286,14 @@ impl Files {
             window_min_size: Some(size(px(LEAST_SIZE.0), px(LEAST_SIZE.1))),
             ..Default::default()
         };
+        let folder = { opening.tabs.get(opening.active) }
+            .and_then(|tab| tab.panes.get(tab.active))
+            .and_then(Location::folder)
+            .map(Path::to_owned);
         let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| FilesView::new(opening, config, window, cx))
+            let view = cx.new(|cx| FilesView::new(opening, config, window, cx));
+            Self::list_window(&view, window, folder, cx);
+            view
         });
         match opened {
             Ok(opened) => Some(opened),
@@ -169,6 +302,63 @@ impl Files {
                 None
             }
         }
+    }
+
+    /// Puts the window of `view` in the list of folder windows of the
+    /// Shell, at the folder it opened with, and takes it out once the
+    /// window is closed. Its later folders are not told yet: that waits
+    /// for the windows to tell where they navigate.
+    fn list_window(
+        view: &Entity<FilesView>,
+        window: &Window,
+        folder: Option<PathBuf>,
+        cx: &mut App,
+    ) {
+        if !cx.default_global::<Self>().serving {
+            return;
+        }
+        let Some(number) = ShellWindows::number_of(window) else {
+            return;
+        };
+        ShellWindows::opened(number, folder);
+        let handle = window.window_handle();
+        cx.global_mut::<Self>().listed.push((number, handle));
+        cx.observe_release(view, move |_, cx| {
+            ShellWindows::closed(number);
+            cx.global_mut::<Self>()
+                .listed
+                .retain(|(listed, _)| *listed != number);
+        })
+        .detach();
+    }
+
+    /// Serves the list of folder windows of the Shell, as the shell of the
+    /// session, once: a program that asks a window of the file manager to
+    /// choose files brings that window to the front. Choosing the files
+    /// themselves waits for the panes to choose items by name.
+    fn serve_shell_windows(cx: &mut App) {
+        let this = cx.default_global::<Self>();
+        if this.serving || !shell_mode() {
+            return;
+        }
+        this.serving = true;
+        let selections = ShellWindows::serve();
+        cx.spawn(async move |cx| {
+            while let Ok(selection) = selections.recv().await {
+                let answered = cx.update(|cx| {
+                    let listed = { cx.global::<Self>().listed.iter() }
+                        .find(|(number, _)| *number == selection.window)
+                        .map(|(_, handle)| *handle);
+                    if let Some(handle) = listed {
+                        let _ = handle.update(cx, |_, window, _| window.activate_window());
+                    }
+                });
+                if answered.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Opens the folder `path` in the file manager when the configuration
@@ -180,6 +370,51 @@ impl Files {
         }
         Self::open(Location::Folder(path.to_owned()), cx);
         true
+    }
+
+    /// Opens what `words` name, read as Explorer reads its command line
+    /// (see [`crate::explorer_args`]): a folder, `/select,<path>`,
+    /// `shell:Downloads`, a `search-ms:` search and the like. What is no
+    /// folder of the file system, such as Control Panel, is handed to
+    /// Explorer with the same words. Known folders and paths are looked
+    /// up away from the user interface.
+    pub fn open_command(words: &[String], cx: &mut App) {
+        let args = ExplorerArgs::parse(words);
+        if args.target.is_none() && args.root.is_none() {
+            Self::open_named("", cx);
+            return;
+        }
+        let line = explorer_command_line(words);
+        let found =
+            ShellThread::call_alone("explorer words", move || args.destination(&SystemPlaces));
+        cx.spawn(async move |cx| {
+            let Ok(destination) = found.recv().await else {
+                return;
+            };
+            cx.update(|cx| match destination {
+                Destination::Default => Self::open_named("", cx),
+                Destination::Open(location) => Self::open(location, cx),
+                Destination::Select(path) => Self::open_at_item(&path, cx),
+                Destination::Explorer => {
+                    if let Err(error) = start_explorer(&line, false) {
+                        report!("{error:#}");
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the folder around `path`, where `path` is to be chosen.
+    /// Choosing it waits for the panes to be able to choose an item by
+    /// name; until then the folder opens with nothing chosen.
+    pub fn open_at_item(path: &Path, cx: &mut App) {
+        let folder = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => path,
+        };
+        Self::open(Location::Folder(folder.to_owned()), cx);
     }
 
     /// Where a window opens that names no folder: the folder of the user.
@@ -210,6 +445,29 @@ impl Files {
     }
 }
 
+/// The places of this computer as Explorer's command lines name them:
+/// known folders through the Shell, paths through the file system. Asked
+/// away from the user interface, as both may wait.
+pub struct SystemPlaces;
+
+impl Places for SystemPlaces {
+    fn known(&self, name: &str) -> KnownPlace {
+        known_folder_path(name).map_or(KnownPlace::Virtual, KnownPlace::Folder)
+    }
+
+    fn named(&self, word: &str) -> Location {
+        Files::named(word)
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+}
+
 /// The module of the file manager: the widget `files` opens a window of
 /// it, at the folder its option `folder` names, and so does the action
 /// `files`, at the folder of its argument.
@@ -224,6 +482,20 @@ impl Module for FilesModule {
         widgets.register("files", |context, cx| {
             let folder = context.text("folder").unwrap_or_default().to_owned();
             cx.new(|_| FilesButton { folder }).into()
+        })?;
+        // AutoPlay asks here what to do with a drive that arrived.
+        widgets.register_panel(autoplay::POPUP, |_, cx| cx.new(AutoPlayList::new).into())?;
+        widgets.register_popup(PopupConfig {
+            name: autoplay::POPUP.to_owned(),
+            place: Default::default(),
+            width: 360.,
+            height: 380.,
+            content: vec![WidgetSpec {
+                widget: autoplay::POPUP.to_owned(),
+                popup: None,
+                options: toml::Table::new(),
+            }],
+            side: Vec::new(),
         })
     }
 
@@ -231,13 +503,91 @@ impl Module for FilesModule {
         // Windows keeps Win+E, which opens Explorer, to itself; it is
         // taken where the keys of Windows are in use, as in shell mode,
         // where nothing else answers it.
-        let open = |folder: Option<&str>, cx: &mut App| {
-            Files::open_named(folder.unwrap_or_default(), cx);
+        let open = |folder: Option<&str>, cx: &mut App| match folder {
+            Some(folder) => Files::open_command(&[folder.to_owned()], cx),
+            None => Files::open_named("", cx),
         };
         let open = { Action::new(open).taking_any_arg() }
             .taking_reserved_keys()
             .by_default("win+e", None);
-        actions.register("files", open)
+        actions.register("files", open)?;
+        let default =
+            Action::new(|arg, cx| Files::set_default(arg == Some("on"), cx)).checking(|arg| {
+                match arg {
+                    Some("on" | "off") => Ok(()),
+                    _ => Err("`files-default` takes `on` or `off`".to_owned()),
+                }
+            });
+        actions.register("files-default", default)?;
+        let share = Action::new(|arg, cx| Files::share(shared_paths(arg.unwrap_or_default()), cx))
+            .checking(|arg| match arg.map(shared_paths) {
+                Some(paths) if !paths.is_empty() => Ok(()),
+                _ => Err("`share` takes the paths of files, separated by `|`".to_owned()),
+            });
+        actions.register("share", share)?;
+        let map = Action::new(|_, cx| {
+            let dialog = NetworkDrives::map();
+            cx.background_executor()
+                .spawn(async move { report_dialog(dialog.recv().await.ok()) })
+                .detach();
+        });
+        actions.register("map-drive", map)?;
+        let disconnect = Action::new(|arg, cx| {
+            let dialog = NetworkDrives::disconnect(arg.and_then(drive_letter_of));
+            cx.background_executor()
+                .spawn(async move { report_dialog(dialog.recv().await.ok()) })
+                .detach();
+        })
+        .checking(|arg| match arg {
+            None => Ok(()),
+            Some(arg) if drive_letter_of(arg).is_some() => Ok(()),
+            Some(_) => Err("`disconnect-drive` takes the letter of a drive, or none".to_owned()),
+        });
+        actions.register("disconnect-drive", disconnect)?;
+        let location = Action::new(|arg, cx| {
+            let Some(arg) = arg.map(str::to_owned) else {
+                if let Err(error) = NetworkDrives::add_location_wizard() {
+                    report!("{error:#}");
+                }
+                return;
+            };
+            let made = cx.background_executor().spawn(async move {
+                let (address, name) = match arg.split_once('|') {
+                    Some((address, name)) => {
+                        (address.trim().to_owned(), Some(name.trim().to_owned()))
+                    }
+                    None => (arg.trim().to_owned(), None),
+                };
+                NetworkDrives::add_location(&address, name.as_deref())
+            });
+            // This PC shows the network locations, the new one among them.
+            cx.spawn(async move |cx| match made.await {
+                Ok(_) => {
+                    cx.update(|cx| Files::open(Location::Computer, cx)).ok();
+                }
+                Err(error) => report!("the network location was not added: {error:#}"),
+            })
+            .detach();
+        })
+        .taking_any_arg();
+        actions.register("add-network-location", location)
+    }
+}
+
+/// The paths the `arg` of `share` names, separated by `|`, which no path
+/// holds.
+fn shared_paths(arg: &str) -> Vec<PathBuf> {
+    { arg.split('|') }
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Reports what a dialog of network drives came to where Windows refused.
+fn report_dialog(dialog: Option<DriveDialog>) {
+    if let Some(DriveDialog::Failed(why)) = dialog {
+        report!("the network drive was not changed: {why}");
     }
 }
 
