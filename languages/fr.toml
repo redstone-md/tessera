@@ -341,3 +341,12 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Restart" = "Redémarrer"
 "Closes all apps, turns the computer off and starts it again." = "Ferme toutes les applications, éteint l’ordinateur et le redémarre."
 "OK" = "OK"
+
+# How the displays show the desktop (winx-hotkeys).
+"Project" = "Projeter"
+"PC screen only" = "Écran du PC uniquement"
+"Duplicate" = "Dupliquer"
+"Extend" = "Étendre"
+"Second screen only" = "Deuxième écran uniquement"
+"Connect to a wireless display" = "Se connecter à un écran sans fil"
+"Only one display is connected." = "Un seul écran est connecté."

@@ -341,3 +341,12 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Restart" = "Перезавантаження"
 "Closes all apps, turns the computer off and starts it again." = "Закриває всі застосунки, вимикає комп’ютер і знову вмикає його."
 "OK" = "OK"
+
+# How the displays show the desktop (winx-hotkeys).
+"Project" = "Проєціювання"
+"PC screen only" = "Лише екран комп’ютера"
+"Duplicate" = "Дублювати"
+"Extend" = "Розширити"
+"Second screen only" = "Лише другий екран"
+"Connect to a wireless display" = "Під’єднатися до бездротового дисплея"
+"Only one display is connected." = "Під’єднано лише один дисплей."

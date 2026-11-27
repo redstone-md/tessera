@@ -340,3 +340,12 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Restart" = "Neu starten"
 "Closes all apps, turns the computer off and starts it again." = "Schließt alle Apps, schaltet den Computer aus und startet ihn wieder."
 "OK" = "OK"
+
+# How the displays show the desktop (winx-hotkeys).
+"Project" = "Projizieren"
+"PC screen only" = "Nur PC-Bildschirm"
+"Duplicate" = "Duplizieren"
+"Extend" = "Erweitern"
+"Second screen only" = "Nur zweiter Bildschirm"
+"Connect to a wireless display" = "Mit einer drahtlosen Anzeige verbinden"
+"Only one display is connected." = "Nur eine Anzeige ist angeschlossen."

@@ -16,6 +16,7 @@ mod brightness;
 mod commands;
 mod connections;
 mod desktops;
+mod display_mode;
 mod execute;
 mod files;
 mod hdr;
@@ -59,6 +60,7 @@ pub use brightness::ScreenBrightness;
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
+pub use display_mode::DisplayMode;
 pub use execute::Process;
 pub use execute::{Launch, Show};
 pub use files::{

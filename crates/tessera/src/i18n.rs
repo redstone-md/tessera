@@ -707,24 +707,59 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Действие записывается в файл вручную.",
     ),
     // The dialog to shut down (winx-hotkeys).
-    ("What should the computer do?", "Что должен сделать компьютер?"),
+    (
+        "What should the computer do?",
+        "Что должен сделать компьютер?",
+    ),
     ("Switch user", "Сменить пользователя"),
-    ("Shows the sign-in screen and keeps this session with its apps open.", "Показывает экран входа; этот сеанс и его приложения остаются открытыми."),
+    (
+        "Shows the sign-in screen and keeps this session with its apps open.",
+        "Показывает экран входа; этот сеанс и его приложения остаются открытыми.",
+    ),
     ("Sign out", "Выйти из системы"),
-    ("Closes all apps and ends the session.", "Закрывает все приложения и завершает сеанс."),
+    (
+        "Closes all apps and ends the session.",
+        "Закрывает все приложения и завершает сеанс.",
+    ),
     ("Sleep", "Спящий режим"),
-    ("Keeps the session in memory and puts the computer into a low-power state.", "Сохраняет сеанс в памяти и переводит компьютер в режим пониженного энергопотребления."),
+    (
+        "Keeps the session in memory and puts the computer into a low-power state.",
+        "Сохраняет сеанс в памяти и переводит компьютер в режим пониженного энергопотребления.",
+    ),
     ("Hibernate", "Гибернация"),
-    ("Saves the session to the disk and turns the computer off.", "Сохраняет сеанс на диск и выключает компьютер."),
+    (
+        "Saves the session to the disk and turns the computer off.",
+        "Сохраняет сеанс на диск и выключает компьютер.",
+    ),
     ("Update and shut down", "Обновить и завершить работу"),
-    ("Installs the updates that wait, then turns the computer off.", "Устанавливает ожидающие обновления, затем выключает компьютер."),
+    (
+        "Installs the updates that wait, then turns the computer off.",
+        "Устанавливает ожидающие обновления, затем выключает компьютер.",
+    ),
     ("Shut down", "Завершение работы"),
-    ("Closes all apps and turns the computer off.", "Закрывает все приложения и выключает компьютер."),
+    (
+        "Closes all apps and turns the computer off.",
+        "Закрывает все приложения и выключает компьютер.",
+    ),
     ("Update and restart", "Обновить и перезагрузить"),
-    ("Installs the updates that wait, then starts the computer again.", "Устанавливает ожидающие обновления, затем перезапускает компьютер."),
+    (
+        "Installs the updates that wait, then starts the computer again.",
+        "Устанавливает ожидающие обновления, затем перезапускает компьютер.",
+    ),
     ("Restart", "Перезагрузка"),
-    ("Closes all apps, turns the computer off and starts it again.", "Закрывает все приложения, выключает компьютер и снова включает его."),
+    (
+        "Closes all apps, turns the computer off and starts it again.",
+        "Закрывает все приложения, выключает компьютер и снова включает его.",
+    ),
     ("OK", "ОК"),
+    // How the displays show the desktop (winx-hotkeys).
+    ("Project", "Проецирование"),
+    ("PC screen only", "Только экран компьютера"),
+    ("Duplicate", "Повторяющийся"),
+    ("Extend", "Расширить"),
+    ("Second screen only", "Только второй экран"),
+    ("Connect to a wireless display", "Подключиться к беспроводному дисплею"),
+    ("Only one display is connected.", "Подключён только один дисплей."),
 ];
 
 #[cfg(test)]
