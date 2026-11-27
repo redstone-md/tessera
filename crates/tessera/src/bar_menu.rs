@@ -3,7 +3,8 @@
 
 //! The menu a click with the right button opens on a bar, as the panels of
 //! KDE Plasma and the toolbar of Seelen UI have one: on a widget it moves
-//! the widget to another slot, takes it out, or adds another; on the bar
+//! the widget to another slot, opens the card of its options in the
+//! settings, takes it out, or adds another; on the bar
 //! itself it changes the edge, the thickness, the hiding, the length and
 //! the displays of the bar, adds a bar at a free edge or removes this one.
 //! Every change is written to the configuration file, which the shell then
@@ -94,6 +95,7 @@ impl BarMenu {
                 entries.push(MenuEntry::heading(name));
                 if editable {
                     entries.extend(Self::moves(place, language));
+                    entries.push(Self::configure(place, language));
                     entries.push(MenuEntry::new(
                         ICON_REMOVE,
                         language.say("Remove widget"),
@@ -161,6 +163,17 @@ impl BarMenu {
                 })
             })
             .collect()
+    }
+
+    /// The entry that opens the card of the options of the widget at
+    /// `place` in the Widgets section of the settings, which lists them
+    /// even where the widget declares none.
+    fn configure(place: Place, language: Language) -> MenuEntry {
+        MenuEntry::new(ICON_SETTINGS, language.say("Configure…"), move |cx| {
+            let item = widget_item(place);
+            // The menu is still handling the click that chose this.
+            cx.defer(move |cx| Settings::open_at("widgets", Some(&item), cx));
+        })
     }
 
     fn arrange(language: Language) -> MenuEntry {
@@ -328,6 +341,18 @@ fn later(cx: &mut App, change: impl FnOnce(&mut ConfigFile) -> bool + 'static) {
     cx.defer(move |cx| rewrite(cx, change));
 }
 
+/// What the settings call the widget at `place` of a bar:
+/// `surface/<n>/<start|center|end>/<i>`, counted from 0 as the file
+/// lists them.
+fn widget_item(place: Place) -> String {
+    let slot = match place.slot {
+        Slot::Start => "start",
+        Slot::Center => "center",
+        Slot::End => "end",
+    };
+    format!("surface/{}/{slot}/{}", place.surface, place.index)
+}
+
 /// What the menus call an edge.
 fn edge_label(edge: ScreenEdge) -> &'static str {
     match edge {
@@ -389,6 +414,16 @@ mod tests {
             position,
             primary,
         }
+    }
+
+    #[test]
+    fn a_widget_of_a_bar_is_named_as_the_settings_open_it() {
+        let place = Place {
+            surface: 1,
+            slot: Slot::Center,
+            index: 3,
+        };
+        assert_eq!(widget_item(place), "surface/1/center/3");
     }
 
     #[test]
