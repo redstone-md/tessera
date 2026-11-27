@@ -54,7 +54,7 @@ In both modes, Tessera hears the shell hook of Windows (windows made, destroyed,
 ## What does not work without Explorer
 
 - The notification area and the AppBar messages are Explorer's; Tessera takes them over in another part of its work (until then, icons of the tray may not show).
-- Programs started at sign-in (the `Run` keys, the Startup folder) are started by the shell; that is another part of Tessera's work. If Explorer is started later in the same session, it may start them again.
+- Programs started at sign-in (the `Run` keys, the Startup folder) are started by the shell; Tessera starts them once per session as `[startup]` in `config.toml` sets (see FEATURES.md). If Explorer is started later in the same session, it may start them again.
 - Settings > Personalization and some programs call into Explorer (the wallpaper per display, pins of the Start menu, "Show in folder", Control Panel and virtual folders). Explorer still works as a file manager window for these.
 - The virtual desktops of Windows, Task View, Win+Tab, the Start menu and the search of Windows, the input indicator of CJK input methods, the touch keyboard button, Win+PrtScn and other keys Explorer answers.
 - Whether user32 honours the undocumented `SetShellWindowEx`, `SetProgmanWindow` and `SetTaskmanWindow` on every version of Windows 11 is not verified; one that is missing is reported in the problems list.
