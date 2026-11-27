@@ -163,7 +163,7 @@ impl Actions {
     /// `popup` of a `[[key]]` does; as an action it also takes its keys
     /// from Windows where it keeps them, such as Win+V for a clipboard
     /// popup.
-    fn builtin() -> [(&'static str, Action); 1] {
+    pub(crate) fn builtin() -> [(&'static str, Action); 1] {
         let popup = Action::new(|name, cx| Shell::toggle_popup(name.unwrap_or_default(), cx))
             .taking_reserved_keys()
             .checking(|name| match name {

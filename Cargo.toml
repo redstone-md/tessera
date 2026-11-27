@@ -10,6 +10,9 @@ repository = "https://github.com/redstone-md/tessera"
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
+# The terminal of the file manager's F4 panel and the drop-down terminal:
+# the grid, the VT parser and ConPTY.
+alacritty_terminal = "0.25"
 anyhow = "1"
 async-channel = "2"
 # Reads the AutomaticDestinations-ms jump lists, which are compound files.
@@ -90,6 +93,7 @@ windows = { version = "0.61", features = [
     "Win32_Media_MediaFoundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
+    "Win32_NetworkManagement_NetManagement",
     "Win32_NetworkManagement_WiFi",
     "Win32_NetworkManagement_WNet",
     "Win32_Security",
@@ -138,6 +142,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Notifications",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",

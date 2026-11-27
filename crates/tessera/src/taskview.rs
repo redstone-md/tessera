@@ -186,12 +186,18 @@ impl TaskView {
     /// Adds the actions `taskview` and `present-windows`.
     pub fn start(cx: &mut App) {
         cx.set_global(Self::default());
-        Actions::add(
-            "taskview",
-            Self::action(true).by_default("win+tab", None),
-            cx,
-        );
-        Actions::add("present-windows", Self::action(false), cx);
+        for (name, action) in Self::actions() {
+            Actions::add(name, action, cx);
+        }
+    }
+
+    /// The actions `taskview`, with its key by default, and
+    /// `present-windows`.
+    pub(crate) fn actions() -> [(&'static str, Action); 2] {
+        [
+            ("taskview", Self::action(true).by_default("win+tab", None)),
+            ("present-windows", Self::action(false)),
+        ]
     }
 
     /// The action that opens Task View, or closes it: with the cards of

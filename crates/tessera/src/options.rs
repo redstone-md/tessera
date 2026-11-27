@@ -75,10 +75,16 @@ pub enum Kind {
     Path,
     /// The name of an installed font family.
     Font,
-    /// Texts in order.
+    /// Texts in order. With `choices`, each item is one of their values;
+    /// `min` and `max` bound how many items there are.
     List,
     /// Names, each with a value.
     Pairs,
+    /// A time of day, `HH:MM` from `00:00` to `23:59`.
+    Time,
+    /// A number the same at every side, or a table of `top`, `right`,
+    /// `bottom` and `left` numbers; `min` and `max` bound each.
+    Sides,
 }
 
 /// Whether a path names a file or a folder.
@@ -244,6 +250,24 @@ pub fn write_pairs(pairs: &[(String, String)]) -> String {
     entries.join("; ")
 }
 
+/// The sides a setting of the kind `sides` may name.
+const SIDES: [&str; 4] = ["top", "right", "bottom", "left"];
+
+/// Whether `text` is a time of day the settings can write: `HH:MM`, two
+/// digits each, from `00:00` to `23:59`.
+pub fn is_time(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let digits = |at: [usize; 2]| {
+        at.iter()
+            .all(|at| bytes[*at].is_ascii_digit())
+            .then(|| (bytes[at[0]] - b'0') * 10 + (bytes[at[1]] - b'0'))
+    };
+    bytes.len() == 5
+        && bytes[2] == b':'
+        && digits([0, 1]).is_some_and(|hours| hours < 24)
+        && digits([3, 4]).is_some_and(|minutes| minutes < 60)
+}
+
 /// Whether `text` is a color the settings can write: `#rrggbb` or
 /// `#rrggbbaa`.
 pub fn is_color(text: &str) -> bool {
@@ -293,7 +317,8 @@ impl OptionDecl {
         if choice && self.choices.is_empty() {
             return Err("is a choice without choices".to_owned());
         }
-        if !choice && !self.choices.is_empty() {
+        // A list with choices is a choice of several.
+        if !choice && self.kind != Kind::List && !self.choices.is_empty() {
             return Err("has choices but is no choice".to_owned());
         }
         for (index, one) in self.choices.iter().enumerate() {
@@ -316,7 +341,10 @@ impl OptionDecl {
                 return Err(format!("offers `{}` twice", text_of(&one.value)));
             }
         }
-        if matches!(self.kind, Kind::Number | Kind::Slider) {
+        if matches!(
+            self.kind,
+            Kind::Number | Kind::Slider | Kind::Sides | Kind::List
+        ) {
             let finite = |bound: Option<f64>| bound.is_none_or(f64::is_finite);
             if !finite(self.min) || !finite(self.max) || !finite(self.step) {
                 return Err("has a bound or a step that is no number".to_owned());
@@ -325,6 +353,14 @@ impl OptionDecl {
                 && min > max
             {
                 return Err(format!("goes from {min} down to {max}"));
+            }
+            if self.kind == Kind::List
+                && [self.min, self.max]
+                    .iter()
+                    .flatten()
+                    .any(|bound| *bound < 0. || bound.fract() != 0.)
+            {
+                return Err("bounds the number of items by no whole number".to_owned());
             }
             if self.step.is_some_and(|step| step <= 0.) {
                 return Err("has a step that is not above 0".to_owned());
@@ -468,6 +504,33 @@ impl OptionDecl {
                 if let Some(item) = items.iter().find(|item| item.contains([',', ';'])) {
                     return Err(format!("{shown} has `{item}`, which holds a `,` or a `;`"));
                 }
+                let offered = || {
+                    { self.choices.iter() }
+                        .filter(|choice| !choice.is_unset())
+                        .map(|choice| text_of(&choice.value))
+                };
+                if !self.choices.is_empty()
+                    && let Some(item) = items
+                        .iter()
+                        .find(|item| !offered().any(|one| one == **item))
+                {
+                    let offered: Vec<String> = offered().collect();
+                    return Err(format!(
+                        "{shown} has `{item}`, which is not one of {}",
+                        offered.join(", ")
+                    ));
+                }
+                let count = items.len() as f64;
+                if let Some(least) = self.min
+                    && count < least
+                {
+                    return Err(format!("{shown} has fewer than {least} items"));
+                }
+                if let Some(most) = self.max
+                    && count > most
+                {
+                    return Err(format!("{shown} has more than {most} items"));
+                }
                 Ok(toml::Value::Array(
                     items.into_iter().map(Into::into).collect(),
                 ))
@@ -482,6 +545,38 @@ impl OptionDecl {
                 };
                 check_pairs(&pairs)?;
                 Ok(write_pairs(&pairs).into())
+            }
+            Kind::Time => match value.as_str().map(str::trim) {
+                Some(text) if is_time(text) => Ok(text.into()),
+                _ => Err(format!("{shown} is no time of the form HH:MM")),
+            },
+            Kind::Sides => {
+                let fitted = |value: &toml::Value| {
+                    number_of(value)
+                        .filter(|number| number.is_finite())
+                        .map(|number| self.number_value(self.fit(number)))
+                };
+                match value {
+                    toml::Value::Table(table) => {
+                        let mut sides = toml::Table::new();
+                        for (side, room) in table {
+                            if !SIDES.contains(&side.as_str()) {
+                                return Err(format!(
+                                    "{shown} has `{side}`, which is none of top, right, bottom and left"
+                                ));
+                            }
+                            let room = fitted(room)
+                                .ok_or_else(|| format!("{shown} has a {side} that is no number"))?;
+                            sides.insert(side.clone(), room);
+                        }
+                        Ok(toml::Value::Table(sides))
+                    }
+                    other => fitted(other).ok_or_else(|| {
+                        format!(
+                            "{shown} is neither a number nor a table of top, right, bottom and left"
+                        )
+                    }),
+                }
             }
         }
     }
@@ -892,6 +987,79 @@ mod tests {
     fn a_key_is_plain() {
         let text = "[[setting]]\nkey = \"a b\"\nkind = \"toggle\"\nlabel = \"A\"\n";
         let file: toml::Table = toml::from_str(text).unwrap();
+        let decls: Vec<OptionDecl> = file["setting"].clone().try_into().unwrap();
+        assert!(decls[0].check().is_err());
+    }
+
+    #[test]
+    fn a_time_is_two_digits_a_colon_and_two_digits_of_a_day() {
+        let from = decl(
+            "[[setting]]\nkey = \"from\"\nkind = \"time\"\nlabel = \"From\"\ndefault = \"21:00\"\n",
+        );
+        assert_eq!(from.validate(&value("\"07:30\"")), Ok("07:30".into()));
+        assert_eq!(from.validate(&value("\" 23:59 \"")), Ok("23:59".into()));
+        assert_eq!(from.validate(&value("\"00:00\"")), Ok("00:00".into()));
+        for wrong in [
+            "\"24:00\"",
+            "\"12:60\"",
+            "\"7:30\"",
+            "\"07:3\"",
+            "\"07-30\"",
+            "\"\"",
+            "730",
+        ] {
+            assert!(from.validate(&value(wrong)).is_err(), "{wrong} was taken");
+        }
+        let wrong =
+            "[[setting]]\nkey = \"t\"\nkind = \"time\"\nlabel = \"T\"\ndefault = \"9:00\"\n";
+        let file: toml::Table = toml::from_str(wrong).unwrap();
+        let decls: Vec<OptionDecl> = file["setting"].clone().try_into().unwrap();
+        assert!(decls[0].check().is_err());
+    }
+
+    #[test]
+    fn sides_are_one_number_or_a_number_for_each_side() {
+        let gap = decl(
+            "[[setting]]\nkey = \"gap\"\nkind = \"sides\"\nlabel = \"Gap\"\nmin = 0\nmax = 100\n",
+        );
+        assert_eq!(gap.validate(&value("8")), Ok(8.into()));
+        assert_eq!(gap.validate(&value("140")), Ok(100.into()));
+        assert_eq!(
+            gap.validate(&value("{ top = 4, left = -3.6 }")),
+            Ok(value("{ top = 4, left = 0 }"))
+        );
+        assert!(gap.validate(&value("{ middle = 4 }")).is_err());
+        assert!(gap.validate(&value("{ top = \"wide\" }")).is_err());
+        assert!(gap.validate(&value("true")).is_err());
+    }
+
+    #[test]
+    fn a_list_with_choices_takes_only_those() {
+        let days = decl(
+            "[[setting]]\nkey = \"days\"\nkind = \"list\"\nlabel = \"Days\"\n\
+             choices = [{ value = \"mon\" }, { value = \"tue\" }, { value = \"sun\" }]\n",
+        );
+        assert_eq!(
+            days.validate(&value("\"mon, sun\"")),
+            Ok(value("[\"mon\", \"sun\"]"))
+        );
+        assert!(days.validate(&value("[\"mon\", \"fri\"]")).is_err());
+        assert_eq!(days.validate(&value("[]")), Ok(value("[]")));
+    }
+
+    #[test]
+    fn a_list_can_be_bounded_in_length() {
+        let pair = decl(
+            "[[setting]]\nkey = \"gradient\"\nkind = \"list\"\nlabel = \"Gradient\"\nmin = 2\nmax = 2\n",
+        );
+        assert_eq!(
+            pair.validate(&value("[\"#000000\", \"#ffffff\"]")),
+            Ok(value("[\"#000000\", \"#ffffff\"]"))
+        );
+        assert!(pair.validate(&value("[\"#000000\"]")).is_err());
+        assert!(pair.validate(&value("\"a, b, c\"")).is_err());
+        let half = "[[setting]]\nkey = \"l\"\nkind = \"list\"\nlabel = \"L\"\nmax = 1.5\n";
+        let file: toml::Table = toml::from_str(half).unwrap();
         let decls: Vec<OptionDecl> = file["setting"].clone().try_into().unwrap();
         assert!(decls[0].check().is_err());
     }

@@ -755,6 +755,7 @@ impl Snapper {
                 let handled = cx.update(|cx| match event {
                     MoveEvent::Start(id) => Self::begin(id, cx),
                     MoveEvent::End(id) => Self::finish(id, cx),
+                    MoveEvent::Resizing { .. } => {}
                 });
                 if handled.is_err() {
                     break;

@@ -65,6 +65,8 @@ use crate::session::ShellModule;
 pub use marketplace::Updates;
 pub use power_dialog::DesktopClosing;
 pub use settings::Settings;
+#[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
+pub(crate) use settings::{ActionTitle, action_titles};
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {

@@ -1189,7 +1189,9 @@ impl Settings {
                 let track = div().w(px(SLIDER_WIDTH)).flex().child(slider);
                 (Some(track.into_any_element()), None)
             }
-            Kind::Text => {
+            // A time and sides are typed as text until settings-core gives
+            // them controls of their own.
+            Kind::Text | Kind::Time | Kind::Sides => {
                 let text = resolved.map(text_of).unwrap_or_default();
                 let field = self.field(row, decl, text, cx);
                 (
