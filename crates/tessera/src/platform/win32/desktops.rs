@@ -19,15 +19,18 @@
 //!
 //! The manager lives on a thread of its own in a single-threaded
 //! apartment, so that a call that waits for Explorer holds up neither the
-//! thread of GPUI nor the shell thread.
+//! thread of GPUI nor the shell thread. Like the shell thread, it handles
+//! window messages between pieces of work, as such an apartment must:
+//! work that arrives is told of with a message to the thread.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
 
 use async_channel::Receiver;
-use windows::Win32::Foundation::{HWND, LPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWM_CLOAKED_SHELL, DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -35,15 +38,16 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_SAM_FLAGS, RRF_RT_REG_BINARY, RegGetValueW,
 };
-use windows::Win32::System::Threading::GetCurrentProcessId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_F4, VK_LEFT, VK_LWIN, VK_RIGHT,
 };
 use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
-    GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOOLWINDOW,
+    DispatchMessageW, EnumWindows, GW_OWNER, GWL_EXSTYLE, GetMessageW, GetWindow,
+    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible, MSG,
+    PM_NOREMOVE, PeekMessageW, PostThreadMessageW, TranslateMessage, WM_APP, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, GUID, PCWSTR, w};
 
@@ -63,6 +67,12 @@ const RECORD: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Vi
 
 /// The key D, which has no name among the virtual keys.
 const VK_D: VIRTUAL_KEY = VIRTUAL_KEY(0x44);
+
+/// The message that tells the thread of the desktops that work is waiting.
+const WORK_WAITING: u32 = WM_APP + 0x52;
+
+/// The thread of the desktops once it has a message queue; 0 before.
+static THREAD: AtomicU32 = AtomicU32::new(0);
 
 /// The virtual desktops at one moment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,14 +334,30 @@ fn ask<R: Send + 'static>(
             }
         }
     });
-    if let Some(queue) = queue {
-        queue.send(job).ok();
+    if let Some(queue) = queue
+        && queue.send(job).is_ok()
+    {
+        wake();
     }
     answered
 }
 
+/// Tells the thread of the desktops that work is waiting. Before it has a
+/// message queue nothing is told: it does the work waiting then on its
+/// own.
+fn wake() {
+    let thread = THREAD.load(Ordering::SeqCst);
+    if thread != 0 {
+        // SAFETY: the message carries no pointer; a thread that is gone
+        // makes the call fail, which leaves nothing to do.
+        let _ = unsafe { PostThreadMessageW(thread, WORK_WAITING, WPARAM(0), LPARAM(0)) };
+    }
+}
+
 /// Runs on the thread of the desktops: makes the manager in a
-/// single-threaded apartment and does the work that arrives, in order.
+/// single-threaded apartment, then handles the messages of the thread for
+/// as long as the process lives, doing the work that arrives, in order,
+/// whenever it is told of.
 fn serve(jobs: &mpsc::Receiver<Job>) {
     // SAFETY: the thread is new, so its apartment is chosen here, once.
     let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
@@ -344,8 +370,36 @@ fn serve(jobs: &mpsc::Receiver<Job>) {
     if manager.is_none() {
         report!("Windows tells nothing of which window is on which of its desktops");
     }
-    while let Ok(job) = jobs.recv() {
-        let done = catch_unwind(AssertUnwindSafe(|| job(manager.as_ref())));
+    let mut message = MSG::default();
+    // SAFETY: `message` outlives the calls that fill and pass it on. The
+    // first call makes the message queue of the thread, so that what is
+    // posted from now on arrives.
+    unsafe {
+        let _ = PeekMessageW(&raw mut message, None, 0, 0, PM_NOREMOVE);
+        THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
+    }
+    // The work handed over before the queue was there is done here.
+    work(jobs, manager.as_ref());
+    // SAFETY: as above; messages of the apartment of COM go to its window
+    // from inside these calls.
+    unsafe {
+        while GetMessageW(&raw mut message, None, 0, 0).as_bool() {
+            if message.hwnd.is_invalid() && message.message == WORK_WAITING {
+                work(jobs, manager.as_ref());
+                continue;
+            }
+            let _ = TranslateMessage(&raw const message);
+            DispatchMessageW(&raw const message);
+        }
+    }
+}
+
+/// Does the work waiting, in order, until none is left. Work that arrives
+/// meanwhile is done too, even where COM took the message telling of it
+/// while it waited for Explorer.
+fn work(jobs: &mpsc::Receiver<Job>, manager: Option<&IVirtualDesktopManager>) {
+    while let Ok(job) = jobs.try_recv() {
+        let done = catch_unwind(AssertUnwindSafe(|| job(manager)));
         if done.is_err() {
             report!("asking Windows about its desktops failed");
         }
