@@ -102,7 +102,7 @@ impl Module for DevicesModule {
 }
 
 /// The drive letter `arg` names: `E`, `e`, `E:` or `E:\`.
-fn letter_of(arg: &str) -> Option<char> {
+pub(crate) fn letter_of(arg: &str) -> Option<char> {
     let arg = arg.trim();
     let rest = arg.trim_end_matches(['\\', '/']);
     let rest = rest.strip_suffix(':').unwrap_or(rest);

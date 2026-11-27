@@ -39,6 +39,7 @@ mod key_locks;
 mod keyboard;
 mod media;
 mod move_watch;
+mod net_drives;
 mod network;
 mod night_light;
 mod notifications;
@@ -60,6 +61,7 @@ mod renaming;
 mod run_history;
 mod screenshot;
 mod send_to;
+mod share;
 mod shell_host;
 mod shell_item;
 mod shell_items;
@@ -122,6 +124,7 @@ pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
     show_properties,
 };
+pub use files::{reveal, reveal_with};
 pub use folder_handler::{
     FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
 };
@@ -139,6 +142,7 @@ pub use media::SessionKey;
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use media::{Repeat, SessionInfo};
 pub use move_watch::{MoveEvent, MoveWatch};
+pub use net_drives::{DriveDialog, NetworkDrives};
 pub use network::{Link, Network};
 pub use night_light::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use notifications::Occupation;
@@ -162,6 +166,7 @@ pub use renaming::rename_new;
 pub use run_history::RunHistory;
 pub use screenshot::save_screenshot;
 pub use send_to::SendToTarget;
+pub use share::SharePackage;
 pub use shell_host::{HostOptions, ShellEvent, ShellHost};
 pub use shell_item::ShellId;
 pub use shell_menu::{Intercept, MenuOutcome, ShellMenu, ShellVerb};

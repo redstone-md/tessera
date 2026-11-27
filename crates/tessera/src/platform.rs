@@ -60,6 +60,11 @@ pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
 };
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
+#[allow(
+    unused_imports,
+    reason = "reveal is for the surfaces that show a file in its folder"
+)]
+pub use win32::{DriveDialog, NetworkDrives, SharePackage, reveal, reveal_with};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,

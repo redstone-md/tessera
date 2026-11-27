@@ -14,8 +14,10 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 
 use anyhow::{Result, bail};
+use async_channel::Sender;
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, POINT};
 use windows::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
@@ -240,6 +242,33 @@ pub fn reveal_in_explorer(path: &Path) -> Result<()> {
     argument.push(path.as_os_str());
     Command::new("explorer.exe").arg(argument).spawn()?;
     Ok(())
+}
+
+/// Where [`reveal`] hands its paths while Tessera Files shows folders;
+/// `None` while Explorer does.
+static REVEALER: Mutex<Option<Sender<PathBuf>>> = Mutex::new(None);
+
+/// Has [`reveal`] hand its paths to `revealer` from now on, which the file
+/// manager of Tessera takes them from, or to Explorer again with `None`.
+pub fn reveal_with(revealer: Option<Sender<PathBuf>>) {
+    if let Ok(mut held) = REVEALER.lock() {
+        *held = revealer;
+    }
+}
+
+/// Shows `path` chosen in its folder: in Tessera Files where it shows
+/// folders (`[files] own`, see [`reveal_with`]), and else in Explorer, as
+/// [`reveal_in_explorer`] does. It returns at once, from any thread.
+#[allow(dead_code, reason = "for the surfaces that show a file in its folder")]
+pub fn reveal(path: &Path) -> Result<()> {
+    let handed = REVEALER.lock().ok().and_then(|held| {
+        held.as_ref()
+            .map(|revealer| revealer.try_send(path.to_owned()))
+    });
+    match handed {
+        Some(Ok(())) => Ok(()),
+        _ => reveal_in_explorer(path),
+    }
 }
 
 /// The clipboard of files, which Explorer and other programs share: what
