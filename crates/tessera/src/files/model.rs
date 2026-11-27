@@ -7,12 +7,16 @@
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, Metadata};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::platform::is_hidden;
+use crate::platform::{Attributes, NameRules, is_hidden, localized_candidates, shell_names};
+
+/// How many names of a folder are asked of the Shell at most, as each
+/// takes it a moment.
+const SHELL_NAMES_ASKED: usize = 512;
 
 /// Where a window of the file manager is.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -127,16 +131,51 @@ impl History {
 /// Something a folder holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
+    /// The name of the file itself.
     pub name: String,
+    /// The name as it is shown: the one the Shell gives in the language
+    /// of the user, or without an extension Explorer hides.
+    pub display: String,
     pub path: PathBuf,
     pub folder: bool,
     /// In bytes; 0 for a folder.
     pub size: u64,
     pub modified: Option<SystemTime>,
+    /// Whether it is hidden or of the system.
     pub hidden: bool,
+    /// Whether it is a protected file of the system, hidden and of the
+    /// system both, which Explorer hides even where hidden files show.
+    pub protected: bool,
+    /// Whether it is a shortcut, over whose icon an arrow is drawn.
+    pub link: bool,
 }
 
 impl Entry {
+    /// The entry of the file or folder at `path`, of which `metadata` was
+    /// read, its name shown as `rules` say.
+    pub fn of(path: PathBuf, metadata: &Metadata, rules: &mut NameRules) -> Self {
+        let folder = metadata.is_dir();
+        let attributes = Attributes::of(metadata);
+        let name = { path.file_name() }
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let link = !folder
+            && Path::new(&name).extension().is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("lnk") || extension.eq_ignore_ascii_case("url")
+            });
+        Self {
+            display: rules.shown(&name, folder),
+            name,
+            path,
+            folder,
+            size: if folder { 0 } else { metadata.len() },
+            modified: metadata.modified().ok(),
+            hidden: is_hidden(metadata),
+            protected: attributes.protected(),
+            link,
+        }
+    }
+
     /// What kind of file it is, as a column says it: `Folder`, or the
     /// extension of its name in capitals.
     pub fn kind(&self) -> String {
@@ -150,10 +189,13 @@ impl Entry {
     }
 }
 
-/// What a folder holds, with its folders and files mixed, in no order.
-/// A thing whose metadata cannot be read is left out.
-pub fn read_folder(path: &Path) -> io::Result<Vec<Entry>> {
+/// What a folder holds, with its folders and files mixed, in no order,
+/// named as `rules` say and, where they follow Explorer, as the Shell
+/// names what a `desktop.ini` gives a name of its own. A thing whose
+/// metadata cannot be read is left out. Blocks on the disk.
+pub fn read_folder(path: &Path, rules: &mut NameRules) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
+    let mut attributes = Vec::new();
     for item in fs::read_dir(path)? {
         let Ok(item) = item else {
             continue;
@@ -161,15 +203,21 @@ pub fn read_folder(path: &Path) -> io::Result<Vec<Entry>> {
         let Ok(metadata) = item.metadata() else {
             continue;
         };
-        let folder = metadata.is_dir();
-        entries.push(Entry {
-            name: item.file_name().to_string_lossy().into_owned(),
-            path: item.path(),
-            folder,
-            size: if folder { 0 } else { metadata.len() },
-            modified: metadata.modified().ok(),
-            hidden: is_hidden(&metadata),
-        });
+        attributes.push(Attributes::of(&metadata));
+        entries.push(Entry::of(item.path(), &metadata, rules));
+    }
+    if rules.follows() {
+        let items = { entries.iter().zip(attributes) }
+            .map(|(entry, attributes)| (entry.path.clone(), entry.folder, attributes));
+        let mut asked = localized_candidates(path, items);
+        asked.truncate(SHELL_NAMES_ASKED);
+        let named = shell_names(&asked);
+        for (asked, name) in asked.iter().zip(named) {
+            let entry = entries.iter_mut().find(|entry| &entry.path == asked);
+            if let (Some(entry), Some(name)) = (entry, name) {
+                entry.display = name;
+            }
+        }
     }
     Ok(entries)
 }
@@ -242,7 +290,7 @@ impl Order {
             Column::Kind => a.kind().cmp(&b.kind()),
             Column::Size => a.size.cmp(&b.size),
         };
-        let order = by_column.then_with(|| natural(&a.name, &b.name));
+        let order = by_column.then_with(|| natural(&a.display, &b.display));
         if self.descending {
             order.reverse()
         } else {
@@ -287,6 +335,32 @@ pub fn natural(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// Which of the hidden files are shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    /// Hidden files and files of the system.
+    pub hidden: bool,
+    /// Protected files of the system too, where hidden files are shown.
+    pub protected: bool,
+}
+
+impl Shown {
+    /// Shows every file there is.
+    #[cfg(test)]
+    pub const ALL: Self = Self {
+        hidden: true,
+        protected: true,
+    };
+
+    pub fn shows(self, entry: &Entry) -> bool {
+        match (entry.hidden, entry.protected) {
+            (false, _) => true,
+            (true, false) => self.hidden,
+            (true, true) => self.hidden && self.protected,
+        }
+    }
+}
+
 /// What a folder holds and which of it is shown, in which order.
 #[derive(Debug, Default)]
 pub struct Listing {
@@ -303,16 +377,16 @@ impl Listing {
         }
     }
 
-    /// Shows what matches `filter` (a part of the name, in any case),
-    /// hidden files only with `hidden`, in `order`.
-    pub fn arrange(&mut self, order: &Order, filter: &str, hidden: bool) {
+    /// Shows what matches `filter` (a part of the name as shown, in any
+    /// case), hidden files only as `shown` says, in `order`.
+    pub fn arrange(&mut self, order: &Order, filter: &str, shown: Shown) {
         let filter = filter.trim().to_lowercase();
         let entries = &self.entries;
         self.shown = (0..entries.len())
             .filter(|&index| {
                 let entry = &entries[index];
-                (hidden || !entry.hidden)
-                    && (filter.is_empty() || entry.name.to_lowercase().contains(&filter))
+                shown.shows(entry)
+                    && (filter.is_empty() || entry.display.to_lowercase().contains(&filter))
             })
             .collect();
         self.shown
@@ -521,11 +595,14 @@ mod tests {
     fn entry(name: &str, folder: bool, size: u64) -> Entry {
         Entry {
             name: name.to_owned(),
+            display: name.to_owned(),
             path: PathBuf::from(name),
             folder,
             size,
             modified: None,
             hidden: name.starts_with('.'),
+            protected: name.starts_with("~"),
+            link: false,
         }
     }
 
@@ -553,15 +630,45 @@ mod tests {
             entry(".hidden", false, 1),
         ]);
         let order = Order::default();
-        listing.arrange(&order, "", false);
+        let plain = Shown::default();
+        listing.arrange(&order, "", plain);
         assert_eq!(names(&listing), ["Zeta", "a.txt", "b.txt"]);
-        listing.arrange(&order.toggled(Column::Name), "", false);
+        listing.arrange(&order.toggled(Column::Name), "", plain);
         assert_eq!(names(&listing), ["b.txt", "a.txt", "Zeta"]);
         let by_size = order.toggled(Column::Size);
-        listing.arrange(&by_size, "", true);
+        listing.arrange(&by_size, "", Shown::ALL);
         assert_eq!(names(&listing), ["Zeta", ".hidden", "b.txt", "a.txt"]);
-        listing.arrange(&order, "TXT", false);
+        listing.arrange(&order, "TXT", plain);
         assert_eq!(names(&listing), ["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn protected_files_need_both_switches() {
+        let mut protected = entry("~protected", false, 0);
+        protected.hidden = true;
+        let mut listing = Listing::new(vec![
+            entry("plain", false, 0),
+            entry(".hidden", false, 0),
+            protected,
+        ]);
+        let shown = |listing: &mut Listing, hidden, protected| {
+            listing.arrange(&Order::default(), "", Shown { hidden, protected });
+            listing.len()
+        };
+        assert_eq!(shown(&mut listing, false, true), 1);
+        assert_eq!(shown(&mut listing, true, false), 2);
+        assert_eq!(shown(&mut listing, true, true), 3);
+    }
+
+    #[test]
+    fn the_shown_name_orders_and_filters() {
+        let mut documents = entry("Documents", true, 0);
+        documents.display = "Документы".to_owned();
+        let mut listing = Listing::new(vec![documents, entry("Zeta", true, 0)]);
+        listing.arrange(&Order::default(), "доку", Shown::default());
+        assert_eq!(names(&listing), ["Documents"]);
+        listing.arrange(&Order::default(), "", Shown::default());
+        assert_eq!(names(&listing), ["Zeta", "Documents"]);
     }
 
     #[test]
@@ -616,7 +723,7 @@ mod tests {
     #[test]
     fn a_selection_reaches_from_its_anchor() {
         let mut listing = Listing::new((0..5).map(|n| entry(&format!("f{n}"), false, 0)).collect());
-        listing.arrange(&Order::default(), "", false);
+        listing.arrange(&Order::default(), "", Shown::default());
         let mut selection = Selection::default();
         selection.click(&listing, 1, false, false);
         selection.click(&listing, 3, false, true);

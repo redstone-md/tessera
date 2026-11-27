@@ -22,17 +22,17 @@ use gpui::{
 };
 
 use super::model::{
-    Column, Entry, History, Listing, Location, Order, Selection, crumbs, free_name, is_valid_name,
-    read_folder, size_text, stamp_of,
+    Column, Entry, History, Listing, Location, Order, Selection, Shown, crumbs, free_name,
+    is_valid_name, read_folder, size_text, stamp_of,
 };
 use super::{Files, FilesConfig, Look};
 use crate::field::TextField;
 use crate::i18n::Language;
-use crate::icons::AppIcons;
+use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
-    Drive, DriveKind, FileClipboard, FileWork, Launch, open_terminal, reveal_in_explorer,
-    show_properties,
+    Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
+    open_terminal, reveal_in_explorer, show_properties,
 };
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
@@ -97,6 +97,11 @@ pub enum PaneEvent {
     ToOtherPane { cut: bool },
 }
 
+/// The arrow Windows draws over the icon of a shortcut, looked up once.
+struct LinkArrow(Icon);
+
+impl gpui::Global for LinkArrow {}
+
 /// A file or folder being renamed, with the field its new name is
 /// written in.
 struct Rename {
@@ -110,7 +115,12 @@ pub struct FolderPane {
     listing: Listing,
     selection: Selection,
     order: Order,
-    hidden: bool,
+    config: FilesConfig,
+    /// Whether hidden files are shown, where the user switched it; else
+    /// the configuration and the folder options of Explorer say.
+    hidden: Option<bool>,
+    /// The folder options of Explorer, as read with the folder last.
+    explorer: ExplorerSettings,
     look: Look,
     /// The drives, as the computer shows them.
     drives: Vec<Drive>,
@@ -160,6 +170,10 @@ impl FolderPane {
             cx.new(|cx| TextField::new(language.say("Filter").into(), cx).with_glyph(ICON_SEARCH));
         cx.observe(&filter, |this, _, cx| this.arrange(cx)).detach();
         let focus = cx.focus_handle();
+        if !cx.has_global::<LinkArrow>() {
+            let arrow = IconPixels::link_arrow().and_then(|pixels| icon_of_pixels(&pixels));
+            cx.set_global(LinkArrow(arrow));
+        }
         let watch = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(WATCH_INTERVAL).await;
@@ -195,7 +209,9 @@ impl FolderPane {
                 folders_first: config.folders_first,
                 ..Order::default()
             },
-            hidden: config.hidden,
+            config,
+            hidden: None,
+            explorer: ExplorerSettings::default(),
             look: config.view,
             drives: Vec::new(),
             filter,
@@ -270,19 +286,23 @@ impl FolderPane {
             cx.notify();
             return;
         };
+        let follow = self.config.explorer;
         self.reading = Some(
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let read = cx
                     .background_executor()
                     .spawn(async move {
                         let stamp = stamp_of(&path);
-                        (read_folder(&path), stamp)
+                        let explorer = ExplorerSettings::read();
+                        let mut rules = NameRules::new(explorer, follow);
+                        (read_folder(&path, &mut rules), stamp, explorer)
                     })
                     .await;
                 this.update(cx, |this, cx| {
                     this.reading = None;
-                    let (entries, stamp) = read;
+                    let (entries, stamp, explorer) = read;
                     this.stamp = stamp;
+                    this.explorer = explorer;
                     match entries {
                         Ok(entries) => {
                             this.problem = None;
@@ -307,7 +327,7 @@ impl FolderPane {
             .and_then(|position| self.listing.get(position))
             .map(|entry| entry.path.clone());
         let filter = self.filter.read(cx).text();
-        self.listing.arrange(&self.order, &filter, self.hidden);
+        self.listing.arrange(&self.order, &filter, self.shown());
         self.selection.follow(cursor, &self.listing);
         cx.notify();
     }
@@ -385,7 +405,7 @@ impl FolderPane {
             self.go(Location::Folder(entry.path.clone()), window, cx);
         } else {
             Launch::new(&entry.path)
-                .named(format!("`{}`", entry.name))
+                .named(format!("`{}`", entry.display))
                 .start();
         }
     }
@@ -691,12 +711,26 @@ impl FolderPane {
     }
 
     pub fn toggle_hidden(&mut self, cx: &mut Context<Self>) {
-        self.hidden = !self.hidden;
+        self.hidden = Some(!self.hidden());
         self.arrange(cx);
     }
 
+    /// Whether hidden files are shown: as the user switched it, or else
+    /// where the configuration or the folder options of Explorer show
+    /// them.
     pub fn hidden(&self) -> bool {
-        self.hidden
+        let explorer = self.config.explorer && self.explorer.show_hidden;
+        self.hidden.unwrap_or(self.config.hidden || explorer)
+    }
+
+    /// Which hidden files are shown. Protected files of the system show
+    /// with the others only where Explorer shows them, or where Explorer
+    /// is not followed.
+    fn shown(&self) -> Shown {
+        Shown {
+            hidden: self.hidden(),
+            protected: !self.config.explorer || self.explorer.show_protected,
+        }
     }
 
     pub fn look(&self) -> Look {
@@ -1141,7 +1175,7 @@ impl FolderPane {
                 None
             }
         };
-        match image {
+        let picture = match image {
             Some(image) => img(image).size(size).flex_none().into_any_element(),
             None => div()
                 .size(size)
@@ -1149,6 +1183,17 @@ impl FolderPane {
                 .rounded(theme.shape.small)
                 .bg(theme.colors.outline.opacity(0.3))
                 .into_any_element(),
+        };
+        let arrow = { cx.try_global::<LinkArrow>() }.and_then(|arrow| arrow.0.clone());
+        match (entry.link, arrow) {
+            (true, Some(arrow)) => div()
+                .relative()
+                .size(size)
+                .flex_none()
+                .child(picture)
+                .child(img(arrow).absolute().left_0().bottom_0().size(size * 0.5))
+                .into_any_element(),
+            _ => picture,
         }
     }
 
@@ -1163,7 +1208,7 @@ impl FolderPane {
             _ => div()
                 .flex_1()
                 .min_w_0()
-                .child(one_line(entry.name.clone()))
+                .child(one_line(entry.display.clone()))
                 .into_any_element(),
         }
     }
@@ -1303,7 +1348,7 @@ impl FolderPane {
                                                 .w_full()
                                                 .child(rename.field.clone())
                                                 .into_any_element(),
-                                            _ => one_line(entry.name.clone()).into_any_element(),
+                                            _ => one_line(entry.display.clone()).into_any_element(),
                                         },
                                     ),
                                 ),

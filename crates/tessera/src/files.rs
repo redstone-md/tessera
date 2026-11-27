@@ -66,6 +66,10 @@ pub struct FilesConfig {
     /// Whether a window opened without a folder opens with the tabs of
     /// the last window closed.
     pub restore: bool,
+    /// Whether the folder options of Explorer are followed: extensions of
+    /// known types hidden, hidden and protected files shown as Explorer
+    /// shows them, and the names a `desktop.ini` gives.
+    pub explorer: bool,
 }
 
 impl Default for FilesConfig {
@@ -76,6 +80,7 @@ impl Default for FilesConfig {
             folders_first: true,
             view: Look::Details,
             restore: false,
+            explorer: true,
         }
     }
 }

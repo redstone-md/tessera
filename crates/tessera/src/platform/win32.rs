@@ -17,6 +17,7 @@ mod commands;
 mod connections;
 mod desktops;
 mod execute;
+mod explorer_view;
 mod files;
 mod hdr;
 mod hotkeys;
@@ -61,6 +62,9 @@ pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
 pub use execute::Process;
 pub use execute::{Launch, Show};
+pub use explorer_view::{
+    Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
+};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
     reveal_in_explorer, show_properties,
