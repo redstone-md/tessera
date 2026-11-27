@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! Windows where the wallpaper is that a video plays in, again and again
-//! and without its sound, or a list of videos one after the other.
+//! Windows where the wallpaper is that a video plays in, again and again,
+//! or a list of videos one after the other: without its sound unless it
+//! is asked for, as fast as asked, mirrored, placed and with a color laid
+//! over it as [`VideoLook`] says.
 //!
 //! The windows lie where a [`DesktopBackdrop`](super::DesktopBackdrop)
 //! does, one over each display. The media engine of Windows reads the
 //! file and decodes it once, with the graphics card where that can; a
 //! thread of its own has each frame drawn once by the graphics card, at
 //! the size of the video or less, and the compositor of Windows scales
-//! that one picture over every window. Nothing of a frame passes through
-//! the memory of Tessera, and a video on three displays is decoded and
-//! drawn as often as one on one. Displays that play other videos each get
-//! a [`DesktopVideo`] of their own, which decodes its own.
+//! that one picture over every window, mirrors it and lays the color over
+//! it. Nothing of a frame passes through the memory of Tessera but a
+//! poster frame where one is asked for, and a video on three displays is
+//! decoded and drawn as often as one on one. Displays that play other
+//! videos each get a [`DesktopVideo`] of their own, which decodes its own.
+//!
+//! Of the ways CSS lays a color over a picture the compositor has two:
+//! over it as much as its alpha says (`normal`), and the darker of the
+//! two (`darken`). Blur, brightness, contrast and saturation are not done
+//! to a video at all.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -22,19 +30,27 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use windows::Win32::Foundation::{COLORREF, HMODULE, HWND, LPARAM, LRESULT, RECT, S_OK, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, S_OK, WPARAM,
+};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
-    D3D11CreateDevice, ID3D11Device, ID3D11Multithread, ID3D11Texture2D,
+    D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
+    ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR, DCompositionCreateDevice, IDCompositionDevice,
-    IDCompositionEffectGroup, IDCompositionTarget, IDCompositionTransform, IDCompositionVisual,
+    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR,
+    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, DCOMPOSITION_BORDER_MODE_HARD,
+    DCOMPOSITION_COMPOSITE_MODE_MIN_BLEND, DCOMPOSITION_COMPOSITE_MODE_SOURCE_OVER,
+    DCompositionCreateDevice, IDCompositionDevice, IDCompositionEffectGroup, IDCompositionTarget,
+    IDCompositionTransform, IDCompositionVisual,
 };
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
+    DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
@@ -98,7 +114,71 @@ struct Told {
     shown: AtomicU32,
     /// The video is held still wherever it is seen.
     paused: AtomicBool,
+    /// Poster frames are asked for: of the first frame of each video.
+    posters: AtomicBool,
+    /// A poster frame is to be taken of the next frame drawn.
+    want_poster: AtomicBool,
+    /// The poster frame taken last, until it is taken from here.
+    poster: Mutex<Option<Poster>>,
 }
+
+/// One frame of a video, as it is drawn before it is scaled to the
+/// windows: rows from the top, a pixel being blue, green, red and a byte
+/// that is 255.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Poster {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+/// A color laid over a video.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VideoOverlay {
+    /// Red, green, blue and how much of it is laid on, of 255.
+    pub color: [u8; 4],
+    /// The darker of the color and the video, in place of the color over
+    /// the video.
+    pub darken: bool,
+}
+
+/// How a video is played and shown.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoLook {
+    /// How fast, 1 being as it was made.
+    pub speed: f32,
+    /// Whether its sound is heard, and how loud, from 0 to 1.
+    pub sound: bool,
+    pub volume: f32,
+    /// Whether left and right, and top and bottom, change places.
+    pub flip_across: bool,
+    pub flip_down: bool,
+    /// Where what is cut off to cover a window is taken from: 0 keeps
+    /// the left or the top, 1 the right or the bottom.
+    pub anchor: (f32, f32),
+    pub overlay: Option<VideoOverlay>,
+}
+
+impl Default for VideoLook {
+    fn default() -> Self {
+        Self {
+            speed: 1.,
+            sound: false,
+            volume: 1.,
+            flip_across: false,
+            flip_down: false,
+            anchor: MIDDLE,
+            overlay: None,
+        }
+    }
+}
+
+/// The middle, across and down.
+const MIDDLE: (f32, f32) = (0.5, 0.5);
+
+/// The side of the small surface a color laid over a video is drawn in
+/// before the compositor stretches it over the window.
+const OVERLAY_SIDE: u32 = 8;
 
 #[implement(IMFMediaEngineNotify)]
 struct Listener(Arc<Told>);
@@ -157,33 +237,89 @@ fn kept_size(width: u32, height: u32, over: &[(u32, u32)]) -> (u32, u32) {
 /// sides: how many times as large they are drawn, and where their left
 /// and top sides are from those of the window.
 fn placed(width: u32, height: u32, over_width: u32, over_height: u32) -> (f32, f32, f32) {
+    placed_at(width, height, (over_width, over_height), MIDDLE)
+}
+
+/// How frames lie in a window as [`placed`] says, what does not fit cut
+/// off as `anchor` says: 0 keeps the left or the top side, 1 the other.
+fn placed_at(
+    width: u32,
+    height: u32,
+    (over_width, over_height): (u32, u32),
+    (across, down): (f32, f32),
+) -> (f32, f32, f32) {
     let (wide, high) = (width.max(1) as f32, height.max(1) as f32);
     let (over_wide, over_high) = (over_width.max(1) as f32, over_height.max(1) as f32);
     let scale = (over_wide / wide).max(over_high / high);
     (
         scale,
-        (over_wide - wide * scale) / 2.,
-        (over_high - high * scale) / 2.,
+        (over_wide - wide * scale) * across.clamp(0., 1.),
+        (over_high - high * scale) * down.clamp(0., 1.),
     )
+}
+
+/// The scale across and down, and the offset, of frames laid in a window
+/// of `over_width` by `over_height` by [`placed_at`] and then mirrored
+/// within the window as `look` says.
+fn mirrored(
+    (scale, left, top): (f32, f32, f32),
+    (over_width, over_height): (u32, u32),
+    look: &VideoLook,
+) -> (f32, f32, f32, f32) {
+    let (over_wide, over_high) = (over_width as f32, over_height as f32);
+    let (scale_x, left) = if look.flip_across {
+        (-scale, over_wide - left)
+    } else {
+        (scale, left)
+    };
+    let (scale_y, top) = if look.flip_down {
+        (-scale, over_high - top)
+    } else {
+        (scale, top)
+    };
+    (scale_x, scale_y, left, top)
 }
 
 /// The part of a video of `width` by `height` that is drawn into frames of
 /// `frame_width` by `frame_height` so that it covers them, what does not
-/// fit cut off evenly on two sides: its left, top, right and bottom, each
-/// from 0 to 1 of the video. The videos of a list keep the frames of the
-/// first, whatever their own size.
-fn covering(width: u32, height: u32, frame_width: u32, frame_height: u32) -> [f32; 4] {
+/// fit cut off on two sides as `anchor` says: its left, top, right and
+/// bottom, each from 0 to 1 of the video. The videos of a list keep the
+/// frames of the first, whatever their own size.
+fn covering(
+    width: u32,
+    height: u32,
+    (frame_width, frame_height): (u32, u32),
+    (across, down): (f32, f32),
+) -> [f32; 4] {
     let (wide, high) = (width.max(1) as f32, height.max(1) as f32);
     let (frame_wide, frame_high) = (frame_width.max(1) as f32, frame_height.max(1) as f32);
     let shape = wide / high;
     let frame_shape = frame_wide / frame_high;
     if shape > frame_shape {
         // Wider in shape: the sides go.
-        let side = (1. - frame_shape / shape) / 2.;
-        [side, 0., 1. - side, 1.]
+        let cut = 1. - frame_shape / shape;
+        let left = cut * across.clamp(0., 1.);
+        [left, 0., left + 1. - cut, 1.]
     } else {
-        let side = (1. - shape / frame_shape) / 2.;
-        [0., side, 1., 1. - side]
+        let cut = 1. - shape / frame_shape;
+        let top = cut * down.clamp(0., 1.);
+        [0., top, 1., top + 1. - cut]
+    }
+}
+
+/// `color` laid over a video, as the compositor is given it: blue,
+/// green, red and alpha with the colors multiplied by the alpha. For the
+/// darker of the two, a color that keeps the video where its alpha says
+/// to lay little of it on, and covers all.
+fn overlay_pixel(overlay: VideoOverlay) -> [u8; 4] {
+    let [red, green, blue, alpha] = overlay.color;
+    let share = u32::from(alpha);
+    if overlay.darken {
+        let toward = |value: u8| (255 - (share * (255 - u32::from(value)) + 127) / 255) as u8;
+        [toward(blue), toward(green), toward(red), 255]
+    } else {
+        let times = |value: u8| ((u32::from(value) * share + 127) / 255) as u8;
+        [times(blue), times(green), times(red), alpha]
     }
 }
 
@@ -207,11 +343,13 @@ struct Target {
 /// What the frames are made with, and where they go.
 struct Stage<'a> {
     device: ID3D11Device,
+    context: ID3D11DeviceContext,
     factory: IDXGIFactory2,
     composition: IDCompositionDevice,
     /// One for all the windows: they come into sight together.
     fade: IDCompositionEffectGroup,
     targets: &'a [Target],
+    look: &'a VideoLook,
 }
 
 /// The frames of the video, kept once and shown in every window.
@@ -270,24 +408,23 @@ impl Stage<'_> {
                     .composition
                     .CreateTargetForHwnd(HWND(target.window as *mut _), true)
                     .context("a wallpaper window takes no frames of the compositor")?;
-                let (scale, left, top) = placed(wide, high, over_wide, over_high);
-                let scaled = self.composition.CreateScaleTransform()?;
-                scaled.SetScaleX2(scale)?;
-                scaled.SetScaleY2(scale)?;
-                let moved = self.composition.CreateTranslateTransform()?;
-                moved.SetOffsetX2(left)?;
-                moved.SetOffsetY2(top)?;
-                let lies = self.composition.CreateTransformGroup(&[
-                    Some(scaled.cast::<IDCompositionTransform>()?),
-                    Some(moved.cast::<IDCompositionTransform>()?),
-                ])?;
+                let over = (over_wide, over_high);
+                let lies = placed_at(wide, high, over, self.look.anchor);
+                let (scale_x, scale_y, left, top) = mirrored(lies, over, self.look);
                 let visual = self.composition.CreateVisual()?;
                 visual.SetContent(&chain)?;
-                visual.SetTransform(&lies)?;
+                visual.SetTransform(&self.transform((scale_x, scale_y), (left, top))?)?;
                 visual.SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR)?;
-                visual.SetEffect(&self.fade)?;
-                window.SetRoot(&visual)?;
-                bound.push((window, visual));
+                // The video and the color over it fade in together.
+                let root = self.composition.CreateVisual()?;
+                root.SetEffect(&self.fade)?;
+                root.AddVisual(&visual, true, None::<&IDCompositionVisual>)?;
+                if let Some(overlay) = self.look.overlay {
+                    let laid = self.overlay(overlay, over)?;
+                    root.AddVisual(&laid, true, &visual)?;
+                }
+                window.SetRoot(&root)?;
+                bound.push((window, root));
             }
             self.composition.Commit()?;
             let buffer: ID3D11Texture2D = chain.GetBuffer(0)?;
@@ -304,11 +441,158 @@ impl Stage<'_> {
             })
         }
     }
+
+    /// A scale by `scale` across and down, which mirrors where it is
+    /// below 0, and then a move by `offset`.
+    ///
+    /// # Safety
+    ///
+    /// As for any call of the compositor on this thread.
+    unsafe fn transform(
+        &self,
+        scale: (f32, f32),
+        offset: (f32, f32),
+    ) -> Result<IDCompositionTransform> {
+        // SAFETY: see the function.
+        unsafe {
+            let scaled = self.composition.CreateScaleTransform()?;
+            scaled.SetScaleX2(scale.0)?;
+            scaled.SetScaleY2(scale.1)?;
+            let moved = self.composition.CreateTranslateTransform()?;
+            moved.SetOffsetX2(offset.0)?;
+            moved.SetOffsetY2(offset.1)?;
+            let group = self.composition.CreateTransformGroup(&[
+                Some(scaled.cast::<IDCompositionTransform>()?),
+                Some(moved.cast::<IDCompositionTransform>()?),
+            ])?;
+            Ok(group.cast()?)
+        }
+    }
+
+    /// A visual that lays `overlay` over all of a window of `over`: a few
+    /// pixels of the color, stretched without blurring their edges.
+    ///
+    /// # Safety
+    ///
+    /// As for any call of the compositor on this thread.
+    unsafe fn overlay(
+        &self,
+        overlay: VideoOverlay,
+        over: (u32, u32),
+    ) -> Result<IDCompositionVisual> {
+        let pixel = overlay_pixel(overlay);
+        let side = OVERLAY_SIDE;
+        let pixels: Vec<u8> = (0..side * side).flat_map(|_| pixel).collect();
+        // SAFETY: the surface is drawn between `BeginDraw` and `EndDraw`
+        // with pixels that outlive the call, within the part of the
+        // texture the compositor gives for it.
+        unsafe {
+            let surface = self.composition.CreateSurface(
+                side,
+                side,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_ALPHA_MODE_PREMULTIPLIED,
+            )?;
+            let mut offset = POINT::default();
+            let texture: ID3D11Texture2D = surface.BeginDraw(None, &raw mut offset)?;
+            let part = D3D11_BOX {
+                left: offset.x as u32,
+                top: offset.y as u32,
+                front: 0,
+                right: offset.x as u32 + side,
+                bottom: offset.y as u32 + side,
+                back: 1,
+            };
+            self.context.UpdateSubresource(
+                &texture,
+                0,
+                Some(&raw const part),
+                pixels.as_ptr().cast(),
+                side * 4,
+                0,
+            );
+            surface.EndDraw()?;
+            let visual = self.composition.CreateVisual()?;
+            visual.SetContent(&surface)?;
+            let (over_wide, over_high) = (over.0 as f32, over.1 as f32);
+            let stretch = (over_wide / side as f32, over_high / side as f32);
+            visual.SetTransform(&self.transform(stretch, (0., 0.))?)?;
+            visual.SetBitmapInterpolationMode(
+                DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            )?;
+            visual.SetBorderMode(DCOMPOSITION_BORDER_MODE_HARD)?;
+            visual.SetCompositeMode(if overlay.darken {
+                DCOMPOSITION_COMPOSITE_MODE_MIN_BLEND
+            } else {
+                DCOMPOSITION_COMPOSITE_MODE_SOURCE_OVER
+            })?;
+            Ok(visual)
+        }
+    }
+
+    /// The frame `frames` holds now, read back from the graphics card.
+    ///
+    /// # Safety
+    ///
+    /// `frames` was made by this stage, on this thread.
+    unsafe fn poster(&self, frames: &Frames) -> Result<Poster> {
+        let (width, height) = (
+            frames.whole.right.unsigned_abs(),
+            frames.whole.bottom.unsigned_abs(),
+        );
+        let description = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+        // SAFETY: the copy is made into a texture of the size and format
+        // of the frames, and read while it is mapped, row by row within
+        // the pitch the graphics card gives.
+        unsafe {
+            let mut copy: Option<ID3D11Texture2D> = None;
+            self.device
+                .CreateTexture2D(&raw const description, None, Some(&raw mut copy))?;
+            let copy = copy.context("the graphics card gives no texture to read")?;
+            self.context.CopyResource(&copy, &frames.buffer);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context
+                .Map(&copy, 0, D3D11_MAP_READ, 0, Some(&raw mut mapped))?;
+            let row = width as usize * 4;
+            let mut pixels = Vec::with_capacity(row * height as usize);
+            for line in 0..height as usize {
+                let start = mapped
+                    .pData
+                    .cast::<u8>()
+                    .add(line * mapped.RowPitch as usize);
+                pixels.extend_from_slice(std::slice::from_raw_parts(start, row));
+            }
+            self.context.Unmap(&copy, 0);
+            // The swap chain keeps no alpha.
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel[3] = 255;
+            }
+            Ok(Poster {
+                width,
+                height,
+                pixels,
+            })
+        }
+    }
 }
 
 /// Plays the videos in the files `paths` into the windows of `targets`
 /// until told to stop. Runs on a thread of its own.
-fn draw(targets: &[Target], paths: &[PathBuf], told: &Arc<Told>) -> Result<()> {
+fn draw(targets: &[Target], paths: &[PathBuf], look: &VideoLook, told: &Arc<Told>) -> Result<()> {
     if !media_started() {
         bail!("the media library of Windows does not start");
     }
@@ -349,12 +633,15 @@ fn draw(targets: &[Target], paths: &[PathBuf], told: &Arc<Told>) -> Result<()> {
             .context("the compositor of Windows takes no frames")?;
         let fade = composition.CreateEffectGroup()?;
         fade.SetOpacity2(0.)?;
+        let context = device.GetImmediateContext()?;
         let stage = Stage {
             device,
+            context,
             factory,
             composition,
             fade,
             targets,
+            look,
         };
 
         let classes: IMFMediaEngineClassFactory =
@@ -370,9 +657,14 @@ fn draw(targets: &[Target], paths: &[PathBuf], told: &Arc<Told>) -> Result<()> {
             &MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT,
             DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32,
         )?;
-        // No sound is asked of the engine at all.
+        // Without its sound, no sound is asked of the engine at all.
+        let flags = if look.sound {
+            0
+        } else {
+            MF_MEDIA_ENGINE_FORCEMUTE.0 as u32
+        };
         let engine = classes
-            .CreateInstance(MF_MEDIA_ENGINE_FORCEMUTE.0 as u32, &attributes)
+            .CreateInstance(flags, &attributes)
             .context("the media engine could not be made")?;
         let played = play(&engine, &stage, paths, told);
         let _ = engine.Shutdown();
@@ -406,8 +698,20 @@ unsafe fn play(
         let Some(first) = paths.first() else {
             bail!("no video was given");
         };
-        let source = |path: &Path| engine.SetSource(&BSTR::from(path.to_string_lossy().as_ref()));
-        engine.SetMuted(true)?;
+        let look = stage.look;
+        let speed = f64::from(look.speed);
+        // A file read anew begins at the default rate, which is set
+        // before it and the rate after it.
+        let source = |path: &Path| {
+            let _ = engine.SetDefaultPlaybackRate(speed);
+            engine.SetSource(&BSTR::from(path.to_string_lossy().as_ref()))?;
+            let _ = engine.SetPlaybackRate(speed);
+            windows::core::Result::Ok(())
+        };
+        engine.SetMuted(!look.sound)?;
+        if look.sound {
+            let _ = engine.SetVolume(f64::from(look.volume.clamp(0., 1.)));
+        }
         engine.SetLoop(paths.len() == 1)?;
         engine.SetAutoPlay(true)?;
         source(first)?;
@@ -437,6 +741,10 @@ unsafe fn play(
                 told.events.fetch_and(!(ERRORED | ENDED), Ordering::Relaxed);
                 playing = (playing + 1) % paths.len();
                 size = None;
+                // Where poster frames are asked for, of the next one too.
+                if told.posters.load(Ordering::Relaxed) {
+                    told.want_poster.store(true, Ordering::Relaxed);
+                }
                 if source(&paths[playing]).is_err() {
                     told.events.fetch_or(ERRORED, Ordering::Relaxed);
                 }
@@ -484,12 +792,11 @@ unsafe fn play(
                     frames = Some(stage.frames(wide, high)?);
                 }
                 if let (Some(frames), Some((wide, high))) = (&frames, size) {
-                    let [left, top, right, bottom] = covering(
-                        wide,
-                        high,
+                    let kept = (
                         frames.whole.right.unsigned_abs(),
                         frames.whole.bottom.unsigned_abs(),
                     );
+                    let [left, top, right, bottom] = covering(wide, high, kept, look.anchor);
                     let part = MFVideoNormalizedRect {
                         left,
                         top,
@@ -502,6 +809,15 @@ unsafe fn play(
                         &raw const frames.whole,
                         Some(&raw const black),
                     );
+                    if moved.is_ok() && told.want_poster.swap(false, Ordering::Relaxed) {
+                        // Read before it is shown, while it is still the
+                        // frame drawn into. Where it cannot be read the
+                        // video simply has no poster frame.
+                        if let Ok(poster) = stage.poster(frames) {
+                            let kept = told.poster.lock();
+                            *kept.unwrap_or_else(PoisonError::into_inner) = Some(poster);
+                        }
+                    }
                     if moved.is_ok() && frames.chain.Present(0, DXGI_PRESENT(0)).is_ok() {
                         told.events.fetch_or(SHOWING, Ordering::Relaxed);
                         given_up = 0;
@@ -531,10 +847,11 @@ pub struct DesktopVideo {
 impl DesktopVideo {
     /// Opens a window over each of the displays at `frames`, not yet to
     /// be seen, and begins to read the videos in the files `paths`: one
-    /// is played again and again, several one after the other. Fails
-    /// where the desktop is not laid out as Windows 11 24H2 does; what
-    /// else keeps the videos from playing is told by [`Self::state`].
-    pub fn open(frames: &[ScreenRect], paths: &[PathBuf]) -> Result<Self> {
+    /// is played again and again, several one after the other, as `look`
+    /// says. Fails where the desktop is not laid out as Windows 11 24H2
+    /// does; what else keeps the videos from playing is told by
+    /// [`Self::state`].
+    pub fn open(frames: &[ScreenRect], paths: &[PathBuf], look: VideoLook) -> Result<Self> {
         let mut video = Self {
             windows: Vec::new(),
             told: Arc::new(Told::default()),
@@ -559,7 +876,7 @@ impl DesktopVideo {
             // SAFETY: the thread is given to the library and taken back
             // in a pair, after everything made on it is let go of.
             let entered = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
-            if let Err(error) = draw(&targets, &paths, &told) {
+            if let Err(error) = draw(&targets, &paths, &look, &told) {
                 let mut reason = told.reason.lock().unwrap_or_else(PoisonError::into_inner);
                 *reason = Some(format!("{error:#}"));
                 told.events.fetch_or(FAILED, Ordering::Relaxed);
@@ -624,6 +941,21 @@ impl DesktopVideo {
     pub fn pause(&self, paused: bool) {
         self.told.paused.store(paused, Ordering::Relaxed);
     }
+
+    /// Has a poster frame taken of the next frame drawn, and of the first
+    /// of each video that follows; [`Self::take_poster`] gives them.
+    pub fn want_posters(&self) {
+        if !self.told.posters.swap(true, Ordering::Relaxed) {
+            self.told.want_poster.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// The poster frame taken last, where one was taken since this was
+    /// asked the last time.
+    pub fn take_poster(&self) -> Option<Poster> {
+        let kept = self.told.poster.lock();
+        kept.unwrap_or_else(PoisonError::into_inner).take()
+    }
 }
 
 impl Drop for DesktopVideo {
@@ -684,10 +1016,64 @@ mod tests {
 
     #[test]
     fn a_later_video_of_another_shape_still_covers_the_frames() {
-        assert_eq!(covering(1920, 1080, 1920, 1080), [0., 0., 1., 1.]);
+        assert_eq!(covering(1920, 1080, (1920, 1080), MIDDLE), [0., 0., 1., 1.]);
         // Twice as wide in shape: the middle half across.
-        assert_eq!(covering(2000, 500, 1000, 500), [0.25, 0., 0.75, 1.]);
+        assert_eq!(
+            covering(2000, 500, (1000, 500), MIDDLE),
+            [0.25, 0., 0.75, 1.]
+        );
         // Square in wide frames: the middle half down.
-        assert_eq!(covering(500, 500, 1000, 500), [0., 0.25, 1., 0.75]);
+        assert_eq!(
+            covering(500, 500, (1000, 500), MIDDLE),
+            [0., 0.25, 1., 0.75]
+        );
+        // Kept to a side: what is cut goes from the other.
+        assert_eq!(
+            covering(2000, 500, (1000, 500), (0., 0.5)),
+            [0., 0., 0.5, 1.]
+        );
+        assert_eq!(
+            covering(500, 500, (1000, 500), (0.5, 1.)),
+            [0., 0.5, 1., 1.]
+        );
+    }
+
+    #[test]
+    fn frames_are_placed_and_mirrored_within_their_window() {
+        // Square frames in a wide window, kept to the top.
+        let lies = placed_at(1000, 1000, (2000, 1000), (0.5, 0.));
+        assert_eq!(lies, (2., 0., 0.));
+        let bottom = placed_at(1000, 1000, (2000, 1000), (0.5, 1.));
+        assert_eq!(bottom, (2., 0., -1000.));
+        let look = VideoLook {
+            flip_across: true,
+            ..VideoLook::default()
+        };
+        // Mirrored, a point at the left of the frames ends at the right.
+        let (scale_x, scale_y, left, top) = mirrored(lies, (2000, 1000), &look);
+        assert_eq!((scale_x, scale_y), (-2., 2.));
+        assert_eq!(0. * scale_x + left, 2000.);
+        assert_eq!(1000. * scale_x + left, 0.);
+        assert_eq!(top, 0.);
+    }
+
+    #[test]
+    fn a_color_over_a_video_is_given_with_its_alpha_multiplied_in() {
+        let half = VideoOverlay {
+            color: [200, 100, 0, 128],
+            darken: false,
+        };
+        assert_eq!(overlay_pixel(half), [0, 50, 100, 128]);
+        // The darker of the two, laid on by half: halfway to white.
+        let darker = VideoOverlay {
+            darken: true,
+            ..half
+        };
+        assert_eq!(overlay_pixel(darker), [127, 177, 227, 255]);
+        let whole = VideoOverlay {
+            color: [10, 20, 30, 255],
+            darken: true,
+        };
+        assert_eq!(overlay_pixel(whole), [30, 20, 10, 255]);
     }
 }
