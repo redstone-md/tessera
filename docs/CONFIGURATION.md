@@ -97,3 +97,61 @@ packaged = true       # false: the startup tasks of Store apps do not start
 What starts, in this order: the components of Active Setup that the machine has in a newer version than the user (each waited for, a minute at most); `RunOnce` of the machine, 64-bit and then 32-bit, each waited for, only where Tessera may delete its values (it usually may not, and it then reports how many it left); `Policies\Explorer\Run` and `Run` of the machine, its 32-bit `Run`, then those of the user; the Startup folders of all users and of the user; `RunOnce` of the user; the startup tasks of Store apps. A value of `RunOnce` is deleted before its program runs, or after it when its name starts with `!`; in Safe Mode only those whose name starts with `*` run. A session counts as started once a volatile key named by the session and the logon is made under `HKCU\Software\Tessera\Startup`, so a Tessera that restarts in the same session starts nothing again; Windows deletes that key at sign-out. A Tessera run as administrator, with the full token of an administrator who also has a filtered one, starts nothing and makes no such key, so that the programs of the session never get that token. `[startup]` changed while Tessera runs counts at once: `run = true` then starts the programs if they did not start yet in this session, and `run = false` before the delay is over keeps them from starting.
 
 The widget `startup`, made for a popup or a card, lists the programs that start with every sign-in (not those of Active Setup and `RunOnce`) with a switch each, and **Startup apps** under **General** in the settings shows the same list. A switch writes what Task Manager writes, in `Explorer\StartupApproved` (`Run`, `Run32`, `StartupFolder`) of the program's own hive, which Explorer and Tessera both honour. For a program of all users, Windows lets only an administrator write the machine's choice; where it refuses, switching the program off marks it off for this user alone in `HKCU\Software\Tessera\StartupApproved`, which Tessera alone reads (Explorer, as the shell, still starts it), and switching it back on removes that mark, or says it needs an administrator where the machine's choice is off. A program a policy starts has no switch. The switch of a Store app writes the state Windows keeps for its startup task.
+| `run` | none | opens the Run dialog, the popup `run`, or closes it; its keys (Win+R) are taken from Windows, and Win+R is bound to it by default where the keys of Windows are in use |
+| `runner` | none | opens the compact runner, the popup `runner`, or closes it; it brings no key |
+
+The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## The launcher and its runners
+
+The `launcher` widget, the compact `runner` widget and the Run dialog `run` answer what is typed with the runners of Tessera, in the manner of KRunner. The answers a runner is sure of stand above the applications, the others after the files. Enter does what the chosen row does, Shift+Enter runs a command in a terminal, Ctrl+Shift+Enter runs a command or an application as an administrator, and Ctrl+C copies the result of a calculation or a conversion. Ending the session or a process waits for Enter a second time.
+
+| Runner | Answers |
+| --- | --- |
+| `calculator` | arithmetic, as `2^10 / 3`, `sqrt(2) * pi`, `15% * 80`, `0xff + 1`, `255 to hex`; after `=` any expression |
+| `units` | conversions, as `5 km to mi`, `100 f in c`, `2 GiB in MB`, `1,5 кг в г`, and of currencies, as `100 usd to eur` |
+| `command` | paths, addresses, `shell:` places, `::{CLSID}`, programs of the App Paths and of `PATH` with arguments; `> command` runs in a terminal |
+| `web` | `g:`, `gg:`, `google:`, `ddg:`, `bing:`, `wiki:`, `wp:`, `gh:`, `yt:`, `maps:` and `ya:` searches, and the keywords of `web` |
+| `search` | a last row that searches the web for anything with the engine of `engine` |
+| `windows` | open windows by their titles and programs, to switch to or close |
+| `processes` | `kill <name>`: ends the processes of the programs of that name |
+| `power` | locking, sleep, hibernation, signing out, restarting, shutting down |
+| `settings` | pages of the Settings app, items of the Control Panel and tools of Windows |
+| `emoji` | `:name`: emoji and symbols, copied when chosen |
+| `recent` | the documents of the Recent folder, by their names |
+
+The `launcher` and `runner` widgets take these options besides those of the launcher (`placeholder`, `folders`, `view`):
+
+- `runners`, the runners to ask, by the names of the table; all of them without the option.
+- `web`, a table of keywords and addresses that adds web searches, as `web = { so = "https://stackoverflow.com/search?q={}" }`.
+- `engine`, the keyword of the engine the last row searches the web with (`ddg`).
+- `currency = false` keeps Tessera from fetching exchange rates; rates kept from before are still used (`true`).
+- `recent = true` lists the documents opened lately while nothing is typed, in the list view (`false` for the launcher, `true` for the runner).
+- `settings = false` leaves out the pages of the settings (`true`).
+
+```toml
+[[popup]]
+name = "launcher"
+width = 640
+height = 720
+content = ["apps", { widget = "launcher", view = "list", recent = true, engine = "so", web = { so = "https://stackoverflow.com/search?q={}" } }, "power"]
+```
+
+In an address of `web`, `{}` stands for what is searched and `{lang}` for the two letters of the language of Tessera; a keyword of `web` replaces a built-in one of the same name. The exchange rates are the daily reference rates of the European Central Bank, kept in `%LOCALAPPDATA%\tessera\rates.xml` and fetched again from `www.ecb.europa.eu` when a conversion between currencies is asked and they are older than 12 hours; a fetch that failed is not tried again for ten minutes. What is chosen is remembered in `launcher-history.toml` in the configuration directory, 300 entries at the most; deleting the file forgets it.
+
+The popups `runner` and `run` come with Tessera and can be replaced by a `[[popup]]` of the same name. `place = "top"` puts any popup near the top of the display, in the middle of its width, without a veil:
+
+```toml
+[[popup]]
+name = "runner"
+place = "top"
+width = 640
+height = 380
+content = [{ widget = "runner", recent = false }]
+
+[[key]]
+press = "alt+space"
+action = "runner"
+```
+
+The Run dialog reads and writes the history of the Run dialog of Explorer (`HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`), so both offer the same commands.

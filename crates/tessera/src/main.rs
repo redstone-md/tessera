@@ -29,6 +29,7 @@ mod platform;
 mod popup;
 mod preview;
 mod session;
+mod runners;
 mod shell;
 mod startup;
 mod surface;
