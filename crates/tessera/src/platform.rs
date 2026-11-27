@@ -34,6 +34,7 @@ pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+pub use win32::{PowerMode, PowerModeState};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 #[allow(
     unused_imports,
