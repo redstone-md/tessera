@@ -509,7 +509,10 @@ impl Reader<'_> {
                 if count == 0 {
                     return Err("layered windows are at least one".to_owned());
                 }
-                self.leaves += count - 1;
+                if count > MOST_LEAVES {
+                    return Err("the tree has too many leaves".to_owned());
+                }
+                self.leaves = self.leaves.saturating_add(count);
                 Node::Layered(count)
             }
             Some(letter @ (b'h' | b'v')) => {
@@ -536,7 +539,7 @@ impl Reader<'_> {
             }
             _ => return Err(format!("no part begins at {}", self.at - 1)),
         };
-        if matches!(node, Node::Leaf | Node::Layered(_)) {
+        if matches!(node, Node::Leaf) {
             self.leaves += 1;
         }
         if self.leaves > MOST_LEAVES {
@@ -900,6 +903,14 @@ mod tests {
         }
         let deep = format!("{}l{}", "h(1:".repeat(80), ")".repeat(80));
         assert!(Node::from_text(&deep).is_err());
+        for huge in [
+            "m513",
+            "h(1:l,1:l,1:m18446744073709551614)",
+            "h(1:m300,1:m300)",
+        ] {
+            assert!(Node::from_text(huge).is_err(), "{huge}");
+        }
+        assert_eq!(Node::from_text("m512"), Ok(Node::Layered(512)));
     }
 
     #[test]
