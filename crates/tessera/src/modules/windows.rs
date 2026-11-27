@@ -9,39 +9,60 @@
 //! gives the taskbar (as the shell of the session), marks a window that
 //! asks for attention, and has Windows fly a window that is minimized to
 //! it. A dock taller than wide lays its buttons out in a column.
-//! Widget: `windows`.
+//!
+//! A pin may also be a file, a folder, a web address or a separator.
+//! Buttons are dragged into another order, a pin dragged off the dock is
+//! unpinned, and files, folders and links dropped from other programs are
+//! pinned, or opened with the pinned application they are dropped on.
+//! The button of an application that plays sound shows a speaker, which
+//! mutes it. Widget: `windows`.
 
+mod address;
+mod arrange;
+pub mod cli;
 mod entries;
 mod keys;
 mod marks;
 mod options;
+mod order;
+mod pinning;
+mod pins;
+mod speakers;
+
+pub(crate) use self::pins::Pin;
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, Entity, FocusHandle,
-    Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement, Pixels,
-    Render, ScrollDelta, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, canvas, div, img, px,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, DragMoveEvent, Entity,
+    FocusHandle, Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement,
+    Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, WeakEntity, Window, WindowId, canvas, div, img, px,
 };
 
+use self::arrange::{DockDrag, DragGhost, DropSlot, OutsideDrag};
 use self::entries::{StartAnother, is_files};
 use self::marks::Edge;
-use self::options::{Candidate, DockOptions, Grouping, Layout, Middle, Reveal, Side, SortKey};
+use self::options::{
+    Candidate, DockOptions, Grouping, Layout, Middle, PinnedOn, Reveal, Side, SortKey, Sorting,
+};
+use self::speakers::{ButtonSound, Speakers};
 use crate::actions::Actions;
 use crate::badges::{Badges, Owner};
 use crate::config::edit::ConfigFile;
-use crate::icons::{AppIcons, Icon, icon_of_pixels, is_link};
+use crate::i18n::Language;
+use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::Menus;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{
-    AppWindow, AppWindowId, DisplayKey, NativeSurface, Progress, ScreenEdge, ScreenRect,
-    ShellEvent, ShellHost, Shortcut, TaskbarList, WindowEvents, app_id_in, app_path, shell_mode,
+    AppSound, AppWindow, AppWindowId, Display, DisplayKey, NativeSurface, PathZone, PathZones,
+    Progress, ScreenEdge, ScreenRect, ShellEvent, ShellHost, TaskbarList, WindowEvents, ZoneEffect,
+    shell_mode,
 };
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::{PreviewOwner, Previews};
@@ -49,6 +70,7 @@ use crate::rules::Rules;
 use crate::shell::Shell;
 use crate::surface::EdgeSurface;
 use crate::theme::Theme;
+use crate::tip::Tips;
 use crate::ui::{Pick, icon, logo, one_line, state_layer};
 use crate::workspaces::Workspaces;
 
@@ -102,6 +124,44 @@ const WHEEL_STEP: f32 = 40.;
 /// The application the windows of the file manager of Tessera belong to.
 pub const FILES_APP: &str = "Tessera.Files";
 
+/// How often the pointer is read while a pin is dragged, to see it let go
+/// outside the dock, which GPUI does not tell.
+const DRAG_WATCH: Duration = Duration::from_millis(33);
+
+/// How long the pointer of a drag from another program rests on the
+/// button of an application before its window comes forward, as in
+/// Explorer, so that what is dragged can be dropped into it.
+const DRAG_HOVER: Duration = Duration::from_millis(600);
+
+/// How long after the button is let go inside the window a drag that GPUI
+/// has not ended is given up.
+const DROP_GRACE: Duration = Duration::from_millis(120);
+
+/// The tag of the drop zone of the empty part of the dock; the zones of
+/// the buttons are tagged with their keys.
+const EMPTY_PART: u64 = u64::MAX;
+
+/// How long a separator is along the dock, as a part of a button, and
+/// how long its line is across it.
+const SEPARATOR_SLOT: f32 = 0.4;
+const SEPARATOR_LINE: f32 = 0.5;
+
+/// How large the speaker is, as a part of the button it sits on, and how
+/// far the wheel over it turns the volume for one step of the wheel.
+const SPEAKER_SIZE: f32 = 0.34;
+const SPEAKER_STEP: f32 = 0.05;
+
+/// How much of the primary color a pin takes while something another
+/// program drags would be opened with it.
+const DROP_TINT: f32 = 0.3;
+
+/// Where an element was drawn last, which it writes as it is drawn.
+type Measured = Rc<Cell<Option<Bounds<Pixels>>>>;
+
+/// The glyphs of the speaker, playing and muted.
+const ICON_SPEAKER: &str = "\u{e995}";
+const ICON_SPEAKER_MUTED: &str = "\u{e74f}";
+
 pub struct WindowsModule;
 
 impl Module for WindowsModule {
@@ -113,7 +173,12 @@ impl Module for WindowsModule {
         widgets.register("windows", |context, cx| {
             let options = DockOptions::of(context);
             let display = context.display;
-            let pins = Pin::find(&context.texts("pinned").unwrap_or_default());
+            // Docks of the other displays show only what runs, where the
+            // pins stand on the primary one.
+            let pins = match options.pinned_on == PinnedOn::Primary && !is_primary(display) {
+                true => Vec::new(),
+                false => Pin::find(&context.texts("pinned").unwrap_or_default()),
+            };
             let start = context.text("start").map(|popup| {
                 let glyph = context.text("start-icon");
                 let glyph = glyph.map(|glyph| SharedString::from(glyph.to_owned()));
@@ -125,90 +190,21 @@ impl Module for WindowsModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        keys::register(actions)
+        keys::register(actions)?;
+        pinning::register(actions)
     }
 }
 
-/// An application that keeps a button whether it runs or not.
-struct Pin {
-    /// What a click opens while the application has no window.
-    shortcut: Shortcut,
-    /// The program file its windows belong to, when that is known.
-    program: Option<PathBuf>,
-    /// The packaged application its windows belong to, if it is one.
-    app: Option<String>,
-}
-
-impl Pin {
-    /// The applications `names` stand for. A name is the path of a file,
-    /// the path that names a packaged application, or what the Start menu
-    /// calls an application; one that is none of these is reported and
-    /// skipped.
-    fn find(names: &[String]) -> Vec<Self> {
-        let is_path = |name: &str| {
-            let path = Path::new(name);
-            path.is_absolute() || app_id_in(path).is_some()
-        };
-        let by_name = names.iter().any(|name| !is_path(name));
-        let start_menu = if by_name {
-            Shortcut::start_menu()
-        } else {
-            Vec::new()
-        };
-        let pins = names.iter().filter_map(|name| {
-            let path = Path::new(name);
-            let shortcut = if let Some(app) = app_id_in(path) {
-                Some(Shortcut {
-                    name: name.clone(),
-                    path: app_path(app),
-                })
-            } else if path.is_absolute() {
-                path.is_file().then(|| Shortcut {
-                    name: name.clone(),
-                    path: path.to_owned(),
-                })
-            } else {
-                let known = |shortcut: &&Shortcut| shortcut.name.eq_ignore_ascii_case(name);
-                start_menu.iter().find(known).cloned()
-            };
-            if shortcut.is_none() {
-                report!("nothing to pin is called `{name}`");
-            }
-            shortcut.map(Self::of)
-        });
-        pins.collect()
-    }
-
-    fn of(shortcut: Shortcut) -> Self {
-        let app = app_id_in(&shortcut.path).map(str::to_owned);
-        let program = if app.is_some() {
-            None
-        } else if is_link(&shortcut.path) {
-            shortcut.link().target
-        } else {
-            Some(shortcut.path.clone())
-        };
-        Self {
-            shortcut,
-            program,
-            app,
-        }
-    }
-
-    /// Whether `window` belongs to the pinned application.
-    fn owns(&self, window: &AppWindow) -> bool {
-        if let (Some(app), Some(shown)) = (&self.app, &window.app_id) {
-            return app.eq_ignore_ascii_case(shown);
-        }
-        let (Some(program), Some(executable)) = (&self.program, &window.executable) else {
-            return false;
-        };
-        !window.is_own() && same_file(program, executable)
-    }
-
-    fn icon(&self, icons: &AppIcons) -> Icon {
-        icons.of_shortcut(&self.shortcut)
-    }
+/// Whether `display` is the primary display, whose frame begins where the
+/// virtual screen does; a dock of no display counts as on it.
+fn is_primary(display: Option<DisplayKey>) -> bool {
+    let Some(display) = display else {
+        return true;
+    };
+    let frame = { Display::all().into_iter() }
+        .find(|shown| shown.key == display)
+        .map(|shown| shown.frame);
+    frame.is_none_or(|frame| frame.left == 0 && frame.top == 0)
 }
 
 /// What tells the application of a window from other applications, the
@@ -278,13 +274,22 @@ fn with(pins: &[String], name: &str) -> Vec<String> {
 }
 
 /// Makes `change` of the pinned applications in the configuration file,
-/// which the shell then takes over. A failure is reported on the error
-/// output.
-fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
-    match ConfigFile::change_pinned(change) {
-        Ok(()) => cx.defer(Shell::config_changed),
-        Err(error) => report!("{error}"),
-    }
+/// away from the thread of GPUI, which the shell then takes over. A
+/// failure is reported on the error output.
+fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String> + Send + 'static) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let changed = cx
+            .background_executor()
+            .spawn(async move { ConfigFile::change_pinned(change) })
+            .await;
+        match changed {
+            Ok(()) => {
+                cx.update(Shell::config_changed).ok();
+            }
+            Err(error) => report!("{error}"),
+        }
+    })
+    .detach();
 }
 
 /// What the taskbar was told of the windows of a button, as it is shown.
@@ -351,6 +356,20 @@ struct DockItem {
     minimizes_to: Option<(ScreenRect, Vec<AppWindowId>)>,
     /// How far the wheel turned that has not brought a window yet.
     wheel: f32,
+    /// What a pinned button is called while its application has no
+    /// window.
+    named: String,
+    /// 1 while a gap opens before the button for something dragged.
+    shift: Spring,
+    /// 1 in its place, 0 while a drag has lifted it out.
+    lift: Spring,
+    /// What the applications of the button play, where they play or are
+    /// muted.
+    sound: Option<ButtonSound>,
+    /// Where the speaker of the button is in its surface, once drawn.
+    speaker: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The processes of the windows, with the windows they were read for.
+    processes: Option<(Vec<AppWindowId>, Vec<u32>)>,
 }
 
 impl DockItem {
@@ -359,8 +378,8 @@ impl DockItem {
     /// has the windows.
     fn waiting(&self, badges: &Badges) -> usize {
         let pinned = self.pin.as_ref().map(|pin| Owner {
-            app: pin.app.as_deref(),
-            program: pin.program.as_deref(),
+            app: pin.app(),
+            program: pin.program(),
         });
         let grouped = self.group.as_deref().and_then(|group| {
             let (kind, name) = group.split_once(':')?;
@@ -404,10 +423,27 @@ impl DockItem {
         self.front().is_some_and(is_files)
     }
 
-    /// What the button is ordered by.
-    fn sort_key(&self) -> SortKey {
+    /// Whether the button is a separator, which stands between buttons.
+    fn is_separator(&self) -> bool {
+        self.pin.as_ref().is_some_and(Pin::is_separator)
+    }
+
+    /// The processes of the windows of the button: of each frame, and of
+    /// what a packaged application shows inside its frame.
+    fn processes(&self) -> Vec<u32> {
+        let frames = self.windows.iter().map(|window| window.id.process());
+        let contents = { self.windows.iter() }.filter_map(|window| window.id.content_process());
+        let mut processes: Vec<u32> = frames.chain(contents).filter(|&id| id != 0).collect();
+        processes.sort_unstable();
+        processes.dedup();
+        processes
+    }
+
+    /// What the button is ordered by, `order` being the order buttons
+    /// that are not pinned were dragged into.
+    fn sort_key(&self, order: &[String]) -> SortKey {
         let name = match (&self.pin, self.front()) {
-            (Some(pin), _) => pin.shortcut.name.clone(),
+            (Some(_), _) => self.named.clone(),
             (None, Some(window)) => match (&window.app_id, &window.executable) {
                 (Some(app), _) => app.clone(),
                 (None, Some(executable)) => executable
@@ -418,10 +454,15 @@ impl DockItem {
             },
             (None, None) => String::new(),
         };
+        let placed = match &self.pin {
+            Some(_) => None,
+            None => { self.group.as_deref() }.and_then(|group| order::place(order, group)),
+        };
         SortKey {
             pinned: self.pinned,
             opened: self.opened,
             name: name.to_lowercase(),
+            placed,
         }
     }
 
@@ -429,9 +470,13 @@ impl DockItem {
     fn preview_owner(&self) -> PreviewOwner {
         let front = self.front();
         let app = { front.and_then(|window| window.app_id.clone()) }
-            .or_else(|| self.pin.as_ref().and_then(|pin| pin.app.clone()));
-        let program = { front.and_then(|window| window.executable.clone()) }
-            .or_else(|| self.pin.as_ref().and_then(|pin| pin.program.clone()));
+            .or_else(|| self.pin.as_ref().and_then(Pin::app).map(str::to_owned));
+        let program = { front.and_then(|window| window.executable.clone()) }.or_else(|| {
+            self.pin
+                .as_ref()
+                .and_then(Pin::program)
+                .map(Path::to_path_buf)
+        });
         PreviewOwner { app, program }
     }
 }
@@ -471,11 +516,83 @@ enum Deed {
 #[derive(Default)]
 pub struct Docks {
     lists: Vec<WeakEntity<WindowList>>,
+    /// The order the buttons of applications that are not pinned were
+    /// dragged into, once it was read from its file.
+    order: Option<Vec<String>>,
+    /// Whether the file is being read.
+    reading_order: bool,
+    /// The windows whose drops from other programs a dock takes, each
+    /// with that dock: one dock of a surface takes them.
+    drop_windows: HashMap<WindowId, DropSlot>,
 }
 
 impl Global for Docks {}
 
 impl Docks {
+    /// The order buttons that are not pinned were dragged into; empty
+    /// until it is read, which this starts.
+    fn order(cx: &mut App) -> Vec<String> {
+        let docks = cx.default_global::<Self>();
+        if let Some(order) = &docks.order {
+            return order.clone();
+        }
+        if !docks.reading_order {
+            docks.reading_order = true;
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let order = cx
+                    .background_executor()
+                    .spawn(async { order::load() })
+                    .await;
+                cx.update(|cx| {
+                    let docks = cx.default_global::<Self>();
+                    docks.order = Some(order);
+                    let lists: Vec<_> =
+                        docks.lists.iter().filter_map(WeakEntity::upgrade).collect();
+                    for list in lists {
+                        list.update(cx, |list, cx| list.refresh(cx));
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
+        Vec::new()
+    }
+
+    /// Keeps `shown`, the groups of buttons that are not pinned, as the
+    /// order they stand in from now on, in every dock and in the file.
+    fn reorder(shown: &[String], cx: &mut App) {
+        let docks = cx.default_global::<Self>();
+        let order = order::reordered(docks.order.as_deref().unwrap_or_default(), shown);
+        docks.order = Some(order.clone());
+        let lists: Vec<_> = docks.lists.iter().filter_map(WeakEntity::upgrade).collect();
+        for list in lists {
+            list.update(cx, |list, cx| list.refresh(cx));
+        }
+        cx.background_executor()
+            .spawn(async move { order::save(&order) })
+            .detach();
+    }
+
+    /// The icon a dock shows for the pin `entry`, where one does.
+    #[allow(
+        dead_code,
+        reason = "the Dock card of settings-core draws pins with Pin::icon"
+    )]
+    fn pin_icon(entry: &str, cx: &App) -> Icon {
+        let docks = cx.try_global::<Self>()?;
+        let icons = cx.global::<AppIcons>();
+        let lists = docks.lists.iter().filter_map(WeakEntity::upgrade);
+        lists.into_iter().find_map(|list| {
+            let list = list.read(cx);
+            let pinned = list.items.iter().filter_map(|item| item.pin.as_ref());
+            let pin = pinned
+                .into_iter()
+                .find(|pin| pin.entry.eq_ignore_ascii_case(entry))?;
+            pin.icon_in(icons, false)
+        })
+    }
+
     /// Does what a click on the button `number` does, counted from 1
     /// among the applications of the list on the display the pointer is
     /// on, or else of the list that was made first.
@@ -616,6 +733,27 @@ struct WindowList {
     /// Whether the list has the surfaces that hide on its display shown,
     /// for a window that asks for attention.
     revealing: bool,
+    /// The button dragged along the dock, while one is.
+    dragging: Option<usize>,
+    /// Where what is dragged would go in, among the buttons that stay in
+    /// their places; `None` while it is off the dock.
+    aim: Option<usize>,
+    /// 1 while a gap opens after the last button for something dragged.
+    end_gap: Spring,
+    /// What a drag from another program is over, while there is one.
+    outside: Option<OutsideDrag>,
+    /// The places of the dock that take drops, as it was drawn last.
+    zones: PathZones,
+    /// Whether the dock takes the drops of its surface, or tried and
+    /// failed.
+    drops_taken: bool,
+    /// Whether the dock shows the pins: not on the displays other than the
+    /// primary one with `pinned_on = "primary"`.
+    pins_shown: bool,
+    /// Where the surface is on the screen, as it was last drawn.
+    frame: Option<ScreenRect>,
+    /// Held while the dock shows speakers.
+    _speakers: Option<Rc<()>>,
 }
 
 impl WindowList {
@@ -683,6 +821,10 @@ impl WindowList {
 
         let this = cx.weak_entity();
         cx.default_global::<Docks>().lists.push(this);
+        let speakers = options.audio.then(|| {
+            cx.observe_global::<Speakers>(Self::hear_sounds).detach();
+            Speakers::watch(cx)
+        });
         let motion = cx.global::<Theme>().motion;
         let mut list = Self {
             start: start.map(|(popup, glyph)| Start {
@@ -707,9 +849,19 @@ impl WindowList {
             blur: None,
             born: Instant::now(),
             revealing: false,
+            dragging: None,
+            aim: None,
+            end_gap: Spring::new(motion.spatial, 0.),
+            outside: None,
+            zones: PathZones::default(),
+            drops_taken: false,
+            pins_shown: options.pinned_on == PinnedOn::Every || is_primary(display),
+            frame: None,
+            _speakers: speakers,
         };
-        for (index, pin) in pins.into_iter().enumerate() {
-            list.add(Some(pin), Some(index), None, Vec::new(), cx);
+        for pin in pins {
+            let place = pin.place;
+            list.add(Some(pin), Some(place), None, Vec::new(), cx);
         }
         list.refresh(cx);
         list
@@ -780,9 +932,9 @@ impl WindowList {
     }
 
     /// The key of the button `number`, counted from 1 among those that
-    /// are shown.
+    /// are shown, separators left out.
     fn numbered(&self, number: usize) -> Option<usize> {
-        let leaving = self.items.iter().map(|item| item.leaving);
+        let leaving = { self.items.iter() }.map(|item| item.leaving || item.is_separator());
         numbered(leaving, number).map(|index| self.items[index].key)
     }
 
@@ -800,7 +952,7 @@ impl WindowList {
         };
         let ids = item.ids();
         match &item.pin {
-            Some(pin) if ids.is_empty() => pin.shortcut.launch(),
+            Some(pin) if ids.is_empty() => pin.open(cx),
             _ if ids.is_empty() => StartAnother::of(item).start(cx),
             _ => switch_to(&ids),
         }
@@ -857,7 +1009,12 @@ impl WindowList {
         let motion = cx.global::<Theme>().motion;
         let mut presence = Spring::new(motion.spatial, 0.);
         presence.animate_to(1.);
-        let title = pin.as_ref().map(|pin| pin.shortcut.name.clone());
+        let language = Language::of(cx);
+        let named = pin
+            .as_ref()
+            .map(|pin| pin.name(language))
+            .unwrap_or_default();
+        let title = pin.as_ref().map(|_| named.clone());
         self.items.push(DockItem {
             key: self.next_key,
             pin,
@@ -882,6 +1039,12 @@ impl WindowList {
             progress: Spring::new(motion.spatial, 0.),
             minimizes_to: None,
             wheel: 0.,
+            named,
+            shift: Spring::new(motion.spatial, 0.),
+            lift: Spring::new(motion.spatial, 1.),
+            sound: None,
+            speaker: Rc::default(),
+            processes: None,
         });
         self.next_key += 1;
     }
@@ -908,7 +1071,9 @@ impl WindowList {
     /// The pointer came onto the button `key`, or left it: the previews of
     /// its windows open after a moment, or close.
     fn preview(&self, key: usize, hovered: bool, window: &Window, cx: &mut Context<Self>) {
-        let item = self.item(key).filter(|item| !item.windows.is_empty());
+        // A button dragged past others opens none of their previews.
+        let item =
+            { self.item(key) }.filter(|item| !item.windows.is_empty() && self.dragging.is_none());
         let Some(item) = item.filter(|_| hovered) else {
             let left = item.and_then(DockItem::front).map(|window| window.id);
             Previews::leave(left, cx);
@@ -973,7 +1138,7 @@ impl WindowList {
             return;
         };
         let shown: Vec<usize> = { self.items.iter() }
-            .filter(|item| !item.leaving)
+            .filter(|item| !item.leaving && !item.is_separator())
             .map(|item| item.key)
             .collect();
         let index = shown.iter().position(|&key| key == at).unwrap_or(0);
@@ -1116,7 +1281,8 @@ impl WindowList {
                 }
             }
         }
-        changed |= self.sort();
+        changed |= self.sort(cx);
+        changed |= self.take_sounds(cx);
         if changed {
             cx.notify();
             self.reveal_for_attention(cx);
@@ -1191,7 +1357,7 @@ impl WindowList {
         item.more.animate_to(f32::from(more));
         let title = match (item.front(), &item.pin) {
             (Some(window), _) => window.id.title(),
-            (None, Some(pin)) => pin.shortcut.name.clone(),
+            (None, Some(_)) => item.named.clone(),
             (None, None) => String::new(),
         };
         if item.title != title {
@@ -1236,8 +1402,14 @@ impl WindowList {
 
     /// Puts the buttons in the order the dock is sorted by, and says
     /// whether it changed.
-    fn sort(&mut self) -> bool {
-        let keys: Vec<SortKey> = self.items.iter().map(DockItem::sort_key).collect();
+    fn sort(&mut self, cx: &mut App) -> bool {
+        let order = match self.options.sort {
+            Sorting::Manual => Docks::order(cx),
+            _ => Vec::new(),
+        };
+        let keys: Vec<SortKey> = { self.items.iter() }
+            .map(|item| item.sort_key(&order))
+            .collect();
         let order = options::order(&keys, self.options.sort);
         if order
             .iter()
@@ -1303,14 +1475,186 @@ impl WindowList {
         }
     }
 
+    /// Takes in what the applications of the buttons play, and says
+    /// whether it changed.
+    fn take_sounds(&mut self, cx: &App) -> bool {
+        let speakers = cx.try_global::<Speakers>().filter(|_| self.options.audio);
+        let Some(speakers) = speakers else {
+            return false;
+        };
+        let mut changed = false;
+        for item in &mut self.items {
+            let ids = item.ids();
+            let sound = match ids.is_empty() || item.leaving {
+                true => None,
+                false => {
+                    // The processes of the windows are asked for again only
+                    // when the windows change.
+                    if item.processes.as_ref().is_none_or(|(held, _)| *held != ids) {
+                        item.processes = Some((ids, item.processes()));
+                    }
+                    let processes = item.processes.as_ref().map(|(_, found)| found.as_slice());
+                    speakers.of_processes(processes.unwrap_or_default())
+                }
+            };
+            if sound != item.sound {
+                item.sound = sound;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// What plays changed.
+    fn hear_sounds(&mut self, cx: &mut Context<Self>) {
+        if self.take_sounds(cx) {
+            cx.notify();
+        }
+    }
+
+    /// Mutes the applications of the button `key`, or gives them their
+    /// sound back.
+    fn toggle_mute(&mut self, key: usize, cx: &mut Context<Self>) {
+        let item = self.items.iter_mut().find(|item| item.key == key);
+        let Some(sound) = item.and_then(|item| item.sound.as_mut()) else {
+            return;
+        };
+        sound.muted = !sound.muted;
+        let (programs, muted) = (sound.programs.clone(), sound.muted);
+        cx.background_executor()
+            .spawn(async move {
+                for program in programs {
+                    if let Err(error) = AppSound::set_muted(&program, muted) {
+                        report!("{error:#}");
+                    }
+                }
+            })
+            .detach();
+        cx.notify();
+    }
+
+    /// The wheel turned over the speaker of the button `key`: the volume of
+    /// its applications goes up or down a step for each step of the wheel.
+    fn turn_volume(&mut self, key: usize, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let steps = match event.delta {
+            ScrollDelta::Pixels(delta) => delta.y / px(WHEEL_STEP),
+            ScrollDelta::Lines(delta) => delta.y,
+        };
+        let item = self.items.iter_mut().find(|item| item.key == key);
+        let Some(sound) = item.and_then(|item| item.sound.as_mut()) else {
+            return;
+        };
+        let volume = (sound.volume + steps * SPEAKER_STEP).clamp(0., 1.);
+        if volume == sound.volume {
+            return;
+        }
+        sound.volume = volume;
+        let programs = sound.programs.clone();
+        cx.background_executor()
+            .spawn(async move {
+                for program in programs {
+                    if let Err(error) = AppSound::set_volume(&program, volume) {
+                        report!("{error:#}");
+                    }
+                }
+            })
+            .detach();
+    }
+
+    /// The pointer came onto the speaker of the button `key`, or left it:
+    /// a tip says whether the application plays or is muted.
+    fn speaker_tip(&self, key: usize, hovered: bool, window: &Window, cx: &mut Context<Self>) {
+        let tip = ("dock-speaker", key as u64);
+        let item = self.item(key).filter(|_| hovered);
+        let shown = item.and_then(|item| Some((item.sound.as_ref()?, item.speaker.get()?)));
+        let Some((sound, bounds)) = shown else {
+            return Tips::leave(tip, cx);
+        };
+        let language = Language::of(cx);
+        let text = match sound.muted {
+            true => language.say("Muted; a click gives the sound back"),
+            false => language.say("Plays sound; a click mutes it"),
+        };
+        if let Some(anchor) = self.anchor_at(bounds, window, cx) {
+            Tips::request(tip, SharedString::new_static(text), anchor, cx);
+        }
+    }
+
+    /// Opens the menu of the empty part of the dock at `position`.
+    fn empty_menu(&self, position: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        Previews::close(cx);
+        match PopupAnchor::at_point(window, position, cx) {
+            Ok(anchor) => Menus::open(pinning::empty_part(anchor, cx), anchor, cx),
+            Err(error) => report!("the menu of the dock has nowhere to open: {error:#}"),
+        }
+    }
+
+    /// A separator between buttons, drawn as a thin line; it is dragged
+    /// like a button, and its menu removes it.
+    fn render_separator(
+        item: &mut DockItem,
+        look: Look,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = look.theme;
+        let presence = item.presence.value(window);
+        let shown = presence.max(0.) * item.lift.value(window).clamp(0., 1.);
+        let gap = item.shift.value(window).max(0.);
+        let key = item.key;
+        let across = theme.dock.item_size;
+        let length = across * SEPARATOR_SLOT;
+        let line = div()
+            .flex_none()
+            .bg(theme.colors.outline.opacity(START_LINE));
+        let line = match look.layout {
+            Layout::Row => line.w(px(1.)).h(across * SEPARATOR_LINE),
+            Layout::Column { .. } => line.h(px(1.)).w(across * SEPARATOR_LINE),
+        };
+        let measured = item.bounds.clone();
+        let measure = move |seen: Bounds<Pixels>, _: &mut Window, _: &mut App| {
+            measured.set(Some(seen));
+        };
+        let list = cx.entity_id();
+        let separator = div()
+            .id(("dock-separator", key))
+            .relative()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size_full()
+            .child(line)
+            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.menu(key, window, cx);
+                }),
+            )
+            .on_drag(DockDrag { key, list }, move |_, _, _, cx| {
+                cx.new(|_| DragGhost {
+                    icon: None,
+                    size: px(1.),
+                })
+            });
+        let full = length + theme.spacing.tiny;
+        slot(look.layout, full, across, shown, gap, presence, separator)
+    }
+
     fn render_item(
         item: &mut DockItem,
         icon: Icon,
         look: Look,
         focused: bool,
+        lit: bool,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if item.is_separator() {
+            return Self::render_separator(item, look, window, cx);
+        }
         let theme = look.theme;
         let presence = item.presence.value(window);
         let active = item.active.value(window);
@@ -1323,7 +1667,6 @@ impl WindowList {
         let state = item.interaction.state(window);
         let key = item.key;
         let ids = item.ids();
-        let shortcut = item.pin.as_ref().map(|pin| pin.shortcut.clone());
         // What the middle button starts: the pinned application, or the
         // program of the window in front, as `New window` of the menu does.
         let another = StartAnother::of(item);
@@ -1336,6 +1679,11 @@ impl WindowList {
             active,
         );
         let background = marks::attention_background(&theme, background, attention, look.pulse);
+        // A pin that takes what another program drags over it lights up.
+        let background = match lit {
+            true => mix(background, theme.colors.primary, DROP_TINT),
+            false => background,
+        };
         let width = look.labelled.unwrap_or(theme.dock.item_size);
         let length = match look.layout {
             Layout::Row => width,
@@ -1355,7 +1703,11 @@ impl WindowList {
             .focus_ring(focused, theme)
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, _, window, cx| this.menu(key, window, cx)),
+                cx.listener(move |this, _, window, cx| {
+                    // The menu of the empty part does not open over it.
+                    cx.stop_propagation();
+                    this.menu(key, window, cx);
+                }),
             )
             .on_mouse_down(MouseButton::Middle, move |_, _, cx| {
                 Previews::close(cx);
@@ -1372,12 +1724,22 @@ impl WindowList {
             .on_click(cx.listener(move |this, _, _, cx| {
                 Previews::close(cx);
                 Menus::close(cx);
-                match &shortcut {
-                    Some(shortcut) if ids.is_empty() => shortcut.launch(),
-                    _ => switch_to(&ids),
-                }
+                this.press(key, cx);
                 this.keyboard = None;
             }))
+            .on_drag(
+                DockDrag {
+                    key,
+                    list: cx.entity_id(),
+                },
+                {
+                    let (icon, size) = (icon.clone(), theme.dock.icon_size);
+                    move |_, _, _, cx| {
+                        let icon = icon.clone();
+                        cx.new(|_| DragGhost { icon, size })
+                    }
+                },
+            )
             .child({
                 let bounds = item.bounds.clone();
                 let measure = move |seen: Bounds<Pixels>, _: &mut Window, _: &mut App| {
@@ -1449,6 +1811,9 @@ impl WindowList {
                 button.children((badge > 0.01).then(|| Self::render_badge(waiting, badge, theme)))
             }
         };
+        let speaker = { item.sound.as_ref() }
+            .map(|sound| Self::render_speaker(key, sound, &item.speaker, theme, cx));
+        let button = button.children(speaker);
         let button = Interaction::track_hover(
             button,
             cx,
@@ -1460,20 +1825,67 @@ impl WindowList {
         );
 
         // The slot includes the spacing between buttons, so that a button
-        // that comes or goes moves its neighbors smoothly.
-        let slot = length + theme.spacing.tiny;
-        let slot_div = div()
+        // that comes or goes, or is lifted out by a drag, moves its
+        // neighbors smoothly, as does the gap that opens for a drag.
+        let full = length + theme.spacing.tiny;
+        let shown = presence.max(0.) * item.lift.value(window).clamp(0., 1.);
+        let gap = item.shift.value(window).max(0.);
+        let across = match look.layout {
+            Layout::Row => theme.dock.item_size,
+            Layout::Column { .. } => width,
+        };
+        slot(look.layout, full, across, shown, gap, presence, button)
+    }
+
+    /// The speaker of an application that plays, or is muted, at the top
+    /// left of its button: a click mutes it or gives the sound back, the
+    /// wheel turns its volume, and a tip says which it is.
+    fn render_speaker(
+        key: usize,
+        sound: &ButtonSound,
+        measured: &Rc<Cell<Option<Bounds<Pixels>>>>,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let size = theme.dock.item_size * SPEAKER_SIZE;
+        let (glyph, color) = match sound.muted {
+            true => (ICON_SPEAKER_MUTED, theme.colors.on_surface_variant),
+            false => (ICON_SPEAKER, theme.colors.primary),
+        };
+        let measured = measured.clone();
+        let measure = move |seen: Bounds<Pixels>, _: &mut Window, _: &mut App| {
+            measured.set(Some(seen));
+        };
+        div()
+            .id(("dock-speaker", key))
+            .absolute()
+            .top_0()
+            .left_0()
+            .size(size)
             .flex()
             .items_center()
             .justify_center()
-            .overflow_hidden()
-            .opacity(presence.clamp(0., 1.));
-        match look.layout {
-            Layout::Row => slot_div.w(slot * presence.max(0.)).h(theme.dock.item_size),
-            Layout::Column { .. } => slot_div.h(slot * presence.max(0.)).w(width),
-        }
-        .child(button)
-        .into_any_element()
+            .rounded(theme.shape.full)
+            .bg(theme.colors.surface_container_highest)
+            .text_color(color)
+            .child(icon(&theme, glyph).text_size(size * 0.7))
+            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    // The click is the speaker's, not the button's.
+                    cx.stop_propagation();
+                    this.toggle_mute(key, cx);
+                }),
+            )
+            .on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, _, cx| {
+                cx.stop_propagation();
+                this.turn_volume(key, event, cx);
+            }))
+            .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                this.speaker_tip(key, *hovered, window, cx);
+            }))
+            .into_any_element()
     }
 
     /// The button that opens the popup of `start`, drawn like the buttons
@@ -1529,6 +1941,7 @@ impl WindowList {
                 }
             }))
             .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                cx.stop_propagation();
                 Previews::close(cx);
                 Menus::close(cx);
                 Actions::run("winx", None, cx);
@@ -1677,27 +2090,52 @@ impl Render for WindowList {
             travel: marks::phase(since, marks::TRAVEL),
             pulse: marks::pulse(marks::phase(since, marks::PULSE)),
         };
+        let frame = NativeSurface::of(window).and_then(|native| native.frame());
+        self.frame = frame.as_ref().ok().copied();
         if self.shell
-            && let Ok(frame) = NativeSurface::of(window).and_then(|native| native.frame())
+            && let Ok(frame) = frame
         {
             self.tell_minimize_targets(frame, window.scale_factor());
         }
+        self.take_drops(window, cx);
+        self.open_gap();
         let keyboard = self.keyboard;
+        let lit = { self.outside.and_then(|outside| outside.over) }.filter(|&key| {
+            self.item(key)
+                .and_then(|item| item.pin.as_ref())
+                .is_some_and(Pin::takes_files)
+        });
+        let mut parts: Vec<(Measured, u64, ZoneEffect)> = Vec::new();
+        // What is dropped on the dock is pinned, where it shows pins.
+        let empty = match self.pins_shown {
+            true => ZoneEffect::Link,
+            false => ZoneEffect::None,
+        };
         let items = &mut self.items;
         let elements: Vec<AnyElement> = items
             .iter_mut()
             .map(|item| {
                 let icons = cx.global::<AppIcons>();
+                // The application in front shows the active icon of a pack.
+                let active = item.active.target() > 0.5;
                 let icon = match (&item.pin, item.front()) {
-                    (Some(pin), _) => pin.icon(icons),
+                    (Some(pin), _) => pin.icon_in(icons, active),
                     (None, Some(window)) => {
                         let program = window.program();
-                        program.and_then(|program| icons.of_executable(&program))
+                        program.and_then(|program| icons.of_executable_as(&program, active))
                     }
                     (None, None) => None,
                 };
+                if !item.leaving && !item.is_separator() {
+                    let effect = match item.pin.as_ref().is_some_and(Pin::takes_files) {
+                        true => ZoneEffect::Copy,
+                        false => empty,
+                    };
+                    parts.push((item.bounds.clone(), item.key as u64, effect));
+                }
                 let focused = keyboard == Some(item.key);
-                Self::render_item(item, icon, look, focused, window, cx)
+                let lit = lit == Some(item.key);
+                Self::render_item(item, icon, look, focused, lit, window, cx)
             })
             .collect();
         // A button that has finished leaving was just drawn at no width;
@@ -1716,11 +2154,58 @@ impl Render for WindowList {
         if elements.is_empty() && start.is_none() {
             return div().id("dock");
         }
+        // The gap after the last button, for something dragged there.
+        let end_gap = self.end_gap.value(window).max(0.);
+        let end_slot = theme.dock.item_size + theme.spacing.tiny;
+        let end = (end_gap > 0.01).then(|| {
+            let across = theme.dock.item_size;
+            slot(self.layout, end_slot, across, 0., end_gap, 1., div())
+        });
+        // The places that take drops from other programs, written after
+        // the buttons measured themselves.
+        let zones = self.zones.clone();
+        let write_zones = move |bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
+            let mut written = vec![PathZone {
+                bounds,
+                tag: EMPTY_PART,
+                effect: empty,
+            }];
+            written.extend(parts.iter().filter_map(|(measured, tag, effect)| {
+                Some(PathZone {
+                    bounds: measured.get()?,
+                    tag: *tag,
+                    effect: *effect,
+                })
+            }));
+            zones.set(written);
+        };
         let padding = theme.spacing.small - theme.spacing.tiny / 2.;
         let list = div()
             .id("dock")
+            .relative()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.empty_menu(event.position, window, cx);
+                }),
+            )
+            .on_drag_move(cx.listener(|this, event: &DragMoveEvent<DockDrag>, _, cx| {
+                let drag = event.drag(cx);
+                if drag.list != cx.entity_id() {
+                    return;
+                }
+                let key = drag.key;
+                let position = event.event.position;
+                let over = event.bounds.contains(&position);
+                this.drag_moved(key, position, over, cx);
+            }))
+            .on_drop(cx.listener(|this, drag: &DockDrag, _, cx| {
+                if drag.list == cx.entity_id() {
+                    this.dropped(drag.key, cx);
+                }
+            }))
             .flex()
             .items_center()
             .rounded(theme.shape.large)
@@ -1732,13 +2217,49 @@ impl Render for WindowList {
                 .flex_col()
                 .py(padding),
         };
-        list.children(start).children(elements)
+        list.children(start)
+            .children(elements)
+            .children(end)
+            .child(canvas(write_zones, |_, (), _, _| {}).absolute().size_full())
     }
+}
+
+/// The room of one button along the dock, `full` long, `across` wide:
+/// the button `shown` of the way in, after a gap `gap` of the way open.
+fn slot(
+    layout: Layout,
+    full: Pixels,
+    across: Pixels,
+    shown: f32,
+    gap: f32,
+    opacity: f32,
+    child: impl IntoElement,
+) -> AnyElement {
+    let room = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
+        .opacity(opacity.clamp(0., 1.));
+    let space = div().flex_none();
+    let wrap = div().flex().flex_none().items_center();
+    match layout {
+        Layout::Row => wrap
+            .child(space.w(full * gap).h(across))
+            .child(room.w(full * shown).h(across).child(child)),
+        Layout::Column { .. } => wrap
+            .flex_col()
+            .child(space.h(full * gap).w(across))
+            .child(room.h(full * shown).w(across).child(child)),
+    }
+    .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::icons::is_link;
 
     #[test]
     fn paths_of_one_file_are_told_whatever_their_spelling() {

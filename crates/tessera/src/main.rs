@@ -89,6 +89,9 @@ fn main() {
     if let Some(handed) = keys::send_if_requested(std::env::args().skip(1)) {
         std::process::exit(if handed { 0 } else { 1 });
     }
+    if let Some(handed) = modules::windows::cli::send_if_requested(std::env::args().skip(1)) {
+        std::process::exit(if handed { 0 } else { 1 });
+    }
     session::detect(std::env::args().skip(1));
     // As the shell, the start is written down before anything else, and
     // the session may go to Explorer instead.

@@ -42,6 +42,29 @@ pub enum Sorting {
     Opened,
     /// By the name of the application.
     Name,
+    /// The pinned applications first, then the others in the order they
+    /// were dragged into, which is kept across starts; those never dragged
+    /// come after them as they opened.
+    Manual,
+}
+
+impl Sorting {
+    /// Whether the buttons stand with the pins first in the order of
+    /// `pinned`, so that a button can be dragged to another place.
+    pub fn keeps_pins_first(self) -> bool {
+        matches!(self, Self::Pinned | Self::Manual)
+    }
+}
+
+/// On which docks the pins stand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PinnedOn {
+    /// On the dock of every display.
+    #[default]
+    Every,
+    /// Only on the dock of the primary display; the others show only the
+    /// applications that run.
+    Primary,
 }
 
 /// What a click with the middle button on a button does.
@@ -81,6 +104,10 @@ pub struct DockOptions {
     pub reveal: Reveal,
     /// Whether the buttons count the waiting notifications.
     pub badges: bool,
+    pub pinned_on: PinnedOn,
+    /// Whether the button of an application that plays sound shows a
+    /// speaker, which mutes it.
+    pub audio: bool,
 }
 
 impl DockOptions {
@@ -119,6 +146,7 @@ impl DockOptions {
                     ("pinned", Sorting::Pinned),
                     ("opened", Sorting::Opened),
                     ("name", Sorting::Name),
+                    ("manual", Sorting::Manual),
                 ],
                 Sorting::Pinned,
             ),
@@ -140,6 +168,13 @@ impl DockOptions {
                 Reveal::WhileFlashing,
             ),
             badges: context.flag("badges").unwrap_or(true),
+            pinned_on: choice(
+                context,
+                "pinned_on",
+                &[("every", PinnedOn::Every), ("primary", PinnedOn::Primary)],
+                PinnedOn::Every,
+            ),
+            audio: context.flag("audio").unwrap_or(true),
         }
     }
 }
@@ -210,6 +245,9 @@ pub struct SortKey {
     pub opened: Option<u64>,
     /// The name of the application, in lower case.
     pub name: String,
+    /// The place it was dragged to among the applications that are not
+    /// pinned, for [`Sorting::Manual`].
+    pub placed: Option<usize>,
 }
 
 /// The indices of `keys` in the order `sorting` puts their buttons in.
@@ -226,8 +264,30 @@ pub fn order(keys: &[SortKey], sorting: Sorting) -> Vec<usize> {
             (key.opened.is_none(), key.opened, key.pinned)
         }),
         Sorting::Name => indices.sort_by(|&one, &other| keys[one].name.cmp(&keys[other].name)),
+        Sorting::Manual => indices.sort_by_key(|&index| {
+            let key = &keys[index];
+            let placed = (key.placed.is_none(), key.placed);
+            (key.pinned.is_none(), key.pinned, placed, key.opened)
+        }),
     }
     indices
+}
+
+/// Where something dragged along the dock at `at` goes in among buttons
+/// whose middles are at `middles`, in order along the dock: before the
+/// first one whose middle lies beyond it.
+pub fn insertion(middles: &[f32], at: f32) -> usize {
+    middles.iter().take_while(|&&middle| middle < at).count()
+}
+
+/// The place in `pinned` that a drop at `index` among the shown pins goes
+/// to, where `shown` are the places in `pinned` of the pins shown, in the
+/// order of the dock: before the pin it lands before, or after the last.
+pub fn pin_place(shown: &[usize], index: usize) -> usize {
+    match shown.get(index) {
+        Some(&place) => place,
+        None => shown.last().map_or(0, |&last| last + 1),
+    }
 }
 
 /// Which of `windows`, the one used last first, the wheel brings forward
@@ -333,6 +393,14 @@ mod tests {
         assert_eq!(options.sort, Sorting::Name);
         assert_eq!(options.middle, Middle::Close);
         assert_eq!(options.reveal, Reveal::UntilActivated);
+        assert!(options.audio);
+        assert_eq!(options.pinned_on, PinnedOn::Every);
+        let primary = DockOptions::of(&context(
+            "pinned_on = \"primary\"\naudio = false\nsort = \"manual\"",
+        ));
+        assert_eq!(primary.pinned_on, PinnedOn::Primary);
+        assert!(!primary.audio);
+        assert_eq!(primary.sort, Sorting::Manual);
         let wrong = DockOptions::of(&context("group = \"sometimes\"\nshow = 3"));
         assert_eq!(wrong.group, Grouping::Always);
         assert_eq!(wrong.show, Showing::Display);
@@ -391,6 +459,7 @@ mod tests {
             pinned,
             opened,
             name: name.to_owned(),
+            placed: None,
         };
         let keys = [
             key(None, Some(3), "editor"),
@@ -403,6 +472,30 @@ mod tests {
         assert_eq!(order(&keys, Sorting::Name), [1, 0, 2, 3]);
         let same = [key(None, None, "a"), key(None, None, "a")];
         assert_eq!(order(&same, Sorting::Name), [0, 1]);
+        // Dragged ones stand in their order after the pins, and the rest
+        // after them as they opened.
+        let mut dragged = keys.clone();
+        dragged[0].placed = Some(1);
+        dragged[3].placed = Some(0);
+        assert_eq!(order(&dragged, Sorting::Manual), [2, 1, 3, 0]);
+        dragged[3].placed = Some(2);
+        assert_eq!(order(&dragged, Sorting::Manual), [2, 1, 0, 3]);
+        dragged[3].placed = None;
+        assert_eq!(order(&dragged, Sorting::Manual), [2, 1, 0, 3]);
+        assert!(Sorting::Manual.keeps_pins_first() && !Sorting::Name.keeps_pins_first());
+    }
+
+    #[test]
+    fn a_drag_goes_in_before_the_first_middle_beyond_it() {
+        let middles = [20., 60., 100.];
+        assert_eq!(insertion(&middles, 5.), 0);
+        assert_eq!(insertion(&middles, 59.), 1);
+        assert_eq!(insertion(&middles, 61.), 2);
+        assert_eq!(insertion(&middles, 500.), 3);
+        assert_eq!(insertion(&[], 5.), 0);
+        assert_eq!(pin_place(&[0, 2, 3], 1), 2);
+        assert_eq!(pin_place(&[0, 2, 3], 3), 4);
+        assert_eq!(pin_place(&[], 0), 0);
     }
 
     #[test]
