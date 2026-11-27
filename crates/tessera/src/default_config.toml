@@ -94,6 +94,11 @@
 #           "right", "up", "down" or "float" says where the next window
 #           opens and "split horizontal" or "vertical" how it divides the
 #           tile of the window in front
+#           "stack left", "right", "up" or "down" puts the window in front
+#           into the stack of the tile on that side, "unstack" takes it out
+#           of its stack, "cycle-stack next" or "prev" brings the next or
+#           the previous window of its stack in front, and "reserve stack"
+#           has the next window that opens join that stack
 #   run     a program to start and its arguments, a list
 #   focus   "left", "right", "up" or "down": the window on that side of the
 #           window in front comes in front, among the windows [tiling]
@@ -1101,6 +1106,13 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # display as the displays of a [[surface]] do (its place from the left,
 # counted from 1, its device name or the name of its monitor), and number
 # a workspace, counted from 1.
+# Windows can be stacked in one tile, below a bar of tabs: stack_bar says
+# when the bar is drawn ("always", "as-needed" for two windows or more,
+# which is the default, or "never") and stack_bar_height how high, 16 to
+# 96 pixels (32). auto_stack = true, or a list of categories of the window
+# rules, has a new window join the stack of a tiled window of its category
+# on the same workspace of the same display. The layout file "tabbed"
+# that comes with Tessera puts every window after the second in a stack.
 #
 # [tiling]
 # layout = "bsp"
@@ -1109,6 +1121,9 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # drag = "sort"
 # float = { width = 0.6, height = 0.7 }
 # border = { width = 3, offset = 0 }
+# stack_bar = "always"
+# stack_bar_height = 28
+# auto_stack = ["browser", "terminal"]
 #
 # [[tiling.display]]
 # match = "2"
