@@ -154,7 +154,8 @@ impl TryFrom<String> for Day {
 
 /// The hours of each day that do not disturb holds: from `from` to `to`,
 /// which may be on the next day, and only on the `days` it starts on, or
-/// every day without them. `from` the same as `to` is the whole day.
+/// every day without them. `from` the same as `to` is the 24 hours from
+/// `from`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuietSchedule {
@@ -177,14 +178,12 @@ impl QuietSchedule {
             now.time().num_seconds_from_midnight() / 60,
         );
         let end_on = |date: NaiveDate| date.and_time(self.to.time());
-        if from == to {
-            return starts_on(today).then(|| end_on(today.succ_opt().unwrap_or(today)));
-        }
         if from < to {
             return (starts_on(today) && (from..to).contains(&minute)).then(|| end_on(today));
         }
-        // Over midnight: in the evening of a day it starts on, or in the
-        // morning after one.
+        // Over midnight, and `from` the same as `to` as the 24 hours from
+        // it: in the evening of a day it starts on, or in the morning after
+        // one.
         if minute >= from && starts_on(today) {
             return Some(end_on(today.succ_opt().unwrap_or(today)));
         }
@@ -1176,6 +1175,18 @@ mod tests {
         let weekend = schedule("from = \"0:00\"\nto = \"0:00\"\ndays = [\"sat\", \"sun\"]");
         assert_eq!(weekend.holds(at(7, 15, 0)), Some(at(8, 0, 0)));
         assert_eq!(weekend.holds(at(6, 15, 0)), None);
+    }
+
+    #[test]
+    fn a_schedule_from_a_time_to_the_same_time_holds_for_24_hours() {
+        let day = schedule("from = \"08:00\"\nto = \"08:00\"\ndays = [\"mon\"]");
+        // Monday 2 March, 8:00, until Tuesday 8:00.
+        assert_eq!(day.holds(at(2, 7, 59)), None);
+        assert_eq!(day.holds(at(2, 8, 0)), Some(at(3, 8, 0)));
+        assert_eq!(day.holds(at(2, 23, 0)), Some(at(3, 8, 0)));
+        assert_eq!(day.holds(at(3, 0, 0)), Some(at(3, 8, 0)));
+        assert_eq!(day.holds(at(3, 7, 59)), Some(at(3, 8, 0)));
+        assert_eq!(day.holds(at(3, 8, 0)), None);
     }
 
     #[test]
