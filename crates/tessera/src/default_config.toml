@@ -40,7 +40,7 @@
 # Whether the keys of Windows that features of Tessera bring to their
 # actions are bound, where no [[key]] below presses the same keys. Without
 # the key in this file they are bound only when Tessera is the shell of the
-# session. No feature brings such keys yet.
+# session. The keys they bring are named with the actions below.
 # windows_keys = true
 
 # Each [[key]] is a key combination Tessera answers wherever it is pressed.
@@ -140,6 +140,47 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             winx     the menu of Win+X (win+x): the tools of Windows,
+#                      the settings, the file manager, search, Run, shut
+#                      down or sign out and the desktop, each taken by
+#                      its letter as in Windows; it opens at the widget
+#                      winx, else at the Start button (the button that
+#                      opens "launcher"), else at the left end of a bar
+#             power-dialog  the dialog that asks what the computer is
+#                      to do: switch user, sign out, sleep, hibernate,
+#                      shut down, restart, and while updates of Windows
+#                      wait, update and shut down or update and restart;
+#                      nothing is done before OK. It brings no key: the
+#                      desktop of the shell opens it for alt+f4
+#             display-mode  the choice of Win+P (win+p): PC screen only,
+#                      duplicate, extend or second screen only; arg
+#                      "pc-screen-only", "duplicate", "extend" or
+#                      "second-screen-only" switches at once
+#             input-language  asks the window in front for the next
+#                      keyboard layout (win+space); arg "previous" for
+#                      the one before (win+shift+space), "list" opens the
+#                      popup keyboard-list
+#             open     opens what arg names through the Shell, as a
+#                      double click would: win+i "ms-settings:", win+u
+#                      "ms-settings:easeofaccess", win+k
+#                      "ms-settings-connectabledevices:devicediscovery",
+#                      win+g "ms-gamebar:", win+shift+s "ms-screenclip:"
+#                      and win+pause "ms-settings:about"
+#             start, search, quick-settings, notification-center
+#                      the popup arg names, or without one "launcher"
+#                      (start: ctrl+escape; search: win+s and win+q),
+#                      "quick-settings" (win+a) and "calendar" (win+n)
+#             screenshot  saves a picture of all displays as
+#                      Screenshot (N).png in Pictures\Screenshots, N
+#                      counted on as Windows counts (win+printscreen)
+#             dock     what dock above does with the number arg names,
+#                      1 to 9; it brings no key
+#           The keys in brackets are bound to the actions where
+#           windows_keys is on (see above), unless a [[key]] presses the
+#           same keys, and they are taken from Windows. win+l,
+#           ctrl+shift+escape and the keys that switch the input language
+#           (alt+shift, ctrl+shift) stay with Windows; so does win+period,
+#           whose emoji panel Tessera does not open.
 #
 # [[key]]
 # press = "win+v"
@@ -344,6 +385,25 @@
 #               click. Option actions, which of "lock", "sleep", "sign-out",
 #               "restart" and "shut-down" to offer, in that order;
 #               "hibernate" is offered only when named here
+#               Option updates = false leaves out "update-restart" and
+#               "update-shut-down", which otherwise stand before restart
+#               and shut down while updates of Windows wait for a restart,
+#               and install them on the way; "switch-user", which shows
+#               the screen to sign in on and keeps the session, is offered
+#               when named, and acts at the first click as locking does
+#   "power-dialog"  what the computer is to do, as a list chosen from with
+#               the arrows, a letter or the pointer, and done with OK or
+#               Enter; for the popup power-dialog in the middle of the
+#               display, which the action power-dialog opens
+#   "display-mode"  the four ways of Win+P to show the desktop on the
+#               displays, the one in use checked and those that need
+#               another display dimmed, and the way to a wireless display;
+#               for the popup display-mode
+#   "keyboard-list"  the keyboard layouts with the names Windows gives
+#               them, the one of the window in front checked; a choice asks
+#               that window for it. For the popup keyboard-list
+#   "winx-menu" the menu of Win+X, for the popup winx
+#   "winx"      a button that opens the menu of Win+X under it
 #   "marketplace"  the extensions the registries offer, to install, update
 #               and remove; contacts the registries when it is shown. Fills
 #               the height left in its popup and scrolls. Option show,
@@ -370,6 +430,11 @@ center = [{ widget = "windows", start = "launcher" }]
 #   place          "surface" (default): at the widget that opened it;
 #                  "center": in the middle of the display, the rest dimmed
 #   content        widgets, stacked from the top
+#
+# Modules bring popups of their own: winx (300 by 660), power-dialog (in the
+# middle, 400 by 600), display-mode (320 by 336) and keyboard-list (340 by
+# 360), each holding the widget of the same name (winx-menu for winx). A
+# [[popup]] of the same name here is used instead.
 
 [[popup]]
 name = "launcher"

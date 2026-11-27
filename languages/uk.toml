@@ -372,3 +372,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Search" = "Пошук"
 "Run" = "Виконати"
 "Shut down or sign out" = "Завершення роботи або вихід"
+
+# Settings: the button of the menu of Win+X (winx-hotkeys).
+"Win+X menu" = "Меню Win+X"

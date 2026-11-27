@@ -759,6 +759,7 @@ const WIDGET_LABELS: &[(&str, &str)] = &[
     ("user", "Account"),
     ("volume", "Volume"),
     ("windows", "Windows"),
+    ("winx", "Win+X menu"),
     ("workspaces", "Workspaces"),
 ];
 

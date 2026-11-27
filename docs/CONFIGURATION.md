@@ -45,7 +45,7 @@ action = "popup"      # the popup `arg` names, opened or closed
 arg = "clipboard"
 ```
 
-An action may also bring keys of its own, the keys Windows has for the same thing (as Win+M for minimizing every window). They are bound where `windows_keys = true` is at the top of `config.toml`, or, without that key, when Tessera is the shell of the session; `windows_keys = false` leaves them out. A `[[key]]` that presses the same keys wins over such a key, whatever it does. No action brings keys yet.
+An action may also bring keys of its own, the keys Windows has for the same thing (as Win+M for minimizing every window). They are bound where `windows_keys = true` is at the top of `config.toml`, or, without that key, when Tessera is the shell of the session; `windows_keys = false` leaves them out. A `[[key]]` that presses the same keys wins over such a key, whatever it does. The actions below that bring keys name them; see also [the keys of Windows without Explorer](#the-keys-of-windows-without-explorer).
 
 From a console, `tessera do <action> [arg]` does an action in the running shell, as `tessera do popup launcher`; the words after the name are joined by spaces into the `arg`.
 
@@ -54,5 +54,28 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `winx` | none | opens the menu of Win+X, or closes it: at the widget `winx` where a bar has one, else at the Start button (the button that opens `launcher`), else at the left end of a bar. Brings Win+X |
+| `power-dialog` | none | opens the dialog that asks what the computer is to do (switch user, sign out, sleep, hibernate, shut down, restart, and while updates wait update and shut down or update and restart); nothing is done before OK or Enter. Brings no key: the desktop of the shell opens it for Alt+F4 |
+| `display-mode` | `pc-screen-only`, `duplicate`, `extend`, `second-screen-only`, or none | without `arg` opens the popup `display-mode`, the choice of Win+P; with one switches the displays to that mode at once. Brings Win+P |
+| `input-language` | `next`, `previous`, `list`, or none | asks the window in front (or the one that was in front before a popup of Tessera) for the next keyboard layout, or the one before with `previous`; `list` opens the popup `keyboard-list`. Brings Win+Space and Win+Shift+Space (`previous`) |
+| `open` | a file, a program, a folder or an address | opens it through the Shell, as a double click does. Brings Win+I (`ms-settings:`), Win+U (`ms-settings:easeofaccess`), Win+K (`ms-settings-connectabledevices:devicediscovery`), Win+G (`ms-gamebar:`), Win+Shift+S (`ms-screenclip:`) and Win+Pause (`ms-settings:about`) |
+| `start`, `search`, `quick-settings`, `notification-center` | the name of a popup, or none | opens that popup, or closes it; without `arg`, `launcher` for `start` (Ctrl+Esc) and `search` (Win+S, Win+Q), `quick-settings` (Win+A) and `calendar` (Win+N) |
+| `screenshot` | none | saves a picture of all displays as `Screenshot (N).png` in the Screenshots folder of Pictures, N counted on from where Windows counts. Brings Win+PrtScn |
+| `dock` | 1 to 9 | does what `dock = n` does: what a click on the button of that number in the dock does. Brings no key |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## The keys of Windows without Explorer
+
+When Tessera is the shell, nothing of Explorer answers the keys Explorer answers in Windows, so the actions above bring them, and `windows_keys` (on by default in shell mode) binds them. Beside Explorer, `windows_keys = true` takes them from Explorer as well; each is then answered by Tessera instead. A `[[key]]` that presses the same keys wins, so a single key can be given back to another action, or turned into something else:
+
+```toml
+windows_keys = true
+
+[[key]]
+press = "win+a"
+action = "quick-settings"
+arg = "sound"         # the popup Win+A opens instead of `quick-settings`
+```
+
+Win+L locks the session through Windows itself, and Ctrl+Shift+Esc, Alt+Shift and Ctrl+Shift are answered by Windows too, so they keep working in shell mode and Tessera does not take them. While `windows_key` takes over the Windows key, Ctrl+Esc opens the same popup, as it opens the Start menu in Windows, unless a `[[key]]` (or `start` above) holds it. Win+R belongs to the Run dialog, Win+V to the clipboard history and Win+1 to Win+9, Win+T and Win+B to the dock, which bring their own keys. Not answered by Tessera: Win+period (the emoji panel of Windows; whether Windows still opens it without Explorer is not known), Win+comma (the peek at the desktop), Win+Tab, Win+Ctrl+D and the other keys of the virtual desktops of Windows, which need Explorer.

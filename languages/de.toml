@@ -371,3 +371,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Search" = "Suchen"
 "Run" = "Ausführen"
 "Shut down or sign out" = "Herunterfahren oder abmelden"
+
+# Settings: the button of the menu of Win+X (winx-hotkeys).
+"Win+X menu" = "Win+X-Menü"

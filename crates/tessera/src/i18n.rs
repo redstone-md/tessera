@@ -780,12 +780,20 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Terminal", "Терминал"),
     ("Terminal (Admin)", "Терминал (администратор)"),
     ("Windows PowerShell", "Windows PowerShell"),
-    ("Windows PowerShell (Admin)", "Windows PowerShell (администратор)"),
+    (
+        "Windows PowerShell (Admin)",
+        "Windows PowerShell (администратор)",
+    ),
     ("Task Manager", "Диспетчер задач"),
     ("File Explorer", "Проводник"),
     ("Search", "Поиск"),
     ("Run", "Выполнить"),
-    ("Shut down or sign out", "Завершение работы или выход из системы"),
+    (
+        "Shut down or sign out",
+        "Завершение работы или выход из системы",
+    ),
+    // Settings: the button of the menu of Win+X (winx-hotkeys).
+    ("Win+X menu", "Меню Win+X"),
 ];
 
 #[cfg(test)]
