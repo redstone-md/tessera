@@ -98,14 +98,18 @@ impl Radios {
     }
 
     /// Switches every radio off, and gives those that were on, to be
-    /// switched back on afterwards.
+    /// switched back on afterwards. A radio that refused is reported, and
+    /// those that were on are given all the same, since the others were
+    /// switched off.
     pub fn airplane_on() -> Result<Vec<RadioId>, String> {
         let were_on: Vec<RadioId> = Self::all()?
             .into_iter()
             .filter(|radio| radio.on)
             .map(|radio| radio.id())
             .collect();
-        set_where(|_| true, false)?;
+        if let Err(refusal) = set_where(|_| true, false) {
+            report!("{refusal}");
+        }
         Ok(were_on)
     }
 
@@ -131,8 +135,9 @@ fn listed() -> WindowsResult<Vec<Radio>> {
 }
 
 /// Switches each radio `chosen` takes on or off and says how many there
-/// were. Each radio is switched even when another refused; the first
-/// refusal is what is reported.
+/// were. A radio that is so already, or that the machine itself switched
+/// off, is left as it is. Each radio is switched even when another
+/// refused; the first refusal is what is reported.
 fn set_where(chosen: impl Fn(&Radio) -> bool, on: bool) -> Result<usize, String> {
     let radios = listed().map_err(|error| format!("the radios cannot be read: {error}"))?;
     let radios: Vec<Radio> = radios.into_iter().filter(|radio| chosen(radio)).collect();
@@ -146,10 +151,9 @@ fn set_where(chosen: impl Fn(&Radio) -> bool, on: bool) -> Result<usize, String>
     let state = if on { RadioState::On } else { RadioState::Off };
     let mut refusal = None;
     for radio in &radios {
-        // A radio switched off by the machine itself stays as it is.
         if radio
             .State()
-            .is_ok_and(|state| state == RadioState::Disabled)
+            .is_ok_and(|now| now == state || now == RadioState::Disabled)
         {
             continue;
         }
