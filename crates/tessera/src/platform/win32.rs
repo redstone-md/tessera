@@ -29,6 +29,7 @@ mod drag;
 mod drop_target;
 mod execute;
 mod explorer_view;
+mod file_jobs;
 mod file_op;
 mod files;
 mod folder_handler;
@@ -45,6 +46,7 @@ mod key_locks;
 mod keyboard;
 mod lasting;
 mod media;
+mod mouse_buttons;
 mod mouse_hook;
 mod move_watch;
 mod net_drives;
@@ -153,6 +155,7 @@ pub use execute::{Launch, Show};
 pub use explorer_view::{
     Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
 };
+pub use file_jobs::{FileJobEvent, FileJobState, FileJobs};
 pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
@@ -182,6 +185,7 @@ pub use lasting::WindowMark;
 pub use media::SessionKey;
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use media::{Repeat, SessionInfo};
+pub use mouse_buttons::{MouseBinding, MouseButtonName, MouseButtons};
 pub use mouse_hook::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
 pub use move_watch::{MoveEvent, MoveWatch};
 pub use net_drives::{DriveDialog, NetworkDrives};

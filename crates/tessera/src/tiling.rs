@@ -89,7 +89,7 @@ const LAYOUTS_DIRECTORY: &str = "tiling-layouts";
 /// The keys the action `tiling` has by default where the keys of Windows
 /// are in use, while tiling is on: where the next window opens, and every
 /// tile alike again.
-const DEFAULT_KEYS: [(&str, &str); 5] = [
+pub(crate) const DEFAULT_KEYS: &[(&str, &str)] = &[
     ("win+shift+i", "reserve up"),
     ("win+shift+k", "reserve down"),
     ("win+shift+j", "reserve left"),
@@ -525,15 +525,20 @@ impl Tiler {
     /// Registers the action `tiling`, which takes what a `tiling` key
     /// takes, with its keys by default.
     fn add_action(cx: &mut App) {
+        Actions::add("tiling", Self::action(), cx);
+    }
+
+    /// The action `tiling`, with its checking and its keys by default.
+    pub(crate) fn action() -> Action {
         let mut action = Action::new(|arg, cx| match parse_command(&words(arg.unwrap_or(""))) {
             Ok(command) => Self::command(command, cx),
             Err(why) => report!("the action `tiling` does nothing: {why}"),
         })
         .checking(|arg| parse_command(&words(arg.unwrap_or(""))).map(drop));
-        for (press, arg) in DEFAULT_KEYS {
+        for &(press, arg) in DEFAULT_KEYS {
             action = action.by_default(press, Some(arg));
         }
-        Actions::add("tiling", action, cx);
+        action
     }
 
     /// Hears of windows the user begins and ends moving or resizing: one
@@ -556,6 +561,7 @@ impl Tiler {
                                 this.nudged = true;
                             }
                         }
+                        MoveEvent::Resizing { .. } => {}
                     }
                 });
                 if heard.is_err() {

@@ -89,7 +89,37 @@ impl Location {
             Self::Folder(path) | Self::Search { root: path, .. } => path.display().to_string(),
         }
     }
+
+    /// The name the Shell parses this place by: the path of a folder, and
+    /// for other places the name files-namespace gives them; none where
+    /// the place has no such name (Home, a search).
+    pub fn parsing_name(&self) -> Option<String> {
+        match self {
+            Self::Folder(path) => Some(path.display().to_string()),
+            Self::RecycleBin => Some(RECYCLE_BIN_PARSING.to_owned()),
+            Self::Computer => Some(COMPUTER_PARSING.to_owned()),
+            Self::Home | Self::Search { .. } => None,
+        }
+    }
+
+    /// The place a parsing name names, where it is one of the file system
+    /// (files-namespace adds the places of the Shell).
+    pub fn from_parsing(name: &str) -> Option<Location> {
+        let name = name.trim();
+        if name.eq_ignore_ascii_case(RECYCLE_BIN_PARSING) {
+            return Some(Self::RecycleBin);
+        }
+        if name.eq_ignore_ascii_case(COMPUTER_PARSING) {
+            return Some(Self::Computer);
+        }
+        let path = Path::new(name);
+        (path.is_absolute() && path.is_dir()).then(|| Self::Folder(path.to_owned()))
+    }
 }
+
+/// The parsing names of the Recycle Bin and of This PC.
+const RECYCLE_BIN_PARSING: &str = "::{645FF040-5081-101B-9F08-00AA002F954E}";
+const COMPUTER_PARSING: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
 
 /// The locations a window went through, to go back and forth among them
 /// as a browser does.
@@ -162,7 +192,7 @@ impl History {
 }
 
 /// Something a folder holds.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Entry {
     /// The name of the file itself.
     pub name: String,
@@ -1188,11 +1218,9 @@ mod tests {
             path: PathBuf::from(name),
             folder,
             size,
-            modified: None,
             hidden: name.starts_with('.'),
             protected: name.starts_with("~"),
-            link: false,
-            cloud: None,
+            ..Default::default()
         }
     }
 

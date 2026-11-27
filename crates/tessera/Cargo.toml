@@ -8,6 +8,7 @@ description = "A modular native desktop shell for Windows"
 publish = false
 
 [dependencies]
+alacritty_terminal.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 cfb.workspace = true

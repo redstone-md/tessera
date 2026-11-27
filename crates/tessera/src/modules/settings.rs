@@ -8,6 +8,10 @@
 //! controls of [`controls`].
 
 mod controls;
+pub(super) mod rows;
+
+#[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
+pub(crate) use rows::{ActionTitle, action_titles};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -1092,6 +1096,13 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The English titles of the sections, in the order of the rail, as
+    /// `open_at` takes them.
+    #[allow(dead_code, reason = "for windows-selftest, which opens each section")]
+    pub fn section_titles() -> &'static [&'static str] {
+        rows::SECTIONS
+    }
+
     fn new(cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
         let layouts = LAYOUTS.iter().map(|(_, layout)| {

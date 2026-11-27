@@ -1,0 +1,4 @@
+# Options of the widgets declared by spectacle-klipper. Format: widget_options.rs
+# ([[widget]] with a name, then [[widget.setting]] entries, each an
+# OptionDecl whose key is the option). Plain labels are English texts of
+# the RUSSIAN table in i18n.rs.

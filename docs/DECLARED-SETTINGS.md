@@ -40,6 +40,10 @@ choices = [
 | `font` | The family in use, which opens a list of the installed font families with a field to narrow it down. An optional font has a button that takes it out. | The name of a family |
 | `list` | Rows of texts, with a handle to drag a row to another place, a button that takes it out, and **Add**. | For an extension the text `a, b, c`; for Tessera itself a TOML array. An item may not hold `,` or `;`. |
 | `pairs` | Rows of a name and a value, the same way. | The text `Tokyo=+9; London=+0` |
+| `time` | A field for now; a control of its own is not done yet. | A time of day `HH:MM`, two digits each, from `00:00` to `23:59` |
+| `sides` | A field for now, which takes one number; a control of its own is not done yet. `min` and `max` bound each number. | A number for every side, or a table `{ top, right, bottom, left }` of numbers, a side left out being 0 |
+
+A `list` with `choices` takes only their values as items, and its `min` and `max` bound how many items it has (`min = 2` and `max = 2` for exactly two); its rows are not drawn as choices yet.
 
 There is no kind for passwords, tokens or keys: those an extension reads stay in `config.toml`, written by hand, and its description says so.
 

@@ -88,6 +88,10 @@ pub struct FilesConfig {
     /// When AutoPlay is done for drives that arrive: as the shell only
     /// (Explorer does it otherwise), always, or never.
     pub autoplay: AutoPlayWhen,
+    /// Whether the windows of the file manager that were open when Tessera
+    /// ended open again at its next start, each with its tabs. Read by the
+    /// part of files-terminal that restores windows.
+    pub restore_windows: bool,
 }
 
 impl Default for FilesConfig {
@@ -102,6 +106,7 @@ impl Default for FilesConfig {
             restore: false,
             explorer: true,
             autoplay: AutoPlayWhen::Shell,
+            restore_windows: false,
         }
     }
 }
@@ -359,6 +364,35 @@ impl Files {
             return false;
         }
         Self::open(location, cx);
+        true
+    }
+
+    /// Opens a place of the Shell that is no folder of the file system,
+    /// named by its parsing name (`::{CLSID}`, `shell:…`, `\\server`, a
+    /// library or saved search, a path inside an archive) in Tessera's file
+    /// manager. Never waits for the Shell: it says true after looking only at
+    /// how the name is written, opens a window that reads the place away from
+    /// the user interface, and itself hands the name to Explorer when the
+    /// place turns out not to be one it can show. False means the name is
+    /// none it takes at all (or the file manager is not Tessera's), and the
+    /// caller hands it to Explorer.
+    #[allow(dead_code, reason = "implemented by files-namespace")]
+    pub fn open_shell(_parsing: &str, _cx: &mut App) -> bool {
+        false
+    }
+
+    /// Sends the window `hwnd` of the file manager to the place named
+    /// `parsing`; false where no such window is open or the name is none
+    /// it can show (files-namespace adds the places of the Shell).
+    #[allow(dead_code, reason = "for the windows of the Shell of shell-services")]
+    pub fn navigate(hwnd: isize, parsing: &str, cx: &mut App) -> bool {
+        let Some(window) = Self::windows(cx).into_iter().find(|each| each.hwnd == hwnd) else {
+            return false;
+        };
+        let Some(location) = Location::from_parsing(parsing) else {
+            return false;
+        };
+        (window.navigate)(location, cx);
         true
     }
 
@@ -626,6 +660,9 @@ impl Render for FilesButton {
 /// was read.
 pub type SelectItems = std::rc::Rc<dyn Fn(Vec<std::ffi::OsString>, &mut App)>;
 
+/// What sends the pane in front of a window to another place.
+pub type NavigateTo = std::rc::Rc<dyn Fn(Location, &mut App)>;
+
 /// Who is told when the windows of the file manager change.
 type WindowsObserver = std::rc::Rc<dyn Fn(&WindowsChange, &mut App)>;
 
@@ -637,6 +674,11 @@ pub struct FilesWindow {
     pub hwnd: isize,
     /// The folder its pane in front shows, where that is a folder.
     pub folder: Option<PathBuf>,
+    /// The parsing name of the place its pane in front shows.
+    #[allow(dead_code, reason = "for the windows of the Shell of shell-services")]
+    pub parsing: Option<String>,
+    /// Sends its pane in front to another place.
+    pub navigate: NavigateTo,
     /// Chooses the items of those names in the folder of its pane in
     /// front, once the folder was read.
     pub select: SelectItems,

@@ -110,10 +110,8 @@ fn entry_of(item: &RecycledItem, path: PathBuf) -> Entry {
         size: item.size.unwrap_or_default(),
         // The date of the listing is when it was deleted.
         modified: item.deleted,
-        hidden: false,
-        protected: false,
         link,
-        cloud: None,
+        ..Default::default()
     }
 }
 
