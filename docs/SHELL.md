@@ -73,7 +73,7 @@ What goes to Tessera Files:
 
 - a folder or a drive opened by a double click in another program, by `ShellExecute` with the verbs `open`, `explore` or `opennewwindow`, by the Run dialog or by a shortcut to a folder;
 - `tessera files` with any of the command lines of `explorer.exe` that name a folder of the file system (`/select,`, `/e,`, `/n`, `/root,`, `/separate`, `shell:` names of known folders, This PC, Home, `search-ms:` with a folder, `file:` addresses);
-- with `[files] own = true`, the folders the surfaces of Tessera open. `platform::reveal`, which shows a file in its folder in Tessera Files, is ready for the surfaces that offer "Open file location", but no surface calls it yet: the file manager's own "Show in Explorer" stays with Explorer on purpose.
+- with `[files] own = true`, the folders the surfaces of Tessera open. `platform::reveal`, which shows a file in its folder in Tessera Files, is what Open file location of the Start menu, the launcher and the dock uses; the file manager's own "Show in Explorer" stays with Explorer on purpose.
 
 What still opens in Explorer:
 
