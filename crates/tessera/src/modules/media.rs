@@ -3,7 +3,10 @@
 
 //! What is playing. Widgets: `media`, a compact readout that is there only
 //! while an application offers something, and `media-controls`, the title
-//! with its picture and buttons to skip and pause.
+//! with its picture, buttons to skip and pause, to shuffle and repeat where
+//! the player lets them, the position, and a choice between the players
+//! while several have something. Action: `media`, which passes a command to
+//! the player chosen there, or to the one Windows considers current.
 
 use std::cell::Cell;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -17,11 +20,12 @@ use gpui::{
     WeakEntity, Window, canvas, div, img, px,
 };
 
+use crate::actions::{Action, Actions};
+use crate::i18n::Language;
 use crate::icons::{Icon, image_of_bytes};
-
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{Media, MediaCommand, NowPlaying, Position};
+use crate::platform::{Media, MediaCommand, NowPlaying, Position, Repeat, SessionInfo};
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, pill, state_layer, wave_bar};
 
@@ -55,6 +59,13 @@ const ICON_PREVIOUS: &str = "\u{e892}";
 const ICON_PLAY: &str = "\u{e768}";
 const ICON_PAUSE: &str = "\u{e769}";
 const ICON_NEXT: &str = "\u{e893}";
+const ICON_SHUFFLE: &str = "\u{e8b1}";
+const ICON_REPEAT_ALL: &str = "\u{e8ee}";
+const ICON_REPEAT_ONE: &str = "\u{e8ed}";
+
+/// The height of a chip that chooses a player, and the most it takes.
+const CHIP_HEIGHT: Pixels = px(28.);
+const CHIP_WIDTH: Pixels = px(120.);
 
 pub struct MediaModule;
 
@@ -77,21 +88,96 @@ impl Module for MediaModule {
             cx.new(|cx| Controls::new(player, cx)).into()
         })
     }
+
+    fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
+        let media = Action::new(|arg, cx| {
+            if let Some(command) = command_named(arg) {
+                send_to_chosen(command, cx);
+            }
+        })
+        .checking(|arg| match command_named(arg) {
+            Some(_) => Ok(()),
+            None => Err(
+                "`media` takes `toggle`, `play`, `pause`, `stop`, `next` or `previous`".to_owned(),
+            ),
+        });
+        actions.register("media", media)
+    }
+}
+
+/// The command the `arg` of the action `media` names.
+fn command_named(arg: Option<&str>) -> Option<MediaCommand> {
+    match arg? {
+        "toggle" => Some(MediaCommand::Toggle),
+        "play" => Some(MediaCommand::Play),
+        "pause" => Some(MediaCommand::Pause),
+        "stop" => Some(MediaCommand::Stop),
+        "next" => Some(MediaCommand::Next),
+        "previous" => Some(MediaCommand::Previous),
+        _ => None,
+    }
+}
+
+/// Passes `command` to the player chosen in the media widgets, or to the
+/// one Windows considers current while none is chosen or none is shown.
+fn send_to_chosen(command: MediaCommand, cx: &mut App) {
+    match cx.try_global::<SharedPlayer>() {
+        Some(shared) => {
+            let player = shared.0.clone();
+            player.update(cx, |player, cx| player.send(command, cx));
+        }
+        None => cx
+            .background_executor()
+            .spawn(async move {
+                if let Err(error) = Media::send(None, command) {
+                    report!("{error}");
+                }
+            })
+            .detach(),
+    }
+}
+
+/// What a chip that chooses `session` says: the name of its application,
+/// or what it plays where the application is known only by a number, as
+/// some browsers are.
+fn chip_label(session: &SessionInfo) -> String {
+    let app = session.app.as_str();
+    let name = match app.split_once('!') {
+        // A packaged application: the name of its package, without the
+        // publisher before it and the hash after it.
+        Some((family, _)) => {
+            let package = family.split('_').next().unwrap_or(family);
+            package.rsplit('.').next().unwrap_or(package)
+        }
+        None => {
+            let file = app.rsplit(['\\', '/']).next().unwrap_or(app);
+            match file.len().checked_sub(4) {
+                Some(stem) if file[stem..].eq_ignore_ascii_case(".exe") => &file[..stem],
+                _ => file,
+            }
+        }
+    };
+    let number = name.len() >= 12 && name.chars().all(|letter| letter.is_ascii_hexdigit());
+    if (number || name.is_empty()) && !session.title.is_empty() {
+        return session.title.clone();
+    }
+    name.to_owned()
 }
 
 /// The title and the artist on one line, whichever of them there are.
-fn headline(now: &NowPlaying) -> String {
+fn headline(now: &NowPlaying, language: Language) -> String {
     match (now.title.is_empty(), now.artist.is_empty()) {
         (false, false) => format!("{} \u{2013} {}", now.artist, now.title),
         (false, true) => now.title.clone(),
         (true, false) => now.artist.clone(),
-        (true, true) => "Unnamed".to_owned(),
+        (true, true) => language.say("Unnamed").to_owned(),
     }
 }
 
-/// What tells one piece from another: its title and its artist.
-fn track_of(now: &NowPlaying) -> (String, String) {
-    (now.title.clone(), now.artist.clone())
+/// What tells one piece from another: its player, its title and its
+/// artist.
+fn track_of(now: &NowPlaying) -> (String, String, String) {
+    (now.app.clone(), now.title.clone(), now.artist.clone())
 }
 
 /// The picture of what is playing as it was read.
@@ -103,10 +189,10 @@ struct Cover {
 }
 
 impl Cover {
-    /// Reads and decodes the picture; one that cannot be used is reported
-    /// and counts as none.
-    fn read() -> Self {
-        let bytes = Media::cover().and_then(|bytes| bytes.ok_or_else(String::new));
+    /// Reads and decodes the picture of what `app` plays; one that cannot
+    /// be used is reported and counts as none.
+    fn read(app: Option<&str>) -> Self {
+        let bytes = Media::cover(app).and_then(|bytes| bytes.ok_or_else(String::new));
         let image = bytes.and_then(|bytes| {
             let image = image_of_bytes(&bytes, COVER_SOURCE);
             let image = image.map_err(|error| format!("the picture is not an image: {error}"))?;
@@ -134,6 +220,11 @@ fn digest(bytes: &[u8]) -> u64 {
 /// What is playing, shared by every media widget.
 struct Player {
     now: Option<NowPlaying>,
+    /// Every application that has a session.
+    sessions: Vec<SessionInfo>,
+    /// The application chosen among them; `None` for the one Windows
+    /// considers current.
+    chosen: Option<String>,
     /// The picture of what is playing, if it has one.
     cover: Icon,
     /// Why nothing is known, if reading failed.
@@ -158,14 +249,19 @@ impl Player {
                 let mut reads = 0;
                 loop {
                     let (known, wanted) = (track.clone(), reads > 0);
+                    let Ok(chosen) = this.read_with(cx, |this, _| this.chosen.clone()) else {
+                        break;
+                    };
                     let read = cx.background_executor().spawn(async move {
-                        let now = Media::now_playing();
+                        let chosen = chosen.as_deref();
+                        let now = Media::now_playing(chosen);
                         let playing = now.as_ref().ok().and_then(|now| now.as_ref());
                         let changed = playing.map(track_of) != known;
-                        let cover = (changed || wanted).then(Cover::read);
-                        (now, cover)
+                        let cover = (changed || wanted).then(|| Cover::read(chosen));
+                        let sessions = Media::sessions();
+                        (now, cover, sessions)
                     });
-                    let (now, read) = read.await;
+                    let (now, read, sessions) = read.await;
                     if let Ok(now) = &now {
                         let playing = now.as_ref().map(track_of);
                         if playing != track {
@@ -180,7 +276,10 @@ impl Player {
                         cover = fresh.clone();
                     }
                     let fresh = fresh.map(|cover| cover.image);
-                    let taken = this.update(cx, |this, cx| this.take(now, fresh, cx));
+                    let taken = this.update(cx, |this, cx| {
+                        this.take_sessions(sessions, cx);
+                        this.take(now, fresh, cx);
+                    });
                     if taken.is_err() {
                         break;
                     }
@@ -190,6 +289,8 @@ impl Player {
             .detach();
             Self {
                 now: None,
+                sessions: Vec::new(),
+                chosen: None,
                 cover: None,
                 error: None,
             }
@@ -226,24 +327,79 @@ impl Player {
         }
     }
 
+    /// Takes over the sessions that were read; a chosen application whose
+    /// session is gone is chosen no more.
+    fn take_sessions(&mut self, read: Result<Vec<SessionInfo>, String>, cx: &mut Context<Self>) {
+        // A failure is reported with what is playing, which fails too.
+        let Ok(sessions) = read else {
+            return;
+        };
+        if let Some(chosen) = &self.chosen
+            && !sessions.iter().any(|session| &session.app == chosen)
+        {
+            self.chosen = None;
+        }
+        if sessions != self.sessions {
+            self.sessions = sessions;
+            cx.notify();
+        }
+    }
+
+    /// Has the widgets show what `app` plays from now on, and its keys go
+    /// to it.
+    fn choose(&mut self, app: String, cx: &mut Context<Self>) {
+        let current = self.sessions.iter().find(|session| session.current);
+        // The current one is followed as Windows changes it.
+        let chosen = (current.map(|session| &session.app) != Some(&app)).then_some(app);
+        if chosen == self.chosen {
+            return;
+        }
+        self.chosen = chosen.clone();
+        cx.notify();
+        // What it plays is read at once; its picture comes with the next
+        // reading.
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let read = cx
+                .background_executor()
+                .spawn(async move { Media::now_playing(chosen.as_deref()) });
+            let read = read.await;
+            this.update(cx, |this, cx| this.take(read, None, cx)).ok();
+        })
+        .detach();
+    }
+
+    /// The application shown: the one chosen, or the one Windows considers
+    /// current.
+    fn shown_app(&self) -> Option<&str> {
+        match &self.chosen {
+            Some(chosen) => Some(chosen),
+            None => self.now.as_ref().map(|now| now.app.as_str()),
+        }
+    }
+
     /// Passes `command` on and reads what came of it.
     fn send(&mut self, command: MediaCommand, cx: &mut Context<Self>) {
         // The answer takes a moment; the button should not.
-        if command == MediaCommand::Toggle
-            && let Some(now) = &mut self.now
-        {
-            now.playing = !now.playing;
+        if let Some(now) = &mut self.now {
+            match command {
+                MediaCommand::Toggle => now.playing = !now.playing,
+                MediaCommand::Play => now.playing = true,
+                MediaCommand::Pause | MediaCommand::Stop => now.playing = false,
+                MediaCommand::Shuffle(on) => now.shuffle = Some(on),
+                MediaCommand::Repeat(repeat) => now.repeat = Some(repeat),
+                MediaCommand::Seek(seconds) => {
+                    if let Some(position) = now.position.as_mut() {
+                        position.elapsed = seconds.min(position.length);
+                    }
+                }
+                MediaCommand::Previous | MediaCommand::Next => {}
+            }
             cx.notify();
         }
-        if let MediaCommand::Seek(seconds) = command
-            && let Some(position) = self.now.as_mut().and_then(|now| now.position.as_mut())
-        {
-            position.elapsed = seconds.min(position.length);
-            cx.notify();
-        }
+        let app = self.chosen.clone();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let sent = cx.background_executor().spawn(async move {
-                if let Err(error) = Media::send(command) {
+                if let Err(error) = Media::send(app.as_deref(), command) {
                     report!("{error}");
                 }
             });
@@ -307,7 +463,7 @@ impl Readout {
 
 /// Whether the readout of a bar shows `one` and `other` alike.
 fn reads_as(one: &NowPlaying, other: &NowPlaying) -> bool {
-    one.playing == other.playing && headline(one) == headline(other)
+    one.playing == other.playing && one.title == other.title && one.artist == other.artist
 }
 
 impl Render for Readout {
@@ -334,13 +490,18 @@ impl Render for Readout {
                 pill(&theme)
                     .font_weight(FontWeight::MEDIUM)
                     .child(icon(&theme, glyph).flex_none().text_color(color))
-                    .child(div().min_w_0().child(one_line(headline(now)))),
+                    .child(
+                        div()
+                            .min_w_0()
+                            .child(one_line(headline(now, Language::of(cx)))),
+                    ),
             )
     }
 }
 
-/// The title, the artist, and buttons to skip back, pause or play, and
-/// skip on.
+/// The title, the artist, buttons to skip back, pause or play, and skip
+/// on, and to shuffle and repeat where the player lets them; over them a
+/// chip for each player while there are several.
 struct Controls {
     player: Entity<Player>,
     /// 1 while it plays, 0 while it does not; shapes the middle button.
@@ -352,7 +513,9 @@ struct Controls {
     position: Spring,
     /// Where the line of the position was last drawn.
     line: Rc<Cell<Bounds<Pixels>>>,
-    buttons: [Interaction; 3],
+    buttons: [Interaction; 5],
+    /// The chips of the players, one for each session.
+    chips: Vec<Interaction>,
     _changes: Subscription,
 }
 
@@ -369,7 +532,8 @@ impl Controls {
             cover_presence: Spring::new(motion.effects, 1.),
             position: Spring::new(motion.effects, 0.),
             line: Rc::default(),
-            buttons: [Interaction::new(&motion); 3],
+            buttons: [Interaction::new(&motion); 5],
+            chips: Vec::new(),
         }
     }
 
@@ -479,23 +643,89 @@ impl Controls {
         .into_any_element()
     }
 
+    /// A chip for each player, the one shown lit; a click shows another.
+    /// Nothing while there is only one.
+    fn chips(&mut self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let player = self.player.read(cx);
+        let sessions = player.sessions.clone();
+        let shown = player.shown_app().map(str::to_owned);
+        if sessions.len() < 2 {
+            return div().into_any_element();
+        }
+        self.chips
+            .resize_with(sessions.len(), || Interaction::new(&theme.motion));
+        let chips = sessions.into_iter().enumerate().map(|(index, session)| {
+            let lit = shown.as_deref() == Some(session.app.as_str());
+            let state = self.chips[index].state(window);
+            let (ground, text) = if lit {
+                (theme.colors.secondary_container, theme.colors.on_surface)
+            } else {
+                (
+                    theme.colors.surface_container_highest,
+                    theme.colors.on_surface_variant,
+                )
+            };
+            let glyph = if session.playing {
+                ICON_NOTE
+            } else {
+                ICON_PAUSE
+            };
+            let chip = div()
+                .id(("media-player", index))
+                .h(CHIP_HEIGHT)
+                .max_w(CHIP_WIDTH)
+                .min_w_0()
+                .flex_none()
+                .px(theme.spacing.small)
+                .flex()
+                .items_center()
+                .gap(theme.spacing.tiny)
+                .rounded(theme.shape.full)
+                .bg(state_layer(theme, ground, state))
+                .text_color(text)
+                .text_size(TIME_SIZE)
+                .child(icon(theme, glyph).flex_none())
+                .child(div().min_w_0().child(one_line(chip_label(&session))));
+            let app = session.app;
+            Interaction::track(chip, cx, move |this: &mut Self| this.chips.get_mut(index))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let app = app.clone();
+                    this.player.update(cx, |player, cx| player.choose(app, cx));
+                }))
+                .into_any_element()
+        });
+        div()
+            .id("media-players")
+            .pb(theme.spacing.small)
+            .flex()
+            .gap(theme.spacing.tiny)
+            .overflow_x_scroll()
+            .children(chips.collect::<Vec<_>>())
+            .into_any_element()
+    }
+
     /// One round button. `emphasis` is 0 for a plain one and up to 1 for
-    /// the middle one while it plays, which makes it wider and squarer.
+    /// the middle one while it plays, which makes it wider and squarer;
+    /// `lit` marks a shuffle or repeat that is on.
+    #[allow(clippy::too_many_arguments, reason = "each says how the button looks")]
     fn button(
         &mut self,
         glyph: &'static str,
         command: MediaCommand,
         enabled: bool,
         emphasis: Option<f32>,
+        lit: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let slot = match command {
-            MediaCommand::Previous => 0,
-            MediaCommand::Toggle => 1,
-            // Going to a place of the piece has no button.
-            MediaCommand::Next | MediaCommand::Seek(_) => 2,
+            MediaCommand::Shuffle(_) => 0,
+            MediaCommand::Previous => 1,
+            MediaCommand::Toggle | MediaCommand::Play | MediaCommand::Pause => 2,
+            // Going to a place of the piece and stopping have no button.
+            MediaCommand::Next | MediaCommand::Seek(_) | MediaCommand::Stop => 3,
+            MediaCommand::Repeat(_) => 4,
         };
         let state = self.buttons[slot].state(window);
         let (base, color, width, radius) = match emphasis {
@@ -504,6 +734,12 @@ impl Controls {
                 theme.colors.primary,
                 TOGGLE_WIDTH,
                 BUTTON_SIZE / 2. + (theme.shape.medium - BUTTON_SIZE / 2.) * playing,
+            ),
+            None if lit => (
+                theme.colors.secondary_container,
+                theme.colors.primary,
+                BUTTON_SIZE,
+                BUTTON_SIZE / 2.,
             ),
             None => (
                 theme.colors.surface_container_highest,
@@ -545,44 +781,67 @@ impl Controls {
 impl Render for Controls {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
+        let language = Language::of(cx);
+        let chips = self.chips(&theme, window, cx);
         let Some(now) = self.player.read(cx).now.clone() else {
-            return div()
-                .text_color(theme.colors.on_surface_variant)
-                .child("Nothing is playing");
+            return div().flex().flex_col().child(chips).child(
+                div()
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(language.say("Nothing is playing")),
+            );
         };
         self.playing.animate_to(if now.playing { 1. } else { 0. });
         let playing = self.playing.value(window).clamp(0., 1.);
         let toggle = if now.playing { ICON_PAUSE } else { ICON_PLAY };
         let title = if now.title.is_empty() {
-            "Unnamed".to_owned()
+            language.say("Unnamed").to_owned()
         } else {
             now.title.clone()
         };
+        // Shuffle and repeat are there only where the player tells them.
+        let shuffle = now.shuffle.map(|on| {
+            let command = MediaCommand::Shuffle(!on);
+            self.button(ICON_SHUFFLE, command, now.can_shuffle, None, on, window, cx)
+        });
+        let repeat = now.repeat.map(|repeat| {
+            let glyph = match repeat {
+                Repeat::Track => ICON_REPEAT_ONE,
+                Repeat::Off | Repeat::List => ICON_REPEAT_ALL,
+            };
+            let command = MediaCommand::Repeat(repeat.next());
+            let on = repeat != Repeat::Off;
+            self.button(glyph, command, now.can_repeat, None, on, window, cx)
+        });
         let buttons = [
-            self.button(
+            shuffle,
+            Some(self.button(
                 ICON_PREVIOUS,
                 MediaCommand::Previous,
                 now.can_previous,
                 None,
+                false,
                 window,
                 cx,
-            ),
-            self.button(
+            )),
+            Some(self.button(
                 toggle,
                 MediaCommand::Toggle,
                 now.can_toggle,
                 Some(playing),
+                false,
                 window,
                 cx,
-            ),
-            self.button(
+            )),
+            Some(self.button(
                 ICON_NEXT,
                 MediaCommand::Next,
                 now.can_next,
                 None,
+                false,
                 window,
                 cx,
-            ),
+            )),
+            repeat,
         ];
         let names = div()
             .flex_1()
@@ -606,6 +865,7 @@ impl Render for Controls {
         div()
             .flex()
             .flex_col()
+            .child(chips)
             .child(
                 div()
                     .flex()
@@ -625,7 +885,7 @@ impl Render for Controls {
                     .items_center()
                     .justify_center()
                     .gap(theme.spacing.small)
-                    .children(buttons),
+                    .children(buttons.into_iter().flatten()),
             )
     }
 }
@@ -666,6 +926,7 @@ mod tests {
 
     fn playing(title: &str, artist: &str) -> NowPlaying {
         NowPlaying {
+            app: "player.exe".to_owned(),
             title: title.to_owned(),
             artist: artist.to_owned(),
             playing: true,
@@ -674,6 +935,10 @@ mod tests {
             can_next: true,
             can_seek: false,
             position: None,
+            shuffle: None,
+            can_shuffle: false,
+            repeat: None,
+            can_repeat: false,
         }
     }
 
@@ -704,9 +969,43 @@ mod tests {
 
     #[test]
     fn the_headline_names_what_is_known() {
-        assert_eq!(headline(&playing("Song", "Band")), "Band \u{2013} Song");
-        assert_eq!(headline(&playing("Song", "")), "Song");
-        assert_eq!(headline(&playing("", "Band")), "Band");
-        assert_eq!(headline(&playing("", "")), "Unnamed");
+        let headline = |now| headline(&now, Language::English);
+        assert_eq!(headline(playing("Song", "Band")), "Band \u{2013} Song");
+        assert_eq!(headline(playing("Song", "")), "Song");
+        assert_eq!(headline(playing("", "Band")), "Band");
+        assert_eq!(headline(playing("", "")), "Unnamed");
+    }
+
+    #[test]
+    fn a_chip_names_the_application() {
+        let session = |app: &str, title: &str| SessionInfo {
+            app: app.to_owned(),
+            title: title.to_owned(),
+            artist: String::new(),
+            playing: true,
+            current: false,
+        };
+        let label = |app, title| chip_label(&session(app, title));
+        assert_eq!(label("Spotify.exe", "Song"), "Spotify");
+        assert_eq!(label("chrome.EXE", "Song"), "chrome");
+        assert_eq!(label(r"C:\Apps\vlc.exe", "Song"), "vlc");
+        assert_eq!(
+            label(
+                "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic",
+                "Song"
+            ),
+            "ZuneMusic"
+        );
+        // Known by a number: what it plays tells it.
+        assert_eq!(label("308046B0AF4A39CB", "Video"), "Video");
+        assert_eq!(label("308046B0AF4A39CB", ""), "308046B0AF4A39CB");
+    }
+
+    #[test]
+    fn the_media_action_names_its_command() {
+        assert_eq!(command_named(Some("toggle")), Some(MediaCommand::Toggle));
+        assert_eq!(command_named(Some("stop")), Some(MediaCommand::Stop));
+        assert_eq!(command_named(Some("seek")), None);
+        assert_eq!(command_named(None), None);
     }
 }
