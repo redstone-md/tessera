@@ -1617,6 +1617,12 @@ fn layouts_directory() -> Option<PathBuf> {
     Some(config_dir()?.join(LAYOUTS_DIRECTORY))
 }
 
+/// Whether `text` is a layout file the tiling can use, or why it is not,
+/// for the marketplace to check what it installs.
+pub fn check_layout_file(text: &str) -> Result<(), String> {
+    declarative::Declared::parse("", text).map(drop)
+}
+
 /// How windows move back when tiling is switched off: without overshoot.
 const BACK: SpringSpec = SpringSpec {
     stiffness: 380.,

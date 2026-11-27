@@ -674,7 +674,9 @@ fn check_single(kind: Kind, content: &[u8]) -> anyhow::Result<()> {
         }
         Kind::TilingLayout => {
             let layout = std::str::from_utf8(content).context("the layout is not text")?;
-            toml::from_str::<toml::Table>(layout).context("the layout is no TOML file")?;
+            crate::tiling::check_layout_file(layout)
+                .map_err(anyhow::Error::msg)
+                .context("the layout is invalid")?;
         }
         Kind::Wallpaper => {
             image::guess_format(content).context("the wallpaper is no picture")?;
@@ -1522,7 +1524,7 @@ mod tests {
         image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let layout = b"[[container]]\nkind = \"leaf\"\n";
+        let layout = include_bytes!("../tiling/layouts/wide.toml");
         fs::write(root.join("offered/hills.png"), &png).unwrap();
         fs::write(root.join("offered/notes.txt"), b"text").unwrap();
         fs::write(root.join("offered/wide.toml"), layout).unwrap();

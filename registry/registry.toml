@@ -520,3 +520,27 @@ file = "wallpapers/nebula.jpg"
 sha256 = "8a3a44d098f0f12d327047daeae1367d93df9bc062ee0ec872ed01482832980b"
 preview = "wallpapers/nebula.jpg"
 preview_sha256 = "8a3a44d098f0f12d327047daeae1367d93df9bc062ee0ec872ed01482832980b"
+
+[[tiling_layout]]
+id = "tall"
+name = "Tall"
+description = "A tiling layout that comes with Tessera."
+version = "1.0.0"
+file = "tiling-layouts/tall.toml"
+sha256 = "360bcec44cca56d80af51d7569b0a564b596419bb2531b697819028c27910170"
+
+[[tiling_layout]]
+id = "three-columns"
+name = "Three columns"
+description = "A tiling layout that comes with Tessera."
+version = "1.0.0"
+file = "tiling-layouts/three-columns.toml"
+sha256 = "2261d7b7adbc3a4d5a5403382923d6a5dee38b77d00ba020870657898f367608"
+
+[[tiling_layout]]
+id = "wide"
+name = "Wide"
+description = "A tiling layout that comes with Tessera."
+version = "1.0.0"
+file = "tiling-layouts/wide.toml"
+sha256 = "7062974bd2081577972070afcad4dd42d2583fc286da4309ad2b17572035acb4"
