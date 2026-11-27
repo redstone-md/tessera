@@ -23,6 +23,7 @@ mod launcher;
 mod look;
 mod marketplace;
 mod media;
+mod more_windows_keys;
 mod network;
 pub mod night;
 mod notifications;
@@ -118,6 +119,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
         Box::new(windows_keys::WindowsKeysModule),
+        Box::new(more_windows_keys::MoreWindowsKeysModule),
         Box::new(winx::WinxModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
