@@ -321,3 +321,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# Quick settings: the power plans.
+"Windows tells of no power plan" = "Windows не повідомляє жодної схеми живлення"

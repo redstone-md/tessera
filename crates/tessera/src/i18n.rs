@@ -706,6 +706,11 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // Quick settings: the power plans.
+    (
+        "Windows tells of no power plan",
+        "Windows не сообщает ни одной схемы питания",
+    ),
 ];
 
 #[cfg(test)]

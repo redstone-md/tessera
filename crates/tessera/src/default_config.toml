@@ -283,8 +283,12 @@
 #               and the next one brings them back; it asks the taskbar
 #               of Windows, which stays hidden
 #   "plan"      the power plan of Windows that is in use, read every five
-#               seconds; a click puts the next plan in use, the first
-#               after the last. Option name, false to show the icon alone
+#               seconds; a click opens the popup "plan", which lists the
+#               plans. Option name, false to show the icon alone; option
+#               cycle, true to have a click put the next plan in use, the
+#               first after the last, instead (with popup = "")
+#   "plan-list" every power plan of Windows, the one in use lit; a click
+#               on another puts it in use. The popup "plan" holds it
 #   "hdr"       whether the display of its bar shows high dynamic range,
 #               asked every five seconds; a click switches it. Nothing
 #               on a display that is not capable of it

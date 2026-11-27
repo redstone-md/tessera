@@ -41,7 +41,21 @@ impl PowerPlan {
             .collect()
     }
 
-    /// Puts the plan in use.
+    /// Whether both are the same plan, whichever is in use.
+    pub fn is(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+
+    /// Marks `chosen` as the one in use among `plans`, and no other, as
+    /// they are once Windows has put it in use.
+    pub fn mark_in_use(plans: &mut [Self], chosen: &Self) {
+        for plan in plans {
+            plan.active = plan.is(chosen);
+        }
+    }
+
+    /// Puts the plan in use. It takes a moment: Windows tells every
+    /// program that asked to know.
     pub fn activate(&self) -> io::Result<()> {
         // SAFETY: the identifier outlives the call.
         let result = unsafe { PowerSetActiveScheme(None, Some(&raw const self.id)) };
@@ -137,6 +151,21 @@ mod tests {
             .collect();
         assert_eq!(name_in(&bytes), "Balanced");
         assert_eq!(name_in(&[]), "");
+    }
+
+    #[test]
+    fn one_plan_at_a_time_is_in_use() {
+        let plan = |number: u128, active| PowerPlan {
+            id: GUID::from_u128(number),
+            name: format!("plan {number}"),
+            active,
+        };
+        let mut plans = vec![plan(1, true), plan(2, false), plan(3, false)];
+        PowerPlan::mark_in_use(&mut plans, &plan(3, false));
+        let active: Vec<bool> = plans.iter().map(|plan| plan.active).collect();
+        assert_eq!(active, [false, false, true]);
+        assert!(plans[0].is(&plan(1, false)));
+        assert!(!plans[0].is(&plans[1]));
     }
 
     /// Reads the plans of this computer; changes nothing.

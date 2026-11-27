@@ -321,3 +321,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # Settings: keys that name an action.
 "Action" = "Acción"
 "The action is written in the file by hand." = "La acción se escribe a mano en el archivo."
+
+# Quick settings: the power plans.
+"Windows tells of no power plan" = "Windows no indica ningún plan de energía"

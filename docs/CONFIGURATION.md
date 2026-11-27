@@ -56,3 +56,12 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Quick settings: power plans, sound, media and flyouts
+
+The `plan` widget shows the power plan in use, and a click on it opens the popup `plan`, which the module brings along: the widget `plan-list`, every plan Windows lists, where a click on one that is not in use puts it in use. A popup of the same name in `config.toml` is used instead. `cycle = true` gives the widget the click it had before the list: the next plan, the first after the last; add `popup = ""` so that the popup does not open as well.
+
+```toml
+start = [{ widget = "plan", name = false }]            # opens the list
+end = [{ widget = "plan", cycle = true, popup = "" }]  # goes on to the next plan
+```
