@@ -735,3 +735,7 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Kill process" = "Arrêter le processus"
 "Media" = "Médias"
 "Personalize" = "Personnaliser"
+
+# taskview: Task View and Present Windows.
+"Type to search" = "Tapez pour rechercher"
+"No windows are open" = "Aucune fenêtre ouverte"

@@ -735,3 +735,7 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+
+# taskview: Task View and Present Windows.
+"Type to search" = "Почніть вводити для пошуку"
+"No windows are open" = "Немає відкритих вікон"

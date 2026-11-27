@@ -1384,6 +1384,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // taskview: Task View and Present Windows.
+    ("Type to search", "Начните вводить для поиска"),
+    ("No windows are open", "Нет открытых окон"),
 ];
 
 #[cfg(test)]
