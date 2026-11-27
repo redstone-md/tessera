@@ -435,16 +435,15 @@ The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `prev
 
 ## Notices, devices and privacy
 
-Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low. Tessera gives these as notices of its own, cards in the lower right corner of the display the pointer is on with buttons for what can be done about them. `[notices]` says which:
+Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low. Tessera gives these as notices of its own, listed with the [notifications](#notifications) and shown as banners where banners are on, with buttons for what can be done about them. `[notices]` says which:
 
 ```toml
 [notices]
 drives = true    # a drive plugged in, or a disc or a card put in, with Open and Eject
 battery = true   # warnings at the battery levels of the power plan in use
-seconds = 8      # how long a notice that is not urgent stays, 2 to 60
 ```
 
-Without `drives` or `battery`, each is on only while Tessera is the shell of the session, since Explorer tells of them otherwise. What an ejection came to is always told. A refusal to eject and the warnings at the reserve and critical levels are urgent: they come through do not disturb (`quiet` in `[notifications]`) and stay until they are put away; the other notices are held back by it.
+Without `drives` or `battery`, each is on only while Tessera is the shell of the session, since Explorer tells of them otherwise. What an ejection came to is always told. A notice that is not urgent comes as a banner as a notification does: only where `banners = true` in `[notifications]` and do not disturb does not hold, staying `seconds` there. A refusal to eject and the warnings at the reserve and critical levels are urgent: they come as banners even while banners are off or do not disturb holds (`quiet` in `[notifications]`), and stay until they are put away.
 
 The widgets that go with them are placed by no built-in layout:
 

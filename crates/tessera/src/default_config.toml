@@ -340,15 +340,15 @@
 # size = 25
 # images = true
 
-# The notices Tessera gives where Explorer would, as cards in the lower
-# right corner of the display the pointer is on. Without a key, each is
+# The notices Tessera gives where Explorer would, listed with the
+# notifications and shown as banners where [notifications] shows banners
+# (urgent ones always, until they are put away). Without a key, each is
 # given only while Tessera is the shell of the session.
 #   drives   a drive plugged in, or a disc or a card put in, with buttons
 #            that open it and eject it
 #   battery  warnings at the low, reserve and critical battery levels of
 #            the power plan in use; the last two are urgent: they come
 #            while do not disturb is on and stay until they are put away
-#   seconds  how long a notice that is not urgent stays (8, 2 to 60)
 # [notices]
 # drives = true
 # battery = true

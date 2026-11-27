@@ -26,12 +26,12 @@ use gpui::{
 };
 
 use crate::actions::{Action, Actions};
+use crate::banners::{Banners, Notice, NoticeAction};
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::files::{Files, size_text};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, InteractionState, Spring, staggered};
-use crate::notices::{Notice, NoticeAction, Notices};
 use crate::platform::{
     DeviceChanges, DriveKind, EjectRefusal, Ejection, Launch, RemovableDevice, RemovableDrive,
     Removables,
@@ -291,7 +291,7 @@ impl Drives {
         }
         let language = Language::of(cx);
         for drive in arrived {
-            Notices::post(arrival_notice(&drive, language), cx);
+            Banners::post(arrival_notice(&drive, language), cx);
         }
     }
 
@@ -349,7 +349,7 @@ impl Drives {
             };
             cx.notify();
         });
-        Notices::post(notice, cx);
+        Banners::post(notice, cx);
         Self::refresh(cx);
     }
 

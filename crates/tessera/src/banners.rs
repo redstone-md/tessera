@@ -367,10 +367,6 @@ pub struct NoticeAction {
 }
 
 impl NoticeAction {
-    #[allow(
-        dead_code,
-        reason = "for the parts of Tessera that post notices with buttons"
-    )]
     pub fn new(label: impl Into<SharedString>, run: impl Fn(&mut App) + 'static) -> Self {
         Self {
             label: label.into(),
@@ -392,7 +388,8 @@ pub struct Notice {
     /// They are on the banner only, not in the list of notifications.
     pub actions: Vec<NoticeAction>,
     /// Whether it comes as a banner even while banners are switched off
-    /// or held back, as a warning of an empty battery should.
+    /// or held back, and stays until it is put away, as a warning of an
+    /// empty battery should.
     pub urgent: bool,
 }
 
@@ -544,7 +541,7 @@ impl Banners {
 
     /// Posts `notice`: it is listed with the notifications, and comes as a
     /// banner where banners are shown and not held back, or where it is
-    /// urgent.
+    /// urgent, and then stays until it is put away.
     pub fn post(notice: Notice, cx: &mut App) {
         let Notice {
             app,
@@ -559,7 +556,10 @@ impl Banners {
         if !urgent && !(banners && Self::hush(cx).is_none()) {
             return;
         }
-        let stay = cx.global::<Self>().config.stay();
+        let stay = match urgent {
+            true => Duration::MAX,
+            false => cx.global::<Self>().config.stay(),
+        };
         let item = BannerItem {
             key,
             windows: false,

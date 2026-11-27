@@ -17,8 +17,8 @@ use std::time::Duration;
 use async_channel::Receiver;
 use gpui::{App, AsyncApp, Global, Task};
 
+use crate::banners::{Banners, Notice, NoticeAction};
 use crate::i18n::Language;
-use crate::notices::{Notice, NoticeAction, Notices};
 use crate::platform::{Battery, BatteryChanges, BatteryLevels, CriticalAction, Launch};
 
 /// How often the charge is read where Windows does not tell of changes.
@@ -155,7 +155,7 @@ impl PowerWarnings {
             return;
         };
         let percent = battery.map_or(0, |battery| battery.percent);
-        Notices::post(notice(warning, percent, &levels, Language::of(cx)), cx);
+        Banners::post(notice(warning, percent, &levels, Language::of(cx)), cx);
     }
 }
 
