@@ -267,8 +267,10 @@ struct Entry {
     manifest_sha256: String,
     wasm: String,
     wasm_sha256: String,
-    /// Where the extension suggests a widget of it is put.
-    place: Option<Placement>,
+    /// Where the extension suggests a widget of it is put. Read as it
+    /// is and checked when the offer is fetched, so a place this version
+    /// cannot read leaves out only the place, not the registry.
+    place: Option<toml::Value>,
     #[serde(flatten)]
     preview: PreviewEntry,
 }
@@ -436,8 +438,9 @@ pub struct Offer {
     pub registry: String,
     /// Where the registry that offers it is.
     pub source: Location,
-    /// Where the registry suggests a widget of an extension is put.
-    pub place: Option<Placement>,
+    /// Where the registry suggests a widget of an extension is put, as
+    /// the registry writes it.
+    place: Option<toml::Value>,
     kind: Kind,
     files: Files,
     /// A picture of what it looks like.
@@ -581,12 +584,14 @@ impl Offer {
                 let widgets: Vec<String> = { parsed.widgets.iter() }
                     .map(|widget| parsed.qualified(&widget.name))
                     .collect();
-                let place = self.place.clone().filter(|place| {
-                    { place.check(&widgets) }
+                let place = self.place.clone().and_then(|place| {
+                    Placement::deserialize(place)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|place| place.check(&widgets).map(|()| place))
                         .inspect_err(|error| {
                             report!("the place `{}` suggests is ignored: {error:#}", self.id)
                         })
-                        .is_ok()
+                        .ok()
                 });
                 Ok(Package {
                     wishes: wishes(&parsed.permissions, language),
@@ -1630,6 +1635,9 @@ mod tests {
             None
         );
         assert_eq!(placed("place = { slot = \"middle\" }"), None);
+        assert_eq!(placed("place = { surface = \"bar\" }"), None);
+        assert_eq!(placed("place = { slot = \"end\", size = \"large\" }"), None);
+        assert_eq!(placed("place = \"end\""), None);
         assert_eq!(placed(""), None);
         fs::remove_dir_all(root).unwrap();
     }
