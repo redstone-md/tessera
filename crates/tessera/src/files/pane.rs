@@ -899,14 +899,21 @@ impl FolderPane {
 
     /// Renames the files of `plan`, away from the user interface, and
     /// chooses them under their new names once the folder is read again.
+    /// The renames done go into the undo journal as one piece of work, so
+    /// that one Ctrl+Z takes them all back.
     fn batch_rename(&mut self, plan: Vec<(PathBuf, PathBuf)>, cx: &mut Context<Self>) {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let renamed: Vec<PathBuf> = plan.iter().map(|(_, new)| new.clone()).collect();
-            let problems = cx
+            let applied = cx
                 .background_executor()
                 .spawn(async move { apply(&plan) })
                 .await;
-            for problem in problems {
+            UndoJournal::note(
+                { applied.done.into_iter() }
+                    .map(|(from, to)| FileDeed::Renamed { from, to })
+                    .collect(),
+            );
+            for problem in applied.problems {
                 report!("a file was not renamed: {problem}");
             }
             this.update(cx, |this, cx| {

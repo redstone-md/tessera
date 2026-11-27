@@ -167,13 +167,23 @@ fn same_but_case(a: &Path, b: &Path) -> bool {
     a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
 }
 
+/// What [`apply`] did: the renames that were done, each from the name a
+/// file had to the one it got (a name passed through on the way is left
+/// out), and what went wrong, in words.
+#[derive(Debug, Default)]
+pub struct Applied {
+    pub done: Vec<(PathBuf, PathBuf)>,
+    pub problems: Vec<String>,
+}
+
 /// Renames the files of `plan`, through names of their own first where
 /// new names swap. Nothing is put over a file that is there: such a
 /// file, and each rename that fails, is told in what is given back. A
 /// file whose rename fails gets its old name back where that is free, or
 /// else is told with the name it was left at.
 /// Blocks on the disk; it is done away from the user interface.
-pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Vec<String> {
+pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Applied {
+    let mut done = Vec::new();
     let mut problems = Vec::new();
     let passing = swaps(plan);
     // Each file with the name it has now and the one it gets.
@@ -191,6 +201,7 @@ pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Vec<String> {
     }
     for (from, via, to) in steps {
         let Err(error) = rename_new(&via, to) else {
+            done.push((from.clone(), to.clone()));
             continue;
         };
         problems.push(match to.exists() && !same_but_case(from, to) {
@@ -209,7 +220,7 @@ pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Vec<String> {
             ));
         }
     }
-    problems
+    Applied { done, problems }
 }
 
 /// What the dialog tells the pane it stands over.
@@ -578,5 +589,24 @@ mod tests {
         assert!(!swaps(&plan));
         let capitals = vec![(paths[0].clone(), Path::new("C:\\photos").join("1.TXT"))];
         assert!(!swaps(&capitals));
+    }
+
+    #[test]
+    fn what_was_renamed_is_told_from_the_old_name_to_the_new() {
+        let folder = std::env::temp_dir().join(format!("tessera-rename-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let [one, two, kept] = ["1.txt", "2.txt", "kept.txt"].map(|name| folder.join(name));
+        for path in [&one, &two, &kept] {
+            std::fs::write(path, b"").unwrap();
+        }
+        let swapped = vec![
+            (one.clone(), two.clone()),
+            (two.clone(), one.clone()),
+            (kept.clone(), one.clone()),
+        ];
+        let applied = apply(&swapped);
+        std::fs::remove_dir_all(&folder).ok();
+        assert_eq!(applied.done, swapped[..2]);
+        assert_eq!(applied.problems.len(), 1, "{:?}", applied.problems);
     }
 }
