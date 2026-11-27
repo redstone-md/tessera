@@ -101,7 +101,9 @@ impl Shell {
         Files::configure(&config.files, cx);
         Startup::start(&config.startup, cx);
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
+        Rules::use_templates(&config.rule_templates, cx);
         Rules::start(&config.rules, cx);
+        crate::window_actions::WindowActions::start(&config.window_actions, cx);
         Corners::start(&config.corners, cx);
         ClipHistory::start(&config.clipboard, cx);
         Notices::configure(&config.notices, cx);
@@ -313,7 +315,9 @@ impl Shell {
         Files::configure(&config.files, cx);
         Startup::configure(&config.startup, cx);
         Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
+        Rules::use_templates(&config.rule_templates, cx);
         Rules::configure(&config.rules, cx);
+        crate::window_actions::WindowActions::configure(&config.window_actions, cx);
         Corners::configure(&config.corners, cx);
         ClipHistory::configure(&config.clipboard, cx);
         Night::configure(&config.night_light, cx);

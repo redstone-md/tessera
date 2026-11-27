@@ -46,6 +46,7 @@ mod tiling;
 mod tip;
 mod ui;
 mod wallpaper;
+mod window_actions;
 mod window_menu;
 mod workspaces;
 

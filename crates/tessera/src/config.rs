@@ -425,11 +425,11 @@ pub struct Config {
     // #[serde(default)]
     // pub system: crate::modules::system::SystemConfig,
     // Wave 2, window-behaviour-rules: modifier+drag, title bar clicks, focus follows mouse.
-    // #[serde(default)]
-    // pub window_actions: crate::window_actions::WindowActionsConfig,
+    #[serde(default)]
+    pub window_actions: crate::window_actions::WindowActionsConfig,
     // Wave 2, window-behaviour-rules: bundled rule sets that are switched on.
-    // #[serde(default)]
-    // pub rule_templates: Vec<String>,
+    #[serde(default)]
+    pub rule_templates: Vec<String>,
     // Wave 2, tray-bluetooth: which notification icons are shown, hidden and in what order.
     // #[serde(default)]
     // pub tray: crate::tray_settings::TrayConfig,
