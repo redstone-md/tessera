@@ -36,8 +36,9 @@ use windows::Win32::Devices::Display::{
 };
 use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, LUID};
 use windows::Win32::Graphics::Gdi::{
-    DEVMODEW, DISPLAYCONFIG_PATH_ACTIVE, DISPLAYCONFIG_PATH_MODE_IDX_INVALID,
-    ENUM_DISPLAY_SETTINGS_FLAGS, ENUM_DISPLAY_SETTINGS_MODE, EnumDisplaySettingsExW,
+    DEVMODE_DISPLAY_ORIENTATION, DEVMODEW, DISPLAYCONFIG_PATH_ACTIVE,
+    DISPLAYCONFIG_PATH_MODE_IDX_INVALID, DMDO_90, DMDO_270, ENUM_DISPLAY_SETTINGS_FLAGS,
+    ENUM_DISPLAY_SETTINGS_MODE, EnumDisplaySettingsExW,
 };
 use windows::core::{HRESULT, HSTRING};
 
@@ -578,7 +579,7 @@ fn display_number(device: &str) -> Option<u32> {
 }
 
 /// The modes the desktop `device` offers, each once, largest and quickest
-/// first.
+/// first, as the modes are whichever way the display is turned.
 fn video_modes(device: &str) -> Vec<VideoMode> {
     if device.is_empty() {
         return Vec::new();
@@ -603,16 +604,33 @@ fn video_modes(device: &str) -> Vec<VideoMode> {
         if !listed.as_bool() {
             break;
         }
-        modes.push((
-            mode.dmBitsPerPel,
-            VideoMode {
-                width: mode.dmPelsWidth,
-                height: mode.dmPelsHeight,
-                hertz: mode.dmDisplayFrequency,
-            },
-        ));
+        // SAFETY: for a display the union holds its position and
+        // orientation; a mode listed without them has zeros there, which
+        // is the orientation not turned.
+        let orientation = unsafe { mode.Anonymous1.Anonymous2.dmDisplayOrientation };
+        let listed = VideoMode {
+            width: mode.dmPelsWidth,
+            height: mode.dmPelsHeight,
+            hertz: mode.dmDisplayFrequency,
+        };
+        modes.push((mode.dmBitsPerPel, unturned(orientation, listed)));
     }
     distinct_modes(modes)
+}
+
+/// The mode `listed` is: Windows lists the modes of a display in the
+/// orientation it is turned to, so those of one turned upright higher
+/// than wide, where [`DisplayOutput::mode`] keeps them as the panel has
+/// them.
+fn unturned(orientation: DEVMODE_DISPLAY_ORIENTATION, listed: VideoMode) -> VideoMode {
+    match orientation {
+        DMDO_90 | DMDO_270 => VideoMode {
+            width: listed.height,
+            height: listed.width,
+            ..listed
+        },
+        _ => listed,
+    }
 }
 
 /// Each mode once, of the most colors any mode has, largest and quickest
@@ -822,6 +840,25 @@ mod tests {
                 mode(1920, 1080, 60),
                 mode(1280, 720, 60),
             ]
+        );
+    }
+
+    #[test]
+    fn the_modes_of_a_display_turned_upright_are_kept_unturned() {
+        let mode = |width, height| VideoMode {
+            width,
+            height,
+            hertz: 60,
+        };
+        assert_eq!(unturned(DMDO_90, mode(1080, 1920)), mode(1920, 1080));
+        assert_eq!(unturned(DMDO_270, mode(1080, 1920)), mode(1920, 1080));
+        assert_eq!(
+            unturned(DEVMODE_DISPLAY_ORIENTATION(0), mode(1920, 1080)),
+            mode(1920, 1080)
+        );
+        assert_eq!(
+            unturned(DEVMODE_DISPLAY_ORIENTATION(2), mode(1920, 1080)),
+            mode(1920, 1080)
         );
     }
 
