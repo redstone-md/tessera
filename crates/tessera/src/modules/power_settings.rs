@@ -14,8 +14,6 @@
 //! A battery charge limit is not offered: Windows has no setting or
 //! interface for one, only the makers' own tools.
 
-use std::collections::HashMap;
-
 use gpui::{
     App, AppContext, AsyncApp, Context, Div, Entity, FontWeight, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
@@ -23,16 +21,17 @@ use gpui::{
 };
 
 use super::quick::{Face, SettingsPage, TileView, chip, on_or_off, register_tile};
+use super::settings_parts::{Feedback, chip_row, note_line};
 use crate::actions::{Action, Actions};
 use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, InteractionState, Spring};
+use crate::motion::Spring;
 use crate::performance::{Performance, PerformanceMode};
 use crate::platform::{ButtonAction, PowerSetting, PowerSettings, SleepBlock, Supply};
 use crate::runners::fill;
 use crate::shell::Shell;
-use crate::theme::{Motion, Theme};
+use crate::theme::Theme;
 use crate::ui::{TileFace, list_title, one_line, switch};
 
 /// The name of the popup, of its widget and of the action that opens it.
@@ -96,47 +95,6 @@ impl Module for PowerSettingsModule {
         actions.register(INHIBIT, inhibit)?;
         let performance = Action::new(Performance::perform).checking(Performance::check);
         actions.register(PERFORMANCE, performance)
-    }
-}
-
-/// The pointer feedback of the controls of a view, each under a key of
-/// its own, made as they are first drawn.
-pub(super) struct Feedback {
-    motion: Motion,
-    controls: HashMap<(&'static str, usize), Interaction>,
-}
-
-impl Feedback {
-    pub(super) fn new(motion: Motion) -> Self {
-        Self {
-            motion,
-            controls: HashMap::new(),
-        }
-    }
-
-    /// The feedback of the control `key` now.
-    pub(super) fn state(
-        &mut self,
-        key: (&'static str, usize),
-        window: &Window,
-    ) -> InteractionState {
-        let motion = self.motion;
-        { self.controls.entry(key) }
-            .or_insert_with(|| Interaction::new(&motion))
-            .state(window)
-    }
-
-    /// `element` made to show the pointer on it as the control `key` of
-    /// the view `V`, whose feedback `find` gives.
-    pub(super) fn track<V: 'static>(
-        element: Stateful<Div>,
-        key: (&'static str, usize),
-        cx: &mut Context<V>,
-        find: impl Fn(&mut V) -> &mut Self + Clone + 'static,
-    ) -> Stateful<Div> {
-        Interaction::track(element, cx, move |view: &mut V| {
-            find(view).controls.get_mut(&key)
-        })
     }
 }
 
@@ -530,7 +488,7 @@ impl PowerPanel {
         vec![
             list_title(theme, language.say("Performance mode")).into_any_element(),
             chip_row(theme).children(chips).into_any_element(),
-            note(theme, in_force).into_any_element(),
+            note_line(theme, in_force).into_any_element(),
         ]
     }
 
@@ -576,31 +534,12 @@ impl PowerPanel {
                 }));
             }
             if settings.battery {
-                rows.push(note(theme, language.say(supply_label(supply))).into_any_element());
+                rows.push(note_line(theme, language.say(supply_label(supply))).into_any_element());
             }
             rows.push(chip_row(theme).children(chips).into_any_element());
         }
         rows
     }
-}
-
-/// A row of chips that wraps onto more lines where they do not fit.
-fn chip_row(theme: &Theme) -> Div {
-    div()
-        .flex_none()
-        .flex()
-        .flex_wrap()
-        .gap(theme.spacing.small)
-        .px(theme.spacing.small)
-}
-
-/// A line of text in the quieter color.
-fn note(theme: &Theme, text: impl Into<SharedString>) -> Div {
-    div()
-        .flex_none()
-        .px(theme.spacing.small)
-        .text_color(theme.colors.on_surface_variant)
-        .child(text.into())
 }
 
 impl Render for PowerPanel {
@@ -626,10 +565,10 @@ impl Render for PowerPanel {
             .child(self.inhibit_row(&theme, language, window, cx))
             .children(self.performance_rows(&theme, language, window, cx));
         match self.settings.clone() {
-            None => frame = frame.child(note(&theme, language.say("Reading…"))),
+            None => frame = frame.child(note_line(&theme, language.say("Reading…"))),
             Some(None) => {
                 let text = "Windows gives no power plan in use, so its settings cannot be shown";
-                frame = frame.child(note(&theme, language.say(text)));
+                frame = frame.child(note_line(&theme, language.say(text)));
             }
             Some(Some(settings)) => {
                 for setting in PowerSetting::ALL {
@@ -641,7 +580,8 @@ impl Render for PowerPanel {
                 }
                 if settings.battery {
                     let text = "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.";
-                    frame = frame.child(note(&theme, language.say(text)).pt(theme.spacing.small));
+                    frame =
+                        frame.child(note_line(&theme, language.say(text)).pt(theme.spacing.small));
                 }
             }
         }

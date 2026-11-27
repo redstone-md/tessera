@@ -38,6 +38,7 @@ mod run;
 mod runner;
 mod session;
 mod settings;
+mod settings_parts;
 mod sound;
 mod start;
 mod startup;

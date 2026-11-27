@@ -29,8 +29,8 @@ use gpui::{
     div, px,
 };
 
-use super::power_settings::Feedback;
 use super::quick::{SettingsPage, chip};
+use super::settings_parts::{Feedback, chip_row, note_line};
 use crate::actions::{Action, Actions};
 use crate::banners::{Banners, Notice, NoticeAction};
 use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
@@ -1134,25 +1134,6 @@ impl DisplaySettings {
 struct Press {
     prominent: bool,
     usable: bool,
-}
-
-/// A row of chips that wraps onto more lines where they do not fit.
-fn chip_row(theme: &Theme) -> Div {
-    div()
-        .flex_none()
-        .flex()
-        .flex_wrap()
-        .gap(theme.spacing.small)
-        .px(theme.spacing.small)
-}
-
-/// A line of text in the quieter color.
-fn note_line(theme: &Theme, text: impl Into<SharedString>) -> Div {
-    div()
-        .flex_none()
-        .px(theme.spacing.small)
-        .text_color(theme.colors.on_surface_variant)
-        .child(text.into())
 }
 
 impl Render for DisplaySettings {
