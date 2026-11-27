@@ -953,6 +953,9 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # two seconds, so a banner may come that much late, and Windows shows a
 # banner of its own as well unless its settings tell it not to. Windows does
 # not tell what the buttons of a notification do, so a banner has none.
+# Without the key banners are off beside Explorer and on while Tessera is the
+# shell, where Windows draws no banners; banners = false switches them off
+# there too.
 #
 # [notifications]
 # banners = true

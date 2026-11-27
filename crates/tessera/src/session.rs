@@ -262,10 +262,13 @@ pub fn guard(arguments: impl Iterator<Item = String>) -> bool {
 
 /// Has Tessera keep workspaces of its own as the shell where the
 /// configuration names no number: the virtual desktops of Windows are
-/// part of Explorer.
+/// part of Explorer. As the shell it also shows notifications as banners
+/// where the configuration does not say otherwise, since Windows draws no
+/// banners without Explorer.
 pub fn adjust(config: &mut Config) {
     if shell_mode() {
         config.workspaces = config.workspaces.owning(SHELL_WORKSPACES);
+        config.notifications.banners.get_or_insert(true);
     }
 }
 

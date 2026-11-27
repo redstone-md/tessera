@@ -198,9 +198,10 @@ impl QuietSchedule {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationsConfig {
-    /// Whether a notification that arrives is shown as a banner.
-    #[serde(default)]
-    pub banners: bool,
+    /// Whether a notification that arrives is shown as a banner; `None`
+    /// where the configuration does not say, which is no banners beside
+    /// Explorer and banners as the shell ([`crate::session::adjust`]).
+    pub banners: Option<bool>,
     /// Whether do not disturb holds until it is switched off.
     #[serde(default)]
     pub quiet: bool,
@@ -221,6 +222,11 @@ pub struct NotificationsConfig {
 }
 
 impl NotificationsConfig {
+    /// Whether a notification that arrives is shown as a banner.
+    pub fn banners(&self) -> bool {
+        self.banners.unwrap_or(false)
+    }
+
     /// How long a banner stays.
     fn stay(&self) -> Duration {
         let (least, most) = STAY_RANGE;
@@ -254,7 +260,7 @@ impl NotificationsConfig {
     /// a display that is duplicated counts.
     pub fn occupations(&self) -> Option<bool> {
         let kinds = self.quiet_when();
-        (self.banners && !kinds.is_empty()).then(|| kinds.contains(&Occupation::Duplicating))
+        (self.banners() && !kinds.is_empty()).then(|| kinds.contains(&Occupation::Duplicating))
     }
 }
 
@@ -553,7 +559,7 @@ impl Banners {
     /// not while do not disturb holds unless their application has
     /// priority, nor for an application whose banners are switched off.
     pub fn arrive(arrived: &[u64], cx: &mut App) {
-        let Some(this) = cx.try_global::<Self>().filter(|this| this.config.banners) else {
+        let Some(this) = cx.try_global::<Self>().filter(|this| this.config.banners()) else {
             return;
         };
         let stay = this.config.stay();
@@ -596,7 +602,7 @@ impl Banners {
             on_gone,
         } = notice;
         let key = NotificationStore::add_own(app.clone(), title.clone(), body.clone(), cx);
-        let banners = cx.default_global::<Self>().config.banners;
+        let banners = cx.default_global::<Self>().config.banners();
         if !urgent && !(banners && Self::hush(cx).is_none()) {
             return Posted { key, shown: false };
         }
@@ -1337,9 +1343,18 @@ mod tests {
     }
 
     #[test]
+    fn banners_are_off_where_the_configuration_does_not_say() {
+        let read = |text: &str| toml::from_str::<NotificationsConfig>(text).unwrap();
+        assert_eq!(read("").banners, None);
+        assert!(!read("").banners());
+        assert!(read("banners = true").banners());
+        assert_eq!(read("banners = false").banners, Some(false));
+    }
+
+    #[test]
     fn being_busy_is_asked_only_while_it_holds_banners_back() {
         let config = |banners, quiet_when: Option<Vec<Occupation>>| NotificationsConfig {
-            banners,
+            banners: Some(banners),
             quiet_when,
             ..Default::default()
         };

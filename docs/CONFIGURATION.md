@@ -311,6 +311,8 @@ history = 200         # notifications kept after they left Windows, at most 1000
 quiet = false         # do not disturb until switched off
 quiet_when = ["fullscreen", "game", "presenting", "duplicating"]  # the default
 schedule = { from = "22:00", to = "07:00", days = ["fri", "sat"] }
+# Without `banners`, banners are off beside Explorer and on while Tessera is the shell,
+# where Windows draws none; `banners = false` switches them off there too.
 
 [[notification_rule]]
 app = "Microsoft Teams*"  # the name or the identifier, with * and ?
