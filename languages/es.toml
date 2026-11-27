@@ -667,3 +667,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Num Lock off" = "Bloq Num desactivado"
 "Nothing is playing" = "No se reproduce nada"
 "Unnamed" = "Sin nombre"
+# Wallpaper: the widget and the theme of its colors.
+"Wallpaper" = "Fondo de pantalla"
+"Wallpaper colors" = "Colores del fondo de pantalla"

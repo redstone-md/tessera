@@ -666,3 +666,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Num Lock off" = "Num-Taste aus"
 "Nothing is playing" = "Es wird nichts abgespielt"
 "Unnamed" = "Unbenannt"
+# Wallpaper: the widget and the theme of its colors.
+"Wallpaper" = "Hintergrundbild"
+"Wallpaper colors" = "Farben des Hintergrundbilds"

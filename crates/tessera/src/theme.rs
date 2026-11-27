@@ -13,6 +13,7 @@ use serde::Deserialize;
 use crate::config::{read_user_file, theme_file};
 use crate::motion::SpringSpec;
 use crate::platform::{accent_color, light_mode};
+use crate::wallpaper::wallpaper_color;
 
 mod contrast;
 pub use contrast::Ground;
@@ -24,6 +25,11 @@ pub const ACCENT_THEME: &str = "accent";
 
 /// What a theme file writes as its seed to follow the accent color.
 const ACCENT_SEED: &str = "accent";
+
+/// The theme name that stands for colors derived from the wallpaper, and
+/// what a theme file writes as its seed for that.
+pub const WALLPAPER_THEME: &str = "wallpaper";
+const WALLPAPER_SEED: &str = "wallpaper";
 
 /// The longest length a theme file may set, in pixels. The built-in radius
 /// of fully rounded corners is just below it.
@@ -58,6 +64,9 @@ enum Scheme {
 pub struct Followed {
     accent: Option<[u8; 3]>,
     light: Option<bool>,
+    /// The color of the wallpaper the colors were derived from, where
+    /// they follow it; `Some(None)` while the wallpaper has none.
+    wallpaper: Option<Option<[u8; 3]>>,
 }
 
 /// Material 3 color roles used by shell surfaces.
@@ -332,6 +341,10 @@ impl Theme {
             theme.derive(Some(ACCENT_SEED), Scheme::System, name);
             return theme;
         }
+        if name == WALLPAPER_THEME {
+            theme.derive(Some(WALLPAPER_SEED), Scheme::System, name);
+            return theme;
+        }
         if name.contains(['/', '\\', ':']) || name.starts_with('.') {
             report!("`{name}` is not a theme name, the built-in theme is used");
             return theme;
@@ -380,6 +393,17 @@ impl Theme {
                 self.followed.accent = Some(accent.unwrap_or(BUILT_IN_SEED));
                 accent
             }
+            Some(WALLPAPER_SEED) => {
+                // Until a picture is read, the accent color stands in, and
+                // is followed as well while it does.
+                let color = wallpaper_color();
+                self.followed.wallpaper = Some(color);
+                color.or_else(|| {
+                    let accent = accent_color();
+                    self.followed.accent = Some(accent.unwrap_or(BUILT_IN_SEED));
+                    accent
+                })
+            }
             Some(seed) => parse_rgb(seed)
                 .inspect_err(|error| report!("theme `{name}`: {error:#}"))
                 .ok(),
@@ -392,9 +416,20 @@ impl Theme {
     /// Whether the colors were derived from settings of Windows that have
     /// changed since.
     pub fn is_stale(&self) -> bool {
-        let Followed { accent, light } = self.followed;
+        let Followed {
+            accent,
+            light,
+            wallpaper,
+        } = self.followed;
         accent.is_some_and(|accent| accent_color().unwrap_or(BUILT_IN_SEED) != accent)
             || light.is_some_and(|light| light_mode().unwrap_or(false) != light)
+            || wallpaper.is_some_and(|color| wallpaper_color() != color)
+    }
+
+    /// Whether the colors are derived from the wallpaper, which then
+    /// reads the wallpaper of Windows for them where it draws nothing.
+    pub fn follows_wallpaper(&self) -> bool {
+        self.followed.wallpaper.is_some()
     }
 }
 
@@ -719,7 +754,7 @@ fn parse_color(text: &str) -> anyhow::Result<Hsla> {
 }
 
 /// `#rrggbb` as `[red, green, blue]`.
-fn parse_rgb(text: &str) -> anyhow::Result<[u8; 3]> {
+pub(crate) fn parse_rgb(text: &str) -> anyhow::Result<[u8; 3]> {
     let digits = text.strip_prefix('#').unwrap_or_default();
     if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("`{text}` is not a color of the form #rrggbb");

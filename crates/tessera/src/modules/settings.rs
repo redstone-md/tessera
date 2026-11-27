@@ -28,6 +28,7 @@ use crate::panel::Arranging;
 use crate::platform::{AppWindow, Modifiers, ScreenEdge};
 use crate::popup::Popups;
 use crate::shell::Shell;
+use crate::theme::WALLPAPER_THEME;
 use crate::theme::{ACCENT_THEME, Theme};
 use crate::tiling::TileLayout;
 use crate::ui::{icon, state_layer, switch};
@@ -759,6 +760,7 @@ const WIDGET_LABELS: &[(&str, &str)] = &[
     ("update", "Updates"),
     ("user", "Account"),
     ("volume", "Volume"),
+    ("wallpaper", "Wallpaper"),
     ("windows", "Windows"),
     ("winx", "Win+X menu"),
     ("workspaces", "Workspaces"),
@@ -880,14 +882,20 @@ fn themes() -> Vec<String> {
         .filter_map(|path| Some(path.file_stem()?.to_str()?.to_owned()))
         .collect();
     names.retain(|name| name != ACCENT_THEME);
+    names.retain(|name| name != WALLPAPER_THEME);
     names.sort();
     // The colors of Windows are a choice like a file.
     names.insert(0, ACCENT_THEME.to_owned());
+    // So are those of the wallpaper.
+    names.insert(1, WALLPAPER_THEME.to_owned());
     names
 }
 
 /// What the chip of the theme `name` says.
 fn theme_title(name: &str, language: Language) -> SharedString {
+    if name == WALLPAPER_THEME {
+        return language.say("Wallpaper colors").into();
+    }
     if name == ACCENT_THEME {
         language.say("Windows accent").into()
     } else {

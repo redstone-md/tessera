@@ -1288,6 +1288,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Num Lock off", "Num Lock выключен"),
     ("Nothing is playing", "Ничего не воспроизводится"),
     ("Unnamed", "Без названия"),
+    // Wallpaper: the widget and the theme of its colors.
+    ("Wallpaper", "Обои"),
+    ("Wallpaper colors", "Цвета обоев"),
 ];
 
 #[cfg(test)]

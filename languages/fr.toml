@@ -667,3 +667,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Num Lock off" = "Verr. Num désactivé"
 "Nothing is playing" = "Aucune lecture en cours"
 "Unnamed" = "Sans titre"
+# Wallpaper: the widget and the theme of its colors.
+"Wallpaper" = "Fond d'écran"
+"Wallpaper colors" = "Couleurs du fond d'écran"

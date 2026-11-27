@@ -68,11 +68,13 @@ mod show_desktop;
 mod snap;
 mod startup;
 mod system;
+mod system_wallpaper;
 mod taskbar;
 mod thumbnail;
 mod tray;
 mod veil;
 mod video;
+mod wic;
 mod wifi;
 mod window_ops;
 mod windows_key;
@@ -84,6 +86,7 @@ pub use app_commands::AppCommand;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::spatial_sound;
 pub use audio::{AppSound, AudioDevice, AudioOutput};
+pub use backdrop::display_at;
 pub use backdrop::{
     BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,
     read_desktop_if_requested,
@@ -159,12 +162,14 @@ pub use snap::on_resizing_border;
 pub use snap::{Display, MaximizeHover, WindowArranging, front_fills, shift_held};
 pub use startup::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
+pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
 pub use tray::{Balloon, BalloonEvent, BalloonKind};
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};
+pub use wic::decode_with_wic;
 pub use wifi::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
 pub use windows_key::DesktopClose;
 pub use windows_key::{ChoiceKey, TakenKeys, WindowsKey};

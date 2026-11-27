@@ -43,6 +43,7 @@ mod trash;
 mod tray;
 mod update;
 mod user;
+mod wallpaper;
 mod wifi;
 pub mod windows;
 mod windows_keys;
@@ -97,6 +98,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(update::UpdateModule),
         Box::new(tray::TrayModule),
         Box::new(user::UserModule),
+        Box::new(wallpaper::WallpaperModule),
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
         Box::new(windows_keys::WindowsKeysModule),

@@ -667,3 +667,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Num Lock off" = "Num Lock вимкнено"
 "Nothing is playing" = "Нічого не відтворюється"
 "Unnamed" = "Без назви"
+# Wallpaper: the widget and the theme of its colors.
+"Wallpaper" = "Шпалери"
+"Wallpaper colors" = "Кольори шпалер"
