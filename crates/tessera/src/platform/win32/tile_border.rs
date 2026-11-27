@@ -32,9 +32,9 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GW_HWNDPREV, GetMessageW, GetWindow,
     HWND_TOP, MSG, PostMessageW, RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow,
-    WM_APP, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-    WS_POPUP,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA,
+    UpdateLayeredWindow, WM_APP, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::w;
 
@@ -241,12 +241,16 @@ fn look(window: HWND) {
     // SAFETY: the calls only read the order of windows and move this
     // thread's own window, and tolerate a handle whose window is gone.
     unsafe {
-        let above = GetWindow(wanted.around.hwnd(), GW_HWNDPREV)
-            .ok()
-            .filter(|above| !above.is_invalid() && *above != window);
-        let after = above.unwrap_or(HWND_TOP);
+        // Where the border already lies just above it, it keeps its place:
+        // raising it to the top would cover the window's own dialogs.
+        let (after, kept) = match GetWindow(wanted.around.hwnd(), GW_HWNDPREV) {
+            Ok(above) if above == window => (HWND_TOP, true),
+            Ok(above) if !above.is_invalid() => (above, false),
+            _ => (HWND_TOP, false),
+        };
         let flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE;
         let flags = if same { flags } else { flags | SWP_NOMOVE };
+        let flags = if kept { flags | SWP_NOZORDER } else { flags };
         let _ = SetWindowPos(window, Some(after), left, top, 0, 0, flags);
     }
 }
