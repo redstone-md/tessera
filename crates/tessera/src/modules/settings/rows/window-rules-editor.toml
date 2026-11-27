@@ -1,3 +1,173 @@
 # Rows of the settings filled by window-rules-editor. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The editor of the [[rule]] entries.
+
+[[card]]
+section = "Window rules"
+title = "Window rules"
+page = "rules-editor"
+search = ["Pick a window", "Detected window properties", "Rule sets that come with Tessera"]
+
+# [window_actions]: what the pointer does to windows.
+
+[[card]]
+section = "Windows"
+title = "Window actions"
+table = "window_actions"
+search = ["Keep above other windows", "Focus follows the pointer"]
+
+[[card.row]]
+key = "modifier"
+kind = "choice"
+label = "Key held to move and resize windows"
+description = "With it held, the left button moves the window under the pointer and the right button resizes it."
+optional = true
+choices = [
+    { value = "unset", label = "Off" },
+    { value = "alt", label = { en = "Alt" } },
+    { value = "win", label = "Windows key" },
+]
+
+[[card.row]]
+key = "snap_distance"
+kind = "number"
+label = "Snap distance"
+description = "How near the edges of displays and windows a moved window is drawn to them; 0 for none."
+min = 0
+max = 100
+step = 1
+default = 10
+unit = "px"
+
+[[card.row]]
+key = "titlebar_middle"
+kind = "choice"
+label = "Middle button on a title bar"
+default = "none"
+choices = [
+    { value = "none", label = "Nothing" },
+    { value = "lower", label = "Lower" },
+    { value = "minimize", label = "Minimize" },
+    { value = "close", label = "Close" },
+]
+
+[[card.row]]
+key = "focus_follows_mouse"
+kind = "toggle"
+label = "Focus follows the pointer"
+description = "The window the pointer rests on gets the keyboard; Windows' own setting is given back when Tessera quits."
+default = false
+
+[[card.row]]
+key = "focus_delay"
+kind = "number"
+label = "Rest before the focus follows"
+min = 0
+max = 5000
+step = 50
+default = 300
+unit = "ms"
+visible_if = { key = "focus_follows_mouse", equals = true }
+
+[[card.row]]
+key = "focus_raises"
+kind = "toggle"
+label = "Bring it in front too"
+default = false
+visible_if = { key = "focus_follows_mouse", equals = true }
+
+# The placement of new windows and more of what the pointer does.
+
+[[card]]
+section = "Windows"
+title = "Placement and mouse"
+table = "window_actions"
+
+[[card.row]]
+key = "placement"
+kind = "choice"
+label = "Where new windows go"
+description = "Once, when a new window with a title bar is first shown, unless it is tiled or a rule places it."
+default = "windows"
+choices = [
+    { value = "windows", label = "Where Windows puts them" },
+    { value = "centered", label = "Centered" },
+    { value = "under-pointer", label = "Under the pointer" },
+    { value = "zero-corner", label = "Top left corner" },
+    { value = "smart", label = "Where they cover the least" },
+    { value = "maximized", label = "Maximized" },
+    { value = "cascade", label = "Cascaded" },
+]
+
+[[card.row]]
+key = "titlebar_double"
+kind = "choice"
+label = "Double click on a title bar"
+default = "windows"
+choices = [
+    { value = "windows", label = "As Windows does" },
+    { value = "maximize", label = "Maximize or restore" },
+    { value = "minimize", label = "Minimize" },
+    { value = "close", label = "Close" },
+    { value = "lower", label = "Lower" },
+    { value = "above", label = "Keep above other windows" },
+    { value = "nothing", label = "Nothing" },
+]
+
+[[card.row]]
+key = "titlebar_wheel"
+kind = "choice"
+label = "Wheel on a title bar"
+default = "nothing"
+choices = [
+    { value = "nothing", label = "Nothing" },
+    { value = "opacity", label = "Opacity" },
+    { value = "above-below", label = "Keep above or below" },
+    { value = "workspace", label = "Send to the next workspace" },
+    { value = "minimize-restore", label = "Maximize, restore or minimize" },
+]
+
+[[card.row]]
+key = "modifier_wheel"
+kind = "choice"
+label = "Wheel with the key held"
+description = "Over any window, with the key held to move and resize windows."
+default = "nothing"
+choices = [
+    { value = "nothing", label = "Nothing" },
+    { value = "opacity", label = "Opacity" },
+    { value = "workspace", label = "Go to the next workspace" },
+    { value = "volume", label = "Volume" },
+]
+
+[[card.row]]
+key = "modifier_middle"
+kind = "choice"
+label = "Middle button with the key held"
+default = "nothing"
+choices = [
+    { value = "nothing", label = "Nothing" },
+    { value = "close", label = "Close" },
+    { value = "minimize", label = "Minimize" },
+    { value = "lower", label = "Lower" },
+    { value = "window-menu", label = "Window menu" },
+]
+
+[[card.row]]
+key = "inactive_click"
+kind = "choice"
+label = "Click on a window not in front"
+default = "windows"
+choices = [
+    { value = "windows", label = "Bring it in front and pass the click" },
+    { value = "activate-only", label = "Only bring it in front" },
+]
+
+# The titles of the actions of window-rules-editor.
+
+[[action]]
+name = "edit-window-rule"
+title = "Configure special window settings…"
+arg = "The number of a window, with ,temporarily after it to apply until it closes"
