@@ -30,11 +30,16 @@
 //! ```
 //!
 //! Beside the bindings the kit has a builder for the trees `render`
-//! returns ([`Ui`]), readers for settings ([`settings`]), a store for the
-//! state kept across restarts ([`store`]), requests on a timer and in a
-//! queue ([`net`]), calendar and clock arithmetic ([`time`]), number and
-//! text formatting ([`format`]) and a small random number generator
-//! ([`rng`]).
+//! returns ([`Ui`]), what the user did to a widget ([`Event`]), readers
+//! for settings ([`settings`]), a store for the state kept across
+//! restarts ([`store`]), requests on a timer and in a queue ([`net`]),
+//! the state of the machine and the shell and what can be done to it
+//! ([`shell`]), calendar and clock arithmetic ([`time`]), number and text
+//! formatting ([`format`]) and a small random number generator ([`rng`]).
+//!
+//! Every export of the interface has an answer in [`Extension`] that does
+//! nothing unless the extension says otherwise, so an extension writes
+//! only what it uses.
 
 /// The bindings of `wit/extension.wit`, also re-exported at the root.
 pub mod bindings {
@@ -58,15 +63,18 @@ pub fn log(message: &str) {
     eprintln!("{message}");
 }
 
+mod event;
 pub mod format;
 pub mod net;
 pub mod rng;
 pub mod settings;
+pub mod shell;
 pub mod store;
 pub mod time;
 mod ui;
 
-pub use ui::{Id, Ui};
+pub use event::Event;
+pub use ui::{IMAGE_LIMIT, Id, Ui};
 
 /// An extension: the state it keeps between calls and how it answers
 /// Tessera. [`extension!`] creates the value on the first call.
@@ -81,8 +89,35 @@ pub trait Extension: Sized + 'static {
     /// The user pressed the button of `widget` whose action is `action`.
     fn activate(&mut self, _widget: &str, _action: &str, _now: u64) {}
 
+    /// The user did something to `widget`: pressed a button, typed into
+    /// a field, moved a slider or flipped a toggle. Unless an extension
+    /// says otherwise, a press goes on to [`Extension::activate`] and the
+    /// rest is let go.
+    fn input(&mut self, widget: &str, event: Event<'_>, now: u64) {
+        if let Event::Pressed(action) = event {
+            self.activate(widget, action, now);
+        }
+    }
+
     /// The outcome of the request `fetch` numbered `request`.
     fn fetched(&mut self, _request: u32, _outcome: Result<Response, String>, _now: u64) {}
+
+    /// The settings of the extension changed; [`settings`] reads the new
+    /// ones.
+    fn settings_changed(&mut self, _now: u64) {}
+
+    /// What the extension offers for `query`, typed into the launcher,
+    /// when its manifest has a `[runner]` table. It has 300 milliseconds.
+    fn answer(&mut self, _query: &str, _now: u64) -> Vec<Answer> {
+        Vec::new()
+    }
+
+    /// The user chose the answer `id`, whose action is
+    /// [`AnswerAction::Run`].
+    fn run_answer(&mut self, _id: &str, _now: u64) {}
+
+    /// The user pressed the keys of the shortcut `id` of the manifest.
+    fn shortcut(&mut self, _id: &str, _now: u64) {}
 }
 
 /// Exports the [`Extension`] `$app` to Tessera, keeping one value of it
@@ -112,7 +147,9 @@ macro_rules! extension {
                 }
 
                 fn activate(widget: ::std::string::String, action: ::std::string::String) {
-                    with_app(|app, now| $crate::Extension::activate(app, &widget, &action, now))
+                    with_app(|app, now| {
+                        $crate::Extension::input(app, &widget, $crate::Event::parse(&action), now)
+                    })
                 }
 
                 fn fetched(
@@ -120,6 +157,22 @@ macro_rules! extension {
                     outcome: ::core::result::Result<$crate::Response, ::std::string::String>,
                 ) {
                     with_app(|app, now| $crate::Extension::fetched(app, request, outcome, now))
+                }
+
+                fn settings_changed() {
+                    with_app(|app, now| $crate::Extension::settings_changed(app, now))
+                }
+
+                fn answer(query: ::std::string::String) -> ::std::vec::Vec<$crate::Answer> {
+                    with_app(|app, now| $crate::Extension::answer(app, &query, now))
+                }
+
+                fn run_answer(id: ::std::string::String) {
+                    with_app(|app, now| $crate::Extension::run_answer(app, &id, now))
+                }
+
+                fn shortcut(id: ::std::string::String) {
+                    with_app(|app, now| $crate::Extension::shortcut(app, &id, now))
                 }
             }
 
