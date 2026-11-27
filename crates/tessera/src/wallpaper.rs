@@ -571,7 +571,9 @@ impl Wallpaper {
         // Displays that show the same file share what was read, and those
         // of one size the fitted picture as well.
         let mut read_last: Option<(PathBuf, Arc<RgbImage>)> = None;
-        let mut fitted: Option<(Plan, Arc<BackdropPicture>)> = None;
+        // With the color it stands out with, which the primary display
+        // gives the theme whether it made the picture or took it over.
+        let mut fitted: Option<(Plan, Arc<BackdropPicture>, Option<[u8; 3]>)> = None;
         let mut fading = Vec::new();
         for &index in changed {
             let plan = &plans[index];
@@ -587,11 +589,11 @@ impl Wallpaper {
                 (frame.right - frame.left).unsigned_abs(),
                 (frame.bottom - frame.top).unsigned_abs(),
             );
-            let picture = match fitted.take() {
-                Some((of, picture))
+            let (picture, color) = match fitted.take() {
+                Some((of, picture, color))
                     if of == *plan && picture.size() == size && fit != Fit::Span =>
                 {
-                    picture
+                    (picture, color)
                 }
                 // The one of another size is let go of before the next
                 // is made.
@@ -619,7 +621,7 @@ impl Wallpaper {
                     if let (Some(file), Some(image)) = (file, &image) {
                         read_last = Some((file.clone(), image.clone()));
                     }
-                    let picture = cx
+                    let (shown, color) = cx
                         .background_executor()
                         .spawn(async move {
                             let color = match &image {
@@ -630,12 +632,12 @@ impl Wallpaper {
                             (shown, color)
                         })
                         .await;
-                    if index == first {
-                        set_wallpaper_color(picture.1);
-                    }
-                    Arc::new(picture.0)
+                    (Arc::new(shown), color)
                 }
             };
+            if index == first {
+                set_wallpaper_color(color);
+            }
             let taken = cx.update(|cx| {
                 let this = cx.global_mut::<Self>();
                 if this.task != task {
@@ -659,7 +661,7 @@ impl Wallpaper {
                 Some(Ok(())) => fading.push(index),
                 Some(Err(error)) => report!("a display gets no wallpaper: {error:#}"),
             }
-            fitted = Some((plan.clone(), picture));
+            fitted = Some((plan.clone(), picture, color));
         }
         drop(fitted);
         drop(read_last);

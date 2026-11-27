@@ -394,10 +394,15 @@ impl Theme {
                 accent
             }
             Some(WALLPAPER_SEED) => {
-                // Until a picture is read, the accent color stands in.
+                // Until a picture is read, the accent color stands in, and
+                // is followed as well while it does.
                 let color = wallpaper_color();
                 self.followed.wallpaper = Some(color);
-                color.or_else(accent_color)
+                color.or_else(|| {
+                    let accent = accent_color();
+                    self.followed.accent = Some(accent.unwrap_or(BUILT_IN_SEED));
+                    accent
+                })
             }
             Some(seed) => parse_rgb(seed)
                 .inspect_err(|error| report!("theme `{name}`: {error:#}"))
