@@ -7,9 +7,12 @@
 //! While the tray window serves the icons itself, the balloons that arrive
 //! are published on a channel for the notifications of the shell to show,
 //! and the application is told what became of them. Beside Explorer they
-//! go to Explorer, which shows them, and nothing is published but the
-//! withdrawal of one, which tells a reader nothing it has to act on.
+//! go to Explorer, which shows them, and nothing is published but the end
+//! of a balloon that was published while the window served the icons.
+//! Nothing is published before a reader subscribed, and a reader that
+//! falls behind loses the oldest balloons, not the newest.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use async_channel::{Receiver, Sender};
@@ -21,7 +24,7 @@ use windows::Win32::UI::Shell::{
 
 use crate::platform::win32::icon::IconPixels;
 
-/// How many balloons wait for a reader; more are dropped, as nobody reads.
+/// How many balloons wait for a reader; the oldest are dropped for more.
 const WAITING: usize = 32;
 
 /// Marks a balloon that is to be dropped when it cannot be shown at once.
@@ -140,15 +143,22 @@ fn channel() -> &'static (Sender<Balloon>, Receiver<Balloon>) {
     CHANNEL.get_or_init(|| async_channel::bounded(WAITING))
 }
 
-/// The balloons as they arrive. Every receiver handed out takes from the
-/// same stream, so one reader is meant to take them all.
+/// Whether a reader subscribed; before that nothing is kept.
+static SUBSCRIBED: AtomicBool = AtomicBool::new(false);
+
+/// The balloons as they arrive from now on. Every receiver handed out
+/// takes from the same stream, so one reader is meant to take them all.
 pub(super) fn subscribe() -> Receiver<Balloon> {
+    SUBSCRIBED.store(true, Ordering::Relaxed);
     channel().1.clone()
 }
 
-/// Hands `balloon` to the reader, or drops it if too many wait already.
+/// Hands `balloon` to the reader, dropping the oldest that waits if too
+/// many do. Without a reader it is dropped.
 pub(super) fn publish(balloon: Balloon) {
-    let _ = channel().0.try_send(balloon);
+    if SUBSCRIBED.load(Ordering::Relaxed) {
+        let _ = channel().0.force_send(balloon);
+    }
 }
 
 #[cfg(test)]

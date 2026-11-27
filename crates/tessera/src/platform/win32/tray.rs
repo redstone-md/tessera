@@ -33,7 +33,7 @@ mod balloon;
 pub use balloon::{Balloon, BalloonEvent, BalloonKind};
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
@@ -298,6 +298,8 @@ struct Icons {
     generation: u64,
     /// The balloons that began or ended since they were last taken.
     balloons: Vec<Balloon>,
+    /// The icons whose balloon was handed to the reader and not yet ended.
+    published: HashSet<u64>,
 }
 
 impl Icons {
@@ -415,9 +417,26 @@ impl Icons {
             .retain(|id, _| entries.values().any(|entry| entry.id == *id));
     }
 
-    /// The balloons that began or ended since this was last asked.
-    fn take_balloons(&mut self) -> Vec<Balloon> {
-        std::mem::take(&mut self.balloons)
+    /// The balloons that began or ended since this was last asked, as far
+    /// as their reader is to hear of them: those that began while the shell
+    /// serves the icons, as `serving` says, and their ends. Explorer shows
+    /// the others; one that replaces a balloon the reader has ends that.
+    fn take_balloons(&mut self, serving: bool) -> Vec<Balloon> {
+        let published = &mut self.published;
+        let balloons = std::mem::take(&mut self.balloons).into_iter();
+        balloons
+            .filter_map(|balloon| {
+                if balloon.is_withdrawal() {
+                    published.remove(&balloon.id).then_some(balloon)
+                } else if serving {
+                    published.insert(balloon.id);
+                    Some(balloon)
+                } else {
+                    let id = balloon.id;
+                    published.remove(&id).then(|| Balloon::withdrawal(id))
+                }
+            })
+            .collect()
     }
 
     /// The answer to the request for the part `corner` of the place of the
@@ -449,17 +468,6 @@ impl Icons {
             .collect();
         icons.sort_by_key(|icon| icon.id);
         icons
-    }
-}
-
-/// Hands the balloons that began or ended to their reader: all of them
-/// while the shell serves the icons, otherwise only those that ended, as
-/// Explorer shows the others.
-fn publish(balloons: Vec<Balloon>, serving: bool) {
-    for balloon in balloons {
-        if serving || balloon.is_withdrawal() {
-            balloon::publish(balloon);
-        }
     }
 }
 
@@ -695,9 +703,10 @@ impl Tray {
     }
 
     /// The balloons applications show at their icons, and their ends, as
-    /// they arrive while the shell serves the icons itself. Beside Explorer
-    /// only ends arrive, as Explorer shows the balloons. The stream is one
-    /// for the whole process, so one reader is meant to take it.
+    /// they arrive while the shell serves the icons itself. Beside Explorer,
+    /// which shows the balloons, only the ends of those that arrived before
+    /// do. Nothing arrives that came before the first call. The stream is
+    /// one for the whole process, so one reader is meant to take it.
     #[allow(dead_code, reason = "for the notifications that show balloons")]
     pub fn balloons() -> Receiver<Balloon> {
         balloon::subscribe()
@@ -989,9 +998,9 @@ fn record(data: &[u8], serving: bool) -> bool {
     let (accepted, balloons) = {
         let mut icons = icons();
         let accepted = icons.apply(&notice, load_icon);
-        (accepted, icons.take_balloons())
+        (accepted, icons.take_balloons(serving))
     };
-    publish(balloons, serving);
+    balloons.into_iter().for_each(balloon::publish);
     accepted
 }
 
@@ -1010,9 +1019,9 @@ fn upkeep(window: HWND) {
         let mut icons = icons();
         // SAFETY: the call only reads whether a window exists.
         icons.prune(|owner| unsafe { IsWindow(Some(handle(owner))) }.as_bool());
-        icons.take_balloons()
+        icons.take_balloons(serving)
     };
-    publish(balloons, serving);
+    balloons.into_iter().for_each(balloon::publish);
 
     if SERVING.replace(serving) != serving {
         if serving {
@@ -1331,7 +1340,7 @@ mod tests {
             &Notice::parse(&balloon_bytes(NIM_ADD, 1, "Hello", 1)),
             pixels,
         );
-        let balloons = icons.take_balloons();
+        let balloons = icons.take_balloons(true);
         assert_eq!(balloons.len(), 1);
         let first = &balloons[0];
         assert_eq!(
@@ -1344,30 +1353,50 @@ mod tests {
         );
         assert_eq!(first.kind, BalloonKind::Info);
         assert!(first.icon.is_none());
-        assert!(icons.take_balloons().is_empty());
+        assert!(icons.take_balloons(true).is_empty());
 
         // An empty text takes the balloon back.
         icons.apply(&Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)), pixels);
-        let balloons = icons.take_balloons();
+        let balloons = icons.take_balloons(true);
         assert!(balloons.len() == 1 && balloons[0].is_withdrawal());
         icons.apply(&Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "", 0)), pixels);
-        assert!(icons.take_balloons().is_empty());
+        assert!(icons.take_balloons(true).is_empty());
 
         // Removing the icon ends its balloon, as does closing its window.
         icons.apply(
             &Notice::parse(&balloon_bytes(NIM_MODIFY, 1, "Again", 4)),
             pixels,
         );
-        let balloons = icons.take_balloons();
+        let balloons = icons.take_balloons(true);
         assert_eq!(balloons[0].kind, BalloonKind::User);
         assert!(balloons[0].icon.is_some(), "the picture of the icon");
         icons.apply(&notice(NIM_DELETE, 10, 1, 0, ""), pixels);
-        assert!(icons.take_balloons()[0].is_withdrawal());
+        assert!(icons.take_balloons(true)[0].is_withdrawal());
 
         icons.apply(&Notice::parse(&balloon_bytes(NIM_ADD, 2, "Bye", 0)), pixels);
-        icons.take_balloons();
+        icons.take_balloons(true);
         icons.prune(|_| false);
-        assert!(icons.take_balloons()[0].is_withdrawal());
+        assert!(icons.take_balloons(true)[0].is_withdrawal());
+    }
+
+    #[test]
+    fn beside_explorer_only_ends_of_published_balloons_are_handed_on() {
+        let mut icons = Icons::default();
+        let shown = |text: &str| Notice::parse(&balloon_bytes(NIM_MODIFY, 1, text, 1));
+        icons.apply(&shown("Hello"), pixels);
+        assert_eq!(icons.take_balloons(true).len(), 1);
+        // Explorer shows the next one, which ends the first.
+        icons.apply(&shown("Again"), pixels);
+        let ended = icons.take_balloons(false);
+        assert!(ended.len() == 1 && ended[0].is_withdrawal());
+        // The end of one only Explorer showed is no news.
+        icons.apply(&shown(""), pixels);
+        assert!(icons.take_balloons(false).is_empty());
+        // Nor is it once the shell serves the icons again.
+        icons.apply(&shown("Third"), pixels);
+        icons.take_balloons(false);
+        icons.apply(&shown(""), pixels);
+        assert!(icons.take_balloons(true).is_empty());
     }
 
     #[test]
