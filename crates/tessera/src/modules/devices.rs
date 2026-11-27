@@ -26,6 +26,7 @@ use gpui::{
 };
 
 use crate::actions::{Action, Actions};
+use crate::autoplay;
 use crate::banners::{Banners, Notice, NoticeAction};
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::files::{Files, size_text};
@@ -142,6 +143,8 @@ impl DeviceState {
 pub struct Drives {
     state: Option<Entity<DeviceState>>,
     tell: bool,
+    /// Whether AutoPlay is done for drives that arrive.
+    autoplay: bool,
     /// The number of the last reading started and of the last one taken:
     /// readings take their time, and one that ends after a later one is
     /// not taken.
@@ -155,6 +158,15 @@ impl Drives {
     /// Tells of drives that arrive from now on if `on`, and not otherwise.
     pub fn tell_arrivals(on: bool, cx: &mut App) {
         cx.default_global::<Self>().tell = on;
+        if on {
+            Self::state(cx);
+        }
+    }
+
+    /// Does AutoPlay for drives that arrive from now on if `on`, and not
+    /// otherwise.
+    pub fn play_arrivals(on: bool, cx: &mut App) {
+        cx.default_global::<Self>().autoplay = on;
         if on {
             Self::state(cx);
         }
@@ -286,12 +298,25 @@ impl Drives {
             }
             arrived
         });
-        if !cx.global::<Self>().tell {
+        let Self { tell, autoplay, .. } = *cx.global::<Self>();
+        if !tell && !autoplay {
             return;
         }
         let language = Language::of(cx);
         for drive in arrived {
-            Banners::post(arrival_notice(&drive, language), cx);
+            let notice = tell.then(|| arrival_notice(&drive, language));
+            if !autoplay {
+                if let Some(notice) = notice {
+                    Banners::post(notice, cx);
+                }
+                continue;
+            }
+            let medium = autoplay::medium_of(
+                drive.drive.kind == DriveKind::Optical,
+                drive.device.is_some(),
+            );
+            let (root, title) = (drive.drive.root.clone(), drive.drive.title());
+            autoplay::arrived(root, title, medium, notice, cx);
         }
     }
 

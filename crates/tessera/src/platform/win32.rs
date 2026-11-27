@@ -11,6 +11,7 @@ mod app_commands;
 mod app_windows;
 mod appbar;
 mod audio;
+mod autoplay;
 mod backdrop;
 mod bin;
 mod bluetooth;
@@ -94,6 +95,7 @@ pub use app_commands::AppCommand;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::spatial_sound;
 pub use audio::{AppSound, AudioDevice, AudioOutput};
+pub use autoplay::{AutoPlay, AutoPlayHandler, AutoPlayOffer, Chosen, Invoke, Medium};
 pub use backdrop::display_at;
 pub use backdrop::{
     BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,

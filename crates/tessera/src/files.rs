@@ -28,15 +28,17 @@ use session::{Opening, Session};
 use view::FilesView;
 
 use crate::actions::{Action, Actions};
+use crate::autoplay::{self, AutoPlayList, AutoPlayWhen};
 use crate::banners::{Banners, Notice};
+use crate::config::{PopupConfig, WidgetSpec};
 use crate::explorer_args::{Destination, ExplorerArgs, KnownPlace, Places, explorer_command_line};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::modules::devices::letter_of as drive_letter_of;
+use crate::modules::devices::{Drives, letter_of as drive_letter_of};
 use crate::platform::Place;
 use crate::platform::{
     DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, known_folder_path,
-    reveal_with, start_explorer,
+    reveal_with, shell_mode, start_explorer,
 };
 use crate::theme::Theme;
 use crate::ui::{icon, pill};
@@ -75,6 +77,9 @@ pub struct FilesConfig {
     /// known types hidden, hidden and protected files shown as Explorer
     /// shows them, and the names a `desktop.ini` gives.
     pub explorer: bool,
+    /// When AutoPlay is done for drives that arrive: as the shell only
+    /// (Explorer does it otherwise), always, or never.
+    pub autoplay: AutoPlayWhen,
 }
 
 impl Default for FilesConfig {
@@ -88,6 +93,7 @@ impl Default for FilesConfig {
             per_folder: false,
             restore: false,
             explorer: true,
+            autoplay: AutoPlayWhen::Shell,
         }
     }
 }
@@ -106,6 +112,12 @@ impl Files {
     pub fn configure(config: &FilesConfig, cx: &mut App) {
         cx.default_global::<Self>().config = *config;
         Self::take_reveals(config.own, cx);
+        Drives::play_arrivals(config.autoplay.active(shell_mode()), cx);
+    }
+
+    /// Whether the folders the surfaces of Tessera open open here.
+    pub fn opens_folders(cx: &App) -> bool {
+        Self::config(cx).own
     }
 
     /// Has the files that `platform::reveal` shows in their folders shown
@@ -391,6 +403,20 @@ impl Module for FilesModule {
         widgets.register("files", |context, cx| {
             let folder = context.text("folder").unwrap_or_default().to_owned();
             cx.new(|_| FilesButton { folder }).into()
+        })?;
+        // AutoPlay asks here what to do with a drive that arrived.
+        widgets.register_panel(autoplay::POPUP, |_, cx| cx.new(AutoPlayList::new).into())?;
+        widgets.register_popup(PopupConfig {
+            name: autoplay::POPUP.to_owned(),
+            place: Default::default(),
+            width: 360.,
+            height: 380.,
+            content: vec![WidgetSpec {
+                widget: autoplay::POPUP.to_owned(),
+                popup: None,
+                options: toml::Table::new(),
+            }],
+            side: Vec::new(),
         })
     }
 

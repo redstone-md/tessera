@@ -9,6 +9,7 @@
 mod report;
 
 mod actions;
+mod autoplay;
 mod badges;
 mod banners;
 mod clipboard;
