@@ -1625,6 +1625,28 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Other keys are bound to these actions with a [[key]] in config.toml.",
         "Другие клавиши назначаются этим действиям записью [[key]] в config.toml.",
     ),
+    // window-behaviour-rules: the window menu and the action kill-window.
+    ("Keep below other windows", "Держать под другими окнами"),
+    (
+        "Stop keeping below other windows",
+        "Не держать под другими окнами",
+    ),
+    ("Fill the display", "На весь экран"),
+    ("Stop filling the display", "Выйти из полноэкранного режима"),
+    ("Hide the title bar", "Скрыть заголовок окна"),
+    ("Show the title bar", "Показать заголовок окна"),
+    ("Move with the keyboard", "Переместить с клавиатуры"),
+    ("Resize with the keyboard", "Изменить размер с клавиатуры"),
+    ("Kill window", "Завершить окно"),
+    (
+        "Click a window to end its program. Esc cancels.",
+        "Щёлкните окно, чтобы завершить его программу. Esc — отмена.",
+    ),
+    ("Process", "Процесс"),
+    (
+        "It ends at once: what it has not saved is lost.",
+        "Она завершится сразу: всё несохранённое пропадёт.",
+    ),
 ];
 
 #[cfg(test)]

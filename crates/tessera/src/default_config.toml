@@ -62,6 +62,12 @@
 # session. The keys they bring are named with the actions below.
 # windows_keys = true
 
+# The sets of [[rule]] entries that come with Tessera to switch on:
+# "browsers", "games" (launchers and overlays float), "password-managers",
+# "system-dialogs", "development", "adobe" and "picture-in-picture" (above
+# the other windows). Your own rules come after them and have the last word.
+# rule_templates = ["system-dialogs", "picture-in-picture"]
+
 # Each [[key]] is a key combination Tessera answers wherever it is pressed.
 # press names it: keys to hold among alt, ctrl, shift and win, then the key
 # to press, joined by +; that key is a digit, a letter, f1 to f24, space,
@@ -246,6 +252,12 @@
 #                      keep above, opacity, workspace, display, snap,
 #                      maximize, minimize, close, and a [[rule]] written
 #                      for it; brings alt+f3
+#                      the window menu also keeps a window below, fills
+#                      the display with it, hides its title bar, moves
+#                      or resizes it with the keys, and ends its program
+#             kill-window  covers the displays; a click on a window asks
+#                      whether its program is to be ended at once; Esc
+#                      leaves; brings ctrl+alt+escape
 #             quiet    do not disturb: arg "on", "off", "morning" (until
 #                      eight), a number of minutes, or "toggle" as without
 #                      one
@@ -1003,6 +1015,77 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # workspace = 2
 # display = 2
 # maximize = true
+#
+# More of what a rule can do (window-behaviour-rules):
+#   minimized = true    minimize it
+#   fullscreen = true   it covers all of its display without title bar or
+#                       frame; Tessera gives both back when the rule goes or
+#                       Tessera quits
+#   below = true        keep it below the other windows: it is lowered again
+#                       whenever another window comes in front
+#   sticky = true       show it on every workspace; read, but Tessera's
+#                       workspaces cannot do that yet
+#   inactive_opacity    0.1 to 1: how opaque it is drawn while another
+#                       window is in front
+#   no_titlebar = true  take its title bar away, keeping the border that
+#                       resizes it; given back as fullscreen is
+#   min_size, max_size  [width, height] in logical pixels it is kept within
+#                       when it first appears and when the rules change
+#   category            a word for its kind, as "browser" or "game"
+#   apply = "remember"  as "initially", and the next window the rule names
+#                       opens where the last one was, as kept in
+#                       rules-state.toml beside this file
+# Besides exe, app, title and class, a rule names windows by:
+#   path   the whole path of the program, as "C:\Program Files\*"
+#   match  how all names of the table are matched: "glob" (the default: *,
+#          ? and "re:"), "equals", "starts", "ends", "contains" or "regex";
+#          small and capital letters are alike in all of them
+#   not    a table of names the window must not have
+#   any    a list of tables of names, one of which is to fit
+#   all    a list of tables of names, all of which are to fit
+# The tables in not, any and all take the same keys and match as the table
+# around them unless they give match themselves.
+#
+# [[rule]]
+# any = [{ exe = "chrome.exe" }, { exe = "msedge.exe" }]
+# not = { title = "Picture?in?picture" }
+# match = "equals"
+# category = "browser"
+# apply = "remember"
+#
+# [[rule]]
+# path = "C:\\Games\\"
+# match = "starts"
+# fullscreen = true
+# inactive_opacity = 0.85
+
+# [window_actions] moves and resizes windows with the pointer while a key is
+# held, as KWin does, and more; all of it is off without the table.
+#   modifier = "alt"     or "win": with it held, the left button moves the
+#                        window under the pointer from wherever it is
+#                        pressed, the right button resizes it from its
+#                        nearest corner, and the window gets nothing of
+#                        those presses; a maximized window is restored
+#                        around the pointer first
+#   snap_distance = 10   while Tessera moves a window so, its sides are
+#                        drawn to the edges of the displays and of other
+#                        windows this near, in logical pixels; 0 for none.
+#                        Windows dragged by their title bar are moved by
+#                        Windows and are not drawn
+#   titlebar_middle      what the middle button does on a title bar:
+#                        "lower", "minimize", "close" or "none" (default)
+#   focus_follows_mouse  true: Windows gives the keyboard to the window the
+#                        pointer rests on for focus_delay milliseconds (300),
+#                        and with focus_raises = true brings it in front too;
+#                        given back when Tessera quits
+#
+# [window_actions]
+# modifier = "alt"
+# snap_distance = 10
+# titlebar_middle = "lower"
+# focus_follows_mouse = true
+# focus_delay = 300
+# focus_raises = false
 
 # Each [[corner]] is a corner or an edge of the displays that does
 # something when the pointer rests there: at is "top-left", "top-right",

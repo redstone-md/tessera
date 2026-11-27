@@ -3,11 +3,13 @@
 
 //! The window menu, as KWin has one: for the window in front, the action
 //! `window-menu` (Alt+F3 where the keys of Windows are in use) opens a
-//! menu under its title bar that keeps it above the others or no longer,
-//! makes it more or less see-through, sends it to another workspace of
-//! Tessera's own or to the next display, snaps it to the left or right
-//! half, maximizes, restores, minimizes or closes it, and writes a
-//! `[[rule]]` for windows like it into the configuration.
+//! menu under its title bar that keeps it above or below the others or no
+//! longer, makes it more or less see-through, sends it to another workspace
+//! of Tessera's own or to the next display, snaps it to the left or right
+//! half, maximizes or restores it, has it fill its display, takes its title
+//! bar away, moves or resizes it with the arrow keys, minimizes or closes
+//! it, ends its program once that is confirmed, and writes a `[[rule]]`
+//! for windows like it into the configuration.
 
 use gpui::App;
 
@@ -18,10 +20,20 @@ use crate::platform::{AppWindow, AppWindowId, Display, Launch};
 use crate::rules::write_rule_for;
 use crate::shell::Shell;
 use crate::snap::{Snapper, anchor_at};
+use crate::tiling::Tiler;
+use crate::window_actions::ask_to_kill;
 use crate::workspaces::Workspaces;
 
 const ICON_ABOVE: &str = "\u{e718}";
 const ICON_NOT_ABOVE: &str = "\u{e77a}";
+const ICON_BELOW: &str = "\u{e70d}";
+const ICON_NOT_BELOW: &str = "\u{e70e}";
+const ICON_FULL_SCREEN: &str = "\u{e740}";
+const ICON_WINDOWED: &str = "\u{e73f}";
+const ICON_TITLE_BAR: &str = "\u{e737}";
+const ICON_MOVE: &str = "\u{e7c2}";
+const ICON_RESIZE: &str = "\u{e744}";
+const ICON_KILL: &str = "\u{e7ba}";
 const ICON_OPACITY: &str = "\u{e790}";
 const ICON_WORKSPACE: &str = "\u{e8a9}";
 const ICON_DISPLAY: &str = "\u{e7f4}";
@@ -40,10 +52,11 @@ const OPACITIES: [u32; 4] = [100, 85, 70, 50];
 /// under a title bar of the usual height.
 const BELOW: f32 = 32.;
 
-/// Registers the action `window-menu`.
+/// Registers the action `window-menu`, and `kill-window` beside it.
 pub fn register(actions: &mut Actions) -> anyhow::Result<()> {
     let menu = Action::new(|_, cx| open_for_front(cx)).by_default("alt+f3", None);
-    actions.register("window-menu", menu)
+    actions.register("window-menu", menu)?;
+    crate::window_actions::register(actions)
 }
 
 /// Opens the window menu for the window in front, unless it is one of
@@ -79,6 +92,12 @@ pub fn open(id: AppWindowId, cx: &mut App) {
     entries.push(MenuEntry::new(glyph, label, move |_| {
         id.set_topmost(!above);
     }));
+    let below = id.is_kept_below();
+    let (glyph, label) = match below {
+        false => (ICON_BELOW, say("Keep below other windows")),
+        true => (ICON_NOT_BELOW, say("Stop keeping below other windows")),
+    };
+    entries.push(MenuEntry::new(glyph, label, move |_| id.keep_below(!below)));
     let current = nearest_opacity(id.opacity());
     for opacity in OPACITIES.into_iter().filter(|&opacity| opacity != current) {
         let label = format!("{} {opacity} %", say("Window opacity"));
@@ -110,6 +129,7 @@ pub fn open(id: AppWindowId, cx: &mut App) {
         ),
         false => snap(ICON_MAXIMIZE, say("Maximize the window"), "maximize"),
     });
+    entries.extend(shape_entries(id, display, cx));
     entries.push(MenuEntry::new(
         ICON_MINIMIZE,
         say("Minimize the window"),
@@ -124,6 +144,10 @@ pub fn open(id: AppWindowId, cx: &mut App) {
             id.close();
         },
     ));
+    entries.push(MenuEntry::new(ICON_KILL, say("Kill process"), move |cx| {
+        // The menu closes first, so that the question takes the keyboard.
+        cx.defer(move |cx| ask_to_kill(id, cx));
+    }));
     let label = say("Create a rule for this window");
     entries.push(MenuEntry::new(ICON_RULE, label, move |cx| {
         create_rule(id, cx)
@@ -137,6 +161,48 @@ pub fn open(id: AppWindowId, cx: &mut App) {
     };
     let anchor = anchor_at(&display, point, cx);
     Menus::open(entries, anchor, cx);
+}
+
+/// The entries that change the shape of the window `id` on `display`:
+/// fill the display or no longer, take the title bar away or give it back,
+/// and move or resize it with the arrow keys. A window the tiling places
+/// is not made to fill its display, as the tiling would put it back in its
+/// tile.
+fn shape_entries(id: AppWindowId, display: Display, cx: &App) -> Vec<MenuEntry> {
+    let say = |text: &'static str| Language::of(cx).say(text);
+    let filled = id.fills_display();
+    let (glyph, label) = match filled {
+        false => (ICON_FULL_SCREEN, say("Fill the display")),
+        true => (ICON_WINDOWED, say("Stop filling the display")),
+    };
+    let fill = MenuEntry::new(glyph, label, move |_| {
+        id.fill_display((!filled).then_some(display.frame));
+    });
+    let taken = id.title_bar_taken();
+    let label = match taken {
+        false => say("Hide the title bar"),
+        true => say("Show the title bar"),
+    };
+    let title_bar = MenuEntry::new(ICON_TITLE_BAR, label, move |_| {
+        id.show_title_bar(taken);
+    });
+    // Windows moves and resizes only the window in front with the keys.
+    let moving = MenuEntry::new(ICON_MOVE, say("Move with the keyboard"), move |cx| {
+        cx.defer(move |_| {
+            id.activate();
+            id.move_with_keys();
+        });
+    });
+    let resizing = MenuEntry::new(ICON_RESIZE, say("Resize with the keyboard"), move |cx| {
+        cx.defer(move |_| {
+            id.activate();
+            id.resize_with_keys();
+        });
+    });
+    let fill = (filled || !Tiler::manages(id, cx)).then_some(fill);
+    fill.into_iter()
+        .chain([title_bar, moving, resizing])
+        .collect()
 }
 
 /// An entry for each workspace of Tessera's own other than the one of

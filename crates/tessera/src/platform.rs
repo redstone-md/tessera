@@ -55,6 +55,7 @@ pub use win32::{
     pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer, set_light_mode,
     show_properties,
 };
+pub use win32::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 pub use win32::{Balloon, BalloonEvent};
 pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};

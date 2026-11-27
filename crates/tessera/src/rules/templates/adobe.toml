@@ -1,0 +1,10 @@
+# Adobe: the applications of Adobe draw their panels, dialogs and splash
+# screens as windows of their own, which are not to be tiled, so every
+# window of a program installed under an Adobe folder floats and belongs
+# to the category "graphics".
+
+[[rule]]
+path = "\\Adobe\\"
+match = "contains"
+float = true
+category = "graphics"
