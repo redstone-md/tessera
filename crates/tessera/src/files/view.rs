@@ -27,6 +27,7 @@ use crate::i18n::Language;
 use crate::menu::Menus;
 use crate::platform::FileWork;
 use crate::platform::QuickAccess;
+use crate::platform::{DropEvent, DropTarget, DropZones};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, logo, one_line};
@@ -99,6 +100,10 @@ pub struct FilesView {
     sidebar: Entity<Sidebar>,
     /// What the window hears from each of its panes.
     listening: HashMap<EntityId, [Subscription; 2]>,
+    /// Where the window takes what is dropped on it, which its panes
+    /// write as they draw, and the drop target that reads them.
+    zones: DropZones,
+    _drops: Option<DropTarget>,
     _sidebar: Subscription,
 }
 
@@ -110,9 +115,10 @@ impl FilesView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut listening = HashMap::new();
+        let zones = DropZones::new();
         let mut tabs: Option<Tabs<Entity<FolderPane>>> = None;
         for open in &opening.tabs {
-            let tab = Self::tab_of(open, config, &mut listening, window, cx);
+            let tab = Self::tab_of(open, config, &zones, &mut listening, window, cx);
             match &mut tabs {
                 None => tabs = Some(Tabs::new(tab)),
                 Some(tabs) => {
@@ -122,7 +128,14 @@ impl FilesView {
         }
         let mut tabs = tabs.unwrap_or_else(|| {
             let open = OpenTab::at(Files::home());
-            Tabs::new(Self::tab_of(&open, config, &mut listening, window, cx))
+            Tabs::new(Self::tab_of(
+                &open,
+                config,
+                &zones,
+                &mut listening,
+                window,
+                cx,
+            ))
         });
         tabs.select(opening.active);
         let current = tabs.active().active().read(cx).location().clone();
@@ -135,30 +148,68 @@ impl FilesView {
             }
             true
         });
+        let drops = Self::take_drops(&zones, window, cx);
         let mut view = Self {
             config,
             tabs,
             sidebar,
             listening,
+            zones,
+            _drops: drops,
             _sidebar: listened,
         };
         view.show(window, cx);
         view
     }
 
+    /// Has the window take what is dropped on it over the places its
+    /// panes write into `zones`, in place of GPUI, and read the folders of
+    /// its panes again once the work of a drop is done.
+    fn take_drops(
+        zones: &DropZones,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<DropTarget> {
+        let (target, events) = match DropTarget::register(window, zones.clone()) {
+            Ok(registered) => registered,
+            Err(error) => {
+                report!("the file manager takes no drops: {error:#}");
+                return None;
+            }
+        };
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            while let Ok(event) = events.recv().await {
+                if !matches!(event, DropEvent::Done { .. }) {
+                    continue;
+                }
+                let read = this.update(cx, |this, cx| {
+                    for pane in this.tabs.all().iter().flat_map(Tab::panes) {
+                        pane.update(cx, |pane, cx| pane.load(cx));
+                    }
+                });
+                if read.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        Some(target)
+    }
+
     /// A tab of panes at the locations of `open`.
     fn tab_of(
         open: &OpenTab,
         config: FilesConfig,
+        zones: &DropZones,
         listening: &mut HashMap<EntityId, [Subscription; 2]>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Tab<Entity<FolderPane>> {
         let mut panes = open.panes.iter().take(2);
         let first = panes.next().cloned().unwrap_or_else(Files::home);
-        let mut tab = Tab::single(Self::pane_at(first, config, listening, window, cx));
+        let mut tab = Tab::single(Self::pane_at(first, config, zones, listening, window, cx));
         if let Some(second) = panes.next() {
-            let second = Self::pane_at(second.clone(), config, listening, window, cx);
+            let second = Self::pane_at(second.clone(), config, zones, listening, window, cx);
             tab.split_with(second).ok();
         }
         tab.focus(open.active);
@@ -170,11 +221,16 @@ impl FilesView {
     fn pane_at(
         location: Location,
         config: FilesConfig,
+        zones: &DropZones,
         listening: &mut HashMap<EntityId, [Subscription; 2]>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<FolderPane> {
-        let pane = cx.new(|cx| FolderPane::new(location, config, window, cx));
+        let pane = cx.new(|cx| {
+            let mut pane = FolderPane::new(location, config, window, cx);
+            pane.take_drops(zones.clone());
+            pane
+        });
         let subscriptions = [
             cx.subscribe_in(&pane, window, Self::pane_event),
             cx.observe(&pane, |_, _, cx| cx.notify()),
@@ -189,7 +245,14 @@ impl FilesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<FolderPane> {
-        Self::pane_at(location, self.config, &mut self.listening, window, cx)
+        Self::pane_at(
+            location,
+            self.config,
+            &self.zones,
+            &mut self.listening,
+            window,
+            cx,
+        )
     }
 
     /// The pane in front.
@@ -360,7 +423,14 @@ impl FilesView {
             panes: locations,
             ..OpenTab::at(Location::Computer)
         };
-        let tab = Self::tab_of(&open, self.config, &mut self.listening, window, cx);
+        let tab = Self::tab_of(
+            &open,
+            self.config,
+            &self.zones,
+            &mut self.listening,
+            window,
+            cx,
+        );
         self.tabs.open(tab, false);
         self.show(window, cx);
     }
@@ -889,6 +959,8 @@ impl FilesView {
 impl Render for FilesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
+        // The panes write where they take drops anew as they draw.
+        self.zones.clear();
         div()
             .id("files")
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))

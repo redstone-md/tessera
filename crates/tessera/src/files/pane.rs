@@ -16,9 +16,9 @@ use chrono::{DateTime, Local};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Context, Entity, EventEmitter,
     FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ListAlignment, ListOffset,
-    ListState, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, canvas, div, img,
-    list, prelude::FluentBuilder, px,
+    ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, Point, Render,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window,
+    canvas, div, img, list, prelude::FluentBuilder, px,
 };
 
 use super::model::{
@@ -33,11 +33,11 @@ use crate::field::TextField;
 use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
+use crate::platform::{DragOut, DropZone, DropZones, FileDeed, UndoJournal};
 use crate::platform::{
     Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
     QuickAccess, disk_space, recent_files, reveal_in_explorer, show_properties, terminal,
 };
-use crate::platform::{FileDeed, UndoJournal};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
@@ -70,6 +70,10 @@ const WATCH_INTERVAL: Duration = Duration::from_millis(1500);
 
 /// How many of the files used lately Home shows.
 const RECENT_SHOWN: usize = 20;
+
+/// How far the pointer moves with the button held, in logical pixels,
+/// before what is chosen is dragged.
+const DRAG_DISTANCE: f32 = 4.;
 
 /// How many icons of files are looked up for one frame; the rest come on
 /// the frames after, so that a folder of new kinds opens at once.
@@ -135,6 +139,17 @@ impl gpui::Global for LinkArrow {}
 struct Rename {
     path: PathBuf,
     field: Entity<TextField>,
+}
+
+/// A press of the left button on an item, which may become a drag.
+#[derive(Clone, Copy)]
+struct Pressed {
+    at: Point<Pixels>,
+    position: usize,
+    /// Whether the item was chosen among others, which a click without
+    /// keys narrows the choice to once the button is let go, so that the
+    /// others can be dragged with it.
+    narrow: bool,
 }
 
 /// One location of a window of the file manager, and what it holds.
@@ -207,6 +222,12 @@ pub struct FolderPane {
     window: AnyWindowHandle,
     /// The dialog that renames many files at once, while it is open.
     batch: Option<(Entity<BatchRename>, gpui::Subscription)>,
+    /// The press of the left button on an item, until it is let go or
+    /// becomes a drag.
+    pressed: Option<Pressed>,
+    /// Where the window takes drops, which the pane writes its folder and
+    /// the rows of its folders into as it draws.
+    zones: DropZones,
     /// Waits for the looks of folders to be read, where looks are kept per
     /// folder and they were not read yet.
     _views: Option<gpui::Subscription>,
@@ -314,12 +335,20 @@ impl FolderPane {
             lit: false,
             window: window.window_handle(),
             batch: None,
+            pressed: None,
+            zones: DropZones::new(),
             _views: views,
             _watch: watch,
         };
         pane.take_view(cx);
         pane.load(cx);
         pane
+    }
+
+    /// Has the pane write where it takes drops into `zones`, those of the
+    /// window it is in.
+    pub fn take_drops(&mut self, zones: DropZones) {
+        self.zones = zones;
     }
 
     /// Where the pane is.
@@ -1326,9 +1355,69 @@ impl FolderPane {
             self.open_at(position, window, cx);
             return;
         }
-        self.selection
-            .click(&self.listing, position, held.control, held.shift);
+        let chosen = { self.listing.get(position) }
+            .is_some_and(|entry| self.selection.contains(&entry.path));
+        let narrow = event.button == MouseButton::Left && chosen && !held.control && !held.shift;
+        if !narrow {
+            self.selection
+                .click(&self.listing, position, held.control, held.shift);
+        }
+        if event.button == MouseButton::Left {
+            self.pressed = Some(Pressed {
+                at: event.position,
+                position,
+                narrow,
+            });
+        }
         cx.notify();
+    }
+
+    /// The left button let go: a press on an item chosen among others
+    /// that did not become a drag narrows the choice to it.
+    fn release(&mut self, cx: &mut Context<Self>) {
+        if let Some(pressed) = self.pressed.take()
+            && pressed.narrow
+        {
+            self.selection
+                .click(&self.listing, pressed.position, false, false);
+            cx.notify();
+        }
+    }
+
+    /// Drags what is chosen out, into Explorer, any program or a folder of
+    /// Tessera, once the pointer moved far enough with the left button
+    /// held on an item; the folder is read again after the drop.
+    fn pointer_moved(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pressed) = self.pressed else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.pressed = None;
+            return;
+        }
+        let moved = event.position - pressed.at;
+        let distance = (moved.x / px(1.)).hypot(moved.y / px(1.));
+        if distance < DRAG_DISTANCE {
+            return;
+        }
+        self.pressed = None;
+        let chosen = self.chosen();
+        if chosen.is_empty() {
+            return;
+        }
+        let dragged = DragOut::new(chosen).start(window, cx);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            if let Err(error) = dragged.await {
+                report!("the files were not dragged: {error}");
+            }
+            this.update(cx, |this, cx| this.load(cx)).ok();
+        })
+        .detach();
     }
 
     /// A press on the list where it holds nothing.
@@ -2010,8 +2099,23 @@ impl FolderPane {
             .when(chosen, |item| item.bg(theme.colors.secondary_container))
             .when(!chosen, |item| {
                 item.hover(|style| style.bg(theme.colors.surface_container_highest))
+            })
+            .when(entry.folder, |item| {
+                item.relative().child(self.drop_zone(entry.path.clone()))
             });
         Self::pressable(item, position, cx)
+    }
+
+    /// An element over what holds it, which writes it down as a place
+    /// that takes drops into `folder` where it is drawn.
+    fn drop_zone(&self, folder: PathBuf) -> impl IntoElement {
+        let zones = self.zones.clone();
+        canvas(
+            move |bounds, _, _| zones.push(DropZone { bounds, folder }),
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .size_full()
     }
 
     /// The name of `entry` under its icon, or the field it is renamed in.
@@ -2249,6 +2353,13 @@ impl FolderPane {
                 MouseButton::Right,
                 cx.listener(|this, event, window, cx| this.press_empty(event, window, cx)),
             )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.release(cx)),
+            )
+            .on_mouse_move(
+                cx.listener(|this, event, window, cx| this.pointer_moved(event, window, cx)),
+            )
             .into_any_element()
     }
 }
@@ -2293,6 +2404,8 @@ impl Render for FolderPane {
                 false => gpui::transparent_black(),
             })
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.wheel(event, cx)))
+            // The folder shown takes drops beneath the rows of its folders.
+            .children(self.folder().map(|folder| self.drop_zone(folder)))
             .children(self.render_pattern(&theme))
             .child(content)
             .children(self.batch.as_ref().map(|(dialog, _)| dialog.clone()))
