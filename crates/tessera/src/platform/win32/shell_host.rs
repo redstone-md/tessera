@@ -108,8 +108,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, s, w};
 
-use super::{AppWindowId, Launch, MediaCommand, ScreenRect, Taskbar};
-use super::{AudioOutput, Media};
+use super::{AppCommand, AppWindowId, Launch, ScreenRect, Taskbar};
 
 /// The codes of the shell hook, as `wParam` of the `SHELLHOOK` message.
 const HSHELL_WINDOWCREATED: u32 = 1;
@@ -128,17 +127,6 @@ const HSHELL_MONITORCHANGED: u32 = 16;
 const HSHELL_HIGHBIT: u32 = 0x8000;
 const HSHELL_RUDEAPPACTIVATED: u32 = HSHELL_WINDOWACTIVATED | HSHELL_HIGHBIT;
 const HSHELL_FLASH: u32 = HSHELL_REDRAW | HSHELL_HIGHBIT;
-
-/// The application commands of `WM_APPCOMMAND` the shell answers.
-const APPCOMMAND_VOLUME_MUTE: u16 = 8;
-const APPCOMMAND_VOLUME_DOWN: u16 = 9;
-const APPCOMMAND_VOLUME_UP: u16 = 10;
-const APPCOMMAND_MEDIA_NEXTTRACK: u16 = 11;
-const APPCOMMAND_MEDIA_PREVIOUSTRACK: u16 = 12;
-const APPCOMMAND_MEDIA_PLAY_PAUSE: u16 = 14;
-
-/// How far a key of the volume moves it, as the flyout of Windows does.
-const VOLUME_STEP: f32 = 0.02;
 
 /// How soon after a request for the Start menu another is the same.
 const START_TWICE: Duration = Duration::from_millis(300);
@@ -215,6 +203,10 @@ pub enum ShellEvent {
     /// A command of `WM_APPCOMMAND` that the window in front left, as a
     /// key of the volume or of media.
     AppCommand(u16),
+    /// A key of the volume or of media that the shell took, for the user
+    /// interface to do; told only where Tessera is the shell and
+    /// `[shell] media_keys` is on.
+    Key(AppCommand),
     /// Ctrl+Esc or the Windows key asked for the Start menu.
     StartRequested,
     /// Alt+F4 on the desktop asked how to end the session.
@@ -1187,10 +1179,15 @@ fn shell_hook(code: u32, l: LPARAM) -> LRESULT {
         HSHELL_APPCOMMAND => {
             let command = app_command(l.0);
             publish(ShellEvent::AppCommand(command));
-            let answered = shell
-                && MEDIA_KEYS.load(Ordering::Relaxed)
-                && KeyDeed::of(command).is_some_and(KeyDeed::hand_over);
-            LRESULT(answered.into())
+            // As the shell, a key of the volume or of media is taken here
+            // and done by the user interface, whose flyout shows it.
+            let taken = { shell && MEDIA_KEYS.load(Ordering::Relaxed) }
+                .then(|| AppCommand::of(command))
+                .flatten();
+            if let Some(key) = taken {
+                publish(ShellEvent::Key(key));
+            }
+            LRESULT(taken.is_some().into())
         }
         HSHELL_ENDTASK => {
             publish(ShellEvent::EndTask(AppWindowId::from_raw(l.0)));
@@ -1314,79 +1311,6 @@ fn is_writable(start: *const c_void, size: usize) -> bool {
         && (start as usize)
             .checked_add(size)
             .is_some_and(|last| last <= end)
-}
-
-/// What a key of the volume or of media does, as the shell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeyDeed {
-    Louder,
-    Quieter,
-    Mute,
-    Media(MediaCommand),
-}
-
-impl KeyDeed {
-    /// What the shell does for the application command `command`; `None`
-    /// for one it leaves alone.
-    fn of(command: u16) -> Option<Self> {
-        Some(match command {
-            APPCOMMAND_VOLUME_UP => Self::Louder,
-            APPCOMMAND_VOLUME_DOWN => Self::Quieter,
-            APPCOMMAND_VOLUME_MUTE => Self::Mute,
-            APPCOMMAND_MEDIA_NEXTTRACK => Self::Media(MediaCommand::Next),
-            APPCOMMAND_MEDIA_PREVIOUSTRACK => Self::Media(MediaCommand::Previous),
-            APPCOMMAND_MEDIA_PLAY_PAUSE => Self::Media(MediaCommand::Toggle),
-            _ => return None,
-        })
-    }
-
-    /// Has the thread of the keys do it, and says it was taken.
-    fn hand_over(self) -> bool {
-        static KEYS: OnceLock<Option<mpsc::Sender<KeyDeed>>> = OnceLock::new();
-        let keys = KEYS.get_or_init(|| {
-            let (sender, deeds) = mpsc::channel::<KeyDeed>();
-            let started = thread::Builder::new()
-                .name("shell keys".to_owned())
-                .spawn(move || {
-                    for deed in deeds {
-                        deed.run();
-                    }
-                });
-            match started {
-                Ok(_) => Some(sender),
-                Err(error) => {
-                    report!("the keys of the volume and of media are left alone: {error}");
-                    None
-                }
-            }
-        });
-        keys.as_ref().is_some_and(|keys| keys.send(self).is_ok())
-    }
-
-    /// Does it; a change of the volume also ends muting, as Windows does.
-    fn run(self) {
-        let done = match self {
-            Self::Louder | Self::Quieter => AudioOutput::default_device().and_then(|output| {
-                let volume = stepped(output.volume()?, self == Self::Louder);
-                output.set_muted(false)?;
-                output.set_volume(volume)
-            }),
-            Self::Mute => AudioOutput::default_device()
-                .and_then(|output| output.set_muted(!output.is_muted()?)),
-            Self::Media(command) => Media::send(command).map_err(anyhow::Error::msg),
-        };
-        if let Err(error) = done {
-            report!("a key of the volume or of media did nothing: {error:#}");
-        }
-    }
-}
-
-/// The volume after one step up or down from `volume`, on the grid of
-/// steps, within 0 and 1.
-fn stepped(volume: f32, up: bool) -> f32 {
-    let steps = (volume / VOLUME_STEP).round();
-    let steps = if up { steps + 1. } else { steps - 1. };
-    (steps * VOLUME_STEP).clamp(0., 1.)
 }
 
 /// Asks `window` to close, and has Windows end it if it does not answer
@@ -1596,24 +1520,12 @@ mod tests {
     fn the_command_is_read_without_the_device_bits() {
         // The volume up key of a keyboard: the command in the high word,
         // the device in its top bits.
-        let l = ((0x8000 | u32::from(APPCOMMAND_VOLUME_UP)) << 16) as isize;
-        assert_eq!(app_command(l), APPCOMMAND_VOLUME_UP);
-        assert_eq!(KeyDeed::of(APPCOMMAND_VOLUME_UP), Some(KeyDeed::Louder));
-        assert_eq!(
-            KeyDeed::of(APPCOMMAND_MEDIA_PLAY_PAUSE),
-            Some(KeyDeed::Media(MediaCommand::Toggle))
-        );
+        // APPCOMMAND_VOLUME_UP is 10.
+        let l = ((0x8000 | 10u32) << 16) as isize;
+        assert_eq!(app_command(l), 10);
+        assert_eq!(AppCommand::of(app_command(l)), Some(AppCommand::VolumeUp));
         // Browser back is left to the window.
-        assert_eq!(KeyDeed::of(1), None);
-    }
-
-    #[test]
-    fn the_volume_moves_on_a_grid_of_steps() {
-        assert!((stepped(0.5, true) - 0.52).abs() < 1e-6);
-        assert!((stepped(0.5, false) - 0.48).abs() < 1e-6);
-        assert!((stepped(0.511, true) - 0.53).abs() < 1e-6);
-        assert_eq!(stepped(1., true), 1.);
-        assert_eq!(stepped(0., false), 0.);
+        assert_eq!(AppCommand::of(1), None);
     }
 
     #[test]

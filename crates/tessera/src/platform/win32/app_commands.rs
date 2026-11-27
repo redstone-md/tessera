@@ -43,7 +43,6 @@ impl AppCommand {
     /// The key a command of `WM_APPCOMMAND` names, with or without the
     /// bits that tell which device sent it; `None` for one that is not
     /// for sound or media, as the keys of a browser are.
-    #[allow(dead_code, reason = "the shell host hands its keys to it")]
     pub fn of(command: u16) -> Option<Self> {
         let command = APPCOMMAND_ID(u32::from(command) & !FAPPCOMMAND_MASK);
         Some(match command {

@@ -295,9 +295,9 @@
 #                     again (true)
 #   quit_to_explorer  whether Tessera that quits starts Explorer as the shell,
 #                     so the session keeps one (true)
-#   media_keys        whether the keys of the volume and of media change the
-#                     volume and go to the media application, as Explorer
-#                     has them (true)
+#   media_keys        whether the keys of the volume, of the microphone and
+#                     of media run the actions volume and media, with their
+#                     flyouts, as Explorer has them (true)
 # [shell]
 # emergency_keys = true
 # quit_to_explorer = true

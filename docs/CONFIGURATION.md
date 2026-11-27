@@ -101,6 +101,9 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `notify` | the text of a notice | posts a notice of Tessera's own, listed with the notifications and shown as a banner where banners are: `tessera do notify Backup done \| 3 files copied` has the title before ` \| ` and the text after it |
 | `clipboard` | none | opens the history of the clipboard in the popup `clipboard`, or closes it, and notes the window in front as the one to paste into; its keys (Win+V) are taken from Windows, and Win+V is bound to it where `windows_keys` binds the keys of Windows and `[clipboard]` had the history on as Tessera started |
 | `night-light` | `on`, `off`, `toggle`, or none | switches night light on or off, or over without `arg` or with `toggle`: that of Windows or Tessera's own, as `[night_light] source` says |
+| `volume` | `up`, `down`, `mute` or `mute-microphone` | turns the default output a step up (and lifts its mute) or down, as Windows counts steps for it (2 of 100 for most), mutes it or lifts its mute, or mutes the default microphone or lifts its mute; the flyout shows what came of it where `[flyout]` wants it. |
+| `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
+| `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -346,11 +349,6 @@ to = "07:00"
 ```
 
 The night light of Windows is read from and written to the records Windows keeps for it in the CloudStore of the account, whose layout Windows does not document; Windows switches it by the schedule of its own settings, and `schedule` here does not apply to it. Tessera's own multiplies the gamma ramp of every display with the color of a light of that temperature and gives the displays their own ramps back when Tessera quits; while they are tinted, their own ramps are kept in the file `night-light-ramps` of the configuration directory, so that a Tessera stopped without giving them back gives them back when it starts again. `kelvins` is how warm it is when Tessera starts: the warmth set on `night-light-slider` for Tessera's own is not written down and is forgotten when Tessera quits or `kelvins` is changed. Windows refuses ramps far from the straight line unless the DWORD `GdiIcmGammaRange` = 256 is set under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`; a refused ramp is reported once per display. With a schedule, a click on the tile holds until the schedule next changes its mind, as with Windows.
-| `volume` | `up`, `down`, `mute` or `mute-microphone` | turns the default output a step up (and lifts its mute) or down, as Windows counts steps for it (2 of 100 for most), mutes it or lifts its mute, or mutes the default microphone or lifts its mute; the flyout shows what came of it where `[flyout]` wants it. |
-| `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
-| `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
-
-The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
 ## Quick settings: power plans, sound, media and flyouts
 

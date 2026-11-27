@@ -42,6 +42,7 @@ use serde::Deserialize;
 
 use crate::actions::{Action, Actions};
 use crate::config::{Config, PopupConfig, WidgetSpec};
+use crate::flyout::Flyouts;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
@@ -324,6 +325,7 @@ fn answer(event: ShellEvent, cx: &mut gpui::App) {
         ShellEvent::StartRequested => Shell::start_requested(cx),
         ShellEvent::CloseRequested => ask_how_to_end(cx),
         ShellEvent::QuitRequested | ShellEvent::SessionEnding => cx.quit(),
+        ShellEvent::Key(key) => Flyouts::answer(key, cx),
         _ => {}
     }
 }

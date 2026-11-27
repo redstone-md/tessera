@@ -659,7 +659,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Input" = "Entrada"
 "Sound settings" = "Configuración de sonido"
 "Spatial sound" = "Sonido espacial"
-"On" = "Activado"
 "Microphone off" = "Micrófono desactivado"
 "Microphone on" = "Micrófono activado"
 "Caps Lock on" = "Bloq Mayús activado"

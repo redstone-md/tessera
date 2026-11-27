@@ -659,7 +659,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Input" = "Entrée"
 "Sound settings" = "Paramètres audio"
 "Spatial sound" = "Son spatial"
-"On" = "Activé"
 "Microphone off" = "Micro désactivé"
 "Microphone on" = "Micro activé"
 "Caps Lock on" = "Verr. Maj activé"

@@ -400,9 +400,8 @@ impl Flyouts {
 
     /// Does what Explorer would for the key `command` of the keyboard: runs
     /// the action that does the same, whose flyout shows what came of it.
-    /// For shell mode, where the shell host is told of the keys and no
-    /// Explorer answers them; the shell host then leaves them to this.
-    #[allow(dead_code, reason = "the shell host hands its keys to it")]
+    /// For shell mode, where the shell host takes the keys and no
+    /// Explorer answers them ([`ShellEvent::Key`](crate::platform::ShellEvent)).
     pub fn answer(command: AppCommand, cx: &mut App) {
         let (action, arg) = action_of(command);
         Actions::run(action, Some(arg), cx);

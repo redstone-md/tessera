@@ -5,7 +5,9 @@
 
 mod win32;
 
+pub use win32::AppCommand;
 pub use win32::BinUsage;
+pub use win32::BrightnessLevel;
 pub use win32::DesktopClose;
 pub use win32::DisplayMode;
 pub use win32::InputName;
@@ -17,10 +19,6 @@ pub use win32::Process;
 pub use win32::QuickFolder;
 #[allow(unused_imports, reason = "for the view of the bin in the file manager")]
 pub use win32::RecycledItem;
-pub use win32::AppCommand;
-pub use win32::BrightnessLevel;
-#[allow(unused_imports, reason = "for the starts that wait for a program")]
-pub use win32::Process;
 pub use win32::SessionKey;
 #[allow(
     unused_imports,
@@ -98,10 +96,10 @@ pub use win32::{Launch, Show};
 pub use win32::{PowerMode, PowerModeState};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
+pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{expand_variables, find_program, recent_folder};
-pub use win32::{Repeat, SessionInfo};
 #[allow(
     unused_imports,
     reason = "for the features that ask Explorer while it runs"

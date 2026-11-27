@@ -658,7 +658,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Input" = "Eingabe"
 "Sound settings" = "Toneinstellungen"
 "Spatial sound" = "Räumlicher Klang"
-"On" = "Ein"
 "Microphone off" = "Mikrofon aus"
 "Microphone on" = "Mikrofon an"
 "Caps Lock on" = "Feststelltaste an"

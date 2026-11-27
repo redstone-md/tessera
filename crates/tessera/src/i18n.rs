@@ -1280,7 +1280,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Input", "Ввод"),
     ("Sound settings", "Параметры звука"),
     ("Spatial sound", "Пространственный звук"),
-    ("On", "Вкл."),
     ("Microphone off", "Микрофон выключен"),
     ("Microphone on", "Микрофон включён"),
     ("Caps Lock on", "Caps Lock включён"),
