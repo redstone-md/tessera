@@ -768,6 +768,24 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     // The keyboard layouts (winx-hotkeys).
     ("No window is typed into.", "Нет окна, в котором идёт ввод."),
+    // The menu of Win+X (winx-hotkeys).
+    ("Mobility Center", "Центр мобильности"),
+    ("Power Options", "Управление электропитанием"),
+    ("Event Viewer", "Просмотр событий"),
+    ("System", "Система"),
+    ("Device Manager", "Диспетчер устройств"),
+    ("Network Connections", "Сетевые подключения"),
+    ("Disk Management", "Управление дисками"),
+    ("Computer Management", "Управление компьютером"),
+    ("Terminal", "Терминал"),
+    ("Terminal (Admin)", "Терминал (администратор)"),
+    ("Windows PowerShell", "Windows PowerShell"),
+    ("Windows PowerShell (Admin)", "Windows PowerShell (администратор)"),
+    ("Task Manager", "Диспетчер задач"),
+    ("File Explorer", "Проводник"),
+    ("Search", "Поиск"),
+    ("Run", "Выполнить"),
+    ("Shut down or sign out", "Завершение работы или выход из системы"),
 ];
 
 #[cfg(test)]

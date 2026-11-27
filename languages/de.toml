@@ -352,3 +352,22 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # The keyboard layouts (winx-hotkeys).
 "No window is typed into." = "Kein Fenster nimmt Eingaben entgegen."
+
+# The menu of Win+X (winx-hotkeys).
+"Mobility Center" = "Mobilitätscenter"
+"Power Options" = "Energieoptionen"
+"Event Viewer" = "Ereignisanzeige"
+"System" = "System"
+"Device Manager" = "Geräte-Manager"
+"Network Connections" = "Netzwerkverbindungen"
+"Disk Management" = "Datenträgerverwaltung"
+"Computer Management" = "Computerverwaltung"
+"Terminal" = "Terminal"
+"Terminal (Admin)" = "Terminal (Administrator)"
+"Windows PowerShell" = "Windows PowerShell"
+"Windows PowerShell (Admin)" = "Windows PowerShell (Administrator)"
+"Task Manager" = "Task-Manager"
+"File Explorer" = "Datei-Explorer"
+"Search" = "Suchen"
+"Run" = "Ausführen"
+"Shut down or sign out" = "Herunterfahren oder abmelden"

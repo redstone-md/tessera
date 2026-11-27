@@ -353,3 +353,22 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 # The keyboard layouts (winx-hotkeys).
 "No window is typed into." = "Немає вікна, у якому йде введення."
+
+# The menu of Win+X (winx-hotkeys).
+"Mobility Center" = "Центр мобільності"
+"Power Options" = "Електроживлення"
+"Event Viewer" = "Переглядач подій"
+"System" = "Система"
+"Device Manager" = "Диспетчер пристроїв"
+"Network Connections" = "Мережеві підключення"
+"Disk Management" = "Керування дисками"
+"Computer Management" = "Керування комп’ютером"
+"Terminal" = "Термінал"
+"Terminal (Admin)" = "Термінал (адміністратор)"
+"Windows PowerShell" = "Windows PowerShell"
+"Windows PowerShell (Admin)" = "Windows PowerShell (адміністратор)"
+"Task Manager" = "Диспетчер завдань"
+"File Explorer" = "Провідник"
+"Search" = "Пошук"
+"Run" = "Виконати"
+"Shut down or sign out" = "Завершення роботи або вихід"
