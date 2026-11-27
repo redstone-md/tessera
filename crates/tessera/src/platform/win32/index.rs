@@ -538,7 +538,11 @@ impl FileSearch {
             let at = |time: NaiveDateTime| time.format("%Y-%m-%d %H:%M:%S").to_string();
             let field = "System.DateModified";
             conditions.push(match (comparison, since) {
-                // A span back from today is since its first day.
+                // A span back from today is since its first day, and
+                // `<` or `<=` it is older than that day.
+                (Comparison::Below | Comparison::AtMost, true) => {
+                    format!("{field} < '{}'", at(start))
+                }
                 (_, true) => format!("{field} >= '{}'", at(start)),
                 (Comparison::Equal, false) => {
                     format!("{field} >= '{}' AND {field} < '{}'", at(start), at(end))
@@ -552,7 +556,8 @@ impl FileSearch {
         if let Some((comparison, bytes)) = self.size {
             conditions.push(format!("System.Size {} {bytes}", comparison.sql()));
         }
-        if conditions.is_empty() {
+        // A folder alone asks for all that lies below it.
+        if conditions.is_empty() && self.folder.is_none() {
             return None;
         }
         let scope = self
@@ -563,10 +568,12 @@ impl FileSearch {
             true => "System.Search.Rank DESC",
             false => "System.DateModified DESC",
         };
+        let conditions: String = { conditions.iter() }
+            .map(|condition| format!(" AND {condition}"))
+            .collect();
         Some(format!(
             "SELECT TOP {limit} System.ItemUrl FROM SystemIndex \
-             WHERE SCOPE='{scope}' AND {} ORDER BY {order}",
-            conditions.join(" AND ")
+             WHERE SCOPE='{scope}'{conditions} ORDER BY {order}"
         ))
     }
 }
@@ -715,6 +722,14 @@ mod tests {
         let hostile = FileSearch::parse("ext:pdf'--");
         assert!(hostile.extensions.is_empty());
         assert!(asked("").is_none());
+        // A folder alone is all that lies below it.
+        assert_eq!(
+            asked("in:D:/Shots").as_deref(),
+            Some(
+                "SELECT TOP 20 System.ItemUrl FROM SystemIndex \
+                 WHERE SCOPE='file:D:/Shots' ORDER BY System.DateModified DESC"
+            )
+        );
     }
 
     #[test]
@@ -731,6 +746,11 @@ mod tests {
         );
         assert!(at("modified:week").contains("System.DateModified >= '2026-03-08 00:00:00'"));
         assert!(at("date:today").contains("System.DateModified >= '2026-03-15 00:00:00'"));
+        // Before a span is older than it.
+        let older = at("modified:<week");
+        assert!(older.contains("System.DateModified < '2026-03-08 00:00:00'"));
+        assert!(!older.contains(">="));
+        assert!(at("modified:<=month").contains("System.DateModified < '2026-02-15 00:00:00'"));
         assert_eq!(FileSearch::parse("modified:soon").words, ["modified:soon"]);
     }
 
