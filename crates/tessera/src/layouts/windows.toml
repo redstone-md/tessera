@@ -3,7 +3,7 @@ edge = "bottom"
 thickness = 64
 start = [{ widget = "label", icon = "tessera", popup = "launcher" }, "workspaces"]
 center = ["windows"]
-end = ["problems", { widget = "media", popup = "media" }, "tray", "keyboard", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "clock", popup = "calendar", format = "%H:%M  %d.%m.%Y" }, { widget = "label", icon = "", popup = "settings" }]
+end = ["problems", { widget = "media", popup = "media" }, "privacy", "devices", "tray", "keyboard", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "clock", popup = "calendar", format = "%H:%M  %d.%m.%Y" }, { widget = "label", icon = "", popup = "settings" }]
 
 # Each [[popup]] is a floating panel that opens next to the surface.
 #   name           what widgets refer to

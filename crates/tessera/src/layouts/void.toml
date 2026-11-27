@@ -3,7 +3,7 @@ edge = "top"
 thickness = 36
 start = [{ widget = "focused", show = "program" }, { widget = "cpu", style = "text" }, { widget = "memory", style = "text" }, { widget = "media", popup = "media" }]
 center = ["workspaces", { widget = "clock", popup = "calendar" }]
-end = ["problems", "tray", "keyboard", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
+end = ["problems", "privacy", "devices", "tray", "keyboard", { widget = "bluetooth-button", popup = "bluetooth" }, { widget = "network", popup = "network" }, { widget = "volume", popup = "sound" }, { widget = "label", icon = "", popup = "settings" }]
 
 [[surface]]
 edge = "bottom"

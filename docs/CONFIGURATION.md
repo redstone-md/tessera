@@ -445,7 +445,7 @@ battery = true   # warnings at the battery levels of the power plan in use
 
 Without `drives` or `battery`, each is on only while Tessera is the shell of the session, since Explorer tells of them otherwise. What an ejection came to is always told. A notice that is not urgent comes as a banner as a notification does: only where `banners = true` in `[notifications]` and do not disturb does not hold, staying `seconds` there. A refusal to eject and the warnings at the reserve and critical levels are urgent: they come as banners even while banners are off or do not disturb holds (`quiet` in `[notifications]`), and stay until they are put away.
 
-The widgets that go with them are placed by no built-in layout:
+The built-in layouts place the widgets that go with them before the notification area, as here:
 
 ```toml
 [[surface]]
