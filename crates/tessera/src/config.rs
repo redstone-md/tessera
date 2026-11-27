@@ -563,9 +563,27 @@ pub struct SurfaceConfig {
     /// What the strip has instead on the displays each selector names, by
     /// selector. Where several name a display, each is applied in turn, in
     /// the order of their selectors as text, so the last says what it
-    /// gives.
-    #[serde(default)]
+    /// gives. A selector that cannot be read makes the file rejected.
+    #[serde(default, deserialize_with = "per_display")]
     pub per_display: std::collections::BTreeMap<String, SurfaceOverride>,
+}
+
+/// Reads the overrides of a surface by display, and rejects the file where
+/// a selector cannot be read, as the other blocks are rejected.
+fn per_display<'de, D>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, SurfaceOverride>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let overrides =
+        std::collections::BTreeMap::<String, SurfaceOverride>::deserialize(deserializer)?;
+    for selector in overrides.keys() {
+        DisplaySelector::parse(selector).map_err(|error| {
+            serde::de::Error::custom(format!("`per_display.\"{selector}\"`: {error}"))
+        })?;
+    }
+    Ok(overrides)
 }
 
 impl SurfaceConfig {
@@ -577,8 +595,8 @@ impl SurfaceConfig {
 
     /// The surface as it is on `display`, with what the overrides that
     /// name the display give, and for each slot whether an override
-    /// replaced it. The overrides are taken out of what is returned. An
-    /// override whose selector cannot be read is reported and skipped.
+    /// replaced it. The overrides are taken out of what is returned. Their
+    /// selectors were read when the file was.
     pub fn on_display(&self, display: Option<&DisplayName>) -> (Self, [bool; 3]) {
         let mut placed = Self {
             per_display: std::collections::BTreeMap::new(),
@@ -586,12 +604,8 @@ impl SurfaceConfig {
         };
         let mut replaced = [false; 3];
         for (selector, change) in &self.per_display {
-            let selector = match DisplaySelector::parse(selector) {
-                Ok(selector) => selector,
-                Err(error) => {
-                    report!("`per_display.\"{selector}\"` of a surface is skipped: {error}");
-                    continue;
-                }
+            let Ok(selector) = DisplaySelector::parse(selector) else {
+                continue;
             };
             if !display.is_some_and(|display| selector.matches(display)) {
                 continue;
@@ -1031,6 +1045,16 @@ mod tests {
         assert_eq!(placed.start.len(), 1);
         let (placed, _) = bar.on_display(None);
         assert_eq!(placed.thickness, 40.);
+    }
+
+    #[test]
+    fn an_override_for_no_display_rejects_the_file() {
+        for selector in ["\"0\"", "\" \""] {
+            let text = format!(
+                "[[surface]]\nedge = \"top\"\n[surface.per_display.{selector}]\nthickness = 40\n"
+            );
+            assert!(toml::from_str::<Config>(&text).is_err(), "{selector}");
+        }
     }
 
     #[test]
