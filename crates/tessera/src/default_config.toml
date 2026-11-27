@@ -150,8 +150,9 @@
 #                      to do: switch user, sign out, sleep, hibernate,
 #                      shut down, restart, and while updates of Windows
 #                      wait, update and shut down or update and restart;
-#                      nothing is done before OK. It brings no key: the
-#                      desktop of the shell opens it for alt+f4
+#                      nothing is done before OK. It brings no key:
+#                      where windows_keys is on, alt+f4 opens it while
+#                      the desktop is in front
 #             display-mode  the choice of Win+P (win+p): PC screen only,
 #                      duplicate, extend or second screen only; arg
 #                      "pc-screen-only", "duplicate", "extend" or
@@ -169,7 +170,8 @@
 #             start, search, quick-settings, notification-center
 #                      the popup arg names, or without one "launcher"
 #                      (start: ctrl+escape; search: win+s and win+q),
-#                      "quick-settings" (win+a) and "calendar" (win+n)
+#                      "quick-settings" (win+a), which the module brings,
+#                      and "calendar" (win+n)
 #             screenshot  saves a picture of all displays as
 #                      Screenshot (N).png in Pictures\Screenshots, N
 #                      counted on as Windows counts (win+printscreen)
@@ -433,7 +435,9 @@ center = [{ widget = "windows", start = "launcher" }]
 #
 # Modules bring popups of their own: winx (300 by 660), power-dialog (in the
 # middle, 400 by 600), display-mode (320 by 336) and keyboard-list (340 by
-# 360), each holding the widget of the same name (winx-menu for winx). A
+# 360), each holding the widget of the same name (winx-menu for winx), and
+# quick-settings (360 by 420: connections, the radio-switch of wifi and of
+# bluetooth, volume-slider and brightness-slider). A
 # [[popup]] of the same name here is used instead.
 
 [[popup]]

@@ -81,7 +81,6 @@ impl Action {
     /// Tessera is the shell) and no `[[key]]` of the user presses the same
     /// keys. This is how a feature brings its keys of Windows without the
     /// keys of the configuration knowing it.
-    #[allow(dead_code, reason = "for the features that bring keys of Windows")]
     pub fn by_default(mut self, press: &str, arg: Option<&str>) -> Self {
         self.default_keys
             .push((press.to_owned(), arg.map(str::to_owned)));
