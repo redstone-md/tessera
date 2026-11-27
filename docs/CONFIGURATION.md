@@ -42,6 +42,22 @@ files = "~"           # a path, "~" for the folder of the user, or "computer"
 From a console, `tessera files`, `tessera files computer` and `tessera files D:\Projects` open a window in the running shell.
 
 `tessera files home` (or `files = "home"`) opens Quick access: the folders Explorer keeps there and the files used lately. With `restore = true`, `tessera files` and a `files` key without a folder open the tabs of the last window closed instead of the folder of the user; they are kept in `%LOCALAPPDATA%\tessera\files-session.toml`, with the shares of other computers visited, which the side shows under Network. With `per_folder = true` the looks of the folders are kept in `%LOCALAPPDATA%\tessera\files-views.toml`, the 500 seen last; neither file is configuration, and either can be deleted to forget what it holds. `explorer = true` reads the folder options of Explorer (`HideFileExt`, `Hidden` and `ShowSuperHidden` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced`) each time a folder is read; with `explorer = false` every name is shown as it is and protected files of the system show with the hidden ones. `hidden = true` shows hidden files whatever Explorer says; Ctrl+H switches them for a pane.
+
+`[file_view]` sets the pictures of files and the panes beside the panes of files:
+
+```toml
+[file_view]
+thumbnails = true         # pictures of what files hold, where icons are 32 pixels or larger
+folder_thumbnails = true  # pictures of what folders hold too
+thumbnail_size = 256      # the largest side asked of the Shell, in pixels of the display, 32 to 256
+overlays = true           # the overlays of OneDrive, Git clients and other programs over icons
+preview = false           # windows open with the preview pane (Alt+P)
+details = false           # windows open with the details pane (Alt+Shift+P or F11)
+preview_handlers = true   # programs' preview handlers draw PDF, Office and other kinds
+preview_timeout = 5.0     # seconds a preview handler is waited for, 1 to 60
+```
+
+The columns of the details are kept per folder whatever `per_folder` says, in `%LOCALAPPDATA%\tessera\files-views.toml` beside the looks, the 500 used last; the Recycle Bin, Home and the results of a search keep one set each. A change of `[file_view]` applies to the windows that are open the next time they draw; `preview` and `details` only to windows opened afterwards.
 ## The clipboard
 
 `[clipboard]` sets the history of the clipboard that Tessera keeps while it runs (see [FEATURES.md](FEATURES.md)):
