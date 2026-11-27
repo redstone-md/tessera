@@ -419,11 +419,9 @@ pub struct Config {
     // #[serde(default)]
     // pub desktop: crate::desktop::DesktopConfig,
     // Wave 2, system-settings: performance mode by power source and energy saver.
-    // #[serde(default)]
-    // pub performance: crate::performance::PerformanceConfig,
     // Wave 2, system-settings: how often the system meters are read.
-    // #[serde(default)]
-    // pub system: crate::modules::system::SystemConfig,
+    #[serde(default)]
+    pub system: crate::modules::system::SystemConfig,
     // Wave 2, window-behaviour-rules: modifier+drag, title bar clicks, focus follows mouse.
     // #[serde(default)]
     // pub window_actions: crate::window_actions::WindowActionsConfig,

@@ -171,6 +171,7 @@ pub use snap::on_resizing_border;
 pub use snap::{Display, MaximizeHover, WindowArranging, front_fills, shift_held};
 pub use startup::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
+pub use system::{GpuLoad, GpuUsage};
 pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
 pub use terminal::{terminal, windows_terminal};

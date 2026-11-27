@@ -76,6 +76,7 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::start(&config.tiling, cx);
         Workspaces::start(&config.workspaces, cx);
+        crate::modules::system::Meters::configure(&config.system, cx);
         let extensions = installed_stamp();
         let modules = modules::builtin(&config);
         Actions::start(&modules, cx);
@@ -303,6 +304,7 @@ impl Shell {
         cx.set_global(config.language);
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
+        crate::modules::system::Meters::configure(&config.system, cx);
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
         DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);

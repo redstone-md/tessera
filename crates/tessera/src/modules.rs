@@ -39,7 +39,7 @@ mod settings;
 mod sound;
 mod start;
 mod startup;
-mod system;
+pub mod system;
 mod tiling;
 mod trash;
 mod tray;
