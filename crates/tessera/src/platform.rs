@@ -33,6 +33,7 @@ pub use win32::on_resizing_border;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::spatial_sound;
+pub use win32::wheel_lines;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,

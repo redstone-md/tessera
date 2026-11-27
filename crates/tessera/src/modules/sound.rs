@@ -30,7 +30,7 @@ use crate::flyout::{Flyouts, Reading, volume_icon};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
-use crate::platform::{AppSound, AudioDevice, AudioOutput, Shortcut, spatial_sound};
+use crate::platform::{AppSound, AudioDevice, AudioOutput, Shortcut, spatial_sound, wheel_lines};
 use crate::theme::Theme;
 use crate::ui::{
     LIST_MIN_HEIGHT, ROW_HEIGHT, Slider, icon, list_row, list_title, one_line, pill, state_layer,
@@ -74,44 +74,39 @@ pub(super) const WHEEL_STEP: i32 = 2;
 /// How many logical pixels of a touchpad make a notch of the wheel.
 const PIXELS_PER_NOTCH: f32 = 40.;
 
-/// The notches of the wheel over a widget: each turn of a mouse wheel is
-/// one, whatever the lines Windows makes of it; the pixels of a touchpad
-/// are added up until they make one. The wheel turned with Shift held,
-/// which Windows turns sideways, counts the same.
+/// The notches of the wheel over a widget: the lines GPUI makes of a turn
+/// are divided by the lines Windows scrolls for a notch, and the parts of
+/// a notch a precision touchpad or a fine wheel sends are added up until
+/// they make one, as the pixels of a touchpad are. The wheel turned with
+/// Shift held, which Windows turns sideways, counts the same.
 #[derive(Default)]
 pub(super) struct Wheel {
-    /// The part of a notch the touchpad turned so far.
+    /// The part of a notch turned so far.
     rest: f32,
 }
 
 impl Wheel {
     /// How many notches `event` turns the wheel, up above 0.
     pub(super) fn notches(&mut self, event: &ScrollWheelEvent) -> i32 {
-        notches_of(event.delta, &mut self.rest)
+        let sideways = matches!(event.delta, ScrollDelta::Lines(lines) if lines.y == 0.);
+        notches_of(event.delta, wheel_lines(sideways), &mut self.rest)
     }
 }
 
-/// How many notches `delta` turns the wheel, up above 0, with `rest` the
-/// part of a notch a touchpad turned before.
-fn notches_of(delta: ScrollDelta, rest: &mut f32) -> i32 {
+/// How many notches `delta` turns the wheel, up above 0, with
+/// `lines_per_notch` the lines Windows makes of a notch and `rest` the
+/// part of a notch turned before.
+fn notches_of(delta: ScrollDelta, lines_per_notch: f32, rest: &mut f32) -> i32 {
     let along = |x: f32, y: f32| if y != 0. { y } else { x };
-    match delta {
-        ScrollDelta::Lines(lines) => {
-            *rest = 0.;
-            let turned = along(lines.x, lines.y);
-            if turned == 0. {
-                0
-            } else {
-                turned.signum() as i32
-            }
-        }
+    *rest += match delta {
+        ScrollDelta::Lines(lines) => along(lines.x, lines.y) / lines_per_notch,
         ScrollDelta::Pixels(pixels) => {
-            *rest += along(f32::from(pixels.x), f32::from(pixels.y)) / PIXELS_PER_NOTCH;
-            let whole = rest.trunc();
-            *rest -= whole;
-            whole as i32
+            along(f32::from(pixels.x), f32::from(pixels.y)) / PIXELS_PER_NOTCH
         }
-    }
+    };
+    let whole = rest.trunc();
+    *rest -= whole;
+    whole as i32
 }
 
 /// The `step` option of a widget the wheel turns, in percent from 1 to 25.
@@ -1342,20 +1337,26 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_of_the_wheel_is_a_notch_and_a_touchpad_adds_up() {
+    fn a_turn_of_the_wheel_is_a_notch_and_parts_add_up() {
         use gpui::{point, px};
+        let lines = |x: f32, y: f32| ScrollDelta::Lines(point(x, y));
         let mut rest = 0.;
         // Windows makes three lines of a notch, sideways with Shift held.
-        assert_eq!(notches_of(ScrollDelta::Lines(point(0., 3.)), &mut rest), 1);
-        assert_eq!(
-            notches_of(ScrollDelta::Lines(point(0., -3.)), &mut rest),
-            -1
-        );
-        assert_eq!(notches_of(ScrollDelta::Lines(point(3., 0.)), &mut rest), 1);
-        assert_eq!(notches_of(ScrollDelta::Lines(point(0., 0.)), &mut rest), 0);
+        assert_eq!(notches_of(lines(0., 3.), 3., &mut rest), 1);
+        assert_eq!(notches_of(lines(0., -3.), 3., &mut rest), -1);
+        assert_eq!(notches_of(lines(3., 0.), 3., &mut rest), 1);
+        assert_eq!(notches_of(lines(0., 0.), 3., &mut rest), 0);
+        // A line is a third of a notch; three of them make one.
+        assert_eq!(notches_of(lines(0., 1.), 3., &mut rest), 0);
+        assert_eq!(notches_of(lines(0., 1.), 3., &mut rest), 0);
+        assert_eq!(notches_of(lines(0., 1.), 3., &mut rest), 1);
+        // A page a notch is one notch all the same.
+        let page = u32::MAX as f32;
+        assert_eq!(notches_of(lines(0., page), page, &mut rest), 1);
         let pixels = |y: f32| ScrollDelta::Pixels(point(px(0.), px(y)));
-        assert_eq!(notches_of(pixels(25.), &mut rest), 0);
-        assert_eq!(notches_of(pixels(25.), &mut rest), 1);
-        assert_eq!(notches_of(pixels(-100.), &mut rest), -2);
+        let mut rest = 0.;
+        assert_eq!(notches_of(pixels(25.), 3., &mut rest), 0);
+        assert_eq!(notches_of(pixels(25.), 3., &mut rest), 1);
+        assert_eq!(notches_of(pixels(-100.), 3., &mut rest), -2);
     }
 }

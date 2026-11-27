@@ -535,5 +535,5 @@ The widget `keyboard` shows, after the letters of the layout of the window in fr
 end = ["touch-keyboard", "keyboard", { widget = "volume", step = 5 }, { widget = "brightness", step = 10 }]
 ```
 
-The wheel over `volume` turns the default output up or down by `step` percent (2 without the option, from 1 to 25) and over `brightness` makes its display brighter or darker by `step` percent (5 without it), each with its flyout where `[flyout]` wants it. Over `media` the wheel turns the volume as over `volume`, and with Shift held goes to the next piece (down) or back to the one before (up). A mouse wheel turns one step a notch; a touchpad one step for every 40 pixels it scrolls.
+The wheel over `volume` turns the default output up or down by `step` percent (2 without the option, from 1 to 25) and over `brightness` makes its display brighter or darker by `step` percent (5 without it), each with its flyout where `[flyout]` wants it. Over `media` the wheel turns the volume as over `volume`, and with Shift held goes to the next piece (down) or back to the one before (up). A mouse wheel turns one step a notch, counted as the lines Windows scrolls for a notch (3 when that is set to 0), so the small turns of a precision touchpad add up to a step; a touchpad that scrolls by pixels makes one step for every 40 pixels.
 
