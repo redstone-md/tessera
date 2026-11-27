@@ -161,7 +161,6 @@ impl EdgeSurface {
     /// Shows the surfaces that hide on `display` for `duration`, wherever
     /// the pointer is, as the dock does for an application that asks for
     /// attention. A later call for the same display replaces the time.
-    #[allow(dead_code, reason = "for the dock, which reveals itself for attention")]
     pub fn reveal(display: DisplayKey, duration: Duration, cx: &mut App) {
         let reveals = cx.default_global::<Reveals>();
         reveals.0.retain(|_, until| Instant::now() < *until);

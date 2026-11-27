@@ -47,12 +47,18 @@ use crate::popup::{PopupAnchor, Popups};
 use crate::preview::{PreviewOwner, Previews};
 use crate::rules::Rules;
 use crate::shell::Shell;
+use crate::surface::EdgeSurface;
 use crate::theme::Theme;
 use crate::ui::{Pick, icon, logo, one_line, state_layer};
 use crate::workspaces::Workspaces;
 
 /// How often it is checked whether something happened to a window.
 const CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// For how long a window that asks for attention keeps the surfaces that
+/// hide shown, unless it stops asking first: told again at each change of
+/// the dock, it lasts until the window is activated.
+const ATTENTION_REVEAL: Duration = Duration::from_secs(60 * 60);
 
 /// How many checks pass before the window list is read again although
 /// nothing was reported: every half second when Windows reports nothing at
@@ -547,22 +553,6 @@ impl Docks {
             })
             .ok();
     }
-
-    /// Whether a window asks for attention in the way `reveal_on_attention`
-    /// of a dock on `display` wants shown: what keeps a dock that hides
-    /// shown, once the surfaces can be told to.
-    #[allow(
-        dead_code,
-        reason = "the surfaces that hide read it once they can be revealed"
-    )]
-    pub fn wants_reveal(display: Option<DisplayKey>, cx: &mut App) -> bool {
-        let docks = cx.default_global::<Self>();
-        let lists: Vec<_> = docks.lists.iter().filter_map(WeakEntity::upgrade).collect();
-        lists.iter().any(|list| {
-            let list = list.read(cx);
-            (display.is_none() || list.display == display) && list.wants_reveal()
-        })
-    }
 }
 
 /// Which of the buttons is the one of `number`, counted from 1 among
@@ -570,55 +560,6 @@ impl Docks {
 fn numbered(leaving: impl Iterator<Item = bool>, number: usize) -> Option<usize> {
     let mut shown = leaving.enumerate().filter(|(_, leaving)| !leaving);
     shown.nth(number.checked_sub(1)?).map(|(index, _)| index)
-}
-
-/// Where a menu or a preview of a button of a column opens: beside the
-/// dock, on the side `toward`, hanging from the top of the button `top`
-/// in the upper half of the display and standing on its bottom `bottom`
-/// in the lower half.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Beside {
-    /// The point to center on, and the sides of the display left to the
-    /// floating window.
-    x: i32,
-    left: i32,
-    right: i32,
-    /// Whether it hangs from `line` rather than standing on it.
-    hangs: bool,
-    line: i32,
-}
-
-impl Beside {
-    fn of(surface: ScreenRect, screen: ScreenRect, top: i32, bottom: i32, toward: Side) -> Self {
-        let (x, left, right) = match toward {
-            Side::Right => (surface.right, surface.right, screen.right),
-            Side::Left => (surface.left, screen.left, surface.left),
-        };
-        let hangs = top < (screen.top + screen.bottom) / 2;
-        let line = if hangs { top } else { bottom };
-        Self {
-            x,
-            left,
-            right,
-            hangs,
-            line,
-        }
-    }
-
-    /// Makes `anchor` place what opens there as this says, with what
-    /// `PopupAnchor::frame` makes of it.
-    fn apply(self, anchor: &mut PopupAnchor) {
-        anchor.x = self.x;
-        anchor.screen.left = self.left;
-        anchor.screen.right = self.right;
-        if self.hangs {
-            anchor.edge = ScreenEdge::Top;
-            anchor.surface.bottom = self.line;
-        } else {
-            anchor.edge = ScreenEdge::Bottom;
-            anchor.surface.top = self.line;
-        }
-    }
 }
 
 /// The button before the applications, which opens a popup.
@@ -680,6 +621,9 @@ struct WindowList {
     blur: Option<Subscription>,
     /// When the list was made, from which the motion of marks counts.
     born: Instant,
+    /// Whether the list has the surfaces that hide on its display shown,
+    /// for a window that asks for attention.
+    revealing: bool,
 }
 
 impl WindowList {
@@ -770,6 +714,7 @@ impl WindowList {
             given_back: None,
             blur: None,
             born: Instant::now(),
+            revealing: false,
         };
         for (index, pin) in pins.into_iter().enumerate() {
             list.add(Some(pin), Some(index), None, Vec::new(), cx);
@@ -781,6 +726,28 @@ impl WindowList {
     /// Takes in what the shell hook tells: a window that flashes asks for
     /// attention until it is activated.
     fn hear(&mut self, event: ShellEvent, cx: &mut Context<Self>) {
+        self.hear_event(event, cx);
+        self.reveal_for_attention(cx);
+    }
+
+    /// Has the surfaces that hide on the display of the list shown while
+    /// a window of the list asks for attention as `reveal_on_attention`
+    /// says, and hide again as they do once none does.
+    fn reveal_for_attention(&mut self, cx: &mut Context<Self>) {
+        let Some(display) = self.display else {
+            return;
+        };
+        let wanted = self.wants_reveal();
+        if wanted {
+            // Told again at each change, so that it lasts until then.
+            EdgeSurface::reveal(display, ATTENTION_REVEAL, cx);
+        } else if self.revealing {
+            EdgeSurface::reveal(display, Duration::ZERO, cx);
+        }
+        self.revealing = wanted;
+    }
+
+    fn hear_event(&mut self, event: ShellEvent, cx: &mut Context<Self>) {
         match event {
             ShellEvent::Flash(id) => {
                 if self.attention.insert(id, true) != Some(true) {
@@ -934,23 +901,16 @@ impl WindowList {
         self.anchor_at(bounds, window, cx)
     }
 
+    /// Where what opens for the button at `bounds` opens: away from the
+    /// edge of the dock's surface, centered on the button along it.
     fn anchor_at(&self, bounds: Bounds<Pixels>, window: &Window, cx: &App) -> Option<PopupAnchor> {
-        let middle = bounds.origin.x + bounds.size.width / 2.;
-        let anchor = PopupAnchor::at(window, middle, cx);
-        let mut anchor = match anchor {
-            Ok(anchor) => anchor,
+        match PopupAnchor::at_point(window, bounds.center(), cx) {
+            Ok(anchor) => Some(anchor),
             Err(error) => {
                 report!("a preview or a menu of the dock has nowhere to open: {error:#}");
-                return None;
+                None
             }
-        };
-        if let Layout::Column { toward } = self.layout {
-            let physical = |length: Pixels| (length / px(1.) * anchor.scale).round() as i32;
-            let top = anchor.surface.top + physical(bounds.origin.y);
-            let bottom = top + physical(bounds.size.height);
-            Beside::of(anchor.surface, anchor.screen, top, bottom, toward).apply(&mut anchor);
         }
-        Some(anchor)
     }
 
     /// The pointer came onto the button `key`, or left it: the previews of
@@ -1162,6 +1122,7 @@ impl WindowList {
         changed |= self.sort();
         if changed {
             cx.notify();
+            self.reveal_for_attention(cx);
         }
     }
 
@@ -1634,10 +1595,24 @@ impl WindowList {
             .into_any_element()
     }
 
-    /// How the buttons are laid out in `window`: a column where it is
-    /// taller than wide, with the marks toward the larger room of the
-    /// display.
+    /// How the buttons are laid out in `window`: a row on a surface at
+    /// the top or the bottom, a column on one at the left or the right
+    /// with the marks on the side away from that edge. Where the dock is
+    /// on no surface, as in a popup, a column where it is taller than
+    /// wide, with the marks toward the larger room of the display.
     fn layout_of(window: &Window, cx: &App) -> Layout {
+        match crate::surface::edge_of(window, cx) {
+            Some(ScreenEdge::Top | ScreenEdge::Bottom) => return Layout::Row,
+            Some(ScreenEdge::Left) => {
+                return Layout::Column {
+                    toward: Side::Right,
+                };
+            }
+            Some(ScreenEdge::Right) => {
+                return Layout::Column { toward: Side::Left };
+            }
+            None => {}
+        }
         let bounds = window.bounds();
         let display = window.display(cx).map(|display| display.bounds());
         let (left, right) = display.map_or((0., 0.), |display| {
@@ -1823,30 +1798,5 @@ mod tests {
     fn only_shortcut_files_are_read_as_links() {
         assert!(is_link(Path::new(r"C:\Menu\App.LNK")));
         assert!(!is_link(Path::new(r"C:\Apps\app.exe")));
-    }
-
-    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> ScreenRect {
-        ScreenRect {
-            left,
-            top,
-            right,
-            bottom,
-        }
-    }
-
-    #[test]
-    fn what_a_column_opens_stands_beside_it() {
-        let screen = rect(0, 0, 1920, 1080);
-        let left_dock = rect(0, 200, 64, 880);
-        let high = Beside::of(left_dock, screen, 300, 356, Side::Right);
-        assert_eq!((high.x, high.left, high.right), (64, 64, 1920));
-        assert!(high.hangs);
-        assert_eq!(high.line, 300);
-        let low = Beside::of(left_dock, screen, 800, 856, Side::Right);
-        assert!(!low.hangs);
-        assert_eq!(low.line, 856);
-        let right_dock = rect(1856, 200, 1920, 880);
-        let beside = Beside::of(right_dock, screen, 300, 356, Side::Left);
-        assert_eq!((beside.x, beside.left, beside.right), (1856, 0, 1856));
     }
 }

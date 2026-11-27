@@ -607,7 +607,7 @@
 #               goes through its windows. Option reveal_on_attention,
 #               "while_flashing", "until_activated" or "never": when a
 #               dock that hides is shown for a window that asks for
-#               attention (read, not yet followed by the surfaces).
+#               attention; the surfaces that hide with it come too.
 #               A window whose [[rule]] says skip_dock = true gets no
 #               button. As the shell, a button shows the progress and the
 #               overlay icon applications give the taskbar, and the
@@ -1022,8 +1022,8 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #   opacity        0.1 to 1: how opaque it is drawn; some programs draw
 #                  badly once they are see-through
 #   border = false Windows draws no thin border around it (Windows 11)
-#   skip_switcher  true keeps it out of the window switcher and Task View
-#   skip_dock      read by the dock, which leaves no window out by it yet
+#   skip_dock, skip_switcher  true keeps it out of the dock, or out of
+#                  the window switcher and Task View
 # A window that is tiled is not placed, sized or maximized by a rule. A
 # title that a program gives its window more than a second after showing it
 # needs apply = "always".

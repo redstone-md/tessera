@@ -619,10 +619,6 @@ impl Rules {
     }
 
     /// What the rules say of `window`.
-    #[allow(
-        dead_code,
-        reason = "for the dock and the window switcher, which leave windows out"
-    )]
     pub fn of(window: &AppWindow, cx: &App) -> Effective {
         let Some(this) = cx.try_global::<Self>() else {
             return Effective::default();
