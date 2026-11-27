@@ -10,25 +10,24 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::CString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Home_IsPinned;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::System::SystemServices::{SFGAO_FILESYSTEM, SFGAO_FOLDER, SFGAO_STREAM};
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, BHID_SFUIObject, CMF_NORMAL, CMINVOKECOMMANDINFO, FOLDERID_Recent,
-    FOLDERID_SkyDrive, IContextMenu, IEnumShellItems, IShellItem, IShellItem2, KF_FLAG_DEFAULT,
-    SHCreateItemFromParsingName, SHGetKnownFolderPath, SIGDN, SIGDN_FILESYSPATH,
-    SIGDN_NORMALDISPLAY,
+    BHID_EnumItems, FOLDERID_Recent, FOLDERID_SkyDrive, IEnumShellItems, IShellItem, IShellItem2,
+    SHCreateItemFromParsingName, SIGDN, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
-use windows::Win32::UI::WindowsAndMessaging::{CreatePopupMenu, DestroyMenu, SW_SHOWNORMAL};
-use windows::core::{GUID, HSTRING, Interface, PCSTR, PWSTR};
+use windows::core::{HSTRING, Interface, PWSTR};
 
 use super::explorer_view::{subkeys, text};
-use super::{ShellThread, Shortcut};
+use super::file_op::same_path;
+use super::shell_item::IdList;
+use super::shell_items::known_folder;
+use super::{ShellThread, Shortcut, shell_menu};
 
 /// The folder of Quick access, which Windows 11 shows as Home.
 const QUICK_ACCESS: &str = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}";
@@ -120,7 +119,9 @@ pub async fn recent_files(most: usize) -> Vec<ShellPlace> {
 
 /// The folder of OneDrive of the user, where OneDrive is set up.
 pub fn onedrive() -> Option<PathBuf> {
-    known_folder(&FOLDERID_SkyDrive).filter(|path| path.is_dir())
+    known_folder(&FOLDERID_SkyDrive)
+        .ok()
+        .filter(|path| path.is_dir())
 }
 
 /// The distributions of WSL of the user, each at its share under
@@ -135,16 +136,6 @@ pub fn wsl_distributions() -> Vec<ShellPlace> {
             Some(ShellPlace { name, path })
         })
         .collect()
-}
-
-/// Whether two paths name the same folder, in any case and with or
-/// without a separator at their end.
-fn same_path(a: &Path, b: &Path) -> bool {
-    let plain = |path: &Path| {
-        let text = path.to_string_lossy().to_lowercase();
-        text.trim_end_matches('\\').to_owned()
-    };
-    plain(a) == plain(b)
 }
 
 /// The item of the Shell at `name`, a path or a `shell:` name.
@@ -240,38 +231,14 @@ fn is_pinned(item: &IShellItem) -> bool {
 /// Has the Shell do the verb `verb` of the menu of `item`, as a click on
 /// it in Explorer's menu does. Runs on the shell thread.
 fn invoke(item: &IShellItem, verb: &str) -> Result<()> {
-    let verb = CString::new(verb).context("a verb has no NUL")?;
-    // SAFETY: COM is initialized on the shell thread; the menu is made for
-    // the Shell to fill, so that it loads the handlers of its verbs, and
-    // destroyed afterwards; the verb outlives the call that reads it.
-    unsafe {
-        let menu: IContextMenu = item
-            .BindToHandler(None, &BHID_SFUIObject)
-            .context("the item has no menu")?;
-        let popup = CreatePopupMenu()?;
-        let filled = menu.QueryContextMenu(popup, 0, 1, 0x7fff, CMF_NORMAL);
-        let info = CMINVOKECOMMANDINFO {
-            cbSize: size_of::<CMINVOKECOMMANDINFO>() as u32,
-            hwnd: ShellThread::owner().unwrap_or_default(),
-            lpVerb: PCSTR(verb.as_ptr().cast()),
-            nShow: SW_SHOWNORMAL.0,
-            ..Default::default()
-        };
-        let done = match filled.is_ok() {
-            true => menu.InvokeCommand(&raw const info),
-            false => Err(filled.into()),
-        };
-        let _ = DestroyMenu(popup);
-        if let Err(error) = done {
-            bail!("the Shell did not do `{}`: {error}", verb.to_string_lossy());
-        }
-    }
-    Ok(())
+    let list = IdList::of_object(item)?;
+    let owner = ShellThread::owner().unwrap_or_default();
+    shell_menu::invoke_verb_here(vec![list], verb, owner, true)
 }
 
 /// The files the Recent folder has shortcuts to, the latest first.
 fn read_recent(most: usize) -> Vec<ShellPlace> {
-    let Some(folder) = known_folder(&FOLDERID_Recent) else {
+    let Ok(folder) = known_folder(&FOLDERID_Recent) else {
         return Vec::new();
     };
     let Ok(items) = std::fs::read_dir(folder) else {
@@ -301,30 +268,4 @@ fn read_recent(most: usize) -> Vec<ShellPlace> {
         })
         .take(most)
         .collect()
-}
-
-/// Where the known folder `id` is, which the user may have moved.
-fn known_folder(id: &GUID) -> Option<PathBuf> {
-    // SAFETY: the identifier outlives the call; the text Windows
-    // allocates is copied and then freed exactly once.
-    unsafe {
-        let text = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
-        let path = text.to_string().ok().map(PathBuf::from);
-        CoTaskMemFree(Some(text.0.cast()));
-        path
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paths_are_the_same_in_any_case() {
-        assert!(same_path(
-            Path::new(r"C:\Users\Me\Documents\"),
-            Path::new(r"c:\users\me\documents")
-        ));
-        assert!(!same_path(Path::new(r"C:\a"), Path::new(r"C:\ab")));
-    }
 }
