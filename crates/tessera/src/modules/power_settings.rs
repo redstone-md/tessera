@@ -14,6 +14,7 @@
 //! A battery charge limit is not offered: Windows has no setting or
 //! interface for one, only the makers' own tools.
 
+use async_channel::Sender;
 use gpui::{
     App, AppContext, AsyncApp, Context, Div, Entity, FontWeight, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
@@ -317,6 +318,59 @@ const PERFORMANCE_CHOICES: [Option<PerformanceMode>; 4] = [
     Some(PerformanceMode::Extreme),
 ];
 
+/// A choice of the popup to be written into the power plan, and the view
+/// that shows it.
+struct PlanWrite {
+    setting: PowerSetting,
+    supply: Supply,
+    value: u32,
+    panel: WeakEntity<PowerPanel>,
+}
+
+/// Writes the choices of the popup into the power plan one after the
+/// other, off the thread that draws, so that a choice still being written
+/// never ends up over a later one.
+struct PlanWrites(Sender<PlanWrite>);
+
+impl Global for PlanWrites {}
+
+impl PlanWrites {
+    /// Has `write` done after those handed over before.
+    fn send(write: PlanWrite, cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            let (queue, waiting) = async_channel::unbounded::<PlanWrite>();
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                let mut failed = false;
+                while let Ok(write) = waiting.recv().await {
+                    let PlanWrite {
+                        setting,
+                        supply,
+                        value,
+                        panel,
+                    } = write;
+                    let written = { cx.background_executor() }
+                        .spawn(async move { PowerSettings::write(setting, supply, value) });
+                    if let Err(error) = written.await {
+                        report!("{error}");
+                        failed = true;
+                    }
+                    // What the plan keeps is read again once no later
+                    // choice waits, so that the reading shows no older value
+                    // over a choice still to be written.
+                    if failed && waiting.is_empty() {
+                        failed = false;
+                        panel.update(cx, |_, cx| PowerPanel::read(cx)).ok();
+                    }
+                }
+            })
+            .detach();
+            cx.set_global(Self(queue));
+        }
+        // The queue is held by the task for as long as the program runs.
+        cx.global::<Self>().0.try_send(write).ok();
+    }
+}
+
 /// The settings of power, for the popup.
 struct PowerPanel {
     /// `None` until read; then `None` inside where Windows gave no plan.
@@ -372,8 +426,8 @@ impl PowerPanel {
     }
 
     /// Shows `value` for `setting` on `supply` at once and writes it into
-    /// the power plan; where that fails, what the plan keeps is read
-    /// again.
+    /// the power plan after the choices before it; where that fails, what
+    /// the plan keeps is read again.
     fn choose(
         &mut self,
         setting: PowerSetting,
@@ -389,15 +443,13 @@ impl PowerPanel {
         }
         settings.set(setting, supply, value);
         cx.notify();
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let write = { cx.background_executor() }
-                .spawn(async move { PowerSettings::write(setting, supply, value) });
-            if let Err(error) = write.await {
-                report!("{error}");
-                this.update(cx, |_, cx| Self::read(cx)).ok();
-            }
-        })
-        .detach();
+        let write = PlanWrite {
+            setting,
+            supply,
+            value,
+            panel: cx.entity().downgrade(),
+        };
+        PlanWrites::send(write, cx);
     }
 
     /// The row with the switch that blocks sleep.
