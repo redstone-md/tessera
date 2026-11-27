@@ -321,3 +321,16 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# Notifications: history, do not disturb and the bell.
+"For 1 hour" = "На 1 годину"
+"Until morning" = "До ранку"
+"Until turned off" = "Доки не вимкнено"
+"On until" = "Увімкнено до"
+"As scheduled, until" = "За розкладом, до"
+"While an app fills the screen" = "Поки застосунок на весь екран"
+"While a game runs" = "Поки триває гра"
+"While presenting" = "Під час презентації"
+"While a display is duplicated" = "Поки екран дублюється"
+"Unknown application" = "Невідомий застосунок"
+"Banners are switched off" = "Банери вимкнено"

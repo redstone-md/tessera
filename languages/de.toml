@@ -320,3 +320,16 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # Settings: keys that name an action.
 "Action" = "Aktion"
 "The action is written in the file by hand." = "Die Aktion wird von Hand in die Datei geschrieben."
+
+# Notifications: history, do not disturb and the bell.
+"For 1 hour" = "Für 1 Stunde"
+"Until morning" = "Bis morgen früh"
+"Until turned off" = "Bis zum Ausschalten"
+"On until" = "An bis"
+"As scheduled, until" = "Nach Zeitplan, bis"
+"While an app fills the screen" = "Solange eine App den Bildschirm füllt"
+"While a game runs" = "Solange ein Spiel läuft"
+"While presenting" = "Während einer Präsentation"
+"While a display is duplicated" = "Solange ein Bildschirm dupliziert wird"
+"Unknown application" = "Unbekannte App"
+"Banners are switched off" = "Banner sind ausgeschaltet"
