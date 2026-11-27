@@ -53,6 +53,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{BOOL, HRESULT, Interface, PCWSTR, Ref, implement};
 
+use super::execute::own_window_in_front;
 use super::shell_item::{IdList, ShellId, item_of_path, path_of_item, wide};
 use super::{NativeSurface, ShellThread, shell_menu};
 
@@ -842,23 +843,6 @@ fn restore(step: &Step, owner: HWND, outcome: &mut Outcome) -> Result<()> {
         false => outcome.aborted = true,
     }
     Ok(())
-}
-
-/// The window in front, as a number, where it is Tessera's.
-fn own_window_in_front() -> Option<isize> {
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
-    let mut process = 0u32;
-    // SAFETY: the calls only read which window is in front and whose it
-    // is; `process` outlives the call that fills it.
-    unsafe {
-        let window = GetForegroundWindow();
-        if window.is_invalid() {
-            return None;
-        }
-        GetWindowThreadProcessId(window, Some(&raw mut process));
-        (process == GetCurrentProcessId()).then_some(window.0 as isize)
-    }
 }
 
 /// The listener of an `IFileOperation`, which writes down what the Shell
