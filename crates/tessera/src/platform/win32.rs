@@ -70,6 +70,7 @@ mod shortcuts;
 mod show_desktop;
 mod snap;
 mod startup;
+mod switching;
 mod system;
 mod system_wallpaper;
 mod taskbar;

@@ -512,6 +512,40 @@ const SETTINGS: &[Setting] = &[
     },
     Setting {
         section: Section::Windows,
+        card: "Window switcher",
+        title: "Style",
+        target: Target::Table("switcher", "style"),
+        kind: Kind::Choice(&[
+            ("Icon tiles", Answer::Unset),
+            ("Large pictures", Answer::Text("thumbnails")),
+            ("Compact list", Answer::Text("list")),
+            ("Row of icons", Answer::Text("icons")),
+        ]),
+    },
+    Setting {
+        section: Section::Windows,
+        card: "Window switcher",
+        title: "Which windows",
+        target: Target::Table("switcher", "scope"),
+        kind: Kind::Choice(&[
+            ("This workspace", Answer::Unset),
+            ("This display", Answer::Text("display")),
+            ("All workspaces", Answer::Text("all")),
+        ]),
+    },
+    Setting {
+        section: Section::Windows,
+        card: "Window switcher",
+        title: "Minimized windows",
+        target: Target::Table("switcher", "minimized"),
+        kind: Kind::Choice(&[
+            ("In their place", Answer::Unset),
+            ("After the others", Answer::Text("last")),
+            ("Left out", Answer::Text("hide")),
+        ]),
+    },
+    Setting {
+        section: Section::Windows,
         card: "Workspaces",
         title: "Own workspaces",
         target: Target::Table("workspaces", "own"),

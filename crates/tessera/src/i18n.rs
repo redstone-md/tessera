@@ -1350,6 +1350,20 @@ const RUSSIAN: &[(&str, &str)] = &[
         "No application uses the microphone, the camera or the location",
         "Микрофон, камеру и местоположение не использует ни одно приложение",
     ),
+    // The window switcher: its styles and filters.
+    ("Workspace", "Рабочий стол"),
+    ("Icon tiles", "Плитки значков"),
+    ("Large pictures", "Большие изображения"),
+    ("Compact list", "Компактный список"),
+    ("Row of icons", "Ряд значков"),
+    ("Which windows", "Какие окна"),
+    ("This workspace", "Этот рабочий стол"),
+    ("This display", "Этот дисплей"),
+    ("All workspaces", "Все рабочие столы"),
+    ("Minimized windows", "Свёрнутые окна"),
+    ("In their place", "На своём месте"),
+    ("After the others", "После остальных"),
+    ("Left out", "Не показывать"),
 ];
 
 #[cfg(test)]

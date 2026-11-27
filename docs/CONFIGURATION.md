@@ -60,6 +60,40 @@ action = "clipboard"   # the popup "clipboard", noting the window in front to pa
 The widget `clipboard` is the list, for a popup, and the popup `clipboard` holds it: 440 by 560 pixels at the middle of the bar, unless a `[[popup]]` of the same name says otherwise (`place = "center"` puts it in the middle of the display). The widget `clipboard-button` is a button of a bar that opens it. In the list the arrows choose an item, Enter or a click puts it back on the clipboard and presses Ctrl+V in the window that was in front, Delete (with nothing written in the search) takes it out, and Esc closes the popup; the buttons of a row pin it, take it out, or open the web address it is. **Clear all** keeps the pinned items. Pinned items are written to `clipboard.toml` in the configuration directory, which Tessera rewrites; the pictures among them stay in `cache\clipboard`. A `clipboard.toml` that cannot be read is reported and left as it is, and pins made then are not written until Tessera starts again, so that it can be mended without losing them.
 
 Where `windows_keys` binds the keys of Windows, Win+V is bound to `clipboard` only when `enabled` was true as Tessera started; with `enabled = false` it stays with the history of Windows. A change of `enabled` moves Win+V at the next start. A `[[key]]` that names the action, as above, takes Win+V either way.
+## The window switcher
+
+The window switcher opens for a `[[key]]` with `switch = "next"` or `"previous"`, or one with `action = "switcher"`, and `[switcher]` sets how it looks and which windows it offers:
+
+```toml
+[switcher]
+style = "tiles"       # or "thumbnails", "list", "icons"
+previews = false      # pictures of the windows in the tiles of "tiles"
+scope = "workspace"   # or "display", "all"
+minimized = "keep"    # or "last", "hide"
+
+[[key]]
+press = "alt+backquote"
+action = "switcher"
+arg = "app-next"      # the windows of the application of the window in front
+```
+
+Where the keys of Windows are in use (`windows_keys = true`, or Tessera being the shell), the action `switcher` brings Alt+Tab, Alt+Shift+Tab, Alt+` and Alt+Shift+` without such entries; the entry above is for when they are not.
+
+| Key | Values | What it does |
+| --- | --- | --- |
+| `style` | `tiles` (default), `thumbnails`, `list`, `icons` | `tiles`: tiles of icon and title, eight in a row, or with `previews = true` larger tiles with a picture of the window, six in a row. `thumbnails`: a picture of each window, as large (up to 320 by 200) and as many in a row as nine tenths of the display give room for, made smaller down to half that size before the rows scroll. `list`: one line for each window with its icon, its title and the name of its program. `icons`: the icons alone in a row (more rows where they do not fit), with the title of the chosen window under them. A minimized window, and one hidden on another workspace, has no picture to give and shows its icon in the place of one |
+| `scope` | `workspace` (default), `display`, `all` | `workspace`: the windows of the workspace that is shown, on every display; the windows of other virtual desktops of Windows are never offered. `display`: of those, the windows on the display the switcher opens on, the display the pointer is on. `all`: those of the workspace shown, then the windows of the other workspaces of Tessera's own (`[workspaces]` with `own`), workspace by workspace; where every display has workspaces of its own, those of the display the switcher opens on. Choosing such a window goes to its workspace |
+| `minimized` | `keep` (default), `last`, `hide` | `keep`: minimized windows stand where they were last used, like the others. `last`: after all the windows that are not minimized. `hide`: they are not offered |
+
+Rows that do not fit on the display scroll to the chosen window. While the switcher is open:
+
+- typing narrows the windows to those whose title, or the name of whose program, has every word typed, whatever the case; the line of what was typed stands above the windows, Backspace takes the last letter back, and Esc forgets all of it (a second Esc closes the switcher). While the keys of the switcher are held, as Alt is with Alt+Tab, a letter is taken as typed although Windows writes nothing for it;
+- the wheel moves the choice one window on for each notch down, and back for each notch up;
+- Delete or Ctrl+W asks the chosen window to close, and a click with the middle button the window clicked, as its close button does. A window that goes, or only hides, within a second and a half is no longer offered; one whose application asks the user first, or refuses, stays;
+- Tab and Shift+Tab move the choice when the switcher was opened with no key held;
+- an action `switcher` with `app-next` or `app-previous` narrows the open switcher to the windows of the application of the chosen window, and one with `next` or `previous` offers all of them again.
+
+The arrows, Enter, Esc, Delete and Backspace are taken with the keyboard hook whatever has the keyboard, so they reach no other program while the switcher is open. Letters, Tab, Ctrl+W and the wheel reach the switcher while its window has the keyboard: Tessera brings it in front when it opens, and asks Windows again in other ways where Windows refuses at first; where Windows still refuses, those go to the window in front. The settings show the style, the scope and the minimized windows on the **Window switcher** card of the **Windows** part.
 
 ## Actions
 
@@ -106,6 +140,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
 | `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
 | `eject` | the letter of a drive, as `E` or `E:` | ejects that drive as its **Eject** button in the popup `devices` does: the device it is on, with every drive of it, or its medium where it is a disc or a card in a reader built in; a notice says how it went |
+| `switcher` | `next`, `previous`, `app-next`, `app-previous`, or none | opens the [window switcher](#the-window-switcher), or goes one window on (`next`, or none) or back (`previous`) in the open one; `app-next` and `app-previous` go through the windows of one application only. The choice is taken when the keys to hold of the `press` that did it are let go; for a `press` with none, the switcher stays open until a window is chosen. Done by `tessera do switcher`, it waits for the keys that are down as it is done, which are usually none. Its keys are taken from Windows, and it brings Alt+Tab (`next`), Alt+Shift+Tab (`previous`), Alt+` (`app-next`) and Alt+Shift+` (`app-previous`) where the keys of Windows are in use |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 

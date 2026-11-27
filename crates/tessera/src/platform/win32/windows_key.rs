@@ -141,7 +141,9 @@ fn taken_presses() -> &'static (Sender<u32>, Receiver<u32>) {
 }
 
 /// A key that moves through a choice on the screen, confirms it or calls
-/// it off.
+/// it off, or that does something to what is chosen or typed there:
+/// Delete and Backspace, which are taken so that they do not reach the
+/// window in front when the choice did not get the keyboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChoiceKey {
     Escape,
@@ -150,6 +152,8 @@ pub enum ChoiceKey {
     Up,
     Right,
     Down,
+    Delete,
+    Backspace,
 }
 
 impl ChoiceKey {
@@ -161,6 +165,8 @@ impl ChoiceKey {
             0x26 => Self::Up,
             0x27 => Self::Right,
             0x28 => Self::Down,
+            0x2E => Self::Delete,
+            0x08 => Self::Backspace,
             _ => return None,
         })
     }
@@ -486,6 +492,7 @@ mod tests {
     fn only_the_keys_of_a_choice_are_such() {
         assert_eq!(ChoiceKey::of(0x1B), Some(ChoiceKey::Escape));
         assert_eq!(ChoiceKey::of(0x28), Some(ChoiceKey::Down));
+        assert_eq!(ChoiceKey::of(0x2E), Some(ChoiceKey::Delete));
         assert_eq!(ChoiceKey::of(0x09), None);
     }
 

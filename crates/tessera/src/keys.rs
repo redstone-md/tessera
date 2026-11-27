@@ -606,9 +606,14 @@ impl Shortcuts {
     }
 
     fn pressed(index: usize, cx: &mut App) {
-        let deed = cx.global::<Self>().deeds.get(index).cloned().flatten();
+        let this = cx.global::<Self>();
+        let deed = this.deeds.get(index).cloned().flatten();
+        let held = { this.config.get(index) }
+            .and_then(|key| Press::parse(&key.press))
+            .map(|press| press.held)
+            .unwrap_or_default();
         if let Some(deed) = deed {
-            deed.done(cx);
+            Actions::pressing(held, cx, |cx| deed.done(cx));
         }
     }
 }
