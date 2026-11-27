@@ -1384,6 +1384,94 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // system-settings: displays, power, performance mode.
+    ("Apply", "Применить"),
+    (
+        "At least one display has to stay on.",
+        "Хотя бы один экран должен оставаться включённым.",
+    ),
+    ("Block sleep", "Без сна"),
+    (
+        "Block sleep and screen locking",
+        "Запретить сон и блокировку экрана",
+    ),
+    (
+        "Keeps the screen on and the computer awake until switched off or Tessera closes.",
+        "Экран не гаснет и компьютер не засыпает, пока это не выключено или Tessera не закрыта.",
+    ),
+    ("Display {}", "Экран {}"),
+    (
+        "Drag the displays to arrange them; a click chooses one.",
+        "Перетаскивайте экраны, чтобы расставить их; щелчок выбирает экран.",
+    ),
+    ("In force: {}", "Действует: {}"),
+    ("Keep changes", "Сохранить изменения"),
+    (
+        "Keep these display settings?",
+        "Сохранить эти параметры экрана?",
+    ),
+    (
+        "Keep these display settings? The old ones come back in {} seconds.",
+        "Сохранить эти параметры экрана? Прежние вернутся через {} с.",
+    ),
+    (
+        "The old ones come back in {} seconds.",
+        "Прежние вернутся через {} с.",
+    ),
+    ("Main display", "Основной дисплей"),
+    ("Make this the main display", "Сделать основным дисплеем"),
+    ("Never", "Никогда"),
+    ("Orientation", "Ориентация"),
+    ("Performance mode", "Режим производительности"),
+    ("Refresh rate", "Частота обновления"),
+    ("Resolution", "Разрешение"),
+    ("Revert", "Вернуть"),
+    ("Scale", "Масштаб"),
+    (
+        "Shows the same as display {}",
+        "Показывает то же, что экран {}",
+    ),
+    (
+        "The displays cannot be read: {}",
+        "Не удаётся прочитать экраны: {}",
+    ),
+    ("{} h", "{} ч"),
+    ("{} min", "{} мин"),
+    ("{}% (recommended)", "{}% (рекомендуется)"),
+    ("Do nothing", "Ничего не делать"),
+    ("Minimal", "Минимальный"),
+    ("Extreme", "Предельный"),
+    ("Landscape", "Альбомная"),
+    ("Portrait", "Книжная"),
+    ("Landscape (flipped)", "Альбомная (перевёрнутая)"),
+    ("Portrait (flipped)", "Книжная (перевёрнутая)"),
+    ("Plugged in", "От сети"),
+    ("On battery", "От батареи"),
+    ("Turn off the screen after", "Отключать экран через"),
+    (
+        "Put the computer to sleep after",
+        "Переводить компьютер в сон через",
+    ),
+    ("Turn off the display", "Отключить дисплей"),
+    ("When I close the lid", "При закрытии крышки"),
+    (
+        "When I press the power button",
+        "При нажатии кнопки питания",
+    ),
+    ("When I press the sleep button", "При нажатии кнопки сна"),
+    ("Automatic", "Автоматически"),
+    (
+        "Windows chooses the mode and the place of a display that is switched on; they can be changed once it is on.",
+        "Режим и место включаемого экрана выбирает Windows; их можно изменить, когда он включится.",
+    ),
+    (
+        "Windows gives no power plan in use, so its settings cannot be shown",
+        "Windows не сообщает текущую схему электропитания, поэтому её параметры не показать",
+    ),
+    (
+        "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
+        "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
+    ),
 ];
 
 #[cfg(test)]

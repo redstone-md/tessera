@@ -126,6 +126,10 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `winx` | none | opens the menu of Win+X, or closes it: at the widget `winx` where a bar has one, else at the Start button (the button that opens `launcher`), else at the left end of a bar. Brings Win+X |
 | `power-dialog` | none | opens the dialog that asks what the computer is to do (switch user, sign out, sleep, hibernate, shut down, restart, and while updates wait update and shut down or update and restart); nothing is done before OK or Enter. Brings no key: where `windows_keys` is on, Alt+F4 opens it while the desktop is in front (no window, or the desktop window), and Alt+F4 elsewhere still closes the window in front |
 | `display-mode` | `pc-screen-only`, `duplicate`, `extend`, `second-screen-only`, or none | without `arg` opens the popup `display-mode`, the choice of Win+P; with one switches the displays to that mode at once. Brings Win+P |
+| `display-settings` | none | opens the popup `display-settings`, the [configuration of the displays](#displays-power-performance-and-meters), or closes it. Brings no key |
+| `power-settings` | none | opens the popup `power-settings`, the [power settings](#displays-power-performance-and-meters), or closes it. Brings no key |
+| `inhibit` | `on`, `off`, or none | blocks sleep and screen locking until it is switched off or Tessera quits, or lets go of that; without `arg` the other way than it is. Brings no key |
+| `performance` | `off`, `minimal`, `extreme`, `auto`, or none | puts that [performance mode](#displays-power-performance-and-meters) in force by hand, or without `arg` the next one; `auto` gives the choice back to `[performance]`. Brings no key |
 | `input-language` | `next`, `previous`, `list`, or none | asks the window in front for the next keyboard layout, or the one before with `previous`; where a window of Tessera is in front, Tessera takes on that layout itself. `list` opens the popup `keyboard-list`, whose choice is for the window that was in front before it. Brings Win+Space and Win+Shift+Space (`previous`) |
 | `open` | a file, a program, a folder or an address | opens it through the Shell, as a double click does. Brings Win+I (`ms-settings:`), Win+U (`ms-settings:easeofaccess`), Win+K (`ms-settings-connectabledevices:devicediscovery`), Win+G (`ms-gamebar:`), Win+Shift+S (`ms-screenclip:`) and Win+Pause (`ms-settings:about`) |
 | `start`, `search`, `quick-settings`, `notification-center` | the name of a popup, or none | opens that popup, or closes it; without `arg`, for `start` (Ctrl+Esc) the popup of `windows_key`, the same one the Windows key opens, or the launcher where `windows_key` names none, `launcher` for `search` (Win+S, Win+Q), `quick-settings` (Win+A; the built-in layout has this popup with the tiles of the [quick settings](#quick-settings), and for a layout without it the module brings one with the connections, the switches of Wi-Fi and Bluetooth, the volume and the brightness) and `calendar` (Win+N) |
@@ -490,3 +494,39 @@ end = ["devices", "privacy", "tray", "volume"]
 ```
 
 `devices` is an icon that is there only while something can be taken out of the machine; a click opens the popup `devices` with `devices-list`, a row for each drive and device with **Open** and **Eject**. `privacy` shows an icon for the microphone, the camera and the location while an application uses it, with a tip that names the applications; a click opens the popup `privacy` with `privacy-list`. Both popups can be replaced by a `[[popup]]` of the same name, or the lists put into another one.
+
+## Displays, power, performance and meters
+
+The popup `display-settings`, which the action of the same name opens, sets the displays: their arrangement (dragged in a drawing of the desktop, snapping to each other and kept against one another), which are on, which is the main one, and the resolution, refresh rate, scale and orientation of each. **Apply** tries the new configuration for 15 seconds and the old one comes back unless **Keep changes** is pressed in the popup or on the banner that asks. The popup `power-settings`, which the action of the same name opens, blocks sleep by hand and sets the performance mode, when the screen goes off and the computer sleeps, and what the lid and the power and sleep buttons do, on mains power and on battery, in the power plan in use. Both stand in the middle of the display; a `[[popup]]` of the same name in `config.toml` is used instead, and the widgets `display-settings` and `power-settings` can stand in another popup.
+
+```toml
+[[key]]
+press = "win+shift+p"
+action = "display-settings"
+
+[[key]]
+press = "win+shift+c"
+action = "inhibit"         # "on", "off", or none to switch
+```
+
+`[performance]` chooses how much the shell spends on looks: `off` (everything moves as the theme says), `minimal` (what slides arrives at once and fades take half the time) or `extreme` (nothing moves). `default` is the mode on mains power, `on_battery` on battery and `on_energy_saver` while energy saver, or battery saver on an older Windows, is on, whatever the source; a line left out falls back to the one before. The tile `performance` and the action `performance` put another mode in force by hand until the power source or a saver changes; `performance auto` gives the choice back to these lines.
+
+```toml
+[performance]
+default = "off"
+on_battery = "minimal"
+on_energy_saver = "extreme"
+```
+
+`[system] interval` is how many seconds pass between two readings of the meters (`cpu`, `memory`, `network`, `gpu`), from 1 to 60, two by default; `battery` and `disk` are read no more than every 20 and 30 seconds. A meter's own option `interval` wins over both. Meters of the same kind and interval share one reading.
+
+```toml
+[system]
+interval = 3
+
+[[surface]]
+edge = "top"
+start = ["cpu", { widget = "gpu", show = "memory", interval = 5 }, "memory"]
+```
+
+The tiles `inhibit` and `performance` are for the `tiles` of the quick settings, as `{ widget = "tiles", tiles = ["inhibit", "performance", "power-mode"] }`.
