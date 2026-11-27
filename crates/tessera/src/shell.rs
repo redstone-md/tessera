@@ -26,6 +26,7 @@ use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::modules::DesktopClosing;
 use crate::modules::night::Night;
+use crate::notices::Notices;
 use crate::notifications_store::NotificationStore;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
@@ -103,6 +104,7 @@ impl Shell {
         Rules::start(&config.rules, cx);
         Corners::start(&config.corners, cx);
         ClipHistory::start(&config.clipboard, cx);
+        Notices::configure(&config.notices, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -315,6 +317,7 @@ impl Shell {
         Corners::configure(&config.corners, cx);
         ClipHistory::configure(&config.clipboard, cx);
         Night::configure(&config.night_light, cx);
+        Notices::configure(&config.notices, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

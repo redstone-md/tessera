@@ -1291,6 +1291,65 @@ const RUSSIAN: &[(&str, &str)] = &[
     // Wallpaper: the widget and the theme of its colors.
     ("Wallpaper", "Обои"),
     ("Wallpaper colors", "Цвета обоев"),
+    // Removable devices, the privacy indicator and battery warnings.
+    ("Removable devices", "Съёмные устройства"),
+    ("Eject", "Извлечь"),
+    ("Ejecting…", "Извлечение…"),
+    ("Safely remove", "Безопасное извлечение"),
+    ("Nothing to take out", "Извлекать нечего"),
+    ("Safe to remove", "Можно извлечь"),
+    ("can now be taken out.", "теперь можно извлечь."),
+    ("The device was not ejected", "Устройство не извлечено"),
+    (
+        "A program is using it; close its files and try again.",
+        "Его использует программа; закройте её файлы и попробуйте снова.",
+    ),
+    ("It is in use by", "Его использует"),
+    (
+        "This account may not eject it.",
+        "Этой учётной записи нельзя его извлечь.",
+    ),
+    (
+        "Windows refused to eject it.",
+        "Windows отказалась его извлечь.",
+    ),
+    ("A drive was plugged in", "Подключён диск"),
+    ("A disc or a card was put in", "Вставлен диск или карта"),
+    ("of the charge is left.", "заряда осталось."),
+    ("The battery is low", "Батарея разряжается"),
+    (
+        "Plug the computer in soon.",
+        "Скоро подключите компьютер к сети.",
+    ),
+    ("The battery is very low", "Батарея почти разряжена"),
+    (
+        "Plug the computer in now.",
+        "Подключите компьютер к сети сейчас.",
+    ),
+    (
+        "Plug the computer in now; it will soon go to sleep.",
+        "Подключите компьютер к сети сейчас; скоро он перейдёт в спящий режим.",
+    ),
+    (
+        "Plug the computer in now; it will soon hibernate.",
+        "Подключите компьютер к сети сейчас; скоро он перейдёт в режим гибернации.",
+    ),
+    (
+        "Plug the computer in now; it will soon shut down.",
+        "Подключите компьютер к сети сейчас; скоро он выключится.",
+    ),
+    ("The battery is nearly empty", "Батарея почти пуста"),
+    (
+        "Save your work and plug the computer in.",
+        "Сохраните работу и подключите компьютер к сети.",
+    ),
+    ("Microphone", "Микрофон"),
+    ("Camera", "Камера"),
+    ("Location", "Местоположение"),
+    (
+        "No application uses the microphone, the camera or the location",
+        "Микрофон, камеру и местоположение не использует ни одно приложение",
+    ),
 ];
 
 #[cfg(test)]

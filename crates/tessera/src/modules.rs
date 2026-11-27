@@ -11,6 +11,7 @@ mod clipboard;
 mod clock;
 mod command;
 mod connections;
+pub mod devices;
 mod display_mode;
 mod focused;
 mod hdr;
@@ -28,6 +29,7 @@ mod overview;
 mod plan;
 mod power_dialog;
 mod power_mode;
+mod privacy;
 mod problems;
 mod quick;
 mod run;
@@ -67,6 +69,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
         Box::new(display_mode::DisplayModeModule),
+        Box::new(devices::DevicesModule),
         Box::new(FilesModule),
         Box::new(focused::FocusedModule),
         Box::new(keyboard::KeyboardModule),
@@ -94,6 +97,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(hdr::HdrModule),
         Box::new(plan::PlanModule),
         Box::new(power_dialog::PowerDialogModule),
+        Box::new(privacy::PrivacyModule),
         Box::new(trash::TrashModule),
         Box::new(update::UpdateModule),
         Box::new(tray::TrayModule),

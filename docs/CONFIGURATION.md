@@ -105,6 +105,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
 | `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
 | `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
+| `eject` | the letter of a drive, as `E` or `E:` | ejects that drive as its **Eject** button in the popup `devices` does: the device it is on, with every drive of it, or its medium where it is a disc or a card in a reader built in; a notice says how it went |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -431,3 +432,27 @@ video = "C:/Users/me/Videos/focus.mp4"
 The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `previous`) have every display show the next or the previous picture of its list at once.
 
 `theme = "wallpaper"`, or `seed = "wallpaper"` in a theme file, derives the colors from the wallpaper, as `accent` does from the accent color.
+
+## Notices, devices and privacy
+
+Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low. Tessera gives these as notices of its own, cards in the lower right corner of the display the pointer is on with buttons for what can be done about them. `[notices]` says which:
+
+```toml
+[notices]
+drives = true    # a drive plugged in, or a disc or a card put in, with Open and Eject
+battery = true   # warnings at the battery levels of the power plan in use
+seconds = 8      # how long a notice that is not urgent stays, 2 to 60
+```
+
+Without `drives` or `battery`, each is on only while Tessera is the shell of the session, since Explorer tells of them otherwise. What an ejection came to is always told. A refusal to eject and the warnings at the reserve and critical levels are urgent: they come through do not disturb (`quiet` in `[notifications]`) and stay until they are put away; the other notices are held back by it.
+
+The widgets that go with them are placed by no built-in layout:
+
+```toml
+[[surface]]
+edge = "top"
+thickness = 48
+end = ["devices", "privacy", "tray", "volume"]
+```
+
+`devices` is an icon that is there only while something can be taken out of the machine; a click opens the popup `devices` with `devices-list`, a row for each drive and device with **Open** and **Eject**. `privacy` shows an icon for the microphone, the camera and the location while an application uses it, with a tip that names the applications; a click opens the popup `privacy` with `privacy-list`. Both popups can be replaced by a `[[popup]]` of the same name, or the lists put into another one.

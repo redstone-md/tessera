@@ -53,8 +53,13 @@ pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, s
     reason = "for the notifications that show the balloons of the tray"
 )]
 pub use win32::{Balloon, BalloonEvent, BalloonKind};
+pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
+pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
+pub use win32::{
+    DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
+};
 pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
 };

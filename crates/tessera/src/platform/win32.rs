@@ -22,6 +22,7 @@ mod desktops;
 mod display_mode;
 mod drag;
 mod drop_target;
+mod devices;
 mod execute;
 mod explorer_view;
 mod file_op;
@@ -60,6 +61,8 @@ mod shell_host;
 mod shell_item;
 mod shell_items;
 mod shell_menu;
+mod power_warnings;
+mod privacy;
 mod shell_mode;
 mod shell_new;
 mod shell_thread;
@@ -103,6 +106,9 @@ pub use desktops::VirtualDesktops;
 pub use display_mode::DisplayMode;
 pub use drag::{DragButton, DragOut, DropEffect, DropEffects, DropKeys, drop_effect, drop_into};
 pub use drop_target::{DropEvent, DropTarget, DropZone, DropZones};
+pub use devices::{
+    DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
+};
 pub use execute::Process;
 pub use execute::{Launch, Show};
 pub use explorer_view::{
@@ -153,6 +159,8 @@ pub use shell_item::ShellId;
 pub use shell_items::IconPlace;
 pub use shell_menu::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use shell_mode::started_as_shell;
+pub use power_warnings::{BatteryChanges, BatteryLevels, CriticalAction};
+pub use privacy::{Capability, CapabilityUse, PrivacyWatch};
 pub use shell_mode::{explorer_running, shell_mode};
 pub use shell_new::NewTemplate;
 pub use shell_thread::ShellThread;
