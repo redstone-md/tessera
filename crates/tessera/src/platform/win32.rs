@@ -144,7 +144,7 @@ pub use night_light::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLi
 pub use notifications::Occupation;
 pub use notifications::{Notification, Notifications};
 pub use open_with::{OpenWithHandler, choose_app};
-pub use overlays::{CloudState, OverlayMarks, Overlays};
+pub use overlays::{CloudState, Overlays};
 pub use pace::Pace;
 pub use packaged::{app_id_in, app_path};
 pub use passage::Passage;
@@ -157,7 +157,7 @@ pub use preview_host::{PreviewColors, PreviewHost, PreviewShown};
 pub use privacy::{Capability, CapabilityUse, PrivacyWatch};
 pub use processes::RunningProcess;
 pub use program_path::{expand_variables, find_program, recent_folder};
-pub use properties::{FileProperty, Properties, PropertyEdit, PropertyValue};
+pub use properties::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use quick_access::QuickFolder;
 pub use quick_access::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use radios::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};

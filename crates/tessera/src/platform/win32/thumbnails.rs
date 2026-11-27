@@ -40,7 +40,7 @@ const WORKERS: usize = 2;
 pub const LARGEST_THUMBNAIL: u32 = 256;
 
 /// What a thumbnail may be.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThumbnailKind {
     /// Only a picture of what the file holds; nothing where its kind has
     /// no thumbnail provider, so that its icon is drawn instead.

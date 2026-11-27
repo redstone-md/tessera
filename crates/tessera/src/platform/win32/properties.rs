@@ -29,9 +29,12 @@ use windows::Win32::Storage::EnhancedStorage::{
 use windows::Win32::System::Com::CoTaskMemAlloc;
 use windows::Win32::System::Com::StructuredStorage::{
     InitPropVariantFromStringAsVector, PROPVARIANT, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
-    PropVariantClear, PropVariantToUInt32,
+    PropVariantClear, PropVariantToUInt32, PropVariantToUInt64,
 };
-use windows::Win32::System::Variant::{VT_EMPTY, VT_LPWSTR, VT_UI4};
+use windows::Win32::System::Variant::{
+    VT_EMPTY, VT_FILETIME, VT_I1, VT_I2, VT_I4, VT_I8, VT_INT, VT_LPWSTR, VT_UI1, VT_UI2, VT_UI4,
+    VT_UI8, VT_UINT,
+};
 use windows::Win32::UI::Shell::PropertiesSystem::{
     GPS_BESTEFFORT, GPS_DEFAULT, GPS_READWRITE, IPropertyStore, PDFF_DEFAULT,
     PSFormatForDisplayAlloc, SHGetPropertyStoreFromParsingName,
@@ -114,6 +117,32 @@ impl FileProperty {
         }
     }
 
+    /// What the files of Tessera call it, as `date-taken`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Authors => "authors",
+            Self::Rating => "rating",
+            Self::Tags => "tags",
+            Self::Comment => "comment",
+            Self::Dimensions => "dimensions",
+            Self::Length => "length",
+            Self::DateTaken => "date-taken",
+            Self::CameraMaker => "camera-maker",
+            Self::CameraModel => "camera-model",
+            Self::DateCreated => "date-created",
+            Self::Owner => "owner",
+            Self::Attributes => "attributes",
+        }
+    }
+
+    /// The property the files of Tessera call `name`.
+    pub fn named(name: &str) -> Option<Self> {
+        Self::DETAILS
+            .into_iter()
+            .find(|property| property.name() == name)
+    }
+
     /// Whether the details pane lets the user write it.
     pub fn editable(self) -> bool {
         matches!(
@@ -148,6 +177,10 @@ pub struct PropertyValue {
     pub shown: String,
     /// For the rating, how many stars of five it gives.
     pub stars: Option<u8>,
+    /// What it is ordered by where it is a number or a moment, which its
+    /// text does not order by: the number, or the moment in the 100
+    /// nanoseconds Windows counts.
+    pub order: Option<u64>,
 }
 
 impl PropertyValue {
@@ -240,7 +273,21 @@ fn read_value(store: &IPropertyStore, property: FileProperty) -> Option<Property
                 .then(|| PropVariantToUInt32(&raw const value).ok())
                 .flatten()
                 .map(stars_of);
-            PropertyValue { shown, stars }
+            let kind = value.Anonymous.Anonymous.vt;
+            let order = match kind {
+                VT_FILETIME => {
+                    let time = value.Anonymous.Anonymous.Anonymous.filetime;
+                    Some(u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime))
+                }
+                VT_UI1 | VT_UI2 | VT_UI4 | VT_UI8 | VT_I1 | VT_I2 | VT_I4 | VT_I8 | VT_UINT
+                | VT_INT => PropVariantToUInt64(&raw const value).ok(),
+                _ => None,
+            };
+            PropertyValue {
+                shown,
+                stars,
+                order,
+            }
         });
         let _ = PropVariantClear(&raw mut value);
         read.filter(|value| !value.shown.trim().is_empty() || value.stars.is_some())

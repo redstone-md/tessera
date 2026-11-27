@@ -53,7 +53,7 @@ pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
-pub use win32::{CloudState, OverlayMarks, Overlays};
+pub use win32::{CloudState, Overlays};
 pub use win32::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
@@ -72,7 +72,7 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
-pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue};
+pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
