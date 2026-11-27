@@ -422,6 +422,9 @@ pub struct Notice {
     pub body: String,
     /// A character of the icon font shown in place of a logo.
     pub glyph: Option<&'static str>,
+    /// A picture shown in place of a logo, before the glyph, as the
+    /// picture of a balloon of the notification area.
+    pub picture: Icon,
     /// Its buttons; a click on the banner does what the first one does.
     /// They are on the banner only, not in the list of notifications.
     pub actions: Vec<NoticeAction>,
@@ -447,6 +450,8 @@ struct BannerItem {
     title: String,
     body: String,
     glyph: &'static str,
+    /// The picture the notice brought, which stands before the logo.
+    picture: Icon,
     actions: Vec<NoticeAction>,
     on_gone: OnGone,
 }
@@ -575,6 +580,7 @@ impl Banners {
                 title: entry.title.clone(),
                 body: entry.body.clone(),
                 glyph: APP_GLYPH,
+                picture: None,
                 actions: Vec::new(),
                 on_gone: OnGone::default(),
             })
@@ -591,6 +597,7 @@ impl Banners {
             title,
             body,
             glyph,
+            picture,
             actions,
             urgent,
             on_gone,
@@ -612,6 +619,7 @@ impl Banners {
             title,
             body,
             glyph: glyph.unwrap_or(APP_GLYPH),
+            picture,
             actions,
             on_gone,
         };
@@ -833,9 +841,11 @@ impl BannerView {
     fn add(&mut self, items: Vec<BannerItem>, stay: Duration, cx: &mut Context<Self>) {
         let motion = cx.global::<Theme>().motion;
         for item in items {
-            let logo = cx
-                .try_global::<NotificationStore>()
-                .and_then(|store| store.logo(&item.app_id));
+            let logo = item.picture.clone().or_else(|| {
+                cx.try_global::<NotificationStore>()
+                    .and_then(|store| store.logo(&item.app_id))
+            });
+
             let mut presence = Spring::new(motion.spatial, 0.);
             presence.animate_to(1.);
             self.banners.insert(

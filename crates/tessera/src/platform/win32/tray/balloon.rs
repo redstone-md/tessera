@@ -58,7 +58,7 @@ impl BalloonKind {
 #[derive(Clone, Debug)]
 #[allow(
     dead_code,
-    reason = "the banners show a balloon as a notice and do not yet honour its kind, picture, sound and timing wishes"
+    reason = "the banners show a balloon with its kind and picture but do not yet honour its wishes for size and sound"
 )]
 pub struct Balloon {
     /// The icon it belongs to, as [`super::TrayIcon::id`] names it. An icon

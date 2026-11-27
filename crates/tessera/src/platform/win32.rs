@@ -177,6 +177,7 @@ pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use tray::TrayPromotion;
 pub use tray::{Balloon, BalloonEvent};
+pub use tray::BalloonKind;
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};

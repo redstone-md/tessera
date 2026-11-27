@@ -50,6 +50,7 @@ pub use win32::{
 };
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 pub use win32::{Balloon, BalloonEvent};
+pub use win32::BalloonKind;
 pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
