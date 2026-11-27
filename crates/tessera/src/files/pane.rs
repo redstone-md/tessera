@@ -25,6 +25,7 @@ use super::model::{
     Order, Selection, Shape, Shown, crumbs, free_name, is_valid_name, read_folder, size_text,
     stamp_of,
 };
+use super::rename::{BatchRename, RenameEvent, apply};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
 use super::session::{FolderView, FolderViews};
 use super::{Files, FilesConfig};
@@ -195,6 +196,8 @@ pub struct FolderPane {
     lit: bool,
     /// The window the pane is in.
     window: AnyWindowHandle,
+    /// The dialog that renames many files at once, while it is open.
+    batch: Option<(Entity<BatchRename>, gpui::Subscription)>,
     _watch: Task<()>,
 }
 
@@ -289,6 +292,7 @@ impl FolderPane {
             beside: false,
             lit: false,
             window: window.window_handle(),
+            batch: None,
             _watch: watch,
         };
         pane.take_view(cx);
@@ -797,6 +801,10 @@ impl FolderPane {
     /// Renames the chosen file or folder, where one is chosen.
     fn rename_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chosen = self.chosen();
+        if chosen.len() > 1 {
+            self.begin_batch_rename(chosen, window, cx);
+            return;
+        }
         let [path] = chosen.as_slice() else {
             return;
         };
@@ -807,6 +815,62 @@ impl FolderPane {
             return;
         };
         self.begin_rename(path.clone(), name, window, cx);
+    }
+
+    /// Opens the dialog that renames the files at `paths` at once.
+    fn begin_batch_rename(
+        &mut self,
+        paths: Vec<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let renamed: std::collections::HashSet<&PathBuf> = paths.iter().collect();
+        let entries = self.listing.entries();
+        let taken = { entries.iter() }
+            .filter(|entry| !renamed.contains(&entry.path))
+            .map(|entry| entry.name.to_lowercase())
+            .collect();
+        let folders = { entries.iter() }
+            .filter(|entry| entry.folder && renamed.contains(&entry.path))
+            .map(|entry| entry.path.clone())
+            .collect();
+        let dialog = cx.new(|cx| BatchRename::new(paths, folders, taken, window, cx));
+        let heard = cx.subscribe_in(
+            &dialog,
+            window,
+            |this, _, event: &RenameEvent, window, cx| {
+                this.batch = None;
+                window.focus(&this.focus);
+                if let RenameEvent::Apply(plan) = event {
+                    this.batch_rename(plan.clone(), cx);
+                }
+                cx.notify();
+            },
+        );
+        self.batch = Some((dialog, heard));
+        cx.notify();
+    }
+
+    /// Renames the files of `plan`, away from the user interface, and
+    /// chooses them under their new names once the folder is read again.
+    fn batch_rename(&mut self, plan: Vec<(PathBuf, PathBuf)>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let renamed: Vec<PathBuf> = plan.iter().map(|(_, new)| new.clone()).collect();
+            let problems = cx
+                .background_executor()
+                .spawn(async move { apply(&plan) })
+                .await;
+            for problem in problems {
+                report!("a file was not renamed: {problem}");
+            }
+            this.update(cx, |this, cx| {
+                this.selection.clear();
+                this.selection.chosen.extend(renamed);
+                this.load(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Gives the file being renamed the name in its field; with `keep`,
@@ -904,6 +968,15 @@ impl FolderPane {
     ) -> bool {
         let key = event.keystroke.key.as_str();
         let held = &event.keystroke.modifiers;
+        if let Some((dialog, _)) = &self.batch {
+            let dialog = dialog.clone();
+            match key {
+                "enter" => dialog.update(cx, |dialog, cx| dialog.confirm(cx)),
+                "escape" => dialog.update(cx, |dialog, cx| dialog.cancel(cx)),
+                _ => {}
+            }
+            return true;
+        }
         if self.rename.is_some() {
             match key {
                 "enter" => self.end_rename(false, window, cx),
@@ -1353,11 +1426,13 @@ impl FolderPane {
                 cx.emit(PaneEvent::ToOtherPane { cut: true })
             }));
         }
-        if chosen.len() == 1 {
-            entries.push(entry(ICON_RENAME, "Rename", |this, cx| {
-                this.after_menu(cx, |this, window, cx| this.rename_chosen(window, cx))
-            }));
-        }
+        let rename = match chosen.len() {
+            1 => "Rename",
+            _ => "Rename all",
+        };
+        entries.push(entry(ICON_RENAME, rename, |this, cx| {
+            this.after_menu(cx, |this, window, cx| this.rename_chosen(window, cx))
+        }));
         entries.push(entry(ICON_BIN, "Delete", |this, cx| this.delete(false, cx)));
         entries.push(entry(ICON_EXPLORER, "Show in Explorer", |this, _| {
             if let Some(path) = this.chosen().first()
@@ -2163,6 +2238,7 @@ impl Render for FolderPane {
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.wheel(event, cx)))
             .children(self.render_pattern(&theme))
             .child(content)
+            .children(self.batch.as_ref().map(|(dialog, _)| dialog.clone()))
             .child(
                 canvas(
                     move |bounds, _, cx| {

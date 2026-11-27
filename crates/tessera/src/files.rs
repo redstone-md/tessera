@@ -7,6 +7,7 @@
 
 mod model;
 mod pane;
+mod rename;
 mod search;
 mod session;
 mod sidebar;

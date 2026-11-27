@@ -635,6 +635,11 @@ impl Listing {
         }
     }
 
+    /// Everything the listing holds, shown or not.
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
+    }
+
     /// Adds `entries` to what the listing holds; it is arranged again
     /// afterwards.
     pub fn extend(&mut self, entries: impl IntoIterator<Item = Entry>) {

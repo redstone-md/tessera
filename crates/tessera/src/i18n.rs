@@ -757,6 +757,17 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("the first shown", "показаны первые"),
     ("Open file location", "Расположение файла"),
     ("Nothing was found", "Ничего не найдено"),
+    ("Rename all", "Переименовать все"),
+    ("New name, # for the number", "Новое имя, # вместо номера"),
+    ("Find", "Найти"),
+    ("Replace with", "Заменить на"),
+    ("No name changes", "Ни одно имя не меняется"),
+    ("cannot be the name of a file", "не может быть именем файла"),
+    ("would be the name of two files", "досталось бы двум файлам"),
+    (
+        "is the name of something else here",
+        "уже носит здесь другой объект",
+    ),
 ];
 
 #[cfg(test)]
