@@ -20,6 +20,7 @@ mod execute;
 mod files;
 mod hdr;
 mod hotkeys;
+mod hotspot;
 mod icon;
 mod index;
 mod jump;
@@ -68,6 +69,7 @@ pub use files::{
 };
 pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
+pub use hotspot::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use icon::IconPixels;
 pub use index::SearchIndex;
 pub use jump::{JumpTask, RecentDocument, app_id_of_program};
