@@ -1384,6 +1384,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // tray-bluetooth: the notification area, Bluetooth and Wi-Fi.
+    ("Show in bar", "Показать на панели"),
+    ("Move to overflow", "Переместить в скрытые"),
+    ("Show hidden icons", "Показать скрытые значки"),
 ];
 
 #[cfg(test)]

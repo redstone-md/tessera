@@ -735,3 +735,8 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Kill process" = "Arrêter le processus"
 "Media" = "Médias"
 "Personalize" = "Personnaliser"
+
+# tray-bluetooth: the notification area, Bluetooth and Wi-Fi.
+"Show in bar" = "Afficher dans la barre"
+"Move to overflow" = "Déplacer dans le dépassement"
+"Show hidden icons" = "Afficher les icônes cachées"

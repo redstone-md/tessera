@@ -735,3 +735,8 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+
+# tray-bluetooth: the notification area, Bluetooth and Wi-Fi.
+"Show in bar" = "Показати на панелі"
+"Move to overflow" = "Перемістити до прихованих"
+"Show hidden icons" = "Показати приховані значки"

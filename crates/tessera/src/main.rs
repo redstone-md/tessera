@@ -44,6 +44,7 @@ mod switcher;
 mod theme;
 mod tiling;
 mod tip;
+mod tray_settings;
 mod ui;
 mod wallpaper;
 mod window_menu;
