@@ -1424,6 +1424,23 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows offers no way to connect this device from here; it connects by itself when it is switched on",
         "Windows не позволяет подключить это устройство отсюда; оно подключается само, когда включено",
     ),
+    ("Disconnect", "Отключить"),
+    ("Join a hidden network", "Подключиться к скрытой сети"),
+    (
+        "For a network that does not show its name",
+        "Для сети, которая не показывает своё имя",
+    ),
+    ("WPA2-Personal", "WPA2-Personal"),
+    ("WPA3-Personal", "WPA3-Personal"),
+    ("Wi-Fi settings", "Параметры Wi-Fi"),
+    (
+        "WPA-Enterprise and WEP networks are joined in the Wi-Fi settings of Windows",
+        "К сетям WPA-Enterprise и WEP подключаются в параметрах Wi-Fi Windows",
+    ),
+    (
+        "The name of a network has 1 to 32 Latin characters",
+        "Имя сети содержит от 1 до 32 латинских символов",
+    ),
 ];
 
 #[cfg(test)]

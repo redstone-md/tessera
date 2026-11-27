@@ -454,6 +454,9 @@
 #               one Windows has the settings of or anyone may join, and
 #               asks for the password of another; two right clicks on a
 #               saved one forget it
+#               The connected network has a button that leaves it, and a
+#               row under the networks joins one that hides its name
+
 #   "problems"  how many things went wrong since Tessera started; shows
 #               nothing while there are none, and opens the list of them
 #   "problem-list"  what went wrong, the latest first, with a button that
