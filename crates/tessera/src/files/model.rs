@@ -1407,6 +1407,91 @@ pub fn glob_matches(pattern: &str, name: &str) -> bool {
     pattern[p..].iter().all(|&letter| letter == '*')
 }
 
+/// The `shell:` names of the known folders the address bar suggests, as
+/// Explorer takes them.
+pub const SHELL_NAMES: [&str; 22] = [
+    "shell:AppData",
+    "shell:Common Programs",
+    "shell:Common Startup",
+    "shell:ControlPanelFolder",
+    "shell:Desktop",
+    "shell:Downloads",
+    "shell:Favorites",
+    "shell:Fonts",
+    "shell:Libraries",
+    "shell:Local AppData",
+    "shell:MyComputerFolder",
+    "shell:My Music",
+    "shell:My Pictures",
+    "shell:My Video",
+    "shell:NetworkPlacesFolder",
+    "shell:Personal",
+    "shell:Profile",
+    "shell:Programs",
+    "shell:Recent",
+    "shell:RecycleBinFolder",
+    "shell:SendTo",
+    "shell:Startup",
+];
+
+/// How many suggestions the address bar shows at most.
+pub const SUGGESTED: usize = 10;
+
+/// What the text of the address bar is completed from: the folder it
+/// names up to its last separator, and the start of the name typed after
+/// it. None where no folder is named yet.
+pub fn address_parts(text: &str) -> Option<(PathBuf, String)> {
+    let at = text.rfind(['\\', '/'])?;
+    let (folder, typed) = text.split_at(at + 1);
+    // `C:` alone is the current folder of the drive; `C:\` its root.
+    (folder.len() >= 3 || folder.starts_with("\\\\"))
+        .then(|| (PathBuf::from(folder), typed.to_owned()))
+}
+
+/// What the address bar suggests for `text`: the folders `children` of
+/// the folder it names that begin with what was typed after it, the
+/// `shell:` names that begin with it, and the places of `history` that
+/// hold it, without twice the same, at most [`SUGGESTED`].
+pub fn suggestions(text: &str, children: &[PathBuf], history: &[String]) -> Vec<String> {
+    let text = text.trim();
+    let lower = text.to_lowercase();
+    if lower.is_empty() {
+        return Vec::new();
+    }
+    let mut found: Vec<String> = Vec::new();
+    if let Some((folder, typed)) = address_parts(text) {
+        let typed = typed.to_lowercase();
+        let mut names: Vec<String> = { children.iter() }
+            .filter_map(|child| {
+                child
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .filter(|name| name.to_lowercase().starts_with(&typed))
+            .collect();
+        names.sort_by(|a, b| natural(a, b));
+        found.extend(
+            names
+                .into_iter()
+                .map(|name| folder.join(name).display().to_string()),
+        );
+    }
+    found.extend(
+        { SHELL_NAMES.iter() }
+            .filter(|name| name.to_lowercase().starts_with(&lower))
+            .map(|name| (*name).to_owned()),
+    );
+    found.extend(
+        { history.iter() }
+            .filter(|place| place.to_lowercase().contains(&lower))
+            .cloned(),
+    );
+    let mut seen = HashSet::new();
+    found.retain(|place| seen.insert(place.to_lowercase()) && !place.eq_ignore_ascii_case(text));
+    found.truncate(SUGGESTED);
+    found
+}
+
 /// The steps of the path of a folder, from its drive, each with where it
 /// leads: what the bar over the list is made of.
 pub fn crumbs(path: &Path) -> Vec<(String, PathBuf)> {
@@ -1800,6 +1885,33 @@ mod tests {
         assert_eq!(names, ["C:", "Users", "me"]);
         assert_eq!(crumbs[0].1, PathBuf::from("C:\\"));
         assert_eq!(crumbs[2].1, PathBuf::from("C:\\Users\\me"));
+    }
+
+    #[test]
+    fn the_address_bar_completes_the_folder_typed() {
+        assert_eq!(
+            address_parts(r"C:\Users\me\Doc"),
+            Some((PathBuf::from(r"C:\Users\me\"), "Doc".to_owned()))
+        );
+        assert_eq!(
+            address_parts(r"C:\"),
+            Some((PathBuf::from(r"C:\"), String::new()))
+        );
+        assert_eq!(address_parts("Doc"), None);
+        assert_eq!(address_parts(r"C:"), None);
+        let children = [
+            PathBuf::from(r"C:\Users\me\Documents"),
+            PathBuf::from(r"C:\Users\me\Downloads"),
+            PathBuf::from(r"C:\Users\me\Music"),
+        ];
+        let history = [r"D:\Docs".to_owned(), r"C:\Users\me\Documents".to_owned()];
+        assert_eq!(
+            suggestions(r"C:\Users\me\do", &children, &history),
+            [r"C:\Users\me\Documents", r"C:\Users\me\Downloads"]
+        );
+        assert_eq!(suggestions("shell:down", &[], &[]), ["shell:Downloads"]);
+        assert_eq!(suggestions("docs", &[], &history), [r"D:\Docs"]);
+        assert!(suggestions("  ", &children, &history).is_empty());
     }
 
     #[test]

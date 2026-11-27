@@ -32,6 +32,7 @@ use super::model::{
     stamp_of,
 };
 use super::model::{COMPUTER_PARSING, KnownShellPlace, PICTURES_LIBRARY, is_archive};
+use super::model::{address_parts, suggestions};
 use super::recycle_view::{self, Bin, BinDeed};
 use super::rename::{BatchRename, RenameEvent, apply, parent_key};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
@@ -205,8 +206,11 @@ pub struct FolderPane {
     pins: HashSet<PathBuf>,
     /// What the filter field narrows the list to.
     filter: Entity<TextField>,
-    /// The path being written in place of the steps, when it is.
+    /// The path being written in place of the steps, when it is, with
+    /// what it suggests and the reading of the folder it names.
     address: Option<Entity<TextField>>,
+    suggested: Vec<String>,
+    _suggesting: Option<(Subscription, Option<Task<()>>)>,
     rename: Option<Rename>,
     /// Why the folder cannot be shown.
     problem: Option<String>,
@@ -433,6 +437,8 @@ impl FolderPane {
             pins: HashSet::new(),
             filter,
             address: None,
+            suggested: Vec::new(),
+            _suggesting: None,
             rename: None,
             problem: None,
             stamp: None,
@@ -1695,12 +1701,64 @@ impl FolderPane {
             field
         });
         field.read(cx).focus(window);
+        let typed = cx.observe(&field, |this, field, cx| {
+            this.suggest(field.read(cx).text(), cx)
+        });
+        self._suggesting = Some((typed, None));
+        self.suggested.clear();
         self.address = Some(field);
+        cx.notify();
+    }
+
+    /// Suggests what the address bar may go to as `text` is typed: the
+    /// folders of the folder it names, read away from the user interface,
+    /// the `shell:` names and the places gone through.
+    fn suggest(&mut self, text: String, cx: &mut Context<Self>) {
+        let history: Vec<String> = { self.history.behind(64).into_iter() }
+            .chain(self.history.ahead(64))
+            .filter_map(|place| place.parsing_name())
+            .collect();
+        let folder = address_parts(&text).map(|(folder, _)| folder);
+        let reading = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let children = match folder {
+                Some(folder) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            let read = std::fs::read_dir(&folder).into_iter().flatten().flatten();
+                            { read.filter(|item| item.file_type().is_ok_and(|kind| kind.is_dir())) }
+                                .map(|item| item.path())
+                                .collect::<Vec<_>>()
+                        })
+                        .await
+                }
+                None => Vec::new(),
+            };
+            this.update(cx, |this, cx| {
+                this.suggested = suggestions(&text, &children, &history);
+                cx.notify();
+            })
+            .ok();
+        });
+        if let Some((_, task)) = &mut self._suggesting {
+            *task = Some(reading);
+        }
+    }
+
+    /// Writes the suggestion `place` in the address bar, to go there with
+    /// Enter.
+    fn take_suggestion(&mut self, place: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(field) = &self.address {
+            field.update(cx, |field, cx| field.set_text(&place, false, cx));
+            field.read(cx).focus(window);
+        }
+        self.suggested.clear();
         cx.notify();
     }
 
     /// Goes where the address field says, or back to the steps.
     fn end_address(&mut self, go: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self._suggesting = None;
+        self.suggested.clear();
         let Some(field) = self.address.take() else {
             return;
         };
@@ -2702,10 +2760,47 @@ impl FolderPane {
     /// written, its field.
     pub fn render_address(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if let Some(field) = &self.address {
+            let shown = { self.suggested.iter().enumerate() }.map(|(index, place)| {
+                let taken = place.clone();
+                div()
+                    .id(("files-suggestion", index))
+                    .px(theme.spacing.medium)
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .rounded(theme.shape.small)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.colors.surface_container_highest))
+                    .child(one_line(place.clone()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.take_suggestion(taken.clone(), window, cx)
+                    }))
+            });
+            let list = (!self.suggested.is_empty()).then(|| {
+                // Drawn over the list below, after everything else.
+                gpui::deferred(
+                    div()
+                        .absolute()
+                        .top(px(38.))
+                        .left_0()
+                        .right_0()
+                        .p(theme.spacing.tiny)
+                        .rounded(theme.shape.medium)
+                        .bg(theme.colors.surface_container)
+                        .border_1()
+                        .border_color(theme.colors.outline.opacity(0.3))
+                        .text_size(theme.typography.label_size)
+                        .text_color(theme.colors.on_surface)
+                        .children(shown),
+                )
+                .with_priority(1)
+            });
             return div()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .child(field.clone())
+                .children(list)
                 .into_any_element();
         }
         let language = Language::of(cx);
@@ -2778,6 +2873,7 @@ impl FolderPane {
                         .child("\u{203a}")
                         .into_any_element(),
                 );
+                let listed = target.clone();
                 steps.push(
                     div()
                         .id(("files-crumb", index))
@@ -2794,6 +2890,30 @@ impl FolderPane {
                             cx.stop_propagation();
                             this.go(Location::Folder(target.clone()), window, cx)
                         }))
+                        .into_any_element(),
+                );
+                steps.push(
+                    div()
+                        .id(("files-crumb-folders", index))
+                        .flex_none()
+                        .w(px(16.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(theme.shape.small)
+                        .cursor_pointer()
+                        .font_family(theme.typography.icon_family)
+                        .text_size(px(8.))
+                        .text_color(theme.colors.on_surface_variant)
+                        .hover(|style| style.bg(theme.colors.surface_container_highest))
+                        .child(ICON_SORT_DOWN)
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.list_folders(listed.clone(), event.position(), window, cx)
+                            }),
+                        )
                         .into_any_element(),
                 );
             }
@@ -2829,6 +2949,58 @@ impl FolderPane {
             .child(div().flex_1().h_full())
             .on_click(cx.listener(|this, _, window, cx| this.edit_address(window, cx)))
             .into_any_element()
+    }
+
+    /// Opens a menu of the folders in `folder` under `position`, read away
+    /// from the user interface, each of which the pane goes to.
+    fn list_folders(
+        &mut self,
+        folder: PathBuf,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = match PopupAnchor::under(window, position, cx) {
+            Ok(anchor) => anchor,
+            Err(error) => return report!("the menu has no place: {error:#}"),
+        };
+        let (follow, shown) = (self.config.explorer, self.shown());
+        let read = cx.background_executor().spawn(async move {
+            let explorer = ExplorerSettings::read();
+            let mut rules = NameRules::new(explorer, follow);
+            let mut folders: Vec<Entry> = { read_folder(&folder, &mut rules).unwrap_or_default() }
+                .into_iter()
+                .filter(|entry| entry.folder && shown.shows(entry))
+                .collect();
+            folders.sort_by(|a, b| super::model::natural(&a.display, &b.display));
+            folders
+        });
+        let window = self.window;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let folders = read.await;
+            this.update(cx, |_, cx| {
+                let entries: Vec<MenuEntry> = { folders.into_iter() }
+                    .map(|entry| {
+                        let pane = cx.entity().downgrade();
+                        let location = Location::Folder(entry.path.clone());
+                        MenuEntry::new(ICON_FOLDER, entry.display.clone(), move |cx| {
+                            let (pane, location) = (pane.clone(), location.clone());
+                            window
+                                .update(cx, |_, window, cx| {
+                                    pane.update(cx, |this, cx| this.go(location, window, cx))
+                                        .ok();
+                                })
+                                .ok();
+                        })
+                    })
+                    .collect();
+                if !entries.is_empty() {
+                    Menus::open(entries, anchor, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The field the list is filtered with.
