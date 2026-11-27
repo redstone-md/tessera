@@ -175,6 +175,7 @@ pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
 pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
+pub use tray::TrayPromotion;
 pub use tray::{Balloon, BalloonEvent};
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
