@@ -146,7 +146,7 @@ struct WifiList {
     /// The saved network one more click of the right button forgets.
     forgetting: Option<String>,
     /// The button of the connected network that leaves it, and whether it
-    /// was clicked and the network is not left yet.
+    /// was clicked and Windows has not answered yet.
     leave: Interaction,
     leaving: bool,
     /// The row that unfolds the form for a network that hides its name,
@@ -231,16 +231,21 @@ impl WifiList {
         self.failure = None;
         cx.notify();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            // Windows may join the network again at once, as its profile
+            // says it does by itself, so the list is read right after and
+            // the button no longer waits for the network to drop out.
             let left = cx
                 .background_executor()
-                .spawn(async { Wifi::disconnect() })
+                .spawn(async { Wifi::disconnect().map(|()| Wifi::reach()) })
                 .await;
-            if let Err(error) = left {
-                let _ = this.update(cx, |this, cx| {
-                    this.leaving = false;
-                    this.fail(error, cx);
-                });
-            }
+            let _ = this.update(cx, |this, cx| {
+                this.leaving = false;
+                match left {
+                    Ok(read) => this.take(read, cx),
+                    Err(error) => this.fail(error, cx),
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
