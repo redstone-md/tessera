@@ -28,7 +28,8 @@ world extension {
         /// fetched once and kept while the widget shows it; redirects are
         /// not followed.
         url(string),
-        /// The icon of an application: the path of its program file, or
+        /// The icon of an application: the path of its program file on a
+        /// local drive (not a network path), or
         /// the AppUserModelID of a packaged application, as
         /// `Microsoft.WindowsCalculator_8wekyb3d8bbwe!App`.
         app(string),
@@ -117,7 +118,8 @@ world extension {
     record node {
         kind: node-kind,
         /// Indices into the list `render` returned. Each must be greater
-        /// than the index of this node; others are ignored.
+        /// than the index of this node, and a node is the child of one
+        /// node only, the first that names it; others are ignored.
         children: list<u32>,
     }
 
@@ -226,8 +228,10 @@ world extension {
         /// Names the window to `window-command` for as long as it is open.
         id: u64,
         title: string,
-        /// The program file of the window, or the AppUserModelID of a
-        /// packaged application; empty where Windows does not tell.
+        /// The AppUserModelID of the window where it is one of a packaged
+        /// application, or else its program file: either is an `app` whose
+        /// icon an image shows. Where Windows tells no program file, the
+        /// AppUserModelID the program gave itself, or else empty.
         app: string,
         /// The same number for windows on the same display, for as long
         /// as the arrangement of the displays is unchanged.

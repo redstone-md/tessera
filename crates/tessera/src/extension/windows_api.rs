@@ -10,9 +10,11 @@
 //! workspaces.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::Path;
 
 use gpui::App;
 
+use super::nodes::is_packaged;
 use super::system::ShellState;
 use crate::platform::{AppWindow, AppWindowId, DisplayKey};
 use crate::workspaces::Workspaces;
@@ -22,7 +24,8 @@ use crate::workspaces::Workspaces;
 pub struct WindowRow {
     pub id: u64,
     pub title: String,
-    /// The program file, or the AppUserModelID of a packaged application.
+    /// The AppUserModelID of a packaged application, or else the program
+    /// file; see [`app_of`].
     pub app: String,
     pub display: u32,
     pub workspace: Option<u32>,
@@ -36,11 +39,7 @@ pub fn list(shell: Option<&ShellState>) -> Vec<WindowRow> {
     let front = AppWindowId::foreground();
     let windows = AppWindow::enumerate().into_iter();
     let rows = windows.map(|window| {
-        let app = match (&window.app_id, &window.executable) {
-            (Some(app), _) => app.clone(),
-            (None, Some(file)) => file.to_string_lossy().into_owned(),
-            (None, None) => String::new(),
-        };
+        let app = app_of(window.app_id.as_deref(), window.executable.as_deref());
         let raw = window.id.raw();
         WindowRow {
             id: raw as u64,
@@ -59,6 +58,21 @@ pub fn list(shell: Option<&ShellState>) -> Vec<WindowRow> {
         rows.insert(0, focused);
     }
     rows
+}
+
+/// What names the application of a window to an extension, so that the
+/// icon of an image node can be had of it: the AppUserModelID `app_id`
+/// where it is one of a packaged application, or else the program file.
+/// Many desktop programs set an AppUserModelID of their own, such as
+/// `Chrome`, of which no icon can be had; that one is told only where
+/// Windows does not tell the program file.
+fn app_of(app_id: Option<&str>, executable: Option<&Path>) -> String {
+    match (app_id, executable) {
+        (Some(id), _) if is_packaged(id) => id.to_owned(),
+        (_, Some(file)) => file.to_string_lossy().into_owned(),
+        (Some(id), None) => id.to_owned(),
+        (None, None) => String::new(),
+    }
 }
 
 /// The same number for every window of a display.
@@ -128,6 +142,20 @@ impl WindowDeed {
 mod tests {
     use super::*;
     use crate::extension::system::WorkspaceState;
+
+    #[test]
+    fn a_window_is_named_by_its_package_or_else_its_program_file() {
+        let chrome = Path::new(r"C:\Program Files\Google\Chrome\chrome.exe");
+        let calculator = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
+        assert_eq!(app_of(Some(calculator), Some(chrome)), calculator);
+        assert_eq!(
+            app_of(Some("Chrome"), Some(chrome)),
+            r"C:\Program Files\Google\Chrome\chrome.exe"
+        );
+        assert_eq!(app_of(None, Some(chrome)), chrome.to_string_lossy());
+        assert_eq!(app_of(Some("Chrome"), None), "Chrome");
+        assert_eq!(app_of(None, None), "");
+    }
 
     #[test]
     fn windows_are_moved_only_between_workspaces_of_tessera() {
