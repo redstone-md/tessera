@@ -335,7 +335,7 @@ impl bindings::ExtensionImports for HostState {
 
     fn workspace_state(&mut self) -> Result<bindings::Workspaces, String> {
         self.permits(SystemKind::Workspaces)?;
-        let workspaces = system::shell().unwrap_or_default().workspaces;
+        let workspaces = shell_now()?.workspaces;
         Ok(bindings::Workspaces {
             count: workspaces.count,
             current: workspaces.current,
@@ -354,7 +354,7 @@ impl bindings::ExtensionImports for HostState {
             outline,
             primary,
             secondary_container,
-        ] = system::shell().unwrap_or_default().palette;
+        ] = shell_now()?.palette;
         Ok(bindings::Palette {
             surface,
             surface_highest,
@@ -687,6 +687,18 @@ fn current(node: bindings::legacy::Node) -> Node {
 
 /// Whether `wasm` starts with the binary header of a component, as opposed
 /// to that of a core module: the layer field after the magic is 1.
+/// What the shell shows now, or why it is not known: the thread that
+/// draws writes it down from the time a widget, shortcut or chosen answer
+/// of an extension that may read it was first used, until the extensions
+/// are loaded again.
+fn shell_now() -> Result<system::ShellState, String> {
+    system::shell().ok_or_else(|| {
+        "what the shell shows is not known yet: it is told once a widget, shortcut \
+         or chosen answer of the extension was used"
+            .to_owned()
+    })
+}
+
 fn is_component(wasm: &[u8]) -> bool {
     wasm.get(..4) == Some(b"\0asm") && wasm.get(6..8) == Some(&[1, 0])
 }

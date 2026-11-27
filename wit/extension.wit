@@ -378,10 +378,14 @@ world extension {
     /// returned.
     import window-command: func(id: u64, action: window-action) -> result<_, string>;
 
-    /// The workspaces. Needs `workspaces`.
+    /// The workspaces. Needs `workspaces`. Fails until a widget, shortcut
+    /// or chosen answer of the extension was used, as the shell tells its
+    /// state only from then on, and while the shell is held up for
+    /// seconds.
     import workspace-state: func() -> result<workspaces, string>;
 
-    /// The colors of the active theme. Needs `theme`.
+    /// The colors of the active theme. Needs `theme`. Fails when
+    /// `workspace-state` does.
     import theme-colors: func() -> result<palette, string>;
 
     /// Opens the popup `name` of the extension's manifest, unless it is

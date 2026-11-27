@@ -8,18 +8,19 @@
 //! the media, the meters and the network are read there when asked, and
 //! a reading is kept for a moment so that several extensions share it.
 //! What only the thread that draws knows, the workspaces and the colors of
-//! the theme, that thread writes down here while an extension may ask
-//! ([`publish`]). While a widget watches the media or the meters, a thread
+//! the theme, that thread writes down here while an extension that may
+//! ask is shown ([`ShellReader`]), once for all of them. While a widget watches the media or the meters, a thread
 //! of its own reads them every second and counts the changes, which the
 //! widgets compare with what they saw ([`generation`]).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gpui::{App, Hsla, Rgba};
+use gpui::{App, AsyncApp, Hsla, Rgba};
 
 use super::access::WatchKind;
 use crate::platform::{
@@ -37,6 +38,20 @@ const METERS_KEPT: Duration = Duration::from_secs(1);
 
 /// How often the thread that watches reads what is watched.
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often the thread that draws looks at the shell while it is
+/// watched, and writes down what it shows.
+const SHELL_TICK: Duration = Duration::from_millis(250);
+
+/// How many looks the state of the shell is written down after when no
+/// widget watches it: once a second.
+const SHELL_TICKS_UNWATCHED: u64 = 4;
+
+/// For how long the state of the shell written down is given as the
+/// state now. One older than that was not written down again since, as
+/// no extension that may read it is shown any more or the thread that
+/// draws is held up, and is no answer.
+const SHELL_KEPT: Duration = Duration::from_secs(3);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -205,26 +220,119 @@ pub fn hex(color: Hsla) -> String {
     format!("#{:02x}{:02x}{:02x}", byte(r), byte(g), byte(b))
 }
 
-static SHELL: Mutex<Option<ShellState>> = Mutex::new(None);
+/// What the shell showed when it was written down last, and when.
+static SHELL: Mutex<Option<(Instant, ShellState)>> = Mutex::new(None);
 
 /// Writes down what the shell shows, and counts a change of the
 /// workspaces or of the theme. It is for the thread that draws.
-pub fn publish(state: ShellState) {
+fn publish(state: ShellState) {
     let mut shell = lock(&SHELL);
-    let before = shell.take().unwrap_or_default();
+    let before = shell.take().map(|(_, state)| state).unwrap_or_default();
     if before.workspaces != state.workspaces || before.homes != state.homes {
         bump(WatchKind::Workspaces);
     }
     if before.palette != state.palette {
         bump(WatchKind::Theme);
     }
-    *shell = Some(state);
+    *shell = Some((Instant::now(), state));
 }
 
-/// What the shell showed when it was last written down; `None` before
-/// that.
+/// What the shell shows, as it was written down at most [`SHELL_KEPT`]
+/// ago; `None` before it was, and once it is older.
 pub fn shell() -> Option<ShellState> {
-    lock(&SHELL).clone()
+    let shell = lock(&SHELL);
+    let (at, state) = shell.as_ref()?;
+    is_fresh(at.elapsed()).then(|| state.clone())
+}
+
+/// Whether a state of the shell written down `age` ago is still given.
+fn is_fresh(age: Duration) -> bool {
+    age <= SHELL_KEPT
+}
+
+/// The extensions that may read the shell, on the thread that draws.
+#[derive(Default)]
+struct ShellReaders {
+    readers: usize,
+    /// How many of them have a widget that watches the shell.
+    watching: usize,
+    /// Whether the looks at the shell are going on.
+    looking: bool,
+}
+
+thread_local! {
+    static READERS: RefCell<ShellReaders> = RefCell::default();
+}
+
+/// Has the thread that draws write down what the shell shows for as long
+/// as it lives: every [`SHELL_TICK`] while it or another reader
+/// [`watches`](Self::watch) the shell, else once a second. However many
+/// readers there are, the shell is looked at once for all of them, and
+/// only while one lives. It is for the thread that draws.
+pub struct ShellReader {
+    watching: bool,
+}
+
+impl ShellReader {
+    pub fn new(cx: &mut App) -> Self {
+        publish(ShellState::of(cx));
+        let start = READERS.with_borrow_mut(|readers| {
+            readers.readers += 1;
+            !std::mem::replace(&mut readers.looking, true)
+        });
+        if start {
+            cx.spawn(async move |cx: &mut AsyncApp| Self::look(cx).await)
+                .detach();
+        }
+        Self { watching: false }
+    }
+
+    /// Says whether a widget of this reader watches the shell.
+    pub fn watch(&mut self, watching: bool) {
+        if self.watching == watching {
+            return;
+        }
+        self.watching = watching;
+        READERS.with_borrow_mut(|readers| match watching {
+            true => readers.watching += 1,
+            false => readers.watching -= 1,
+        });
+    }
+
+    /// Writes down what the shell shows while a reader lives.
+    async fn look(cx: &mut AsyncApp) {
+        let mut ticks = 0u64;
+        loop {
+            cx.background_executor().timer(SHELL_TICK).await;
+            ticks += 1;
+            let (readers, watching) =
+                READERS.with_borrow(|readers| (readers.readers, readers.watching));
+            if readers == 0 {
+                break;
+            }
+            if watching > 0 || ticks.is_multiple_of(SHELL_TICKS_UNWATCHED) {
+                let Ok(state) = cx.update(|cx| ShellState::of(cx)) else {
+                    break;
+                };
+                publish(state);
+            }
+        }
+        READERS.with_borrow_mut(|readers| readers.looking = false);
+    }
+}
+
+impl Drop for ShellReader {
+    fn drop(&mut self) {
+        self.watch(false);
+        let left = READERS.with_borrow_mut(|readers| {
+            readers.readers -= 1;
+            readers.readers
+        });
+        if left == 0 {
+            // No one writes it down any more, so it is no answer.
+            lock(&SHELL).take();
+        }
+    }
 }
 
 /// The changes counted for each kind, but those of the windows and the
@@ -378,5 +486,12 @@ mod tests {
         publish(state);
         assert!(generation(WatchKind::Theme) > theme);
         assert_eq!(shell().unwrap().palette[0], "#ffffff");
+    }
+
+    #[test]
+    fn the_state_of_the_shell_is_given_only_while_it_is_written_down() {
+        assert!(is_fresh(Duration::ZERO));
+        assert!(is_fresh(SHELL_KEPT));
+        assert!(!is_fresh(SHELL_KEPT + Duration::from_millis(1)));
     }
 }

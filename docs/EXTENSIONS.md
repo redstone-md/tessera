@@ -82,7 +82,7 @@ Those of 0.3 are unchanged. Each import added in 0.4 fails, saying why, unless t
 
 A popup opened from `activate` opens at the widget that was pressed. Opened from any other call it opens at the first widget of the extension on the display the pointer is on, or else in the middle of a bar of that display. Opening it closes any other popup, as opening a popup does.
 
-The workspaces, the workspace of each window and the colors of the theme are what only the thread that draws knows. It writes them down for extensions every second while an extension with one of the permissions `windows`, `window-control`, `workspaces` or `theme` runs and has a widget placed, a shortcut pressed or an answer chosen, and every quarter of a second while a widget watches them; until then `workspace-state` and `theme-colors` give what was written last, which before the first time is nothing (no workspaces, no colors), and `windows` gives no workspaces.
+The workspaces, the workspace of each window and the colors of the theme are what only the thread that draws knows. It writes them down for all extensions at once: every second from the time an extension with one of the permissions `windows`, `window-control`, `workspaces` or `theme` has a widget placed, a shortcut pressed or an answer chosen, until the extensions are loaded again, and every quarter of a second while a widget watches them. Before that, and when what was written down is more than three seconds old, `workspace-state` and `theme-colors` fail saying so, and `windows` gives no workspaces; so `answer` of an extension that shows nothing else cannot read them yet.
 
 ### Watching
 

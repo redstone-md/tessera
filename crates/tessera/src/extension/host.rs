@@ -24,7 +24,7 @@ use super::access::{SystemKind, WatchKind};
 use super::http::{self, HttpRequest};
 use super::nodes::Content;
 use super::runtime::{Effect, Instance, NumberedRequest};
-use super::system::{self, ShellState};
+use super::system::{self, ShellReader};
 use super::widget::ExtensionWidget;
 use crate::actions::Actions;
 use crate::banners::{Banners, Notice, OnGone};
@@ -222,19 +222,18 @@ pub struct Host {
     seen: HashMap<WatchKind, u64>,
     /// Has the media and the meters read while widgets watch them.
     watch: Option<system::Watch>,
-    /// Whether what widgets watch is being looked at, and how often it
-    /// was.
+    /// Whether what widgets watch is being looked at.
     ticking: bool,
-    ticks: u64,
-    /// Whether it writes down what only the thread that draws knows.
-    reads_shell: bool,
+    /// Has what only the thread that draws knows written down, for an
+    /// extension that may read it.
+    shell: Option<ShellReader>,
     /// What was said already about the content it described.
     reported: HashSet<String>,
 }
 
 impl Host {
     fn new(id: String, worker: Worker, reads_shell: bool, cx: &mut Context<Self>) -> Self {
-        let mut host = Self {
+        Self {
             id,
             worker,
             failed: false,
@@ -242,15 +241,9 @@ impl Host {
             seen: HashMap::new(),
             watch: None,
             ticking: false,
-            ticks: 0,
-            reads_shell,
+            shell: reads_shell.then(|| ShellReader::new(cx)),
             reported: HashSet::new(),
-        };
-        if reads_shell {
-            system::publish(ShellState::of(cx));
-            host.tick_on(cx);
         }
-        host
     }
 
     /// Whether the extension has failed and shows nothing any more.
@@ -279,8 +272,18 @@ impl Host {
                 .or_insert_with(|| system::generation(kind));
         }
         system::start_watching(watch);
-        self.watch = Some(system::Watch::new(&self.watched()));
+        self.watch_now();
         self.tick_on(cx);
+    }
+
+    /// Has what the widgets watch now read and written down.
+    fn watch_now(&mut self) {
+        let watched = self.watched();
+        let shell = [WatchKind::Windows, WatchKind::Workspaces, WatchKind::Theme];
+        if let Some(reader) = &mut self.shell {
+            reader.watch(shell.iter().any(|kind| watched.contains(kind)));
+        }
+        self.watch = (!watched.is_empty()).then(|| system::Watch::new(&watched));
     }
 
     /// Every kind a widget watches.
@@ -292,8 +295,9 @@ impl Host {
         kinds
     }
 
-    /// Looks at what is watched every [`WATCH_TICK`] for as long as the
-    /// host lives, and draws the widgets that watch what changed.
+    /// Looks at what is watched every [`WATCH_TICK`] for as long as a
+    /// widget watches something, and draws the widgets
+    /// that watch what changed.
     fn tick_on(&mut self, cx: &mut Context<Self>) {
         if self.ticking {
             return;
@@ -302,7 +306,7 @@ impl Host {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(WATCH_TICK).await;
-                let Ok(due) = this.update(cx, |host, cx| host.tick(cx)) else {
+                let Ok(Some(due)) = this.update(cx, |host, _| host.tick()) else {
                     break;
                 };
                 for widget in due {
@@ -313,24 +317,18 @@ impl Host {
         .detach();
     }
 
-    /// Writes down the state of the shell and says which widgets watch
-    /// what changed since the last look.
-    fn tick(&mut self, cx: &mut Context<Self>) -> Vec<WeakEntity<ExtensionWidget>> {
-        // What the shell shows is written down every second, and at every
-        // look while a widget watches it.
-        self.ticks += 1;
-        let shell = [WatchKind::Windows, WatchKind::Workspaces, WatchKind::Theme];
-        let watched = self.watched();
-        let watches_shell = shell.iter().any(|kind| watched.contains(kind));
-        if self.reads_shell && (watches_shell || self.ticks.is_multiple_of(4)) {
-            system::publish(ShellState::of(cx));
-        }
+    /// Says which widgets watch what changed since the last look, or
+    /// `None` once no widget watches anything, which ends the looks.
+    fn tick(&mut self) -> Option<Vec<WeakEntity<ExtensionWidget>>> {
         let before = self.widgets.len();
         self.widgets
             .retain(|placed| placed.widget.upgrade().is_some());
         if self.widgets.len() != before {
-            let watched = self.watched();
-            self.watch = (!watched.is_empty()).then(|| system::Watch::new(&watched));
+            self.watch_now();
+        }
+        if self.watch.is_none() {
+            self.ticking = false;
+            return None;
         }
         let mut changed = Vec::new();
         for kind in self.watched() {
@@ -340,13 +338,13 @@ impl Host {
             }
         }
         if changed.is_empty() || self.failed {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let due = self
             .widgets
             .iter()
             .filter(|placed| placed.watch.iter().any(|kind| changed.contains(kind)));
-        due.map(|placed| placed.widget.clone()).collect()
+        Some(due.map(|placed| placed.widget.clone()).collect())
     }
 
     /// Does `call` on the thread of the extension.
