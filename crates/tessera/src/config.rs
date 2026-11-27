@@ -765,13 +765,16 @@ pub struct Config {
     /// pointer rests there.
     #[serde(default, rename = "corner")]
     pub corners: Vec<CornerConfig>,
-    // Wave 2, declared-settings: theme files stacked over `theme`, in order.
+    /// Theme files stacked over `theme`, in order, each applied over the
+    /// result of those before it.
     #[serde(default)]
     pub theme_layers: Vec<String>,
-    // Wave 2, declared-settings: the values of declared theme settings, per theme name.
+    /// The values of the settings themes declare, by theme name;
+    /// `builtin` for the built-in theme.
     #[serde(default)]
     pub theme_options: HashMap<String, toml::Table>,
-    // Wave 2, resources-icon-packs: the installed icon packs, the first that has an icon wins.
+    /// The installed icon packs in use, in order: the first that has an
+    /// icon for an application or a kind of file gives it.
     #[serde(default)]
     pub icon_packs: Vec<String>,
     // Wave 2, files-previews: thumbnails, preview and details panes of the file manager.

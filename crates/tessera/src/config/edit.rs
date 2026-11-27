@@ -680,7 +680,8 @@ impl ConfigFile {
     }
 }
 
-// Wave 2, resources-icon-packs: what the marketplace writes.
+// What the marketplace writes: the icon packs in use, a wallpaper it
+// applies and a widget it places.
 impl ConfigFile {
     /// Names the icon packs in use, the first one first; none takes the
     /// key away.
@@ -1057,8 +1058,8 @@ content = ["apps"]
     }
 }
 
-// Wave 2, declared-settings: the values of declared settings of extensions
-// and themes, and the themes stacked over the base theme.
+// The values of the settings extensions and themes declare, and the themes
+// stacked over the base theme.
 impl ConfigFile {
     /// Sets the setting `key` of the extension `id`, under
     /// `[extension.<id>]`; `None` takes it away, and the table with its
@@ -1219,7 +1220,7 @@ fit = "fill"
     }
 }
 
-// surfaces-edges: the changes the menu of a bar makes to its surface.
+// The changes the menu of a bar makes to its surface.
 impl ConfigFile {
     /// How many surfaces the file has.
     fn surface_count(&self) -> usize {
