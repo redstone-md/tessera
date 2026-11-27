@@ -898,3 +898,7 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Close window" = "Закрити вікно"
 "Close all windows" = "Закрити всі вікна"
 "Window menu" = "Меню вікна"
+# Wave 2, jumplists-peek: the sections of a jump list.
+"Frequent" = "Часто використовувані"
+"Recent" = "Останні"
+"Tasks" = "Завдання"

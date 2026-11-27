@@ -119,6 +119,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(hotspot::HotspotModule),
         Box::new(power_mode::PowerModeModule),
         Box::new(night::NightModule),
+        Box::new(crate::peek::PeekModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),

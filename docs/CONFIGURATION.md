@@ -188,6 +188,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `sticky` | none | has the window in front seen on every workspace of Tessera's own, or, when it is, live on the workspace shown again. Brings no key |
 | `taskview` | `workspace`, `all`, `app`, or none | opens [Task View](#task-view), or closes it: the windows of each display spread as live pictures, with the workspaces along the top; `all` shows those of every workspace, `app` those of the application in front. Its keys are taken from Windows, and it brings Win+Tab where the keys of Windows are in use |
 | `present-windows` | `workspace`, `all`, `app`, or none | the same without the workspaces along the top; it brings no key |
+| `peek-desktop` | none | shows the desktop in front of every window, with a thin outline where each window is, until the keys to hold of its `press` are let go; done by `tessera do peek-desktop`, or by a `press` without keys to hold, it shows the desktop until it is done again or a click lands on it. The desktop is the picture Windows paints behind its windows, without the wallpaper Tessera draws itself. Its keys are taken from Windows, and it brings Win+comma where the keys of Windows are in use |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -352,6 +353,9 @@ priority = 3
 ```
 
 A part that gets no window is left out. A file needs a container without `max` and without `condition` (in containers without one either), which takes the windows the others do not. Files are read when Tessera starts, with the configuration, and, while windows are tiled, within two seconds of a change; a file that cannot be used, one named as a layout of Tessera's own and one larger than 64 KB are reported in the problems and left out, and where a layout names a file that is not there, `master` is used.
+Win+L locks the session through Windows itself, and Ctrl+Shift+Esc, Alt+Shift and Ctrl+Shift are answered by Windows too, so they keep working in shell mode and Tessera does not take them. While `windows_key` takes over the Windows key, Ctrl+Esc opens the same popup, as it opens the Start menu in Windows, through `start` above, unless a `[[key]]` holds it or gives `start` another popup as `arg`. Without `windows_key` the Windows key by itself opens nothing, in shell mode as well; set `windows_key = "launcher"` for it to open the launcher. Win+E belongs to the file manager (`files`), Win+R to the Run dialog, Win+V to the clipboard history and Win+1 to Win+9, Win+T and Win+B to the dock, which bring their own keys. Not answered by Tessera: Win+period (the emoji panel of Windows; whether Windows still opens it without Explorer is not known), Win+Tab, Win+Ctrl+D and the other keys of the virtual desktops of Windows, which need Explorer.
+
+Win+comma belongs to the peek at the desktop (`peek-desktop`), which shows the desktop while the keys are held.
 
 ## Snapping, window rules and hot corners
 

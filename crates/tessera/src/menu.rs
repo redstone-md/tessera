@@ -7,11 +7,12 @@
 //! entries when it is chosen, with a way back at its top.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::{
     App, Bounds, Context, FontWeight, Global, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, WindowHandle,
-    div, point, px, size,
+    Render, RenderImage, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    WindowHandle, div, img, point, px, size,
 };
 
 use crate::i18n::Language;
@@ -38,6 +39,9 @@ const ICON_BACK: &str = "\u{e72b}";
 /// What marks the entry that is chosen now among others.
 const ICON_CHECKED: &str = "\u{e73e}";
 
+/// How large the picture of an entry is, in parts of the size of its text.
+const PICTURE_SIZE: f32 = 1.25;
+
 /// What an entry does when it is chosen.
 #[derive(Clone)]
 enum Deed {
@@ -48,6 +52,9 @@ enum Deed {
     Name,
 }
 
+/// What the button at the end of an entry does.
+type Aside = Rc<dyn Fn(&mut App)>;
+
 /// Something a menu offers.
 #[derive(Clone)]
 pub struct MenuEntry {
@@ -57,6 +64,11 @@ pub struct MenuEntry {
     deed: Deed,
     /// Whether it is marked as what is chosen now.
     checked: bool,
+    /// A picture shown instead of the glyph, such as the icon of a file.
+    picture: Option<Arc<RenderImage>>,
+    /// A small button at the end of the entry, seen while the pointer is
+    /// on it: its glyph and what it does.
+    aside: Option<(&'static str, Aside)>,
 }
 
 impl MenuEntry {
@@ -70,6 +82,8 @@ impl MenuEntry {
             label: label.into(),
             deed: Deed::Act(Rc::new(action)),
             checked: false,
+            picture: None,
+            aside: None,
         }
     }
 
@@ -81,10 +95,8 @@ impl MenuEntry {
         entries: Vec<MenuEntry>,
     ) -> Self {
         Self {
-            glyph,
-            label: label.into(),
             deed: Deed::Open(Rc::new(entries)),
-            checked: false,
+            ..Self::new(glyph, label, |_| {})
         }
     }
 
@@ -92,10 +104,8 @@ impl MenuEntry {
     /// nothing.
     pub fn heading(label: impl Into<SharedString>) -> Self {
         Self {
-            glyph: "",
-            label: label.into(),
             deed: Deed::Name,
-            checked: false,
+            ..Self::new("", label, |_| {})
         }
     }
 
@@ -112,6 +122,20 @@ impl MenuEntry {
             Deed::Open(entries) => !entries.is_empty(),
             Deed::Act(_) | Deed::Name => true,
         }
+    }
+
+    /// The entry, showing `picture` instead of its glyph where there is
+    /// one.
+    pub fn with_picture(mut self, picture: Option<Arc<RenderImage>>) -> Self {
+        self.picture = picture;
+        self
+    }
+
+    /// The entry, with a small button at its end that shows `glyph` while
+    /// the pointer is on the entry and does `action` instead of the entry.
+    pub fn with_aside(mut self, glyph: &'static str, action: impl Fn(&mut App) + 'static) -> Self {
+        self.aside = Some((glyph, Rc::new(action)));
+        self
     }
 }
 
@@ -348,18 +372,41 @@ impl MenuView {
             Some(Deed::Name) => row,
             None => row.on_click(cx.listener(|this, _, window, cx| this.go(None, window, cx))),
         };
+        let lead = match entry.and_then(|entry| entry.picture.clone()) {
+            Some(picture) => img(picture)
+                .size(theme.typography.label_size * PICTURE_SIZE)
+                .flex_none()
+                .into_any_element(),
+            None => icon(theme, glyph)
+                .text_size(theme.typography.label_size)
+                .text_color(theme.colors.on_surface_variant)
+                .into_any_element(),
+        };
+        let aside = { entry.and_then(|entry| entry.aside.clone()) }.map(|(glyph, aside)| {
+            div()
+                .id(("menu-aside", index))
+                .flex_none()
+                .opacity(state.hover)
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    aside(cx);
+                    cx.defer(Menus::close);
+                })
+                .child(
+                    icon(theme, glyph)
+                        .text_size(theme.typography.label_size)
+                        .text_color(theme.colors.on_surface_variant),
+                )
+        });
         let row = row
-            .child(
-                icon(theme, glyph)
-                    .text_size(theme.typography.label_size)
-                    .text_color(theme.colors.on_surface_variant),
-            )
+            .child(lead)
             .child(div().flex_1().min_w_0().child(one_line(label)))
             .children(trailing.map(|glyph| {
                 icon(theme, glyph)
                     .text_size(theme.typography.label_size)
                     .text_color(theme.colors.primary)
-            }));
+            }))
+            .children(aside);
         Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index))
             .into_any_element()
     }

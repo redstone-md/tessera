@@ -897,3 +897,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Close window" = "Fenster schließen"
 "Close all windows" = "Alle Fenster schließen"
 "Window menu" = "Fenstermenü"
+# Wave 2, jumplists-peek: the sections of a jump list.
+"Frequent" = "Häufig"
+"Recent" = "Zuletzt verwendet"
+"Tasks" = "Aufgaben"

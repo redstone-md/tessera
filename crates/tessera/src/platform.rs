@@ -37,6 +37,7 @@ pub use win32::desktop_of;
 pub use win32::display_at;
 pub use win32::font_families;
 pub use win32::on_resizing_border;
+pub use win32::paint_desktop;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::spatial_sound;
@@ -93,6 +94,7 @@ pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, T
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
+pub use win32::{JumpItem, JumpList, JumpTarget, KnownCategory};
 pub use win32::{KeyLocks, window_in_front};
 #[allow(
     unused_imports,
