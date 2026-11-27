@@ -363,6 +363,8 @@ impl CardView {
         let Some(native) = self.native.filter(|_| !self.held) else {
             return;
         };
+        // Above the icons of the desktop, which may have come or gone.
+        native.rest_on_desktop();
         let room = native.display().work_area();
         if let Some(room) = room.filter(|_| room != self.room) {
             self.room = Some(room);

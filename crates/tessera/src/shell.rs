@@ -94,6 +94,7 @@ impl Shell {
         }
         crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
+        crate::desktop::Desktop::start(&config.desktop, cx);
         Banners::configure(&config.notifications, cx);
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
@@ -306,6 +307,7 @@ impl Shell {
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
         DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);
+        crate::desktop::Desktop::configure(&config.desktop, cx);
         Banners::configure(&config.notifications, cx);
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
