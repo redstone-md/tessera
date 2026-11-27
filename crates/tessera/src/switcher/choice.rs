@@ -134,6 +134,8 @@ pub fn choice_key(key: &str) -> Option<ChoiceKey> {
         "up" => ChoiceKey::Up,
         "right" => ChoiceKey::Right,
         "down" => ChoiceKey::Down,
+        "delete" => ChoiceKey::Delete,
+        "backspace" => ChoiceKey::Backspace,
         _ => return None,
     })
 }
@@ -257,6 +259,7 @@ mod tests {
         assert_eq!(typed_text("f5", None, false, true), None);
         assert_eq!(typed_text("backspace", Some("\u{8}"), false, false), None);
         assert_eq!(choice_key("escape"), Some(ChoiceKey::Escape));
+        assert_eq!(choice_key("backspace"), Some(ChoiceKey::Backspace));
         assert_eq!(choice_key("a"), None);
     }
 

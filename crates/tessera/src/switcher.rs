@@ -226,7 +226,11 @@ impl Switcher {
             let adopted = native.and_then(|native| {
                 native.adopt_as_popup()?;
                 native.place(frame)?;
-                native.reveal(true);
+                // What is typed and Ctrl+W reach the switcher only when it
+                // is in front; asked once, Windows may refuse that after
+                // the keyboard hook took the keys that opened it.
+                native.reveal(false);
+                native.bring_forward();
                 Ok(())
             });
             if let Err(error) = adopted {
@@ -707,8 +711,9 @@ impl SwitcherView {
     }
 
     /// Takes a key pressed while the switcher is open: an arrow moves the
-    /// choice, Enter takes it, and Esc forgets what was typed, or closes
-    /// without bringing a window in front when nothing was.
+    /// choice, Enter takes it, Esc forgets what was typed, or closes
+    /// without bringing a window in front when nothing was, Delete closes
+    /// the chosen window and Backspace takes back the last letter typed.
     fn key(&mut self, key: ChoiceKey, cx: &mut Context<Self>) {
         if self.closing {
             return;
@@ -717,6 +722,12 @@ impl SwitcherView {
             ChoiceKey::Escape if !self.typed.is_empty() => self.type_into(None, cx),
             ChoiceKey::Escape => self.close(cx),
             ChoiceKey::Enter => self.choose(self.chosen, cx),
+            ChoiceKey::Delete => self.close_window(self.chosen, cx),
+            ChoiceKey::Backspace => {
+                let mut typed = self.typed.clone();
+                typed.pop();
+                self.type_into(Some(typed), cx);
+            }
             arrow => {
                 let count = self.shown.len();
                 if count > 0 {
@@ -727,8 +738,8 @@ impl SwitcherView {
     }
 
     /// Takes a key that reached the window rather than the keyboard hook:
-    /// what is typed, Backspace, Tab, Delete and Ctrl+W, and the keys of a
-    /// choice when the hook did not take them.
+    /// what is typed, Tab and Ctrl+W, and the keys of a choice when the
+    /// hook did not take them.
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         if self.closing {
             return;
@@ -740,12 +751,8 @@ impl SwitcherView {
             self.key(choice, cx);
         } else if key == "tab" {
             self.step(held.shift, Through::All, cx);
-        } else if key == "delete" || (key == "w" && held.control) {
+        } else if key == "w" && held.control {
             self.close_window(self.chosen, cx);
-        } else if key == "backspace" {
-            let mut typed = self.typed.clone();
-            typed.pop();
-            self.type_into(Some(typed), cx);
         } else if let Some(text) =
             typed_text(key, keystroke.key_char.as_deref(), held.control, held.alt)
         {
