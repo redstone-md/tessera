@@ -5,13 +5,18 @@
 //! and folders of the computer, open what they hold and copy, move,
 //! rename and delete it, through the Shell where Explorer would.
 
+mod columns;
+mod details_pane;
 mod model;
 mod pane;
+mod preview_pane;
+mod recycle_view;
 mod rename;
 mod search;
 mod session;
 mod sidebar;
 mod tabs;
+mod thumbs;
 mod view;
 
 use std::path::{Path, PathBuf};
@@ -24,6 +29,7 @@ use serde::Deserialize;
 
 pub use model::{Grouping, Location, Look, size_text};
 use session::{Opening, Session};
+pub use thumbs::FileViewConfig;
 use view::FilesView;
 
 use crate::actions::{Action, Actions};
@@ -249,6 +255,115 @@ impl Render for FilesButton {
                     .child(icon(theme, ICON_FOLDER)),
             )
             .on_click(move |_, _, cx| Files::open_named(&folder, cx))
+    }
+}
+
+// files-previews: the windows of the file manager as others see them, for
+// the windows of the Shell (`ShellWindows`) and `/select`, and opening a
+// folder with items chosen.
+
+/// What chooses items by their names in the folder of a window, once it
+/// was read.
+pub type SelectItems = std::rc::Rc<dyn Fn(Vec<std::ffi::OsString>, &mut App)>;
+
+/// Who is told when the windows of the file manager change.
+type WindowsObserver = std::rc::Rc<dyn Fn(&WindowsChange, &mut App)>;
+
+/// A window of the file manager, as the windows of the Shell list it.
+#[derive(Clone)]
+#[allow(dead_code, reason = "for the windows of the Shell")]
+pub struct FilesWindow {
+    pub handle: gpui::AnyWindowHandle,
+    /// The native window, as a number.
+    pub hwnd: isize,
+    /// The folder its pane in front shows, where that is a folder.
+    pub folder: Option<PathBuf>,
+    /// Chooses the items of those names in the folder of its pane in
+    /// front, once the folder was read.
+    pub select: SelectItems,
+}
+
+/// What changed among the windows of the file manager.
+#[derive(Clone)]
+#[allow(dead_code, reason = "for the windows of the Shell")]
+pub enum WindowsChange {
+    Opened(FilesWindow),
+    /// Its pane in front went to another place, or another pane came in
+    /// front.
+    Navigated(FilesWindow),
+    Closed(FilesWindow),
+}
+
+/// The windows of the file manager that are open, and who is told when
+/// they change.
+#[derive(Default)]
+struct OpenWindows {
+    windows: Vec<(gpui::AnyWindowHandle, gpui::WeakEntity<FilesView>)>,
+    observers: Vec<WindowsObserver>,
+}
+
+impl Global for OpenWindows {}
+
+impl Files {
+    /// The windows of the file manager that are open, the oldest first.
+    #[allow(dead_code, reason = "for the windows of the Shell")]
+    pub fn windows(cx: &App) -> Vec<FilesWindow> {
+        let Some(open) = cx.try_global::<OpenWindows>() else {
+            return Vec::new();
+        };
+        { open.windows.iter() }
+            .filter_map(|(_, view)| view.upgrade())
+            .map(|view| view.read(cx).described(&view, cx))
+            .collect()
+    }
+
+    /// Has `observer` told whenever a window of the file manager opens,
+    /// goes somewhere else or closes.
+    #[allow(dead_code, reason = "for the windows of the Shell")]
+    pub fn observe_windows(cx: &mut App, observer: impl Fn(&WindowsChange, &mut App) + 'static) {
+        cx.default_global::<OpenWindows>()
+            .observers
+            .push(std::rc::Rc::new(observer));
+    }
+
+    /// Opens a window of the file manager at `folder` with the items
+    /// called `names` in it chosen, once it was read, as `/select` and
+    /// `SHOpenFolderAndSelectItems` ask.
+    #[allow(dead_code, reason = "for the command lines of Explorer")]
+    pub fn open_selecting(folder: PathBuf, names: Vec<std::ffi::OsString>, cx: &mut App) {
+        Self::open(Location::Folder(folder), cx);
+        // The window was made just now, and is the newest.
+        let newest = { cx.try_global::<OpenWindows>() }
+            .and_then(|open| open.windows.last().cloned())
+            .and_then(|(_, view)| view.upgrade());
+        if let Some(view) = newest {
+            view.update(cx, |view, cx| view.select_when_loaded(names, cx));
+        }
+    }
+
+    /// Notes that the window of `view` opened.
+    fn window_opened(
+        handle: gpui::AnyWindowHandle,
+        view: gpui::WeakEntity<FilesView>,
+        cx: &mut App,
+    ) {
+        let open = cx.default_global::<OpenWindows>();
+        open.windows.retain(|(_, each)| each.upgrade().is_some());
+        open.windows.push((handle, view));
+    }
+
+    /// Tells those who observe the windows of `change`; a window that
+    /// closed is forgotten.
+    fn window_changed(change: WindowsChange, cx: &mut App) {
+        let observers = { cx.default_global::<OpenWindows>().observers.clone() };
+        if let WindowsChange::Closed(closed) = &change {
+            let handle = closed.handle;
+            let open = cx.default_global::<OpenWindows>();
+            open.windows.retain(|(each, _)| *each != handle);
+        }
+        for observer in observers {
+            observer(&change, cx);
+        }
     }
 }
 

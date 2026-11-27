@@ -18,7 +18,8 @@ use std::time::Duration;
 use gpui::{App, Global, Task};
 use serde::{Deserialize, Serialize};
 
-use super::model::{Column, Grouping, Location, Look};
+use super::columns::{Columns, ShownColumn};
+use super::model::{Column, Grouping, Location, Look, RECYCLE_BIN};
 use super::tabs::EVEN_SPLIT;
 
 /// The file the tabs are kept in.
@@ -194,8 +195,12 @@ impl Session {
         let tabs: Vec<OpenTab> = { self.tabs.iter() }
             .filter(|tab| !tab.panes.is_empty())
             .map(|tab| {
-                let panes: Vec<Location> =
-                    tab.panes.iter().take(2).map(|name| named(name)).collect();
+                // The Recycle Bin is no folder that `named` knows.
+                let named = |name: &String| match name.as_str() {
+                    RECYCLE_BIN => Location::RecycleBin,
+                    name => named(name),
+                };
+                let panes: Vec<Location> = tab.panes.iter().take(2).map(named).collect();
                 OpenTab {
                     active: tab.active.min(panes.len() - 1),
                     split: match tab.split {
@@ -233,11 +238,23 @@ struct SavedView {
     used: u64,
 }
 
+/// The columns of a location as the file of looks keeps them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct SavedColumns {
+    path: String,
+    columns: Vec<ShownColumn>,
+    /// When they were used last, counted in uses.
+    used: u64,
+}
+
 /// What the file of looks holds.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct SavedViews {
     views: Vec<SavedView>,
+    /// The columns of the details of each location where the user chose
+    /// them, which every folder keeps, whatever `per_folder` says.
+    columns: Vec<SavedColumns>,
 }
 
 /// How each folder was last shown, for the configuration that keeps a
@@ -246,6 +263,9 @@ struct SavedViews {
 pub struct FolderViews {
     /// By the path in small letters, with when each was used last.
     views: HashMap<String, (FolderView, u64)>,
+    /// The columns of locations, by [`columns_key`], with when each was
+    /// used last.
+    columns: HashMap<String, (Vec<ShownColumn>, u64)>,
     /// The count of uses, which tells the latest.
     clock: u64,
     /// Whether the file was asked for, and whether it was read.
@@ -259,6 +279,18 @@ impl Global for FolderViews {}
 /// The key of a folder among the looks, alike in any case.
 fn view_key(path: &Path) -> String {
     path.to_string_lossy().trim_end_matches('\\').to_lowercase()
+}
+
+/// The key a location keeps its columns under: its folder, or for the
+/// places that are none, a name no folder has.
+pub fn columns_key(location: &Location) -> String {
+    match location {
+        Location::Folder(path) => view_key(path),
+        Location::Home => "::home".to_owned(),
+        Location::Computer => "::computer".to_owned(),
+        Location::Search { .. } => "::search".to_owned(),
+        Location::RecycleBin => "::recycle-bin".to_owned(),
+    }
 }
 
 impl FolderViews {
@@ -286,6 +318,10 @@ impl FolderViews {
                     views.clock = views.clock.max(saved.used);
                     // A look changed while the file was read is newer.
                     { views.views.entry(saved.path) }.or_insert((saved.view, saved.used));
+                }
+                for saved in saved.columns {
+                    views.clock = views.clock.max(saved.used);
+                    { views.columns.entry(saved.path) }.or_insert((saved.columns, saved.used));
                 }
             })
             .ok();
@@ -320,11 +356,51 @@ impl FolderViews {
                 views.views.remove(&oldest);
             }
         }
+        Self::save(cx);
+    }
+
+    /// The columns the location `key` names ([`columns_key`]) was last
+    /// shown with, if the user chose them.
+    pub fn columns(key: &str, cx: &App) -> Option<Columns> {
+        let views = cx.try_global::<Self>()?;
+        let (columns, _) = views.columns.get(key)?;
+        Some(Columns::kept(columns.clone()))
+    }
+
+    /// Keeps `columns` as those of the location `key` names, and writes
+    /// the looks a moment later.
+    pub fn put_columns(key: String, columns: &Columns, cx: &mut App) {
+        let views = cx.default_global::<Self>();
+        views.clock += 1;
+        let used = views.clock;
+        views.columns.insert(key, (columns.shown().to_vec(), used));
+        if views.columns.len() > VIEWS_KEPT {
+            let oldest = { views.columns.iter() }
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                views.columns.remove(&oldest);
+            }
+        }
+        Self::save(cx);
+    }
+
+    /// Writes the looks and the columns a moment later, away from the
+    /// user interface.
+    fn save(cx: &mut App) {
+        let views = cx.default_global::<Self>();
         let saved = SavedViews {
             views: { views.views.iter() }
                 .map(|(path, (view, used))| SavedView {
                     path: path.clone(),
                     view: *view,
+                    used: *used,
+                })
+                .collect(),
+            columns: { views.columns.iter() }
+                .map(|(path, (columns, used))| SavedColumns {
+                    path: path.clone(),
+                    columns: columns.clone(),
                     used: *used,
                 })
                 .collect(),
@@ -390,10 +466,22 @@ mod tests {
                 },
                 used: 7,
             }],
+            columns: vec![SavedColumns {
+                path: "::search".to_owned(),
+                columns: Columns::of(&[Column::Folder, Column::Size])
+                    .shown()
+                    .to_vec(),
+                used: 8,
+            }],
         };
         let text = toml::to_string(&saved).expect("looks can be written");
         let read: SavedViews = toml::from_str(&text).expect("and read");
         assert_eq!(read.views, saved.views);
+        assert_eq!(read.columns, saved.columns);
+        // A file of looks from before the columns were kept is read.
+        let old: SavedViews = toml::from_str("[[views]]\npath = \"c:\\\\a\"\nlook = \"list\"\nzoom = 0\ncolumn = \"type\"\ndescending = false\ngrouping = \"none\"\nused = 1\n")
+            .expect("an older file is read");
+        assert_eq!(old.views[0].view.column, Column::Kind);
         assert_eq!(view_key(Path::new("C:\\Users\\Me\\")), "c:\\users\\me");
     }
 
@@ -406,5 +494,9 @@ mod tests {
         let opening = session.opening(|_| Location::Computer).expect("one tab");
         assert_eq!(opening.active, 0);
         assert_eq!(opening.tabs, [OpenTab::at(Location::Computer)]);
+        let mut bin = Session::default();
+        bin.set_tabs(&Opening::at(Location::RecycleBin));
+        let reopened = bin.opening(|_| Location::Computer).expect("one tab");
+        assert_eq!(reopened.tabs, [OpenTab::at(Location::RecycleBin)]);
     }
 }

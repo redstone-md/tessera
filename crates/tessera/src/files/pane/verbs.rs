@@ -131,7 +131,7 @@ fn shell_menu(built: Result<ShellMenu, String>) -> Option<Rc<ShellMenu>> {
 
 /// What `answer` yields before `until`; `None` once that passed, or where
 /// it yields nothing.
-async fn within<T: Send + 'static>(
+pub(in crate::files) async fn within<T: Send + 'static>(
     answer: Receiver<T>,
     until: Instant,
     cx: &AsyncApp,

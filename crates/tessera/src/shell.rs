@@ -99,6 +99,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        config.file_view.configure(cx);
         Startup::start(&config.startup, cx);
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::start(&config.rules, cx);
@@ -311,6 +312,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        config.file_view.configure(cx);
         Startup::configure(&config.startup, cx);
         Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::configure(&config.rules, cx);

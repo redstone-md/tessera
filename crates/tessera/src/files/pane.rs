@@ -6,11 +6,13 @@
 //! chosen, drawn as rows or tiles of which only those in sight are drawn.
 //! A window holds one pane per tab, or two side by side.
 
-use std::cell::Cell;
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local};
 use gpui::{
@@ -20,33 +22,42 @@ use gpui::{
     ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window,
     canvas, div, img, list, prelude::FluentBuilder, px,
 };
+use gpui::{NavigationDirection, ObjectFit, RenderImage, StyledImage, Subscription};
 
+use super::columns::Columns;
 use super::model::{
     Arrangement, Column, Entry, GroupLabel, Grouping, History, Line, Listing, Location, Look,
-    Order, Selection, Shape, Shown, crumbs, is_valid_name, read_folder, size_text, stamp_of,
+    Order, Selection, Shape, Shown, TypeAhead, crumbs, is_valid_name, read_folder, size_text,
+    stamp_of,
 };
+use super::recycle_view::{self, Bin, BinDeed};
 use super::rename::{BatchRename, RenameEvent, apply, parent_key};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
 use super::session::{FolderView, FolderViews};
+use super::thumbs::{FileViewConfig, Picture, Thumbs};
+use super::view::DropPlaces;
 use super::{Files, FilesConfig};
 use crate::field::TextField;
 use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
-use crate::platform::{DragOut, DropZone, DropZones, FileDeed, UndoJournal};
+use crate::platform::{DragOut, FileDeed, UndoJournal};
 use crate::platform::{
     Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
     QuickAccess, disk_space, recent_files, reveal_in_explorer, show_properties, terminal,
 };
+use crate::platform::{FileProperty, Overlays, PropertyValue, RecycleBin};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
 
 use super::sidebar::ICON_HOME;
 
+mod header;
 mod verbs;
 
 use verbs::ShellChoices;
+pub(super) use verbs::within;
 
 /// Measures of a pane, in logical pixels.
 const HEADER_HEIGHT: f32 = 30.;
@@ -54,12 +65,6 @@ const GROUP_HEIGHT: f32 = 34.;
 /// The room between items side by side, and around them.
 const GAP: f32 = 8.;
 const MARGIN: f32 = 16.;
-
-/// The widths of the columns after the name.
-const MODIFIED_WIDTH: f32 = 150.;
-const KIND_WIDTH: f32 = 90.;
-const SIZE_WIDTH: f32 = 90.;
-const FOLDER_WIDTH: f32 = 260.;
 
 /// How far the wheel turns, with Ctrl held, for one step of zoom.
 const WHEEL_STEP: f32 = 40.;
@@ -111,6 +116,8 @@ const ICON_NONE: &str = "";
 const ICON_SELECT_ALL: &str = "\u{e8b3}";
 const ICON_INVERT: &str = "\u{e8b2}";
 const ICON_PATTERN: &str = "\u{e8b9}";
+const ICON_UNDO: &str = "\u{e7a7}";
+const ICON_REDO: &str = "\u{e7a6}";
 
 /// What a pane tells the window it is in.
 #[derive(Clone, Debug, PartialEq)]
@@ -131,6 +138,14 @@ pub enum PaneEvent {
 
 /// The arrow Windows draws over the icon of a shortcut, looked up once.
 struct LinkArrow(Icon);
+
+/// The overlays programs draw over the icons of a folder, by the names
+/// of its items.
+#[derive(Default)]
+struct Overlaid {
+    marks: HashMap<OsString, usize>,
+    pictures: Vec<Arc<RenderImage>>,
+}
 
 impl gpui::Global for LinkArrow {}
 
@@ -225,9 +240,42 @@ pub struct FolderPane {
     /// The press of the left button on an item, until it is let go or
     /// becomes a drag.
     pressed: Option<Pressed>,
+    /// The scale of the display the window was last drawn on.
+    scale: Cell<f32>,
     /// Where the window takes drops, which the pane writes its folder and
     /// the rows of its folders into as it draws.
-    zones: DropZones,
+    zones: DropPlaces,
+    /// The folder a drag from another program is over, which is marked.
+    drag_over: Option<PathBuf>,
+    /// The thumbnails of the window, which the larger looks draw.
+    thumbs: Entity<Thumbs>,
+    _thumbs: Option<Subscription>,
+    /// The overlays programs draw over the icons of the folder shown, and
+    /// their reading while it runs.
+    overlays: Overlaid,
+    _overlays: Option<Task<()>>,
+    /// The columns of the details, as chosen for the location, and
+    /// whether their widths changed since they were kept.
+    columns: Columns,
+    columns_changed: bool,
+    /// Whether the folder holds files of a cloud folder, whose state a
+    /// column then shows.
+    cloudy: bool,
+    /// The values of the columns of the Shell, by path and property, as
+    /// they were read; those being read; and the rows that wanted values
+    /// in the frame drawn.
+    properties: HashMap<(PathBuf, FileProperty), Option<PropertyValue>>,
+    properties_asked: HashSet<(PathBuf, FileProperty)>,
+    wanted: RefCell<HashSet<PathBuf>>,
+    /// What the Recycle Bin holds, where it is the place shown.
+    bin: Bin,
+    /// The letters typed over the list to choose by name.
+    typed: TypeAhead,
+    /// The names of items to choose once the folder was read, as
+    /// `select_when_loaded` asks.
+    pending_names: Option<Vec<OsString>>,
+    /// The language texts are said in, as of the frame drawn.
+    language: Language,
     /// Waits for the looks of folders to be read, where looks are kept per
     /// folder and they were not read yet.
     _views: Option<gpui::Subscription>,
@@ -248,7 +296,8 @@ impl FolderPane {
             cx.new(|cx| TextField::new(language.say("Filter").into(), cx).with_glyph(ICON_SEARCH));
         cx.observe(&filter, |this, _, cx| this.arrange(cx)).detach();
         let focus = cx.focus_handle();
-        let views = (config.per_folder && !FolderViews::loaded(cx)).then(|| {
+        // The columns of each folder are kept whatever `per_folder` says.
+        let views = (!FolderViews::loaded(cx)).then(|| {
             FolderViews::load(cx);
             cx.observe_global::<FolderViews>(|this: &mut Self, cx| {
                 if FolderViews::loaded(cx) {
@@ -336,7 +385,23 @@ impl FolderPane {
             window: window.window_handle(),
             batch: None,
             pressed: None,
-            zones: DropZones::new(),
+            scale: Cell::new(window.scale_factor()),
+            zones: DropPlaces::default(),
+            drag_over: None,
+            thumbs: cx.new(|_| Thumbs::new()),
+            _thumbs: None,
+            overlays: Overlaid::default(),
+            _overlays: None,
+            columns: Columns::of(&Column::ALL),
+            columns_changed: false,
+            cloudy: false,
+            properties: HashMap::new(),
+            properties_asked: HashSet::new(),
+            wanted: RefCell::new(HashSet::new()),
+            bin: Bin::default(),
+            typed: TypeAhead::default(),
+            pending_names: None,
+            language,
             _views: views,
             _watch: watch,
         };
@@ -347,8 +412,96 @@ impl FolderPane {
 
     /// Has the pane write where it takes drops into `zones`, those of the
     /// window it is in.
-    pub fn take_drops(&mut self, zones: DropZones) {
+    pub fn take_drops(&mut self, zones: DropPlaces) {
         self.zones = zones;
+    }
+
+    /// Has the pane draw the thumbnails of `thumbs`, those of the window
+    /// it is in, and draw again when one comes.
+    pub fn take_thumbs(&mut self, thumbs: Entity<Thumbs>, cx: &mut Context<Self>) {
+        self._thumbs = Some(cx.observe(&thumbs, |_, _, cx| cx.notify()));
+        self.thumbs = thumbs;
+    }
+
+    /// Marks the folder `folder` as the one a drag is over, or none.
+    pub fn mark_drag_over(&mut self, folder: Option<PathBuf>, cx: &mut Context<Self>) {
+        if self.drag_over != folder {
+            self.drag_over = folder;
+            cx.notify();
+        }
+    }
+
+    /// Chooses the items called `names` in the folder shown once it was
+    /// read, and shows the first; at once where it is read already. This
+    /// is how `/select` and the windows of the Shell choose items.
+    pub fn select_when_loaded(&mut self, names: Vec<OsString>, cx: &mut Context<Self>) {
+        self.pending_names = Some(names);
+        if self.reading.is_none() {
+            self.take_pending_names(cx);
+        }
+    }
+
+    /// Chooses the items `select_when_loaded` named, where they are shown.
+    fn take_pending_names(&mut self, cx: &mut Context<Self>) {
+        let Some(names) = self.pending_names.take() else {
+            return;
+        };
+        let wanted: Vec<String> = { names.iter() }
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .collect();
+        let chosen: Vec<PathBuf> = { self.listing.entries().iter() }
+            .filter(|entry| wanted.contains(&entry.name.to_lowercase()))
+            .map(|entry| entry.path.clone())
+            .collect();
+        if chosen.is_empty() {
+            return;
+        }
+        self.selection.clear();
+        self.selection.chosen.extend(chosen);
+        self.reveal_chosen();
+        cx.notify();
+    }
+
+    /// Scrolls to the first item chosen, and puts the cursor there.
+    fn reveal_chosen(&mut self) {
+        let first = (0..self.listing.len()).find(|&position| {
+            { self.listing.get(position) }.is_some_and(|entry| self.selection.contains(&entry.path))
+        });
+        if let Some(position) = first {
+            self.selection.cursor = Some(position);
+            if let Some(line) = self.line_of(position) {
+                self.list.scroll_to_reveal_item(line);
+            }
+        }
+    }
+
+    /// The entry the cursor is on, or else the first chosen, for the
+    /// panes beside the list to show.
+    pub fn focused_entry(&self) -> Option<Entry> {
+        let at_cursor = { self.selection.cursor }
+            .and_then(|position| self.listing.get(position))
+            .filter(|entry| self.selection.contains(&entry.path));
+        at_cursor
+            .or_else(|| {
+                (0..self.listing.len())
+                    .filter_map(|position| self.listing.get(position))
+                    .find(|entry| self.selection.contains(&entry.path))
+            })
+            .cloned()
+    }
+
+    /// How many items are chosen.
+    pub fn chosen_count(&self) -> usize {
+        self.selection.chosen.len()
+    }
+
+    /// Forgets the thumbnails of `paths`, whose files changed, so that
+    /// they are pictured anew.
+    pub fn refresh_pictures(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        self.thumbs
+            .update(cx, |thumbs, cx| thumbs.forget(paths, cx));
+        self.properties.retain(|(path, _), _| !paths.contains(path));
+        cx.notify();
     }
 
     /// Where the pane is.
@@ -367,6 +520,7 @@ impl FolderPane {
                 Language::of(cx).say("Search results in"),
                 title_of(root)
             ),
+            Location::RecycleBin => Language::of(cx).say("Recycle Bin").to_owned(),
         }
     }
 
@@ -405,9 +559,11 @@ impl FolderPane {
         self.reading = None;
         self.search = None;
         self.searched = None;
+        self._overlays = None;
         let path = match self.history.current().clone() {
             Location::Folder(path) => path,
             Location::Home => return self.load_home(cx),
+            Location::RecycleBin => return self.load_bin(cx),
             Location::Search { root, query } => {
                 self.listing = Listing::default();
                 self.problem = None;
@@ -457,11 +613,13 @@ impl FolderPane {
                             this.listing = Listing::default();
                         }
                     }
+                    this.took_entries(cx);
                     if let Some(pending) = this.pending.take() {
                         this.selection.clear();
                         this.selection.chosen.insert(pending);
                     }
                     this.arrange(cx);
+                    this.take_pending_names(cx);
                     if let Some(line) = { this.selection.chosen.iter().next() }
                         .and_then(|path| this.listing.position_of(path))
                         .and_then(|position| this.line_of(position))
@@ -472,6 +630,129 @@ impl FolderPane {
                 .ok();
             }),
         );
+    }
+
+    /// Asks the folder just read for the overlays programs draw over the
+    /// icons of its items, away from the user interface; those drawn
+    /// before stay until the answer comes.
+    fn took_entries(&mut self, cx: &mut Context<Self>) {
+        let Some(folder) = self.folder() else {
+            return;
+        };
+        if !FileViewConfig::of(cx).overlays || self.listing.entries().is_empty() {
+            return;
+        }
+        // The arrow of a shortcut is drawn by Tessera itself.
+        let names: Vec<OsString> = { self.listing.entries().iter() }
+            .filter(|entry| !entry.link)
+            .map(|entry| OsString::from(&entry.name))
+            .collect();
+        let side = (self.look.shape(self.zoom).icon * self.scale.get()) as u32;
+        let marks = Overlays::of_folder(folder, names, side);
+        self._overlays = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let Ok(marks) = marks.recv().await else {
+                    return;
+                };
+                this.update(cx, |this, cx| {
+                    let pictures = { marks.pictures.iter() }
+                        .filter_map(icon_of_pixels)
+                        .collect::<Vec<_>>();
+                    // A picture that cannot be made leaves its marks out.
+                    if pictures.len() == marks.pictures.len() {
+                        this.overlays = Overlaid {
+                            marks: marks.marks,
+                            pictures,
+                        };
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }),
+        );
+    }
+
+    /// Reads what lies in the Recycle Bin, away from the user interface.
+    fn load_bin(&mut self, cx: &mut Context<Self>) {
+        self.problem = None;
+        self.space = None;
+        let items = RecycleBin::list();
+        self.reading = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let items = items.recv().await.unwrap_or_else(|_| Ok(Vec::new()));
+                let read = cx
+                    .background_executor()
+                    .spawn(async move { items.map(Bin::read) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.reading = None;
+                    match read {
+                        Ok((entries, bin)) => {
+                            this.listing = Listing::new(entries);
+                            this.bin = bin;
+                        }
+                        Err(error) => {
+                            this.problem = Some(error);
+                            this.listing = Listing::default();
+                            this.bin = Bin::default();
+                        }
+                    }
+                    this.arrange(cx);
+                })
+                .ok();
+            }),
+        );
+    }
+
+    /// Does `deed` of the bar of the Recycle Bin, and reads the bin again
+    /// once it is done.
+    fn bin_deed(&mut self, deed: BinDeed, cx: &mut Context<Self>) {
+        let chosen = self.bin.items(&self.chosen());
+        let reread = |cx: &mut AsyncApp, this: &WeakEntity<Self>| {
+            this.update(cx, |this, cx| this.load(cx)).ok();
+        };
+        match deed {
+            BinDeed::Restore | BinDeed::RestoreAll => {
+                let items = match deed {
+                    BinDeed::Restore => chosen,
+                    _ => self.bin.all(),
+                };
+                if items.is_empty() {
+                    return;
+                }
+                let done = recycle_view::restore(items);
+                cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    if let Ok(outcome) = done.recv().await {
+                        outcome.report();
+                    }
+                    reread(cx, &this);
+                })
+                .detach();
+            }
+            BinDeed::Erase => {
+                if chosen.is_empty() {
+                    return;
+                }
+                let done = recycle_view::erase(chosen);
+                cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    if let Ok(Err(error)) = done.recv().await {
+                        report!("the items were not deleted: {error}");
+                    }
+                    reread(cx, &this);
+                })
+                .detach();
+            }
+            BinDeed::Empty => {
+                let done = recycle_view::empty();
+                cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                    if let Ok(Err(error)) = done.recv().await {
+                        report!("{error}");
+                    }
+                    reread(cx, &this);
+                })
+                .detach();
+            }
+        }
     }
 
     /// Takes what a search found.
@@ -583,12 +864,15 @@ impl FolderPane {
             .map(|entry| entry.path.clone());
         let filter = self.filter.read(cx).text();
         let order = self.order();
+        let keys = self.sort_keys(cx);
+        self.cloudy = { self.listing.entries().iter() }.any(|entry| entry.cloud.is_some());
         self.listing.arrange(Arrangement {
             order: &order,
             filter: &filter,
             shown: self.shown(),
             grouping: self.grouping(),
             today: Local::now().date_naive(),
+            keys: keys.as_ref(),
         });
         self.selection.follow(cursor, &self.listing);
         self.relayout(false);
@@ -630,6 +914,7 @@ impl FolderPane {
     /// Takes the look the folder had where looks are kept per folder, or
     /// else the one the configuration gives.
     fn take_view(&mut self, cx: &mut Context<Self>) {
+        self.take_columns(cx);
         if !self.config.per_folder {
             return;
         }
@@ -674,6 +959,10 @@ impl FolderPane {
     /// Shows the location the history is at.
     fn arrived(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.clear();
+        self.forget_properties();
+        self.overlays = Overlaid::default();
+        self.bin = Bin::default();
+        self.pending_names = None;
         self.rename = None;
         self.address = None;
         self.pattern = None;
@@ -738,6 +1027,10 @@ impl FolderPane {
     }
 
     fn open(&mut self, entry: &Entry, window: &mut Window, cx: &mut Context<Self>) {
+        // What lies in the Recycle Bin is brought back before it opens.
+        if *self.history.current() == Location::RecycleBin {
+            return;
+        }
         if entry.folder {
             self.go(Location::Folder(entry.path.clone()), window, cx);
         } else {
@@ -823,6 +1116,9 @@ impl FolderPane {
     /// Puts what is chosen into the Recycle Bin, or with `erase` deletes
     /// it for good, after the Shell asks.
     fn delete(&mut self, erase: bool, cx: &mut Context<Self>) {
+        if *self.history.current() == Location::RecycleBin {
+            return self.bin_deed(BinDeed::Erase, cx);
+        }
         let chosen = self.chosen();
         if chosen.is_empty() {
             return;
@@ -1138,7 +1434,7 @@ impl FolderPane {
                 self.filter.read(cx).focus(window)
             }
             // The keys of the looks of Explorer.
-            ("1", true, false, true) => self.set_look_zoomed(Look::Icons, 4, cx),
+            ("1", true, false, true) => self.set_look_zoomed(Look::Icons, 5, cx),
             ("2", true, false, true) => self.set_look_zoomed(Look::Icons, 3, cx),
             ("3", true, false, true) => self.set_look_zoomed(Look::Icons, 1, cx),
             ("4", true, false, true) => self.set_look_zoomed(Look::Icons, 0, cx),
@@ -1148,7 +1444,37 @@ impl FolderPane {
             ("=" | "+", true, false, _) => self.zoom_by(true, cx),
             ("-", true, false, _) => self.zoom_by(false, cx),
             ("0", true, false, false) => self.set_look(self.look, cx),
-            _ => return false,
+            _ => return self.type_ahead(event, cx),
+        }
+        true
+    }
+
+    /// Chooses the next item whose name begins with the letters typed
+    /// over the list within a second of each other; says whether the key
+    /// was such a letter.
+    fn type_ahead(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let held = &event.keystroke.modifiers;
+        if held.control || held.alt || held.platform || held.function {
+            return false;
+        }
+        let Some(letters) = { event.keystroke.key_char.as_deref() }
+            .filter(|letters| letters.chars().all(|letter| !letter.is_control()))
+            .filter(|letters| !letters.is_empty())
+        else {
+            return false;
+        };
+        // A space starts nothing; within a word it is part of the name.
+        let typed = self.typed.push(letters, Instant::now()).to_owned();
+        if typed.trim().is_empty() {
+            return false;
+        }
+        let found = TypeAhead::find(&self.listing, self.selection.cursor, &typed);
+        if let Some(position) = found {
+            self.selection.click(&self.listing, position, false, false);
+            if let Some(line) = self.line_of(position) {
+                self.list.scroll_to_reveal_item(line);
+            }
+            cx.notify();
         }
         true
     }
@@ -1479,6 +1805,23 @@ impl FolderPane {
             };
         let chosen = self.chosen();
         let mut entries = Vec::new();
+        if *self.history.current() == Location::RecycleBin {
+            let deeds = match chosen.is_empty() {
+                true => [BinDeed::RestoreAll, BinDeed::Empty],
+                false => [BinDeed::Restore, BinDeed::Erase],
+            };
+            for deed in deeds {
+                let view = view.clone();
+                entries.push(MenuEntry::new(
+                    ICON_NONE,
+                    language.say(deed.title()),
+                    move |cx| {
+                        view.update(cx, |this, cx| this.bin_deed(deed, cx)).ok();
+                    },
+                ));
+            }
+            return entries;
+        }
         if chosen.is_empty() {
             if self.folder().is_some() {
                 entries.push(entry(ICON_NEW_FOLDER, "New folder", |this, cx| {
@@ -1486,6 +1829,15 @@ impl FolderPane {
                 }));
                 if FileClipboard::take().is_some() {
                     entries.push(entry(ICON_PASTE, "Paste", |this, cx| this.paste(cx)));
+                }
+                // Undo and redo say what they take back, as Explorer's do.
+                let undo = UndoJournal::undo_label().map(|label| (ICON_UNDO, label, false));
+                let redo = UndoJournal::redo_label().map(|label| (ICON_REDO, label, true));
+                for (glyph, label, again) in undo.into_iter().chain(redo) {
+                    let view = view.clone();
+                    entries.push(MenuEntry::new(glyph, language.say(label), move |cx| {
+                        view.update(cx, |this, cx| this.undo(again, cx)).ok();
+                    }));
                 }
                 entries.push(entry(ICON_TERMINAL, "Open in terminal", |this, cx| {
                     if let Some(folder) = this.folder() {
@@ -1794,10 +2146,53 @@ impl FolderPane {
         self.filter.clone()
     }
 
-    /// The icon of `entry`, `size` wide: the folder of the icon font for a
-    /// folder, the one the Shell draws for a file; a blank one until it
-    /// was looked up.
+    /// The picture of `entry`, `size` wide: its thumbnail where the look
+    /// is large enough and the Shell has one, else the icon of its kind,
+    /// with the overlay a program draws over it; `priority` is the place
+    /// of its line among those in sight.
     fn entry_icon(
+        &self,
+        entry: &Entry,
+        size: Pixels,
+        priority: u32,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let side = size / px(1.);
+        let scale = self.scale.get();
+        let thumbnail = match self.history.current() {
+            // What lies in the bin is pictured by its icon only.
+            Location::RecycleBin => Picture::Icon,
+            _ => { self.thumbs.clone() }.update(cx, |thumbs, cx| {
+                thumbs.picture(entry, side, scale, priority, cx)
+            }),
+        };
+        let picture = match thumbnail {
+            Picture::Drawn(image) => img(image)
+                .size(size)
+                .flex_none()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            Picture::Icon => self.kind_icon(entry, size, theme, cx),
+        };
+        let overlay = { self.overlays.marks.get(std::ffi::OsStr::new(&entry.name)) }
+            .and_then(|index| self.overlays.pictures.get(*index).cloned());
+        match overlay {
+            Some(overlay) => div()
+                .relative()
+                .size(size)
+                .flex_none()
+                .child(picture)
+                .child(img(overlay).absolute().left_0().top_0().size(size))
+                .into_any_element(),
+            None => picture,
+        }
+    }
+
+    /// The icon of the kind of `entry`, `size` wide: the folder of the
+    /// icon font for a folder, the one the Shell draws for a file; a blank
+    /// one until it was looked up.
+    fn kind_icon(
         &self,
         entry: &Entry,
         size: Pixels,
@@ -1960,70 +2355,6 @@ impl FolderPane {
             .into_any_element()
     }
 
-    /// The columns the details show: those of a folder, or for results
-    /// of a search the folder each is in.
-    fn columns(&self) -> [Column; 4] {
-        match self.history.current() {
-            Location::Search { .. } => Column::FOUND,
-            _ => Column::ALL,
-        }
-    }
-
-    /// A cell of a column of the details, `column` wide.
-    fn cell(column: Column, theme: &Theme) -> gpui::Div {
-        let cell = div().flex_none().px(theme.spacing.small).overflow_hidden();
-        match column {
-            Column::Name => div().flex_1().min_w_0(),
-            Column::Modified => cell.w(px(MODIFIED_WIDTH)),
-            Column::Kind => cell.w(px(KIND_WIDTH)),
-            Column::Size => cell.w(px(SIZE_WIDTH)).flex().justify_end(),
-            Column::Folder => cell.w(px(FOLDER_WIDTH)),
-        }
-    }
-
-    fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let language = Language::of(cx);
-        let order = self.order();
-        let icon_room = self.look.shape(self.zoom).icon + 16.;
-        let heading = |column: Column| {
-            let arrow = (order.column == column).then(|| {
-                let glyph = if order.descending {
-                    ICON_SORT_DOWN
-                } else {
-                    ICON_SORT_UP
-                };
-                icon(theme, glyph).text_size(px(9.))
-            });
-            let cell = Self::cell(column, theme)
-                .id(("files-heading", column as usize))
-                .h_full()
-                .flex()
-                .items_center()
-                .gap(theme.spacing.tiny)
-                .cursor_pointer()
-                .hover(|style| style.text_color(theme.colors.on_surface))
-                .child(language.say(column.title()))
-                .children(arrow)
-                .on_click(cx.listener(move |this, _, _, cx| this.sort_by(column, cx)));
-            match column {
-                Column::Size => cell.justify_end(),
-                _ => cell,
-            }
-        };
-        div()
-            .h(px(HEADER_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .pl(px(icon_room))
-            .pr(theme.spacing.medium)
-            .text_size(theme.typography.label_size * 0.85)
-            .text_color(theme.colors.on_surface_variant)
-            .border_b_1()
-            .border_color(theme.colors.outline.opacity(0.25))
-            .children(self.columns().map(heading))
-    }
-
     /// The heading of a group, with how many it holds.
     fn render_heading(
         &self,
@@ -2057,26 +2388,6 @@ impl FolderPane {
             .into_any_element()
     }
 
-    /// The text of the cell `column` of `entry`.
-    fn cell_text(&self, entry: &Entry, column: Column) -> String {
-        match column {
-            Column::Name => entry.display.clone(),
-            Column::Modified => moment(entry.modified),
-            Column::Kind => entry.kind(),
-            Column::Size if entry.folder => String::new(),
-            Column::Size => size_text(entry.size),
-            Column::Folder => match (entry.path.parent(), self.history.current().root()) {
-                (Some(parent), Some(root)) => match parent.strip_prefix(root) {
-                    Ok(inner) if inner.as_os_str().is_empty() => ".".to_owned(),
-                    Ok(inner) => inner.display().to_string(),
-                    Err(_) => parent.display().to_string(),
-                },
-                (Some(parent), None) => parent.display().to_string(),
-                (None, _) => String::new(),
-            },
-        }
-    }
-
     /// The box of the item at `position`, lit as it is chosen, which
     /// takes the presses of the pointer.
     fn item_box(
@@ -2088,6 +2399,7 @@ impl FolderPane {
     ) -> gpui::Stateful<gpui::Div> {
         let chosen = self.selection.contains(&entry.path);
         let cursor = self.selection.cursor == Some(position);
+        let over = entry.folder && self.drag_over.as_ref() == Some(&entry.path);
         let item = div()
             .id(("files-item", position))
             .flex_none()
@@ -2095,10 +2407,12 @@ impl FolderPane {
             .text_size(theme.typography.label_size)
             .text_color(theme.colors.on_surface)
             .border_1()
-            .border_color(match cursor {
-                true => theme.colors.primary.opacity(0.5),
-                false => gpui::transparent_black(),
+            .border_color(match (over, cursor) {
+                (true, _) => theme.colors.primary,
+                (false, true) => theme.colors.primary.opacity(0.5),
+                (false, false) => gpui::transparent_black(),
             })
+            .when(over, |item| item.bg(theme.colors.primary.opacity(0.15)))
             .when(entry.hidden, |item| item.opacity(0.6))
             .when(chosen, |item| item.bg(theme.colors.secondary_container))
             .when(!chosen, |item| {
@@ -2112,14 +2426,8 @@ impl FolderPane {
 
     /// An element over what holds it, which writes it down as a place
     /// that takes drops into `folder` where it is drawn.
-    fn drop_zone(&self, folder: PathBuf) -> impl IntoElement {
-        let zones = self.zones.clone();
-        canvas(
-            move |bounds, _, _| zones.push(DropZone { bounds, folder }),
-            |_, (), _, _| {},
-        )
-        .absolute()
-        .size_full()
+    fn drop_zone(&self, folder: PathBuf) -> impl IntoElement + use<> {
+        self.zones.zone(folder)
     }
 
     /// The name of `entry` under its icon, or the field it is renamed in.
@@ -2143,21 +2451,26 @@ impl FolderPane {
         &self,
         position: usize,
         shape: Shape,
+        priority: u32,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let entry = self.listing.get(position)?.clone();
         let item = self.item_box(position, &entry, theme, cx);
-        let picture = self.entry_icon(&entry, px(shape.icon), theme, cx);
+        let picture = self.entry_icon(&entry, px(shape.icon), priority, theme, cx);
         let dim = theme.colors.on_surface_variant;
         let small = theme.typography.label_size * 0.85;
         let item = match self.look {
             Look::Details => {
-                let cells = self.columns().into_iter().skip(1).map(|column| {
-                    Self::cell(column, theme)
-                        .text_color(dim)
-                        .child(one_line(self.cell_text(&entry, column)))
-                });
+                let columns = self.shown_columns();
+                let cells: Vec<AnyElement> = { columns.shown().iter().skip(1) }
+                    .map(|shown| {
+                        Self::cell(*shown, theme)
+                            .text_color(dim)
+                            .child(self.cell_content(&entry, shown.column, theme))
+                            .into_any_element()
+                    })
+                    .collect();
                 item.h(px(shape.height))
                     .mx(theme.spacing.small)
                     .flex()
@@ -2229,15 +2542,19 @@ impl FolderPane {
     ) -> AnyElement {
         let theme = *cx.global::<Theme>();
         let shape = self.look.shape(self.zoom);
+        self.scale.set(window.scale_factor());
+        // The rows nearest the top of what is in sight are pictured first.
+        let top = self.list.logical_scroll_top().item_ix;
+        let priority = index.saturating_sub(top) as u32;
         let element = match self.lines.get(index).cloned() {
             Some(Line::Heading { label, count }) => self.render_heading(&label, count, &theme, cx),
             Some(Line::Items(range)) if self.look == Look::Details => {
-                let item = self.render_item(range.start, shape, &theme, cx);
+                let item = self.render_item(range.start, shape, priority, &theme, cx);
                 item.unwrap_or_else(|| div().into_any_element())
             }
             Some(Line::Items(range)) => {
                 let items: Vec<AnyElement> = range
-                    .filter_map(|position| self.render_item(position, shape, &theme, cx))
+                    .filter_map(|position| self.render_item(position, shape, priority, &theme, cx))
                     .collect();
                 div()
                     .px(px(MARGIN / 2.))
@@ -2251,6 +2568,13 @@ impl FolderPane {
         };
         if self.icons_owed.get() {
             cx.on_next_frame(window, |_, _, cx| cx.notify());
+        }
+        let wanted = self
+            .wanted
+            .try_borrow()
+            .is_ok_and(|wanted| !wanted.is_empty());
+        if wanted && self.reads_properties() {
+            cx.on_next_frame(window, |this, _, cx| this.read_wanted(cx));
         }
         element
     }
@@ -2318,6 +2642,25 @@ impl FolderPane {
             .into_any_element()
     }
 
+    /// The bar of the Recycle Bin over its list, where it is shown.
+    fn render_bin_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if *self.history.current() != Location::RecycleBin {
+            return None;
+        }
+        let pane = cx.entity().downgrade();
+        let pressed = move |deed: BinDeed, _: &mut Window, cx: &mut App| {
+            pane.update(cx, |pane, cx| pane.bin_deed(deed, cx)).ok();
+        };
+        let chosen = !self.selection.chosen.is_empty();
+        Some(recycle_view::render_bar(
+            theme,
+            Language::of(cx),
+            chosen,
+            self.bin.is_empty(),
+            pressed,
+        ))
+    }
+
     /// The bar over the list in which a pattern to choose by is written.
     fn render_pattern(&self, theme: &Theme) -> Option<AnyElement> {
         let field = self.pattern.clone()?;
@@ -2374,6 +2717,7 @@ impl Render for FolderPane {
         self.icons_left.set(ICONS_PER_FRAME);
         self.icons_owed.set(false);
         let language = Language::of(cx);
+        self.language = language;
         let content = match (self.history.current(), &self.problem) {
             (Location::Computer, _) => self.render_computer(&theme, cx),
             (_, Some(problem)) => {
@@ -2408,8 +2752,27 @@ impl Render for FolderPane {
                 false => gpui::transparent_black(),
             })
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.wheel(event, cx)))
+            // The buttons of the pointer that go back and forth, as in a
+            // browser.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, window, cx| this.back(window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, window, cx| this.forward(window, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.columns_changed {
+                        this.keep_columns(cx);
+                    }
+                }),
+            )
             // The folder shown takes drops beneath the rows of its folders.
             .children(self.folder().map(|folder| self.drop_zone(folder)))
+            .children(self.render_bin_bar(&theme, cx))
             .children(self.render_pattern(&theme))
             .child(content)
             .children(self.batch.as_ref().map(|(dialog, _)| dialog.clone()))

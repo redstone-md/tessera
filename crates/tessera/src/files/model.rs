@@ -6,12 +6,12 @@
 //! chosen.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, Metadata};
 use std::io;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Datelike, Local, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ use super::FilesConfig;
 use crate::platform::{
     Attributes, ExplorerSettings, NameRules, is_hidden, localized_candidates, shell_names,
 };
+use crate::platform::{CloudState, FileProperty};
 
 /// How many names of a folder are asked of the Shell at most, as each
 /// takes it a moment.
@@ -38,7 +39,12 @@ pub enum Location {
         root: PathBuf,
         query: String,
     },
+    /// What lies in the Recycle Bin, of every drive.
+    RecycleBin,
 }
+
+/// What the files of the file manager call the Recycle Bin.
+pub const RECYCLE_BIN: &str = "recycle-bin";
 
 impl Location {
     /// The location one level up: the folder around a folder, and the
@@ -46,6 +52,7 @@ impl Location {
     pub fn up(&self) -> Option<Self> {
         match self {
             Self::Home | Self::Computer => None,
+            Self::RecycleBin => Some(Self::Computer),
             Self::Folder(path) => Some(match path.parent() {
                 Some(parent) if parent != path && !parent.as_os_str().is_empty() => {
                     Self::Folder(parent.to_owned())
@@ -58,7 +65,7 @@ impl Location {
 
     pub fn folder(&self) -> Option<&Path> {
         match self {
-            Self::Home | Self::Computer | Self::Search { .. } => None,
+            Self::Home | Self::Computer | Self::Search { .. } | Self::RecycleBin => None,
             Self::Folder(path) => Some(path),
         }
     }
@@ -78,6 +85,7 @@ impl Location {
         match self {
             Self::Home => "home".to_owned(),
             Self::Computer => "computer".to_owned(),
+            Self::RecycleBin => RECYCLE_BIN.to_owned(),
             Self::Folder(path) | Self::Search { root: path, .. } => path.display().to_string(),
         }
     }
@@ -174,6 +182,8 @@ pub struct Entry {
     pub protected: bool,
     /// Whether it is a shortcut, over whose icon an arrow is drawn.
     pub link: bool,
+    /// Where it lies in a cloud folder, its state there.
+    pub cloud: Option<CloudState>,
 }
 
 impl Entry {
@@ -204,6 +214,7 @@ impl Entry {
             },
             protected: attributes.protected(),
             link,
+            cloud: CloudState::of(metadata),
         }
     }
 
@@ -259,17 +270,24 @@ pub fn stamp_of(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|folder| folder.modified()).ok()
 }
 
-/// A column of the list, which it can be ordered by.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// A column of the list, which it can be ordered by: one of the file
+/// system, or a property the Shell knows of files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub enum Column {
     Name,
     Modified,
-    #[serde(rename = "type")]
     Kind,
     Size,
     /// The folder a file is in, which results of a search show.
     Folder,
+    /// The state of a file of a cloud folder.
+    Status,
+    /// Where an item of the Recycle Bin was deleted from.
+    Original,
+    /// When an item of the Recycle Bin was deleted.
+    Deleted,
+    Property(FileProperty),
 }
 
 impl Column {
@@ -278,6 +296,8 @@ impl Column {
     /// The columns of the results of a search, which come from many
     /// folders.
     pub const FOUND: [Self; 4] = [Self::Name, Self::Folder, Self::Modified, Self::Size];
+    /// The columns of the Recycle Bin.
+    pub const BIN: [Self; 4] = [Self::Name, Self::Original, Self::Deleted, Self::Size];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -286,9 +306,113 @@ impl Column {
             Self::Kind => "Type",
             Self::Size => "Size",
             Self::Folder => "Folder",
+            Self::Status => "Status",
+            Self::Original => "Original location",
+            Self::Deleted => "Date deleted",
+            Self::Property(property) => property.title(),
+        }
+    }
+
+    /// What the files of the file manager call it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Modified => "modified",
+            Self::Kind => "type",
+            Self::Size => "size",
+            Self::Folder => "folder",
+            Self::Status => "status",
+            Self::Original => "original",
+            Self::Deleted => "deleted",
+            Self::Property(property) => property.name(),
+        }
+    }
+
+    /// The column the files of the file manager call `name`.
+    pub fn named(name: &str) -> Option<Self> {
+        let fixed = [
+            Self::Name,
+            Self::Modified,
+            Self::Kind,
+            Self::Size,
+            Self::Folder,
+            Self::Status,
+            Self::Original,
+            Self::Deleted,
+        ];
+        { fixed.into_iter() }
+            .find(|column| column.name() == name)
+            .or_else(|| FileProperty::named(name).map(Self::Property))
+    }
+
+    /// How wide it is drawn at first, in logical pixels; the name takes
+    /// what the others leave.
+    pub fn first_width(self) -> f32 {
+        match self {
+            Self::Name => 0.,
+            Self::Modified | Self::Deleted => 150.,
+            Self::Kind | Self::Size => 90.,
+            Self::Folder | Self::Original => 260.,
+            Self::Status => 170.,
+            Self::Property(_) => 140.,
+        }
+    }
+
+    /// Whether its values stand at the right of its cells, as numbers do.
+    pub fn to_the_right(self) -> bool {
+        self == Self::Size
+    }
+
+    /// The property of the Shell it shows, where it shows one.
+    pub fn property(self) -> Option<FileProperty> {
+        match self {
+            Self::Property(property) => Some(property),
+            _ => None,
         }
     }
 }
+
+impl From<Column> for String {
+    fn from(column: Column) -> Self {
+        column.name().to_owned()
+    }
+}
+
+impl TryFrom<String> for Column {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::named(&name).ok_or_else(|| format!("there is no column `{name}`"))
+    }
+}
+
+/// What an entry is ordered by in a column whose values are not part of
+/// the entry: a number or a moment where there is one, else the text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SortKey {
+    pub number: Option<u64>,
+    pub text: String,
+}
+
+impl SortKey {
+    /// The order of `a` and `b`, of which one may have no value: those
+    /// without come last.
+    fn compare(a: Option<&Self>, b: Option<&Self>) -> Ordering {
+        match (a, b) {
+            (Some(a), Some(b)) => match (a.number, b.number) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                _ => natural(&a.text, &b.text),
+            },
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+    }
+}
+
+/// The keys entries are ordered by in a column whose values they do not
+/// hold themselves, by path.
+pub type SortKeys = HashMap<PathBuf, SortKey>;
 
 /// How a folder shows what it holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,8 +447,8 @@ impl Look {
         match self {
             Self::Details => &[16., 20., 24., 32.],
             Self::List => &[16., 20., 24.],
-            Self::Tiles => &[32., 48., 64.],
-            Self::Icons => &[32., 48., 64., 96., 128.],
+            Self::Tiles => &[32., 48., 64., 96.],
+            Self::Icons => &[32., 48., 64., 96., 128., 256.],
         }
     }
 
@@ -527,17 +651,26 @@ impl Order {
         }
     }
 
-    pub fn compare(&self, a: &Entry, b: &Entry) -> Ordering {
+    /// The order of `a` and `b`, by `keys` in a column whose values the
+    /// entries do not hold.
+    pub fn compare(&self, a: &Entry, b: &Entry, keys: Option<&SortKeys>) -> Ordering {
         if self.folders_first && a.folder != b.folder {
             return b.folder.cmp(&a.folder);
         }
         let by_column = match self.column {
             Column::Name => Ordering::Equal,
+            Column::Status => {
+                { a.cloud.map(|state| state as u8) }.cmp(&b.cloud.map(|state| state as u8))
+            }
+            Column::Original | Column::Property(_) => {
+                let keys = keys.map(|keys| (keys.get(&a.path), keys.get(&b.path)));
+                keys.map_or(Ordering::Equal, |(x, y)| SortKey::compare(x, y))
+            }
             Column::Folder => natural(
                 &a.path.parent().unwrap_or(&a.path).to_string_lossy(),
                 &b.path.parent().unwrap_or(&b.path).to_string_lossy(),
             ),
-            Column::Modified => a.modified.cmp(&b.modified),
+            Column::Modified | Column::Deleted => a.modified.cmp(&b.modified),
             Column::Kind => a.kind().cmp(&b.kind()),
             Column::Size => a.size.cmp(&b.size),
         };
@@ -646,6 +779,9 @@ pub struct Arrangement<'a> {
     pub grouping: Grouping,
     /// The day it is, which groups by date reckon from.
     pub today: NaiveDate,
+    /// What the entries are ordered by, where the column of the order is
+    /// one whose values they do not hold.
+    pub keys: Option<&'a SortKeys>,
 }
 
 impl Listing {
@@ -685,8 +821,9 @@ impl Listing {
             .map(|index| (group_of(&entries[index], grouping, today), index))
             .collect();
         keyed.sort_unstable_by(|(a_group, a), (b_group, b)| {
-            { a_group.cmp(b_group) }
-                .then_with(|| arrangement.order.compare(&entries[*a], &entries[*b]))
+            { a_group.cmp(b_group) }.then_with(|| {
+                { arrangement.order }.compare(&entries[*a], &entries[*b], arrangement.keys)
+            })
         });
         (self.groups, self.shown) = keyed.into_iter().unzip();
         if grouping == Grouping::None {
@@ -885,6 +1022,59 @@ impl Selection {
     }
 }
 
+/// How long after a letter the next one typed still adds to the name
+/// sought, as in Explorer and Dolphin.
+pub const TYPE_AHEAD_PAUSE: Duration = Duration::from_secs(1);
+
+/// Letters typed over the list, which choose the next item whose name
+/// begins with them.
+#[derive(Debug, Default)]
+pub struct TypeAhead {
+    typed: String,
+    last: Option<Instant>,
+}
+
+impl TypeAhead {
+    /// Adds `letters` typed at `now` to what was typed, or starts anew
+    /// after a pause; the letters typed so far.
+    pub fn push(&mut self, letters: &str, now: Instant) -> &str {
+        let paused = { self.last }.is_none_or(|last| now.duration_since(last) > TYPE_AHEAD_PAUSE);
+        if paused {
+            self.typed.clear();
+        }
+        self.typed.push_str(&letters.to_lowercase());
+        self.last = Some(now);
+        &self.typed
+    }
+
+    /// The position of the item `typed` chooses among those `listing`
+    /// shows, `cursor` being where the choice is: the first from there on
+    /// whose name begins with it, around the end. One letter, or the same
+    /// letter again and again, goes to the next item with it, so that
+    /// pressing a letter steps through the names it begins.
+    pub fn find(listing: &Listing, cursor: Option<usize>, typed: &str) -> Option<usize> {
+        let mut letters = typed.chars();
+        let first = letters.next()?;
+        let stepping = letters.all(|letter| letter == first);
+        let sought: String = match stepping {
+            true => first.to_string(),
+            false => typed.to_owned(),
+        };
+        let count = listing.len();
+        let start = match (cursor, stepping) {
+            (Some(cursor), true) => cursor + 1,
+            (Some(cursor), false) => cursor,
+            (None, _) => 0,
+        };
+        (0..count)
+            .map(|offset| (start + offset) % count)
+            .find(|&position| {
+                { listing.get(position) }
+                    .is_some_and(|entry| entry.display.to_lowercase().starts_with(&sought))
+            })
+    }
+}
+
 /// Whether `name` matches `pattern`, in which `*` stands for any letters
 /// and `?` for one, in any case.
 pub fn glob_matches(pattern: &str, name: &str) -> bool {
@@ -1002,6 +1192,7 @@ mod tests {
             hidden: name.starts_with('.'),
             protected: name.starts_with("~"),
             link: false,
+            cloud: None,
         }
     }
 
@@ -1016,6 +1207,7 @@ mod tests {
             shown,
             grouping: Grouping::None,
             today: today(),
+            keys: None,
         });
     }
 
@@ -1099,6 +1291,7 @@ mod tests {
             shown: Shown::default(),
             grouping: Grouping::Kind,
             today: today(),
+            keys: None,
         });
         assert_eq!(
             names(&listing),
@@ -1146,7 +1339,8 @@ mod tests {
     #[test]
     fn a_look_zooms_within_its_sizes() {
         assert_eq!(Look::Icons.zoomed(0, false), 0);
-        assert_eq!(Look::Icons.zoomed(4, true), 4);
+        assert_eq!(Look::Icons.zoomed(4, true), 5);
+        assert_eq!(Look::Icons.zoomed(5, true), 5);
         assert_eq!(Look::List.zoomed(9, false), 1);
         let first = Look::Details.shape(Look::Details.first_zoom());
         assert_eq!((first.icon, first.width), (20., 0.));
@@ -1155,6 +1349,32 @@ mod tests {
                 .iter()
                 .all(|look| look.is_grid() == (*look != Look::Details))
         );
+    }
+
+    #[test]
+    fn letters_typed_choose_the_names_they_begin() {
+        let mut listing = Listing::new(vec![
+            entry("apple", false, 0),
+            entry("avocado", false, 0),
+            entry("banana", false, 0),
+            entry("Berry", false, 0),
+        ]);
+        arranged(&mut listing, &Order::default(), "", Shown::default());
+        let start = Instant::now();
+        let mut typed = TypeAhead::default();
+        let word = typed.push("b", start).to_owned();
+        assert_eq!(TypeAhead::find(&listing, Some(0), &word), Some(2));
+        let word = typed
+            .push("e", start + Duration::from_millis(300))
+            .to_owned();
+        assert_eq!(word, "be");
+        assert_eq!(TypeAhead::find(&listing, Some(2), &word), Some(3));
+        // After a pause the word starts anew; the same letter steps.
+        let word = typed.push("a", start + Duration::from_secs(3)).to_owned();
+        assert_eq!(word, "a");
+        assert_eq!(TypeAhead::find(&listing, Some(0), &word), Some(1));
+        assert_eq!(TypeAhead::find(&listing, Some(1), "aa"), Some(0));
+        assert_eq!(TypeAhead::find(&listing, None, "z"), None);
     }
 
     #[test]
@@ -1179,6 +1399,52 @@ mod tests {
         assert_eq!(selection.add_matching(&listing, "*.txt; nothing"), 2);
         selection.invert(&listing);
         assert_eq!(selection.in_order(&listing), [PathBuf::from("b.png")]);
+    }
+
+    #[test]
+    fn columns_are_kept_by_their_names() {
+        for column in [
+            Column::Name,
+            Column::Kind,
+            Column::Deleted,
+            Column::Property(FileProperty::DateTaken),
+        ] {
+            assert_eq!(Column::named(column.name()), Some(column));
+        }
+        assert_eq!(Column::named("type"), Some(Column::Kind));
+        assert_eq!(Column::named("nothing"), None);
+    }
+
+    #[test]
+    fn a_column_of_the_shell_orders_by_its_keys_and_those_without_last() {
+        let mut listing = Listing::new(vec![
+            entry("a.jpg", false, 0),
+            entry("b.jpg", false, 0),
+            entry("c.jpg", false, 0),
+        ]);
+        let key = |number: Option<u64>, text: &str| SortKey {
+            number,
+            text: text.to_owned(),
+        };
+        let keys: SortKeys = [
+            (PathBuf::from("a.jpg"), key(Some(30), "30")),
+            (PathBuf::from("c.jpg"), key(Some(4), "4")),
+        ]
+        .into_iter()
+        .collect();
+        let order = Order {
+            column: Column::Property(FileProperty::DateTaken),
+            ..Order::default()
+        };
+        listing.arrange(Arrangement {
+            order: &order,
+            filter: "",
+            shown: Shown::default(),
+            grouping: Grouping::None,
+            today: today(),
+            keys: Some(&keys),
+        });
+        assert_eq!(names(&listing), ["c.jpg", "a.jpg", "b.jpg"]);
     }
 
     #[test]
