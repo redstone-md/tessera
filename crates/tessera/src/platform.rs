@@ -30,6 +30,11 @@ pub use win32::{
 };
 #[allow(
     unused_imports,
+    reason = "for the file manager and the desktop, which drag files out"
+)]
+pub use win32::{DragButton, DragOut, DropEffect, DropEffects, DropKeys, drop_effect, drop_into};
+#[allow(
+    unused_imports,
     reason = "for the file manager and the desktop, which take work on files back"
 )]
 pub use win32::{
