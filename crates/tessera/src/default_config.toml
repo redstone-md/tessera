@@ -1045,6 +1045,16 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # layout = true       the window in front switched to another keyboard layout
 # place = "bottom"    or "top", "top-left", "top-right", "bottom-left",
 #                     "bottom-right"
+#                     or "left", "right" (the middle of a side), "center"
+# media = true        another piece being played: its picture, title, artist
+#                     and application, read once a second
+# workspace = true    another workspace shown: its name and a dot for each
+# seconds = 2         how long a flyout stays after the last change, 1 to 10
+#                     (1.6 without the key)
+# margin = 24         how far from the sides of the display it hangs, in
+#                     logical pixels
+# With layout = true, Win+Space (the action input-language) also lists the
+# installed layouts, the one switched to lit, while the Windows key is held.
 #
 # In shell mode Windows shows no indicator of its own.
 

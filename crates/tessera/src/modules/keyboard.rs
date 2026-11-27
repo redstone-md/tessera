@@ -12,9 +12,10 @@
 //! (`previous`, Win+Shift+Space); where a window of Tessera is in front,
 //! as the launcher is while its search field is typed into, Tessera takes
 //! on that layout itself. `list` opens the list. The switcher Windows
-//! shows while Win+Space is held is part of Explorer and is not shown;
-//! Ctrl+Shift and Alt+Shift are switched by Windows itself and stay with
-//! it.
+//! shows while Win+Space is held is part of Explorer; in its place the
+//! layout flyout lists the layouts with the one switched to lit, where
+//! `[flyout]` wants layouts shown. Ctrl+Shift and Alt+Shift are switched
+//! by Windows itself and stay with it.
 
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,7 @@ use gpui::{
 
 use crate::actions::{Action, Actions};
 use crate::config::{PopupConfig, WidgetSpec};
+use crate::flyout::Flyouts;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
@@ -174,11 +176,17 @@ fn switch(typing: Typing, language: InputLanguage, cx: &mut App) {
     }
 }
 
-/// Asks `typing` for the layout after its own, or before it when `back`.
-fn switch_next(typing: Typing, back: bool, cx: &mut App) {
-    if let Some(next) = step(typing.language, &InputLanguage::installed(), back) {
-        switch(typing, next, cx);
-    }
+/// Asks `typing` for the layout after its own, or before it when `back`,
+/// and gives the layouts with the one asked for.
+fn switch_next(
+    typing: Typing,
+    back: bool,
+    cx: &mut App,
+) -> Option<(Vec<InputLanguage>, InputLanguage)> {
+    let installed = InputLanguage::installed();
+    let next = step(typing.language, &installed, back)?;
+    switch(typing, next, cx);
+    Some((installed, next))
 }
 
 /// Does the action `input-language` with `arg`: the next or the previous
@@ -195,8 +203,12 @@ fn input_language(arg: Option<&str>, cx: &mut App) {
         }
         return;
     }
-    if let Some(typing) = TypedInto::window(cx) {
-        switch_next(typing, back, cx);
+    // The list of the layouts shows while the keys are held, as the one
+    // of Windows does.
+    if let Some((installed, next)) =
+        TypedInto::window(cx).and_then(|typing| switch_next(typing, back, cx))
+    {
+        Flyouts::show_layouts(installed, next, cx);
     }
 }
 

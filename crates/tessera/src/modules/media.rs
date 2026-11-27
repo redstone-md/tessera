@@ -21,6 +21,7 @@ use gpui::{
 };
 
 use crate::actions::{Action, Actions};
+use crate::flyout::media_app_name;
 use crate::i18n::Language;
 use crate::icons::{Icon, image_of_bytes};
 use crate::module::{Module, WidgetRegistry};
@@ -141,25 +142,7 @@ fn send_to_chosen(command: MediaCommand, cx: &mut App) {
 /// or what it plays where the application is known only by a number, as
 /// some browsers are.
 fn chip_label(session: &SessionInfo) -> String {
-    let app = session.key.app.as_str();
-    let name = match app.split_once('!') {
-        // A packaged application: the name of its package, without the
-        // publisher before it and the hash after it.
-        Some((family, _)) => {
-            let package = family.split('_').next().unwrap_or(family);
-            package.rsplit('.').next().unwrap_or(package)
-        }
-        None => {
-            let file = app.rsplit(['\\', '/']).next().unwrap_or(app);
-            // An application names itself as it likes, in any letters: the
-            // end is looked at only where it lies between two of them.
-            let stem = file.len().saturating_sub(4);
-            match file.get(stem..) {
-                Some(end) if end.eq_ignore_ascii_case(".exe") => &file[..stem],
-                _ => file,
-            }
-        }
-    };
+    let name = media_app_name(&session.key.app);
     let number = name.len() >= 12 && name.chars().all(|letter| letter.is_ascii_hexdigit());
     if (number || name.is_empty()) && !session.title.is_empty() {
         return session.title.clone();

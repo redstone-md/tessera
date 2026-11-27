@@ -421,6 +421,18 @@ layout = true
 place = "top-right"
 ```
 
+`media = true` shows another piece being played by the session Windows considers current, read once a second: a card with its picture, its title and its artist with the application that plays it (the piece that plays when Tessera starts is not shown, nor a piece without a title). `workspace = true` shows going to another workspace on the display the pointer is on, Tessera's own or the virtual desktops of Windows: its name, or its number, and a dot for each workspace, the one shown long and lit. With `layout = true` the action `input-language` (Win+Space where the keys of Windows are bound) also lists the installed layouts with the names Windows gives them, the one switched to lit, for as long as the Windows key is held and `seconds` after, as the switcher of Explorer does. `seconds` is how long a flyout stays after the last change, from 1 to 10 (1.6 without the key), and `margin` how far it hangs from the sides of the space, in logical pixels (24 without the key, at most 400). `place` also takes `left` and `right`, the middle of a side, from which the flyout slides in, and `center`.
+
+```toml
+[flyout]
+media = true
+workspace = true
+layout = true
+seconds = 3
+margin = 40
+place = "right"
+```
+
 ## The wallpaper
 
 `[wallpaper]` sets what Tessera shows behind the icons of the desktop; the [features](FEATURES.md) tell what was tried. Without it Tessera shows the wallpaper of Windows, which the desktop window draws, and draws nothing itself.
