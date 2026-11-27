@@ -63,6 +63,10 @@ impl Extension for Sky {
         }
     }
 
+    fn settings_changed(&mut self, now: u64) {
+        *self = Self::start(now);
+    }
+
     fn render(&mut self, widget: &str, now: u64) -> Ui {
         let moon = Moon::at(now);
         match widget {

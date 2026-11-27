@@ -83,6 +83,14 @@ impl Schedule {
         self.asked = None;
     }
 
+    /// Takes changed settings: asks every `interval` seconds from now on,
+    /// the next time at once.
+    pub fn retune(&mut self, interval: u64) {
+        self.interval = interval;
+        self.failing = false;
+        self.hurry();
+    }
+
     pub fn interval(&self) -> u64 {
         self.interval
     }
@@ -168,6 +176,20 @@ impl<T> Feed<T> {
         self.schedule.hurry();
     }
 
+    /// Takes changed settings: asks every `interval` seconds from now on,
+    /// the next time at once. With `fresh`, what is asked changed, so the
+    /// last answer, its error and the question under way, which were about
+    /// what was asked before, are forgotten; the answer to that question
+    /// is then not this feed's.
+    pub fn retune(&mut self, interval: u64, fresh: bool) {
+        self.schedule.retune(interval);
+        if fresh {
+            self.pending = None;
+            self.latest = None;
+            self.error = None;
+        }
+    }
+
     /// The last answer and when it came.
     pub fn latest(&self) -> Option<(&T, u64)> {
         self.latest.as_ref().map(|(value, came)| (value, *came))
@@ -248,6 +270,14 @@ impl<T> Fetcher<T> {
     pub fn busy(&self) -> bool {
         !self.waiting.is_empty() || !self.under_way.is_empty()
     }
+
+    /// Forgets every request, as after changed settings made them ask
+    /// for the wrong things: those waiting are not sent, and those under
+    /// way are no longer these, so [`Fetcher::finish`] does not know them.
+    pub fn clear(&mut self) {
+        self.waiting.clear();
+        self.under_way.clear();
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +321,37 @@ mod tests {
         feed.ask_due_with(659, request, |_| panic!("asked before the retry"));
         feed.ask_due_with(660, request, |_| Err("refused".to_owned()));
         assert_eq!(feed.excuse(), "refused");
+    }
+
+    #[test]
+    fn changed_settings_ask_at_once_and_forget_what_no_longer_fits() {
+        let mut feed: Feed<usize> = Feed::new(600, 60);
+        let request = || get("https://a.example/", &[]);
+        let answer = || {
+            Ok(Response {
+                status: 200,
+                body: "four".to_owned(),
+            })
+        };
+        feed.ask_due_with(0, request, |_| Ok(1));
+        assert!(feed.answered(1, answer(), 1, "S", |body| Ok(body.len())));
+        feed.retune(1200, false);
+        assert_eq!(feed.latest(), Some((&4, 1)));
+        feed.ask_due_with(2, request, |_| Ok(2));
+        feed.retune(1200, true);
+        assert_eq!(feed.latest(), None);
+        assert!(!feed.answered(2, answer(), 3, "S", |body| Ok(body.len())));
+        feed.ask_due_with(3, request, |_| Ok(3));
+        assert!(feed.answered(3, answer(), 4, "S", |body| Ok(body.len())));
+        feed.ask_due_with(1202, request, |_| panic!("asked before the new interval"));
+
+        let mut fetcher = Fetcher::new(1);
+        fetcher.queue(request(), 'a');
+        fetcher.queue(request(), 'b');
+        fetcher.pump_with(|_| Ok(7));
+        fetcher.clear();
+        assert!(!fetcher.busy());
+        assert_eq!(fetcher.finish(7), None);
     }
 
     #[test]

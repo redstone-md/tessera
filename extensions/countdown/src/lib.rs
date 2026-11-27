@@ -74,8 +74,9 @@ impl Dates {
     }
 }
 
-impl Extension for Dates {
-    fn start(now: u64) -> Self {
+impl Dates {
+    /// The dates of the settings, with what was seen of them.
+    fn countdown(now: u64) -> Result<Countdown, String> {
         let events = settings::text("events").map_or(Ok(Vec::new()), |text| parse_events(&text));
         let countdown = events.map(|events| {
             let (countdown, changed) = Countdown::new(events, Record::load(), now);
@@ -87,7 +88,19 @@ impl Extension for Dates {
         if let Err(error) = &countdown {
             kit::log(&format!("the setting `events` cannot be read: {error}"));
         }
-        Self { countdown }
+        countdown
+    }
+}
+
+impl Extension for Dates {
+    fn start(now: u64) -> Self {
+        Self {
+            countdown: Self::countdown(now),
+        }
+    }
+
+    fn settings_changed(&mut self, now: u64) {
+        self.countdown = Self::countdown(now);
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

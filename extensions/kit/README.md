@@ -25,7 +25,7 @@ has an answer that does nothing, so an extension writes only what it uses:
 | `activate(widget, action, now)` | a button of `widget` was pressed |
 | `input(widget, event, now)` | a button was pressed, a field typed into or submitted, a slider moved or a toggle flipped; it hands presses on to `activate` unless the extension says otherwise |
 | `fetched(request, outcome, now)` | a request of `fetch` came back |
-| `settings_changed(now)` | the `[extension.<id>]` table of the configuration changed |
+| `settings_changed(now)` | the `[extension.<id>]` table of the configuration changed; Tessera does not start the extension again, so what `start` read of the settings is read again here (`Feed::retune`, `Schedule::retune` and `Fetcher::clear` ask anew at once) |
 | `answer(query, now)` | something was typed into the launcher and the manifest has a `[runner]` table; it has 300 milliseconds |
 | `run_answer(id, now)` | an answer whose action is `AnswerAction::Run` was chosen |
 | `shortcut(id, now)` | the keys of a `[[shortcut]]` of the manifest were pressed |

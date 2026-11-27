@@ -89,19 +89,36 @@ impl Prices {
     }
 }
 
-impl Extension for Prices {
-    fn start(_now: u64) -> Self {
+impl Prices {
+    /// The coins and the currency of the settings.
+    fn query() -> Result<Query, String> {
         let coins = settings::text("coins").unwrap_or_else(|| "bitcoin, ethereum".to_owned());
         let currency = settings::text("currency").unwrap_or_else(|| "usd".to_owned());
         let query = Query::parse(&coins, &currency);
         if let Err(error) = &query {
             kit::log(error);
         }
-        let minutes = settings::number("interval_minutes", 10, 2..=24 * 60);
+        query
+    }
+
+    /// Seconds between questions, as the settings say.
+    fn interval() -> u64 {
+        settings::number("interval_minutes", 10, 2..=24 * 60) * MINUTE
+    }
+}
+
+impl Extension for Prices {
+    fn start(_now: u64) -> Self {
         Self {
-            query,
-            feed: Feed::new(minutes * MINUTE, MINUTE),
+            query: Self::query(),
+            feed: Feed::new(Self::interval(), MINUTE),
         }
+    }
+
+    fn settings_changed(&mut self, _now: u64) {
+        let query = Self::query();
+        self.feed.retune(Self::interval(), query != self.query);
+        self.query = query;
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

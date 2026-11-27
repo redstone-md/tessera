@@ -91,28 +91,47 @@ impl Pomodoro {
     }
 }
 
-impl Extension for Pomodoro {
-    fn start(_now: u64) -> Self {
+impl Pomodoro {
+    /// The lengths and rounds of the settings.
+    fn plan() -> Plan {
         let minutes = |key, default, most| settings::number(key, default, 1..=most) * MINUTE;
-        let offset = settings::text("utc_offset").map_or(0, |text| {
+        Plan {
+            work: minutes("work_minutes", 25, 180),
+            short: minutes("break_minutes", 5, 60),
+            long: minutes("long_break_minutes", 15, 120),
+            rounds: settings::number("rounds", 4, 1..=12),
+            auto_start: settings::flag("auto_start", true),
+        }
+    }
+
+    /// Seconds the user's day is off UTC, as the settings say.
+    fn offset() -> i64 {
+        settings::text("utc_offset").map_or(0, |text| {
             time::parse_offset(&text).unwrap_or_else(|| {
                 kit::log(&format!(
                     "the setting `utc_offset` is not an offset such as +1 or -5:30: `{text}`"
                 ));
                 0
             })
-        });
+        })
+    }
+}
+
+impl Extension for Pomodoro {
+    fn start(_now: u64) -> Self {
         Self {
-            plan: Plan {
-                work: minutes("work_minutes", 25, 180),
-                short: minutes("break_minutes", 5, 60),
-                long: minutes("long_break_minutes", 15, 120),
-                rounds: settings::number("rounds", 4, 1..=12),
-                auto_start: settings::flag("auto_start", true),
-            },
-            offset,
+            plan: Self::plan(),
+            offset: Self::offset(),
             timer: Timer::read(&Record::load()),
         }
+    }
+
+    /// The phase, the round and the time of the timer stay; the time
+    /// passed until now counts by the plan before.
+    fn settings_changed(&mut self, now: u64) {
+        self.catch_up(now);
+        self.plan = Self::plan();
+        self.offset = Self::offset();
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

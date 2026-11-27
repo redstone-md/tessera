@@ -15,6 +15,7 @@ mod model;
 mod view;
 
 use std::cell::RefCell;
+use std::mem;
 
 use model::{Provider, refusal};
 use view::{Prefs, Slot};
@@ -39,8 +40,16 @@ struct App {
     interval: u64,
 }
 
-impl App {
-    fn start() -> Self {
+/// What the settings say: the services to ask, those of the `summary`
+/// widget, and the seconds between questions to a service.
+struct Chosen {
+    enabled: Vec<Provider>,
+    in_summary: Vec<Provider>,
+    interval: u64,
+}
+
+impl Chosen {
+    fn read() -> Self {
         let listed = |key: &str, default: &str| {
             let text = setting(key).unwrap_or_else(|| default.to_owned());
             let (known, unknown) = view::providers(&text);
@@ -60,11 +69,44 @@ impl App {
             .and_then(|text| text.trim().parse().ok())
             .unwrap_or(DEFAULT_INTERVAL_MINUTES);
         Self {
-            slots: enabled.into_iter().map(Slot::new).collect(),
+            enabled,
             in_summary,
-            prefs: Prefs::restore(&load_state()),
             interval: minutes.clamp(1, 24 * 60) * 60,
         }
+    }
+}
+
+impl App {
+    fn start() -> Self {
+        let chosen = Chosen::read();
+        Self {
+            slots: chosen.enabled.into_iter().map(Slot::new).collect(),
+            in_summary: chosen.in_summary,
+            prefs: Prefs::restore(&load_state()),
+            interval: chosen.interval,
+        }
+    }
+
+    /// Takes changed settings. A service still enabled keeps what it
+    /// answered, one no longer enabled is dropped with the answer it
+    /// awaits, and every service is asked again at once, as a key or the
+    /// interval may be what changed.
+    fn configure(&mut self) {
+        let chosen = Chosen::read();
+        let mut slots = mem::take(&mut self.slots);
+        self.slots = { chosen.enabled.into_iter() }
+            .map(
+                |provider| match slots.iter().position(|slot| slot.provider == provider) {
+                    Some(at) => slots.swap_remove(at),
+                    None => Slot::new(provider),
+                },
+            )
+            .collect();
+        for slot in &mut self.slots {
+            slot.asked_at = None;
+        }
+        self.in_summary = chosen.in_summary;
+        self.interval = chosen.interval;
     }
 
     /// Asks every service that is due.
@@ -176,8 +218,7 @@ impl Guest for AiLimits {
     }
 
     fn settings_changed() {
-        // The settings are read once, when the extension starts; a changed
-        // one is used after Tessera starts the extension again.
+        with_app(App::configure);
     }
 
     fn answer(_query: String) -> Vec<Answer> {

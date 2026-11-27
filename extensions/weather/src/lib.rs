@@ -41,6 +41,21 @@ struct App {
 
 impl App {
     fn start() -> Self {
+        let (place, scale, interval) = Self::chosen();
+        Self {
+            place,
+            scale,
+            interval,
+            asked_at: None,
+            pending: None,
+            report: None,
+            error: None,
+        }
+    }
+
+    /// The place, the scale and the seconds between questions the
+    /// settings give.
+    fn chosen() -> (Result<Place, String>, Scale, u64) {
         let scale = match setting("unit") {
             None => Scale::Celsius,
             Some(text) => Scale::named(&text).unwrap_or_else(|| {
@@ -53,18 +68,23 @@ impl App {
         let minutes = setting("interval_minutes")
             .and_then(|text| text.trim().parse().ok())
             .unwrap_or(DEFAULT_INTERVAL_MINUTES);
-        Self {
-            place: Place::of(
-                setting("latitude").as_deref(),
-                setting("longitude").as_deref(),
-            ),
-            scale,
-            interval: minutes.clamp(5, 24 * 60) * 60,
-            asked_at: None,
-            pending: None,
-            report: None,
-            error: None,
+        let place = Place::of(
+            setting("latitude").as_deref(),
+            setting("longitude").as_deref(),
+        );
+        (place, scale, minutes.clamp(5, 24 * 60) * 60)
+    }
+
+    /// Takes changed settings and asks again at once. A new place or
+    /// scale makes the last answer, and the one awaited, about something
+    /// no longer asked, so they are dropped.
+    fn configure(&mut self) {
+        let (place, scale, interval) = Self::chosen();
+        if place != self.place || scale != self.scale {
+            (self.pending, self.report, self.error) = (None, None, None);
         }
+        (self.place, self.scale, self.interval) = (place, scale, interval);
+        self.asked_at = None;
     }
 
     /// Asks for the weather when it is time to.
@@ -273,8 +293,7 @@ impl Guest for Weather {
     }
 
     fn settings_changed() {
-        // The settings are read once, when the extension starts; a changed
-        // one is used after Tessera starts the extension again.
+        with_app(App::configure);
     }
 
     fn answer(_query: String) -> Vec<Answer> {

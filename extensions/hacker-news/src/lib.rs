@@ -147,18 +147,35 @@ impl News {
     }
 }
 
+impl News {
+    /// How many stories the settings ask for.
+    fn count() -> usize {
+        settings::number("count", 6, 1..=15)
+    }
+
+    /// Seconds between questions, as the settings say.
+    fn interval() -> u64 {
+        settings::number("interval_minutes", 15, 5..=24 * 60) * MINUTE
+    }
+}
+
 impl Extension for News {
     fn start(_now: u64) -> Self {
-        let minutes = settings::number("interval_minutes", 15, 5..=24 * 60);
         Self {
-            count: settings::number("count", 6, 1..=15),
-            schedule: Schedule::new(minutes * MINUTE, MINUTE),
+            count: Self::count(),
+            schedule: Schedule::new(Self::interval(), MINUTE),
             fetcher: Fetcher::new(AT_A_TIME),
             stories: Vec::new(),
             came: None,
             incoming: Vec::new(),
             error: None,
         }
+    }
+
+    fn settings_changed(&mut self, _now: u64) {
+        // The stories shown stay until those of the new count come.
+        self.count = Self::count();
+        self.schedule.retune(Self::interval());
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

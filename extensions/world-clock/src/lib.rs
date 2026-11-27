@@ -105,6 +105,11 @@ impl Extension for Clocks {
         }
     }
 
+    /// The clocks keep nothing but what the settings say.
+    fn settings_changed(&mut self, now: u64) {
+        *self = Self::start(now);
+    }
+
     fn render(&mut self, widget: &str, now: u64) -> Ui {
         match widget {
             "clock" => self.bar(now),

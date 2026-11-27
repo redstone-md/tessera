@@ -148,30 +148,65 @@ impl GitHub {
     }
 }
 
-impl Extension for GitHub {
-    fn start(_now: u64) -> Self {
-        let repos = settings::text("repos").map_or_else(
+impl GitHub {
+    /// The names of the repositories of the settings.
+    fn names() -> Result<Vec<String>, String> {
+        let names = settings::text("repos").map_or_else(
             || Err("Name repositories in the setting `repos`, as \"rust-lang/rust\".".to_owned()),
             |text| parse_repos(&text),
         );
-        if let Err(error) = &repos {
+        if let Err(error) = &names {
             kit::log(error);
         }
-        let repos = repos.map(|names| {
+        names
+    }
+
+    /// The repositories `names`, of which nothing is known yet.
+    fn repositories(names: Result<Vec<String>, String>) -> Result<Vec<Repository>, String> {
+        names.map(|names| {
             let repos = names.into_iter().map(|name| Repository {
                 name,
                 stats: None,
                 error: None,
             });
             repos.collect()
-        });
-        let minutes = settings::number("interval_minutes", 30, 10..=24 * 60);
+        })
+    }
+
+    /// Whether the repositories shown are `names`.
+    fn shows(&self, names: &Result<Vec<String>, String>) -> bool {
+        match (&self.repos, names) {
+            (Ok(repos), Ok(names)) => repos.iter().map(|repo| &repo.name).eq(names),
+            (Err(shown), Err(error)) => shown == error,
+            _ => false,
+        }
+    }
+
+    /// Seconds between questions, as the settings say.
+    fn interval() -> u64 {
+        settings::number("interval_minutes", 30, 10..=24 * 60) * MINUTE
+    }
+}
+
+impl Extension for GitHub {
+    fn start(_now: u64) -> Self {
         Self {
-            repos,
+            repos: Self::repositories(Self::names()),
             token: settings::text("token"),
-            schedule: Schedule::new(minutes * MINUTE, 5 * MINUTE),
+            schedule: Schedule::new(Self::interval(), 5 * MINUTE),
             fetcher: Fetcher::new(AT_A_TIME),
         }
+    }
+
+    fn settings_changed(&mut self, _now: u64) {
+        let names = Self::names();
+        if !self.shows(&names) {
+            // The requests under way name repositories by their place.
+            self.fetcher.clear();
+            self.repos = Self::repositories(names);
+        }
+        self.token = settings::text("token");
+        self.schedule.retune(Self::interval());
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

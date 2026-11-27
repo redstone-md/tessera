@@ -72,21 +72,35 @@ impl Breaks {
     }
 }
 
+impl Breaks {
+    /// Reads the lengths of the settings, keeping when the wait began.
+    fn configure(&mut self) {
+        self.reminder.every = settings::number("every_minutes", 20, 5..=240) * MINUTE;
+        self.reminder.snooze = settings::number("snooze_minutes", 5, 1..=60) * MINUTE;
+        self.rest = settings::number("break_seconds", 20, 5..=600);
+    }
+}
+
 impl Extension for Breaks {
     fn start(now: u64) -> Self {
         let saved: Option<u64> = Record::load().get("start");
-        let breaks = Self {
+        let mut breaks = Self {
             reminder: Reminder {
-                every: settings::number("every_minutes", 20, 5..=240) * MINUTE,
-                snooze: settings::number("snooze_minutes", 5, 1..=60) * MINUTE,
+                every: 0,
+                snooze: 0,
                 start: saved.unwrap_or(now).min(now),
             },
-            rest: settings::number("break_seconds", 20, 5..=600),
+            rest: 0,
         };
+        breaks.configure();
         if saved.is_none() {
             breaks.save();
         }
         breaks
+    }
+
+    fn settings_changed(&mut self, _now: u64) {
+        self.configure();
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

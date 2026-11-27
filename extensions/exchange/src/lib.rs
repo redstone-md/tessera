@@ -83,19 +83,36 @@ impl Exchange {
     }
 }
 
-impl Extension for Exchange {
-    fn start(_now: u64) -> Self {
+impl Exchange {
+    /// The base and the currencies of the settings.
+    fn query() -> Result<Query, String> {
         let base = settings::text("base").unwrap_or_else(|| "USD".to_owned());
         let symbols = settings::text("symbols").unwrap_or_else(|| "EUR, GBP, JPY".to_owned());
         let query = Query::parse(&base, &symbols);
         if let Err(error) = &query {
             kit::log(error);
         }
-        let minutes = settings::number("interval_minutes", 60, 30..=24 * 60);
+        query
+    }
+
+    /// Seconds between questions, as the settings say.
+    fn interval() -> u64 {
+        settings::number("interval_minutes", 60, 30..=24 * 60) * MINUTE
+    }
+}
+
+impl Extension for Exchange {
+    fn start(_now: u64) -> Self {
         Self {
-            query,
-            feed: Feed::new(minutes * MINUTE, 5 * MINUTE),
+            query: Self::query(),
+            feed: Feed::new(Self::interval(), 5 * MINUTE),
         }
+    }
+
+    fn settings_changed(&mut self, _now: u64) {
+        let query = Self::query();
+        self.feed.retune(Self::interval(), query != self.query);
+        self.query = query;
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

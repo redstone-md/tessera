@@ -88,6 +88,12 @@ impl Extension for Tracker {
         }
     }
 
+    /// Every mark is saved when it is made, so the habits still named
+    /// keep theirs.
+    fn settings_changed(&mut self, now: u64) {
+        *self = Self::start(now);
+    }
+
     fn render(&mut self, widget: &str, now: u64) -> Ui {
         match widget {
             "today" => self.bar(now),

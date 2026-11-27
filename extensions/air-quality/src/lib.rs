@@ -89,8 +89,9 @@ impl AirQuality {
     }
 }
 
-impl Extension for AirQuality {
-    fn start(_now: u64) -> Self {
+impl AirQuality {
+    /// The place of the settings.
+    fn place() -> Result<Place, String> {
         let place = Place::of(
             settings::text("latitude").as_deref(),
             settings::text("longitude").as_deref(),
@@ -98,11 +99,27 @@ impl Extension for AirQuality {
         if let Err(error) = &place {
             kit::log(error);
         }
-        let minutes = settings::number("interval_minutes", 30, 10..=24 * 60);
+        place
+    }
+
+    /// Seconds between questions, as the settings say.
+    fn interval() -> u64 {
+        settings::number("interval_minutes", 30, 10..=24 * 60) * MINUTE
+    }
+}
+
+impl Extension for AirQuality {
+    fn start(_now: u64) -> Self {
         Self {
-            place,
-            feed: Feed::new(minutes * MINUTE, MINUTE),
+            place: Self::place(),
+            feed: Feed::new(Self::interval(), MINUTE),
         }
+    }
+
+    fn settings_changed(&mut self, _now: u64) {
+        let place = Self::place();
+        self.feed.retune(Self::interval(), place != self.place);
+        self.place = place;
     }
 
     fn render(&mut self, widget: &str, now: u64) -> Ui {

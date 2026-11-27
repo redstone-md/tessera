@@ -102,8 +102,10 @@ pub trait Extension: Sized + 'static {
     /// The outcome of the request `fetch` numbered `request`.
     fn fetched(&mut self, _request: u32, _outcome: Result<Response, String>, _now: u64) {}
 
-    /// The settings of the extension changed; [`settings`] reads the new
-    /// ones.
+    /// The settings of the extension changed while it runs; [`settings`]
+    /// reads the new ones. Tessera does not start the extension again for
+    /// them, so an extension that keeps what it read in `start` reads it
+    /// again here.
     fn settings_changed(&mut self, _now: u64) {}
 
     /// What the extension offers for `query`, typed into the launcher,
