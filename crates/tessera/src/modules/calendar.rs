@@ -27,7 +27,7 @@ use gpui::{
 use crate::calendar_events::{Event, Occurrence, local_times, occurrences, parse};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::modules::clock::{ClockZones, zone_line};
+use crate::modules::clock::ClockZones;
 use crate::motion::Interaction;
 use crate::theme::Theme;
 use crate::ui::{one_line, state_layer};
@@ -508,8 +508,7 @@ impl Render for Calendar {
                     .children(days),
             );
         }
-        let zones: Vec<_> = { ClockZones::named(cx).into_iter() }
-            .filter_map(|zone| zone_line(&zone, language))
+        let zones: Vec<_> = { ClockZones::lines(cx).into_iter() }
             .map(|line| {
                 div()
                     .text_color(theme.colors.on_surface_variant)

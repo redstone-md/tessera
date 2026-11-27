@@ -7,7 +7,11 @@
 //! the pointer rests on it, gives the date and the time in each of those
 //! zones with its offset, and the calendar shows them under the month
 //! ([`ClockZones`]). A zone is named as [`crate::time_zones::find`] takes
-//! it: an IANA identifier, a zone of Windows or a city.
+//! it: an IANA identifier, a zone of Windows or a city. The line of each
+//! zone is written once a minute on the background executor, since
+//! Windows may read the rules of daylight saving time of a year from the
+//! registry to convert a time, and the tip and the calendar show what was
+//! written.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -74,37 +78,39 @@ fn is_valid_format(format: &str) -> bool {
     !StrftimeItems::new(format).any(|item| item == Item::Error)
 }
 
-/// The zones the clocks that are shown name, for the calendar, in the
-/// order they are named; each once. A clock that is gone, as after the
-/// configuration was read again, names none.
+/// The clocks that are shown and name zones, for the calendar. A clock
+/// that is gone, as after the configuration was read again, names none.
 #[derive(Default)]
-pub struct ClockZones(Vec<(WeakEntity<Clock>, Vec<Zone>)>);
+pub struct ClockZones(Vec<WeakEntity<Clock>>);
 
 impl Global for ClockZones {}
 
 impl ClockZones {
-    /// The zones the clocks name.
-    pub fn named(cx: &App) -> Vec<Zone> {
+    /// The lines of the zones the clocks name, as [`zone_line`] writes
+    /// them, in the order they are named; each zone once.
+    pub fn lines(cx: &App) -> Vec<String> {
         let Some(this) = cx.try_global::<Self>() else {
             return Vec::new();
         };
-        let mut named: Vec<Zone> = Vec::new();
-        let shown = { this.0.iter() }.filter(|(clock, _)| clock.upgrade().is_some());
-        for zone in shown.flat_map(|(_, zones)| zones) {
-            if !named.contains(zone) {
-                named.push(zone.clone());
+        let mut named: Vec<&Zone> = Vec::new();
+        let mut lines = Vec::new();
+        let shown: Vec<_> = this.0.iter().filter_map(WeakEntity::upgrade).collect();
+        for clock in &shown {
+            for (zone, line) in &clock.read(cx).lines {
+                if !named.contains(&zone) {
+                    named.push(zone);
+                    lines.push(line.clone());
+                }
             }
         }
-        named
+        lines
     }
 
-    /// Has `clock` name `zones` from now on, while it is shown.
-    fn add(clock: WeakEntity<Clock>, zones: Vec<Zone>, cx: &mut App) {
+    /// Has `clock` name its zones from now on, while it is shown.
+    fn add(clock: WeakEntity<Clock>, cx: &mut App) {
         let this = &mut cx.default_global::<Self>().0;
-        this.retain(|(clock, _)| clock.upgrade().is_some());
-        if !zones.is_empty() {
-            this.push((clock, zones));
-        }
+        this.retain(|clock| clock.upgrade().is_some());
+        this.push(clock);
     }
 }
 
@@ -131,7 +137,9 @@ pub async fn resolve(names: Vec<String>, cx: &mut AsyncApp) -> Vec<Zone> {
 
 /// A zone as the tip and the calendar give it: its city, the time there
 /// and how far it is from universal time, as "Tokyo 22:05 UTC+09:00".
-pub fn zone_line(zone: &Zone, language: Language) -> Option<String> {
+/// Windows is asked for the time, which may read the registry: this runs
+/// off the thread that draws.
+fn zone_line(zone: &Zone, language: Language) -> Option<String> {
     let now = zone.now()?;
     let offset = zone.offset_now().unwrap_or_default();
     Some(format!(
@@ -154,8 +162,9 @@ fn tip_text(now: NaiveDateTime, zones: &[String], language: Language) -> String 
 /// pattern the `format` option gives.
 pub struct Clock {
     format: String,
-    /// The zones its tip gives, once they were found.
-    zones: Vec<Zone>,
+    /// The zones its tip gives, once they were found, each with its line
+    /// as it was last written.
+    lines: Vec<(Zone, String)>,
     /// Where it was last drawn, for its tip.
     drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -164,28 +173,54 @@ impl Clock {
     fn new(format: String, names: Vec<String>, cx: &mut Context<Self>) -> Self {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let zones = resolve(names, cx).await;
-            let taken = this.update(cx, |this, cx| {
-                ClockZones::add(cx.weak_entity(), zones.clone(), cx);
-                this.zones = zones;
-            });
-            if taken.is_err() {
-                return;
+            if !zones.is_empty() {
+                let added = this.update(cx, |_, cx| ClockZones::add(cx.weak_entity(), cx));
+                if added.is_err() {
+                    return;
+                }
             }
             loop {
-                cx.background_executor()
-                    .timer(Self::until_next_minute())
-                    .await;
+                if !zones.is_empty() {
+                    let Ok(language) = this.read_with(cx, |_, cx| Language::of(cx)) else {
+                        break;
+                    };
+                    let lines = Self::write_lines(zones.clone(), language, cx).await;
+                    if this.update(cx, |this, _| this.lines = lines).is_err() {
+                        break;
+                    }
+                }
                 if this.update(cx, |_, cx| cx.notify()).is_err() {
                     break;
                 }
+                cx.background_executor()
+                    .timer(Self::until_next_minute())
+                    .await;
             }
         })
         .detach();
         Self {
             format,
-            zones: Vec::new(),
+            lines: Vec::new(),
             drawn: Rc::default(),
         }
+    }
+
+    /// The line of each of `zones` now, written on the background
+    /// executor; a zone Windows tells no time for is left out.
+    async fn write_lines(
+        zones: Vec<Zone>,
+        language: Language,
+        cx: &AsyncApp,
+    ) -> Vec<(Zone, String)> {
+        let written = cx.background_executor().spawn(async move {
+            { zones.into_iter() }
+                .filter_map(|zone| {
+                    let line = zone_line(&zone, language)?;
+                    Some((zone, line))
+                })
+                .collect()
+        });
+        written.await
     }
 
     /// Time left until the displayed minute changes.
@@ -204,8 +239,8 @@ impl Clock {
             return;
         };
         let language = Language::of(cx);
-        let zones: Vec<String> = { self.zones.iter() }
-            .filter_map(|zone| zone_line(zone, language))
+        let zones: Vec<String> = { self.lines.iter() }
+            .map(|(_, line)| line.clone())
             .collect();
         let text = tip_text(Local::now().naive_local(), &zones, language);
         let middle = drawn.origin.x + drawn.size.width / 2.;

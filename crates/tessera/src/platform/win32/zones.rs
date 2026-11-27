@@ -6,8 +6,9 @@
 //! the rules of daylight saving time Windows keeps for every year.
 //!
 //! The zones are read once, the first time one is asked for, from the
-//! registry (`EnumDynamicTimeZoneInformation`); after that a conversion is
-//! a computation that waits for nothing.
+//! registry (`EnumDynamicTimeZoneInformation`). A conversion may still
+//! read the rules of daylight saving time of its year from the registry,
+//! so it is made off the thread that draws.
 
 #![allow(unsafe_code)]
 
