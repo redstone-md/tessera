@@ -156,6 +156,9 @@ pub enum PopupPlace {
     Surface,
     /// In the middle of the display, over a veil that dims the rest.
     Center,
+    /// Near the top of the display, in the middle of its width, without a
+    /// veil, as KRunner of KDE Plasma stands.
+    Top,
 }
 
 /// A floating panel of widgets that a click on a widget opens.

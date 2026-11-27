@@ -119,6 +119,22 @@ impl PopupAnchor {
     }
 
     /// The frame of a floating window whose panel is `width` by `height`
+    /// logical pixels and stands in the middle of the width of the
+    /// display, a sixth of its height below its top.
+    pub fn near_top(&self, width: f32, height: f32) -> ScreenRect {
+        let middle = self.middle(width, height);
+        let screen = self.screen;
+        let height = middle.bottom - middle.top;
+        let top = (screen.top + (screen.bottom - screen.top) / 6).min(screen.bottom - height);
+        let top = top.max(screen.top);
+        ScreenRect {
+            top,
+            bottom: top + height,
+            ..middle
+        }
+    }
+
+    /// The frame of a floating window whose panel is `width` by `height`
     /// logical pixels: touching the surface, so the panel sits one margin
     /// away from it, centered on the anchor and kept on the display.
     pub fn frame(&self, width: f32, height: f32) -> ScreenRect {
@@ -372,6 +388,7 @@ impl Popups {
         let frame = match config.place {
             PopupPlace::Surface => anchor.frame(config.width, config.height),
             PopupPlace::Center => anchor.middle(config.width, config.height),
+            PopupPlace::Top => anchor.near_top(config.width, config.height),
         };
         let (place, screen) = (config.place, anchor.screen);
         let rough = Bounds {
@@ -390,6 +407,7 @@ impl Popups {
                 let veil = match place {
                     PopupPlace::Surface => None,
                     PopupPlace::Center => Some(Veil::open(screen, native)?),
+                    PopupPlace::Top => None,
                 };
                 native.reveal(true);
                 Ok(veil)
@@ -406,6 +424,7 @@ impl Popups {
             };
             let (content, side) = (built(&config.content), built(&config.side));
             let centered = place == PopupPlace::Center;
+            let centered = centered || place == PopupPlace::Top;
             let mut view = PopupView::new(config.name.clone(), edge, content, window, cx);
             (view.centered, view.veil) = (centered, veil);
             view.side = side;
@@ -601,5 +620,24 @@ mod tests {
         assert_eq!((frame.left, frame.right), (800, 1000));
         let frame = framed(&anchor(ScreenEdge::Top, bar, 3));
         assert_eq!(frame.left, 0);
+    }
+
+    #[test]
+    fn a_popup_near_the_top_stands_in_the_middle_of_the_width() {
+        let bar = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 48,
+        };
+        let frame = anchor(ScreenEdge::Top, bar, 100).near_top(600., 300.);
+        let margin = (MARGIN * 2.).round() as i32;
+        assert_eq!(frame.left + frame.right, 1000);
+        assert_eq!(frame.right - frame.left, 600 + margin);
+        assert_eq!(frame.top, 800 / 6);
+        assert_eq!(frame.bottom - frame.top, 300 + margin);
+        // Where it does not fit below that, it rises.
+        let tall = anchor(ScreenEdge::Top, bar, 100).near_top(600., 760.);
+        assert_eq!(tall.bottom, 800);
     }
 }
