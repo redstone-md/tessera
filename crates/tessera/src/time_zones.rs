@@ -41,7 +41,6 @@ pub fn find(name: &str) -> Option<Zone> {
 
 /// Every zone Windows has, in its order, which is by offset; the zones of
 /// the table where Windows gives none.
-#[allow(dead_code, reason = "for the `time` runner of the launcher")]
 pub fn all() -> Vec<Zone> {
     let system = SystemZone::all();
     if system.is_empty() {
@@ -90,13 +89,6 @@ impl Zone {
     /// The universal time when it is `local` in this zone.
     pub fn utc_of(&self, local: NaiveDateTime) -> Option<NaiveDateTime> {
         SystemZone::named(&self.windows_id)?.utc_of(local)
-    }
-
-    /// The time of day in `to` when it is `local` in this zone.
-    #[allow(dead_code, reason = "for the `time` runner of the launcher")]
-    pub fn convert(&self, local: NaiveDateTime, to: &Zone) -> Option<NaiveDateTime> {
-        let utc = self.utc_of(local)?;
-        to.local_of(utc)
     }
 
     /// What the zone is called beside a time: the city of its IANA

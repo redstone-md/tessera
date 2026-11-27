@@ -8,16 +8,16 @@
 //! the zone of this computer, or a name the shared table of zones knows:
 //! an IANA name, a Windows name or a city.
 //!
-//! The table of zones is `crate::time_zones`, which the clock brings.
-//! Until it is there, the stub below stands in for it with the same
-//! signature and knows only offsets and the local zone, so a city is not
-//! found yet.
+//! The table of zones is `crate::time_zones`, which the clock and the
+//! calendar ask as well. A name it does not know is looked for among the
+//! cities Windows lists beside its zones, as "Osaka" in "(UTC+09:00)
+//! Osaka, Sapporo, Tokyo".
 
 use chrono::{Duration, Local, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
 
 use super::{Answer, AnswerAction, Query, Runner, fill};
 
-use time_zones::Zone;
+use crate::time_zones::{self, Zone};
 
 const ICON_TIME: &str = "\u{e823}";
 
@@ -34,77 +34,6 @@ const BETWEEN: [&str; 4] = ["in", "to", "в", "во"];
 
 /// The names of the zone of this computer.
 const LOCAL: [&str; 4] = ["local", "here", "здесь", "local time"];
-
-/// A stand-in for the table of zones that the clock brings
-/// (`crate::time_zones`), with the same signature. It knows only offsets
-/// from UTC and the zone of this computer.
-#[allow(
-    dead_code,
-    reason = "a stand-in with the signature of the table that replaces it"
-)]
-mod time_zones {
-    use chrono::{Local, NaiveDateTime, Offset, TimeZone};
-
-    /// A zone as the table names it.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct Zone {
-        pub windows_id: String,
-        pub display: String,
-        pub iana: Option<String>,
-    }
-
-    /// What the stand-in calls the zone of this computer.
-    const LOCAL_ID: &str = "Local";
-
-    /// The zone `name` names: here only `UTC+3` and the like, and the
-    /// local zone.
-    pub fn find(name: &str) -> Option<Zone> {
-        if name.eq_ignore_ascii_case(LOCAL_ID) {
-            return Some(Zone {
-                windows_id: LOCAL_ID.to_owned(),
-                display: LOCAL_ID.to_owned(),
-                iana: None,
-            });
-        }
-        let minutes = super::offset_named(name)?;
-        let written = super::offset_written(minutes);
-        Some(Zone {
-            windows_id: written.clone(),
-            display: written,
-            iana: None,
-        })
-    }
-
-    /// Every zone the table knows; the stand-in lists none.
-    pub fn all() -> Vec<Zone> {
-        Vec::new()
-    }
-
-    impl Zone {
-        /// What time it is now in the zone.
-        pub fn now(&self) -> Option<NaiveDateTime> {
-            let now = chrono::Utc::now().naive_utc();
-            let offset = self.offset_minutes(now)?;
-            Some(now + chrono::Duration::minutes(i64::from(offset)))
-        }
-
-        /// How many minutes the zone is ahead of UTC at `at_utc`.
-        pub fn offset_minutes(&self, at_utc: NaiveDateTime) -> Option<i32> {
-            if self.windows_id == LOCAL_ID {
-                let offset = Local.offset_from_utc_datetime(&at_utc).fix();
-                return Some(offset.local_minus_utc() / 60);
-            }
-            super::offset_named(&self.windows_id)
-        }
-
-        /// The time in `to` when it is `local` here.
-        pub fn convert(&self, local: NaiveDateTime, to: &Zone) -> Option<NaiveDateTime> {
-            let guess = local - chrono::Duration::minutes(i64::from(self.offset_minutes(local)?));
-            let utc = local - chrono::Duration::minutes(i64::from(self.offset_minutes(guess)?));
-            Some(utc + chrono::Duration::minutes(i64::from(to.offset_minutes(utc)?)))
-        }
-    }
-}
 
 /// The offset from UTC in minutes that `name` writes, as `UTC+3`,
 /// `utc-5:30`, `GMT+0100` or `UTC`; at most fourteen hours.
@@ -189,7 +118,9 @@ impl Place {
         if LOCAL.iter().any(|local| name.eq_ignore_ascii_case(local)) {
             return Some(Self::Local);
         }
-        time_zones::find(name).map(Self::Zone)
+        time_zones::find(name)
+            .or_else(|| listed_with(name))
+            .map(Self::Zone)
     }
 
     /// How many minutes the zone is ahead of UTC at `at_utc`.
@@ -209,6 +140,9 @@ impl Place {
 
     /// The time in UTC when it is `local` in the zone.
     fn to_utc(&self, local: NaiveDateTime) -> Option<NaiveDateTime> {
+        if let Self::Zone(zone) = self {
+            return zone.utc_of(local);
+        }
         // The offset at the guess is right but within an hour of a change
         // of the clocks, which a second look settles.
         let guess = local - minutes(self.offset_minutes(local)?);
@@ -225,9 +159,19 @@ impl Place {
         match self {
             Self::Offset(minutes) => offset_written(*minutes),
             Self::Local => query.say("Local time").to_owned(),
-            Self::Zone(zone) => zone.display.clone(),
+            Self::Zone(zone) => zone.label(),
         }
     }
+}
+
+/// The zone of Windows whose name lists `name` among its cities, as
+/// "(UTC+09:00) Osaka, Sapporo, Tokyo" lists "osaka".
+fn listed_with(name: &str) -> Option<Zone> {
+    let name = name.to_lowercase();
+    time_zones::all().into_iter().find(|zone| {
+        let cities = zone.display.rsplit(')').next().unwrap_or_default();
+        { cities.split(',') }.any(|city| city.trim().to_lowercase() == name)
+    })
 }
 
 fn minutes(minutes: i32) -> Duration {
@@ -430,10 +374,5 @@ mod tests {
         let utc = from.to_utc(local).unwrap();
         assert_eq!(utc.hour(), 14);
         assert_eq!(to.at(utc).unwrap().hour(), 9);
-        let stub = time_zones::find("UTC+9").unwrap();
-        let tokyo = stub
-            .convert(local, &time_zones::find("UTC").unwrap())
-            .unwrap();
-        assert_eq!(tokyo.hour(), 6);
     }
 }
