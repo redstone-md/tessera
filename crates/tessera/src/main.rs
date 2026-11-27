@@ -28,6 +28,7 @@ mod panel;
 mod platform;
 mod popup;
 mod preview;
+mod rules;
 mod shell;
 mod snap;
 mod surface;
