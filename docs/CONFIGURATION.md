@@ -54,5 +54,55 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## The wallpaper
+
+`[wallpaper]` sets what Tessera shows behind the icons of the desktop; the [features](FEATURES.md) tell what was tried. Without it Tessera shows the wallpaper of Windows, which the desktop window draws, and draws nothing itself.
+
+```toml
+[wallpaper]
+source = "files"        # "files", "windows", "daily" or "color"; without it, from what is given
+images = ["C:/Users/me/Pictures/Wallpapers"]   # files and directories
+images_light = []       # in place of images while Windows is light
+images_dark = ["C:/Users/me/Pictures/Night"]   # ... or dark
+dark_hours = ["19:00", "07:00"]   # dark by the clock instead of by Windows
+interval = 600          # seconds a picture stays, at least 5
+shuffle = false         # pictures and videos in a random order
+fit = "cover"           # cover (fill), contain (fit), stretch, center, tile or span
+color = "#202020"       # around a picture that leaves room, or the wallpaper alone
+gradient = ["#1e3c72", "#2a5298"]   # top to bottom, in place of color
+video = "C:/Users/me/Videos/sea.mp4"
+videos = ["C:/Users/me/Videos/hill.mp4"]   # played after video, one after the other
+pause_on_battery = true # videos stand still on battery
+daily = "bing"          # or "wikimedia": a picture of the day, fetched once a day
+mirror = false          # make the picture the wallpaper of Windows too, put back on exit
+
+[[wallpaper.display]]   # one display, counted from the left; before the table
+number = 2
+images = ["C:/Users/me/Pictures/second.jpg"]
+fit = "center"
+
+[[wallpaper.workspace]] # one workspace, the first being 1; before its display
+number = 3
+video = "C:/Users/me/Videos/focus.mp4"
+```
+
+| Key | What it does |
+| --- | --- |
+| `source` | `files` shows `images` and videos; `windows` the wallpaper of Windows (Tessera draws it only where the desktop window does not); `daily` a picture of the day; `color` the `color` or `gradient` alone. Without it: `files` where pictures or videos are given, else `daily` where `daily` is, else `color` where a color is, else `windows`. |
+| `images`, `images_light`, `images_dark` | Picture files and directories (`.jpg`, `.png`, `.bmp`, `.gif`, `.tif`, `.webp`, and `.heic`, `.avif`, `.jxr` where Windows reads them). The light and dark lists replace `images` while Windows is light or dark, or by `dark_hours`. |
+| `interval`, `shuffle` | How long a picture stays, and whether the order is random. |
+| `fit` | How a picture is fitted: `cover`, `contain`, `stretch`, `center`, `tile`, `span`; `fill` and `fit` are the names Windows gives `cover` and `contain`. |
+| `color`, `gradient` | `#rrggbb`: what a picture leaves free, or the wallpaper alone. |
+| `video`, `videos` | Videos played in turn, again from the first; the pictures are shown where none can be played. |
+| `pause_on_battery` | Videos stand still while the machine runs on its battery. |
+| `daily` | `bing` or `wikimedia`; only then is anything fetched from the network. |
+| `mirror` | The picture is made the wallpaper of Windows too, and the one before is put back as Tessera exits. |
+| `[[wallpaper.display]]`, `[[wallpaper.workspace]]` | `number`, and `images`, `video`, `videos` and `fit` for one display or one workspace; an entry with no pictures or videos shows the wallpaper of Windows there. |
+
+The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `previous`) have every display show the next or the previous picture of its list at once.
+
+`theme = "wallpaper"`, or `seed = "wallpaper"` in a theme file, derives the colors from the wallpaper, as `accent` does from the accent color.

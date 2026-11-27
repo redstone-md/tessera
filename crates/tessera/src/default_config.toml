@@ -514,6 +514,24 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # changed and shows again when Tessera exits. Needs Windows 11 24H2 or
 # later.
 #
+# fit can also be "center" (in its own size in the middle), "tile" (in its
+# own size, repeated) or "span" (one picture over all displays together);
+# "fill" and "fit", the names Windows has, mean "cover" and "contain".
+# color ("#rrggbb") or gradient (two colors, top to bottom) fills what a
+# picture leaves free, or is the wallpaper alone without pictures. Besides
+# .jpg and .png, pictures may be .bmp, .gif, .tif, .webp, and .heic, .avif
+# or .jxr where Windows has the codec. shuffle = true takes the pictures
+# and videos in a random order. images_light and images_dark replace
+# images while Windows is light or dark, or with dark_hours by the clock.
+#
+# source says where the wallpaper comes from: "files" (images and videos),
+# "windows" (the wallpaper of Windows, which Tessera draws only where the
+# desktop window does not), "daily" (a picture of the day, daily = "bing"
+# or "wikimedia", fetched once a day and kept for a week) or "color".
+# Without it, it follows from what is given, and without anything it is
+# "windows". mirror = true makes the picture shown the wallpaper of
+# Windows too, and puts the one before back as Tessera exits.
+#
 # video names a video file that plays there instead, again and again and
 # without its sound; the formats are the ones Windows plays, such as .mp4.
 # The pictures are then shown only where the video cannot be played. A
@@ -526,16 +544,36 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # of images: number says which, the displays being counted from the left
 # (and from the top where two begin equally far left), the first being 1.
 # A display whose entry has no images gets no wallpaper of Tessera and shows
-# the one of Windows. A video still plays on every display.
+# the one of Windows. An entry may have its own video, videos and fit.
+# Each [[wallpaper.workspace]] does the same for a workspace (the first
+# being 1) on whatever display shows it, before the entry of the display.
 #
 # [wallpaper]
 # images = ["C:/Users/me/Pictures/Wallpapers"]
 # interval = 600
 # video = "C:/Users/me/Videos/wallpaper.mp4"
+# videos = ["C:/Users/me/Videos/hill.mp4"]   # played after video, in turn
+# pause_on_battery = true                     # videos stand still on battery
+# fit = "span"
+# color = "#202020"
+# gradient = ["#1e3c72", "#2a5298"]
+# shuffle = true
+# images_dark = ["C:/Users/me/Pictures/Night"]
+# dark_hours = ["19:00", "07:00"]
+# source = "daily"
+# daily = "bing"
+# mirror = true
 #
 # [[wallpaper.display]]
 # number = 2
 # images = ["C:/Users/me/Pictures/second.jpg"]
+#
+# [[wallpaper.workspace]]
+# number = 3
+# images = ["C:/Users/me/Pictures/Focus"]
+#
+# The widget wallpaper, and the action wallpaper (arg "next" or
+# "previous"), show the next or the previous picture at once.
 
 # Each [[card]] is a panel of widgets that lies on the desktop, below every
 # window. corner is top-left, top-right (the default), bottom-left,
