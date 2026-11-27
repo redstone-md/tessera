@@ -25,6 +25,7 @@ use super::model::{
     Order, Selection, Shape, Shown, crumbs, free_name, is_valid_name, read_folder, size_text,
     stamp_of,
 };
+use super::search::{FOUND_MOST, Found, Search, SearchState};
 use super::session::{FolderView, FolderViews};
 use super::{Files, FilesConfig};
 use crate::field::TextField;
@@ -174,6 +175,13 @@ pub struct FolderPane {
     space: Option<(u64, u64)>,
     /// The field a pattern to choose by is written in, while it is.
     pattern: Option<Entity<TextField>>,
+    /// The search that fills the list, at a location of a search, and
+    /// how it went.
+    search: Option<Search>,
+    searched: Option<SearchState>,
+    /// What to choose once the folder was read, as after "Open file
+    /// location".
+    pending: Option<PathBuf>,
     /// How many icons the frame being drawn may still look up, and
     /// whether one was left for the next.
     icons_left: Cell<usize>,
@@ -263,6 +271,9 @@ impl FolderPane {
             wheel: Cell::new(0.),
             space: None,
             pattern: None,
+            search: None,
+            searched: None,
+            pending: None,
             drives: Vec::new(),
             filter,
             address: None,
@@ -296,6 +307,11 @@ impl FolderPane {
             Location::Home => Language::of(cx).say("Quick access").to_owned(),
             Location::Computer => Language::of(cx).say("This PC").to_owned(),
             Location::Folder(path) => title_of(path),
+            Location::Search { root, .. } => format!(
+                "{} {}",
+                Language::of(cx).say("Search results in"),
+                title_of(root)
+            ),
         }
     }
 
@@ -329,9 +345,21 @@ impl FolderPane {
 
     /// Reads the location shown anew, keeping what was chosen.
     pub fn load(&mut self, cx: &mut Context<Self>) {
+        self.search = None;
+        self.searched = None;
         let path = match self.history.current().clone() {
             Location::Folder(path) => path,
             Location::Home => return self.load_home(cx),
+            Location::Search { root, query } => {
+                self.listing = Listing::default();
+                self.problem = None;
+                self.space = None;
+                self.searched = Some(SearchState::Running);
+                let (follow, shown) = (self.config.explorer, self.shown());
+                self.search = Some(Search::start(root, query, follow, shown, cx));
+                self.arrange(cx);
+                return;
+            }
             Location::Computer => {
                 self.listing = Listing::default();
                 self.problem = None;
@@ -371,11 +399,58 @@ impl FolderPane {
                             this.listing = Listing::default();
                         }
                     }
+                    if let Some(pending) = this.pending.take() {
+                        this.selection.clear();
+                        this.selection.chosen.insert(pending);
+                    }
                     this.arrange(cx);
+                    if let Some(line) = { this.selection.chosen.iter().next() }
+                        .and_then(|path| this.listing.position_of(path))
+                        .and_then(|position| this.line_of(position))
+                    {
+                        this.list.scroll_to_reveal_item(line);
+                    }
                 })
                 .ok();
             }),
         );
+    }
+
+    /// Takes what a search found.
+    pub fn found(&mut self, found: Found, cx: &mut Context<Self>) {
+        match found {
+            Found::Some(entries) => self.listing.extend(entries),
+            Found::Done { indexed, capped } => {
+                self.searched = Some(SearchState::Done { indexed, capped });
+            }
+        }
+        self.arrange(cx);
+    }
+
+    /// Searches below the folder shown, or the one searched, for what the
+    /// filter field holds.
+    fn search_below(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.filter.read(cx).text().trim().to_owned();
+        let Some(root) = self.history.current().root().map(Path::to_owned) else {
+            return;
+        };
+        if query.is_empty() {
+            return;
+        }
+        self.go(Location::Search { root, query }, window, cx);
+    }
+
+    /// Shows the folder the chosen result of a search is in, with it
+    /// chosen.
+    fn open_location(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.chosen().into_iter().next() else {
+            return;
+        };
+        let Some(folder) = path.parent().map(Path::to_owned) else {
+            return;
+        };
+        self.go(Location::Folder(folder), window, cx);
+        self.pending = Some(path);
     }
 
     /// Reads Home: the folders of Quick access, as Explorer keeps them,
@@ -859,6 +934,10 @@ impl FolderPane {
                     self.filter.update(cx, |field, cx| field.clear(cx));
                     window.focus(&self.focus);
                 }
+                "enter" if self.filter.read(cx).is_focused(window) => {
+                    // The filter narrows what is shown; Enter searches below.
+                    self.search_below(window, cx);
+                }
                 "enter" | "down" => window.focus(&self.focus),
                 _ => {}
             }
@@ -1215,6 +1294,14 @@ impl FolderPane {
         entries.push(entry(ICON_OPEN, "Open", |this, cx| {
             this.after_menu(cx, |this, window, cx| this.open_chosen(window, cx))
         }));
+        if matches!(
+            self.history.current(),
+            Location::Search { .. } | Location::Home
+        ) {
+            entries.push(entry(ICON_FOLDER, "Open file location", |this, cx| {
+                this.after_menu(cx, |this, window, cx| this.open_location(window, cx))
+            }));
+        }
         let one_folder = matches!(chosen.as_slice(), [path] if path.is_dir());
         if one_folder {
             entries.push(entry(ICON_NEW_TAB, "Open in new tab", |this, cx| {
@@ -1416,7 +1503,7 @@ impl FolderPane {
         } else {
             steps.push(root.into_any_element());
         }
-        if let Location::Folder(path) = self.history.current() {
+        if let Some(path) = self.history.current().root() {
             for (index, (name, target)) in crumbs(path).into_iter().enumerate() {
                 steps.push(
                     div()
@@ -1459,6 +1546,19 @@ impl FolderPane {
             .text_size(theme.typography.label_size)
             .text_color(theme.colors.on_surface)
             .children(steps)
+            .children(match self.history.current() {
+                Location::Search { query, .. } => Some(
+                    div()
+                        .flex_none()
+                        .px(theme.spacing.small)
+                        .text_color(theme.colors.primary)
+                        .child(format!(
+                            "\u{203a}  {} “{query}”",
+                            language.say("Search results")
+                        )),
+                ),
+                _ => None,
+            })
             .child(div().flex_1().h_full())
             .on_click(cx.listener(|this, _, window, cx| this.edit_address(window, cx)))
             .into_any_element()
@@ -1638,7 +1738,10 @@ impl FolderPane {
     /// The columns the details show: those of a folder, or for results
     /// of a search the folder each is in.
     fn columns(&self) -> [Column; 4] {
-        Column::ALL
+        match self.history.current() {
+            Location::Search { .. } => Column::FOUND,
+            _ => Column::ALL,
+        }
     }
 
     /// A cell of a column of the details, `column` wide.
@@ -1737,7 +1840,7 @@ impl FolderPane {
             Column::Kind => entry.kind(),
             Column::Size if entry.folder => String::new(),
             Column::Size => size_text(entry.size),
-            Column::Folder => match (entry.path.parent(), self.history.current().folder()) {
+            Column::Folder => match (entry.path.parent(), self.history.current().root()) {
                 (Some(parent), Some(root)) => match parent.strip_prefix(root) {
                     Ok(inner) if inner.as_os_str().is_empty() => ".".to_owned(),
                     Ok(inner) => inner.display().to_string(),
@@ -1922,6 +2025,23 @@ impl FolderPane {
         let count = self.listing.len();
         let chosen = self.selection.chosen.len();
         let mut text = format!("{count} {}", language.say("items"));
+        match self.searched {
+            Some(SearchState::Running) => {
+                text = format!("{}  ·  {text}", language.say("Searching…"));
+            }
+            Some(SearchState::Done { indexed, capped }) => {
+                let how = match indexed {
+                    true => language.say("found by the Windows Search index"),
+                    false => language.say("found by reading the folders"),
+                };
+                text.push_str(&format!("  ·  {how}"));
+                if capped {
+                    let most = language.say("the first shown");
+                    text.push_str(&format!("  ·  {most} {FOUND_MOST}"));
+                }
+            }
+            None => {}
+        }
         if chosen > 0 {
             let bytes = self.listing.size_of(&self.selection.chosen);
             text.push_str(&format!("  ·  {chosen} {}", language.say("selected")));
@@ -2011,6 +2131,12 @@ impl Render for FolderPane {
             (Location::Computer, _) => self.render_computer(&theme, cx),
             (_, Some(problem)) => {
                 let text = format!("{}: {problem}", language.say("This folder cannot be read"));
+                self.notice(text, &theme, cx)
+            }
+            (Location::Search { .. }, None)
+                if self.listing.is_empty() && self.searched != Some(SearchState::Running) =>
+            {
+                let text = language.say("Nothing was found").to_owned();
                 self.notice(text, &theme, cx)
             }
             (_, None) if self.listing.is_empty() && self.reading.is_none() => {

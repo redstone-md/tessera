@@ -234,7 +234,7 @@ impl FilesView {
                 if pane == self.pane() {
                     self.retitle(window, cx);
                 }
-                let share = pane.read(cx).folder().as_deref().and_then(share_root);
+                let share = pane.read(cx).location().root().and_then(share_root);
                 if let Some(root) = share {
                     self.visited(root, cx);
                 }

@@ -30,6 +30,11 @@ pub enum Location {
     /// The drives of the computer.
     Computer,
     Folder(PathBuf),
+    /// What a search below the folder `root` finds of `query`.
+    Search {
+        root: PathBuf,
+        query: String,
+    },
 }
 
 impl Location {
@@ -44,13 +49,23 @@ impl Location {
                 }
                 _ => Self::Computer,
             }),
+            Self::Search { root, .. } => Some(Self::Folder(root.clone())),
         }
     }
 
     pub fn folder(&self) -> Option<&Path> {
         match self {
-            Self::Home | Self::Computer => None,
+            Self::Home | Self::Computer | Self::Search { .. } => None,
             Self::Folder(path) => Some(path),
+        }
+    }
+
+    /// The folder the location is in: the folder itself, or the one a
+    /// search is below.
+    pub fn root(&self) -> Option<&Path> {
+        match self {
+            Self::Search { root, .. } => Some(root),
+            other => other.folder(),
         }
     }
 
@@ -60,7 +75,7 @@ impl Location {
         match self {
             Self::Home => "home".to_owned(),
             Self::Computer => "computer".to_owned(),
-            Self::Folder(path) => path.display().to_string(),
+            Self::Folder(path) | Self::Search { root: path, .. } => path.display().to_string(),
         }
     }
 }
@@ -251,6 +266,9 @@ pub enum Column {
 impl Column {
     /// The columns of a folder.
     pub const ALL: [Self; 4] = [Self::Name, Self::Modified, Self::Kind, Self::Size];
+    /// The columns of the results of a search, which come from many
+    /// folders.
+    pub const FOUND: [Self; 4] = [Self::Name, Self::Folder, Self::Modified, Self::Size];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -615,6 +633,12 @@ impl Listing {
             shown: Vec::new(),
             groups: Vec::new(),
         }
+    }
+
+    /// Adds `entries` to what the listing holds; it is arranged again
+    /// afterwards.
+    pub fn extend(&mut self, entries: impl IntoIterator<Item = Entry>) {
+        self.entries.extend(entries);
     }
 
     /// Shows what matches the filter of `arrangement`, the hidden files
@@ -1166,6 +1190,20 @@ mod tests {
         assert_eq!(Location::Computer.up(), None);
         let inner = Location::Folder(PathBuf::from("C:\\Users"));
         assert_eq!(inner.up(), Some(drive));
+    }
+
+    #[test]
+    fn up_from_a_search_is_its_folder() {
+        let search = Location::Search {
+            root: PathBuf::from("C:\\Users"),
+            query: "notes".to_owned(),
+        };
+        assert_eq!(
+            search.up(),
+            Some(Location::Folder(PathBuf::from("C:\\Users")))
+        );
+        assert_eq!(search.folder(), None);
+        assert_eq!(search.root(), Some(Path::new("C:\\Users")));
     }
 
     #[test]

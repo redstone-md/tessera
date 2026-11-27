@@ -746,6 +746,17 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Patterns to select, as *.jpg; IMG_????.*",
         "Шаблоны для выделения, например *.jpg; IMG_????.*",
     ),
+    ("Search results in", "Результаты поиска в"),
+    ("Search results", "Результаты поиска"),
+    ("Searching…", "Поиск…"),
+    (
+        "found by the Windows Search index",
+        "найдено по индексу Windows Search",
+    ),
+    ("found by reading the folders", "найдено чтением папок"),
+    ("the first shown", "показаны первые"),
+    ("Open file location", "Расположение файла"),
+    ("Nothing was found", "Ничего не найдено"),
 ];
 
 #[cfg(test)]
