@@ -23,8 +23,7 @@ use gpui::{
 
 use super::model::{
     Arrangement, Column, Entry, GroupLabel, Grouping, History, Line, Listing, Location, Look,
-    Order, Selection, Shape, Shown, crumbs, free_name, is_valid_name, read_folder, size_text,
-    stamp_of,
+    Order, Selection, Shape, Shown, crumbs, is_valid_name, read_folder, size_text, stamp_of,
 };
 use super::rename::{BatchRename, RenameEvent, apply, parent_key};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
@@ -38,12 +37,16 @@ use crate::platform::{
     Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
     QuickAccess, disk_space, recent_files, reveal_in_explorer, show_properties, terminal,
 };
-use crate::platform::{FileDeed, Made, UndoJournal};
+use crate::platform::{FileDeed, UndoJournal};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
 
 use super::sidebar::ICON_HOME;
+
+mod verbs;
+
+use verbs::ShellChoices;
 
 /// Measures of a pane, in logical pixels.
 const HEADER_HEIGHT: f32 = 30.;
@@ -802,28 +805,10 @@ impl FolderPane {
         self.work(work, cx);
     }
 
-    /// Makes a new folder in the folder shown and starts renaming it.
-    pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(folder) = self.folder() else {
-            return;
-        };
-        let base = Language::of(cx).say("New folder");
-        let path = free_name(&folder, base);
-        if let Err(error) = std::fs::create_dir(&path) {
-            report!("{} cannot be made: {error}", path.display());
-            return;
-        }
-        UndoJournal::note(vec![FileDeed::Created {
-            path: path.clone(),
-            made: Made::Folder,
-        }]);
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned());
-        self.load(cx);
-        self.selection.clear();
-        self.selection.chosen.insert(path.clone());
-        self.begin_rename(path, name.unwrap_or_default(), window, cx);
+    /// Makes a new folder in the folder shown, as New > Folder of
+    /// Windows does, and starts renaming it.
+    pub fn new_folder(&mut self, cx: &mut Context<Self>) {
+        self.new_item(None, cx);
     }
 
     /// Starts renaming the file or folder at `path`, called `name`.
@@ -1117,7 +1102,7 @@ impl FolderPane {
             ("v", true, false, false) => self.paste(cx),
             ("z", true, false, false) => self.undo(false, cx),
             ("y", true, false, false) | ("z", true, false, true) => self.undo(true, cx),
-            ("n", true, false, true) => self.new_folder(window, cx),
+            ("n", true, false, true) => self.new_folder(cx),
             ("h", true, false, false) => self.toggle_hidden(cx),
             ("l", true, false, false) | ("d", false, true, false) => self.edit_address(window, cx),
             ("f", true, false, false) | ("e", true, false, false) => {
@@ -1334,7 +1319,7 @@ impl FolderPane {
                 self.selection.click(&self.listing, position, false, false);
             }
             cx.notify();
-            self.open_menu(event.position, window, cx);
+            self.open_menu(event.position, held.shift, window, cx);
             return;
         }
         if event.click_count >= 2 {
@@ -1352,13 +1337,20 @@ impl FolderPane {
         self.selection.clear();
         cx.notify();
         if event.button == MouseButton::Right {
-            self.open_menu(event.position, window, cx);
+            self.open_menu(event.position, event.modifiers.shift, window, cx);
         }
     }
 
     /// Opens the menu of what is chosen, or of the folder shown where
-    /// nothing is, under `position`.
-    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+    /// nothing is, under `position`: Tessera's entries, then what the
+    /// Shell adds, with the verbs shown with Shift where `extended`.
+    fn open_menu(
+        &mut self,
+        position: Point<Pixels>,
+        extended: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let anchor = match PopupAnchor::under(window, position, cx) {
             Ok(anchor) => anchor,
             Err(error) => {
@@ -1367,7 +1359,17 @@ impl FolderPane {
             }
         };
         let entries = self.menu_entries(cx);
-        Menus::open(entries, anchor, cx);
+        let (chosen, folder) = (self.chosen(), self.folder());
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let choices = ShellChoices::read(chosen, folder, extended, cx).await;
+            this.update(cx, |this, cx| {
+                let mut entries = entries;
+                entries.extend(this.shell_entries(choices, anchor, cx));
+                Menus::open(entries, anchor, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The entries of the menu of what is chosen, or of the folder shown
@@ -1387,7 +1389,7 @@ impl FolderPane {
         if chosen.is_empty() {
             if self.folder().is_some() {
                 entries.push(entry(ICON_NEW_FOLDER, "New folder", |this, cx| {
-                    this.after_menu(cx, |this, window, cx| this.new_folder(window, cx))
+                    this.new_folder(cx)
                 }));
                 if FileClipboard::take().is_some() {
                     entries.push(entry(ICON_PASTE, "Paste", |this, cx| this.paste(cx)));

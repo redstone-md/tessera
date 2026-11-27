@@ -978,19 +978,6 @@ pub fn size_text(bytes: u64) -> String {
     }
 }
 
-/// A name in `folder` that nothing there has yet: `base`, or `base (2)`,
-/// `base (3)` and so on.
-pub fn free_name(folder: &Path, base: &str) -> PathBuf {
-    let first = folder.join(base);
-    if !first.exists() {
-        return first;
-    }
-    (2..)
-        .map(|number| folder.join(format!("{base} ({number})")))
-        .find(|path| !path.exists())
-        .unwrap_or(first)
-}
-
 /// Whether `name` can be the name of a file: not empty, no `\ / : * ? " < > |`
 /// in it, and not ending in a dot or a space.
 pub fn is_valid_name(name: &str) -> bool {

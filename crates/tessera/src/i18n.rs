@@ -1364,6 +1364,12 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("In their place", "На своём месте"),
     ("After the others", "После остальных"),
     ("Left out", "Не показывать"),
+    // integration: the verbs of the Shell in the menu of the file manager.
+    ("New", "Новый"),
+    ("Open with", "Открыть с помощью"),
+    ("Choose another app", "Выбрать другое приложение"),
+    ("Send to", "Отправить"),
+    ("Show more options", "Показать дополнительные параметры"),
 ];
 
 #[cfg(test)]

@@ -713,3 +713,10 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "In their place" = "À leur place"
 "After the others" = "Après les autres"
 "Left out" = "Omises"
+
+# integration: the verbs of the Shell in the menu of the file manager.
+"New" = "Nouveau"
+"Open with" = "Ouvrir avec"
+"Choose another app" = "Choisir une autre application"
+"Send to" = "Envoyer vers"
+"Show more options" = "Afficher plus d’options"

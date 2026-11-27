@@ -51,6 +51,7 @@ use windows::Win32::UI::Shell::{
 use windows::core::HSTRING;
 
 use super::execute::expand_environment;
+use super::file_op::Made;
 use super::registry::{Key, Value};
 use super::shell_items::{IconPlace, known_folder};
 
@@ -98,10 +99,6 @@ pub struct NewTemplate {
     command: Option<String>,
 }
 
-#[allow(
-    dead_code,
-    reason = "for the menu New of the file manager and the desktop"
-)]
 impl NewTemplate {
     /// Every kind Windows offers: the folder first, then the shortcut,
     /// then the others by name. What was read in the last minute is given
@@ -122,6 +119,28 @@ impl NewTemplate {
     /// Whether this is the new folder.
     pub fn is_folder(&self) -> bool {
         self.content == Content::Folder
+    }
+
+    /// Whether the command of the kind makes the item, as the wizard of
+    /// a new shortcut does, instead of the template: the item is then for
+    /// the command to name.
+    pub fn made_by_command(&self) -> bool {
+        self.content == Content::Nothing
+    }
+
+    /// What the [`UndoJournal`](super::UndoJournal) can make again of an
+    /// item of this kind once it was taken back: a folder, an empty file
+    /// or a copy of the template file. `None` for a kind whose content is
+    /// written out of the registry or made by its command, which it cannot.
+    pub fn made(&self) -> Option<Made> {
+        match &self.content {
+            Content::Folder => Some(Made::Folder),
+            Content::Empty => Some(Made::File { template: None }),
+            Content::Copy(name) => Some(Made::File {
+                template: Some(name.clone()),
+            }),
+            Content::Bytes(_) | Content::Nothing => None,
+        }
     }
 
     /// The name a new item gets in a folder that holds nothing of that

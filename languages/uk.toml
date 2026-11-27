@@ -713,3 +713,10 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "In their place" = "На своєму місці"
 "After the others" = "Після інших"
 "Left out" = "Не показувати"
+
+# integration: the verbs of the Shell in the menu of the file manager.
+"New" = "Новий"
+"Open with" = "Відкрити за допомогою"
+"Choose another app" = "Вибрати іншу програму"
+"Send to" = "Надіслати"
+"Show more options" = "Показати додаткові параметри"

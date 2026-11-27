@@ -760,7 +760,7 @@ impl FilesView {
             .gap(theme.spacing.tiny)
             .child(
                 tool_button(theme, "files-new", ICON_NEW_FOLDER, folder)
-                    .on_click(on_pane(|pane, window, cx| pane.new_folder(window, cx))),
+                    .on_click(on_pane(|pane, _, cx| pane.new_folder(cx))),
             )
             .child(tool_button(theme, "files-view", look_glyph, true).on_click(
                 move |event: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
