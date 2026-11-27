@@ -32,6 +32,7 @@ mod explorer_view;
 mod file_jobs;
 mod file_op;
 mod files;
+mod focus_guard;
 mod folder_handler;
 mod fonts;
 mod hdr;
@@ -110,6 +111,7 @@ mod wheel_lines;
 mod wic;
 mod wifi;
 mod window_ops;
+mod window_pick;
 mod windows_key;
 mod winlogon;
 mod zones;
@@ -117,6 +119,7 @@ mod zones;
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
 pub use app_commands::AppCommand;
+pub use app_windows::WindowKind;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
 pub use audio::spatial_sound;
 pub use audio::{AppSound, AudioDevice, AudioOutput};
@@ -162,6 +165,7 @@ pub use files::{
     show_properties,
 };
 pub use files::{reveal, reveal_with};
+pub use focus_guard::{FocusGuard, FocusLevel};
 pub use folder_handler::{FilesStart, start_detached};
 pub use folder_handler::{
     FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
@@ -186,6 +190,7 @@ pub use media::SessionKey;
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use media::{Repeat, SessionInfo};
 pub use mouse_buttons::{MouseBinding, MouseButtonName, MouseButtons};
+pub use mouse_hook::HookAsks;
 pub use mouse_hook::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
 pub use move_watch::{MoveEvent, MoveWatch};
 pub use net_drives::{DriveDialog, NetworkDrives};
@@ -260,6 +265,7 @@ pub use wallpaper_server::{WallpaperAnswers, WallpaperRequest, WallpaperServer};
 pub use wheel_lines::wheel_lines;
 pub use wic::decode_with_wic;
 pub use wifi::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
+pub use window_pick::WindowPick;
 pub use windows_key::DesktopClose;
 pub use windows_key::{ChoiceKey, TakenKeys, WindowsKey};
 pub use winlogon::{

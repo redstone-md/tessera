@@ -4,8 +4,14 @@
 //! Presses of the mouse buttons that shortcuts can be bound to: the middle
 //! button and the two side buttons, with keys held or without.
 //!
-//! Only the types and the way to bind are here so far; nothing is reported
-//! until the presses are taken in the mouse hook (mouse_hook.rs).
+//! The presses are taken in the hook of the pointer (mouse_hook.rs), which
+//! runs on a thread of its own: a press of a bound button with exactly the
+//! keys of a binding held is swallowed, its release too, and the binding
+//! is reported by its place in the list. Every other press reaches the
+//! windows as it came, so the side buttons still go back and forward in a
+//! browser unless a binding asks for them without keys held. Windows does
+//! not show the hook presses meant for a program that runs with more
+//! rights than Tessera.
 
 use async_channel::{Receiver, Sender};
 use std::sync::{Mutex, PoisonError};
@@ -14,10 +20,6 @@ use super::Modifiers;
 
 /// A mouse button a shortcut can be bound to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
-    dead_code,
-    reason = "bound by shortcuts-editor, reported by window-rules-editor"
-)]
 pub enum MouseButtonName {
     Middle,
     /// The first side button (`XBUTTON1`).
@@ -28,10 +30,6 @@ pub enum MouseButtonName {
 
 /// A press of a mouse button with the keys held during it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(
-    dead_code,
-    reason = "bound by shortcuts-editor, reported by window-rules-editor"
-)]
 pub struct MouseBinding {
     pub held: Modifiers,
     pub button: MouseButtonName,
@@ -40,22 +38,83 @@ pub struct MouseBinding {
 /// The presses of mouse buttons that shortcuts are bound to.
 pub struct MouseButtons;
 
-/// The sender of the set bound last, kept so that its receiver stays open.
-static BOUND: Mutex<Option<Sender<usize>>> = Mutex::new(None);
+/// The set bound last, and where its presses are reported.
+struct Bound {
+    bindings: Vec<MouseBinding>,
+    sender: Sender<usize>,
+}
 
-#[allow(
-    dead_code,
-    reason = "bound by shortcuts-editor, reported by window-rules-editor"
-)]
+static BOUND: Mutex<Option<Bound>> = Mutex::new(None);
+
+#[allow(dead_code, reason = "bound by shortcuts-editor")]
 impl MouseButtons {
     /// From now on the presses of `bindings` are swallowed and each is
-    /// reported as its index in `bindings`; a new call replaces the set.
-    /// Stub: nothing is reported until window-rules-editor implements it
-    /// in mouse_hook.rs.
+    /// reported as its index in `bindings`; a new call replaces the set,
+    /// and an empty one takes none.
     pub fn bind(bindings: Vec<MouseBinding>) -> Receiver<usize> {
-        drop(bindings);
         let (sender, receiver) = async_channel::unbounded();
-        *BOUND.lock().unwrap_or_else(PoisonError::into_inner) = Some(sender);
+        let any = !bindings.is_empty();
+        *BOUND.lock().unwrap_or_else(PoisonError::into_inner) = Some(Bound { bindings, sender });
+        super::mouse_hook::buttons_bound(any);
         receiver
+    }
+}
+
+/// Which of `bindings` a press of `button` with `held` is.
+fn binding_of(
+    bindings: &[MouseBinding],
+    button: MouseButtonName,
+    held: Modifiers,
+) -> Option<usize> {
+    { bindings.iter() }.position(|binding| binding.button == button && binding.held == held)
+}
+
+/// Whether a press of `button` with `held` is bound, in which case it is
+/// reported; called by the hook, which then swallows it. A press nobody
+/// listens for any longer is not taken.
+pub(super) fn pressed(button: MouseButtonName, held: Modifiers) -> bool {
+    let bound = BOUND.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(bound) = bound.as_ref() else {
+        return false;
+    };
+    let Some(index) = binding_of(&bound.bindings, button, held) else {
+        return false;
+    };
+    bound.sender.try_send(index).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_press_is_bound_only_with_exactly_the_keys_of_its_binding() {
+        let ctrl = Modifiers {
+            control: true,
+            ..Modifiers::default()
+        };
+        let bindings = [
+            MouseBinding {
+                held: ctrl,
+                button: MouseButtonName::Back,
+            },
+            MouseBinding {
+                held: Modifiers::default(),
+                button: MouseButtonName::Middle,
+            },
+        ];
+        assert_eq!(binding_of(&bindings, MouseButtonName::Back, ctrl), Some(0));
+        let bare = Modifiers::default();
+        assert_eq!(binding_of(&bindings, MouseButtonName::Back, bare), None);
+        let more = Modifiers {
+            shift: true,
+            ..ctrl
+        };
+        assert_eq!(binding_of(&bindings, MouseButtonName::Back, more), None);
+        assert_eq!(
+            binding_of(&bindings, MouseButtonName::Middle, bare),
+            Some(1)
+        );
+        assert_eq!(binding_of(&bindings, MouseButtonName::Forward, ctrl), None);
     }
 }
