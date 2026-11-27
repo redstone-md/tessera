@@ -10,9 +10,10 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, DisplayId, Entity, FocusHandle, Global,
+    AnyWindowHandle, App, Bounds, Context, DisplayId, Entity, EntityId, FocusHandle, Global,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent, ParentElement,
     Pixels, Render, Styled, Subscription, WeakEntity, Window, WindowHandle, div, point, px, size,
 };
@@ -25,8 +26,12 @@ use super::{
 };
 use crate::menu::Menus;
 use crate::motion::{Interaction, Spring};
-use crate::platform::{NativeSurface, ScreenEdge, ScreenRect, Tray, TrayButton};
-use crate::popup::{MARGIN, PopupAnchor, floating_panel, open_floating, retire_floating};
+use crate::platform::{
+    NativeSurface, ScreenEdge, ScreenRect, Tray, TrayButton, pointer_at, pointer_held,
+};
+use crate::popup::{
+    MARGIN, PopupAnchor, REOPEN_GUARD, floating_panel, open_floating, retire_floating,
+};
 use crate::theme::Theme;
 use crate::tip::Tips;
 use crate::tray_settings::{Place, TraySettings};
@@ -59,6 +64,8 @@ pub struct Opening {
 #[derive(Default)]
 pub struct TrayOverflow {
     open: Option<(WeakEntity<TrayStrip>, WindowHandle<OverflowView>)>,
+    /// The strip whose overflow closed last, and when.
+    closed: Option<(EntityId, Instant)>,
 }
 
 impl Global for TrayOverflow {}
@@ -112,6 +119,39 @@ impl TrayOverflow {
             // An overflow that has closed by itself is gone, which is fine.
             window.update(cx, |view, _, cx| view.close(cx)).ok();
         }
+    }
+
+    /// Whether the overflow of `strip` closed a moment ago: the click on
+    /// its button that closed it by taking the keyboard from it is not to
+    /// open it again.
+    pub fn closed_lately(strip: &WeakEntity<TrayStrip>, cx: &App) -> bool {
+        let closed = cx.try_global::<Self>().and_then(|this| this.closed);
+        closed.is_some_and(|(of, at)| of == strip.entity_id() && at.elapsed() < REOPEN_GUARD)
+    }
+
+    /// A press of the pointer in the window of the strip `strip` ended;
+    /// `dragged` says whether it dragged an icon. An overflow of that strip
+    /// that stayed open through the press closes after a click, as it
+    /// would have when the press took the keyboard from it. After a drag,
+    /// which may have put an icon into it, it takes the keyboard back, so
+    /// that the next click elsewhere closes it.
+    pub fn press_ended(strip: EntityId, dragged: bool, cx: &mut App) {
+        let open = cx.try_global::<Self>().and_then(|this| this.open.clone());
+        let Some((_, window)) = open.filter(|(of, _)| of.entity_id() == strip) else {
+            return;
+        };
+        window
+            .update(cx, |view, window, cx| {
+                if !std::mem::take(&mut view.held) {
+                    return;
+                }
+                let back =
+                    dragged && NativeSurface::of(window).is_ok_and(|native| native.take_keyboard());
+                if !back {
+                    view.close(cx);
+                }
+            })
+            .ok();
     }
 
     /// Whether the overflow of `strip` is open.
@@ -234,6 +274,10 @@ pub struct OverflowView {
     /// Whether the window has had keyboard focus; before that, not having
     /// it does not mean the user turned away.
     was_active: bool,
+    /// Whether the window lost the keyboard to a press of the pointer on
+    /// the bar of its strip, which may start dragging an icon into it: it
+    /// stays open until the press ends.
+    held: bool,
     focus: FocusHandle,
     /// The icon the keyboard is on, by its place in the grid.
     keyboard: Option<usize>,
@@ -288,8 +332,13 @@ impl OverflowView {
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.was_active = true;
+                this.held = false;
             } else if this.was_active {
-                this.close(cx);
+                let on_bar = pointer_at().is_some_and(|at| contains(this.opening.surface, at));
+                match pointer_held() && on_bar {
+                    true => this.held = true,
+                    false => this.close(cx),
+                }
             }
         });
         let changes = cx.observe(&opening.model, |this, _, cx| this.sync(cx));
@@ -308,6 +357,7 @@ impl OverflowView {
             visibility,
             closing: false,
             was_active: false,
+            held: false,
             focus,
             keyboard: keyboard.then_some(0),
             keyboard_from_strip: keyboard,
@@ -385,7 +435,9 @@ impl OverflowView {
                 .as_ref()
                 .is_some_and(|(_, window)| AnyWindowHandle::from(*window) == ours)
         {
-            cx.global_mut::<TrayOverflow>().open = None;
+            let overflow = cx.global_mut::<TrayOverflow>();
+            overflow.open = None;
+            overflow.closed = Some((self.strip.entity_id(), Instant::now()));
         }
         cx.notify();
     }

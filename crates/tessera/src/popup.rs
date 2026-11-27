@@ -27,7 +27,7 @@ pub const MARGIN: f32 = 12.;
 /// How long after a popup closes a request to open it again is ignored. The
 /// click that asks to close an open popup first takes focus from it, which
 /// closes it; without this the same click would then reopen it.
-const REOPEN_GUARD: Duration = Duration::from_millis(250);
+pub(crate) const REOPEN_GUARD: Duration = Duration::from_millis(250);
 
 /// How dark the veil behind a popup in the middle of the display is.
 const VEIL: f32 = 0.42;

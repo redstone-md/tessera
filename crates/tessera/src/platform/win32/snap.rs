@@ -180,16 +180,18 @@ impl NativeSurface {
     /// went to another program, as it has after a window of that program
     /// was dragged; then a key nothing listens to is pressed from here,
     /// which counts as input to Tessera, and the window is asked for
-    /// again.
-    pub fn take_keyboard(self) {
-        self.activate();
+    /// again. Whether the window is in front afterwards is returned.
+    pub fn take_keyboard(self) -> bool {
         // SAFETY: the call takes no arguments and only reads which window
         // is in front.
-        if unsafe { GetForegroundWindow() } == self.hwnd {
-            return;
+        let in_front = || unsafe { GetForegroundWindow() } == self.hwnd;
+        self.activate();
+        if in_front() {
+            return true;
         }
         super::windows_key::press_unassigned_key();
         self.activate();
+        in_front()
     }
 }
 

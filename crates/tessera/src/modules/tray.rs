@@ -21,8 +21,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Entity, EntityId, FocusHandle,
-    Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, DispatchPhase, Entity, EntityId,
+    FocusHandle, Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
     ParentElement, Pixels, Point, Render, SharedString, Stateful, StatefulInteractiveElement,
     Styled, Subscription, WeakEntity, Window, canvas, div, img, px,
 };
@@ -500,6 +500,24 @@ fn measure(
     canvas(measure, |_, (), _, _| {}).absolute().size_full()
 }
 
+/// A canvas that tells the overflow of the strip `strip` when a press of
+/// the pointer anywhere in the window ends, and whether it dragged an icon.
+/// The window holds the pointer from the press on, so it hears of the end
+/// also past its edges.
+fn press_watch(strip: EntityId) -> impl IntoElement {
+    let listen = move |_: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+            let button = matches!(event.button, MouseButton::Left | MouseButton::Right);
+            if phase == DispatchPhase::Capture && button {
+                // Heard before the drop is, and acted on after it.
+                let dragged = cx.has_active_drag();
+                cx.defer(move |cx| TrayOverflow::press_ended(strip, dragged, cx));
+            }
+        });
+    };
+    canvas(|_, _, _| {}, listen).absolute().size_0()
+}
+
 /// Tells the application of the icon `id` that the keyboard chose it, or
 /// asked for its menu, as `button` says.
 fn press_with_keyboard(
@@ -903,6 +921,9 @@ impl TrayStrip {
         let strip = cx.entity().downgrade();
         if TrayOverflow::is_open_for(&strip, cx) {
             TrayOverflow::close(cx);
+            return;
+        }
+        if TrayOverflow::closed_lately(&strip, cx) {
             return;
         }
         let opening = Opening {
@@ -1326,7 +1347,7 @@ impl Render for TrayStrip {
                 .p(padding)
                 .flex_wrap(),
         };
-        root.children(elements)
+        root.child(press_watch(cx.entity_id())).children(elements)
     }
 }
 
