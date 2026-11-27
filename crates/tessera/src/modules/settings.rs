@@ -868,10 +868,14 @@ fn surface_title(surface: &SurfaceConfig, language: Language) -> String {
     let edge = match surface.edge {
         ScreenEdge::Top => "Top bar",
         ScreenEdge::Bottom => "Bottom bar",
+        ScreenEdge::Left => "Left bar",
+        ScreenEdge::Right => "Right bar",
     };
     let displays = match surface.displays {
         Displays::All => "every display",
         Displays::Primary => "the primary display",
+        Displays::Others => "the other displays",
+        Displays::Chosen(_) => "the chosen displays",
     };
     format!("{} \u{b7} {}", language.say(edge), language.say(displays))
 }

@@ -100,13 +100,179 @@ fn modified(file: &str) -> Option<SystemTime> {
 /// after any of them was written, created or deleted.
 pub type Stamp = [Option<SystemTime>; 2];
 
-/// Which displays a surface appears on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// What a display is called and where it stands, as surfaces choose
+/// displays by it.
+type DisplayName = crate::platform::DisplayName;
+
+/// Which displays a surface appears on: `"all"`, `"primary"`, `"others"`
+/// (every display but the primary one), or the displays a selector or a
+/// list of selectors names, as [`DisplaySelector`] reads them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "DisplaysText")]
 pub enum Displays {
     #[default]
     All,
     Primary,
+    /// Every display but the primary one.
+    Others,
+    /// The displays any of these selectors matches.
+    Chosen(Vec<DisplaySelector>),
+}
+
+impl Displays {
+    /// Whether the surface appears on `display`, which is the primary
+    /// display where `primary` says so. A display whose name is unknown
+    /// is matched by no selector.
+    pub fn includes(&self, display: Option<&DisplayName>, primary: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Primary => primary,
+            Self::Others => !primary,
+            Self::Chosen(selectors) => display
+                .is_some_and(|display| selectors.iter().any(|selector| selector.matches(display))),
+        }
+    }
+}
+
+/// What the configuration says of displays: a name or a selector, or a
+/// list of selectors.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DisplaysText {
+    Name(String),
+    List(Vec<SelectorText>),
+}
+
+/// A selector as the configuration writes it: a position or a text.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SelectorText {
+    Position(i64),
+    Text(String),
+}
+
+impl TryFrom<SelectorText> for DisplaySelector {
+    type Error = String;
+
+    fn try_from(text: SelectorText) -> Result<Self, String> {
+        match text {
+            SelectorText::Position(position) if position >= 1 => {
+                Ok(Self::Position(position as usize))
+            }
+            SelectorText::Position(position) => Err(format!(
+                "displays are counted from 1 from the left, `{position}` is none"
+            )),
+            SelectorText::Text(text) => Self::parse(&text),
+        }
+    }
+}
+
+impl TryFrom<DisplaysText> for Displays {
+    type Error = String;
+
+    fn try_from(text: DisplaysText) -> Result<Self, String> {
+        match text {
+            DisplaysText::Name(name) => match name.as_str() {
+                "all" => Ok(Self::All),
+                "primary" => Ok(Self::Primary),
+                "others" => Ok(Self::Others),
+                _ => Ok(Self::Chosen(vec![DisplaySelector::parse(&name)?])),
+            },
+            DisplaysText::List(list) => {
+                let selectors = list.into_iter().map(DisplaySelector::try_from);
+                Ok(Self::Chosen(selectors.collect::<Result<_, _>>()?))
+            }
+        }
+    }
+}
+
+/// Names one display or several: by where it stands from left to right,
+/// the first being 1; by the name GDI gives its output, as `\\.\DISPLAY2`;
+/// or by the name the monitor gives itself, as the display settings of
+/// Windows show it, where `*` stands for any text and `?` for any one
+/// character. Names are compared without regard to case.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DisplaySelector {
+    Position(usize),
+    Device(String),
+    Name(String),
+}
+
+/// How the name GDI gives an output begins.
+const DEVICE_PREFIX: &str = r"\\.\";
+
+impl DisplaySelector {
+    /// Reads a selector written as text: digits are a position, a text
+    /// that begins as `\\.\` an output, and anything else a name.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(
+                "a display is named by its position, output or name, not by nothing".into(),
+            );
+        }
+        if text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return match text.parse::<usize>() {
+                Ok(position) if position >= 1 => Ok(Self::Position(position)),
+                _ => Err(format!(
+                    "displays are counted from 1 from the left, `{text}` is none"
+                )),
+            };
+        }
+        if text.starts_with(DEVICE_PREFIX) {
+            return Ok(Self::Device(text.to_owned()));
+        }
+        Ok(Self::Name(text.to_owned()))
+    }
+
+    /// Whether the selector names `display`.
+    pub fn matches(&self, display: &DisplayName) -> bool {
+        match self {
+            Self::Position(position) => display.position == *position,
+            Self::Device(device) => device.eq_ignore_ascii_case(&display.device),
+            Self::Name(pattern) => wildcard_matches(pattern, &display.friendly),
+        }
+    }
+
+    /// The selector as the configuration writes it.
+    pub fn text(&self) -> String {
+        match self {
+            Self::Position(position) => position.to_string(),
+            Self::Device(text) | Self::Name(text) => text.clone(),
+        }
+    }
+}
+
+/// Whether `text` is what `pattern` describes, without regard to case:
+/// `*` stands for any text, also none, and `?` for any one character.
+fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
+    let text: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
+    let (mut at, mut from) = (0, 0);
+    // Where the last `*` was, and where in the text it began to stand.
+    let mut star: Option<(usize, usize)> = None;
+    while from < text.len() {
+        match pattern.get(at) {
+            Some('*') => {
+                star = Some((at, from));
+                at += 1;
+            }
+            Some(&wanted) if wanted == '?' || wanted == text[from] => {
+                at += 1;
+                from += 1;
+            }
+            _ => match star {
+                // The `*` stands for one character more.
+                Some((star_at, star_from)) => {
+                    at = star_at + 1;
+                    from = star_from + 1;
+                    star = Some((star_at, star_from + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[at..].iter().all(|&left| left == '*')
 }
 
 /// A widget to place: its name, the popup a click on it opens, and the
@@ -245,9 +411,21 @@ pub enum Hiding {
 }
 
 impl Hiding {
+    /// Every way, in the order the menus offer them.
+    pub const ALL: [Self; 3] = [Self::Never, Self::Pointer, Self::Overlap];
+
     /// Whether the surface ever goes away.
     pub fn hides(self) -> bool {
         self != Self::Never
+    }
+
+    /// What the settings and the menus call it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Never => "Always shown",
+            Self::Pointer => "Hides by itself",
+            Self::Overlap => "Hides under windows",
+        }
     }
 }
 
@@ -274,6 +452,73 @@ impl TryFrom<HidingName> for Hiding {
     }
 }
 
+/// Where along its edge a surface shorter than the edge stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpanAlign {
+    /// At the top or the left end.
+    Start,
+    #[default]
+    Center,
+    /// At the bottom or the right end.
+    End,
+}
+
+impl SpanAlign {
+    /// Every place, in the order the menus offer them.
+    pub const ALL: [Self; 3] = [Self::Start, Self::Center, Self::End];
+
+    /// What the configuration file calls it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Center => "center",
+            Self::End => "end",
+        }
+    }
+}
+
+/// When the background of a surface turns opaque.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SolidWhen {
+    /// While a maximized window touches the surface on its display.
+    Maximized,
+}
+
+/// How long the pointer is elsewhere before a surface that hides goes, in
+/// milliseconds, where the configuration does not say; it comes back as
+/// soon as the pointer reaches its edge unless `show_delay` says.
+const HIDE_DELAY: u64 = 700;
+
+/// The longest either may be.
+const LONGEST_DELAY: u64 = 10_000;
+
+/// The least and the most of the background a surface shows.
+pub const OPACITY_RANGE: (f32, f32) = (0.3, 1.);
+
+/// The least and the most of the length of its edge a surface takes.
+pub const LENGTH_RANGE: (f32, f32) = (0.2, 1.);
+
+fn hide_delay() -> u64 {
+    HIDE_DELAY
+}
+
+fn whole_length() -> f32 {
+    LENGTH_RANGE.1
+}
+
+/// What a surface has instead on the displays a selector names.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceOverride {
+    pub thickness: Option<f32>,
+    pub hide: Option<Hiding>,
+    pub start: Option<Vec<WidgetSpec>>,
+    pub center: Option<Vec<WidgetSpec>>,
+    pub end: Option<Vec<WidgetSpec>>,
+}
+
 /// One strip docked to a screen edge, and the widgets in its slots.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,6 +537,35 @@ pub struct SurfaceConfig {
     pub center: Vec<WidgetSpec>,
     #[serde(default)]
     pub end: Vec<WidgetSpec>,
+    /// How long, in milliseconds, the pointer rests at the edge before a
+    /// strip that hides comes back.
+    #[serde(default)]
+    pub show_delay: u64,
+    /// How long, in milliseconds, the pointer is elsewhere before a strip
+    /// that hides goes.
+    #[serde(default = "hide_delay")]
+    pub hide_delay: u64,
+    /// How much of the background of the strip is drawn, from 0.3 to 1;
+    /// none where it is not given, and the widgets stand on what is under
+    /// the strip.
+    pub opacity: Option<f32>,
+    /// The share of the length of its edge the strip takes, from 0.2 to 1.
+    #[serde(default = "whole_length")]
+    pub length: f32,
+    /// Where a strip shorter than its edge stands along it.
+    #[serde(default)]
+    pub align: SpanAlign,
+    /// Whether the widgets have fields of their own behind them, as the
+    /// theme says where this does not.
+    pub floating: Option<bool>,
+    /// When the background turns opaque.
+    pub solid_when: Option<SolidWhen>,
+    /// What the strip has instead on the displays each selector names, by
+    /// selector. Where several name a display, each is applied in turn, in
+    /// the order of their selectors as text, so the last says what it
+    /// gives.
+    #[serde(default)]
+    pub per_display: std::collections::BTreeMap<String, SurfaceOverride>,
 }
 
 impl SurfaceConfig {
@@ -299,6 +573,81 @@ impl SurfaceConfig {
     fn widgets(&self) -> impl Iterator<Item = &WidgetSpec> {
         let slots = [&self.start, &self.center, &self.end];
         slots.into_iter().flatten()
+    }
+
+    /// The surface as it is on `display`, with what the overrides that
+    /// name the display give, and for each slot whether an override
+    /// replaced it. The overrides are taken out of what is returned. An
+    /// override whose selector cannot be read is reported and skipped.
+    pub fn on_display(&self, display: Option<&DisplayName>) -> (Self, [bool; 3]) {
+        let mut placed = Self {
+            per_display: std::collections::BTreeMap::new(),
+            ..self.clone()
+        };
+        let mut replaced = [false; 3];
+        for (selector, change) in &self.per_display {
+            let selector = match DisplaySelector::parse(selector) {
+                Ok(selector) => selector,
+                Err(error) => {
+                    report!("`per_display.\"{selector}\"` of a surface is skipped: {error}");
+                    continue;
+                }
+            };
+            if !display.is_some_and(|display| selector.matches(display)) {
+                continue;
+            }
+            if let Some(thickness) = change.thickness {
+                placed.thickness = thickness;
+            }
+            if let Some(hide) = change.hide {
+                placed.hide = hide;
+            }
+            let slots = [&mut placed.start, &mut placed.center, &mut placed.end];
+            let given = [&change.start, &change.center, &change.end];
+            for (index, (slot, given)) in slots.into_iter().zip(given).enumerate() {
+                if let Some(widgets) = given {
+                    *slot = widgets.clone();
+                    replaced[index] = true;
+                }
+            }
+        }
+        (placed, replaced)
+    }
+
+    /// The part of its edge the strip takes.
+    pub fn span(&self) -> crate::platform::EdgeSpan {
+        let (least, most) = LENGTH_RANGE;
+        if !self.length.is_finite() || self.length >= most {
+            return crate::platform::EdgeSpan::WHOLE;
+        }
+        let length = self.length.max(least);
+        let from = match self.align {
+            SpanAlign::Start => 0.,
+            SpanAlign::Center => (1. - length) / 2.,
+            SpanAlign::End => 1. - length,
+        };
+        crate::platform::EdgeSpan {
+            from,
+            to: from + length,
+        }
+    }
+
+    /// How much of the background is drawn, within its range; `None` for
+    /// none.
+    pub fn opacity(&self) -> Option<f32> {
+        let (least, most) = OPACITY_RANGE;
+        let opacity = self.opacity.filter(|opacity| opacity.is_finite())?;
+        Some(opacity.clamp(least, most))
+    }
+
+    /// How long the pointer rests at the edge before the strip comes back.
+    pub fn show_after(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.show_delay.min(LONGEST_DELAY))
+    }
+
+    /// How long the pointer is elsewhere before the strip goes.
+    pub fn hide_after(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.hide_delay.min(LONGEST_DELAY))
     }
 }
 
@@ -565,6 +914,147 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected() {
         let text = "[[surface]]\nedge = \"top\"\nthickness = 40\ncentre = [\"clock\"]\n";
+        assert!(toml::from_str::<Config>(text).is_err());
+    }
+
+    // surfaces-edges: displays, overrides and looks of surfaces.
+
+    fn display(device: &str, friendly: &str, position: usize, primary: bool) -> DisplayName {
+        DisplayName {
+            device: device.to_owned(),
+            friendly: friendly.to_owned(),
+            position,
+            primary,
+        }
+    }
+
+    fn surface(text: &str) -> SurfaceConfig {
+        #[derive(Deserialize)]
+        struct File {
+            surface: Vec<SurfaceConfig>,
+        }
+        let file: File = toml::from_str(text).expect("a valid surface");
+        file.surface.into_iter().next().expect("one surface")
+    }
+
+    #[test]
+    fn a_selector_names_a_display_by_position_output_or_name() {
+        let dell = display(r"\\.\DISPLAY2", "DELL U2720Q", 2, false);
+        let parse = |text: &str| DisplaySelector::parse(text).unwrap();
+        assert_eq!(parse("2"), DisplaySelector::Position(2));
+        assert!(parse("2").matches(&dell));
+        assert!(!parse("1").matches(&dell));
+        assert!(parse(r"\\.\display2").matches(&dell));
+        assert!(!parse(r"\\.\DISPLAY1").matches(&dell));
+        assert!(parse("dell*").matches(&dell));
+        assert!(parse("DELL U27?0Q").matches(&dell));
+        assert!(parse("*2720*").matches(&dell));
+        assert!(!parse("DELL").matches(&dell));
+        assert!(parse("DELL U2720Q").matches(&dell));
+        assert!(DisplaySelector::parse("0").is_err());
+        assert!(DisplaySelector::parse(" ").is_err());
+        assert_eq!(parse(r"\\.\DISPLAY3").text(), r"\\.\DISPLAY3");
+        assert_eq!(parse("4").text(), "4");
+    }
+
+    #[test]
+    fn wildcards_stand_for_any_text_or_one_character() {
+        assert!(wildcard_matches("*", ""));
+        assert!(wildcard_matches("a*b*c", "aXXbYYc"));
+        assert!(wildcard_matches("a*c", "abcbc"));
+        assert!(!wildcard_matches("a*c", "abcb"));
+        assert!(wildcard_matches("??", "ab"));
+        assert!(!wildcard_matches("??", "abc"));
+        assert!(wildcard_matches("ÄB*", "äbc"));
+    }
+
+    #[test]
+    fn displays_are_all_the_primary_the_others_or_those_named() {
+        let read = |text: &str| {
+            surface(&format!(
+                "[[surface]]\nedge = \"top\"\nthickness = 40\ndisplays = {text}\n"
+            ))
+            .displays
+        };
+        assert_eq!(read("\"all\""), Displays::All);
+        assert_eq!(read("\"primary\""), Displays::Primary);
+        assert_eq!(read("\"others\""), Displays::Others);
+        assert_eq!(
+            read("[1, \"LG*\", '\\\\.\\DISPLAY3']"),
+            Displays::Chosen(vec![
+                DisplaySelector::Position(1),
+                DisplaySelector::Name("LG*".into()),
+                DisplaySelector::Device(r"\\.\DISPLAY3".into()),
+            ])
+        );
+        assert_eq!(
+            read("\"DELL*\""),
+            Displays::Chosen(vec![DisplaySelector::Name("DELL*".into())])
+        );
+        let text = "[[surface]]\nedge = \"top\"\nthickness = 40\ndisplays = [0]\n";
+        assert!(toml::from_str::<Config>(text).is_err());
+
+        let main = display(r"\\.\DISPLAY1", "Built-in", 1, true);
+        let side = display(r"\\.\DISPLAY2", "LG HDR", 2, false);
+        let others = Displays::Others;
+        assert!(!others.includes(Some(&main), true));
+        assert!(others.includes(Some(&side), false));
+        assert!(Displays::Primary.includes(None, true));
+        assert!(Displays::All.includes(None, false));
+        let chosen = read("[\"LG*\"]");
+        assert!(chosen.includes(Some(&side), false));
+        assert!(!chosen.includes(Some(&main), true));
+        assert!(!chosen.includes(None, false));
+    }
+
+    #[test]
+    fn an_override_replaces_what_it_gives_on_the_displays_it_names() {
+        let bar = surface(
+            "[[surface]]\nedge = \"left\"\nthickness = 40\nstart = [\"clock\"]\nend = [\"tray\"]\n\
+             [surface.per_display.\"2\"]\nthickness = 56\nend = []\n\
+             [surface.per_display.\"LG*\"]\nhide = \"overlap\"\nthickness = 60\n\
+             [surface.per_display.\"Other\"]\nhide = true\n",
+        );
+        assert_eq!(bar.edge, ScreenEdge::Left);
+        let main = display(r"\\.\DISPLAY1", "Built-in", 1, true);
+        let (placed, replaced) = bar.on_display(Some(&main));
+        assert_eq!((placed.thickness, placed.hide), (40., Hiding::Never));
+        assert_eq!(replaced, [false; 3]);
+        assert!(placed.per_display.is_empty());
+
+        let side = display(r"\\.\DISPLAY2", "LG HDR", 2, false);
+        let (placed, replaced) = bar.on_display(Some(&side));
+        // "2" comes before "LG*" as text, so the second gives the thickness.
+        assert_eq!((placed.thickness, placed.hide), (60., Hiding::Overlap));
+        assert_eq!(replaced, [false, false, true]);
+        assert!(placed.end.is_empty());
+        assert_eq!(placed.start.len(), 1);
+        let (placed, _) = bar.on_display(None);
+        assert_eq!(placed.thickness, 40.);
+    }
+
+    #[test]
+    fn a_surface_takes_a_part_of_its_edge_and_its_looks_are_kept_in_range() {
+        use std::time::Duration;
+        let bar = surface("[[surface]]\nedge = \"right\"\nthickness = 40\n");
+        assert!(bar.span().is_whole());
+        assert_eq!(bar.opacity(), None);
+        assert_eq!(bar.show_after(), Duration::ZERO);
+        assert_eq!(bar.hide_after(), Duration::from_millis(HIDE_DELAY));
+        let bar = surface(
+            "[[surface]]\nedge = \"bottom\"\nthickness = 40\nlength = 0.5\nalign = \"end\"\nopacity = 0.1\nfloating = false\nsolid_when = \"maximized\"\nshow_delay = 250\nhide_delay = 99999\n",
+        );
+        let span = bar.span();
+        assert_eq!((span.from, span.to), (0.5, 1.));
+        assert_eq!(bar.opacity(), Some(OPACITY_RANGE.0));
+        assert_eq!(bar.floating, Some(false));
+        assert_eq!(bar.solid_when, Some(SolidWhen::Maximized));
+        assert_eq!(bar.show_after(), Duration::from_millis(250));
+        assert_eq!(bar.hide_after(), Duration::from_millis(LONGEST_DELAY));
+        let centered = surface("[[surface]]\nedge = \"top\"\nthickness = 40\nlength = 0.05\n");
+        let span = centered.span();
+        assert!((span.from - 0.4).abs() < 1e-6 && (span.to - 0.6).abs() < 1e-6);
+        let text = "[[surface]]\nedge = \"top\"\nthickness = 40\nalign = \"middle\"\n";
         assert!(toml::from_str::<Config>(text).is_err());
     }
 }
