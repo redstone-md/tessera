@@ -10,8 +10,9 @@ use anyhow::bail;
 use gpui::{Global, Hsla, Pixels, px, rgb};
 use serde::Deserialize;
 
-use crate::config::{read_user_file, theme_file};
+use crate::config::{Config, read_user_file, theme_file};
 use crate::motion::SpringSpec;
+use crate::options::{Kind, OptionDecl, OptionSet, UNSET, text_of};
 use crate::platform::{accent_color, light_mode};
 use crate::wallpaper::wallpaper_color;
 
@@ -30,6 +31,90 @@ const ACCENT_SEED: &str = "accent";
 /// what a theme file writes as its seed for that.
 pub const WALLPAPER_THEME: &str = "wallpaper";
 const WALLPAPER_SEED: &str = "wallpaper";
+
+/// The name the settings of the built-in theme are kept under in
+/// `[theme_options]`, where no theme file is named.
+pub const BUILTIN_THEME: &str = "builtin";
+
+/// What the built-in theme and the themes of the colors of Windows and of
+/// the wallpaper declare can be set. The latter two leave out the accent
+/// color, which Windows gives them.
+const BUILTIN_SETTINGS: &str = r##"
+[[setting]]
+key = "accent"
+kind = "color"
+label = "Accent color"
+description = "Every color is derived from it."
+optional = true
+unset_label = "Built-in"
+affects = ["seed"]
+
+[[setting]]
+key = "scheme"
+kind = "choice"
+label = "Scheme"
+affects = ["scheme"]
+choices = [
+    { value = "unset", label = "Default" },
+    { value = "dark", label = "Dark" },
+    { value = "light", label = "Light" },
+    { value = "system", label = "As Windows" },
+]
+
+[[setting]]
+key = "corners"
+kind = "slider"
+label = "Corner roundness"
+description = "Multiplies the radii of the corners; fully round ones stay round."
+min = 0
+max = 2
+step = 0.1
+default = 1.0
+unit = "×"
+scale = ["shape.small", "shape.medium", "shape.large"]
+
+[[setting]]
+key = "density"
+kind = "choice"
+label = "Density"
+choices = [
+    { value = "unset", label = "Default" },
+    { value = "compact", label = "Compact", overlay = { spacing = { tiny = 3, small = 6, medium = 12 } } },
+    { value = "comfortable", label = "Comfortable", overlay = { spacing = { tiny = 5, small = 10, medium = 20 } } },
+]
+
+[[setting]]
+key = "font"
+kind = "font"
+label = "Font"
+optional = true
+unset_label = "Default"
+affects = ["typography.family"]
+
+[[setting]]
+key = "bar_height"
+kind = "number"
+label = "Height of the bar fields"
+min = 24
+max = 64
+step = 2
+unit = "px"
+optional = true
+unset_label = "Default"
+affects = ["bar.pill_height"]
+
+[[setting]]
+key = "dock_size"
+kind = "slider"
+label = "Dock size"
+description = "Multiplies the height of the dock, its buttons and their icons."
+min = 0.6
+max = 1.6
+step = 0.05
+default = 1.0
+unit = "×"
+scale = ["dock.container_height", "dock.item_size", "dock.icon_size"]
+"##;
 
 /// The longest length a theme file may set, in pixels. The built-in radius
 /// of fully rounded corners is just below it.
@@ -299,24 +384,33 @@ impl Theme {
         }
     }
 
-    /// Whether `text` is a theme file. What of it is out of range is not
-    /// looked at: that is reported when the theme is applied.
+    /// Whether `text` is a theme file whose settings can be used. What of
+    /// it is out of range is not looked at: that is reported when the theme
+    /// is applied.
     pub fn check(text: &str) -> anyhow::Result<()> {
-        toml::from_str::<ThemeFile>(text)?;
+        let file = toml::from_str::<ThemeFile>(text)?;
+        if let Some(problem) = file.declared().1.into_iter().next() {
+            bail!("{problem}");
+        }
         Ok(())
     }
 
-    /// The built-in theme with the user's theme file `name` applied over it.
-    /// A missing or unusable file is reported and leaves the built-in theme.
-    /// With `legible`, colors that are read are then moved away from what
-    /// they lie on until they have the contrast WCAG 2.1 asks for.
-    pub fn load(name: Option<&str>, legible: bool) -> Self {
-        let mut theme = Self::named(name);
-        if legible {
-            theme.colors.make_legible();
+    /// The theme `config` asks for: the built-in theme, the theme it names
+    /// over it, and each theme stacked over that in turn, each with the
+    /// values its settings are given. With `contrast`, colors that are
+    /// read are then moved away from what they lie on until they have the
+    /// contrast WCAG 2.1 asks for. A theme that cannot be used is
+    /// reported and left out.
+    pub fn from_config(config: &Config) -> Self {
+        let base = config.theme.as_deref().unwrap_or(BUILTIN_THEME);
+        let layers = config.theme_layers.iter().map(String::as_str);
+        let mut merge = Merge::default();
+        for name in std::iter::once(base).chain(layers) {
+            if let Some(file) = source(name) {
+                merge.layer(name, &file, config.theme_options.get(name));
+            }
         }
-        theme.legible = legible;
-        theme
+        merge.finish(config.contrast)
     }
 
     /// Whether the widgets of a bar lie on the desktop and are to be read
@@ -330,38 +424,6 @@ impl Theme {
     pub fn is_read_on(&self, ground: &Ground, from: f32, to: f32) -> bool {
         let contents = [self.colors.on_surface, self.colors.on_surface_variant];
         ground.carries(&contents, from, to, contrast::TEXT)
-    }
-
-    fn named(name: Option<&str>) -> Self {
-        let mut theme = Self::default();
-        let Some(name) = name else {
-            return theme;
-        };
-        if name == ACCENT_THEME {
-            theme.derive(Some(ACCENT_SEED), Scheme::System, name);
-            return theme;
-        }
-        if name == WALLPAPER_THEME {
-            theme.derive(Some(WALLPAPER_SEED), Scheme::System, name);
-            return theme;
-        }
-        if name.contains(['/', '\\', ':']) || name.starts_with('.') {
-            report!("`{name}` is not a theme name, the built-in theme is used");
-            return theme;
-        }
-        match read_user_file::<ThemeFile>(&theme_file(name)) {
-            Some(file) => {
-                theme.derive(file.seed.as_deref(), file.scheme, name);
-                if let Err(error) = file.colors.apply_to(&mut theme.colors) {
-                    report!("theme `{name}` is only partly applied: {error:#}");
-                }
-                for problem in file.apply_measures_to(&mut theme) {
-                    report!("theme `{name}`: {problem}, which is left as it was");
-                }
-            }
-            None => report!("theme `{name}` is not loaded, the built-in theme is used"),
-        }
-        theme
     }
 
     /// Derives the colors of the theme `name` from `seed`, a color or
@@ -433,6 +495,245 @@ impl Theme {
     }
 }
 
+/// The settings the theme `name` declares, and what is wrong with those
+/// that cannot be used; `None` where there is no such theme. The built-in
+/// theme is [`BUILTIN_THEME`]. It reads a file, so it is not to be called
+/// on the thread that draws.
+pub fn declared_settings(name: &str) -> Option<(OptionSet, Vec<String>)> {
+    source(name).map(|file| file.declared())
+}
+
+/// What the theme `name` is made of: the built-in theme and the themes of
+/// the colors of Windows and of the wallpaper are made here, any other is
+/// read from its file. One that cannot be read is reported and `None`.
+fn source(name: &str) -> Option<ThemeFile> {
+    match name {
+        BUILTIN_THEME => return Some(ThemeFile::builtin(None)),
+        ACCENT_THEME => return Some(ThemeFile::builtin(Some(ACCENT_SEED))),
+        WALLPAPER_THEME => return Some(ThemeFile::builtin(Some(WALLPAPER_SEED))),
+        _ => {}
+    }
+    if name.contains(['/', '\\', ':']) || name.starts_with('.') {
+        report!("`{name}` is not a theme name, it is left out");
+        return None;
+    }
+    let file = read_user_file::<ThemeFile>(&theme_file(name));
+    if file.is_none() {
+        report!("theme `{name}` is not loaded, it is left out");
+    }
+    file
+}
+
+/// What a group of tokens is called in the settings: what a setting of a
+/// theme that changes the token at `path` is said to affect.
+pub fn token_group(path: &str) -> &'static str {
+    match path.split('.').next().unwrap_or_default() {
+        "seed" | "scheme" | "colors" => "Colors",
+        "shape" => "Corners",
+        "spacing" => "Spacing",
+        "typography" => "Font",
+        "motion" => "Motion",
+        "bar" => "Bar",
+        "dock" => "Dock",
+        "calendar" => "Calendar",
+        "slider" => "Sliders",
+        "meter" => "Meters",
+        "launcher" => "Launcher",
+        _ => "Other",
+    }
+}
+
+/// The groups of tokens `setting` changes, each once, in the order they
+/// first appear.
+pub fn affected_groups(setting: &OptionDecl) -> Vec<&'static str> {
+    let overlays = { setting.choices.iter() }.filter_map(|choice| choice.overlay.as_ref());
+    let overlaid = overlays.flat_map(|overlay| overlay.keys().map(String::as_str));
+    let paths = { setting.affects.iter().chain(&setting.scale) }
+        .map(String::as_str)
+        .chain(overlaid);
+    let mut groups = Vec::new();
+    for group in paths.map(token_group) {
+        if !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+/// `value` put at the token `path`, such as `colors.primary`, as a theme
+/// file would hold it.
+fn overlay_at(path: &str, value: toml::Value) -> toml::Table {
+    let mut parts: Vec<&str> = path.split('.').collect();
+    let last = parts.pop().unwrap_or_default();
+    let mut table = toml::Table::new();
+    table.insert(last.to_owned(), value);
+    for part in parts.into_iter().rev() {
+        let mut outer = toml::Table::new();
+        outer.insert(part.to_owned(), toml::Value::Table(table));
+        table = outer;
+    }
+    table
+}
+
+/// `value` as a token holds it: a color of a theme has no transparency,
+/// so what a color setting says of it is dropped.
+fn token_value(setting: &OptionDecl, value: &toml::Value) -> toml::Value {
+    match (setting.kind, value.as_str()) {
+        (Kind::Color, Some(color)) if color.len() == 9 => color[..7].into(),
+        _ => value.clone(),
+    }
+}
+
+/// The themes stacked so far: the theme they make, and the seed and the
+/// scheme its colors were last derived from, which a theme over them that
+/// sets only one of the two derives the colors again with.
+#[derive(Default)]
+struct Merge {
+    theme: Theme,
+    seed: Option<String>,
+    scheme: Option<Scheme>,
+}
+
+impl Merge {
+    /// Applies the theme `name` of `file` over what is stacked so far: its
+    /// seed and scheme, its tokens, and then its settings with `values`.
+    fn layer(&mut self, name: &str, file: &ThemeFile, values: Option<&toml::Table>) {
+        self.tokens(name, file);
+        let (declared, problems) = file.declared();
+        for problem in problems {
+            report!("theme `{name}`: {problem}");
+        }
+        let empty = toml::Table::new();
+        let owner = format!("theme `{name}`");
+        let values = declared.resolve(values.unwrap_or(&empty), &owner);
+        for setting in &declared.decls {
+            if !OptionSet::visible(setting, &values) {
+                continue;
+            }
+            if let Some(value) = values.get(&setting.key)
+                && let Err(error) = self.set(name, setting, value)
+            {
+                report!("theme `{name}`: the setting `{}` {error}", setting.key);
+            }
+        }
+    }
+
+    /// Applies what `file` sets of the colors and the measures. A file that
+    /// sets a seed or a scheme derives every color again from the seed and
+    /// the scheme that are then the last ones set.
+    fn tokens(&mut self, name: &str, file: &ThemeFile) {
+        if file.seed.is_some() || file.scheme.is_some() {
+            if file.seed.is_some() {
+                self.seed.clone_from(&file.seed);
+            }
+            if file.scheme.is_some() {
+                self.scheme = file.scheme;
+            }
+            self.theme.followed = Followed::default();
+            let scheme = self.scheme.unwrap_or_default();
+            self.theme.derive(self.seed.as_deref(), scheme, name);
+        }
+        if let Err(error) = file.colors.apply_to(&mut self.theme.colors) {
+            report!("theme `{name}` is only partly applied: {error:#}");
+        }
+        for problem in file.apply_measures_to(&mut self.theme) {
+            report!("theme `{name}`: {problem}, which is left as it was");
+        }
+    }
+
+    /// Gives the setting `setting` of the theme `name` the value `value`:
+    /// the tokens of its choice, the tokens it scales multiplied by it, or
+    /// the tokens it affects set to it.
+    fn set(&mut self, name: &str, setting: &OptionDecl, value: &toml::Value) -> Result<(), String> {
+        if setting.kind == Kind::Choice {
+            let chosen = setting
+                .chosen(Some(value))
+                .map(|index| &setting.choices[index]);
+            if let Some(overlay) = chosen.and_then(|choice| choice.overlay.as_ref()) {
+                let file = ThemeFile::from_table(overlay.clone())?;
+                self.tokens(name, &file);
+                return Ok(());
+            }
+            if value.as_str() == Some(UNSET) {
+                return Ok(());
+            }
+        }
+        if !setting.scale.is_empty() {
+            let factor = OptionDecl::number(value).ok_or("scales by no number")?;
+            for path in &setting.scale {
+                self.theme.scale(path, factor as f32)?;
+            }
+            return Ok(());
+        }
+        for path in &setting.affects {
+            let file = ThemeFile::from_table(overlay_at(path, token_value(setting, value)))?;
+            self.tokens(name, &file);
+        }
+        Ok(())
+    }
+
+    /// The theme the stack makes, its colors made readable once, at the
+    /// end, where `legible` asks for it.
+    fn finish(self, legible: bool) -> Theme {
+        let mut theme = self.theme;
+        if legible {
+            theme.colors.make_legible();
+        }
+        theme.legible = legible;
+        theme
+    }
+}
+
+impl Theme {
+    /// The length at `path`, such as `shape.small`, that a setting may
+    /// multiply. Fully rounded corners are no such length: they stay round.
+    fn length_mut(&mut self, path: &str) -> Option<&mut Pixels> {
+        Some(match path {
+            "shape.small" => &mut self.shape.small,
+            "shape.medium" => &mut self.shape.medium,
+            "shape.large" => &mut self.shape.large,
+            "spacing.tiny" => &mut self.spacing.tiny,
+            "spacing.small" => &mut self.spacing.small,
+            "spacing.medium" => &mut self.spacing.medium,
+            "typography.label_size" => &mut self.typography.label_size,
+            "typography.icon_size" => &mut self.typography.icon_size,
+            "bar.pill_height" => &mut self.bar.pill_height,
+            "dock.container_height" => &mut self.dock.container_height,
+            "dock.item_size" => &mut self.dock.item_size,
+            "dock.icon_size" => &mut self.dock.icon_size,
+            "dock.indicator_height" => &mut self.dock.indicator_height,
+            "dock.indicator_active_width" => &mut self.dock.indicator_active_width,
+            "calendar.cell_size" => &mut self.calendar.cell_size,
+            "slider.track_height" => &mut self.slider.track_height,
+            "slider.handle_width" => &mut self.slider.handle_width,
+            "slider.handle_height" => &mut self.slider.handle_height,
+            "slider.handle_gap" => &mut self.slider.handle_gap,
+            "slider.inner_radius" => &mut self.slider.inner_radius,
+            "slider.value_width" => &mut self.slider.value_width,
+            "meter.width" => &mut self.meter.width,
+            "meter.stroke" => &mut self.meter.stroke,
+            "meter.amplitude" => &mut self.meter.amplitude,
+            "meter.wavelength" => &mut self.meter.wavelength,
+            "meter.gap" => &mut self.meter.gap,
+            "launcher.field_height" => &mut self.launcher.field_height,
+            "launcher.row_height" => &mut self.launcher.row_height,
+            "launcher.icon_size" => &mut self.launcher.icon_size,
+            _ => return None,
+        })
+    }
+
+    /// Multiplies the length at `path` by `factor`, within what a theme
+    /// may set.
+    fn scale(&mut self, path: &str, factor: f32) -> Result<(), String> {
+        let length = self
+            .length_mut(path)
+            .ok_or_else(|| format!("scales `{path}`, which is no length that can be scaled"))?;
+        let scaled = (f32::from(*length) * factor).clamp(0., LENGTH_LIMIT);
+        *length = px(scaled);
+        Ok(())
+    }
+}
+
 /// A user theme: values to replace in the built-in theme.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -441,9 +742,9 @@ struct ThemeFile {
     /// accent color of Windows. The roles of `colors` are applied over it.
     seed: Option<String>,
     /// Whether the derived colors are `dark`, `light` or, with `system`,
-    /// what the Windows settings say for the taskbar.
-    #[serde(default)]
-    scheme: Scheme,
+    /// what the Windows settings say for the taskbar. Dark where neither
+    /// this nor a theme below says.
+    scheme: Option<Scheme>,
     #[serde(default)]
     colors: ColorOverrides,
     #[serde(default)]
@@ -466,9 +767,98 @@ struct ThemeFile {
     meter: MeterOverrides,
     #[serde(default)]
     launcher: LauncherOverrides,
+    /// What can be set of the theme in the settings, and which tokens it
+    /// changes.
+    #[serde(default, rename = "setting")]
+    settings: Vec<OptionDecl>,
 }
 
 impl ThemeFile {
+    /// What Tessera makes the built-in theme of, or, with `seed`, a theme
+    /// that derives its colors from it as Windows says: the settings it
+    /// declares, without the accent color where Windows gives the seed.
+    fn builtin(seed: Option<&str>) -> Self {
+        let file: Self = toml::from_str(BUILTIN_SETTINGS).expect("the built-in settings are valid");
+        let mut settings = file.settings;
+        if seed.is_some() {
+            settings.retain(|setting| !setting.affects.iter().any(|path| path == "seed"));
+        }
+        Self {
+            seed: seed.map(str::to_owned),
+            scheme: seed.map(|_| Scheme::System),
+            settings,
+            ..Self::default()
+        }
+    }
+
+    /// The tokens a table of a setting holds, written as in a theme file.
+    fn from_table(table: toml::Table) -> Result<Self, String> {
+        let file: Self = toml::Value::Table(table)
+            .try_into()
+            .map_err(|error| format!("names a token that is not one: {error}"))?;
+        if !file.settings.is_empty() {
+            return Err("declares settings inside a setting".to_owned());
+        }
+        Ok(file)
+    }
+
+    /// The settings that can be used, and what is wrong with the others,
+    /// each as a sentence: a declaration that is not usable, or one whose
+    /// tokens are not tokens of a theme.
+    fn declared(&self) -> (OptionSet, Vec<String>) {
+        let (declared, mut problems) = OptionSet::checked(self.settings.clone());
+        let mut kept = OptionSet::default();
+        for setting in declared.decls {
+            match Self::check_tokens(&setting) {
+                Ok(()) => kept.decls.push(setting),
+                Err(error) => problems.push(format!("the setting `{}` {error}", setting.key)),
+            }
+        }
+        (kept, problems)
+    }
+
+    /// Whether what `setting` changes are tokens of a theme that a value
+    /// of its kind can be given.
+    fn check_tokens(setting: &OptionDecl) -> Result<(), String> {
+        if matches!(setting.kind, Kind::List | Kind::Pairs | Kind::Path) {
+            return Err("is of a kind no token of a theme has".to_owned());
+        }
+        let sample: toml::Value = match setting.kind {
+            Kind::Color => "#000000".into(),
+            Kind::Toggle => true.into(),
+            Kind::Number | Kind::Slider => 1.0.into(),
+            Kind::Choice => { setting.choices.iter() }
+                .find(|choice| !choice.is_unset())
+                .map_or_else(|| "".into(), |choice| choice.value.clone()),
+            _ => "Segoe UI".into(),
+        };
+        for path in &setting.affects {
+            Self::from_table(overlay_at(path, sample.clone()))
+                .map_err(|error| format!("affects `{path}`, which {error}"))?;
+        }
+        let mut probe = Theme::default();
+        for path in &setting.scale {
+            probe.scale(path, 1.)?;
+        }
+        for choice in &setting.choices {
+            if let Some(overlay) = &choice.overlay {
+                Self::from_table(overlay.clone()).map_err(|error| {
+                    let value = text_of(&choice.value);
+                    format!("has a choice `{value}` that {error}")
+                })?;
+            }
+        }
+        let changes = !setting.affects.is_empty() || !setting.scale.is_empty();
+        let overlays = setting
+            .choices
+            .iter()
+            .any(|choice| choice.overlay.is_some());
+        if !changes && !overlays {
+            return Err("changes no token".to_owned());
+        }
+        Ok(())
+    }
+
     /// Replaces the shapes, sizes, font and motion that are set and
     /// usable. Returns what is not usable, each as the start of a
     /// sentence.
@@ -787,7 +1177,7 @@ mod tests {
     #[test]
     fn a_theme_file_may_name_a_scheme() {
         let file: ThemeFile = toml::from_str("scheme = \"light\"\n").unwrap();
-        assert_eq!(file.scheme, Scheme::Light);
+        assert_eq!(file.scheme, Some(Scheme::Light));
         let mut theme = Theme::default();
         let dark = theme.colors;
         theme.derive(None, Scheme::Dark, "test");
@@ -895,6 +1285,182 @@ mod tests {
     fn a_font_name_is_kept_once() {
         assert!(std::ptr::eq(kept("Some Font"), kept("Some Font")));
     }
+
+    /// `text` as a theme file, which must be one.
+    fn file(text: &str) -> ThemeFile {
+        Theme::check(text).unwrap();
+        toml::from_str(text).unwrap()
+    }
+
+    /// The theme `layers` make, with the values of their settings.
+    fn stacked(layers: &[(&ThemeFile, Option<&str>)], legible: bool) -> Theme {
+        let mut merge = Merge::default();
+        for (index, (file, values)) in layers.iter().enumerate() {
+            let values = values.map(|values| toml::from_str::<toml::Table>(values).unwrap());
+            merge.layer(&format!("layer{index}"), file, values.as_ref());
+        }
+        merge.finish(legible)
+    }
+
+    #[test]
+    fn a_layer_that_sets_a_seed_derives_every_color_again() {
+        let base =
+            file("seed = \"#ff0000\"\n[colors]\nprimary = \"#123456\"\noutline = \"#654321\"\n");
+        let over = file("seed = \"#0000ff\"\n[colors]\nprimary = \"#abcdef\"\n");
+        let theme = stacked(&[(&base, None), (&over, None)], false);
+        assert_eq!(theme.colors.primary, rgb(0xabcdef).into());
+        // The outline of the base came before the seed of the layer.
+        let blue = tonal::roles([0, 0, 0xff], false);
+        assert_eq!(theme.colors.outline, blue.outline);
+        assert_eq!(theme.colors.surface_container, blue.surface_container);
+
+        // A layer with only a scheme keeps the seed below it.
+        let light = file("scheme = \"light\"\n");
+        let theme = stacked(&[(&base, None), (&light, None)], false);
+        let red = tonal::roles([0xff, 0, 0], true);
+        assert_eq!(theme.colors.surface_container, red.surface_container);
+    }
+
+    #[test]
+    fn a_scale_multiplies_what_the_layers_below_made() {
+        let base = file("[shape]\nsmall = 10\nfull = 500\n");
+        let corners = file(concat!(
+            "[shape]\nmedium = 20\n",
+            "[[setting]]\nkey = \"corners\"\nkind = \"slider\"\nlabel = \"Corners\"\n",
+            "min = 0\nmax = 3\nstep = 0.5\ndefault = 1.0\n",
+            "scale = [\"shape.small\", \"shape.medium\"]\n",
+        ));
+        let theme = stacked(&[(&base, None), (&corners, Some("corners = 2.0"))], false);
+        assert_eq!(theme.shape.small, px(20.));
+        assert_eq!(theme.shape.medium, px(40.));
+        assert_eq!(theme.shape.full, px(500.));
+        // Its default leaves the lengths as they are.
+        let theme = stacked(&[(&base, None), (&corners, None)], false);
+        assert_eq!(theme.shape.small, px(10.));
+        assert!(Theme::check("[[setting]]\nkey = \"c\"\nkind = \"slider\"\nlabel = \"C\"\nmin = 0\nmax = 2\nscale = [\"shape.full\"]\n").is_err());
+    }
+
+    #[test]
+    fn a_choice_brings_its_tokens_and_a_value_goes_where_it_affects() {
+        let theme_file = file(concat!(
+            "seed = \"#ff0000\"\n",
+            "[[setting]]\nkey = \"variant\"\nkind = \"choice\"\nlabel = \"Variant\"\n",
+            "choices = [{ value = \"unset\", label = \"Red\" }, ",
+            "{ value = \"blue\", overlay = { seed = \"#0000ff\", bar = { pill_height = 40 } } }]\n",
+            "[[setting]]\nkey = \"font\"\nkind = \"font\"\nlabel = \"Font\"\noptional = true\n",
+            "affects = [\"typography.family\"]\n",
+            "[[setting]]\nkey = \"accent\"\nkind = \"color\"\nlabel = \"Accent\"\noptional = true\n",
+            "affects = [\"colors.primary\"]\n",
+        ));
+        let theme = stacked(
+            &[(
+                &theme_file,
+                Some("variant = \"blue\"\nfont = \"Bahnschrift\"\naccent = \"#11223380\""),
+            )],
+            false,
+        );
+        let blue = tonal::roles([0, 0, 0xff], false);
+        assert_eq!(theme.colors.outline, blue.outline);
+        assert_eq!(theme.colors.primary, rgb(0x112233).into());
+        assert_eq!(theme.bar.pill_height, px(40.));
+        assert_eq!(theme.typography.family, "Bahnschrift");
+        let plain = stacked(&[(&theme_file, None)], false);
+        assert_eq!(
+            plain.colors.outline,
+            tonal::roles([0xff, 0, 0], false).outline
+        );
+        let groups = affected_groups(&theme_file.declared().0.decls[0]);
+        assert!(groups.len() == 2 && groups.contains(&"Colors") && groups.contains(&"Bar"));
+    }
+
+    #[test]
+    fn contrast_is_corrected_once_at_the_end() {
+        let base = file("[colors]\nsurface_container = \"#202020\"\non_surface = \"#303030\"\n");
+        let over = file("[colors]\non_surface_variant = \"#282828\"\n");
+        let legible = stacked(&[(&base, None), (&over, None)], true);
+        let mut by_hand = stacked(&[(&base, None), (&over, None)], false).colors;
+        by_hand.make_legible();
+        assert_eq!(legible.colors.on_surface, by_hand.on_surface);
+        assert_eq!(
+            legible.colors.on_surface_variant,
+            by_hand.on_surface_variant
+        );
+        assert!(legible.legible);
+    }
+
+    #[test]
+    fn settings_that_name_no_token_are_refused() {
+        let wrong = [
+            "[[setting]]\nkey = \"a\"\nkind = \"color\"\nlabel = \"A\"\naffects = [\"colors.nothing\"]\n",
+            "[[setting]]\nkey = \"a\"\nkind = \"toggle\"\nlabel = \"A\"\n",
+            "[[setting]]\nkey = \"a\"\nkind = \"list\"\nlabel = \"A\"\naffects = [\"seed\"]\n",
+            "[[setting]]\nkey = \"a\"\nkind = \"choice\"\nlabel = \"A\"\nchoices = [{ value = \"x\", overlay = { colours = 1 } }]\n",
+        ];
+        for text in wrong {
+            assert!(Theme::check(text).is_err(), "{text} was taken");
+        }
+        let flat = "[[setting]]\nkey = \"flat\"\nkind = \"toggle\"\nlabel = \"Flat\"\naffects = [\"bar.flat\"]\n";
+        Theme::check(flat).unwrap();
+    }
+
+    #[test]
+    fn the_built_in_themes_declare_their_settings() {
+        let builtin = ThemeFile::builtin(None);
+        let (declared, problems) = builtin.declared();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(declared.get("accent").is_some());
+        let accent = ThemeFile::builtin(Some(ACCENT_SEED));
+        assert!(accent.declared().0.get("accent").is_none());
+        assert_eq!(accent.declared().0.decls.len(), declared.decls.len() - 1);
+        let theme = stacked(
+            &[(
+                &builtin,
+                Some("density = \"compact\"\ncorners = 0.5\ndock_size = 1.5"),
+            )],
+            false,
+        );
+        assert_eq!(theme.spacing.small, px(6.));
+        assert_eq!(theme.shape.small, px(4.));
+        assert_eq!(theme.dock.item_size, px(72.));
+    }
+
+    #[test]
+    fn the_bundled_themes_are_valid() {
+        for (name, text) in BUNDLED {
+            Theme::check(text).unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            let file: ThemeFile = toml::from_str(text).unwrap();
+            assert!(file.declared().1.is_empty(), "{name}");
+        }
+    }
+
+    const BUNDLED: [(&str, &str); 23] = [
+        ("arcade", include_str!("../../../themes/arcade.toml")),
+        ("aurora", include_str!("../../../themes/aurora.toml")),
+        ("citrus", include_str!("../../../themes/citrus.toml")),
+        ("compact", include_str!("../../../themes/compact.toml")),
+        ("contrast", include_str!("../../../themes/contrast.toml")),
+        ("dense", include_str!("../../../themes/dense.toml")),
+        ("ember", include_str!("../../../themes/ember.toml")),
+        (
+            "expressive",
+            include_str!("../../../themes/expressive.toml"),
+        ),
+        ("forest", include_str!("../../../themes/forest.toml")),
+        ("glacier", include_str!("../../../themes/glacier.toml")),
+        ("lilac", include_str!("../../../themes/lilac.toml")),
+        ("mocha", include_str!("../../../themes/mocha.toml")),
+        ("nebula", include_str!("../../../themes/nebula.toml")),
+        ("ocean", include_str!("../../../themes/ocean.toml")),
+        ("oled", include_str!("../../../themes/oled.toml")),
+        ("paper", include_str!("../../../themes/paper.toml")),
+        ("round", include_str!("../../../themes/round.toml")),
+        ("sakura", include_str!("../../../themes/sakura.toml")),
+        ("sandstone", include_str!("../../../themes/sandstone.toml")),
+        ("sunset", include_str!("../../../themes/sunset.toml")),
+        ("synthwave", include_str!("../../../themes/synthwave.toml")),
+        ("terminal", include_str!("../../../themes/terminal.toml")),
+        ("void", include_str!("../../../themes/void.toml")),
+    ];
 
     #[test]
     fn a_theme_file_replaces_only_the_roles_it_sets() {
