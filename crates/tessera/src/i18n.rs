@@ -2314,6 +2314,27 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Two times of day, HH:MM, from when to when the pictures for dark Windows are shown; while Windows is dark without them.",
         "Два времени суток, ЧЧ:ММ, с какого по какое показываются картинки для тёмной Windows; без них — пока тёмная Windows.",
     ),
+    ("Elsewhere", "В других местах"),
+    ("Wallpaper…", "Обои…"),
+    (
+        "The popup of the wallpaper, over the desktop.",
+        "Всплывающее окно обоев, над рабочим столом.",
+    ),
+    ("Displays…", "Дисплеи…"),
+    (
+        "The popup of the displays: resolution, scale, orientation and their places.",
+        "Всплывающее окно дисплеев: разрешение, масштаб, ориентация и их расположение.",
+    ),
+    ("Power…", "Питание…"),
+    (
+        "The popup of the power plan, the screen and sleep.",
+        "Всплывающее окно схемы питания, экрана и сна.",
+    ),
+    ("Open the configuration file", "Открыть файл конфигурации"),
+    (
+        "config.toml, in the program that opens TOML files; Tessera takes up what is saved there.",
+        "config.toml, в программе, открывающей файлы TOML; Tessera подхватывает то, что там сохранено.",
+    ),
 ];
 
 #[cfg(test)]

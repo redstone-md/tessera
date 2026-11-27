@@ -309,7 +309,7 @@ struct Declared {
 
 /// What a theme declares, and what is wrong with the settings left out;
 /// `None` for a theme that is not there.
-type ThemeDeclared = Option<(OptionSet, Vec<String>)>;
+pub(super) type ThemeDeclared = Option<(OptionSet, Vec<String>)>;
 
 /// A control of a declared setting that keeps something between frames.
 enum Held {
@@ -367,6 +367,16 @@ impl DeclaredState {
             pages: HashMap::new(),
             page_item: None,
         }
+    }
+
+    /// The installed extensions, as last read.
+    pub(super) fn extensions(&self) -> &[InstalledExtension] {
+        self.read.extensions.as_deref().unwrap_or_default()
+    }
+
+    /// The themes in use and what they declare, as last read.
+    pub(super) fn themes(&self) -> &[(String, ThemeDeclared)] {
+        &self.read.themes
     }
 
     /// Whether `item` was asked for and is lit.

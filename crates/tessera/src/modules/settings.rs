@@ -12,6 +12,7 @@ mod controls;
 mod dynamic;
 mod placed;
 pub(super) mod rows;
+mod search;
 
 #[allow(unused_imports, reason = "for the Shortcuts page of shortcuts-editor")]
 pub(crate) use rows::{ActionTitle, action_titles};
@@ -21,9 +22,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    AnyElement, AnyView, AppContext, Context, CursorStyle, Div, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, SharedString, Stateful, StatefulInteractiveElement,
-    Styled, Window, div, img, px, transparent_black,
+    AnyElement, AnyView, AppContext, Context, CursorStyle, Div, FocusHandle, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, img, px, transparent_black,
 };
 
 use crate::config::edit::{CardLength, ConfigFile, DEEDS, LAYOUTS, Place, Slot, WidgetPlace};
@@ -44,6 +45,7 @@ use crate::theme::{ACCENT_THEME, Theme};
 use crate::tiling::TileLayout;
 use crate::ui::{icon, state_layer};
 use controls::{CHANGED, DeclaredState, Deed, RowKey};
+use search::SearchState;
 
 /// The directory of the configuration directory that holds theme files.
 const THEMES_DIRECTORY: &str = "themes";
@@ -695,6 +697,11 @@ pub struct Settings {
     declared: DeclaredState,
     /// The placed widget whose options are shown in the Widgets section.
     expanded: Option<WidgetPlace>,
+    /// The search of the settings, at the top of the rail.
+    search: SearchState,
+    /// What the keys go to while nothing in the settings has them, so that
+    /// Ctrl+F reaches the search.
+    focus: FocusHandle,
 }
 
 impl Settings {
@@ -753,6 +760,8 @@ impl Settings {
             startup: None,
             declared: DeclaredState::new(),
             expanded: None,
+            search: SearchState::new(cx),
+            focus: cx.focus_handle(),
         };
         match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
             Ok((config, table)) => (this.config, this.table) = (Some(config), table),
@@ -2009,6 +2018,16 @@ impl Settings {
             )
             .child(
                 div()
+                    .h(CHIP_HEIGHT + theme.spacing.small)
+                    .px(theme.spacing.small)
+                    .flex()
+                    .items_center()
+                    .rounded(theme.shape.full)
+                    .bg(theme.colors.surface_container_highest)
+                    .child(self.search.field.clone()),
+            )
+            .child(
+                div()
                     .id("rail")
                     .flex_1()
                     .min_h(px(0.))
@@ -2227,7 +2246,18 @@ impl Render for Settings {
             .flex_col()
             .gap(theme.spacing.medium)
             .children(self.failure.clone().map(|failure| note(&theme, failure)));
-        if let Some(config) = self.config.clone() {
+        if self.search.is_active() {
+            // What was found stands in place of the cards.
+            let results = self.search_results(cx);
+            page = page.child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .flex()
+                    .flex_col()
+                    .child(results),
+            );
+        } else if let Some(config) = self.config.clone() {
             let (wide, shared) = self.cards(&config, window, cx);
             let count = wide.len() + shared.len() + 1;
             let before = wide.len();
@@ -2271,7 +2301,13 @@ impl Render for Settings {
                 );
             }
         }
+        // Ctrl+F reaches the search while nothing else has the keys.
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus);
+        }
         div()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event, window, cx| this.search_key(event, window, cx)))
             .flex_1()
             .min_h(px(0.))
             .flex()

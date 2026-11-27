@@ -209,10 +209,6 @@ impl BuiltinRows {
     }
 
     /// Every card, in order.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "searched by the settings search")
-    )]
     pub(super) fn groups(&self) -> &[RowGroup] {
         &self.groups
     }
