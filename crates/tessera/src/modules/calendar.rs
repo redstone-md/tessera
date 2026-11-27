@@ -129,8 +129,11 @@ struct Feeds {
     generation: u64,
 }
 
+/// The feeds the calendars share. It holds them weakly: the calendars
+/// keep them, and once the last calendar is gone they drop and their
+/// reading stops.
 #[derive(Default)]
-struct SharedFeeds(Option<Entity<Feeds>>);
+struct SharedFeeds(Option<WeakEntity<Feeds>>);
 
 impl Global for SharedFeeds {}
 
@@ -138,7 +141,8 @@ impl Feeds {
     /// The feeds of `sources`, which are read from now on, every half
     /// hour; the feeds of other sources are dropped.
     fn shared(sources: Vec<String>, cx: &mut App) -> Entity<Self> {
-        let known = cx.default_global::<SharedFeeds>().0.clone();
+        let known =
+            { cx.default_global::<SharedFeeds>().0.clone() }.and_then(|weak| weak.upgrade());
         if let Some(feeds) = known.filter(|feeds| feeds.read(cx).sources == sources) {
             return feeds;
         }
@@ -179,7 +183,7 @@ impl Feeds {
                 generation: 0,
             }
         });
-        cx.global_mut::<SharedFeeds>().0 = Some(feeds.clone());
+        cx.global_mut::<SharedFeeds>().0 = Some(feeds.downgrade());
         feeds
     }
 }
@@ -244,8 +248,10 @@ impl Calendar {
     }
 
     /// Shows the month `months` after the current one, or before it when
-    /// negative.
-    fn step(&mut self, months: i32) {
+    /// negative. The chosen day moves into it, to `today` where that is in
+    /// it and to its first day otherwise, since only the events of the
+    /// days shown are found.
+    fn step(&mut self, months: i32, today: NaiveDate) {
         let distance = Months::new(months.unsigned_abs());
         let month = if months < 0 {
             self.month.checked_sub_months(distance)
@@ -253,6 +259,10 @@ impl Calendar {
             self.month.checked_add_months(distance)
         };
         self.month = month.unwrap_or(self.month);
+        self.chosen = match first_of_month(today) == self.month {
+            true => today,
+            false => self.month,
+        };
     }
 
     /// Has the events of the days shown found, on the background executor,
@@ -315,7 +325,7 @@ impl Calendar {
             .rounded(theme.shape.full)
             .bg(state_layer(theme, theme.colors.surface_container, state))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.step(months);
+                this.step(months, Local::now().date_naive());
                 cx.notify();
             }))
             .child(label);
@@ -569,10 +579,13 @@ mod tests {
             steps: [Interaction::new(&motion); 2],
             _changes: None,
         };
-        calendar.step(1);
+        let today = date(2026, 11, 27);
+        calendar.step(1, today);
         assert_eq!(calendar.month, date(2027, 1, 1));
-        calendar.step(-2);
+        assert_eq!(calendar.chosen, date(2027, 1, 1));
+        calendar.step(-2, today);
         assert_eq!(calendar.month, date(2026, 11, 1));
+        assert_eq!(calendar.chosen, today);
     }
 
     #[test]
