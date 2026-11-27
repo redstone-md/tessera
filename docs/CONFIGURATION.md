@@ -34,6 +34,23 @@ files = "~"           # a path, "~" for the folder of the user, or "computer"
 
 From a console, `tessera files`, `tessera files computer` and `tessera files D:\Projects` open a window in the running shell.
 
+## The clipboard
+
+`[clipboard]` sets the history of the clipboard that Tessera keeps while it runs (see [FEATURES.md](FEATURES.md)):
+
+```toml
+[clipboard]
+enabled = true   # keep what is copied; false forgets all but the pinned items
+size = 25        # items kept besides the pinned ones, 1 to 200
+images = true    # keep pictures too, as PNG files in cache\clipboard of the configuration directory
+
+[[key]]
+press = "win+v"
+action = "clipboard"   # the popup "clipboard", noting the window in front to paste into
+```
+
+The widget `clipboard` is the list, for a popup, and the popup `clipboard` holds it: 440 by 560 pixels at the middle of the bar, unless a `[[popup]]` of the same name says otherwise (`place = "center"` puts it in the middle of the display). The widget `clipboard-button` is a button of a bar that opens it. In the list the arrows choose an item, Enter or a click puts it back on the clipboard and presses Ctrl+V in the window that was in front, Delete (with nothing written in the search) takes it out, and Esc closes the popup; the buttons of a row pin it, take it out, or open the web address it is. **Clear all** keeps the pinned items. Pinned items are written to `clipboard.toml` in the configuration directory, which Tessera rewrites; the pictures among them stay in `cache\clipboard`.
+
 ## Actions
 
 A `[[key]]` can name an action instead of one of its other fields: `action` is its name and `arg`, where the action takes one, what it is done with. The modules of Tessera register the actions, so one comes with the feature that brings it, and a name that no module registered, or an `arg` the action refuses (one that takes none refuses every `arg`), is reported when the configuration is read, like any other mistake in a `[[key]]`. An action may ask for its keys to be taken from Windows where Windows keeps them to itself (as it does with Win+D, Win+V or Win+E); Tessera then takes them with its keyboard hook, as it does for `switch`, `dock` and `files`.
@@ -54,5 +71,6 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `clipboard` | none | opens the history of the clipboard in the popup `clipboard`, or closes it, and notes the window in front as the one to paste into; its keys (Win+V) are taken from Windows, and Win+V is bound to it where `windows_keys` binds the keys of Windows |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).

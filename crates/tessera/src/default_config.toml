@@ -140,6 +140,10 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             clipboard  the history of the clipboard in the popup
+#                      "clipboard", to paste from into the window in front
+#                      (see [clipboard] below); win+v is taken from Windows
+#                      and is its key where windows_keys binds such keys
 #
 # [[key]]
 # press = "win+v"
@@ -162,6 +166,25 @@
 # [files]
 # own = true
 # view = "details"
+
+# [clipboard] has Tessera keep a history of the clipboard while it runs:
+# texts, lists of files and pictures, newest first, to paste again from
+# the popup "clipboard" (the action clipboard, as win+v, opens it). A
+# text or files copied again move to the front. Pinned items stay when
+# the history is cleared and when Tessera starts again, in clipboard.toml
+# of this directory; the others last until Tessera exits. What a program
+# marks as not for a history, as password managers do, is not kept, nor
+# a text of more than about a million characters or a picture of more
+# than 20 megapixels. Rich text is kept as its plain text.
+#   enabled  whether what is copied is kept (true); false forgets all but
+#            the pinned items
+#   size     how many items are kept besides the pinned ones (25, 1 to 200)
+#   images   whether pictures are kept (true); each is a PNG file in
+#            cache/clipboard of this directory until it leaves the history
+# [clipboard]
+# enabled = true
+# size = 25
+# images = true
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"
@@ -186,6 +209,12 @@
 #   "notifications"  the notifications of the Windows notification center,
 #               each with a button that dismisses it; fills the height left
 #               in its popup and scrolls
+#   "clipboard"  the history of the clipboard, for a popup: a search field
+#               over what was copied, newest first; Enter or a click pastes
+#               the item into the window that was in front, the buttons of
+#               a row pin it, delete it or open the web address it is.
+#               The popup "clipboard" holds it; see [clipboard] above
+#   "clipboard-button"  a button that opens the popup "clipboard"
 #   "cpu"       how busy the processors are, as a wavy line and a percentage;
 #               option style, "wave" (default) or "text" for the value alone
 #   "memory"    the physical memory in use; option style as for "cpu", and
