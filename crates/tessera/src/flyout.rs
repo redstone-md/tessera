@@ -42,6 +42,7 @@ use crate::platform::{
     Media, Modifiers, NativeSurface, ScreenBrightness, ScreenRect, Typing, VirtualDesktops,
     window_in_front,
 };
+use crate::platform::{AudioDevice, DefaultDeviceWatch};
 use crate::popup::{MARGIN, Popups, open_floating, retire_floating};
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -186,6 +187,10 @@ impl FlyoutConfig {
             Kind::Layout => self.layout,
             Kind::Media => self.media,
             Kind::Workspace => self.workspace,
+            // Another device is shown where its volume, or the muting of
+            // the microphone, is.
+            Kind::Output => self.volume,
+            Kind::Input => self.microphone,
         }
     }
 
@@ -320,9 +325,13 @@ enum Kind {
     Layout,
     Media,
     Workspace,
+    /// Another default output (dock-pins).
+    Output,
+    /// Another default microphone (dock-pins).
+    Input,
 }
 
-const KINDS: [Kind; 8] = [
+const KINDS: [Kind; 10] = [
     Kind::Volume,
     Kind::Brightness,
     Kind::Microphone,
@@ -331,6 +340,8 @@ const KINDS: [Kind; 8] = [
     Kind::Layout,
     Kind::Media,
     Kind::Workspace,
+    Kind::Output,
+    Kind::Input,
 ];
 
 /// The picture of what is playing, as it is drawn. Two are alike only
@@ -393,6 +404,10 @@ pub enum Reading {
         current: usize,
         labels: Vec<String>,
     },
+    /// The output Windows plays ordinary sound through now, by its name.
+    Output(String),
+    /// The microphone Windows records from now, by its name.
+    Input(String),
 }
 
 impl Reading {
@@ -406,6 +421,8 @@ impl Reading {
             Self::Layout(_) | Self::Layouts { .. } => Kind::Layout,
             Self::Media { .. } => Kind::Media,
             Self::Workspace { .. } => Kind::Workspace,
+            Self::Output(_) => Kind::Output,
+            Self::Input(_) => Kind::Input,
         }
     }
 
@@ -432,6 +449,8 @@ impl Reading {
             }
             Self::Media { .. } => ICON_NOTE,
             Self::Workspace { .. } => ICON_WORKSPACES,
+            Self::Output(_) => ICON_LEVELS[3],
+            Self::Input(_) => ICON_MICROPHONE,
         }
     }
 
@@ -475,6 +494,7 @@ impl Reading {
                 let label = labels.get(*current).cloned();
                 return label.unwrap_or_else(|| (current + 1).to_string());
             }
+            Self::Output(name) | Self::Input(name) => return name.clone(),
         };
         language.say(said).to_owned()
     }
@@ -701,6 +721,37 @@ impl Gauge for MediaGauge {
 /// the thread of the windows, where they are kept; the virtual desktops of
 /// Windows are read from the registry on the background executor first.
 /// Going to another display is no change.
+/// Shows the name of each device Windows takes as the default microphone,
+/// where `input`, or else as the default output, whoever chose it, for as
+/// long as the task is kept (dock-pins).
+fn watch_default_device(input: bool, cx: &mut App) -> Task<()> {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let (_watch, changes) = match DefaultDeviceWatch::start() {
+            Ok(started) => started,
+            Err(error) => return report!("{error:#}"),
+        };
+        while let Ok(change) = changes.recv().await {
+            if change.input != input {
+                continue;
+            }
+            let id = change.id;
+            let named = { cx.background_executor() }
+                .spawn(async move { AudioDevice::name_of(&id) })
+                .await;
+            let Some(name) = named else {
+                continue;
+            };
+            let reading = match input {
+                true => Reading::Input(name),
+                false => Reading::Output(name),
+            };
+            if cx.update(|cx| Flyouts::show(reading, cx)).is_err() {
+                break;
+            }
+        }
+    })
+}
+
 fn watch_workspaces(cx: &mut App) -> Task<()> {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut last: Option<(Option<DisplayKey>, VirtualDesktops)> = None;
@@ -793,6 +844,8 @@ impl Flyouts {
                 Kind::Layout => watch::<LayoutGauge>(cx),
                 Kind::Media => watch::<MediaGauge>(cx),
                 Kind::Workspace => watch_workspaces(cx),
+                Kind::Output => watch_default_device(false, cx),
+                Kind::Input => watch_default_device(true, cx),
             };
             cx.global_mut::<Self>().watches.push((kind, watch));
         }
