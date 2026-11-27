@@ -67,6 +67,12 @@ const COLUMNS_OPTION: &str = "columns";
 /// The size of the popup that follows a link.
 const LINK_POPUP_SIZE: (f32, f32) = (420., 320.);
 
+/// The name of the popup that shows every kind the registries offer.
+const POPUP: &str = "marketplace";
+
+/// Its size.
+const POPUP_SIZE: (f32, f32) = (720., 560.);
+
 pub struct MarketplaceModule {
     /// Where the registries to read are.
     pub registries: Vec<String>,
@@ -88,23 +94,31 @@ impl Module for MarketplaceModule {
             cx.new(|cx| Marketplace::new(kinds, columns, cx)).into()
         })?;
         widgets.register_panel(link::NAME, |_, cx| cx.new(link::InstallPrompt::new).into())?;
-        let (width, height) = LINK_POPUP_SIZE;
-        widgets.register_popup(PopupConfig {
-            name: link::NAME.to_owned(),
-            place: PopupPlace::Center,
-            width,
-            height,
-            content: vec![WidgetSpec {
-                widget: link::NAME.to_owned(),
-                popup: None,
-                options: toml::Table::new(),
-            }],
-            side: Vec::new(),
-        })
+        widgets.register_popup(centered(link::NAME, link::NAME, LINK_POPUP_SIZE))?;
+        // The settings show the extensions and the themes; every kind,
+        // with its updates, is shown here.
+        widgets.register_popup(centered(POPUP, "marketplace", POPUP_SIZE))
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
         actions.register(link::NAME, link::action())
+    }
+}
+
+/// A popup in the middle of the display holding the widget `widget`
+/// alone, without options.
+fn centered(name: &str, widget: &str, (width, height): (f32, f32)) -> PopupConfig {
+    PopupConfig {
+        name: name.to_owned(),
+        place: PopupPlace::Center,
+        width,
+        height,
+        content: vec![WidgetSpec {
+            widget: widget.to_owned(),
+            popup: None,
+            options: toml::Table::new(),
+        }],
+        side: Vec::new(),
     }
 }
 

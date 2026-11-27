@@ -719,6 +719,9 @@ center = [{ widget = "windows", start = "launcher" }]
 # [[popup]] of the same name here is used instead.
 # The marketplace brings install-resource (in the middle, 420 by 320),
 # holding the widget of the same name, which shows a tessera:// link.
+# It also brings marketplace (in the middle, 720 by 560), holding the
+# marketplace widget with every kind and its updates; `tessera do popup
+# marketplace` opens it.
 
 [[popup]]
 name = "launcher"
