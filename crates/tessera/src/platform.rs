@@ -5,6 +5,7 @@
 
 mod win32;
 
+pub use win32::BrightnessLevel;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
 #[allow(

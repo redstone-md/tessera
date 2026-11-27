@@ -5,6 +5,7 @@
 //! compact readout, and `brightness-slider`, the control to change it.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, IntoElement, ParentElement,
@@ -13,11 +14,19 @@ use gpui::{
 
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::platform::{DisplayKey, ScreenBrightness};
+use crate::platform::{BrightnessLevel, DisplayKey, ScreenBrightness};
 use crate::theme::Theme;
 use crate::ui::{Slider, icon, pill};
 
 const ICON_BRIGHTNESS: &str = "\u{e706}";
+
+/// How often the built-in panel of a laptop is asked while a widget shows
+/// it: its keys change it without a word.
+const PANEL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often a monitor is asked, over DDC/CI, which is slow and which many
+/// monitors take badly when asked often.
+const MONITOR_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct BrightnessModule;
 
@@ -40,6 +49,7 @@ impl Module for BrightnessModule {
             cx.new(|cx| BrightnessSlider::new(brightness, cx)).into()
         })
     }
+
 }
 
 fn percent(share: f32) -> String {
@@ -51,6 +61,8 @@ struct Brightness {
     display: Option<DisplayKey>,
     /// From 0 to 1; `None` while the display has not said, or does not.
     share: Option<f32>,
+    /// Whether the display is asked over DDC/CI, and so seldom.
+    slow: bool,
     /// What the display is to be set to once it is done with the last.
     wanted: Option<f32>,
     /// Whether the display is being asked or set now, which takes a part
@@ -59,32 +71,59 @@ struct Brightness {
 }
 
 #[derive(Default)]
-struct SharedBrightness(HashMap<Option<DisplayKey>, Entity<Brightness>>);
+struct SharedBrightness(HashMap<Option<DisplayKey>, WeakEntity<Brightness>>);
 
 impl Global for SharedBrightness {}
 
 impl Brightness {
-    /// The one instance of `display`. The display is asked whenever a
-    /// widget is built, as it is when a popup opens, and not in between:
-    /// what its own buttons change is seen then.
+    /// The one instance of `display`, which lives for as long as a widget
+    /// keeps it. The display is asked whenever a widget is built, as it is
+    /// when a popup opens, and then every second (every five for a
+    /// monitor), so a change made with its own buttons or keys shows.
     fn shared(display: Option<DisplayKey>, cx: &mut App) -> Entity<Self> {
         let known = cx.default_global::<SharedBrightness>().0.get(&display);
-        let brightness = match known.cloned() {
+        let brightness = match known.and_then(WeakEntity::upgrade) {
             Some(brightness) => brightness,
             None => {
-                let brightness = cx.new(|_| Self {
-                    display,
-                    share: None,
-                    wanted: None,
-                    busy: false,
+                let brightness = cx.new(|cx: &mut Context<Self>| {
+                    Self::watch(cx);
+                    Self {
+                        display,
+                        share: None,
+                        slow: false,
+                        wanted: None,
+                        busy: false,
+                    }
                 });
                 let shared = cx.global_mut::<SharedBrightness>();
-                shared.0.insert(display, brightness.clone());
+                shared.0.retain(|_, known| known.upgrade().is_some());
+                shared.0.insert(display, brightness.downgrade());
                 brightness
             }
         };
         brightness.update(cx, Self::ask);
         brightness
+    }
+
+    /// Asks the display again and again, until the last widget is gone.
+    fn watch(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                let Ok(slow) = this.read_with(cx, |this, _| this.slow) else {
+                    break;
+                };
+                let interval = if slow {
+                    MONITOR_INTERVAL
+                } else {
+                    PANEL_INTERVAL
+                };
+                cx.background_executor().timer(interval).await;
+                if this.update(cx, Self::ask).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Asks the display how bright it is, unless it is busy.
@@ -98,19 +137,27 @@ impl Brightness {
             let read = cx
                 .background_executor()
                 .spawn(async move { ScreenBrightness::read(display) });
-            let share = read.await;
+            let level = read.await;
             this.update(cx, |this, cx| {
                 this.busy = false;
                 if this.wanted.is_some() {
                     this.send(cx);
-                } else if this.share != share {
-                    this.share = share;
-                    cx.notify();
+                } else {
+                    this.take(level, cx);
                 }
             })
             .ok();
         })
         .detach();
+    }
+
+    fn take(&mut self, level: Option<BrightnessLevel>, cx: &mut Context<Self>) {
+        self.slow = level.is_some_and(|level| level.slow);
+        let share = level.map(|level| level.share);
+        if self.share != share {
+            self.share = share;
+            cx.notify();
+        }
     }
 
     /// Shows `share` at once and sets the display to it when it is free.
@@ -256,4 +303,5 @@ mod tests {
         assert_eq!(percent(0.426), "43%");
         assert_eq!(percent(1.), "100%");
     }
+
 }

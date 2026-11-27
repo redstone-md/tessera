@@ -55,6 +55,7 @@ pub use backdrop::{
 };
 pub use bin::RecycleBin;
 pub use bluetooth::{Bluetooth, PairedDevice};
+pub use brightness::BrightnessLevel;
 pub use brightness::ScreenBrightness;
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};

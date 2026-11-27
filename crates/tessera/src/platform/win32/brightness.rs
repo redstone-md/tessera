@@ -30,14 +30,40 @@ const PANEL_FULL: u8 = 100;
 /// The brightness of a display, from 0 to 1.
 pub struct ScreenBrightness;
 
+/// How bright a display said it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrightnessLevel {
+    /// From 0 to 1.
+    pub share: f32,
+    /// Whether it was asked over DDC/CI, which takes a part of a second
+    /// each time and is not to be asked more often than every few seconds;
+    /// the built-in panel of a laptop answers at once.
+    pub slow: bool,
+}
+
 impl ScreenBrightness {
     /// How bright `display` is, or the primary one without a display.
     /// `None` when nothing there says: many monitors have DDC/CI switched
-    /// off in their own menu. Asking a monitor takes a part of a second.
-    pub fn read(display: Option<DisplayKey>) -> Option<f32> {
+    /// off in their own menu.
+    pub fn read(display: Option<DisplayKey>) -> Option<BrightnessLevel> {
         let monitors = Monitors::of(display);
-        let asked = monitors.ranges().next().map(|(_, range)| range.share());
-        asked.or_else(|| Panel::open().ok()?.read())
+        let asked = monitors.ranges().next().map(|(_, range)| BrightnessLevel {
+            share: range.share(),
+            slow: true,
+        });
+        asked.or_else(|| {
+            Some(BrightnessLevel {
+                share: Self::panel()?,
+                slow: false,
+            })
+        })
+    }
+
+    /// How bright the built-in panel of a laptop is; `None` on a machine
+    /// without one. It answers at once, and its keys change it without
+    /// telling anyone, so it is the one to watch for them.
+    pub fn panel() -> Option<f32> {
+        Panel::open().ok()?.read()
     }
 
     /// Makes `display` as bright as `share` says, or the primary one
@@ -251,11 +277,11 @@ mod tests {
     #[test]
     #[ignore = "talks to the monitors of the machine"]
     fn the_primary_display_takes_the_brightness_it_has() {
-        let share = ScreenBrightness::read(None);
-        println!("the primary display says {share:?}");
-        if let Some(share) = share {
-            ScreenBrightness::set(None, share).unwrap();
-            assert_eq!(ScreenBrightness::read(None), Some(share));
+        let level = ScreenBrightness::read(None);
+        println!("the primary display says {level:?}");
+        if let Some(level) = level {
+            ScreenBrightness::set(None, level.share).unwrap();
+            assert_eq!(ScreenBrightness::read(None), Some(level));
         }
     }
 }
