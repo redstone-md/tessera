@@ -35,6 +35,7 @@ use gpui::{App, Global};
 
 use crate::config::KeyConfig;
 use crate::module::Module;
+use crate::platform::Modifiers;
 use crate::shell::Shell;
 
 /// What an action does, given the `arg` of its `[[key]]` or the words
@@ -127,6 +128,13 @@ pub struct Actions {
 }
 
 impl Global for Actions {}
+
+/// The keys to hold of the combination that is being answered, while it
+/// is; see [`Actions::pressing`].
+#[derive(Default)]
+struct Pressing(Option<Modifiers>);
+
+impl Global for Pressing {}
 
 impl Actions {
     /// Collects the actions of Tessera itself and of `modules`, and adds
@@ -228,6 +236,22 @@ impl Actions {
     pub fn takes_reserved_keys(&self, name: &str) -> bool {
         self.get(name)
             .is_some_and(|action| action.takes_reserved_keys)
+    }
+
+    /// Does `done` as the answer to a combination whose keys to hold are
+    /// `held`, which an action done meanwhile reads with
+    /// [`Actions::held`]: the keys may be let go before the answer comes,
+    /// so asking Windows which are down then does not tell them.
+    pub fn pressing(held: Modifiers, cx: &mut App, done: impl FnOnce(&mut App)) {
+        let before = cx.default_global::<Pressing>().0.replace(held);
+        done(cx);
+        cx.global_mut::<Pressing>().0 = before;
+    }
+
+    /// The keys to hold of the combination the action being done answers;
+    /// `None` when it was asked for otherwise, as by `tessera do`.
+    pub fn held(cx: &App) -> Option<Modifiers> {
+        cx.try_global::<Pressing>().and_then(|pressing| pressing.0)
     }
 
     /// Does the action `name` with `arg`. A name that is no action is

@@ -137,21 +137,25 @@ impl Switcher {
     }
 
     /// The action `switcher`: a step through the windows its `arg` names,
-    /// until none of the keys held when it is done is down. It takes its
-    /// keys from Windows, and brings Alt+Tab and Alt+Shift+Tab where the
-    /// keys of Windows are in use, as when Tessera is the shell and
-    /// Explorer, whose switcher Windows opens for those keys, does not
-    /// run.
+    /// until none of the keys to hold of the combination that did it is
+    /// down (for `tessera do`, of the keys down when it is done). It takes
+    /// its keys from Windows, and brings Alt+Tab, Alt+Shift+Tab, Alt+` and
+    /// Alt+Shift+` where the keys of Windows are in use, as when Tessera
+    /// is the shell and Explorer, whose switcher Windows opens for Alt+Tab,
+    /// does not run.
     fn action() -> Action {
         Action::new(|arg, cx| {
             if let Some((back, through)) = step_of(arg) {
-                Self::go(back, through, Modifiers::down_now(), cx);
+                let held = Actions::held(cx).unwrap_or_else(Modifiers::down_now);
+                Self::go(back, through, held, cx);
             }
         })
         .taking_reserved_keys()
         .checking(|arg| step_of(arg).map(|_| ()).ok_or_else(|| STEPS.to_owned()))
         .by_default("alt+tab", Some("next"))
         .by_default("alt+shift+tab", Some("previous"))
+        .by_default("alt+backquote", Some("app-next"))
+        .by_default("alt+shift+backquote", Some("app-previous"))
     }
 
     /// Goes one window on in the open switcher, or back with `back`; opens
@@ -1289,6 +1293,14 @@ mod tests {
         let keys: Vec<&str> = { action.default_keys.iter() }
             .map(|(press, _)| press.as_str())
             .collect();
-        assert_eq!(keys, ["alt+tab", "alt+shift+tab"]);
+        assert_eq!(
+            keys,
+            [
+                "alt+tab",
+                "alt+shift+tab",
+                "alt+backquote",
+                "alt+shift+backquote"
+            ]
+        );
     }
 }
