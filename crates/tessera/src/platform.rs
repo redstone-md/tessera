@@ -59,14 +59,7 @@ pub use win32::{
 pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
 };
-#[allow(
-    unused_imports,
-    reason = "for the file manager and the desktop, which drag files out and take drops"
-)]
-pub use win32::{
-    DragButton, DragOut, DropEffect, DropEffects, DropEvent, DropKeys, DropTarget, DropZone,
-    DropZones, drop_effect, drop_into,
-};
+pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,
@@ -80,15 +73,6 @@ pub use win32::{
 };
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
-#[allow(
-    unused_imports,
-    reason = "for the menus New, Open with and Send to of the file manager and the desktop"
-)]
-pub use win32::{IconPlace, NewTemplate, OpenWithHandler, SendToKind, SendToTarget, choose_app};
-#[allow(
-    unused_imports,
-    reason = "for the file manager and the desktop, which show the menus of the Shell"
-)]
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use win32::{KeyLocks, window_in_front};
 #[allow(
@@ -96,6 +80,7 @@ pub use win32::{KeyLocks, window_in_front};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{PowerMode, PowerModeState};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};

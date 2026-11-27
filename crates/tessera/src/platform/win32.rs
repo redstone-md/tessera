@@ -109,7 +109,7 @@ pub use devices::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
 pub use display_mode::DisplayMode;
-pub use drag::{DragButton, DragOut, DropEffect, DropEffects, DropKeys, drop_effect, drop_into};
+pub use drag::DragOut;
 pub use drop_target::{DropEvent, DropTarget, DropZone, DropZones};
 pub use execute::Process;
 pub use execute::{Launch, Show};
@@ -157,10 +157,9 @@ pub use radios::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 pub use renaming::rename_new;
 pub use run_history::RunHistory;
 pub use screenshot::save_screenshot;
-pub use send_to::{SendToKind, SendToTarget};
+pub use send_to::SendToTarget;
 pub use shell_host::{HostOptions, ShellEvent, ShellHost};
 pub use shell_item::ShellId;
-pub use shell_items::IconPlace;
 pub use shell_menu::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use shell_mode::started_as_shell;
 pub use shell_mode::{explorer_running, shell_mode};

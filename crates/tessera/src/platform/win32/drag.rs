@@ -17,10 +17,6 @@
 //! GPUI's own `on_drag` and `on_drop`, and start the drag out only when
 //! the pointer leaves the window.
 #![allow(unsafe_code)]
-#![allow(
-    dead_code,
-    reason = "dragging out is for the file manager and the desktop, which do not use it yet"
-)]
 
 use std::ffi::{OsString, c_void};
 use std::os::windows::ffi::OsStringExt;
@@ -306,6 +302,10 @@ fn volume_of(path: &Path) -> Option<String> {
 
 /// Which button of the pointer a drag is made with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "the file manager opens its menu on the press of the right button, so it drags with the left alone"
+)]
 pub enum DragButton {
     #[default]
     Left,
@@ -334,12 +334,20 @@ impl DragOut {
     }
 
     /// Allows the drop only `allowed`.
+    #[allow(
+        dead_code,
+        reason = "for a drag of what may only be copied, which the file manager does not start"
+    )]
     pub fn allowing(mut self, allowed: DropEffects) -> Self {
         self.allowed = allowed;
         self
     }
 
     /// Says which button the drag is made with.
+    #[allow(
+        dead_code,
+        reason = "the file manager opens its menu on the press of the right button, so it drags with the left alone"
+    )]
     pub fn with_button(mut self, button: DragButton) -> Self {
         self.button = button;
         self

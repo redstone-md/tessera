@@ -179,9 +179,10 @@ impl FilesView {
         };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             while let Ok(event) = events.recv().await {
-                if !matches!(event, DropEvent::Done { .. }) {
+                let DropEvent::Done { outcome, .. } = event else {
                     continue;
-                }
+                };
+                outcome.report();
                 let read = this.update(cx, |this, cx| {
                     for pane in this.tabs.all().iter().flat_map(Tab::panes) {
                         pane.update(cx, |pane, cx| pane.load(cx));

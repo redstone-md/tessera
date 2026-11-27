@@ -39,10 +39,6 @@
 //! end it from outside; a caller that must not wait for long races the
 //! receiver against a timer of its own and goes on without the menu.
 #![allow(unsafe_code)]
-#![allow(
-    dead_code,
-    reason = "the menus of the Shell are for the file manager and the desktop, which do not use all of them yet"
-)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -140,6 +136,10 @@ impl Intercept {
 
 /// An item of a context menu of the Shell.
 #[derive(Clone, Debug, Default)]
+#[allow(
+    dead_code,
+    reason = "the menu of the file manager shows the label of a verb alone; the access key, the default, the check and the picture are for a menu that draws them"
+)]
 pub struct ShellVerb {
     /// What [`ShellMenu::invoke`] takes to do it; zero for a separator or
     /// a submenu.
@@ -218,6 +218,10 @@ impl ShellMenu {
     /// Does the verb `verb` of the files and folders `paths`, such as
     /// `properties`, `openas`, `print` or `runas`, as their menu would.
     /// The receiver yields how it went.
+    #[allow(
+        dead_code,
+        reason = "for the desktop, which does the verbs of its icons by name"
+    )]
     pub fn do_verb(paths: Vec<PathBuf>, verb: &str) -> Receiver<Result<MenuOutcome, String>> {
         let verb = verb.to_owned();
         call(move || {
@@ -238,6 +242,10 @@ impl ShellMenu {
     }
 
     /// Does the verb `verb` of the menu, such as `open` or `properties`.
+    #[allow(
+        dead_code,
+        reason = "for the desktop, which does the verbs of its icons by name"
+    )]
     pub fn invoke_verb(&self, verb: &str) -> Receiver<Result<MenuOutcome, String>> {
         self.invoke_later(Command::Verb(verb.to_owned()), None)
     }

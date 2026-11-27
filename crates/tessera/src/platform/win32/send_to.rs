@@ -71,10 +71,6 @@ pub struct SendToTarget {
     pub kind: SendToKind,
 }
 
-#[allow(
-    dead_code,
-    reason = "for the menu Send to of the file manager and the desktop"
-)]
 impl SendToTarget {
     /// The places, the items of the Send To folder by name, then the
     /// removable drives by letter. The receiver yields once; a failure to

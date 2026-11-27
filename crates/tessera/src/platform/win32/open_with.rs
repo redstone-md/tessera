@@ -52,10 +52,6 @@ pub struct OpenWithHandler {
     pub recommended: bool,
 }
 
-#[allow(
-    dead_code,
-    reason = "for the menu Open with of the file manager and the desktop"
-)]
 impl OpenWithHandler {
     /// The handlers of the kind of the file at `path`, those Windows
     /// recommends first; none for a folder or a file without an
@@ -125,10 +121,6 @@ impl OpenWithHandler {
 /// program for all files of the kind there. It returns at once; the
 /// dialog runs on a thread of its own. A failure is reported; the user
 /// closing the dialog is none.
-#[allow(
-    dead_code,
-    reason = "for the menu Open with of the file manager and the desktop"
-)]
 pub fn choose_app(path: &Path) {
     let path = path.to_owned();
     ShellThread::run_alone("open with", move || {

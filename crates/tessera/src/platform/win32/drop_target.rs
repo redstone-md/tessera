@@ -32,10 +32,6 @@
 //! Once a window has a [`DropTarget`], GPUI's own drop events (`on_drop`
 //! of external paths) no longer arrive there, also after it is dropped.
 #![allow(unsafe_code)]
-#![allow(
-    dead_code,
-    reason = "taking drops is for the file manager and the desktop, which do not use it yet"
-)]
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -135,6 +131,10 @@ fn top_zone(zones: &[DropZone], at: Point<Pixels>) -> Option<(usize, PathBuf)> {
 
 /// What happens to a drag over the window.
 #[derive(Clone, Debug)]
+#[allow(
+    dead_code,
+    reason = "the file manager reads only that the work of a drop is done; it does not mark the zone a drag is over"
+)]
 pub enum DropEvent {
     /// Something is dragged over the window: over the zone at this place
     /// in the list, or none, and what a drop would do there. It is told
