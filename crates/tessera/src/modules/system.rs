@@ -182,15 +182,17 @@ impl Sampler {
                 let (received, sent) = traffic.read()?;
                 Some(Sample::Network { received, sent })
             }
+            Self::Gpu(Some(load)) => load.as_mut()?.read().map(Sample::Gpu),
+            // The counters are rates: a reading right after the first
+            // collection would cover no time, so the first comes at the next
+            // interval, as the first of the processor does.
             Self::Gpu(load) => {
-                let load = load.get_or_insert_with(|| {
-                    let opened = GpuLoad::open();
-                    if opened.is_none() {
-                        report!("Windows gives no counters of the graphics processors");
-                    }
-                    opened
-                });
-                load.as_mut()?.read().map(Sample::Gpu)
+                let opened = GpuLoad::open();
+                if opened.is_none() {
+                    report!("Windows gives no counters of the graphics processors");
+                }
+                *load = Some(opened);
+                None
             }
         }
     }
