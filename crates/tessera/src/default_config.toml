@@ -1023,14 +1023,14 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #                       Tessera quits
 #   below = true        keep it below the other windows: it is lowered again
 #                       whenever another window comes in front
-#   sticky = true       show it on every workspace; read, but Tessera's
-#                       workspaces cannot do that yet
+#   sticky = true       show it on every workspace of Tessera's own
 #   inactive_opacity    0.1 to 1: how opaque it is drawn while another
 #                       window is in front
 #   no_titlebar = true  take its title bar away, keeping the border that
 #                       resizes it; given back as fullscreen is
 #   min_size, max_size  [width, height] in logical pixels it is kept within
-#                       when it first appears and when the rules change
+#                       when it first appears, when the rules change and
+#                       when it was moved or resized
 #   category            a word for its kind, as "browser" or "game"
 #   apply = "remember"  as "initially", and the next window the rule names
 #                       opens where the last one was, as kept in

@@ -1647,6 +1647,8 @@ const RUSSIAN: &[(&str, &str)] = &[
         "It ends at once: what it has not saved is lost.",
         "Она завершится сразу: всё несохранённое пропадёт.",
     ),
+    // integration of wave 2: the window menu shows a window on all workspaces.
+    ("On all workspaces", "На всех рабочих столах"),
 ];
 
 #[cfg(test)]

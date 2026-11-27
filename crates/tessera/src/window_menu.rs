@@ -205,8 +205,9 @@ fn shape_entries(id: AppWindowId, display: Display, cx: &App) -> Vec<MenuEntry> 
         .collect()
 }
 
-/// An entry for each workspace of Tessera's own other than the one of
-/// the window `id`, which sends it there; none where the workspaces are
+/// An entry that shows the window `id` on all workspaces of Tessera's own
+/// or no longer, and one for each workspace other than its own, which
+/// sends it there; none where the workspaces are
 /// the virtual desktops of Windows, which take no window of another
 /// program.
 fn workspace_entries(id: AppWindowId, cx: &App) -> Vec<MenuEntry> {
@@ -216,19 +217,31 @@ fn workspace_entries(id: AppWindowId, cx: &App) -> Vec<MenuEntry> {
     let Some(rows) = Workspaces::residents(display, cx) else {
         return Vec::new();
     };
+    let language = Language::of(cx);
+    let sticky = Workspaces::is_sticky(id, cx);
+    let everywhere = MenuEntry::new(
+        ICON_WORKSPACE,
+        language.say("On all workspaces"),
+        move |cx| Workspaces::toggle_sticky(id, cx),
+    )
+    .checked(sticky);
+    // A window seen on every workspace has no other to be sent to.
+    if sticky {
+        return vec![everywhere];
+    }
     let home = rows
         .iter()
         .position(|row| row.iter().any(|resident| resident.id == id));
-    let say = Language::of(cx).say("Move to workspace");
-    (0..rows.len())
+    let say = language.say("Move to workspace");
+    let moves = (0..rows.len())
         .filter(|&index| Some(index) != home)
         .map(|index| {
             let label = format!("{say} {}", Workspaces::label(index, cx));
             MenuEntry::new(ICON_WORKSPACE, label, move |cx| {
                 Workspaces::move_window(id, index, cx);
             })
-        })
-        .collect()
+        });
+    std::iter::once(everywhere).chain(moves).collect()
 }
 
 /// Writes a rule for windows like `id` and opens the configuration file

@@ -885,3 +885,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Click a window to end its program. Esc cancels." = "Cliquez sur une fenêtre pour arrêter son programme. Échap annule."
 "Process" = "Processus"
 "It ends at once: what it has not saved is lost." = "Il s’arrête aussitôt : ce qui n’a pas été enregistré est perdu."
+
+# integration of wave 2: the window menu shows a window on all workspaces.
+"On all workspaces" = "Sur tous les espaces de travail"

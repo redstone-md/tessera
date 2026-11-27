@@ -885,3 +885,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Click a window to end its program. Esc cancels." = "Клацніть вікно, щоб завершити його програму. Esc — скасувати."
 "Process" = "Процес"
 "It ends at once: what it has not saved is lost." = "Вона завершиться одразу: усе незбережене буде втрачено."
+
+# integration of wave 2: the window menu shows a window on all workspaces.
+"On all workspaces" = "На всіх робочих областях"

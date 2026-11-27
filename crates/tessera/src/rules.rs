@@ -36,7 +36,9 @@ use serde::Deserialize;
 use toml_edit::{Array, Table, value};
 
 use crate::config::edit::ConfigFile;
-use crate::platform::{AppWindow, AppWindowId, Display, ScreenRect, WindowEvents};
+use crate::platform::{
+    AppWindow, AppWindowId, Display, MoveEvent, MoveWatch, ScreenRect, WindowEvents,
+};
 use crate::snap::{Zone, carried};
 use crate::tiling::Tiler;
 use crate::workspaces::Workspaces;
@@ -494,7 +496,8 @@ pub struct Rules {
     /// Counts the tasks that were started to watch the windows; only the
     /// latest goes on.
     task: u64,
-    /// Whether it was said that `sticky` does nothing yet.
+    /// Whether it was said that `sticky` does nothing on the virtual
+    /// desktops of Windows.
     told_sticky: bool,
 }
 
@@ -513,6 +516,26 @@ impl Rules {
         Memory::read(cx);
         crate::window_actions::give_back_on_quit(cx);
         Self::configure(rules, cx);
+        Self::watch_moves(cx);
+    }
+
+    /// Hears of every window the user stops moving or resizing, by its
+    /// title bar or its border as well, and takes it in as
+    /// [`Rules::move_ended`] does. The snapping and the tiling each hear
+    /// the same ends with receivers of their own.
+    fn watch_moves(cx: &mut App) {
+        let events = MoveWatch::subscribe();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(event) = events.recv().await {
+                let MoveEvent::End(id) = event else {
+                    continue;
+                };
+                if cx.update(|cx| Self::move_ended(id, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Takes over the rules of a configuration that was read again, if they
@@ -918,14 +941,20 @@ impl Rules {
         }
     }
 
-    /// Shows the window `id` on every workspace. Tessera's own workspaces
-    /// cannot do that yet, which is said once.
-    fn stick(_id: AppWindowId, cx: &mut App) {
+    /// Shows the window `id` on every workspace of Tessera's own. The
+    /// virtual desktops of Windows cannot be asked to, which is said once.
+    fn stick(id: AppWindowId, cx: &mut App) {
+        if Workspaces::own(cx) {
+            if !Workspaces::is_sticky(id, cx) {
+                Workspaces::toggle_sticky(id, cx);
+            }
+            return;
+        }
         let this = cx.global_mut::<Self>();
         if !this.told_sticky {
             this.told_sticky = true;
             report!(
-                "`sticky` of a [[rule]] does nothing yet: Tessera's workspaces do not show a window on all of them"
+                "`sticky` of a [[rule]] does nothing on the virtual desktops of Windows, which show a window on all of them only when asked in their task view"
             );
         }
     }
