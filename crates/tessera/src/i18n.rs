@@ -1388,6 +1388,42 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Show in bar", "Показать на панели"),
     ("Move to overflow", "Переместить в скрытые"),
     ("Show hidden icons", "Показать скрытые значки"),
+    ("Available devices", "Доступные устройства"),
+    ("Ready to pair", "Готово к сопряжению"),
+    ("Pair", "Связать"),
+    ("Pairing", "Сопряжение"),
+    ("PIN", "PIN-код"),
+    (
+        "Type this PIN on the device:",
+        "Введите этот PIN-код на устройстве:",
+    ),
+    (
+        "Does the device show this PIN?",
+        "Устройство показывает этот PIN-код?",
+    ),
+    ("Type the PIN of the device", "Введите PIN-код устройства"),
+    (
+        "The device refused the pairing",
+        "Устройство отклонило сопряжение",
+    ),
+    (
+        "The device did not answer in time",
+        "Устройство не ответило вовремя",
+    ),
+    (
+        "The device is not ready to pair; put it in pairing mode",
+        "Устройство не готово к сопряжению; переведите его в режим сопряжения",
+    ),
+    ("The pairing was cancelled", "Сопряжение отменено"),
+    ("The device was not paired", "Устройство не сопряжено"),
+    (
+        "Right-click again to remove it",
+        "Щёлкните правой кнопкой ещё раз, чтобы удалить",
+    ),
+    (
+        "Windows offers no way to connect this device from here; it connects by itself when it is switched on",
+        "Windows не позволяет подключить это устройство отсюда; оно подключается само, когда включено",
+    ),
 ];
 
 #[cfg(test)]

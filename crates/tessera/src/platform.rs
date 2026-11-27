@@ -6,6 +6,7 @@
 mod win32;
 
 pub use win32::AppCommand;
+pub use win32::BalloonKind;
 pub use win32::BinUsage;
 pub use win32::BrightnessLevel;
 pub use win32::DesktopClose;
@@ -50,8 +51,8 @@ pub use win32::{
 };
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 pub use win32::{Balloon, BalloonEvent};
-pub use win32::BalloonKind;
 pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
+pub use win32::{BluetoothScan, FoundDevice, Pairing, PairingFailure, PairingPrompt};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};

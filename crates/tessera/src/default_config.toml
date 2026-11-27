@@ -460,6 +460,11 @@
 #               forgets it all; for a popup
 #   "bluetooth" the paired Bluetooth devices, for a popup: which are
 #               connected, and the charge of those that report one
+#               While the popup is open, the devices in reach that can be
+#               paired are listed under them; a click pairs one, asking
+#               for its PIN where it wants one. Two right clicks on a
+#               paired device remove it
+
 #   "connections"  what the machine is connected through, for a popup:
 #               each connection with its address and speed, the VPN
 #               connections Windows keeps, which a click connects and

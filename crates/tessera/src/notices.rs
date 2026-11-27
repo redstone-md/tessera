@@ -230,7 +230,6 @@ mod tests {
 
     #[test]
     fn what_is_told_of_can_be_chosen() {
-
         let config: NoticesConfig =
             toml::from_str("drives = false\nbattery = true\n").expect("a valid table");
         assert!(!config.drives());
