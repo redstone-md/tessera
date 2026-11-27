@@ -30,6 +30,11 @@ pub use win32::{
 };
 #[allow(
     unused_imports,
+    reason = "for the file manager and the desktop, which show the menus of the Shell"
+)]
+pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
+#[allow(
+    unused_imports,
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
