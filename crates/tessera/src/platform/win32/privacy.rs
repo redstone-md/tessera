@@ -34,7 +34,8 @@ use windows::Win32::System::Registry::{
 use windows::Win32::System::Threading::{CreateEventW, WaitForMultipleObjects};
 use windows::core::{Owned, PCWSTR, PWSTR};
 
-use super::devices::{text_in, wide};
+use super::devices::wide;
+use super::files::text_in;
 use super::packaged::app_id_in;
 use super::shortcuts::Shortcut;
 

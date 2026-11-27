@@ -64,7 +64,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{GUID, Owned, PCWSTR};
 
-use super::files::{Drive, DriveKind, disk_space};
+use super::files::{Drive, DriveKind, disk_space, text_in};
 use super::shell_thread::ShellThread;
 
 /// What Windows calls the kinds of drives that are looked at.
@@ -814,15 +814,6 @@ fn eject_medium(letter: char) -> Result<(), EjectRefusal> {
 /// `text` as a NUL-terminated wide string.
 pub(super) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()
-}
-
-/// The text in a NUL-terminated buffer.
-pub(super) fn text_in(buffer: &[u16]) -> String {
-    let length = buffer
-        .iter()
-        .position(|&unit| unit == 0)
-        .unwrap_or(buffer.len());
-    String::from_utf16_lossy(&buffer[..length])
 }
 
 /// The texts of a list of NUL-terminated texts that ends with one NUL

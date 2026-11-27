@@ -149,7 +149,7 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
 }
 
 /// The text in a NUL-terminated buffer.
-fn text_in(buffer: &[u16]) -> String {
+pub(super) fn text_in(buffer: &[u16]) -> String {
     let length = buffer
         .iter()
         .position(|&unit| unit == 0)
