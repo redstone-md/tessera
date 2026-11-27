@@ -234,9 +234,14 @@ impl FilesView {
                 if pane == self.pane() {
                     self.retitle(window, cx);
                 }
-                let share = pane.read(cx).location().root().and_then(share_root);
-                if let Some(root) = share {
+                let location = pane.read(cx).location().clone();
+                if let Some(root) = location.root().and_then(share_root) {
                     self.visited(root, cx);
+                }
+                // A drive may have come or gone since the side read them.
+                if location == Location::Computer {
+                    self.sidebar
+                        .update(cx, |sidebar, cx| sidebar.read_drives(cx));
                 }
             }
             PaneEvent::PinsChanged => {

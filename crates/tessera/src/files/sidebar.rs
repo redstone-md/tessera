@@ -319,12 +319,21 @@ impl Sidebar {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let drives = cx.background_executor().spawn(async { Drive::all() }).await;
             this.update(cx, |this, cx| {
+                let computer = &mut this.groups[COMPUTER].nodes[0];
+                let old = computer.children.take().unwrap_or_default();
                 let children = { drives.into_iter() }
                     .map(|drive| {
-                        Node::folder(drive.root.clone(), drive.title(), drive_glyph(drive.kind))
+                        // A drive that was open stays open.
+                        let kept = old.iter().find(|node| node.path() == Some(&drive.root));
+                        let mut node = match kept {
+                            Some(kept) => kept.clone(),
+                            None => Node::folder(drive.root.clone(), String::new(), ICON_FOLDER),
+                        };
+                        (node.label, node.glyph) = (drive.title(), drive_glyph(drive.kind));
+                        node
                     })
                     .collect();
-                this.groups[COMPUTER].nodes[0].children = Some(children);
+                computer.children = Some(children);
                 this.flatten();
                 cx.notify();
             })

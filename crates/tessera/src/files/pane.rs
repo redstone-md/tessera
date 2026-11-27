@@ -433,15 +433,17 @@ impl FolderPane {
 
     /// Searches below the folder shown, or the one searched, for what the
     /// filter field holds.
+    /// With nothing written, or nowhere to search, the keys go back to
+    /// the list.
     fn search_below(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let query = self.filter.read(cx).text().trim().to_owned();
-        let Some(root) = self.history.current().root().map(Path::to_owned) else {
-            return;
-        };
-        if query.is_empty() {
-            return;
+        let root = self.history.current().root().map(Path::to_owned);
+        match root {
+            Some(root) if !query.is_empty() => {
+                self.go(Location::Search { root, query }, window, cx)
+            }
+            _ => window.focus(&self.focus),
         }
-        self.go(Location::Search { root, query }, window, cx);
     }
 
     /// Shows the folder the chosen result of a search is in, with it
