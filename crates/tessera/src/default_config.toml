@@ -163,6 +163,22 @@
 # own = true
 # view = "details"
 
+# [startup] says what Tessera does, when it is the shell of the session,
+# about the programs that start with the session; beside Explorer it starts
+# none of them, Explorer does. Once per session, delay seconds after the
+# bars opened, it runs the newer components of Active Setup, RunOnce of the
+# machine (where it may delete its values), Run and Policies\Explorer\Run
+# of the machine and of the user, the Startup folders, RunOnce of the user
+# and the startup tasks of Store apps, leaving out what was switched off in
+# Task Manager or in the settings (General, Startup apps).
+#   run           whether it starts them at all (true)
+#   delay         seconds after the bars opened (2)
+#   active_setup  whether the components of Active Setup run first (true)
+#   packaged      whether the startup tasks of Store apps start (true)
+# [startup]
+# run = true
+# delay = 2
+
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"
 #   thickness  reserved screen space, in logical pixels

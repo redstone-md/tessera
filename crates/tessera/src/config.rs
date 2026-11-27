@@ -351,6 +351,10 @@ pub struct Config {
     /// surfaces of Tessera open.
     #[serde(default)]
     pub files: FilesConfig,
+    /// Whether and when Tessera, as the shell, starts the programs that
+    /// start with the session.
+    #[serde(default)]
+    pub startup: crate::startup::StartupConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,
