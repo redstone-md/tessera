@@ -13,6 +13,7 @@ mod backdrop;
 mod bin;
 mod bluetooth;
 mod brightness;
+mod clipboard_watch;
 mod commands;
 mod connections;
 mod desktops;
@@ -56,6 +57,7 @@ pub use backdrop::{
 pub use bin::RecycleBin;
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use brightness::ScreenBrightness;
+pub use clipboard_watch::{Clip, ClipboardWatch, Offer, paste_into};
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
