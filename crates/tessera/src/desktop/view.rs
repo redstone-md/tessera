@@ -96,8 +96,9 @@ impl Band {
 /// The root view of the window of the icons of one display.
 pub struct DesktopIconsView {
     model: Entity<DesktopModel>,
-    /// The number of the display among the displays in their order.
-    display: usize,
+    /// The number of the display among the displays in their order, once
+    /// it is told ([`Self::show_display`]).
+    display: Option<usize>,
     layer: Option<DesktopLayer>,
     /// Where the layer was put, in physical pixels.
     frame: Option<ScreenRect>,
@@ -117,7 +118,6 @@ pub struct DesktopIconsView {
 impl DesktopIconsView {
     pub fn new(
         model: Entity<DesktopModel>,
-        display: usize,
         layer: Option<DesktopLayer>,
         frame: Option<ScreenRect>,
         window: &mut Window,
@@ -135,9 +135,9 @@ impl DesktopIconsView {
         });
         let zones = DropZones::new();
         let drops = Self::take_drops(&model, &zones, window, cx);
-        let mut this = Self {
+        let this = Self {
             model,
-            display,
+            display: None,
             layer,
             frame,
             scale: window.scale_factor(),
@@ -151,9 +151,16 @@ impl DesktopIconsView {
             wheel: 0.,
             _model: observed,
         };
-        this.tell_room(cx);
         Self::keep_placed(cx);
         this
+    }
+
+    /// Has the window draw the icons of the display numbered `display`
+    /// among those that have a window of the icons.
+    pub fn show_display(&mut self, display: usize, cx: &mut Context<Self>) {
+        self.display = Some(display);
+        self.tell_room(cx);
+        cx.notify();
     }
 
     /// Closes the window, giving it back to the desktop first.
@@ -246,7 +253,7 @@ impl DesktopIconsView {
     /// Tells the model where the room of the display is and how many
     /// icons it holds.
     fn tell_room(&mut self, cx: &mut Context<Self>) {
-        let Some(frame) = self.frame else {
+        let (Some(frame), Some(display)) = (self.frame, self.display) else {
             return;
         };
         let (width, height) = self.model.read(cx).config().size.cell();
@@ -261,7 +268,6 @@ impl DesktopIconsView {
                 height,
             ),
         };
-        let display = self.display;
         self.model
             .update(cx, |model, cx| model.set_room(display, room, cx));
     }
@@ -289,7 +295,7 @@ impl DesktopIconsView {
         let cell = self.cell(cx);
         { model.items().iter() }
             .filter_map(|item| Some((item, model.spot(&item.key)?)))
-            .filter(|(_, spot)| spot.display == self.display)
+            .filter(|(_, spot)| Some(spot.display) == self.display)
             .find(|(_, spot)| Self::tile_bounds(*spot, cell).contains(&position))
             .map(|(item, _)| item.key.clone())
     }
@@ -309,7 +315,9 @@ impl DesktopIconsView {
             // A press in the field of the name is the field's.
             let model = self.model.read(cx);
             let cell = self.cell(cx);
-            let spot = model.spot(&key).filter(|spot| spot.display == self.display);
+            let spot = model
+                .spot(&key)
+                .filter(|spot| Some(spot.display) == self.display);
             if spot.is_some_and(|spot| Self::tile_bounds(spot, cell).contains(&event.position)) {
                 return;
             }
@@ -318,6 +326,9 @@ impl DesktopIconsView {
         }
         let held = event.modifiers;
         let Some(key) = self.key_at(event.position, cx) else {
+            if !self.model.read(cx).shows_icons() {
+                return;
+            }
             let before = match held.control {
                 true => self.model.read(cx).chosen().into_iter().collect(),
                 false => HashSet::new(),
@@ -386,7 +397,7 @@ impl DesktopIconsView {
             let model = self.model.read(cx);
             let touched: Vec<String> = { model.items().iter() }
                 .filter_map(|item| Some((item, model.spot(&item.key)?)))
-                .filter(|(_, spot)| spot.display == self.display)
+                .filter(|(_, spot)| Some(spot.display) == self.display)
                 .filter(|(_, spot)| Self::tile_bounds(*spot, cell).intersects(&bounds))
                 .map(|(item, _)| item.key.clone())
                 .collect();
@@ -477,9 +488,11 @@ impl DesktopIconsView {
             return;
         };
         cx.notify();
+        let Some(display) = self.display else {
+            return;
+        };
         let copy = event.modifiers.control;
         let cell = self.cell(cx);
-        let display = self.display;
         self.model.update(cx, |model, cx| {
             let Some(lead) = model.spot(&carried.lead) else {
                 return;
@@ -521,6 +534,19 @@ impl DesktopIconsView {
                 _ => return,
             }
             cx.stop_propagation();
+            return;
+        }
+        // With the icons hidden only what does not touch them is heard:
+        // nothing chosen, opened or deleted that cannot be seen.
+        let hidden = !self.model.read(cx).shows_icons();
+        let blind = matches!(
+            (key, held.control, held.alt, held.shift),
+            ("f5", false, false, false)
+                | ("r", true, false, false)
+                | ("z", true, false, _)
+                | ("y", true, false, false)
+        );
+        if hidden && !blind {
             return;
         }
         let window_handle = window.window_handle();
@@ -723,7 +749,8 @@ impl Render for DesktopIconsView {
             .flat_map(|carried| &carried.keys)
             .collect();
         let mut zones = Vec::new();
-        if let Some(folder) = model.folder() {
+        // Nothing is dropped onto a desktop that shows nothing.
+        if let Some(folder) = model.folder().filter(|_| shows) {
             zones.push(DropZone {
                 bounds: Bounds {
                     origin: Point::default(),
@@ -738,7 +765,7 @@ impl Render for DesktopIconsView {
             for item in model.items() {
                 let Some(spot) = model
                     .spot(&item.key)
-                    .filter(|spot| spot.display == self.display)
+                    .filter(|spot| Some(spot.display) == self.display)
                 else {
                     continue;
                 };

@@ -296,8 +296,17 @@ impl FileClipboard {
         }
     }
 
+    /// Whether the clipboard holds files. It only asks which formats are
+    /// there: the clipboard is not opened and its owner not asked to
+    /// render anything, so it does not wait.
+    pub fn has_files() -> bool {
+        // SAFETY: the call only reads which formats the clipboard has.
+        unsafe { IsClipboardFormatAvailable(CF_HDROP) }.is_ok()
+    }
+
     /// The files on the clipboard, and whether they were cut; `None`
-    /// where it holds none.
+    /// where it holds none. It may wait for the program that put them
+    /// there: it is called away from the thread of GPUI.
     pub fn take() -> Option<(Vec<PathBuf>, bool)> {
         // SAFETY: the clipboard is opened and closed around the reading;
         // the memory it owns is only read, while it is locked.

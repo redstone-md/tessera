@@ -301,6 +301,43 @@ pub fn display_set_key(frames: &[ScreenRect]) -> String {
     named.join(";")
 }
 
+/// The displays a key of [`display_set_key`] names, in their order;
+/// `None` where it is not such a key.
+fn frames_of_key(set: &str) -> Option<Vec<ScreenRect>> {
+    { set.split(';') }
+        .map(|named| {
+            let (size, at) = named.split_once('@')?;
+            let (width, height) = size.split_once('x')?;
+            let (left, top) = at.split_once(',')?;
+            let (left, top): (i32, i32) = (left.parse().ok()?, top.parse().ok()?);
+            Some(ScreenRect {
+                left,
+                top,
+                right: left + width.parse::<i32>().ok()?,
+                bottom: top + height.parse::<i32>().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// How the displays of the arrangement `from` become those of `to`: the
+/// number in `to` of each display of `from`, by the same frame, or else
+/// by the same number where no display of `from` has that frame (as after
+/// the resolution changed); `None` for a display that went.
+fn display_map(from: &[ScreenRect], to: &[ScreenRect]) -> Vec<Option<usize>> {
+    let by_frame: Vec<Option<usize>> = { from.iter() }
+        .map(|frame| to.iter().position(|other| other == frame))
+        .collect();
+    { by_frame.iter().enumerate() }
+        .map(|(index, found)| {
+            found.or_else(|| {
+                let free = index < to.len() && !by_frame.contains(&Some(index));
+                free.then_some(index)
+            })
+        })
+        .collect()
+}
+
 /// The places of the icons for every arrangement of displays, as written
 /// in `desktop-icons.toml`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -341,6 +378,48 @@ impl Positions {
         std::fs::rename(&written, path)
     }
 
+    /// The places for the arrangement `set` of the displays `frames`: those
+    /// kept for it, or where it was never seen (a display unplugged for
+    /// the first time, a resolution changed), those of the arrangement
+    /// kept that shares the most displays with it, `before` where it is
+    /// as good, each moved to the same display in `set`. Only the icons
+    /// of a display that went have no place then, and go to the primary
+    /// one.
+    pub fn seeded(
+        &self,
+        set: &str,
+        frames: &[ScreenRect],
+        before: Option<&str>,
+    ) -> HashMap<String, Spot> {
+        if self.sets.contains_key(set) {
+            return self.of_set(set);
+        }
+        let shared = |other: &[ScreenRect]| {
+            { other.iter() }
+                .filter(|frame| frames.contains(frame))
+                .count()
+        };
+        let best = { self.sets.iter() }
+            .filter_map(|(key, spots)| Some((key, spots, frames_of_key(key)?)))
+            .max_by_key(|(key, _, other)| {
+                (
+                    shared(other),
+                    Some(key.as_str()) == before,
+                    other.len() == frames.len(),
+                )
+            });
+        let Some((_, spots, other)) = best else {
+            return HashMap::new();
+        };
+        let map = display_map(&other, frames);
+        { spots.iter() }
+            .filter_map(|(key, spot)| {
+                let display = (*map.get(spot.display)?)?;
+                Some((key.clone(), Spot { display, ..*spot }))
+            })
+            .collect()
+    }
+
     /// The places kept for the arrangement `set`.
     pub fn of_set(&self, set: &str) -> HashMap<String, Spot> {
         { self.sets.get(set).into_iter().flatten() }
@@ -377,6 +456,53 @@ mod tests {
             right: left + width,
             bottom: top + height,
         }
+    }
+
+    #[test]
+    fn a_key_of_displays_names_their_frames() {
+        let frames = vec![rect(-1920, 0, 1920, 1080), rect(0, 0, 2560, 1440)];
+        assert_eq!(frames_of_key(&display_set_key(&frames)), Some(frames));
+        assert_eq!(frames_of_key("garbage"), None);
+    }
+
+    #[test]
+    fn displays_are_followed_by_frame_or_else_by_number() {
+        let (a, b, c) = (
+            rect(0, 0, 1920, 1080),
+            rect(1920, 0, 1920, 1080),
+            rect(0, 0, 2560, 1440),
+        );
+        // The right display went.
+        assert_eq!(display_map(&[a, b], &[a]), [Some(0), None]);
+        // The left display went: the right one is now the first.
+        assert_eq!(display_map(&[a, b], &[b]), [None, Some(0)]);
+        // The resolution changed.
+        assert_eq!(display_map(&[a], &[c]), [Some(0)]);
+    }
+
+    #[test]
+    fn a_new_arrangement_starts_from_the_places_of_the_one_most_alike() {
+        let (a, b) = (rect(0, 0, 1920, 1080), rect(1920, 0, 1920, 1080));
+        let both = display_set_key(&[a, b]);
+        let mut positions = Positions::default();
+        let spots = HashMap::from([
+            ("left".to_owned(), Spot::cell(3, 2, 0)),
+            ("right".to_owned(), Spot::cell(1, 1, 1)),
+        ]);
+        positions.keep(&both, &spots);
+        // The right display unplugged for the first time.
+        let left = display_set_key(&[a]);
+        let seeded = positions.seeded(&left, &[a], Some(&both));
+        assert_eq!(seeded.get("left"), Some(&Spot::cell(3, 2, 0)));
+        assert_eq!(seeded.get("right"), None);
+        // The left one unplugged: the right one is the first now.
+        let right = display_set_key(&[b]);
+        let seeded = positions.seeded(&right, &[b], None);
+        assert_eq!(seeded.get("right"), Some(&Spot::cell(1, 1, 0)));
+        assert_eq!(seeded.get("left"), None);
+        // An arrangement kept, even emptied, is its own.
+        positions.keep(&left, &HashMap::new());
+        assert!(positions.seeded(&left, &[a], Some(&both)).is_empty());
     }
 
     const SMALL: Grid = Grid {

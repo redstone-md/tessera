@@ -237,13 +237,18 @@ fn item_entries(
     entries.push(entry(ICON_PROPERTIES, "Properties", |model, _| {
         model.properties()
     }));
-    if !paths.is_empty() {
+    // The Shell's own menu, of the files and of the items of the Shell
+    // (This PC, the Recycle Bin...) by the names it parses them by.
+    let shell_items: Vec<PathBuf> = { paths.iter().cloned() }
+        .chain(kinds.iter().map(|kind| PathBuf::from(kind.parsing_name())))
+        .collect();
+    if !shell_items.is_empty() {
         let model = weak.clone();
         entries.push(MenuEntry::new(
             ICON_MORE,
             language.say("Show more options"),
             move |cx| {
-                let built = ShellMenu::for_items(paths.clone(), extended);
+                let built = ShellMenu::for_items(shell_items.clone(), extended);
                 show_shell_menu(built, model.clone(), window, cx);
             },
         ));

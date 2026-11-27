@@ -63,17 +63,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, HWND_BOTTOM, HWND_NOTOPMOST, IDC_ARROW, IsWindowVisible, LoadCursorW,
     PostMessageW, RegisterClassW, SC_CLOSE, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetParent, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, WINDOWPOS, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT, WM_SETFOCUS, WM_SIZE,
-    WM_SYSCOMMAND, WM_WINDOWPOSCHANGING, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_THICKFRAME, WindowFromPoint,
+    ShowWindow, ShowWindowAsync, WINDOWPOS, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_PAINT,
+    WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WM_WINDOWPOSCHANGING, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WS_THICKFRAME, WindowFromPoint,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
 use super::registry::Key;
 use super::shell_item::{IdList, ShellId, name_of_item, wide};
 use super::shell_items::known_folder;
-use super::{IconPixels, NativeSurface, ScreenRect, ShellHost, Taskbar};
+use super::{ExplorerSettings, IconPixels, NativeSurface, ScreenRect, ShellHost, Taskbar};
 
 /// The class of the window Tessera keeps at the bottom beside Explorer,
 /// which the icons of the desktop are drawn in. Windows that look for the
@@ -172,6 +173,30 @@ impl VirtualKind {
     }
 }
 
+/// What the user chose in Windows for what the desktop shows: which
+/// items of the Shell (Desktop icon settings) and Explorer's folder
+/// options. It is read from the registry alone, cheaply, so it can be
+/// asked every little while and the desktop read again when it changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DesktopOptions {
+    /// The value Explorer wrote for each of [`VirtualKind::ALL`], in its
+    /// order: 0 shows it, 1 hides it.
+    hidden: [Option<u32>; VirtualKind::ALL.len()],
+    pub folders: ExplorerSettings,
+}
+
+impl DesktopOptions {
+    /// The options as they are now.
+    pub fn read() -> Self {
+        let key = Key::read(HKEY_CURRENT_USER, NEW_START_PANEL, Default::default());
+        Self {
+            hidden: VirtualKind::ALL
+                .map(|kind| key.as_ref().and_then(|key| key.number(kind.clsid()))),
+            folders: ExplorerSettings::read(),
+        }
+    }
+}
+
 /// An item of the Shell on the desktop, as Windows has it now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VirtualItem {
@@ -183,15 +208,12 @@ pub struct VirtualItem {
 }
 
 /// The items of the Shell the desktop may show, in Explorer's order, with
-/// whether each is shown and its name. Reads the registry and asks the
-/// Shell; COM must be initialized on the calling thread, which is not the
-/// thread of GPUI.
-pub fn virtual_items() -> Vec<VirtualItem> {
-    let key = Key::read(HKEY_CURRENT_USER, NEW_START_PANEL, Default::default());
-    VirtualKind::ALL
-        .into_iter()
-        .map(|kind| {
-            let hidden = key.as_ref().and_then(|key| key.number(kind.clsid()));
+/// whether each is shown as `options` say and its name. Asks the Shell;
+/// COM must be initialized on the calling thread, which is not the thread
+/// of GPUI.
+pub fn virtual_items(options: &DesktopOptions) -> Vec<VirtualItem> {
+    { VirtualKind::ALL.into_iter().zip(options.hidden) }
+        .map(|(kind, hidden)| {
             let name = IdList::of_path(Path::new(&kind.parsing_name()))
                 .and_then(|list| list.item())
                 .ok()
@@ -376,8 +398,9 @@ impl Watched {
         .context("the changes of the folder cannot be read")
     }
 
-    /// Ends the reading that arrived: whether it gave something (or told
-    /// that more changed than fits).
+    /// Ends the reading that arrived: whether it went well, with changes
+    /// or with none written as more changed than fits; `false` where the
+    /// folder went or cannot be reached.
     fn finish(&mut self) -> bool {
         let mut bytes = 0u32;
         // SAFETY: the structure is the one the reading was started with.
@@ -435,10 +458,16 @@ fn watch(mut watched: Vec<Watched>, stop: &Event, changed: &Sender<()>) {
         let Some(one) = index.checked_sub(1).and_then(|at| watched.get_mut(at)) else {
             break;
         };
-        one.finish();
         // A change that waits to be read is enough.
         changed.try_send(()).ok();
-        if one.arm().is_err() {
+        // A reading that failed tells that the folder went or cannot be
+        // reached any more: it would fail again at once, round after
+        // round. The folder is read once more above, and no longer
+        // watched.
+        if !one.finish() {
+            report!("a folder of the desktop is no longer watched: it cannot be reached");
+            watched.remove(index - 1);
+        } else if one.arm().is_err() {
             watched.remove(index - 1);
         }
         if changed.is_closed() {
@@ -473,10 +502,12 @@ impl ExplorerIcons {
                 }
             }
             for view in shown {
-                // SAFETY: hiding a window of another process changes only
-                // whether it is drawn; one that went away is ignored.
+                // SAFETY: the window is Explorer's; the call only posts
+                // that it be hidden and does not wait for Explorer, so a
+                // hung Explorer never holds Tessera; one that went away
+                // is ignored.
                 unsafe {
-                    let _ = ShowWindow(view, SW_HIDE);
+                    let _ = ShowWindowAsync(view, SW_HIDE);
                 }
             }
         }
@@ -489,9 +520,9 @@ impl ExplorerIcons {
             return;
         };
         for view in folder_views() {
-            // SAFETY: as in `hide`.
+            // SAFETY: as in `hide`: the showing is posted, not waited for.
             unsafe {
-                let _ = ShowWindow(view, SW_SHOWNOACTIVATE);
+                let _ = ShowWindowAsync(view, SW_SHOWNOACTIVATE);
             }
         }
         let _ = std::fs::remove_file(mark);

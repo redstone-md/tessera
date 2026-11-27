@@ -9,6 +9,7 @@ pub use win32::AppCommand;
 pub use win32::BinUsage;
 pub use win32::BrightnessLevel;
 pub use win32::DesktopClose;
+pub use win32::DesktopOptions;
 pub use win32::DisplayMode;
 pub use win32::InputName;
 pub use win32::Occupation;

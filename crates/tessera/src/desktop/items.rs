@@ -15,8 +15,8 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::platform::{
-    Attributes, DesktopFolders, ExplorerSettings, NameRules, VirtualKind, shell_names,
-    virtual_items,
+    Attributes, DesktopFolders, DesktopOptions, ExplorerSettings, NameRules, VirtualKind,
+    shell_names, virtual_items,
 };
 
 /// The file that gives a folder its look, which Explorer never shows on
@@ -268,12 +268,17 @@ pub fn rename_text(file_name: &str, shown: &str) -> String {
     }
 }
 
-/// The items of `folder`, shown as Explorer shows them under `settings`.
-/// Blocks on the disk.
-fn read_folder(folder: &Path, public: bool, settings: ExplorerSettings) -> Vec<DesktopItem> {
+/// The items of `folder`, shown as Explorer shows them under `settings`;
+/// `None` where the folder cannot be read now, as a desktop on a network
+/// share that is away. Blocks on the disk.
+fn read_folder(
+    folder: &Path,
+    public: bool,
+    settings: ExplorerSettings,
+) -> Option<Vec<DesktopItem>> {
     let Ok(listing) = fs::read_dir(folder) else {
         report!("the desktop folder {} cannot be read", folder.display());
-        return Vec::new();
+        return None;
     };
     let mut rules = NameRules::new(settings, true);
     let mut found = Vec::new();
@@ -304,16 +309,27 @@ fn read_folder(folder: &Path, public: bool, settings: ExplorerSettings) -> Vec<D
             item.name = name;
         }
     }
-    found
+    Some(found)
+}
+
+/// What a reading of the desktop found.
+pub struct DesktopReading {
+    pub items: Vec<DesktopItem>,
+    /// Whether every desktop folder was read: where one could not be,
+    /// its items are missing, but they are not gone.
+    pub complete: bool,
+    /// What the user chose in Windows for the desktop when it was read.
+    pub options: DesktopOptions,
 }
 
 /// Everything the desktop shows: the items of the Shell the user has
 /// Windows show there, the user's files and folders and then those of
 /// everyone's desktop. It reads the disk and asks the Shell: it is called
 /// on a thread of the Shell, never on the thread of GPUI.
-pub fn read_desktop(folders: &DesktopFolders) -> Vec<DesktopItem> {
-    let settings = ExplorerSettings::read();
-    let mut items: Vec<DesktopItem> = { virtual_items().into_iter() }
+pub fn read_desktop(folders: &DesktopFolders) -> DesktopReading {
+    let options = DesktopOptions::read();
+    let settings = options.folders;
+    let mut items: Vec<DesktopItem> = { virtual_items(&options).into_iter() }
         .filter(|item| item.shown)
         .map(|item| DesktopItem {
             key: item.kind.parsing_name(),
@@ -324,11 +340,17 @@ pub fn read_desktop(folders: &DesktopFolders) -> Vec<DesktopItem> {
         })
         .collect();
     let user = read_folder(&folders.user, false, settings);
-    let public = { folders.public.as_deref() }
-        .map(|public| read_folder(public, true, settings))
-        .unwrap_or_default();
-    items.extend(merge(user, public));
-    items
+    let public = { folders.public.as_deref() }.map(|public| read_folder(public, true, settings));
+    let complete = user.is_some() && !matches!(public, Some(None));
+    items.extend(merge(
+        user.unwrap_or_default(),
+        public.flatten().unwrap_or_default(),
+    ));
+    DesktopReading {
+        items,
+        complete,
+        options,
+    }
 }
 
 #[cfg(test)]

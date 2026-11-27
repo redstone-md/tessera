@@ -26,6 +26,7 @@ mod view;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -42,15 +43,17 @@ use crate::i18n::Language;
 use crate::icons::{Icon, icon_of_pixels};
 use crate::panel::rewrite;
 use crate::platform::{
-    DesktopFolders, DesktopLayer, ExplorerIcons, FileClipboard, FileDeed, FileOperation, FileWork,
-    FolderWatch, IconPixels, Launch, LayerKind, LinkTarget, NativeSurface, NewTemplate, Place,
-    RecycleBin, ScreenRect, ShellThread, SmallBirth, UndoJournal, VirtualKind, display_frames,
-    layer_frame, shell_mode, show_properties,
+    DesktopFolders, DesktopLayer, DesktopOptions, ExplorerIcons, FileClipboard, FileDeed,
+    FileOperation, FileWork, FolderWatch, IconPixels, Launch, LayerKind, LinkTarget, NativeSurface,
+    NewTemplate, Place, RecycleBin, ScreenRect, ShellThread, SmallBirth, UndoJournal, VirtualKind,
+    display_frames, layer_frame, shell_mode, show_properties,
 };
 use crate::popup::floating_window;
 
 use grid::{Arrangement, Grid, Positions, Spot, display_set_key, lay_out, ordered_displays};
-use items::{DesktopItem, ItemKind, SortBy, read_desktop, rename_text, renamed, sorted_keys};
+use items::{
+    DesktopItem, DesktopReading, ItemKind, SortBy, read_desktop, rename_text, renamed, sorted_keys,
+};
 use view::DesktopIconsView;
 
 /// The file the places of the icons are kept in, in the directory of the
@@ -200,6 +203,10 @@ impl Desktop {
     /// with the displays from then on.
     pub fn start(config: &DesktopConfig, cx: &mut App) {
         cx.set_global(Self::default());
+        // Explorer's icons, where a Tessera that ended without restoring
+        // them left them hidden; hidden again at once where Tessera draws
+        // its own. Nothing happens where they were not hidden.
+        ExplorerIcons::restore();
         Self::configure(config, cx);
         Self::answer_close_requests(cx);
         Self::look_again(cx);
@@ -243,6 +250,9 @@ impl Desktop {
         for view in views {
             view.update(cx, |view, window, _| view.close(window)).ok();
         }
+        if cx.has_global::<DesktopIcons>() {
+            cx.remove_global::<DesktopIcons>();
+        }
         Self::keep_explorer(cx);
     }
 
@@ -262,16 +272,16 @@ impl Desktop {
     }
 
     /// Opens a window of the icons on every display, in place of those
-    /// that were open.
+    /// that were open. A display whose window cannot be made part of the
+    /// desktop gets none: its icons go to the other displays.
     fn open_views(model: &Entity<DesktopModel>, cx: &mut App) {
         for view in std::mem::take(&mut cx.global_mut::<Self>().views) {
             view.update(cx, |view, window, _| view.close(window)).ok();
         }
         let frames = ordered_displays(display_frames());
-        let key = display_set_key(&frames);
-        model.update(cx, |model, cx| model.set_displays(frames.clone(), &key, cx));
-        cx.global_mut::<Self>().displays = key;
+        cx.global_mut::<Self>().displays = display_set_key(&frames);
         let kind = cx.global::<Self>().config.layer;
+        let mut opened = Vec::new();
         for display in cx.displays() {
             let rough = Bounds {
                 origin: display.bounds().origin,
@@ -279,30 +289,51 @@ impl Desktop {
             };
             let options = floating_window(rough, Some(display.id()), false);
             let _small = SmallBirth::begin();
-            let frames = frames.clone();
             let model = model.clone();
-            let opened = cx.open_window(options, |window, cx| {
+            let mut adopted = None;
+            let window = cx.open_window(options, |window, cx| {
                 let placed = NativeSurface::of(window).and_then(|native| {
                     let whole = native.display_frame()?;
+                    if !frames.contains(&whole) {
+                        anyhow::bail!("its display is not among those Windows lists");
+                    }
                     let room = native.display().work_area().unwrap_or(whole);
                     let frame = layer_frame(room, whole);
                     let layer = native.adopt_as_desktop_layer(kind, frame)?;
-                    let index = frames.iter().position(|frame| *frame == whole);
-                    anyhow::Ok((layer, index.unwrap_or(0), frame))
+                    anyhow::Ok((layer, whole, frame))
                 });
-                let (layer, index, frame) = match placed {
-                    Ok((layer, index, frame)) => (Some(layer), index, Some(frame)),
+                let (layer, frame) = match placed {
+                    Ok((layer, whole, frame)) => {
+                        adopted = Some(whole);
+                        (Some(layer), Some(frame))
+                    }
                     Err(error) => {
                         report!("the icons of a display are not on the desktop: {error:#}");
-                        (None, 0, None)
+                        // A window that is not part of the desktop would
+                        // hold icons no one sees; it is not kept.
+                        window.remove_window();
+                        (None, None)
                     }
                 };
-                cx.new(|cx| DesktopIconsView::new(model, index, layer, frame, window, cx))
+                cx.new(|cx| DesktopIconsView::new(model, layer, frame, window, cx))
             });
-            match opened {
-                Ok(view) => cx.global_mut::<Self>().views.push(view),
-                Err(error) => report!("the icons of a display did not open: {error:#}"),
+            match (window, adopted) {
+                (Ok(view), Some(whole)) => opened.push((view, whole)),
+                (Ok(_), None) => {}
+                (Err(error), _) => report!("the icons of a display did not open: {error:#}"),
             }
+        }
+        let shown: Vec<ScreenRect> = { frames.into_iter() }
+            .filter(|frame| opened.iter().any(|(_, whole)| whole == frame))
+            .collect();
+        let set = display_set_key(&shown);
+        model.update(cx, |model, cx| model.set_displays(shown.clone(), &set, cx));
+        for (view, whole) in opened {
+            if let Some(index) = shown.iter().position(|frame| *frame == whole) {
+                view.update(cx, |view, _, cx| view.show_display(index, cx))
+                    .ok();
+            }
+            cx.global_mut::<Self>().views.push(view);
         }
     }
 
@@ -325,23 +356,28 @@ impl Desktop {
 
     /// Looks every little while whether the displays were arranged
     /// otherwise, which needs new windows, whether Explorer showed its
-    /// icons again, and whether the Recycle Bin filled or emptied.
+    /// icons again, whether the user changed in Windows what the desktop
+    /// shows, and whether the Recycle Bin filled or emptied.
     fn look_again(cx: &mut App) {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let mut looks = 0u32;
             loop {
                 cx.background_executor().timer(LOOK_AGAIN).await;
                 looks = looks.wrapping_add(1);
-                let frames = { cx.background_executor() }
-                    .spawn(async { display_set_key(&ordered_displays(display_frames())) })
+                let (frames, options) = { cx.background_executor() }
+                    .spawn(async {
+                        let frames = display_set_key(&ordered_displays(display_frames()));
+                        (frames, DesktopOptions::read())
+                    })
                     .await;
                 let looked = cx.update(|cx| {
                     let this = cx.global::<Self>();
                     let model = this.model.clone();
-                    if let Some(model) = &model
-                        && this.displays != frames
-                    {
-                        Self::open_views(model, cx);
+                    if let Some(model) = &model {
+                        if this.displays != frames {
+                            Self::open_views(model, cx);
+                        }
+                        model.update(cx, |model, cx| model.follow_options(options, cx));
                     }
                     Self::keep_explorer(cx);
                     model.map(|model| model.downgrade())
@@ -448,6 +484,9 @@ pub struct DesktopModel {
     /// The key of the arrangement of displays, and the displays in order.
     set: String,
     displays: Vec<ScreenRect>,
+    /// The arrangement of displays before, whose places a new one starts
+    /// from.
+    set_before: Option<String>,
     primary: usize,
     /// What each window told of its display, by the number of the display.
     rooms: Vec<Option<Room>>,
@@ -467,8 +506,11 @@ pub struct DesktopModel {
     reading: Option<Task<()>>,
     /// Whether the icons are fetched anew once the desktop is read.
     refetch: bool,
-    /// How many times the places were written.
-    writes: u64,
+    /// Whether the last reading read every desktop folder: only then are
+    /// the places of icons not found let go.
+    complete: bool,
+    /// What the user chose in Windows for the desktop at the last reading.
+    options: Option<DesktopOptions>,
     _watch: Option<(FolderWatch, Task<()>)>,
 }
 
@@ -484,6 +526,7 @@ impl DesktopModel {
             positions: Positions::default(),
             set: String::new(),
             displays: Vec::new(),
+            set_before: None,
             primary: 0,
             rooms: Vec::new(),
             chosen: HashSet::new(),
@@ -496,7 +539,8 @@ impl DesktopModel {
             scale: 1.,
             reading: None,
             refetch: false,
-            writes: 0,
+            complete: false,
+            options: None,
             _watch: None,
         };
         model.read_positions(cx);
@@ -509,12 +553,22 @@ impl DesktopModel {
     fn configure(&mut self, config: DesktopConfig, cx: &mut Context<Self>) {
         let before = self.config;
         self.config = config;
+        if before.shows_icons() && !config.shows_icons() {
+            // Nothing stays chosen or renamed that cannot be seen.
+            self.chosen.clear();
+            self.cursor = None;
+            self.anchor = None;
+            self.rename = None;
+        }
         if before.size != config.size {
             self.fetch_icons(true, cx);
+        } else if !before.shows_icons() && config.shows_icons() {
+            self.fetch_icons(false, cx);
         }
         if before.arrange == Arrangement::Auto && config.arrange != Arrangement::Auto {
             // The icons stay where auto arrangement put them.
-            self.keep_places(cx);
+            let all = self.order.clone();
+            self.keep_places(&all, cx);
         }
         self.order = sorted_keys(&self.items, config.sort);
         self.relayout(cx);
@@ -582,6 +636,9 @@ impl DesktopModel {
             .unwrap_or(0);
         self.rooms = vec![None; displays.len()];
         self.displays = displays;
+        if self.set != set && !self.set.is_empty() {
+            self.set_before = Some(std::mem::take(&mut self.set));
+        }
         self.set = set.to_owned();
         self.relayout(cx);
     }
@@ -606,8 +663,8 @@ impl DesktopModel {
         !self.rooms.is_empty() && self.rooms.iter().all(Option::is_some)
     }
 
-    /// Places the icons anew, and keeps the places where every display
-    /// is known.
+    /// Places the icons anew, and keeps the places of new icons where
+    /// every display is known.
     fn relayout(&mut self, cx: &mut Context<Self>) {
         let grids: Vec<Grid> = { self.rooms.iter() }
             .map(|room| {
@@ -620,7 +677,9 @@ impl DesktopModel {
                 )
             })
             .collect();
-        let kept = self.positions.of_set(&self.set);
+        let kept = self
+            .positions
+            .seeded(&self.set, &self.displays, self.set_before.as_deref());
         self.spots = lay_out(
             &self.order,
             &kept,
@@ -632,29 +691,52 @@ impl DesktopModel {
         if self.rooms_known() && self.positions_read {
             self.new_from = None;
             if self.config.arrange != Arrangement::Auto {
-                self.keep_places(cx);
+                self.keep_places(&[], cx);
             }
         }
         cx.notify();
     }
 
     /// Keeps where the icons stand now for the arrangement of displays,
-    /// and writes it away from the user interface.
-    fn keep_places(&mut self, cx: &mut Context<Self>) {
+    /// and writes it away from the user interface. The icons `moved` keep
+    /// the places they stand in; the others keep the places kept for them
+    /// where they have one, so that an icon only pushed aside (as while
+    /// the room of a display is smaller) goes back once there is room,
+    /// and a new icon keeps the place it was given. The places of icons
+    /// not found are let go only where every desktop folder was read.
+    fn keep_places(&mut self, moved: &[String], cx: &mut Context<Self>) {
         if !self.positions_read || self.set.is_empty() || self.items.is_empty() {
             return;
         }
-        if !self.positions.keep(&self.set, &self.spots) {
+        let moved: HashSet<&String> = moved.iter().collect();
+        let mut kept = self.positions.of_set(&self.set);
+        for (key, spot) in &self.spots {
+            match moved.contains(key) {
+                true => {
+                    kept.insert(key.clone(), *spot);
+                }
+                false => {
+                    kept.entry(key.clone()).or_insert(*spot);
+                }
+            }
+        }
+        if self.complete {
+            kept.retain(|key, _| self.spots.contains_key(key));
+        }
+        if !self.positions.keep(&self.set, &kept) {
             return;
         }
         let Some(path) = positions_path() else {
             return;
         };
         // Writings may overtake one another away from the user interface;
-        // one older than what was written already is left out.
+        // one older than what was written already is left out. They are
+        // numbered across the process, as a model made anew writes to the
+        // same file.
+        static NEXT: AtomicU64 = AtomicU64::new(1);
         static WRITTEN: Mutex<u64> = Mutex::new(0);
-        self.writes += 1;
-        let (positions, write) = (self.positions.clone(), self.writes);
+        let write = NEXT.fetch_add(1, Ordering::Relaxed);
+        let positions = self.positions.clone();
         { cx.background_executor() }
             .spawn(async move {
                 let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
@@ -728,21 +810,38 @@ impl DesktopModel {
         let read = ShellThread::call_alone("desktop", move || read_desktop(&folders));
         self.reading = Some(
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let Ok(items) = read.recv().await else {
+                let Ok(reading) = read.recv().await else {
                     return;
                 };
-                this.update(cx, |this, cx| this.take_items(items, cx)).ok();
+                this.update(cx, |this, cx| this.take_items(reading, cx))
+                    .ok();
             }),
         );
     }
 
-    /// Shows `items` in place of what was shown.
-    fn take_items(&mut self, items: Vec<DesktopItem>, cx: &mut Context<Self>) {
+    /// Shows what `reading` found in place of what was shown.
+    fn take_items(&mut self, reading: DesktopReading, cx: &mut Context<Self>) {
+        let DesktopReading {
+            items,
+            complete,
+            options,
+        } = reading;
         let keys: HashSet<&String> = items.iter().map(|item| &item.key).collect();
         self.chosen.retain(|key| keys.contains(key));
         if self.cursor.as_ref().is_some_and(|key| !keys.contains(key)) {
             self.cursor = None;
         }
+        // The icons of files that went are let go.
+        let gone = complete
+            && cx
+                .try_global::<DesktopIcons>()
+                .is_some_and(|icons| icons.by_key.keys().any(|key| !keys.contains(key)));
+        if gone {
+            let icons = cx.global_mut::<DesktopIcons>();
+            icons.by_key.retain(|key, _| keys.contains(key));
+        }
+        self.complete = complete;
+        self.options = Some(options);
         self.items = items;
         self.order = sorted_keys(&self.items, self.config.sort);
         self.relayout(cx);
@@ -750,9 +849,23 @@ impl DesktopModel {
         self.fetch_icons(anew, cx);
     }
 
+    /// Reads the desktop again where the user changed in Windows what it
+    /// shows (Desktop icon settings, the folder options) since it was
+    /// last read.
+    fn follow_options(&mut self, options: DesktopOptions, cx: &mut Context<Self>) {
+        if self.options.is_some_and(|seen| seen != options) {
+            self.options = Some(options);
+            self.reload(cx);
+        }
+    }
+
     /// Fetches the icons of the items that have none at the size they are
-    /// drawn at, or with `anew` those of all, on a thread of the Shell.
+    /// drawn at, or with `anew` those of all, on a thread of the Shell;
+    /// none while the icons are hidden.
     fn fetch_icons(&mut self, anew: bool, cx: &mut Context<Self>) {
+        if !self.config.shows_icons() {
+            return;
+        }
         let size = self.icon_pixels();
         let have = cx.default_global::<DesktopIcons>();
         if have.size != size {
@@ -798,7 +911,8 @@ impl DesktopModel {
             let Ok(fetched) = fetched.recv().await else {
                 return;
             };
-            cx.update(|cx| {
+            // Kept only while the desktop that asked for them is there.
+            this.update(cx, |_, cx| {
                 let icons = cx.default_global::<DesktopIcons>();
                 if icons.size != fetched.size {
                     return;
@@ -815,9 +929,9 @@ impl DesktopModel {
                 if let Some(arrow) = fetched.arrow {
                     icons.arrow = icon_of_pixels(&arrow);
                 }
+                cx.notify();
             })
             .ok();
-            this.update(cx, |_, cx| cx.notify()).ok();
         })
         .detach();
     }
@@ -826,7 +940,8 @@ impl DesktopModel {
     /// away from the user interface.
     async fn look_at_bin(this: WeakEntity<Self>, cx: &mut AsyncApp) {
         let shown = this.read_with(cx, |this, _| {
-            { this.items.iter() }.any(|item| item.virtual_kind() == Some(VirtualKind::RecycleBin))
+            this.config.shows_icons() && { this.items.iter() }
+                .any(|item| item.virtual_kind() == Some(VirtualKind::RecycleBin))
         });
         if !shown.unwrap_or(false) {
             return;
@@ -1006,7 +1121,7 @@ impl DesktopModel {
                 )
             })
             .collect();
-        self.spots = lay_out(
+        let spots = lay_out(
             &order,
             &kept,
             self.config.arrange,
@@ -1014,7 +1129,13 @@ impl DesktopModel {
             self.primary,
             None,
         );
-        self.keep_places(cx);
+        // Those moved, and those they pushed aside, take their new places.
+        let changed: Vec<String> = { spots.iter() }
+            .filter(|(key, spot)| self.spots.get(*key) != Some(*spot))
+            .map(|(key, _)| key.clone())
+            .collect();
+        self.spots = spots;
+        self.keep_places(&changed, cx);
         cx.notify();
     }
 
@@ -1068,28 +1189,41 @@ impl DesktopModel {
     }
 
     /// Copies or moves what is on the clipboard onto the desktop, or with
-    /// `link` makes shortcuts to it there.
+    /// `link` makes shortcuts to it there. The clipboard is read away from
+    /// the user interface: its owner may be slow to give the files.
     pub fn paste(&mut self, link: bool, cx: &mut Context<Self>) {
-        let (Some(folder), Some((from, cut))) = (self.folder(), FileClipboard::take()) else {
+        let Some(folder) = self.folder() else {
             return;
         };
-        if link {
-            let operation = { from.into_iter() }.fold(FileOperation::new(), |operation, path| {
-                operation.link(LinkTarget::Path(path), &folder)
-            });
-            self.run(operation, cx);
-            return;
-        }
-        let work = match cut {
-            true => FileWork::Move { from, to: folder },
-            false => FileWork::Copy { from, to: folder },
-        };
-        self.work(work, cx);
+        let read = ShellThread::call_alone("clipboard", FileClipboard::take);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(Some((from, cut))) = read.recv().await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if link {
+                    let operation = { from.into_iter() }
+                        .fold(FileOperation::new(), |operation, path| {
+                            operation.link(LinkTarget::Path(path), &folder)
+                        });
+                    this.run(operation, cx);
+                    return;
+                }
+                let work = match cut {
+                    true => FileWork::Move { from, to: folder },
+                    false => FileWork::Copy { from, to: folder },
+                };
+                this.work(work, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    /// Whether there are files on the clipboard to paste.
+    /// Whether there are files on the clipboard to paste. It only asks
+    /// which formats the clipboard holds, which does not wait.
     pub fn can_paste() -> bool {
-        FileClipboard::take().is_some()
+        FileClipboard::has_files()
     }
 
     /// Puts what is chosen into the Recycle Bin, or with `erase` deletes
