@@ -782,7 +782,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Open {} in {}" = "Ouvrir {} dans {}"
 "Pin to Start" = "Épingler à l’écran de démarrage"
 "Unpin from Start" = "Détacher de l’écran de démarrage"
-"Pin to the dock" = "Épingler au dock"
 "Unpin from the dock" = "Détacher du dock"
 "Add to desktop" = "Ajouter au bureau"
 "App settings" = "Paramètres de l’application"

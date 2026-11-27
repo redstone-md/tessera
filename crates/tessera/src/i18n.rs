@@ -1487,7 +1487,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Open {} in {}", "Открыть {} в {}"),
     ("Pin to Start", "Закрепить на начальном экране"),
     ("Unpin from Start", "Открепить от начального экрана"),
-    ("Pin to the dock", "Закрепить в доке"),
     ("Unpin from the dock", "Открепить от дока"),
     ("Add to desktop", "Добавить на рабочий стол"),
     ("App settings", "Параметры приложения"),

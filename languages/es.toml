@@ -782,7 +782,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Open {} in {}" = "Abrir {} en {}"
 "Pin to Start" = "Anclar a Inicio"
 "Unpin from Start" = "Desanclar de Inicio"
-"Pin to the dock" = "Anclar al dock"
 "Unpin from the dock" = "Desanclar del dock"
 "Add to desktop" = "Añadir al escritorio"
 "App settings" = "Configuración de la aplicación"
