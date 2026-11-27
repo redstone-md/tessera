@@ -34,6 +34,7 @@ mod power_settings;
 mod privacy;
 mod problems;
 mod quick;
+mod rules_editor;
 mod run;
 mod runner;
 mod session;
@@ -87,6 +88,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(launcher::LauncherModule),
         Box::new(run::RunModule),
         Box::new(runner::RunnerModule),
+        Box::new(rules_editor::RulesEditorModule),
         Box::new(marketplace::MarketplaceModule {
             registries: config.registries(),
         }),
