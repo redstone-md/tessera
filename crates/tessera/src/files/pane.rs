@@ -7,7 +7,6 @@
 //! A window holds one pane per tab, or two side by side.
 
 use std::cell::Cell;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
@@ -15,24 +14,26 @@ use std::time::{Duration, SystemTime};
 use chrono::{DateTime, Local};
 use gpui::{
     AnyElement, AnyWindowHandle, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement,
-    Pixels, Point, Render, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Task,
-    UniformListScrollHandle, WeakEntity, Window, canvas, div, img, prelude::FluentBuilder, px,
-    uniform_list,
+    InteractiveElement, IntoElement, KeyDownEvent, ListAlignment, ListOffset, ListState,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, canvas, div, img,
+    list, prelude::FluentBuilder, px,
 };
 
 use super::model::{
-    Column, Entry, History, Listing, Location, Order, Selection, Shown, crumbs, free_name,
-    is_valid_name, read_folder, size_text, stamp_of,
+    Arrangement, Column, Entry, GroupLabel, Grouping, History, Line, Listing, Location, Look,
+    Order, Selection, Shape, Shown, crumbs, free_name, is_valid_name, read_folder, size_text,
+    stamp_of,
 };
-use super::{Files, FilesConfig, Look};
+use super::session::{FolderView, FolderViews};
+use super::{Files, FilesConfig};
 use crate::field::TextField;
 use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
     Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
-    QuickAccess, open_terminal, recent_files, reveal_in_explorer, show_properties,
+    QuickAccess, disk_space, open_terminal, recent_files, reveal_in_explorer, show_properties,
 };
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
@@ -41,15 +42,20 @@ use crate::ui::{icon, one_line};
 use super::sidebar::ICON_HOME;
 
 /// Measures of a pane, in logical pixels.
-pub const ROW_HEIGHT: f32 = 32.;
 const HEADER_HEIGHT: f32 = 30.;
-const TILE_WIDTH: f32 = 112.;
-const TILE_HEIGHT: f32 = 116.;
+const GROUP_HEIGHT: f32 = 34.;
+/// The room between items side by side, and around them.
+const GAP: f32 = 8.;
+const MARGIN: f32 = 16.;
 
 /// The widths of the columns after the name.
 const MODIFIED_WIDTH: f32 = 150.;
 const KIND_WIDTH: f32 = 90.;
 const SIZE_WIDTH: f32 = 90.;
+const FOLDER_WIDTH: f32 = 260.;
+
+/// How far the wheel turns, with Ctrl held, for one step of zoom.
+const WHEEL_STEP: f32 = 40.;
 
 /// How often the folder shown is looked at for changes, while the window
 /// is in front and the pane in sight.
@@ -89,6 +95,11 @@ const ICON_EXPLORER: &str = "\u{ec50}";
 const ICON_LINK: &str = "\u{e71b}";
 const ICON_SORT_UP: &str = "\u{e70e}";
 const ICON_SORT_DOWN: &str = "\u{e70d}";
+const ICON_CHECK: &str = "\u{e73e}";
+const ICON_NONE: &str = "";
+const ICON_SELECT_ALL: &str = "\u{e8b3}";
+const ICON_INVERT: &str = "\u{e8b2}";
+const ICON_PATTERN: &str = "\u{e8b9}";
 
 /// What a pane tells the window it is in.
 #[derive(Clone, Debug, PartialEq)]
@@ -146,11 +157,23 @@ pub struct FolderPane {
     stamp: Option<SystemTime>,
     reading: Option<Task<()>>,
     focus: FocusHandle,
-    scroll: UniformListScrollHandle,
+    /// How large the items of the look are drawn, as a step of its sizes.
+    zoom: usize,
+    /// What the list is grouped by.
+    grouping: Grouping,
+    /// The lines the list is drawn in, and what the list keeps of them.
+    lines: Vec<Line>,
+    list: ListState,
+    /// How many items stand side by side in a line.
+    across: usize,
     /// How wide the pane was last drawn, in logical pixels.
     width: Rc<Cell<f32>>,
-    /// How many tiles stand in a row, as last drawn.
-    columns: usize,
+    /// How far the wheel was turned with Ctrl held, toward a step of zoom.
+    wheel: Cell<f32>,
+    /// The size of the drive the folder is on and what of it is free.
+    space: Option<(u64, u64)>,
+    /// The field a pattern to choose by is written in, while it is.
+    pattern: Option<Entity<TextField>>,
     /// How many icons the frame being drawn may still look up, and
     /// whether one was left for the next.
     icons_left: Cell<usize>,
@@ -181,6 +204,9 @@ impl FolderPane {
             cx.new(|cx| TextField::new(language.say("Filter").into(), cx).with_glyph(ICON_SEARCH));
         cx.observe(&filter, |this, _, cx| this.arrange(cx)).detach();
         let focus = cx.focus_handle();
+        if config.per_folder {
+            FolderViews::load(cx);
+        }
         if !cx.has_global::<LinkArrow>() {
             let arrow = IconPixels::link_arrow().and_then(|pixels| icon_of_pixels(&pixels));
             cx.set_global(LinkArrow(arrow));
@@ -229,6 +255,14 @@ impl FolderPane {
             hidden: None,
             explorer: ExplorerSettings::default(),
             look: config.view,
+            zoom: config.view.first_zoom(),
+            grouping: config.group,
+            lines: Vec::new(),
+            list: ListState::new(0, ListAlignment::Top, px(400.)),
+            across: 1,
+            wheel: Cell::new(0.),
+            space: None,
+            pattern: None,
             drives: Vec::new(),
             filter,
             address: None,
@@ -237,9 +271,7 @@ impl FolderPane {
             stamp: None,
             reading: None,
             focus,
-            scroll: UniformListScrollHandle::new(),
             width: Rc::new(Cell::new(0.)),
-            columns: 1,
             icons_left: Cell::new(ICONS_PER_FRAME),
             icons_owed: Cell::new(false),
             visible: true,
@@ -248,6 +280,7 @@ impl FolderPane {
             window: window.window_handle(),
             _watch: watch,
         };
+        pane.take_view(cx);
         pane.load(cx);
         pane
     }
@@ -302,6 +335,8 @@ impl FolderPane {
             Location::Computer => {
                 self.listing = Listing::default();
                 self.problem = None;
+                self.space = None;
+                self.relayout(true);
                 self.read_drives(cx);
                 cx.notify();
                 return;
@@ -316,14 +351,16 @@ impl FolderPane {
                         let stamp = stamp_of(&path);
                         let explorer = ExplorerSettings::read();
                         let mut rules = NameRules::new(explorer, follow);
-                        (read_folder(&path, &mut rules), stamp, explorer)
+                        let entries = read_folder(&path, &mut rules);
+                        (entries, stamp, explorer, disk_space(&path))
                     })
                     .await;
                 this.update(cx, |this, cx| {
                     this.reading = None;
-                    let (entries, stamp, explorer) = read;
+                    let (entries, stamp, explorer, space) = read;
                     this.stamp = stamp;
                     this.explorer = explorer;
+                    this.space = space;
                     match entries {
                         Ok(entries) => {
                             this.problem = None;
@@ -378,6 +415,7 @@ impl FolderPane {
                     }
                     this.reading = None;
                     this.problem = None;
+                    this.space = None;
                     this.explorer = explorer;
                     this.listing = Listing::new(entries);
                     this.arrange(cx);
@@ -403,9 +441,86 @@ impl FolderPane {
             .and_then(|position| self.listing.get(position))
             .map(|entry| entry.path.clone());
         let filter = self.filter.read(cx).text();
-        self.listing.arrange(&self.order(), &filter, self.shown());
+        let order = self.order();
+        self.listing.arrange(Arrangement {
+            order: &order,
+            filter: &filter,
+            shown: self.shown(),
+            grouping: self.grouping(),
+            today: Local::now().date_naive(),
+        });
         self.selection.follow(cursor, &self.listing);
+        self.relayout(false);
         cx.notify();
+    }
+
+    /// What the list is grouped by: Home is grouped into Quick access and
+    /// the files used lately.
+    fn grouping(&self) -> Grouping {
+        match self.history.current() {
+            Location::Home => Grouping::Home,
+            _ => self.grouping,
+        }
+    }
+
+    /// Lays the shown entries out in lines anew, as many side by side as
+    /// the width holds, and has the list measure them again where they
+    /// changed, or always with `measure`, as after a change of size.
+    fn relayout(&mut self, measure: bool) {
+        let shape = self.look.shape(self.zoom);
+        self.across = match self.look.is_grid() {
+            true => (((self.width.get() - MARGIN + GAP) / (shape.width + GAP)) as usize).max(1),
+            false => 1,
+        };
+        let lines = self.listing.lines(self.across);
+        if measure || lines != self.lines {
+            let old = self.lines.len();
+            self.lines = lines;
+            self.list.splice(0..old, self.lines.len());
+        }
+    }
+
+    /// The line the entry at `position` is drawn in.
+    fn line_of(&self, position: usize) -> Option<usize> {
+        { self.lines.iter() }
+            .position(|line| matches!(line, Line::Items(range) if range.contains(&position)))
+    }
+
+    /// Takes the look the folder had where looks are kept per folder, or
+    /// else the one the configuration gives.
+    fn take_view(&mut self, cx: &mut Context<Self>) {
+        if !self.config.per_folder {
+            return;
+        }
+        let view = { self.folder() }.and_then(|folder| FolderViews::get(&folder, cx));
+        let config = self.config;
+        let view = view.unwrap_or(FolderView {
+            look: config.view,
+            zoom: config.view.first_zoom(),
+            column: Column::Name,
+            descending: false,
+            grouping: config.group,
+        });
+        self.look = view.look;
+        self.zoom = view.zoom;
+        self.order.column = view.column;
+        self.order.descending = view.descending;
+        self.grouping = view.grouping;
+    }
+
+    /// Keeps the look of the folder shown, where looks are kept per
+    /// folder.
+    fn keep_view(&self, cx: &mut Context<Self>) {
+        if let (true, Some(folder)) = (self.config.per_folder, self.folder()) {
+            let view = FolderView {
+                look: self.look,
+                zoom: self.zoom,
+                column: self.order.column,
+                descending: self.order.descending,
+                grouping: self.grouping,
+            };
+            FolderViews::put(&folder, view, cx);
+        }
     }
 
     /// Goes to `location`, as a click or a key asks.
@@ -420,9 +535,14 @@ impl FolderPane {
         self.selection.clear();
         self.rename = None;
         self.address = None;
+        self.pattern = None;
         self.filter.update(cx, |field, cx| field.clear(cx));
-        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.list.scroll_to(ListOffset {
+            item_ix: 0,
+            offset_in_item: px(0.),
+        });
         window.focus(&self.focus);
+        self.take_view(cx);
         self.load(cx);
         cx.emit(PaneEvent::Navigated);
     }
@@ -687,9 +807,13 @@ impl FolderPane {
 
     /// Whether a field of the pane has the keys.
     fn typing(&self, window: &Window, cx: &Context<Self>) -> bool {
-        let fields = [Some(&self.filter), self.address.as_ref()]
-            .into_iter()
-            .chain([self.rename.as_ref().map(|rename| &rename.field)]);
+        let fields = [
+            Some(&self.filter),
+            self.address.as_ref(),
+            self.pattern.as_ref(),
+        ]
+        .into_iter()
+        .chain([self.rename.as_ref().map(|rename| &rename.field)]);
         fields
             .flatten()
             .any(|field| field.read(cx).is_focused(window))
@@ -721,6 +845,14 @@ impl FolderPane {
             }
             return true;
         }
+        if self.pattern.is_some() {
+            match key {
+                "enter" => self.end_pattern(true, window, cx),
+                "escape" => self.end_pattern(false, window, cx),
+                _ => {}
+            }
+            return true;
+        }
         if self.typing(window, cx) {
             match key {
                 "escape" => {
@@ -732,19 +864,18 @@ impl FolderPane {
             }
             return true;
         }
-        let step = match self.look {
-            Look::Details => 1,
-            Look::Tiles => self.columns as isize,
-        };
-        let page = (window.viewport_size().height / px(ROW_HEIGHT)) as isize;
+        let step = self.across as isize;
+        let grid = self.look.is_grid();
+        let height = self.look.shape(self.zoom).height;
+        let page = (window.viewport_size().height / px(height)) as isize * step;
         match (key, held.control, held.alt, held.shift) {
             ("left", false, true, _) | ("backspace", false, false, _) => self.back(window, cx),
             ("right", false, true, _) => self.forward(window, cx),
             ("up", false, true, _) => self.up(window, cx),
             ("up", false, false, extend) => self.step(-step, extend, cx),
             ("down", false, false, extend) => self.step(step, extend, cx),
-            ("left", false, false, extend) if self.look == Look::Tiles => self.step(-1, extend, cx),
-            ("right", false, false, extend) if self.look == Look::Tiles => self.step(1, extend, cx),
+            ("left", false, false, extend) if grid => self.step(-1, extend, cx),
+            ("right", false, false, extend) if grid => self.step(1, extend, cx),
             ("pageup", _, false, extend) => self.step(-page, extend, cx),
             ("pagedown", _, false, extend) => self.step(page, extend, cx),
             ("home", _, false, extend) => self.step(isize::MIN / 2, extend, cx),
@@ -754,10 +885,10 @@ impl FolderPane {
             ("f2", ..) => self.rename_chosen(window, cx),
             ("f5", false, false, false) | ("r", true, false, false) => self.load(cx),
             ("delete", false, false, erase) => self.delete(erase, cx),
-            ("a", true, false, false) => {
-                self.selection.all(&self.listing);
-                cx.notify();
-            }
+            ("a", true, false, false) => self.choose_all(cx),
+            ("a", true, false, true) => self.invert_choice(cx),
+            ("s", true, false, true) => self.begin_pattern(window, cx),
+            ("c", true, false, true) => self.copy_paths(true, cx),
             ("c", true, false, false) => self.put_on_clipboard(false),
             ("x", true, false, false) => self.put_on_clipboard(true),
             ("v", true, false, false) => self.paste(cx),
@@ -767,8 +898,17 @@ impl FolderPane {
             ("f", true, false, false) | ("e", true, false, false) => {
                 self.filter.read(cx).focus(window)
             }
-            ("1", true, false, true) => self.set_look(Look::Details, cx),
-            ("2", true, false, true) => self.set_look(Look::Tiles, cx),
+            // The keys of the looks of Explorer.
+            ("1", true, false, true) => self.set_look_zoomed(Look::Icons, 4, cx),
+            ("2", true, false, true) => self.set_look_zoomed(Look::Icons, 3, cx),
+            ("3", true, false, true) => self.set_look_zoomed(Look::Icons, 1, cx),
+            ("4", true, false, true) => self.set_look_zoomed(Look::Icons, 0, cx),
+            ("5", true, false, true) => self.set_look(Look::List, cx),
+            ("6", true, false, true) => self.set_look(Look::Details, cx),
+            ("7", true, false, true) => self.set_look(Look::Tiles, cx),
+            ("=" | "+", true, false, _) => self.zoom_by(true, cx),
+            ("-", true, false, _) => self.zoom_by(false, cx),
+            ("0", true, false, false) => self.set_look(self.look, cx),
             _ => return false,
         }
         true
@@ -776,12 +916,41 @@ impl FolderPane {
 
     fn step(&mut self, by: isize, extend: bool, cx: &mut Context<Self>) {
         self.selection.step(&self.listing, by, extend);
-        if let Some(cursor) = self.selection.cursor {
-            let row = match self.look {
-                Look::Details => cursor,
-                Look::Tiles => cursor / self.columns.max(1),
-            };
-            self.scroll.scroll_to_item(row, ScrollStrategy::Top);
+        if let Some(line) = { self.selection.cursor }.and_then(|cursor| self.line_of(cursor)) {
+            self.list.scroll_to_reveal_item(line);
+        }
+        cx.notify();
+    }
+
+    pub fn choose_all(&mut self, cx: &mut Context<Self>) {
+        self.selection.all(&self.listing);
+        cx.notify();
+    }
+
+    pub fn invert_choice(&mut self, cx: &mut Context<Self>) {
+        self.selection.invert(&self.listing);
+        cx.notify();
+    }
+
+    /// Opens the field a pattern to choose by is written in.
+    pub fn begin_pattern(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let placeholder = Language::of(cx).say("Patterns to select, as *.jpg; IMG_????.*");
+        let field = cx.new(|cx| TextField::new(placeholder.into(), cx).with_glyph(ICON_PATTERN));
+        field.read(cx).focus(window);
+        self.pattern = Some(field);
+        cx.notify();
+    }
+
+    /// Adds to the choice what matches the pattern written, or with `keep`
+    /// false only closes the field.
+    fn end_pattern(&mut self, choose: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(field) = self.pattern.take() else {
+            return;
+        };
+        window.focus(&self.focus);
+        if choose {
+            let patterns = field.read(cx).text();
+            self.selection.add_matching(&self.listing, &patterns);
         }
         cx.notify();
     }
@@ -813,9 +982,48 @@ impl FolderPane {
         self.look
     }
 
+    /// Shows the items in `look`, at the size it starts at.
     pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
-        self.look = look;
+        self.set_look_zoomed(look, look.first_zoom(), cx);
+    }
+
+    fn set_look_zoomed(&mut self, look: Look, zoom: usize, cx: &mut Context<Self>) {
+        // A zoom past the sizes of the look is its largest.
+        (self.look, self.zoom) = (look, look.zoomed(zoom, true).min(zoom));
+        self.relayout(true);
+        self.keep_view(cx);
         cx.notify();
+    }
+
+    /// Draws the items a size larger, with `bigger`, or smaller.
+    pub fn zoom_by(&mut self, bigger: bool, cx: &mut Context<Self>) {
+        let zoom = self.look.zoomed(self.zoom, bigger);
+        if zoom != self.zoom {
+            self.set_look_zoomed(self.look, zoom, cx);
+            if let Some(line) = { self.selection.cursor }.and_then(|cursor| self.line_of(cursor)) {
+                self.list.scroll_to_reveal_item(line);
+            }
+        }
+    }
+
+    /// Zooms as the wheel turns with Ctrl held, a step for every notch.
+    fn wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        if !event.modifiers.control {
+            return;
+        }
+        let turned = self.wheel.get() + event.delta.pixel_delta(px(WHEEL_STEP)).y / px(1.);
+        if turned.abs() < WHEEL_STEP {
+            self.wheel.set(turned);
+            return;
+        }
+        self.wheel.set(0.);
+        self.zoom_by(turned > 0., cx);
+    }
+
+    pub fn set_grouping(&mut self, grouping: Grouping, cx: &mut Context<Self>) {
+        self.grouping = grouping;
+        self.keep_view(cx);
+        self.arrange(cx);
     }
 
     fn sort_by(&mut self, column: Column, cx: &mut Context<Self>) {
@@ -823,7 +1031,44 @@ impl FolderPane {
             Location::Home => self.home_order = self.home_order.toggled(column),
             _ => self.order = self.order.toggled(column),
         }
+        self.keep_view(cx);
         self.arrange(cx);
+    }
+
+    /// The entries of the menu of how the pane shows what it holds: the
+    /// looks, the groups and the hidden files.
+    pub fn view_menu(&self, cx: &mut Context<Self>) -> Vec<MenuEntry> {
+        let language = Language::of(cx);
+        let pane = cx.entity().downgrade();
+        let mark = |lit: bool| if lit { ICON_CHECK } else { ICON_NONE };
+        let mut entries: Vec<MenuEntry> = { Look::ALL.into_iter() }
+            .map(|look| {
+                let pane = pane.clone();
+                MenuEntry::new(
+                    mark(look == self.look),
+                    language.say(look.title()),
+                    move |cx| {
+                        pane.update(cx, |pane, cx| pane.set_look(look, cx)).ok();
+                    },
+                )
+            })
+            .collect();
+        entries.extend(Grouping::CHOSEN.into_iter().map(|grouping| {
+            let pane = pane.clone();
+            let lit = grouping == self.grouping;
+            MenuEntry::new(mark(lit), language.say(grouping.title()), move |cx| {
+                pane.update(cx, |pane, cx| pane.set_grouping(grouping, cx))
+                    .ok();
+            })
+        }));
+        entries.push(MenuEntry::new(
+            mark(self.hidden()),
+            language.say("Show hidden files"),
+            move |cx| {
+                pane.update(cx, |pane, cx| pane.toggle_hidden(cx)).ok();
+            },
+        ));
+        entries
     }
 
     /// Pins the folder at `path` to Quick access, or unpins it, and tells
@@ -953,6 +1198,12 @@ impl FolderPane {
                     }
                 }));
             }
+            entries.push(entry(ICON_SELECT_ALL, "Select all", |this, cx| {
+                this.choose_all(cx)
+            }));
+            entries.push(entry(ICON_PATTERN, "Select by pattern", |this, cx| {
+                this.after_menu(cx, |this, window, cx| this.begin_pattern(window, cx))
+            }));
             entries.push(entry(ICON_HIDDEN, "Show hidden files", |this, cx| {
                 this.toggle_hidden(cx)
             }));
@@ -1002,7 +1253,10 @@ impl FolderPane {
             this.put_on_clipboard(false)
         }));
         entries.push(entry(ICON_LINK, "Copy path", |this, cx| {
-            this.copy_paths(cx)
+            this.copy_paths(false, cx)
+        }));
+        entries.push(entry(ICON_INVERT, "Invert selection", |this, cx| {
+            this.invert_choice(cx)
         }));
         if self.beside {
             entries.push(entry(ICON_TO_OTHER, "Copy to the other pane", |_, cx| {
@@ -1032,10 +1286,14 @@ impl FolderPane {
     }
 
     /// Puts the paths of what is chosen on the clipboard as text, a line
-    /// each.
-    fn copy_paths(&mut self, cx: &mut Context<Self>) {
+    /// each, and with `quoted` each in quotes, as "Copy as path" of
+    /// Explorer does.
+    fn copy_paths(&mut self, quoted: bool, cx: &mut Context<Self>) {
         let paths: Vec<String> = { self.chosen().into_iter() }
-            .map(|path| path.display().to_string())
+            .map(|path| match quoted {
+                true => format!("\"{}\"", path.display()),
+                false => path.display().to_string(),
+            })
             .collect();
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(paths.join("\r\n")));
     }
@@ -1211,51 +1469,6 @@ impl FolderPane {
         self.filter.clone()
     }
 
-    fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let language = Language::of(cx);
-        let order = self.order();
-        let heading = |column: Column| {
-            let arrow = (order.column == column).then(|| {
-                let glyph = if order.descending {
-                    ICON_SORT_DOWN
-                } else {
-                    ICON_SORT_UP
-                };
-                icon(theme, glyph).text_size(px(9.))
-            });
-            let cell = div()
-                .id(("files-heading", column as usize))
-                .h_full()
-                .flex()
-                .items_center()
-                .gap(theme.spacing.tiny)
-                .px(theme.spacing.small)
-                .cursor_pointer()
-                .hover(|style| style.text_color(theme.colors.on_surface))
-                .child(language.say(column.title()))
-                .children(arrow)
-                .on_click(cx.listener(move |this, _, _, cx| this.sort_by(column, cx)));
-            match column {
-                Column::Name => cell.flex_1().min_w_0(),
-                Column::Modified => cell.w(px(MODIFIED_WIDTH)).flex_none(),
-                Column::Kind => cell.w(px(KIND_WIDTH)).flex_none(),
-                Column::Size => cell.w(px(SIZE_WIDTH)).flex_none().justify_end(),
-            }
-        };
-        div()
-            .h(px(HEADER_HEIGHT))
-            .flex_none()
-            .flex()
-            .items_center()
-            .pl(px(36.))
-            .pr(theme.spacing.medium)
-            .text_size(theme.typography.label_size * 0.85)
-            .text_color(theme.colors.on_surface_variant)
-            .border_b_1()
-            .border_color(theme.colors.outline.opacity(0.25))
-            .children(Column::ALL.map(heading))
-    }
-
     /// The icon of `entry`, `size` wide: the folder of the icon font for a
     /// folder, the one the Shell draws for a file; a blank one until it
     /// was looked up.
@@ -1351,139 +1564,6 @@ impl FolderPane {
         element
     }
 
-    fn render_rows(
-        &mut self,
-        range: Range<usize>,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        range
-            .filter_map(|position| {
-                let entry = self.listing.get(position)?.clone();
-                let chosen = self.selection.contains(&entry.path);
-                let cursor = self.selection.cursor == Some(position);
-                let size = match entry.folder {
-                    true => String::new(),
-                    false => size_text(entry.size),
-                };
-                let row = div()
-                    .id(("files-row", position))
-                    .h(px(ROW_HEIGHT))
-                    .mx(theme.spacing.small)
-                    .flex()
-                    .items_center()
-                    .gap(theme.spacing.small)
-                    .px(theme.spacing.small)
-                    .rounded(theme.shape.small)
-                    .text_size(theme.typography.label_size)
-                    .text_color(theme.colors.on_surface)
-                    .when(entry.hidden, |row| row.opacity(0.6))
-                    .when(chosen, |row| row.bg(theme.colors.secondary_container))
-                    .when(!chosen, |row| {
-                        row.hover(|style| style.bg(theme.colors.surface_container_highest))
-                    })
-                    .when(cursor, |row| {
-                        row.border_1()
-                            .border_color(theme.colors.primary.opacity(0.5))
-                    });
-                Some(
-                    Self::pressable(row, position, cx)
-                        .child(self.entry_icon(&entry, px(20.), theme, cx))
-                        .child(self.entry_name(&entry))
-                        .child(
-                            div()
-                                .w(px(MODIFIED_WIDTH))
-                                .flex_none()
-                                .px(theme.spacing.small)
-                                .text_color(theme.colors.on_surface_variant)
-                                .child(moment(entry.modified)),
-                        )
-                        .child(
-                            div()
-                                .w(px(KIND_WIDTH))
-                                .flex_none()
-                                .px(theme.spacing.small)
-                                .overflow_hidden()
-                                .text_color(theme.colors.on_surface_variant)
-                                .child(one_line(entry.kind())),
-                        )
-                        .child(
-                            div()
-                                .w(px(SIZE_WIDTH))
-                                .flex_none()
-                                .flex()
-                                .justify_end()
-                                .px(theme.spacing.small)
-                                .text_color(theme.colors.on_surface_variant)
-                                .child(size),
-                        )
-                        .into_any_element(),
-                )
-            })
-            .collect()
-    }
-
-    fn render_tile_rows(
-        &mut self,
-        range: Range<usize>,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        let columns = self.columns.max(1);
-        range
-            .map(|row| {
-                let first = row * columns;
-                let tiles =
-                    (first..(first + columns).min(self.listing.len())).filter_map(|position| {
-                        let entry = self.listing.get(position)?.clone();
-                        let chosen = self.selection.contains(&entry.path);
-                        let tile = div()
-                            .id(("files-tile", position))
-                            .w(px(TILE_WIDTH - 8.))
-                            .h(px(TILE_HEIGHT - 8.))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .gap(theme.spacing.tiny)
-                            .p(theme.spacing.tiny)
-                            .rounded(theme.shape.medium)
-                            .text_size(theme.typography.label_size * 0.92)
-                            .text_color(theme.colors.on_surface)
-                            .when(entry.hidden, |tile| tile.opacity(0.6))
-                            .when(chosen, |tile| tile.bg(theme.colors.secondary_container))
-                            .when(!chosen, |tile| {
-                                tile.hover(|style| style.bg(theme.colors.surface_container_highest))
-                            });
-                        Some(
-                            Self::pressable(tile, position, cx)
-                                .child(self.entry_icon(&entry, px(48.), theme, cx))
-                                .child(
-                                    div().w_full().flex().justify_center().child(
-                                        match &self.rename {
-                                            Some(rename) if rename.path == entry.path => div()
-                                                .w_full()
-                                                .child(rename.field.clone())
-                                                .into_any_element(),
-                                            _ => one_line(entry.display.clone()).into_any_element(),
-                                        },
-                                    ),
-                                ),
-                        )
-                    });
-                div()
-                    .h(px(TILE_HEIGHT))
-                    .px(theme.spacing.small)
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .children(tiles)
-                    .into_any_element()
-            })
-            .collect()
-    }
-
     /// The drives of the computer as cards with how full each is.
     fn render_computer(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let language = Language::of(cx);
@@ -1555,6 +1635,283 @@ impl FolderPane {
             .into_any_element()
     }
 
+    /// The columns the details show: those of a folder, or for results
+    /// of a search the folder each is in.
+    fn columns(&self) -> [Column; 4] {
+        Column::ALL
+    }
+
+    /// A cell of a column of the details, `column` wide.
+    fn cell(column: Column, theme: &Theme) -> gpui::Div {
+        let cell = div().flex_none().px(theme.spacing.small).overflow_hidden();
+        match column {
+            Column::Name => div().flex_1().min_w_0(),
+            Column::Modified => cell.w(px(MODIFIED_WIDTH)),
+            Column::Kind => cell.w(px(KIND_WIDTH)),
+            Column::Size => cell.w(px(SIZE_WIDTH)).flex().justify_end(),
+            Column::Folder => cell.w(px(FOLDER_WIDTH)),
+        }
+    }
+
+    fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let language = Language::of(cx);
+        let order = self.order();
+        let icon_room = self.look.shape(self.zoom).icon + 16.;
+        let heading = |column: Column| {
+            let arrow = (order.column == column).then(|| {
+                let glyph = if order.descending {
+                    ICON_SORT_DOWN
+                } else {
+                    ICON_SORT_UP
+                };
+                icon(theme, glyph).text_size(px(9.))
+            });
+            let cell = Self::cell(column, theme)
+                .id(("files-heading", column as usize))
+                .h_full()
+                .flex()
+                .items_center()
+                .gap(theme.spacing.tiny)
+                .cursor_pointer()
+                .hover(|style| style.text_color(theme.colors.on_surface))
+                .child(language.say(column.title()))
+                .children(arrow)
+                .on_click(cx.listener(move |this, _, _, cx| this.sort_by(column, cx)));
+            match column {
+                Column::Size => cell.justify_end(),
+                _ => cell,
+            }
+        };
+        div()
+            .h(px(HEADER_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .pl(px(icon_room))
+            .pr(theme.spacing.medium)
+            .text_size(theme.typography.label_size * 0.85)
+            .text_color(theme.colors.on_surface_variant)
+            .border_b_1()
+            .border_color(theme.colors.outline.opacity(0.25))
+            .children(self.columns().map(heading))
+    }
+
+    /// The heading of a group, with how many it holds.
+    fn render_heading(
+        &self,
+        label: &GroupLabel,
+        count: usize,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let language = Language::of(cx);
+        let label: SharedString = match label {
+            GroupLabel::Said(text) => language.say(text).into(),
+            GroupLabel::Text(text) => text.clone().into(),
+        };
+        div()
+            .h(px(GROUP_HEIGHT))
+            .mx(theme.spacing.medium)
+            .flex()
+            .items_end()
+            .gap(theme.spacing.small)
+            .pb(px(4.))
+            .border_b_1()
+            .border_color(theme.colors.outline.opacity(0.25))
+            .text_size(theme.typography.label_size)
+            .child(div().text_color(theme.colors.primary).child(label))
+            .child(
+                div()
+                    .text_size(theme.typography.label_size * 0.85)
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(format!("({count})")),
+            )
+            .into_any_element()
+    }
+
+    /// The text of the cell `column` of `entry`.
+    fn cell_text(&self, entry: &Entry, column: Column) -> String {
+        match column {
+            Column::Name => entry.display.clone(),
+            Column::Modified => moment(entry.modified),
+            Column::Kind => entry.kind(),
+            Column::Size if entry.folder => String::new(),
+            Column::Size => size_text(entry.size),
+            Column::Folder => match (entry.path.parent(), self.history.current().folder()) {
+                (Some(parent), Some(root)) => match parent.strip_prefix(root) {
+                    Ok(inner) if inner.as_os_str().is_empty() => ".".to_owned(),
+                    Ok(inner) => inner.display().to_string(),
+                    Err(_) => parent.display().to_string(),
+                },
+                (Some(parent), None) => parent.display().to_string(),
+                (None, _) => String::new(),
+            },
+        }
+    }
+
+    /// The box of the item at `position`, lit as it is chosen, which
+    /// takes the presses of the pointer.
+    fn item_box(
+        &self,
+        position: usize,
+        entry: &Entry,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let chosen = self.selection.contains(&entry.path);
+        let cursor = self.selection.cursor == Some(position);
+        let item = div()
+            .id(("files-item", position))
+            .flex_none()
+            .rounded(theme.shape.small)
+            .text_size(theme.typography.label_size)
+            .text_color(theme.colors.on_surface)
+            .border_1()
+            .border_color(match cursor {
+                true => theme.colors.primary.opacity(0.5),
+                false => gpui::transparent_black(),
+            })
+            .when(entry.hidden, |item| item.opacity(0.6))
+            .when(chosen, |item| item.bg(theme.colors.secondary_container))
+            .when(!chosen, |item| {
+                item.hover(|style| style.bg(theme.colors.surface_container_highest))
+            });
+        Self::pressable(item, position, cx)
+    }
+
+    /// The name of `entry` under its icon, or the field it is renamed in.
+    fn entry_label(&self, entry: &Entry) -> AnyElement {
+        match &self.rename {
+            Some(rename) if rename.path == entry.path => div()
+                .w_full()
+                .child(rename.field.clone())
+                .into_any_element(),
+            _ => div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(one_line(entry.display.clone()))
+                .into_any_element(),
+        }
+    }
+
+    /// The item at `position` as `shape` of the look draws it.
+    fn render_item(
+        &self,
+        position: usize,
+        shape: Shape,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let entry = self.listing.get(position)?.clone();
+        let item = self.item_box(position, &entry, theme, cx);
+        let picture = self.entry_icon(&entry, px(shape.icon), theme, cx);
+        let dim = theme.colors.on_surface_variant;
+        let small = theme.typography.label_size * 0.85;
+        let item = match self.look {
+            Look::Details => {
+                let cells = self.columns().into_iter().skip(1).map(|column| {
+                    Self::cell(column, theme)
+                        .text_color(dim)
+                        .child(one_line(self.cell_text(&entry, column)))
+                });
+                item.h(px(shape.height))
+                    .mx(theme.spacing.small)
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.small)
+                    .px(theme.spacing.small)
+                    .child(picture)
+                    .child(self.entry_name(&entry))
+                    .children(cells)
+            }
+            Look::List => item
+                .w(px(shape.width))
+                .h(px(shape.height))
+                .flex()
+                .items_center()
+                .gap(theme.spacing.small)
+                .px(theme.spacing.small)
+                .child(picture)
+                .child(self.entry_name(&entry)),
+            Look::Tiles => {
+                let details = match entry.folder {
+                    true => self.cell_text(&entry, Column::Kind),
+                    false => format!("{}  ·  {}", entry.kind(), size_text(entry.size)),
+                };
+                item.w(px(shape.width))
+                    .h(px(shape.height))
+                    .flex()
+                    .items_center()
+                    .gap(theme.spacing.medium)
+                    .px(theme.spacing.small)
+                    .child(picture)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(self.entry_name(&entry))
+                            .child(
+                                div()
+                                    .text_size(small)
+                                    .text_color(dim)
+                                    .child(one_line(details)),
+                            ),
+                    )
+            }
+            Look::Icons => item
+                .w(px(shape.width))
+                .h(px(shape.height))
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(theme.spacing.tiny)
+                .p(theme.spacing.tiny)
+                .child(picture)
+                .child(self.entry_label(&entry)),
+        };
+        Some(item.into_any_element())
+    }
+
+    /// The line `index` of the list: a heading of a group, or the items
+    /// that stand side by side.
+    fn render_line(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = *cx.global::<Theme>();
+        let shape = self.look.shape(self.zoom);
+        let element = match self.lines.get(index).cloned() {
+            Some(Line::Heading { label, count }) => self.render_heading(&label, count, &theme, cx),
+            Some(Line::Items(range)) if self.look == Look::Details => {
+                let item = self.render_item(range.start, shape, &theme, cx);
+                item.unwrap_or_else(|| div().into_any_element())
+            }
+            Some(Line::Items(range)) => {
+                let items: Vec<AnyElement> = range
+                    .filter_map(|position| self.render_item(position, shape, &theme, cx))
+                    .collect();
+                div()
+                    .px(px(MARGIN / 2.))
+                    .py(px(GAP / 4.))
+                    .flex()
+                    .gap(px(GAP))
+                    .children(items)
+                    .into_any_element()
+            }
+            None => div().into_any_element(),
+        };
+        if self.icons_owed.get() {
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+        }
+        element
+    }
+
     /// What the status bar says of the pane: how many items it shows,
     /// how many of them are chosen and what they take.
     pub fn status_text(&self, cx: &gpui::App) -> String {
@@ -1573,6 +1930,12 @@ impl FolderPane {
             }
         }
         text
+    }
+
+    /// The size of the drive the folder shown is on and what of it is
+    /// free, where it was read.
+    pub fn space(&self) -> Option<(u64, u64)> {
+        self.space
     }
 
     /// A line in the middle of the pane, where it shows no list.
@@ -1595,28 +1958,25 @@ impl FolderPane {
             .into_any_element()
     }
 
-    fn render_list(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let look = self.look;
-        let count = match look {
-            Look::Details => self.listing.len(),
-            Look::Tiles => self.listing.len().div_ceil(self.columns),
-        };
-        let list = uniform_list(
-            "files-list",
-            count,
-            cx.processor(move |this, range: Range<usize>, window, cx| {
-                let theme = *cx.global::<Theme>();
-                let rows = match look {
-                    Look::Details => this.render_rows(range, &theme, cx),
-                    Look::Tiles => this.render_tile_rows(range, &theme, cx),
-                };
-                if this.icons_owed.get() {
-                    cx.on_next_frame(window, |_, _, cx| cx.notify());
-                }
-                rows
-            }),
+    /// The bar over the list in which a pattern to choose by is written.
+    fn render_pattern(&self, theme: &Theme) -> Option<AnyElement> {
+        let field = self.pattern.clone()?;
+        Some(
+            div()
+                .flex_none()
+                .p(theme.spacing.small)
+                .border_b_1()
+                .border_color(theme.colors.outline.opacity(0.25))
+                .child(field)
+                .into_any_element(),
         )
-        .track_scroll(self.scroll.clone())
+    }
+
+    fn render_list(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity();
+        let lines = list(self.list.clone(), move |index, window, cx| {
+            this.update(cx, |this, cx| this.render_line(index, window, cx))
+        })
         .flex_1()
         .py(theme.spacing.tiny);
         div()
@@ -1625,10 +1985,10 @@ impl FolderPane {
             .min_h_0()
             .flex()
             .flex_col()
-            .when(look == Look::Details, |main| {
+            .when(self.look == Look::Details, |main| {
                 main.child(self.render_header(theme, cx))
             })
-            .child(list)
+            .child(lines)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event, window, cx| this.press_empty(event, window, cx)),
@@ -1646,8 +2006,6 @@ impl Render for FolderPane {
         let theme = *cx.global::<Theme>();
         self.icons_left.set(ICONS_PER_FRAME);
         self.icons_owed.set(false);
-        let columns = ((self.width.get() - 16.) / TILE_WIDTH) as usize;
-        self.columns = columns.max(1);
         let language = Language::of(cx);
         let content = match (self.history.current(), &self.problem) {
             (Location::Computer, _) => self.render_computer(&theme, cx),
@@ -1676,6 +2034,8 @@ impl Render for FolderPane {
                 true => theme.colors.primary.opacity(0.6),
                 false => gpui::transparent_black(),
             })
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.wheel(event, cx)))
+            .children(self.render_pattern(&theme))
             .child(content)
             .child(
                 canvas(
@@ -1683,7 +2043,12 @@ impl Render for FolderPane {
                         let wide = bounds.size.width / px(1.);
                         if (width.get() - wide).abs() >= 1. {
                             width.set(wide);
-                            entity.update(cx, |_, cx| cx.notify()).ok();
+                            entity
+                                .update(cx, |this, cx| {
+                                    this.relayout(false);
+                                    cx.notify();
+                                })
+                                .ok();
                         }
                     },
                     |_, (), _, _| {},

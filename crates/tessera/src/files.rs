@@ -20,7 +20,7 @@ use gpui::{
 };
 use serde::Deserialize;
 
-pub use model::{Location, size_text};
+pub use model::{Grouping, Location, Look, size_text};
 use session::{Opening, Session};
 use view::FilesView;
 
@@ -38,17 +38,6 @@ const LEAST_SIZE: (f32, f32) = (560., 360.);
 /// The folder character of the icon font.
 const ICON_FOLDER: &str = "\u{e8b7}";
 
-/// How a folder is first shown.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Look {
-    /// A row per item with its details.
-    #[default]
-    Details,
-    /// Tiles of large icons.
-    Tiles,
-}
-
 /// What `[files]` of the configuration says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -63,6 +52,11 @@ pub struct FilesConfig {
     pub folders_first: bool,
     /// How a folder is first shown.
     pub view: Look,
+    /// What a folder is first grouped by.
+    pub group: Grouping,
+    /// Whether each folder keeps its own look, zoom, order and groups,
+    /// as the user last set them there.
+    pub per_folder: bool,
     /// Whether a window opened without a folder opens with the tabs of
     /// the last window closed.
     pub restore: bool,
@@ -79,6 +73,8 @@ impl Default for FilesConfig {
             hidden: false,
             folders_first: true,
             view: Look::Details,
+            group: Grouping::None,
+            per_folder: false,
             restore: false,
             explorer: true,
         }

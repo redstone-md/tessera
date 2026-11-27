@@ -15,14 +15,17 @@ use gpui::{
     Styled, Subscription, Window, WindowControlArea, div, prelude::FluentBuilder, px, relative,
 };
 
+use super::model::size_text;
 use super::model::{Location, share_root};
-use super::pane::{FolderPane, ICON_HIDDEN, ICON_NEW_FOLDER, PaneEvent};
+use super::pane::{FolderPane, ICON_HIDDEN, ICON_NEW_FOLDER, PaneEvent, fill_bar};
 use super::session::{OpenTab, Opening, Session};
 use super::sidebar::{Sidebar, SidebarEvent};
 use super::tabs::{Tab, Tabs};
 use super::{Files, FilesConfig, Look};
 use crate::i18n::Language;
+use crate::menu::Menus;
 use crate::platform::FileWork;
+use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, logo, one_line};
 
@@ -40,7 +43,9 @@ const ICON_FORWARD: &str = "\u{e72a}";
 const ICON_UP: &str = "\u{e74a}";
 const ICON_REFRESH: &str = "\u{e72c}";
 const ICON_DETAILS: &str = "\u{e8fd}";
-const ICON_TILES: &str = "\u{f0e2}";
+const ICON_LIST: &str = "\u{ea37}";
+const ICON_TILES: &str = "\u{eca5}";
+const ICON_ICONS: &str = "\u{f0e2}";
 const ICON_SPLIT: &str = "\u{e89f}";
 const ICON_ADD: &str = "\u{e710}";
 const ICON_MINIMIZE: &str = "\u{e921}";
@@ -730,13 +735,13 @@ impl FilesView {
             .pane()
             .update(cx, |pane, cx| pane.render_address(theme, cx));
         let filter = self.pane().read(cx).filter_field();
-        let look_button = |id: &'static str, shown: Look, glyph: &'static str| {
-            tool_button(theme, id, glyph, true).when(look == shown, |button| {
-                button
-                    .bg(theme.colors.secondary_container)
-                    .text_color(theme.colors.on_surface)
-            })
+        let look_glyph = match look {
+            Look::Details => ICON_DETAILS,
+            Look::List => ICON_LIST,
+            Look::Tiles => ICON_TILES,
+            Look::Icons => ICON_ICONS,
         };
+        let view_pane = self.pane().clone();
         let looks = div()
             .flex()
             .items_center()
@@ -745,14 +750,19 @@ impl FilesView {
                 tool_button(theme, "files-new", ICON_NEW_FOLDER, folder)
                     .on_click(on_pane(|pane, window, cx| pane.new_folder(window, cx))),
             )
-            .child(
-                look_button("files-details", Look::Details, ICON_DETAILS)
-                    .on_click(on_pane(|pane, _, cx| pane.set_look(Look::Details, cx))),
-            )
-            .child(
-                look_button("files-tiles", Look::Tiles, ICON_TILES)
-                    .on_click(on_pane(|pane, _, cx| pane.set_look(Look::Tiles, cx))),
-            )
+            .child(tool_button(theme, "files-view", look_glyph, true).on_click(
+                move |event: &gpui::ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+                    let anchor = match PopupAnchor::under(window, event.position(), cx) {
+                        Ok(anchor) => anchor,
+                        Err(error) => {
+                            report!("the menu has no place: {error:#}");
+                            return;
+                        }
+                    };
+                    let entries = view_pane.update(cx, |pane, cx| pane.view_menu(cx));
+                    Menus::open(entries, anchor, cx);
+                },
+            ))
             .child(
                 tool_button(theme, "files-hidden", ICON_HIDDEN, true)
                     .when(hidden, |button| button.text_color(theme.colors.primary))
@@ -827,11 +837,28 @@ impl FilesView {
     }
 
     fn render_status(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let text = self.pane().read(cx).status_text(cx);
+        let language = Language::of(cx);
+        let pane = self.pane().read(cx);
+        let text = pane.status_text(cx);
         let tabs = match self.tabs.len() {
             1 => None,
-            count => Some(format!("{count} {}", Language::of(cx).say("tabs"))),
+            count => Some(format!("{count} {}", language.say("tabs"))),
         };
+        let space = pane.space().map(|(total, free)| {
+            let share = super::pane::used_share(Some(total), Some(free));
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(theme.spacing.small)
+                .child(format!(
+                    "{} {} {}",
+                    size_text(free),
+                    language.say("free of"),
+                    size_text(total)
+                ))
+                .child(div().w(px(80.)).child(fill_bar(theme, share, 5.)))
+        });
         div()
             .h(px(STATUS_HEIGHT))
             .flex_none()
@@ -842,6 +869,7 @@ impl FilesView {
             .text_size(theme.typography.label_size * 0.85)
             .text_color(theme.colors.on_surface_variant)
             .child(div().flex_1().min_w_0().child(one_line(text)))
+            .children(space)
             .children(tabs)
     }
 }

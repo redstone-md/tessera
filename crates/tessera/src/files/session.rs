@@ -2,20 +2,36 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! What the file manager keeps between its windows: the tabs of the last
-//! window closed, to open again when `[files] restore` asks. It is kept
-//! in `files-session.toml` of the local data directory of Tessera, which
-//! is no configuration and is written by the file manager alone.
+//! window closed, to open again when `[files] restore` asks, the shares
+//! of other computers visited, and, when `[files] per_folder` asks, how
+//! each folder was last shown. They are kept in `files-session.toml` and
+//! `files-views.toml` of the local data directory of Tessera, which are
+//! no configuration and are written by the file manager alone.
 
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use gpui::{App, Global, Task};
 use serde::{Deserialize, Serialize};
 
-use super::model::Location;
+use super::model::{Column, Grouping, Location, Look};
 use super::tabs::EVEN_SPLIT;
 
 /// The file the tabs are kept in.
 const SESSION_FILE: &str = "files-session.toml";
+
+/// The file the looks of folders are kept in.
+const VIEWS_FILE: &str = "files-views.toml";
+
+/// How many folders keep their look; those not seen longest are
+/// forgotten first.
+const VIEWS_KEPT: usize = 500;
+
+/// How long after a change of a look it is written, so that a few
+/// changes in a row are written once.
+const VIEWS_DELAY: Duration = Duration::from_secs(2);
 
 /// The directory Tessera keeps what it learns in, apart from the
 /// configuration: `%LOCALAPPDATA%\tessera`.
@@ -170,6 +186,130 @@ impl Session {
     }
 }
 
+/// How a folder was last shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderView {
+    pub look: Look,
+    pub zoom: usize,
+    pub column: Column,
+    pub descending: bool,
+    pub grouping: Grouping,
+}
+
+/// A look of a folder as the file keeps it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct SavedView {
+    path: String,
+    #[serde(flatten)]
+    view: FolderView,
+    /// When it was used last, counted in uses.
+    used: u64,
+}
+
+/// What the file of looks holds.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct SavedViews {
+    views: Vec<SavedView>,
+}
+
+/// How each folder was last shown, for the configuration that keeps a
+/// look per folder.
+#[derive(Default)]
+pub struct FolderViews {
+    /// By the path in small letters, with when each was used last.
+    views: HashMap<String, (FolderView, u64)>,
+    /// The count of uses, which tells the latest.
+    clock: u64,
+    /// Whether the file was asked for.
+    asked: bool,
+    writing: Option<Task<()>>,
+}
+
+impl Global for FolderViews {}
+
+/// The key of a folder among the looks, alike in any case.
+fn view_key(path: &Path) -> String {
+    path.to_string_lossy().trim_end_matches('\\').to_lowercase()
+}
+
+impl FolderViews {
+    /// Reads the file of looks, once, away from the user interface; until
+    /// it is read, folders have no look of their own.
+    pub fn load(cx: &mut App) {
+        let views = cx.default_global::<Self>();
+        if views.asked {
+            return;
+        }
+        views.asked = true;
+        cx.spawn(async move |cx| {
+            let saved = cx
+                .background_executor()
+                .spawn(async {
+                    read_state(VIEWS_FILE)
+                        .and_then(|text| toml::from_str::<SavedViews>(&text).ok())
+                        .unwrap_or_default()
+                })
+                .await;
+            cx.update(|cx| {
+                let views = cx.default_global::<Self>();
+                for saved in saved.views {
+                    views.clock = views.clock.max(saved.used);
+                    views.views.insert(saved.path, (saved.view, saved.used));
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// How the folder at `path` was last shown, if it is kept.
+    pub fn get(path: &Path, cx: &App) -> Option<FolderView> {
+        let views = cx.try_global::<Self>()?;
+        views.views.get(&view_key(path)).map(|(view, _)| *view)
+    }
+
+    /// Keeps `view` as how the folder at `path` is shown, and writes the
+    /// looks a moment later.
+    pub fn put(path: &Path, view: FolderView, cx: &mut App) {
+        let views = cx.default_global::<Self>();
+        views.clock += 1;
+        let used = views.clock;
+        views.views.insert(view_key(path), (view, used));
+        if views.views.len() > VIEWS_KEPT {
+            let oldest = { views.views.iter() }
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                views.views.remove(&oldest);
+            }
+        }
+        let saved = SavedViews {
+            views: { views.views.iter() }
+                .map(|(path, (view, used))| SavedView {
+                    path: path.clone(),
+                    view: *view,
+                    used: *used,
+                })
+                .collect(),
+        };
+        let text = match toml::to_string(&saved) {
+            Ok(text) => text,
+            Err(error) => {
+                report!("the file manager cannot write the looks of folders: {error}");
+                return;
+            }
+        };
+        let executor = cx.background_executor().clone();
+        let writing = cx.background_executor().spawn(async move {
+            executor.timer(VIEWS_DELAY).await;
+            write_state(VIEWS_FILE, &text);
+        });
+        // A write that waits is replaced by this one, which drops it.
+        cx.global_mut::<Self>().writing = Some(writing);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +338,27 @@ mod tests {
         };
         assert_eq!(read.opening(named), Some(opening));
         assert_eq!(Session::default().opening(named), None);
+    }
+
+    #[test]
+    fn the_look_of_a_folder_is_kept_in_its_file() {
+        let saved = SavedViews {
+            views: vec![SavedView {
+                path: "c:\\users\\me".to_owned(),
+                view: FolderView {
+                    look: Look::Icons,
+                    zoom: 3,
+                    column: Column::Modified,
+                    descending: true,
+                    grouping: Grouping::Modified,
+                },
+                used: 7,
+            }],
+        };
+        let text = toml::to_string(&saved).expect("looks can be written");
+        let read: SavedViews = toml::from_str(&text).expect("and read");
+        assert_eq!(read.views, saved.views);
+        assert_eq!(view_key(Path::new("C:\\Users\\Me\\")), "c:\\users\\me");
     }
 
     #[test]
