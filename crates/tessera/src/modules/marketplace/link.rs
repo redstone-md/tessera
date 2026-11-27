@@ -10,6 +10,8 @@
 //! by the link itself: the popup `install-resource` shows the registry,
 //! what is offered and what it asks for, and waits for a click.
 
+use std::path::PathBuf;
+
 use gpui::{
     App, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
@@ -271,20 +273,50 @@ impl InstallPrompt {
         self.install_placing(true, cx);
     }
 
+    /// Installs away from the user interface, as an icon pack may be many
+    /// files, and then, with `place`, puts the widget where the registry
+    /// suggests.
     fn install_placing(&mut self, place: bool, cx: &mut Context<Self>) {
         let Step::Asking(found) = std::mem::replace(&mut self.step, Step::Installing) else {
             return;
         };
         let (offer, package) = *found;
         let kind = offer.kind();
-        let installed = directory(kind)
-            .ok_or_else(|| "the configuration directory is unknown".to_owned())
-            .and_then(|directory| {
-                package
-                    .install(&directory)
-                    .map_err(|error| format!("{error:#}"))
-            });
-        self.step = match installed {
+        let directory = directory(kind);
+        let wanted = self.link.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let installed = cx
+                .background_executor()
+                .spawn(async move {
+                    let directory = directory
+                        .ok_or_else(|| "the configuration directory is unknown".to_owned());
+                    let installed = directory.and_then(|directory| {
+                        { package.install(&directory) }.map_err(|error| format!("{error:#}"))
+                    });
+                    (installed, package)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.installed(kind, &offer.id, installed, place, &wanted, cx)
+            })
+            .ok();
+        })
+        .detach();
+        self.buttons = [Interaction::new(&cx.global::<Theme>().motion); 3];
+        cx.notify();
+    }
+
+    /// Shows how the install went, and places the widget.
+    fn installed(
+        &mut self,
+        kind: Kind,
+        id: &str,
+        (installed, package): (Result<PathBuf, String>, Package),
+        place: bool,
+        wanted: &Option<Link>,
+        cx: &mut Context<Self>,
+    ) {
+        let step = match installed {
             Ok(installed) => {
                 cx.defer(Updates::check);
                 if kind == Kind::Extension {
@@ -297,14 +329,19 @@ impl InstallPrompt {
                     .map(|(widget, place)| place_widget(&widget, &place, cx))
                     .unwrap_or(Ok(()));
                 match placed {
-                    Ok(()) => Step::Done(Placing::after(kind, &offer.id, &installed)),
+                    Ok(()) => Step::Done(Placing::after(kind, id, &installed)),
                     Err(error) => Step::Failed(error.into()),
                 }
             }
             Err(error) => Step::Failed(error.into()),
         };
-        self.buttons = [Interaction::new(&cx.global::<Theme>().motion); 3];
-        cx.notify();
+        // Another link may have been followed meanwhile; the install is
+        // done all the same, but the popup shows that link.
+        if self.link == *wanted && matches!(self.step, Step::Installing) {
+            self.step = step;
+            self.buttons = [Interaction::new(&cx.global::<Theme>().motion); 3];
+            cx.notify();
+        }
     }
 
     /// Takes the next step after the install: uses the icon pack, shows

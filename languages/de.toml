@@ -765,3 +765,5 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "This registry is not among those of the configuration. Install only what you trust." = "Dieses Verzeichnis steht nicht in der Konfiguration. Installieren Sie nur, was vertrauenswürdig ist."
 "No link was followed" = "Es wurde kein Link geöffnet"
 "Close" = "Schließen"
+"Installing…" = "Wird installiert…"
+"Removing…" = "Wird entfernt…"

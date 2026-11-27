@@ -766,3 +766,5 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "This registry is not among those of the configuration. Install only what you trust." = "Ce registre ne figure pas dans la configuration. N'installez que ce qui est digne de confiance."
 "No link was followed" = "Aucun lien n'a été suivi"
 "Close" = "Fermer"
+"Installing…" = "Installation…"
+"Removing…" = "Suppression…"

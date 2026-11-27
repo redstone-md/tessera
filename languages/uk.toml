@@ -766,3 +766,5 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "This registry is not among those of the configuration. Install only what you trust." = "Цього реєстру немає в конфігурації. Встановлюйте лише те, чому довіряєте."
 "No link was followed" = "Жодне посилання не відкрито"
 "Close" = "Закрити"
+"Installing…" = "Інсталювання…"
+"Removing…" = "Видалення…"

@@ -282,6 +282,9 @@ enum Stage {
     Idle,
     /// Being downloaded.
     Downloading,
+    /// Being installed or deleted, away from the user interface; the text
+    /// says which.
+    Working(&'static str),
     /// Downloaded and checked; the user is asked to allow what it asks for.
     Offered(Box<Package>),
     /// The user is asked whether to delete it.
@@ -351,6 +354,10 @@ pub struct Marketplace {
     controls: [Interaction; 3],
     tabs: Vec<Interaction>,
 }
+
+/// The install or the removal of an offer, done away from the user
+/// interface.
+type Work = Box<dyn FnOnce() -> anyhow::Result<()> + Send>;
 
 /// What a press of a button of the row at an index does.
 type Action = fn(&mut Marketplace, usize, &mut Context<Marketplace>);
@@ -709,44 +716,7 @@ impl Marketplace {
     /// Does what the row asked about: installs or deletes what it offers.
     /// The shell loads the extensions again after one of them changed.
     fn confirm(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.get_mut(index) else {
-            return;
-        };
-        let kind = row.offer.kind();
-        let done = match row.turn(Stage::Idle, cx) {
-            Stage::Offered(package) => directory(kind)
-                .context("the configuration directory is unknown")
-                .and_then(|directory| package.install(&directory))
-                .map(|_| ()),
-            Stage::Leaving => {
-                let removed = row.installed.as_ref().map_or(Ok(()), Installed::remove);
-                // An icon pack that is gone is no longer used.
-                if removed.is_ok() && kind == Kind::IconPack {
-                    let id = row.offer.id.clone();
-                    if cx.global::<AppIcons>().packs().ids().contains(&id)
-                        && let Err(error) = use_pack(&id, false, cx)
-                    {
-                        report!("{error}");
-                    }
-                }
-                removed
-            }
-            stage => {
-                row.stage = stage;
-                return;
-            }
-        };
-        let Some(row) = self.rows.get_mut(index) else {
-            return;
-        };
-        row.question.animate_to(0.);
-        row.failure = done.err().map(|error| format!("{error:#}").into());
-        row.refresh();
-        if kind == Kind::Extension {
-            cx.defer(Shell::extensions_changed);
-        }
-        cx.emit(Changed);
-        cx.notify();
+        self.settle(index, None, cx);
     }
 
     /// Installs the extension of the row, as [`Self::confirm`] does, and
@@ -758,20 +728,121 @@ impl Marketplace {
             Some(Stage::Offered(package)) => suggested(package),
             _ => None,
         };
-        self.confirm(index, cx);
-        let Some((widget, place)) = placing else {
+        self.settle(index, placing, cx);
+    }
+
+    /// Installs or deletes what the row asked about away from the user
+    /// interface, as an icon pack may be many files, and then puts the
+    /// widget of `placing` where it says.
+    fn settle(
+        &mut self,
+        index: usize,
+        placing: Option<(String, Placement)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(row) = self.rows.get_mut(index) else {
             return;
         };
-        let installed = self
-            .rows
-            .get(index)
-            .is_some_and(|row| row.failure.is_none());
-        if installed && let Err(error) = place_widget(&widget, &place, cx) {
-            if let Some(row) = self.rows.get_mut(index) {
-                row.failure = Some(error.into());
+        let kind = row.offer.kind();
+        let id = row.offer.id.clone();
+        let (work, text): (Work, _) = match row.turn(Stage::Idle, cx) {
+            Stage::Offered(package) => {
+                let directory = directory(kind);
+                let work = Box::new(move || {
+                    let directory = directory.context("the configuration directory is unknown")?;
+                    package.install(&directory).map(|_| ())
+                });
+                (work, "Installing…")
             }
-            cx.notify();
+            Stage::Leaving => {
+                let installed = row.installed.take();
+                let work = Box::new(move || installed.as_ref().map_or(Ok(()), Installed::remove));
+                (work, "Removing…")
+            }
+            stage => {
+                row.stage = stage;
+                return;
+            }
+        };
+        let removing = text == "Removing…";
+        row.turn(Stage::Working(text), cx);
+        row.failure = None;
+        row.question.animate_to(0.);
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let looked_up = id.clone();
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let done = work();
+                    let installed =
+                        { installed(kind).into_iter() }.find(|installed| installed.id == looked_up);
+                    (done, installed)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.settled(kind, &id, removing, outcome, placing, cx)
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Shows on the rows of the offer what [`Self::settle`] did, and what
+    /// is installed after it.
+    fn settled(
+        &mut self,
+        kind: Kind,
+        id: &str,
+        removing: bool,
+        (done, mut installed): (anyhow::Result<()>, Option<Installed>),
+        placing: Option<(String, Placement)>,
+        cx: &mut Context<Self>,
+    ) {
+        // An icon pack that is gone is no longer used.
+        if removing
+            && done.is_ok()
+            && kind == Kind::IconPack
+            && cx
+                .global::<AppIcons>()
+                .packs()
+                .ids()
+                .iter()
+                .any(|known| known == id)
+            && let Err(error) = use_pack(id, false, cx)
+        {
+            report!("{error}");
         }
+        let mut failure = done.err().map(|error| format!("{error:#}"));
+        if kind == Kind::Extension {
+            cx.defer(Shell::extensions_changed);
+        }
+        if failure.is_none()
+            && let Some((widget, place)) = placing
+        {
+            failure = place_widget(&widget, &place, cx).err();
+        }
+        // The registries may have been read again meanwhile; every row of
+        // the offer shows what is installed now.
+        let mut shown = false;
+        for row in
+            { self.rows.iter_mut() }.filter(|row| row.offer.kind() == kind && row.offer.id == id)
+        {
+            if matches!(row.stage, Stage::Working(_)) {
+                row.turn(Stage::Idle, cx);
+                row.failure = failure.clone().map(Into::into);
+                shown = true;
+            }
+            row.installed = installed.take();
+            if row.installed.is_none() {
+                row.refresh();
+            }
+        }
+        if !shown && let Some(failure) = failure {
+            report!("{failure}");
+        }
+        cx.emit(Changed);
+        cx.notify();
     }
 
     fn cancel(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -912,6 +983,9 @@ impl Marketplace {
             Stage::Downloading => {
                 actions.push(caption(language.say("Downloading…").into()).into_any_element());
             }
+            Stage::Working(text) => {
+                actions.push(caption(language.say(text).into()).into_any_element());
+            }
             Stage::Offered(_) | Stage::Leaving => {}
         }
         let letter = row.offer.name.chars().next().unwrap_or('?');
@@ -1032,7 +1106,7 @@ impl Marketplace {
                     (0, Choice::suggested("Remove", Self::confirm)),
                 ],
             )),
-            (Stage::Idle | Stage::Downloading, _) => None,
+            (Stage::Idle | Stage::Downloading | Stage::Working(_), _) => None,
         };
         let asked = asked.map(|(text, choices)| {
             let buttons: Vec<AnyElement> = { choices.into_iter() }

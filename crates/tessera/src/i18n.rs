@@ -1454,6 +1454,8 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     ("No link was followed", "Ни одна ссылка не открыта"),
     ("Close", "Закрыть"),
+    ("Installing…", "Установка…"),
+    ("Removing…", "Удаление…"),
 ];
 
 #[cfg(test)]
