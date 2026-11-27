@@ -735,3 +735,11 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+
+# dock-taskbar: the menu of a button of the dock.
+"New window" = "Нове вікно"
+"Unpin" = "Відкріпити"
+"Pin to the dock" = "Закріпити на доку"
+"Close window" = "Закрити вікно"
+"Close all windows" = "Закрити всі вікна"
+"Window menu" = "Меню вікна"

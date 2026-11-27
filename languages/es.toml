@@ -735,3 +735,11 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Kill process" = "Terminar proceso"
 "Media" = "Multimedia"
 "Personalize" = "Personalizar"
+
+# dock-taskbar: the menu of a button of the dock.
+"New window" = "Nueva ventana"
+"Unpin" = "Desanclar"
+"Pin to the dock" = "Anclar al dock"
+"Close window" = "Cerrar ventana"
+"Close all windows" = "Cerrar todas las ventanas"
+"Window menu" = "Menú de la ventana"

@@ -1384,6 +1384,13 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // dock-taskbar: the menu of a button of the dock.
+    ("New window", "Новое окно"),
+    ("Unpin", "Открепить"),
+    ("Pin to the dock", "Закрепить на доке"),
+    ("Close window", "Закрыть окно"),
+    ("Close all windows", "Закрыть все окна"),
+    ("Window menu", "Меню окна"),
 ];
 
 #[cfg(test)]
