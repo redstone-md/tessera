@@ -53,6 +53,64 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | --- | --- | --- |
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
+| `snap` | `left`, `right`, `up`, `down`, `left-half`, `right-half`, `top-left`, `top-right`, `bottom-left`, `bottom-right`, `maximize`, `restore` or `minimize` | snaps the window in front, as [snapping](#snapping-window-rules-and-hot-corners) describes; its keys (Win and the arrows) are taken from Windows and bound by default where the keys of Windows are |
+| `snap-display` | `next`, `previous`, or none | sends the window in front to the next display from the left (round to the first), or the one before; its keys (Win+Shift+Right, Win+Shift+Left) are taken from Windows and bound by default |
+| `snap-layouts` | none | opens the snap layouts for the window in front; Win+Z is taken from Windows and bound by default |
+| `window-menu` | none | opens the window menu of the window in front; Alt+F3 is bound by default where the keys of Windows are |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Snapping, window rules and hot corners
+
+`[snap]` snaps windows that are dragged to an edge of a display: the left or right edge gives that half, the part of an edge within `corner` pixels (96) of a corner gives the quarter there, and the top edge the whole display; the pointer is to be within `edge` pixels (8) of the edge. A translucent shape in the primary color shows where the window goes before it is let go, and moves from place to place. A snapped window that is dragged away takes its size from before it was snapped once it is let go, with the pointer at the same share of its width; Windows itself gives it back while it is dragged, which a program outside the window cannot. A window dragged by its border is being resized and does not snap. With Shift held, the `[[snap.zone]]` entries of the display under the pointer are the places instead. `gap` leaves that many pixels between snapped windows and around them (0).
+
+```toml
+[snap]
+enabled = true      # without it, only when Tessera is the shell
+gap = 4
+assist = true       # offer the other windows for the rest of the display
+hover = true        # the snap layouts open over a maximize button (as enabled)
+hover_delay = 450   # milliseconds
+
+[[snap.zone]]
+display = 1         # counted from 1 from the left; every display without it
+rect = [0, 0, 0.3333, 1]   # x, y, width, height in shares of the work area
+
+[[snap.layout]]     # replaces the six layouts of Windows
+zones = [[0, 0, 0.7, 1], [0.7, 0, 0.3, 1]]
+```
+
+While dragging snaps, Tessera switches the snapping of Windows off (`SPI_SETWINARRANGING`) for as long as it runs, so that a window is not placed twice; the setting "Snap windows" of Windows stays as the user wrote it, and Tessera switches it on again when it quits, and at its next start if it was terminated. Whether Windows still snaps dragged windows without Explorer has not been seen, which is why dragging snaps by default only when Tessera is the shell. With the snapping of Windows off, Windows may not let a maximized window be dragged by its title bar; Win+Down or a double click on the title bar restores it then. Windows that are tiled are left to the tiling, and Windows does not let Tessera move a window of a program that runs as administrator.
+
+The action `snap` does the same with the keys: with `left` and `right` a window goes to that half, from the other half back to where it was, and from a half or a quarter at the edge on to the next display; `up` goes from a half to its top quarter and from there to the whole display, and `down` takes those steps back and minimizes a window that is where the user put it. `snap-display` sends the window in front to the next display, at the same share of the way across and down, snapped or maximized as it was. `snap-layouts` (Win+Z) opens six small pictures of ways to divide the display under the right end of the title bar of the window in front, and a click on a zone puts the window there; with `hover` they also open when the pointer rests on the maximize button of a window, which Tessera asks the window about (`WM_NCHITTEST`) a few times a second while the pointer is near the top right corner of a window, and close once the pointer has moved away. After a window took a half by dragging, or a zone of the layouts, the other windows are offered for the rest of the display, part after part (`assist`); Esc or a click elsewhere leaves the rest as it is.
+
+Each `[[rule]]` names windows by `exe` (the file name of the program), `title` and `class` (the window class), each a pattern in which `*` stands for any text and `?` for one character, whatever the case of the letters, or a regular expression after `re:`, and says what is done to them when they are first seen: `float = true` leaves them out of the tiles and `tile = true` tiles them whatever `[tiling]` says of their program; `workspace` (from 1) sends them to a workspace of Tessera's own (the virtual desktops of Windows take no window of another program); `display` (from 1 from the left) to a display; `position` (`"center"` or `[x, y]`) and `size` (`[width, height]`, in shares of the work area) place them; `maximize`, `above` (kept above the other windows), `opacity` (0.1 to 1) and `border = false` (no thin border, Windows 11) do what they say. `apply = "always"` does it again whenever the window changes, as far as it differs, which keeps a window where its rule puts it; otherwise a window that moves itself within a second of being shown, as many programs do to go back to where they were, is put back once. Every rule that names a window applies in the order of the file, a later one having the last word. Windows that are open already when Tessera starts or the rules change only get the rules that apply always. A tiled window is not placed by a rule. `skip_dock` and `skip_switcher` are read but neither the dock nor the window switcher leaves windows out yet. A rule without a name, with an `opacity` out of range, or with a `size` beyond the work area is reported and left out.
+
+```toml
+[[rule]]
+exe = "CalculatorApp.exe"
+float = true
+above = true
+position = "center"
+
+[[rule]]
+title = "*Picture-in-picture*"
+above = true
+apply = "always"
+```
+
+The window menu (`window-menu`, Alt+F3 where the keys of Windows are bound) opens under the title bar of the window in front: keep it above other windows or no longer, three opacities, the other workspaces of Tessera's own, the next display, the left or right half, maximize or restore, minimize, close, and **Create a rule for this window**, which writes a `[[rule]]` with its program, its window class, where it is and how large, whether it is kept above and how opaque, and opens `config.toml` to show it.
+
+Each `[[corner]]` names a corner or an edge (`at`: `top-left`, `top-right`, `bottom-left`, `bottom-right`, `top`, `bottom`, `left`, `right`), optionally one `display` (from 1 from the left), a `delay` in milliseconds the pointer rests there first (150, at most 5000), and one of `action` (with `arg`) as a `[[key]]` names one, `popup` or `run`. It is done once, and again only after the pointer has gone 40 pixels away; nothing is done while a button of the pointer is held, as while a window is dragged, or while the window in front fills the display. A corner of its own beats an edge it lies on. The pointer is looked at from a thread of its own ten times a second, fifty times while it is near a corner or edge in use, and not at all while there is no `[[corner]]`.
+
+```toml
+[[corner]]
+at = "top-left"
+popup = "launcher"
+
+[[corner]]
+at = "bottom-right"
+action = "desktop"
+delay = 300
+```

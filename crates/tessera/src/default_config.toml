@@ -140,6 +140,24 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             snap     snaps the window in front, as [snap] below says:
+#                      arg "left", "right", "up" or "down" goes from a half
+#                      to a quarter, to the whole display and back as
+#                      win+arrows do; "left-half", "right-half",
+#                      "top-left", "top-right", "bottom-left",
+#                      "bottom-right" and "maximize" go there at once,
+#                      "restore" and "minimize" do that. Where the keys of
+#                      Windows are bound it brings win+left, win+right,
+#                      win+up and win+down
+#             snap-display  sends the window in front to the next display,
+#                      arg "next" (the default) or "previous"; brings
+#                      win+shift+right and win+shift+left
+#             snap-layouts  opens the snap layouts for the window in front;
+#                      brings win+z
+#             window-menu  opens the window menu of the window in front:
+#                      keep above, opacity, workspace, display, snap,
+#                      maximize, minimize, close, and a [[rule]] written
+#                      for it; brings alt+f3
 #
 # [[key]]
 # press = "win+v"
@@ -442,6 +460,113 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # except = ["taskmgr.exe"]
 # except_titles = ["Picture-in-picture"]
 # except_classes = ["#32770"]
+
+# [snap] snaps windows that are dragged to an edge of a display: the left
+# or right edge gives that half, the part of an edge near a corner the
+# quarter there, and the top edge the whole display; a translucent shape
+# shows where the window goes before it is let go. A snapped window that is
+# dragged away takes its size from before again once it is let go. With
+# Shift held while dragging, the [[snap.zone]] entries of the display are
+# the places instead. After a window took a half, or a zone of the snap
+# layouts, the other windows are offered for the rest (assist).
+#   enabled      whether dragging snaps; without it, only when Tessera is
+#                the shell. While it is on, the snapping of Windows itself
+#                is off until Tessera quits ("Snap windows" in the
+#                settings of Windows stays as it is written).
+#   edge         how near an edge the pointer is to be, in pixels (8)
+#   corner       how near a corner along an edge for a quarter (96)
+#   gap          room left around snapped windows, in pixels (0)
+#   assist       whether the other windows are offered for the rest (true)
+#   hover        whether the snap layouts open when the pointer rests on
+#                the maximize button of a window (as enabled)
+#   hover_delay  how long it rests there first, in milliseconds (450)
+# [[snap.zone]] has rect = [x, y, width, height] in shares of the work area
+# of a display, and display, counted from 1 from the left, for one display
+# only. [[snap.layout]] entries, each with zones, a list of such rects,
+# replace the six layouts of Windows in the snap layouts (win+z).
+# The keys of snapping are the actions snap, snap-display, snap-layouts and
+# window-menu of the [[key]] entries above.
+#
+# [snap]
+# enabled = true
+# gap = 4
+#
+# [[snap.zone]]
+# rect = [0, 0, 0.3333, 1]
+#
+# [[snap.zone]]
+# rect = [0.3333, 0, 0.6667, 1]
+#
+# [[snap.layout]]
+# zones = [[0, 0, 0.7, 1], [0.7, 0, 0.3, 1]]
+
+# Each [[rule]] names windows and says what is done to them when they are
+# first seen; with apply = "always" it is done again whenever the window
+# changes, as far as it differs. Windows that are open already when Tessera
+# starts, or when the rules change, only get the rules that apply always.
+# A rule names windows by one or more of:
+#   exe    the file name of the program, as "notepad.exe"
+#   title  what the title bar says
+#   class  the window class, which tools such as Spy++ show
+# each a pattern in which * stands for any text and ? for one character,
+# whatever the case, or a regular expression after "re:". Every rule that
+# names a window applies, in the order of the file, a later one having the
+# last word. What a rule can do:
+#   float = true   leave the window out of the tiles
+#   tile = true    tile the window whatever [tiling] says of its program
+#   workspace      the workspace of Tessera's own it goes to, from 1
+#   display        the display it goes to, from 1 from the left
+#   position       "center", or [x, y] in shares of the work area
+#   size           [width, height] in shares of the work area
+#   maximize       true to maximize it, false to restore it
+#   above          true to keep it above the other windows
+#   opacity        0.1 to 1: how opaque it is drawn; some programs draw
+#                  badly once they are see-through
+#   border = false Windows draws no thin border around it (Windows 11)
+#   skip_dock, skip_switcher  read by the dock and the window switcher;
+#                  neither leaves windows out yet
+# A window that is tiled is not placed, sized or maximized by a rule.
+#
+# [[rule]]
+# exe = "CalculatorApp.exe"
+# float = true
+# above = true
+# position = "center"
+#
+# [[rule]]
+# title = "*Picture-in-picture*"
+# above = true
+# apply = "always"
+#
+# [[rule]]
+# exe = "re:^(code|cursor)\.exe$"
+# workspace = 2
+# display = 2
+# maximize = true
+
+# Each [[corner]] is a corner or an edge of the displays that does
+# something when the pointer rests there: at is "top-left", "top-right",
+# "bottom-left", "bottom-right", "top", "bottom", "left" or "right";
+# display, counted from 1 from the left, limits it to one display; delay is
+# how long the pointer rests there first, in milliseconds (150). It does
+# one of: action (with arg) as a [[key]] does, popup, or run. It is done
+# once, and again after the pointer has gone some way off; nothing is done
+# while a button of the pointer is held or the window in front fills the
+# display. A corner beats an edge it lies on.
+#
+# [[corner]]
+# at = "top-left"
+# popup = "launcher"
+#
+# [[corner]]
+# at = "bottom-right"
+# action = "desktop"
+# delay = 300
+#
+# [[corner]]
+# at = "top-right"
+# display = 2
+# run = ["wt.exe"]
 
 # [workspaces] makes the "workspaces" widget show workspaces of Tessera's
 # own instead of the virtual desktops of Windows: own is how many, 2 to 9.
