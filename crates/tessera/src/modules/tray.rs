@@ -857,10 +857,12 @@ impl TrayStrip {
                 }
             }
             _ => {
-                // Along a column the arrows up and down move by one.
-                let deed = match (deed, columns) {
-                    (KeyDeed::Row(by), 1) => KeyDeed::Move(by),
-                    (deed, _) => deed,
+                // Along a single row or column the arrows up and down move
+                // by one.
+                let vertical = window.viewport_size().height > window.viewport_size().width;
+                let deed = match deed {
+                    KeyDeed::Row(by) if !vertical || columns == 1 => KeyDeed::Move(by),
+                    deed => deed,
                 };
                 self.keyboard = Some(deed.moved(chosen, count, columns));
                 cx.notify();
@@ -882,10 +884,11 @@ impl TrayStrip {
 
     /// The layout of the strip in `window`.
     fn layout(&self, window: &Window) -> Layout {
-        match self.columns(window) {
-            1 => Layout::Column,
-            _ if window.viewport_size().height > window.viewport_size().width => Layout::Grid,
-            _ => Layout::Row,
+        let viewport = window.viewport_size();
+        match (viewport.height > viewport.width, self.columns(window)) {
+            (false, _) => Layout::Row,
+            (true, 1) => Layout::Column,
+            (true, _) => Layout::Grid,
         }
     }
 
