@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use super::host::{STOPPED, Worker};
 use super::runtime::{Answer as Offered, AnswerAction as Offer};
-use crate::runners::{Answer, AnswerAction, Command, Query, Runner, ranked_score};
+use crate::runners::{Answer, AnswerAction, Command, Query, Runner};
 
 /// How long the extensions have to answer, all together.
 pub const BUDGET: Duration = Duration::from_millis(300);
@@ -155,7 +155,7 @@ fn taken(id: &str, offered: Vec<Offered>) -> Vec<Answer> {
             }
             Offer::Open(_) => return None,
         };
-        let score = ranked_score(offer.score.min(SCORE_CAP), 0);
+        let score = offer.score.min(SCORE_CAP);
         let answer = Answer::new(offer.title, offer.detail, glyph(&offer.icon), score, action);
         let answer = answer.keyed(format!("extension:{id}:{}", offer.id));
         Some(match &offer.action {
