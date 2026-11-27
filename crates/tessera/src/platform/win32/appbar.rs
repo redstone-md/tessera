@@ -68,7 +68,7 @@ pub(super) const WORK_AREAS: u32 = WM_APP + 0x7e;
 
 /// A bar deeper than this share of its display does not take room from
 /// windows: it is one that sent its whole display as its place.
-const DEEPEST_SHARE: i32 = 2;
+const DEEPEST_SHARE: i64 = 2;
 
 /// A display, as the server arranges bars on it, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,12 +234,18 @@ pub(super) struct AppBarServer {
     told: Option<u32>,
 }
 
+/// `to - from`, which cannot overflow: the rectangles of bars come from
+/// other programs, which may send any numbers.
+fn span(from: i32, to: i32) -> i64 {
+    i64::from(to) - i64::from(from)
+}
+
 /// The display that holds most of `rect`, or the one nearest to it.
 fn display_of(rect: ScreenRect, monitors: &[Monitor]) -> Option<usize> {
     let overlap = |frame: ScreenRect| {
-        let width = rect.right.min(frame.right) - rect.left.max(frame.left);
-        let height = rect.bottom.min(frame.bottom) - rect.top.max(frame.top);
-        i64::from(width.max(0)) * i64::from(height.max(0))
+        let width = span(rect.left.max(frame.left), rect.right.min(frame.right));
+        let height = span(rect.top.max(frame.top), rect.bottom.min(frame.bottom));
+        width.max(0) * height.max(0)
     };
     let distance = |frame: ScreenRect| {
         let (x, y) = (
@@ -250,7 +256,8 @@ fn display_of(rect: ScreenRect, monitors: &[Monitor]) -> Option<usize> {
             i64::from(frame.left) + i64::from(frame.right),
             i64::from(frame.top) + i64::from(frame.bottom),
         );
-        (x - cx).pow(2) + (y - cy).pow(2)
+        let (dx, dy) = (x - cx, y - cy);
+        dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
     };
     let best = monitors
         .iter()
@@ -281,16 +288,19 @@ fn clip(area: &mut ScreenRect, edge: u32, bar: ScreenRect) {
 /// edge that lies at `bar`, keeping its depth.
 fn shift(rect: &mut ScreenRect, edge: u32, bar: ScreenRect) {
     let (horizontal, vertical) = match edge {
-        ABE_LEFT => ((bar.right - rect.left).max(0), 0),
-        ABE_TOP => (0, (bar.bottom - rect.top).max(0)),
-        ABE_RIGHT => (-(rect.right - bar.left).max(0), 0),
-        ABE_BOTTOM => (0, -(rect.bottom - bar.top).max(0)),
+        ABE_LEFT => (span(rect.left, bar.right).max(0), 0),
+        ABE_TOP => (0, span(rect.top, bar.bottom).max(0)),
+        ABE_RIGHT => (-span(bar.left, rect.right).max(0), 0),
+        ABE_BOTTOM => (0, -span(bar.top, rect.bottom).max(0)),
         _ => (0, 0),
     };
-    rect.left += horizontal;
-    rect.right += horizontal;
-    rect.top += vertical;
-    rect.bottom += vertical;
+    let moved = |side: i32, by: i64| {
+        (i64::from(side) + by).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+    };
+    rect.left = moved(rect.left, horizontal);
+    rect.right = moved(rect.right, horizontal);
+    rect.top = moved(rect.top, vertical);
+    rect.bottom = moved(rect.bottom, vertical);
 }
 
 /// Whether a bar at `edge` that lies at `rect` is no deeper than a share of
@@ -298,9 +308,9 @@ fn shift(rect: &mut ScreenRect, edge: u32, bar: ScreenRect) {
 fn plausible(edge: u32, rect: ScreenRect, frame: ScreenRect) -> bool {
     match edge {
         ABE_LEFT | ABE_RIGHT => {
-            (rect.right - rect.left) * DEEPEST_SHARE <= frame.right - frame.left
+            span(rect.left, rect.right) * DEEPEST_SHARE <= span(frame.left, frame.right)
         }
-        _ => (rect.bottom - rect.top) * DEEPEST_SHARE <= frame.bottom - frame.top,
+        _ => span(rect.top, rect.bottom) * DEEPEST_SHARE <= span(frame.top, frame.bottom),
     }
 }
 
@@ -1196,6 +1206,30 @@ mod tests {
         let monitors = [monitors[1], monitors[0]];
         let areas = [rect(0, 40, 1920, 1080), rect(1920, 40, 3200, 1024)];
         assert_eq!(changes(&monitors, &areas), vec![areas[1], areas[0]]);
+    }
+
+    #[test]
+    fn any_numbers_a_bar_sends_are_fitted() {
+        let primary = rect(0, 0, 1920, 1080);
+        let monitors = monitors();
+        let mut server = AppBarServer::default();
+        dock(&mut server, 1, ABE_LEFT, primary, 60);
+        let far = rect(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+        for edge in [ABE_LEFT, ABE_TOP, ABE_RIGHT, ABE_BOTTOM] {
+            server.answer(&request(ABM_NEW, 2, 0, far, 0), false, &monitors);
+            let set = server.answer(&request(ABM_SETPOS, 2, edge, far, 0), false, &monitors);
+            assert_eq!(set.result, 1);
+            server.work_areas(&monitors);
+            server.answer(&request(ABM_REMOVE, 2, 0, far, 0), false, &monitors);
+        }
+        let mut moved = rect(i32::MAX - 1, 0, i32::MAX, 10);
+        shift(&mut moved, ABE_LEFT, rect(i32::MIN, 0, i32::MAX, 10));
+        assert_eq!(moved.right, i32::MAX);
+        assert!(!plausible(ABE_TOP, far, primary));
+        assert_eq!(
+            display_of(rect(i32::MIN, 0, i32::MIN, 0), &monitors),
+            Some(1)
+        );
     }
 
     #[test]
