@@ -423,7 +423,6 @@ impl Files {
     /// place turns out not to be one it can show. False means the name is
     /// none it takes at all (or the file manager is not Tessera's), and the
     /// caller hands it to Explorer.
-    #[allow(dead_code, reason = "called by explorer-shim and shortcuts-editor")]
     pub fn open_shell(parsing: &str, cx: &mut App) -> bool {
         let parsing = parsing.trim();
         if !Self::opens_folders(cx) || !is_shell_name(parsing) {
@@ -505,6 +504,11 @@ impl Files {
             return;
         }
         let line = explorer_command_line(words);
+        // A place of the Shell named alone is shown here where it can be.
+        let alone = match words {
+            [word] => Some(word.clone()),
+            _ => None,
+        };
         let found =
             ShellThread::call_alone("explorer words", move || args.destination(&SystemPlaces));
         cx.spawn(async move |cx| {
@@ -516,6 +520,9 @@ impl Files {
                 Destination::Open(location) => Self::open(location, cx),
                 Destination::Select(path) => Self::open_at_item(&path, cx),
                 Destination::Explorer => {
+                    if alone.is_some_and(|word| Self::open_shell(&word, cx)) {
+                        return;
+                    }
                     if let Err(error) = start_explorer(&line, false) {
                         report!("{error:#}");
                     }
