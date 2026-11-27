@@ -485,7 +485,10 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # only. [[snap.layout]] entries, each with zones, a list of such rects,
 # replace the six layouts of Windows in the snap layouts (win+z).
 # The keys of snapping are the actions snap, snap-display, snap-layouts and
-# window-menu of the [[key]] entries above.
+# window-menu of the [[key]] entries above. While Tessera snaps, Windows'
+# own Win+arrows and Win+Z are off with its snapping: they work only where
+# windows_keys = true (by default when Tessera is the shell) binds
+# Tessera's, or a [[key]] with action = "snap" does.
 #
 # [snap]
 # enabled = true
@@ -506,6 +509,10 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # starts, or when the rules change, only get the rules that apply always.
 # A rule names windows by one or more of:
 #   exe    the file name of the program, as "notepad.exe"
+#   app    the packaged application, by its AppUserModelID, as
+#          "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"; the windows of
+#          apps such as Settings and Calculator all have the exe
+#          "ApplicationFrameHost.exe" and the class "ApplicationFrameWindow"
 #   title  what the title bar says
 #   class  the window class, which tools such as Spy++ show
 # each a pattern in which * stands for any text and ? for one character,
@@ -525,10 +532,12 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 #   border = false Windows draws no thin border around it (Windows 11)
 #   skip_dock, skip_switcher  read by the dock and the window switcher;
 #                  neither leaves windows out yet
-# A window that is tiled is not placed, sized or maximized by a rule.
+# A window that is tiled is not placed, sized or maximized by a rule. A
+# title that a program gives its window more than a second after showing it
+# needs apply = "always".
 #
 # [[rule]]
-# exe = "CalculatorApp.exe"
+# app = "Microsoft.WindowsCalculator_*"
 # float = true
 # above = true
 # position = "center"
