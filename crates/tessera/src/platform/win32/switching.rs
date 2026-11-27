@@ -1,22 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! What the window switcher reads of a window beyond what
-//! [`AppWindow`](super::AppWindow) lists, and how it comes in front.
-
-use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+//! How the window switcher comes in front. Whether a window is minimized
+//! is [`AppWindowId::is_minimized`], beside the other states of a window.
 
 use super::{AppWindowId, NativeSurface};
-
-impl AppWindowId {
-    /// Whether the window is minimized at this moment. A window that is
-    /// gone is not.
-    pub fn is_minimized(self) -> bool {
-        // SAFETY: the call only reads window state and tolerates a handle
-        // whose window has since been destroyed.
-        unsafe { IsIconic(self.hwnd()).as_bool() }
-    }
-}
 
 impl NativeSurface {
     /// Brings the window in front with the keyboard, as a window of

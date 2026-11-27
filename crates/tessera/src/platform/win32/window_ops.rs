@@ -125,7 +125,8 @@ impl AppWindowId {
         unsafe { IsZoomed(self.hwnd()).as_bool() }
     }
 
-    /// Whether the window is minimized.
+    /// Whether the window is minimized at this moment. A window that is
+    /// gone is not.
     pub fn is_minimized(self) -> bool {
         // SAFETY: as in `is_maximized`.
         unsafe { IsIconic(self.hwnd()).as_bool() }
