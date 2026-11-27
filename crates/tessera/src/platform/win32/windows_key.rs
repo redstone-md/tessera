@@ -17,6 +17,10 @@
 //! as Alt+Tab, which it gives to no program that asks for them: the key
 //! that completes one is not passed on, and the combination is reported.
 //!
+//! Where it is asked to, the hook also takes Alt+F4 while the desktop is
+//! in front, which Explorer answers with the dialog to shut down; Alt+F4
+//! anywhere else still closes a window.
+//!
 //! The hook has a thread of its own: Windows passes a key on without
 //! asking when the thread of a hook is busy for a fraction of a second,
 //! and the thread that draws sometimes is.
@@ -33,12 +37,13 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN,
-    VK_SHIFT,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_F4, VK_LWIN, VK_MENU,
+    VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PostThreadMessageW,
-    SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
+    CallNextHookEx, GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetMessageW,
+    GetShellWindow, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PostThreadMessageW, SetWindowsHookExW,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
 };
 
 /// A key code no keyboard has and no program listens to.
@@ -99,6 +104,8 @@ static TAKEN: Mutex<Vec<Hotkey>> = Mutex::new(Vec::new());
 static SWALLOWED: AtomicU32 = AtomicU32::new(0);
 /// Whether the keys of [`ChoiceKey`] are taken, whatever else is held.
 static CHOOSING: AtomicBool = AtomicBool::new(false);
+/// Whether Alt+F4 on the desktop is taken.
+static DESKTOP_CLOSE: AtomicBool = AtomicBool::new(false);
 /// The thread that has the hook, or zero while there is no hook.
 static WATCHER: AtomicU32 = AtomicU32::new(0);
 static PRESSED: OnceLock<(Sender<()>, Receiver<()>)> = OnceLock::new();
@@ -164,6 +171,34 @@ fn choice_presses() -> &'static (Sender<ChoiceKey>, Receiver<ChoiceKey>) {
     PRESSED.get_or_init(|| async_channel::bounded(8))
 }
 
+fn close_presses() -> &'static (Sender<()>, Receiver<()>) {
+    static PRESSED: OnceLock<(Sender<()>, Receiver<()>)> = OnceLock::new();
+    PRESSED.get_or_init(|| async_channel::bounded(1))
+}
+
+/// The classes of the windows that are the desktop: that of Explorer and
+/// the one behind its icons, which a shell may make as well.
+const DESKTOP_CLASSES: [&str; 2] = ["Progman", "WorkerW"];
+
+/// Alt+F4 pressed while the desktop is in front: no window, the desktop
+/// window of Windows or of the shell, or one of [`DESKTOP_CLASSES`].
+pub struct DesktopClose;
+
+impl DesktopClose {
+    /// Where a message arrives whenever Alt+F4 is pressed on the desktop
+    /// while it is taken.
+    pub fn presses() -> Receiver<()> {
+        close_presses().1.clone()
+    }
+
+    /// Takes Alt+F4 on the desktop from Windows if `taken`, and leaves it
+    /// to Windows otherwise.
+    pub fn take(taken: bool) -> anyhow::Result<()> {
+        DESKTOP_CLOSE.store(taken, Ordering::Relaxed);
+        watch_while_needed()
+    }
+}
+
 /// Key combinations Windows keeps to itself, taken from it.
 pub struct TakenKeys;
 
@@ -203,6 +238,7 @@ impl TakenKeys {
 fn watch_while_needed() -> anyhow::Result<()> {
     let needed = WINDOWS_KEY.load(Ordering::Relaxed)
         || CHOOSING.load(Ordering::Relaxed)
+        || DESKTOP_CLOSE.load(Ordering::Relaxed)
         || TAKEN.lock().is_ok_and(|taken| !taken.is_empty());
     let watcher = WATCHER.load(Ordering::Relaxed);
     match (needed, watcher != 0) {
@@ -303,6 +339,48 @@ fn start_key(key: VIRTUAL_KEY, down: bool) -> bool {
     true
 }
 
+/// Whether `held` and the key `key` going down make Alt+F4.
+fn is_close_combination(key: u16, held: Modifiers) -> bool {
+    let alt = Modifiers {
+        alt: true,
+        ..Modifiers::default()
+    };
+    key == VK_F4.0 && held == alt
+}
+
+/// Whether the desktop is in front: no window, or a window that is the
+/// desktop.
+fn desktop_in_front() -> bool {
+    // SAFETY: the calls only read system state; the buffer outlives the
+    // call that writes no more than its length.
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_invalid() || window == GetDesktopWindow() || window == GetShellWindow() {
+            return true;
+        }
+        let mut class = [0u16; 16];
+        let length = GetClassNameW(window, &mut class).max(0) as usize;
+        let class = String::from_utf16_lossy(&class[..length]);
+        DESKTOP_CLASSES.contains(&class.as_str())
+    }
+}
+
+/// Whether the key that went down is the F4 of Alt+F4 on the desktop
+/// while that is taken, which is then reported and not passed on. A taken
+/// combination of Alt+F4 was answered before this is asked.
+fn desktop_close_key(key: VIRTUAL_KEY, down: bool) -> bool {
+    if !down || !DESKTOP_CLOSE.load(Ordering::Relaxed) {
+        return false;
+    }
+    if !is_close_combination(key.0, Modifiers::down_now()) || !desktop_in_front() {
+        return false;
+    }
+    SWALLOWED.store(u32::from(key.0), Ordering::Relaxed);
+    // A press that is still waiting to be answered is enough.
+    close_presses().0.try_send(()).ok();
+    true
+}
+
 /// Sets the hook, tells `ready` which thread this is or why there is no
 /// hook, and handles what Windows sends that thread until it is told to
 /// quit, when the hook is removed.
@@ -367,7 +445,7 @@ unsafe extern "system" fn key_event(code: i32, wparam: WPARAM, lparam: LPARAM) -
             let key = VIRTUAL_KEY(event.vkCode as u16);
             let windows = key == VK_LWIN || key == VK_RWIN;
             let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
-            if taken_key(key, down) || start_key(key, down) {
+            if taken_key(key, down) || start_key(key, down) || desktop_close_key(key, down) {
                 return LRESULT(1);
             }
             let modified = windows && down && modifier_held();
@@ -418,6 +496,15 @@ mod tests {
         assert!(!is_start_combination(0x1b, held("ctrl+shift")));
         assert!(!is_start_combination(0x1b, Modifiers::default()));
         assert!(!is_start_combination(0x0d, held("ctrl")));
+    }
+
+    #[test]
+    fn alt_and_f4_alone_close_the_desktop() {
+        let held = |text| Modifiers::parse(text).unwrap();
+        assert!(is_close_combination(0x73, held("alt")));
+        assert!(!is_close_combination(0x73, held("ctrl+alt")));
+        assert!(!is_close_combination(0x73, Modifiers::default()));
+        assert!(!is_close_combination(0x74, held("alt")));
     }
 
     #[test]

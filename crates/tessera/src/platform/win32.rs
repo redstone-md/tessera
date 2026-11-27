@@ -98,6 +98,7 @@ pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};
 pub use wifi::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
+pub use windows_key::DesktopClose;
 pub use windows_key::{ChoiceKey, TakenKeys, WindowsKey};
 
 use std::ffi::c_void;

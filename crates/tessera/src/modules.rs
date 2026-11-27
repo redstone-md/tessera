@@ -44,6 +44,7 @@ use crate::config::Config;
 use crate::extension::ExtensionsModule;
 use crate::files::FilesModule;
 use crate::module::Module;
+pub use power_dialog::DesktopClosing;
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {

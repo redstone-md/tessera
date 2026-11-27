@@ -22,6 +22,7 @@ use crate::keys::Shortcuts;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
+use crate::modules::DesktopClosing;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
@@ -88,6 +89,7 @@ impl Shell {
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
+        DesktopClosing::start(config.windows_keys, cx);
         cx.set_global(Self {
             config,
             surfaces,
@@ -273,6 +275,7 @@ impl Shell {
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
+        DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);

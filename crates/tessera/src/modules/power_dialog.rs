@@ -6,10 +6,11 @@
 //! hibernate, shut down or restart, with or without the updates that wait.
 //! Widget `power-dialog`, in the popup of the same name in the middle of
 //! the display, which the action `power-dialog` opens; nothing is done
-//! before OK or Enter.
+//! before OK or Enter. Where the keys of Windows are in use, Alt+F4 on
+//! the desktop opens it too.
 
 use gpui::{
-    AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
+    App, AppContext, AsyncApp, Context, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window, div, px,
 };
 
@@ -18,7 +19,7 @@ use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::Interaction;
-use crate::platform::{PowerAction, PowerChoices};
+use crate::platform::{DesktopClose, PowerAction, PowerChoices, shell_mode};
 use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -116,10 +117,41 @@ impl Module for PowerDialogModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        // The desktop of the shell opens it for Alt+F4, so it brings no
-        // key of its own: Alt+F4 anywhere else closes a window.
+        // Alt+F4 opens it only on the desktop, which `DesktopClosing`
+        // looks out for, so it brings no key of its own: Alt+F4 anywhere
+        // else closes a window.
         let open = Action::new(|_, cx| Shell::toggle_popup(NAME, cx));
         actions.register(NAME, open)
+    }
+}
+
+/// Alt+F4 on the desktop, answered with the dialog where the keys of
+/// Windows are in use (`windows_keys`, by default when Tessera is the
+/// shell), as Explorer answers it.
+pub struct DesktopClosing;
+
+impl DesktopClosing {
+    /// Takes Alt+F4 on the desktop as `windows_keys` of the configuration
+    /// says, and opens the dialog whenever it is pressed.
+    pub fn start(windows_keys: Option<bool>, cx: &mut App) {
+        Self::configure(windows_keys);
+        let presses = DesktopClose::presses();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while presses.recv().await.is_ok() {
+                if cx.update(|cx| Actions::run(NAME, None, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Takes Alt+F4 on the desktop, or leaves it to Windows, as
+    /// `windows_keys` of the configuration says.
+    pub fn configure(windows_keys: Option<bool>) {
+        if let Err(error) = DesktopClose::take(windows_keys.unwrap_or_else(shell_mode)) {
+            report!("Alt+F4 on the desktop stays with Windows: {error:#}");
+        }
     }
 }
 

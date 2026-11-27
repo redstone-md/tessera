@@ -5,6 +5,7 @@
 
 mod win32;
 
+pub use win32::DesktopClose;
 pub use win32::DisplayMode;
 pub use win32::InputName;
 pub use win32::OwnInput;
