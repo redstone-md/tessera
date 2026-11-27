@@ -9,6 +9,7 @@
 //! of at most 2 MiB, an address on a permitted host, or an application.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,6 +25,11 @@ use crate::platform::app_path;
 /// The most pixels a picture is decoded to, in width and height: enough
 /// for the highest image at twice the scale.
 const DECODED: u32 = 1024;
+
+/// The most pixels a picture may say it has in width and in height. Two
+/// megabytes of one color can describe a picture of eleven thousand
+/// pixels square, half a gigabyte once decoded; this keeps one at 64 MiB.
+const PICTURE_SIDE: u32 = 4096;
 
 /// What tells the picture of an image node apart.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -150,9 +156,26 @@ fn load(source: &ImageSource) -> Result<Arc<RenderImage>, String> {
         }
         ImageSource::App(app) => return Err(format!("{app} is an application")),
     };
+    check_size(bytes)?;
     image_of_bytes(bytes, DECODED)
         .map_err(|error| format!("the picture cannot be read: {error:#}"))?
         .ok_or_else(|| "the picture is empty".to_owned())
+}
+
+/// Fails unless the picture of `bytes` says it is at most
+/// [`PICTURE_SIDE`] pixels in width and height. Only its header is read.
+fn check_size(bytes: &[u8]) -> Result<(), String> {
+    let (width, height) = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map(image::ImageReader::into_dimensions)
+        .map_err(|error| format!("the picture cannot be read: {error}"))?
+        .map_err(|error| format!("the picture cannot be read: {error}"))?;
+    match width <= PICTURE_SIDE && height <= PICTURE_SIDE {
+        true => Ok(()),
+        false => Err(format!(
+            "a picture of {width} by {height} pixels is larger than {PICTURE_SIDE} by {PICTURE_SIDE}"
+        )),
+    }
 }
 
 /// The icon of the application `app`: a program file or the
@@ -163,4 +186,26 @@ fn icon_of_app(app: &str, cx: &App) -> Option<Arc<RenderImage>> {
         false => PathBuf::from(app),
     };
     cx.global::<AppIcons>().of_executable(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbaImage::new(width, height)
+            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn pictures_are_at_most_the_picture_side_in_each_direction() {
+        assert!(check_size(&png(PICTURE_SIDE, 1)).is_ok());
+        assert!(check_size(&png(1, PICTURE_SIDE)).is_ok());
+        assert!(check_size(&png(PICTURE_SIDE + 1, 1)).is_err());
+        assert!(check_size(&png(1, PICTURE_SIDE + 1)).is_err());
+        assert!(check_size(b"\x89PNG\r\n\x1a\nrest").is_err());
+    }
 }
