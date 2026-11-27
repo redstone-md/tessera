@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{App, AsyncApp};
+use gpui::App;
 
 use super::{DockItem, FILES_APP, pin_name, repin, with, without};
 use crate::actions::Actions;
@@ -18,7 +18,7 @@ use crate::i18n::Language;
 use crate::menu::MenuEntry;
 use crate::platform::{
     AppWindow, AppWindowId, JumpTask, Launch, RecentDocument, RunningProcess, Shortcut,
-    app_id_of_program, reveal_in_explorer,
+    app_id_of_program, reveal_in_explorer, shell_mode,
 };
 
 /// How many of the documents an application opened lately its menu
@@ -116,49 +116,73 @@ fn file_of(item: &DockItem) -> Option<PathBuf> {
     }
 }
 
-/// The processes of the windows of `item`, without Tessera's own.
+/// The program beside which Tessera runs when it is not the shell: ending
+/// it ends the taskbar and the desktop of the user.
+const EXPLORER: &str = "explorer.exe";
+
+/// The process that ending the task of `window` ends: the process that
+/// runs what it shows, which for a packaged application is not that of
+/// its frame. `None` for a window of Tessera, for Explorer when it is the
+/// shell, and for a frame that holds no application at the moment.
+fn process_of(window: &AppWindow) -> Option<u32> {
+    let explorer = { window.executable.as_deref() }
+        .and_then(|executable| executable.file_name())
+        .is_some_and(|name| name.eq_ignore_ascii_case(EXPLORER));
+    if explorer && !shell_mode() {
+        return None;
+    }
+    let process = window.id.content_process();
+    (process != 0 && process != std::process::id()).then_some(process)
+}
+
+/// The processes the windows `windows` would be ended with.
 fn processes(windows: &[AppWindow]) -> Vec<u32> {
-    let own = std::process::id();
-    let set: BTreeSet<u32> = { windows.iter() }
-        .map(|window| window.id.process())
-        .filter(|&process| process != 0 && process != own)
-        .collect();
+    let set: BTreeSet<u32> = windows.iter().filter_map(process_of).collect();
     set.into_iter().collect()
+}
+
+/// Ends the processes `processes`, on the thread it is called on.
+fn end_now(processes: impl IntoIterator<Item = u32>) {
+    for process in processes {
+        if let Err(error) = RunningProcess::kill(process) {
+            report!("{error:#}");
+        }
+    }
 }
 
 /// Ends the processes `processes` at once.
 fn kill(processes: Vec<u32>, cx: &mut App) {
     cx.background_executor()
-        .spawn(async move {
-            for process in processes {
-                if let Err(error) = RunningProcess::kill(process) {
-                    report!("{error:#}");
-                }
-            }
-        })
+        .spawn(async move { end_now(processes) })
         .detach();
 }
 
 /// Asks `windows` to close, and ends the processes of those that are
-/// still there after [`HUNG_WAIT`], as End task of Windows does.
+/// still there and do not respond after [`HUNG_WAIT`], as End task of
+/// Windows does. A window that answers, as one asking whether to save
+/// does, is left to the user.
 fn end_task(windows: Vec<AppWindowId>, cx: &mut App) {
     for id in &windows {
         id.close();
     }
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        cx.background_executor().timer(HUNG_WAIT).await;
-        let own = std::process::id();
-        let left: BTreeSet<u32> = { windows.iter() }
-            .filter(|id| id.exists())
-            .map(|id| id.process())
-            .filter(|&process| process != 0 && process != own)
-            .collect();
-        if left.is_empty() {
-            return;
-        }
-        cx.update(|cx| kill(left.into_iter().collect(), cx)).ok();
-    })
-    .detach();
+    let executor = cx.background_executor().clone();
+    executor
+        .spawn({
+            let executor = executor.clone();
+            async move {
+                executor.timer(HUNG_WAIT).await;
+                let own = std::process::id();
+                let hung: BTreeSet<u32> = { windows.iter() }
+                    .filter(|id| id.exists())
+                    .filter_map(|id| id.content())
+                    .filter(|content| content.is_hung())
+                    .map(|content| content.process())
+                    .filter(|&process| process != 0 && process != own)
+                    .collect();
+                end_now(hung);
+            }
+        })
+        .detach();
 }
 
 /// What the menu of `item` offers: the documents its application opened
@@ -271,7 +295,11 @@ pub(super) fn entries(item: &DockItem, cx: &App) -> Vec<MenuEntry> {
     }
     let processes = processes(&item.windows);
     if !processes.is_empty() {
-        let windows = ids;
+        // Only the windows whose task may be ended are closed by End task.
+        let windows: Vec<AppWindowId> = { item.windows.iter() }
+            .filter(|window| process_of(window).is_some())
+            .map(|window| window.id)
+            .collect();
         entries.push(MenuEntry::new(ICON_END, say("End task"), move |cx| {
             end_task(windows.clone(), cx);
         }));

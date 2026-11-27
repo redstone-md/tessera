@@ -22,12 +22,13 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClassNameW,
-    GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, InternalGetWindowText,
-    IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
-    ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    BringWindowToTop, EnumChildWindows, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE,
+    GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    InternalGetWindowText, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER,
+    SetForegroundWindow, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD,
+    WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_NAMECHANGE,
@@ -292,6 +293,55 @@ impl AppWindowId {
         let length = unsafe { GetClassNameW(self.hwnd(), &mut buffer) };
         String::from_utf16_lossy(&buffer[..length.max(0) as usize])
     }
+
+    /// The window the application draws what is seen in. For the frame
+    /// ApplicationFrameHost draws around a packaged application, that is
+    /// the core window of the application inside it, or `None` while the
+    /// frame holds none, as while its application is suspended; for every
+    /// other window it is the window itself.
+    pub fn content(self) -> Option<Self> {
+        if self.class() != FRAME_CLASS {
+            return Some(self);
+        }
+        let mut core = (self.process(), HWND::default());
+        // SAFETY: `core` outlives the synchronous enumeration, which hands
+        // it to `find_core` as its state; no window is sent a message.
+        unsafe {
+            let _ = EnumChildWindows(
+                Some(self.hwnd()),
+                Some(find_core),
+                LPARAM(&raw mut core as isize),
+            );
+        }
+        (!core.1.is_invalid()).then_some(Self(core.1.0 as isize))
+    }
+
+    /// The process that runs what the window shows: that of the packaged
+    /// application inside a frame of ApplicationFrameHost, or else the
+    /// process of the window; 0 if there is none or the window is gone.
+    pub fn content_process(self) -> u32 {
+        self.content().map_or(0, Self::process)
+    }
+}
+
+/// The class of the frames ApplicationFrameHost draws around the windows of
+/// packaged applications.
+const FRAME_CLASS: &str = "ApplicationFrameWindow";
+
+/// The class of the window a packaged application draws in.
+const CORE_CLASS: &str = "Windows.UI.Core.CoreWindow";
+
+/// Keeps in `state`, a frame's process and a handle, the first child of
+/// the frame that is the core window of another process.
+unsafe extern "system" fn find_core(child: HWND, state: LPARAM) -> BOOL {
+    // SAFETY: `state` is the pointer `AppWindowId::content` passed in.
+    let core = unsafe { &mut *(state.0 as *mut (u32, HWND)) };
+    let child_id = AppWindowId(child.0 as isize);
+    if child_id.class() != CORE_CLASS || child_id.process() == core.0 {
+        return true.into();
+    }
+    core.1 = child;
+    false.into()
 }
 
 /// Whether a button of the pointer is held down, as while a window is
