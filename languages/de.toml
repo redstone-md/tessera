@@ -887,3 +887,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # integration of wave 2: the window menu shows a window on all workspaces.
 "On all workspaces" = "Auf allen Arbeitsbereichen"
+# taskview: Task View and Present Windows.
+"Type to search" = "Zum Suchen tippen"
+"No windows are open" = "Keine Fenster geöffnet"

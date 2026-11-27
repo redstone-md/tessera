@@ -171,6 +171,7 @@ impl Shell {
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
+        crate::taskview::TaskView::start(cx);
         Files::configure(&config.files, cx);
         Startup::start(&config.startup, cx);
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);

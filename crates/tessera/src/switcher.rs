@@ -19,10 +19,11 @@
 //! `switch`, and with `arg = "app-next"` through the windows of one
 //! application, as Alt+` does on other desktops.
 
-mod choice;
+pub mod choice;
 mod layout;
+mod stage;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{
@@ -39,15 +40,16 @@ use crate::icons::{AppIcons, Icon};
 use crate::motion::{Spring, mix, staggered};
 use crate::platform::{
     AppWindow, AppWindowId, ChoiceKey, DisplayKey, Modifiers, NativeSurface, ScreenEdge,
-    ScreenRect, TakenKeys, Thumbnail,
+    ScreenRect, ShowDesktop, TakenKeys, Thumbnail, display_at,
 };
 use crate::popup::{
     MARGIN, PopupAnchor, floating_panel, floating_travel, open_floating, retire_floating,
 };
+use crate::rules::Rules;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, release_hover};
-use crate::workspaces::Workspaces;
+use crate::workspaces::{Resident, Workspaces};
 
 use choice::{
     Minimized, Scope, Through, answers, choice_key, first_choice, notches, rechosen,
@@ -71,6 +73,9 @@ pub struct SwitcherConfig {
     /// Whether a tile of the `tiles` style shows a picture of its window.
     #[serde(default)]
     previews: bool,
+    /// Whether an entry that shows the desktop stands after the windows.
+    #[serde(default)]
+    show_desktop: bool,
 }
 
 /// How many windows are offered at most: the ones used last.
@@ -108,8 +113,14 @@ const NOWHERE: ScreenRect = ScreenRect {
     bottom: 0,
 };
 
-/// The glyph of the line of what is typed.
+/// The glyph of the line of what is typed, and of the entry that shows
+/// the desktop.
 const GLYPH_FILTER: &str = "\u{e721}";
+const GLYPH_DESKTOP: &str = "\u{e7f4}";
+
+/// The size a window without a picture is given on the stage of `cover`
+/// and `flip`, in logical pixels.
+const STAND_IN: (f32, f32) = (320., 200.);
 
 /// How a step of the `switcher` action is described where it is
 /// refused.
@@ -199,7 +210,7 @@ impl Switcher {
         let measures = Measures::of(&theme);
         let chrome = Chrome {
             typed: false,
-            title: config.style == Style::Icons,
+            title: config.style == Style::Icons || config.style.is_stage(),
         };
         let layout = measures.layout(config, shown.len(), &anchor, chrome);
         let (width, height) = measures.panel(&layout, chrome);
@@ -291,13 +302,12 @@ impl Switcher {
 /// then, where the scope is `all`, those of the other workspaces of
 /// Tessera's own, workspace by workspace.
 fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<Entry> {
-    let own = std::process::id();
     let on_display = |window: &AppWindow| {
         config.scope != Scope::Display || display.is_none_or(|display| window.display == display)
     };
     let mut found: Vec<Found> = AppWindow::enumerate()
         .into_iter()
-        .filter(|window| window.id.process() != own && on_display(window))
+        .filter(|window| on_display(window) && switchable(window, cx))
         .map(|window| Found {
             id: window.id,
             program: window.program(),
@@ -317,12 +327,9 @@ fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<
     let found = config.minimized.arrange(found, |(_, minimized)| *minimized);
     let icons = cx.global::<AppIcons>();
     let language = Language::of(cx);
-    { found.into_iter().take(SHOWN) }
+    let mut entries: Vec<Entry> = { found.into_iter().take(SHOWN) }
         .map(|(found, minimized)| {
-            let name = { found.program.as_deref() }
-                .and_then(|program| program.file_stem())
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
+            let name = program_name(found.program.as_deref());
             let place = found.workspace.map(|index| {
                 let label = Workspaces::label(index, cx);
                 match label.chars().all(|c| c.is_ascii_digit()) {
@@ -334,16 +341,21 @@ fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<
                 id: found.id,
                 title: found.id.title().into(),
                 icon: { found.program.as_deref() }.and_then(|program| icons.of_executable(program)),
-                name: name.into(),
+                name,
                 program: found.program,
                 workspace: found.workspace,
                 place,
                 minimized,
                 closing: false,
                 picture: None,
+                desktop: false,
             }
         })
-        .collect()
+        .collect();
+    if config.show_desktop {
+        entries.push(Entry::desktop(language));
+    }
+    entries
 }
 
 /// The windows of the workspaces of Tessera's own that are not shown, on
@@ -363,6 +375,9 @@ fn elsewhere(found: &[Found], display: Option<DisplayKey>, cx: &App) -> Vec<Foun
             if found.iter().any(known) || elsewhere.iter().any(known) || !resident.id.exists() {
                 continue;
             }
+            if !resident_switchable(&resident, cx) {
+                continue;
+            }
             elsewhere.push(Found {
                 id: resident.id,
                 program: resident.program,
@@ -371,6 +386,34 @@ fn elsewhere(found: &[Found], display: Option<DisplayKey>, cx: &App) -> Vec<Foun
         }
     }
     elsewhere
+}
+
+/// Whether `window` is one the switcher and Task View offer: a window of
+/// another program than Tessera that no rule leaves out with
+/// `skip_switcher`. Without rules every window is offered.
+pub fn switchable(window: &AppWindow, cx: &App) -> bool {
+    window.id.process() != std::process::id() && Rules::of(window, cx).skip_switcher != Some(true)
+}
+
+/// The same for a window hidden on a workspace of Tessera's own, which
+/// is known by less than a window that is shown.
+pub fn resident_switchable(resident: &Resident, cx: &App) -> bool {
+    let frame = resident.id.frame().unwrap_or(NOWHERE);
+    let window = AppWindow {
+        id: resident.id,
+        display: display_at(frame),
+        executable: resident.program.clone(),
+        app_id: None,
+    };
+    switchable(&window, cx)
+}
+
+/// The name of the file of `program` without its extension, which typing
+/// finds as well as the title of a window.
+pub fn program_name(program: Option<&Path>) -> SharedString {
+    { program.and_then(Path::file_stem) }
+        .map(|stem| SharedString::from(stem.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// A window found for the switcher, before it is described.
@@ -402,14 +445,33 @@ struct Entry {
     /// The picture of the window and the physical size of the window,
     /// where the cells show pictures and Windows gives one.
     picture: Option<(Thumbnail, (i32, i32))>,
+    /// Whether this is no window but the entry that shows the desktop.
+    desktop: bool,
 }
 
 impl Entry {
+    /// The entry that shows the desktop, after the windows.
+    fn desktop(language: Language) -> Self {
+        Self {
+            id: AppWindowId::from_raw(0),
+            title: language.say("Show desktop").into(),
+            icon: None,
+            program: None,
+            name: SharedString::default(),
+            workspace: None,
+            place: None,
+            minimized: false,
+            closing: false,
+            picture: None,
+            desktop: true,
+        }
+    }
+
     /// Whether Windows can draw a picture of the window: a minimized one
     /// and one hidden on another workspace have none to give, so their
     /// icon stands in its place.
     fn may_be_pictured(&self) -> bool {
-        !self.minimized && self.workspace.is_none()
+        !self.minimized && self.workspace.is_none() && !self.desktop
     }
 
     /// Hides the picture of the window, where it has one.
@@ -694,7 +756,7 @@ impl SwitcherView {
     fn chrome(&self) -> Chrome {
         Chrome {
             typed: !self.typed.is_empty(),
-            title: self.config.style == Style::Icons,
+            title: self.config.style == Style::Icons || self.config.style.is_stage(),
         }
     }
 
@@ -703,6 +765,11 @@ impl SwitcherView {
     fn mark(&mut self, chosen: usize, cx: &mut Context<Self>) {
         self.chosen = chosen;
         let (column, row) = self.layout.cell_of(chosen);
+        // On a stage the choice goes round the ends at once, rather than
+        // past every window between them.
+        if self.layout.style.is_stage() && (self.column.target() - column as f32).abs() > 1.5 {
+            self.column.jump_to(column as f32);
+        }
         self.column.animate_to(column as f32);
         self.row.animate_to(row as f32);
         self.first_row = self.layout.first_row(self.first_row, chosen);
@@ -800,7 +867,7 @@ impl SwitcherView {
             return;
         };
         let entry = &mut self.entries[index];
-        if entry.closing {
+        if entry.closing || entry.desktop {
             return;
         }
         entry.closing = true;
@@ -851,9 +918,10 @@ impl SwitcherView {
             return;
         }
         let entry = self.shown.get(position).map(|&index| &self.entries[index]);
-        match entry.map(|entry| (entry.id, entry.workspace)) {
-            Some((id, Some(_))) => Workspaces::show_window(id, cx),
-            Some((id, None)) => id.activate(),
+        match entry.map(|entry| (entry.id, entry.workspace, entry.desktop)) {
+            Some((_, _, true)) => cx.defer(show_desktop),
+            Some((id, Some(_), _)) => Workspaces::show_window(id, cx),
+            Some((id, None, _)) => id.activate(),
             None => {}
         }
         self.close(cx);
@@ -882,6 +950,19 @@ impl SwitcherView {
         if let Err(error) = NativeSurface::of(window).and_then(|native| native.place(frame)) {
             report!("the window switcher is not where it belongs: {error:#}");
         }
+    }
+}
+
+/// Shows the desktop, as the action `desktop` does where a module brings
+/// it, through the taskbar of Explorer where it runs, and with Tessera's
+/// own [`ShowDesktop`] otherwise.
+fn show_desktop(cx: &mut App) {
+    let action = cx
+        .try_global::<Actions>()
+        .is_some_and(|actions| actions.get("desktop").is_some());
+    match action {
+        true => Actions::run("desktop", None, cx),
+        false => ShowDesktop::toggle(),
     }
 }
 
@@ -917,6 +998,18 @@ impl Drawing {
     /// The icon of `entry`, `side` long, or a blank square where it has
     /// none.
     fn icon(&self, entry: &Entry, side: f32) -> AnyElement {
+        if entry.desktop {
+            return div()
+                .size(px(side))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .font_family(self.theme.typography.icon_family)
+                .text_size(px(side * 0.7))
+                .child(GLYPH_DESKTOP)
+                .into_any_element();
+        }
         match entry.icon.clone() {
             Some(icon) => img(icon).size(px(side)).flex_none().into_any_element(),
             None => div()
@@ -1000,16 +1093,19 @@ impl Render for SwitcherView {
         for (entry, _) in { self.entries.iter().zip(offered) }.filter(|(_, offered)| !offered) {
             entry.hide_picture();
         }
-        let cells: Vec<AnyElement> = (0..self.shown.len())
-            .filter_map(|position| self.cell(position, &drawing, cx))
-            .collect();
         let (column, row) = (self.column.value(window), self.row.value(window));
+        let cells: Vec<AnyElement> = match layout.style.is_stage() {
+            true => self.stage(&drawing, column, cx),
+            false => (0..self.shown.len())
+                .filter_map(|position| self.cell(position, &drawing, cx))
+                .collect(),
+        };
         let (left, top) = layout.place(column, row - scroll);
         let corner = match layout.style {
             Style::List => theme.shape.medium,
             _ => theme.shape.large,
         };
-        let mark = (!self.shown.is_empty()).then(|| {
+        let mark = (!self.shown.is_empty() && !layout.style.is_stage()).then(|| {
             div()
                 .absolute()
                 .left(px(left))
@@ -1201,6 +1297,99 @@ impl SwitcherView {
     }
 }
 
+impl SwitcherView {
+    /// The pictures of the windows offered on the stage of `cover` or
+    /// `flip`, the choice being at `along` among them, a fraction while
+    /// it moves; a window without a picture shows its icon on a card in
+    /// its place, and one that stands beyond the stage is not shown.
+    fn stage(&self, drawing: &Drawing, along: f32, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let layout = &self.layout;
+        let theme = &drawing.theme;
+        let sizes: Vec<(f32, f32)> = { self.shown.iter() }
+            .map(|&index| match &self.entries[index].picture {
+                Some((_, (width, height))) => (
+                    *width as f32 / drawing.scale,
+                    *height as f32 / drawing.scale,
+                ),
+                None => STAND_IN,
+            })
+            .collect();
+        let placed = match layout.style {
+            Style::Flip => stage::flip(layout.cell, &sizes, along),
+            _ => stage::cover(layout.cell, &sizes, along),
+        };
+        let mut elements = Vec::new();
+        for (position, placed) in placed.into_iter().enumerate() {
+            let entry = &self.entries[self.shown[position]];
+            let Some(placed) = placed else {
+                entry.hide_picture();
+                continue;
+            };
+            let faded = match entry.closing {
+                true => placed.opacity * 0.5,
+                false => placed.opacity,
+            };
+            let opacity = faded * drawing.visibility.clamp(0., 1.);
+            if let Some((thumbnail, _)) = &entry.picture {
+                let physical = |length: f32| (length * drawing.scale).round() as i32;
+                let (left, top) = (
+                    drawing.origin.0 + placed.left,
+                    drawing.origin.1 + placed.top,
+                );
+                let area = ScreenRect {
+                    left: physical(left),
+                    top: physical(top),
+                    right: physical(left + placed.width),
+                    bottom: physical(top + placed.height),
+                };
+                thumbnail.place(area, opacity);
+            }
+            let at = |grow: f32| {
+                div()
+                    .absolute()
+                    .left(px(placed.left - grow))
+                    .top(px(placed.top - grow))
+                    .w(px(placed.width + grow * 2.))
+                    .h(px(placed.height + grow * 2.))
+            };
+            if position == self.chosen {
+                // A mark around the chosen picture, which Windows draws
+                // over what is inside it.
+                let mark = at(STAGE_MARK)
+                    .rounded(theme.shape.medium)
+                    .border(px(STAGE_MARK))
+                    .border_color(theme.colors.primary)
+                    .opacity(opacity);
+                elements.push(mark.into_any_element());
+            }
+            let face = at(0.)
+                .id(("switcher-stage", position))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(theme.shape.medium)
+                .cursor(CursorStyle::PointingHand)
+                .on_click(cx.listener(move |this, _, _, cx| this.choose(position, cx)))
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |this, _, _, cx| this.close_window(position, cx)),
+                );
+            let face = match entry.picture.is_some() {
+                true => face,
+                false => face
+                    .bg(theme.colors.surface_container_highest)
+                    .opacity(opacity)
+                    .child(drawing.icon(entry, ROOM_ICON.min(placed.height * 0.6))),
+            };
+            elements.push(face.into_any_element());
+        }
+        elements
+    }
+}
+
+/// How wide the mark around the chosen picture of a stage is.
+const STAGE_MARK: f32 = 3.;
+
 /// The weight of the title of the chosen tile.
 trait Weighted: Styled {
     fn when_weight(self, chosen: bool) -> Self {
@@ -1283,7 +1472,13 @@ mod tests {
             (plain.style, plain.scope, plain.minimized, plain.previews),
             (Style::Tiles, Scope::Workspace, Minimized::Keep, false)
         );
-        assert!(toml::from_str::<SwitcherConfig>("style = \"cover\"").is_err());
+        assert!(!plain.show_desktop);
+        let staged: SwitcherConfig =
+            toml::from_str("style = \"flip\"\nshow_desktop = true").unwrap();
+        assert_eq!((staged.style, staged.show_desktop), (Style::Flip, true));
+        let cover: SwitcherConfig = toml::from_str("style = \"cover\"").unwrap();
+        assert_eq!(cover.style, Style::Cover);
+        assert!(toml::from_str::<SwitcherConfig>("style = \"cascade\"").is_err());
         assert!(toml::from_str::<SwitcherConfig>("filter = \"all\"").is_err());
     }
 

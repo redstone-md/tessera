@@ -7,6 +7,7 @@ mod choice;
 mod list;
 pub mod qr;
 mod slider;
+pub mod spread;
 mod tile;
 
 use std::f32::consts::TAU;

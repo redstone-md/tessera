@@ -888,3 +888,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 # integration of wave 2: the window menu shows a window on all workspaces.
 "On all workspaces" = "На всіх робочих областях"
+# taskview: Task View and Present Windows.
+"Type to search" = "Почніть вводити для пошуку"
+"No windows are open" = "Немає відкритих вікон"

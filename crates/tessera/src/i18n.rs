@@ -1649,6 +1649,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     // integration of wave 2: the window menu shows a window on all workspaces.
     ("On all workspaces", "На всех рабочих столах"),
+    // taskview: Task View and Present Windows.
+    ("Type to search", "Начните вводить для поиска"),
+    ("No windows are open", "Нет открытых окон"),
 ];
 
 #[cfg(test)]

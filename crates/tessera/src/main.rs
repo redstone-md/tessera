@@ -44,6 +44,7 @@ mod snap;
 mod startup;
 mod surface;
 mod switcher;
+mod taskview;
 mod theme;
 mod tiling;
 mod tip;
