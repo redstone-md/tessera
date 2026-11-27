@@ -7,15 +7,17 @@
 //! While Explorer runs it keeps the wallpaper, one picture for each
 //! display, and answers for it through `IDesktopWallpaper`. Without
 //! Explorer that object cannot be made, and what is left is what Windows
-//! itself keeps in the registry (`Control Panel\Desktop`): one picture for
-//! all displays and its style, which `SystemParametersInfoW` writes and
-//! `PaintDesktop` draws. Settings > Personalization goes through
-//! `IDesktopWallpaper`, so without Explorer a picture chosen there may not
-//! be taken; a program that calls `SystemParametersInfoW` still works.
+//! itself keeps: one picture for all displays, which
+//! `SystemParametersInfoW` reads and writes, its style in the registry
+//! (`Control Panel\Desktop`), and what `PaintDesktop` draws of them.
+//! Settings > Personalization goes through `IDesktopWallpaper`, so without
+//! Explorer a picture chosen there may not be taken; a program that calls
+//! `SystemParametersInfoW` still works.
 //!
-//! Both [`SystemWallpaper::read`] and [`SystemWallpaper::write`] ask
-//! another process and may wait for it: they are for the shell thread, or
-//! another thread with COM, never for the thread of the interface.
+//! [`SystemWallpaper::read`], [`SystemWallpaper::write`],
+//! [`SystemWallpaper::put_back`] and [`SystemWallpaper::announce`] ask
+//! other processes and may wait for them: they are for the shell thread,
+//! or another thread with COM, never for the thread of the interface.
 
 use std::path::{Path, PathBuf};
 
@@ -33,8 +35,9 @@ use windows::Win32::UI::Shell::{
     DWPOS_TILE, DesktopWallpaper, IDesktopWallpaper,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetWindowThreadProcessId, HWND_BROADCAST, SMTO_ABORTIFHUNG, SPI_SETDESKWALLPAPER,
-    SPIF_UPDATEINIFILE, SendMessageTimeoutW, SystemParametersInfoW, WM_SETTINGCHANGE,
+    FindWindowW, GetWindowThreadProcessId, HWND_BROADCAST, SMTO_ABORTIFHUNG, SPI_GETDESKWALLPAPER,
+    SPI_SETDESKWALLPAPER, SPIF_UPDATEINIFILE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SendMessageTimeoutW, SystemParametersInfoW, WM_SETTINGCHANGE,
 };
 use windows::core::{HSTRING, PCWSTR, PWSTR, w};
 
@@ -198,7 +201,10 @@ impl SystemWallpaper {
     }
 
     fn from_registry(frames: &[ScreenRect]) -> Self {
-        let picture = registry_text(DESKTOP, w!("WallPaper"))
+        // What Windows shows now, which a program may have set without
+        // writing it to the registry; the registry where it does not tell.
+        let picture = live_wallpaper()
+            .or_else(|| registry_text(DESKTOP, w!("WallPaper")))
             .filter(|path| !path.trim().is_empty())
             .map(PathBuf::from)
             .map(|path| {
@@ -415,6 +421,24 @@ fn explorer_wallpaper() -> Option<IDesktopWallpaper> {
     // SAFETY: the call only reads a number of the object.
     let displays = unsafe { wallpaper.GetMonitorDevicePathCount() }.unwrap_or(0);
     (displays > 0).then_some(wallpaper)
+}
+
+/// The file of the picture Windows shows now, as it tells.
+fn live_wallpaper() -> Option<String> {
+    let mut path = [0_u16; 1024];
+    // SAFETY: the buffer is of the length in characters the call is
+    // given, and outlives the call.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETDESKWALLPAPER,
+            path.len() as u32,
+            Some(path.as_mut_ptr().cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .ok()?;
+    let length = path.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&path[..length]))
 }
 
 /// `path` as text to compare as Windows does names of files, ignoring
