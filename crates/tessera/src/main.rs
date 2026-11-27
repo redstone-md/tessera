@@ -28,6 +28,7 @@ mod panel;
 mod platform;
 mod popup;
 mod preview;
+mod session;
 mod shell;
 mod surface;
 mod switcher;
@@ -52,18 +53,31 @@ const TASKBAR_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 fn main() {
     if Taskbar::run_watchdog_if_requested(std::env::args().skip(1))
         || platform::read_desktop_if_requested(std::env::args().skip(1))
+        || session::hand_over_if_requested(std::env::args().skip(1))
     {
         return;
     }
+    if let Some(code) = session::run_command_if_requested(std::env::args().skip(1)) {
+        std::process::exit(code);
+    }
     if let Some(handed) = keys::send_if_requested(std::env::args().skip(1)) {
         std::process::exit(if handed { 0 } else { 1 });
+    }
+    session::detect(std::env::args().skip(1));
+    // As the shell, the start is written down before anything else, and
+    // the session may go to Explorer instead.
+    if !session::guard(std::env::args().skip(1)) {
+        return;
     }
     Taskbar::wait_for_predecessor(std::env::args().skip(1));
     platform::Pace::keep();
     // Decided before anything is opened; as the shell of the session
     // Tessera finds no taskbar of Explorer to hide.
     let shell = platform::shell_mode();
-    let config = Config::load();
+    let mut config = Config::load();
+    session::adjust(&mut config);
+    // The desktop window exists before the wallpaper looks for it.
+    session::start_host(&config.shell);
     Application::new().run(move |cx: &mut App| {
         match (!shell).then(Taskbar::hide_until_exit) {
             None => {}

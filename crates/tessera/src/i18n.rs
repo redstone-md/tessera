@@ -705,6 +705,52 @@ const RUSSIAN: &[(&str, &str)] = &[
     (
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
+    ), // Tessera as the shell of the session (shell-host).
+    ("Shell of the session", "Оболочка сеанса"),
+    (
+        "Tessera is the shell of this session.",
+        "Tessera — оболочка этого сеанса.",
+    ),
+    (
+        "Tessera runs beside Explorer.",
+        "Tessera работает рядом с Проводником.",
+    ),
+    (
+        "At the next sign-in Windows starts Tessera.",
+        "При следующем входе Windows запустит Tessera.",
+    ),
+    (
+        "At the next sign-in Windows starts Explorer.",
+        "При следующем входе Windows запустит Проводник.",
+    ),
+    (
+        "At the next sign-in Windows starts another program:",
+        "При следующем входе Windows запустит другую программу:",
+    ),
+    (
+        "A policy of this computer names the shell; only an administrator can change it.",
+        "Оболочку задаёт политика этого компьютера; изменить её может только администратор.",
+    ),
+    (
+        "Windows is told to read the shell of the computer. It is widely reported to read the one of the user all the same; that is not certain on this computer.",
+        "Windows настроена читать оболочку компьютера. По многим сообщениям, она всё равно читает оболочку пользователя; на этом компьютере это не проверено.",
+    ),
+    (
+        "A change takes effect at the next sign-in.",
+        "Изменение вступит в силу при следующем входе.",
+    ),
+    ("Make Tessera the shell", "Сделать Tessera оболочкой"),
+    (
+        "Give the shell back to Explorer",
+        "Вернуть оболочку Проводнику",
+    ),
+    (
+        "Hand this session to Explorer now",
+        "Передать этот сеанс Проводнику сейчас",
+    ),
+    (
+        "Ctrl+Win+Alt+E starts Task Manager and hands the session to Explorer; Ctrl+Win+Alt+R starts Tessera again.",
+        "Ctrl+Win+Alt+E запускает диспетчер задач и передаёт сеанс Проводнику; Ctrl+Win+Alt+R перезапускает Tessera.",
     ),
 ];
 

@@ -321,3 +321,18 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # Settings: keys that name an action.
 "Action" = "Action"
 "The action is written in the file by hand." = "L’action est écrite à la main dans le fichier."
+
+# Tessera as the shell of the session (shell-host).
+"Shell of the session" = "Shell de la session"
+"Tessera is the shell of this session." = "Tessera est le shell de cette session."
+"Tessera runs beside Explorer." = "Tessera fonctionne à côté de l'Explorateur."
+"At the next sign-in Windows starts Tessera." = "À la prochaine ouverture de session, Windows démarrera Tessera."
+"At the next sign-in Windows starts Explorer." = "À la prochaine ouverture de session, Windows démarrera l'Explorateur."
+"At the next sign-in Windows starts another program:" = "À la prochaine ouverture de session, Windows démarrera un autre programme :"
+"A policy of this computer names the shell; only an administrator can change it." = "Une stratégie de cet ordinateur définit le shell ; seul un administrateur peut la modifier."
+"Windows is told to read the shell of the computer. It is widely reported to read the one of the user all the same; that is not certain on this computer." = "Windows est configuré pour lire le shell de l'ordinateur. D'après de nombreux témoignages, il lit tout de même celui de l'utilisateur ; ce n'est pas certain sur cet ordinateur."
+"A change takes effect at the next sign-in." = "Une modification prend effet à la prochaine ouverture de session."
+"Make Tessera the shell" = "Faire de Tessera le shell"
+"Give the shell back to Explorer" = "Rendre le shell à l'Explorateur"
+"Hand this session to Explorer now" = "Confier cette session à l'Explorateur maintenant"
+"Ctrl+Win+Alt+E starts Task Manager and hands the session to Explorer; Ctrl+Win+Alt+R starts Tessera again." = "Ctrl+Win+Alt+E lance le Gestionnaire des tâches et confie la session à l'Explorateur ; Ctrl+Win+Alt+R redémarre Tessera."

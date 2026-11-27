@@ -321,3 +321,18 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # Settings: keys that name an action.
 "Action" = "Acción"
 "The action is written in the file by hand." = "La acción se escribe a mano en el archivo."
+
+# Tessera as the shell of the session (shell-host).
+"Shell of the session" = "Shell de la sesión"
+"Tessera is the shell of this session." = "Tessera es el shell de esta sesión."
+"Tessera runs beside Explorer." = "Tessera se ejecuta junto al Explorador."
+"At the next sign-in Windows starts Tessera." = "En el próximo inicio de sesión Windows iniciará Tessera."
+"At the next sign-in Windows starts Explorer." = "En el próximo inicio de sesión Windows iniciará el Explorador."
+"At the next sign-in Windows starts another program:" = "En el próximo inicio de sesión Windows iniciará otro programa:"
+"A policy of this computer names the shell; only an administrator can change it." = "Una directiva de este equipo define el shell; solo un administrador puede cambiarla."
+"Windows is told to read the shell of the computer. It is widely reported to read the one of the user all the same; that is not certain on this computer." = "Windows está configurado para leer el shell del equipo. Según muchos informes, lee igualmente el del usuario; en este equipo no es seguro."
+"A change takes effect at the next sign-in." = "Un cambio surte efecto en el próximo inicio de sesión."
+"Make Tessera the shell" = "Hacer de Tessera el shell"
+"Give the shell back to Explorer" = "Devolver el shell al Explorador"
+"Hand this session to Explorer now" = "Entregar esta sesión al Explorador ahora"
+"Ctrl+Win+Alt+E starts Task Manager and hands the session to Explorer; Ctrl+Win+Alt+R starts Tessera again." = "Ctrl+Win+Alt+E inicia el Administrador de tareas y entrega la sesión al Explorador; Ctrl+Win+Alt+R reinicia Tessera."

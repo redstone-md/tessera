@@ -362,6 +362,9 @@ pub struct Config {
     /// a program.
     #[serde(default, rename = "key")]
     pub keys: Vec<KeyConfig>,
+    /// What Tessera does as the shell of the session.
+    #[serde(default)]
+    pub shell: crate::session::ShellConfig,
 }
 
 impl Config {

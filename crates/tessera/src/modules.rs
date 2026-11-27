@@ -40,6 +40,7 @@ use crate::config::Config;
 use crate::extension::ExtensionsModule;
 use crate::files::FilesModule;
 use crate::module::Module;
+use crate::session::ShellModule;
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
@@ -62,6 +63,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(notifications::NotificationsModule),
         Box::new(problems::ProblemsModule),
         Box::new(session::SessionModule),
+        Box::new(ShellModule),
         Box::new(settings::SettingsModule),
         Box::new(start::StartModule),
         Box::new(sound::SoundModule),
