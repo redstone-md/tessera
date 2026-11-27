@@ -39,7 +39,7 @@ use crate::icons::{AppIcons, Icon};
 use crate::motion::{Spring, mix, staggered};
 use crate::platform::{
     AppWindow, AppWindowId, ChoiceKey, DisplayKey, Modifiers, NativeSurface, ScreenEdge,
-    ScreenRect, TakenKeys, Thumbnail, is_minimized,
+    ScreenRect, TakenKeys, Thumbnail,
 };
 use crate::popup::{
     MARGIN, PopupAnchor, floating_panel, floating_travel, open_floating, retire_floating,
@@ -302,7 +302,7 @@ fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<
     let found: Vec<(Found, bool)> = found
         .into_iter()
         .map(|found| {
-            let minimized = is_minimized(found.id);
+            let minimized = found.id.is_minimized();
             (found, minimized)
         })
         .collect();

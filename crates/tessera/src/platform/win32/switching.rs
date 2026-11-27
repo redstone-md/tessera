@@ -8,10 +8,12 @@ use windows::Win32::UI::WindowsAndMessaging::IsIconic;
 
 use super::AppWindowId;
 
-/// Whether `window` is minimized at this moment. A window that is gone
-/// is not.
-pub fn is_minimized(window: AppWindowId) -> bool {
-    // SAFETY: the call only reads window state and tolerates a handle
-    // whose window has since been destroyed.
-    unsafe { IsIconic(window.hwnd()).as_bool() }
+impl AppWindowId {
+    /// Whether the window is minimized at this moment. A window that is
+    /// gone is not.
+    pub fn is_minimized(self) -> bool {
+        // SAFETY: the call only reads window state and tolerates a handle
+        // whose window has since been destroyed.
+        unsafe { IsIconic(self.hwnd()).as_bool() }
+    }
 }
