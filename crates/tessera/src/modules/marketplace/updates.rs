@@ -37,16 +37,15 @@ impl Global for Updates {}
 impl Updates {
     /// Reads `registries` now and once a day from now on.
     pub fn start(registries: Vec<String>, cx: &mut App) {
-        cx.set_global(Self {
-            registries,
-            ..Self::default()
-        });
+        // A marketplace in a bar may have started a reading already.
+        Self::configure(registries, cx);
+        Self::check_if_stale(cx);
         cx.spawn(async move |cx: &mut AsyncApp| {
             loop {
+                cx.background_executor().timer(CHECK_INTERVAL).await;
                 if cx.update(Self::check).is_err() {
                     break;
                 }
-                cx.background_executor().timer(CHECK_INTERVAL).await;
             }
         })
         .detach();
