@@ -13,6 +13,7 @@ use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 use crate::actions::Actions;
 use crate::banners::Banners;
 use crate::config::{Config, Displays};
+use crate::corners::Corners;
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
 use crate::files::Files;
@@ -89,6 +90,7 @@ impl Shell {
         Files::configure(&config.files, cx);
         Snapper::start(&config.snap, cx);
         Rules::start(&config.rules, cx);
+        Corners::start(&config.corners, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -276,6 +278,7 @@ impl Shell {
         Files::configure(&config.files, cx);
         Snapper::configure(&config.snap, cx);
         Rules::configure(&config.rules, cx);
+        Corners::configure(&config.corners, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

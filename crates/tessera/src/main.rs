@@ -12,6 +12,7 @@ mod actions;
 mod badges;
 mod banners;
 mod config;
+mod corners;
 mod desk;
 mod extension;
 mod field;

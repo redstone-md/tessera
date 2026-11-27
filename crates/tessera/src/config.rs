@@ -12,6 +12,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::banners::NotificationsConfig;
+use crate::corners::CornerConfig;
 use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::files::FilesConfig;
@@ -370,6 +371,10 @@ pub struct Config {
     /// What is done to the windows each rule names.
     #[serde(default, rename = "rule")]
     pub rules: Vec<RuleConfig>,
+    /// The corners and edges of the displays that do something when the
+    /// pointer rests there.
+    #[serde(default, rename = "corner")]
+    pub corners: Vec<CornerConfig>,
 }
 
 impl Config {
