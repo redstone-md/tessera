@@ -211,13 +211,14 @@ impl Global for TilingMode {}
 
 impl TilingMode {
     /// What follows when the modes are gone through one by one: every
-    /// layout of `choices` in turn, then no tiling, then the first again.
+    /// layout of `choices` in turn, then no tiling, then tiling again in
+    /// the layout there was.
     pub fn next(self, choices: &[LayoutChoice]) -> Self {
         let first = choices.first().cloned().unwrap_or_default();
         if !self.enabled {
             return Self {
                 enabled: true,
-                layout: first,
+                ..self
             };
         }
         let place = choices.iter().position(|choice| *choice == self.layout);
@@ -818,9 +819,13 @@ impl Tiler {
 
     /// Goes on to the next layout on the workspace of `display`, or of the
     /// display in front; after the last there is no tiling, and after none
-    /// the first layout.
+    /// tiling again, each workspace in the layout it had.
     pub fn next_on(display: Option<DisplayKey>, cx: &mut App) {
         let enabled = cx.global::<TilingMode>().enabled;
+        if !enabled {
+            Self::set_enabled(true, cx);
+            return;
+        }
         let current = Self::layout_on(display, cx);
         let this = cx.global::<Self>();
         let choices = this.choices();
@@ -831,9 +836,8 @@ impl Tiler {
         let next = mode.next(&choices);
         if next.enabled {
             Self::choose(display, next.layout, cx);
-        }
-        if next.enabled != enabled {
-            Self::set_enabled(next.enabled, cx);
+        } else {
+            Self::set_enabled(false, cx);
         }
     }
 
@@ -1593,7 +1597,7 @@ mod tests {
         };
         let builtin = TileLayout::ALL.map(LayoutChoice::Builtin);
         let off = mode(false, TileLayout::Monocle);
-        assert_eq!(off.next(&builtin), mode(true, TileLayout::Master));
+        assert_eq!(off.next(&builtin), mode(true, TileLayout::Monocle));
         assert_eq!(
             mode(true, TileLayout::Master).next(&builtin),
             mode(true, TileLayout::Columns)
