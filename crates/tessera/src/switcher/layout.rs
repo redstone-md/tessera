@@ -141,7 +141,7 @@ impl Layout {
                 cell,
                 picture,
                 icon,
-                columns: count,
+                columns: count.max(1),
                 rows: 1,
                 seen_rows: 1,
                 gap,
@@ -370,6 +370,9 @@ mod tests {
         assert_eq!(flip.moved(1, 3, ChoiceKey::Up), 2);
         assert_eq!(flip.moved(0, 3, ChoiceKey::Down), 2);
         assert!(Style::Flip.is_stage() && !Style::Thumbnails.is_stage());
+        // Typing can leave no window offered; the stage still has a column.
+        let empty = Layout::new(Style::Cover, false, 0, ROOM, 8.);
+        assert_eq!((empty.columns, empty.cell_of(0)), (1, (0, 0)));
     }
 
     #[test]
