@@ -1262,6 +1262,75 @@ impl UndoJournal {
     }
 }
 
+// files-previews: what the next undo and redo take back and do again, for
+// the menus that offer them.
+impl UndoJournal {
+    /// What the next undo takes back, as its entry in a menu says it, in
+    /// English as the table of texts has it ("Undo copy", "Undo rename",
+    /// or "Undo" for work of several kinds); `None` where there is
+    /// nothing to take back. Callers pass it through `Language::say`,
+    /// which gives it in the language of the user, as the menus of the
+    /// file manager and of the desktop do.
+    pub fn next_undo() -> Option<&'static str> {
+        Self::shared(|journal| journal.done.last().map(|deeds| label(deeds, false)))
+    }
+
+    /// What the next redo does again, as [`Self::next_undo`] says it;
+    /// `None` also where nothing of it can be done again, as for items
+    /// brought back from the Recycle Bin, which are not restored again.
+    pub fn next_redo() -> Option<&'static str> {
+        Self::shared(|journal| {
+            let deeds = journal.undone.last()?;
+            let again = deeds.iter().any(|deed| deed.again().is_some());
+            again.then(|| label(deeds, true))
+        })
+    }
+}
+
+/// What the entry of a menu that takes `deeds` back, or with `again` does
+/// them again, says: what kind of work it was, where all of it was of one
+/// kind.
+fn label(deeds: &[FileDeed], again: bool) -> &'static str {
+    const UNDO: [&str; 7] = [
+        "Undo copy",
+        "Undo move",
+        "Undo rename",
+        "Undo delete",
+        "Undo new folder",
+        "Undo new item",
+        "Undo restore",
+    ];
+    // What was restored is not restored again: a redo of it is offered
+    // nowhere.
+    const REDO: [&str; 6] = [
+        "Redo copy",
+        "Redo move",
+        "Redo rename",
+        "Redo delete",
+        "Redo new folder",
+        "Redo new item",
+    ];
+    let kind = |deed: &FileDeed| match deed {
+        FileDeed::Copied { .. } => 0,
+        FileDeed::Moved { .. } => 1,
+        FileDeed::Renamed { .. } => 2,
+        FileDeed::Recycled { .. } | FileDeed::Erased { .. } => 3,
+        FileDeed::Created {
+            made: Made::Folder, ..
+        } => 4,
+        FileDeed::Created { .. } => 5,
+        FileDeed::Restored { .. } => 6,
+    };
+    let first = deeds.first().map(kind);
+    let one_kind = first.filter(|first| deeds.iter().all(|deed| kind(deed) == *first));
+    match (one_kind, again) {
+        (Some(kind), false) => UNDO[kind],
+        (Some(kind), true) => REDO.get(kind).copied().unwrap_or("Redo"),
+        (None, false) => "Undo",
+        (None, true) => "Redo",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1272,6 +1341,24 @@ mod tests {
 
     fn bin_item() -> ShellId {
         ShellId::from_bytes(vec![4, 0, 1, 2, 0, 0]).unwrap()
+    }
+
+    #[test]
+    fn the_menu_says_what_kind_of_work_is_taken_back() {
+        let renamed = FileDeed::Renamed {
+            from: path(r"C:\a\old"),
+            to: path(r"C:\a\new"),
+        };
+        let folder = FileDeed::Created {
+            path: path(r"C:\a\New folder"),
+            made: Made::Folder,
+        };
+        assert_eq!(label(std::slice::from_ref(&renamed), false), "Undo rename");
+        assert_eq!(
+            label(std::slice::from_ref(&folder), true),
+            "Redo new folder"
+        );
+        assert_eq!(label(&[renamed, folder], false), "Undo");
     }
 
     #[test]

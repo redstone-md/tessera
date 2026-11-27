@@ -231,6 +231,17 @@ impl RecycleBin {
     }
 }
 
+// files-previews: what the view of the bin in the file manager needs.
+impl RecycledItem {
+    /// The item as the Shell knows it, which a [`FileOperation`] brings
+    /// back to where it was, so that bringing it back can be undone.
+    ///
+    /// [`FileOperation`]: super::FileOperation
+    pub fn id(&self) -> &ShellId {
+        &self.id
+    }
+}
+
 /// Whether `code` says that the user called off what the Shell asked.
 fn is_cancel(code: HRESULT) -> bool {
     code == E_ABORT || code == HRESULT::from_win32(ERROR_CANCELLED.0)

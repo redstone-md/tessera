@@ -76,6 +76,7 @@ pub use win32::{DesktopSurvey, WindowMark};
     reason = "named by the views that keep the windows of a survey or a still picture"
 )]
 pub use win32::{DesktopWindow, Still};
+pub use win32::{CloudState, Overlays};
 pub use win32::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
@@ -98,12 +99,14 @@ pub use win32::{
 };
 #[allow(unused_imports, reason = "the parts the dock and its previews read")]
 pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton};
+pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue, split_items};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{ImeMode, ImeState, TouchKeyboard};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use win32::{JumpItem, JumpList, JumpTarget, KnownCategory};
 pub use win32::{KeyLocks, window_in_front};
+pub use win32::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"
@@ -111,6 +114,7 @@ pub use win32::{KeyLocks, window_in_front};
 pub use win32::{Launch, Show};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{PowerMode, PowerModeState};
+pub use win32::{PreviewColors, PreviewHost, PreviewShown};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 pub use win32::{Removal, app_settings, put_on_desktop};

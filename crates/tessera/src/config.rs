@@ -779,8 +779,8 @@ pub struct Config {
     #[serde(default)]
     pub icon_packs: Vec<String>,
     // Wave 2, files-previews: thumbnails, preview and details panes of the file manager.
-    // #[serde(default)]
-    // pub file_view: crate::files::FileViewConfig,
+    #[serde(default)]
+    pub file_view: crate::files::FileViewConfig,
     // Wave 2, desktop-icons: the icons of the desktop.
     // #[serde(default)]
     // pub desktop: crate::desktop::DesktopConfig,

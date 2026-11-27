@@ -6,28 +6,35 @@
 //! and drives at the side, one pane or two side by side, and a status
 //! bar.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui::{
     AppContext, Context, DragMoveEvent, Entity, EntityId, Hsla, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement,
     Styled, Subscription, Window, WindowControlArea, div, prelude::FluentBuilder, px, relative,
 };
-use gpui::{AsyncApp, WeakEntity};
+use gpui::{AsyncApp, Bounds, Pixels, WeakEntity, canvas};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+use super::details_pane::{DetailsEvent, DetailsPane};
 use super::model::size_text;
 use super::model::{Location, share_root};
 use super::pane::{FolderPane, ICON_HIDDEN, ICON_NEW_FOLDER, PaneEvent, fill_bar};
+use super::preview_pane::PreviewPane;
 use super::session::{OpenTab, Opening, Session};
 use super::sidebar::{Sidebar, SidebarEvent};
 use super::tabs::{Tab, Tabs};
-use super::{Files, FilesConfig, Look};
+use super::thumbs::{FileViewConfig, Thumbs};
+use super::{Files, FilesConfig, FilesWindow, Look, WindowsChange};
 use crate::i18n::Language;
-use crate::menu::Menus;
+use crate::menu::{MenuEntry, Menus};
 use crate::platform::FileWork;
 use crate::platform::QuickAccess;
-use crate::platform::{DropEvent, DropTarget, DropZones};
+use crate::platform::{DropEvent, DropTarget, DropZone, DropZones};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, logo, one_line};
@@ -54,6 +61,72 @@ const ICON_ADD: &str = "\u{e710}";
 const ICON_MINIMIZE: &str = "\u{e921}";
 const ICON_MAXIMIZE: &str = "\u{e922}";
 const ICON_CLOSE: &str = "\u{e8bb}";
+const ICON_PREVIEW: &str = "\u{e8a1}";
+const ICON_CHECK: &str = "\u{e73e}";
+const ICON_DETAILS_PANE: &str = "\u{e946}";
+
+/// The places of a window that take drops, which its panes, its side and
+/// its tabs write as they draw, with the folder of each in the order they
+/// were written, which is the order the drop target counts them in.
+#[derive(Clone)]
+pub struct DropPlaces {
+    zones: DropZones,
+    folders: Rc<RefCell<Vec<(DropSpot, PathBuf)>>>,
+}
+
+/// Which place of a window a drag is over, so that only that place is
+/// marked, not every other showing the same folder: the rows and the
+/// background of a pane, the side, or a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropSpot {
+    Pane(EntityId),
+    Side,
+    Tab(usize),
+}
+
+impl Default for DropPlaces {
+    fn default() -> Self {
+        Self {
+            zones: DropZones::new(),
+            folders: Rc::default(),
+        }
+    }
+}
+
+impl DropPlaces {
+    /// Writes down `bounds` of `spot` as a place that takes drops into
+    /// `folder`, above those written before.
+    pub fn push(&self, bounds: Bounds<Pixels>, spot: DropSpot, folder: PathBuf) {
+        if let Ok(mut folders) = self.folders.try_borrow_mut() {
+            folders.push((spot, folder.clone()));
+        }
+        self.zones.push(DropZone { bounds, folder });
+    }
+
+    fn clear(&self) {
+        self.zones.clear();
+        if let Ok(mut folders) = self.folders.try_borrow_mut() {
+            folders.clear();
+        }
+    }
+
+    /// The place written down `index`th, with its folder.
+    fn folder(&self, index: usize) -> Option<(DropSpot, PathBuf)> {
+        self.folders.try_borrow().ok()?.get(index).cloned()
+    }
+
+    /// An element over what holds it, which writes it down as the place
+    /// `spot` that takes drops into `folder` where it is drawn.
+    pub fn zone(&self, spot: DropSpot, folder: PathBuf) -> impl IntoElement + use<> {
+        let places = self.clone();
+        canvas(
+            move |bounds, _, _| places.push(bounds, spot, folder),
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .size_full()
+    }
+}
 
 /// A tab being dragged to another place in the strip.
 struct TabDrag {
@@ -102,9 +175,22 @@ pub struct FilesView {
     listening: HashMap<EntityId, [Subscription; 2]>,
     /// Where the window takes what is dropped on it, which its panes
     /// write as they draw, and the drop target that reads them.
-    zones: DropZones,
+    zones: DropPlaces,
     _drops: Option<DropTarget>,
     _sidebar: Subscription,
+    /// The thumbnails the panes of the window draw.
+    thumbs: Entity<Thumbs>,
+    /// The panes beside the panes of files: the preview of the file the
+    /// cursor is on, and its details.
+    preview: Entity<PreviewPane>,
+    details: Entity<DetailsPane>,
+    _details: Subscription,
+    /// The tab a drag from another program is over, which is marked.
+    drag_over: Option<usize>,
+    /// The window, and its native window as a number, for the windows of
+    /// the Shell.
+    handle: gpui::AnyWindowHandle,
+    hwnd: isize,
 }
 
 impl FilesView {
@@ -115,10 +201,11 @@ impl FilesView {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut listening = HashMap::new();
-        let zones = DropZones::new();
+        let zones = DropPlaces::default();
+        let thumbs = cx.new(|_| Thumbs::new());
         let mut tabs: Option<Tabs<Entity<FolderPane>>> = None;
         for open in &opening.tabs {
-            let tab = Self::tab_of(open, config, &zones, &mut listening, window, cx);
+            let tab = Self::tab_of(open, config, &zones, &thumbs, &mut listening, window, cx);
             match &mut tabs {
                 None => tabs = Some(Tabs::new(tab)),
                 Some(tabs) => {
@@ -132,6 +219,7 @@ impl FilesView {
                 &open,
                 config,
                 &zones,
+                &thumbs,
                 &mut listening,
                 window,
                 cx,
@@ -139,16 +227,51 @@ impl FilesView {
         });
         tabs.select(opening.active);
         let current = tabs.active().active().read(cx).location().clone();
-        let sidebar = cx.new(|cx| Sidebar::new(current, config, cx));
+        let sidebar = cx.new(|cx| {
+            let mut sidebar = Sidebar::new(current, config, cx);
+            sidebar.take_drops(zones.clone());
+            sidebar
+        });
         let listened = cx.subscribe_in(&sidebar, window, Self::sidebar_event);
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             if let Some(this) = this.upgrade() {
                 this.read(cx).keep_session(cx);
+                let closed = this.read(cx).described(&this, cx);
+                Files::window_changed(WindowsChange::Closed(closed), cx);
             }
             true
         });
         let drops = Self::take_drops(&zones, window, cx);
+        let file_view = FileViewConfig::of(cx);
+        let preview = cx.new(|cx| PreviewPane::new(file_view.preview, window, cx));
+        let details = cx.new(|cx| DetailsPane::new(file_view.details, thumbs.clone(), cx));
+        // The preview lets go of a file while its properties are written,
+        // and a file written is read anew where shown.
+        let written = cx.subscribe(&details, |this, _, event: &DetailsEvent, cx| {
+            match event {
+                DetailsEvent::Writing(path) => {
+                    let path = path.clone();
+                    this.preview
+                        .update(cx, |preview, cx| preview.hold(path, cx));
+                }
+                DetailsEvent::Written(path) => {
+                    let paths = std::slice::from_ref(path);
+                    for pane in this.tabs.all().iter().flat_map(Tab::panes) {
+                        pane.update(cx, |pane, cx| pane.refresh_pictures(paths, cx));
+                    }
+                    this.preview.update(cx, |preview, cx| preview.release(cx));
+                }
+                DetailsEvent::NotWritten(_) => {
+                    this.preview.update(cx, |preview, cx| preview.release(cx));
+                }
+            }
+            cx.notify();
+        });
+        let hwnd = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
+            _ => 0,
+        };
         let mut view = Self {
             config,
             tabs,
@@ -157,20 +280,54 @@ impl FilesView {
             zones,
             _drops: drops,
             _sidebar: listened,
+            thumbs,
+            preview,
+            details,
+            _details: written,
+            drag_over: None,
+            handle: Window::window_handle(window),
+            hwnd,
         };
+        let this = cx.weak_entity();
+        Files::window_opened(view.handle, this.clone(), cx);
+        // The window is told of once it is made, before `show` tells of
+        // where it went, as those who hear expect.
+        cx.defer(move |cx| {
+            let Some(view) = this.upgrade() else {
+                return;
+            };
+            let opened = view.read(cx).described(&view, cx);
+            Files::window_changed(WindowsChange::Opened(opened), cx);
+        });
         view.show(window, cx);
         view
+    }
+
+    /// The window as the windows of the Shell see it.
+    pub fn described(&self, view: &Entity<Self>, cx: &gpui::App) -> FilesWindow {
+        let this = view.downgrade();
+        let select = move |names: Vec<OsString>, cx: &mut gpui::App| {
+            if let Some(view) = this.upgrade() {
+                view.update(cx, |view, cx| view.select_when_loaded(names, cx));
+            }
+        };
+        FilesWindow {
+            handle: self.handle,
+            hwnd: self.hwnd,
+            folder: self.pane().read(cx).folder(),
+            select: Rc::new(select),
+        }
     }
 
     /// Has the window take what is dropped on it over the places its
     /// panes write into `zones`, in place of GPUI, and read the folders of
     /// its panes again once the work of a drop is done.
     fn take_drops(
-        zones: &DropZones,
+        zones: &DropPlaces,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<DropTarget> {
-        let (target, events) = match DropTarget::register(window, zones.clone()) {
+        let (target, events) = match DropTarget::register(window, zones.zones.clone()) {
             Ok(registered) => registered,
             Err(error) => {
                 report!("the file manager takes no drops: {error:#}");
@@ -179,16 +336,20 @@ impl FilesView {
         };
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             while let Ok(event) = events.recv().await {
-                let DropEvent::Done { outcome, .. } = event else {
-                    continue;
-                };
-                outcome.report();
-                let read = this.update(cx, |this, cx| {
-                    for pane in this.tabs.all().iter().flat_map(Tab::panes) {
-                        pane.update(cx, |pane, cx| pane.load(cx));
+                let heard = this.update(cx, |this, cx| match event {
+                    DropEvent::Over { zone, .. } => {
+                        let over = zone.and_then(|zone| this.zones.folder(zone));
+                        this.mark_drag_over(over, cx);
+                    }
+                    DropEvent::Left | DropEvent::Dropped { .. } => this.mark_drag_over(None, cx),
+                    DropEvent::Done { outcome, .. } => {
+                        outcome.report();
+                        for pane in this.tabs.all().iter().flat_map(Tab::panes) {
+                            pane.update(cx, |pane, cx| pane.load(cx));
+                        }
                     }
                 });
-                if read.is_err() {
+                if heard.is_err() {
                     break;
                 }
             }
@@ -197,20 +358,66 @@ impl FilesView {
         Some(target)
     }
 
+    /// Marks the place a drag is over, with its folder: a row of a pane,
+    /// a place at the side or a tab; the other places are not marked.
+    fn mark_drag_over(&mut self, over: Option<(DropSpot, PathBuf)>, cx: &mut Context<Self>) {
+        let marked = |spot: DropSpot| {
+            { over.as_ref() }
+                .filter(|(over, _)| *over == spot)
+                .map(|(_, folder)| folder.clone())
+        };
+        for pane in self.tabs.all().iter().flat_map(Tab::panes) {
+            let folder = marked(DropSpot::Pane(pane.entity_id()));
+            pane.update(cx, |pane, cx| pane.mark_drag_over(folder, cx));
+        }
+        let side = marked(DropSpot::Side);
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.mark_drag_over(side, cx));
+        let tab = match over {
+            Some((DropSpot::Tab(index), _)) => Some(index),
+            _ => None,
+        };
+        if self.drag_over != tab {
+            self.drag_over = tab;
+            cx.notify();
+        }
+    }
+
+    /// Chooses the items called `names` in the folder of the pane in
+    /// front, once it was read.
+    pub fn select_when_loaded(&mut self, names: Vec<OsString>, cx: &mut Context<Self>) {
+        self.pane()
+            .clone()
+            .update(cx, |pane, cx| pane.select_when_loaded(names, cx));
+    }
+
+    /// Tells those who observe the windows of the file manager that the
+    /// pane in front of this one shows another place.
+    fn tell_navigated(&self, cx: &mut Context<Self>) {
+        let Some(view) = cx.entity().downgrade().upgrade() else {
+            return;
+        };
+        let window = self.described(&view, cx);
+        cx.defer(move |cx| Files::window_changed(WindowsChange::Navigated(window), cx));
+    }
+
     /// A tab of panes at the locations of `open`.
     fn tab_of(
         open: &OpenTab,
         config: FilesConfig,
-        zones: &DropZones,
+        zones: &DropPlaces,
+        thumbs: &Entity<Thumbs>,
         listening: &mut HashMap<EntityId, [Subscription; 2]>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Tab<Entity<FolderPane>> {
         let mut panes = open.panes.iter().take(2);
         let first = panes.next().cloned().unwrap_or_else(Files::home);
-        let mut tab = Tab::single(Self::pane_at(first, config, zones, listening, window, cx));
+        let first = Self::pane_at(first, config, zones, thumbs, listening, window, cx);
+        let mut tab = Tab::single(first);
         if let Some(second) = panes.next() {
-            let second = Self::pane_at(second.clone(), config, zones, listening, window, cx);
+            let second =
+                Self::pane_at(second.clone(), config, zones, thumbs, listening, window, cx);
             tab.split_with(second).ok();
         }
         tab.focus(open.active);
@@ -222,7 +429,8 @@ impl FilesView {
     fn pane_at(
         location: Location,
         config: FilesConfig,
-        zones: &DropZones,
+        zones: &DropPlaces,
+        thumbs: &Entity<Thumbs>,
         listening: &mut HashMap<EntityId, [Subscription; 2]>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -230,6 +438,7 @@ impl FilesView {
         let pane = cx.new(|cx| {
             let mut pane = FolderPane::new(location, config, window, cx);
             pane.take_drops(zones.clone());
+            pane.take_thumbs(thumbs.clone(), cx);
             pane
         });
         let subscriptions = [
@@ -250,6 +459,7 @@ impl FilesView {
             location,
             self.config,
             &self.zones,
+            &self.thumbs,
             &mut self.listening,
             window,
             cx,
@@ -275,6 +485,7 @@ impl FilesView {
         }
         self.pane().read(cx).focus(window);
         self.retitle(window, cx);
+        self.tell_navigated(cx);
     }
 
     /// Titles the window after the pane in front, and lights its place
@@ -299,6 +510,7 @@ impl FilesView {
             PaneEvent::Navigated => {
                 if pane == self.pane() {
                     self.retitle(window, cx);
+                    self.tell_navigated(cx);
                 }
                 let location = pane.read(cx).location().clone();
                 if let Some(root) = location.root().and_then(share_root) {
@@ -428,6 +640,7 @@ impl FilesView {
             &open,
             self.config,
             &self.zones,
+            &self.thumbs,
             &mut self.listening,
             window,
             cx,
@@ -525,10 +738,62 @@ impl FilesView {
 
     fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.keep_session(cx);
+        if let Some(view) = cx.entity().downgrade().upgrade() {
+            let closed = self.described(&view, cx);
+            // Those who hear may read the windows, this one too, which
+            // cannot be read while it is being updated.
+            cx.defer(move |cx| Files::window_changed(WindowsChange::Closed(closed), cx));
+        }
         window.remove_window();
     }
 
+    /// The entries of the View menu that show and hide the panes beside
+    /// the panes of files.
+    fn panes_menu(&self, this: &Entity<Self>, cx: &gpui::App) -> Vec<MenuEntry> {
+        let language = Language::of(cx);
+        let mark = |open: bool| if open { ICON_CHECK } else { "" };
+        let (preview, details) = (this.downgrade(), this.downgrade());
+        vec![
+            MenuEntry::new(
+                mark(self.preview.read(cx).is_open()),
+                language.say("Preview pane"),
+                move |cx| {
+                    preview.update(cx, |this, cx| this.toggle_preview(cx)).ok();
+                },
+            ),
+            MenuEntry::new(
+                mark(self.details.read(cx).is_open()),
+                language.say("Details pane"),
+                move |cx| {
+                    details.update(cx, |this, cx| this.toggle_details(cx)).ok();
+                },
+            ),
+        ]
+    }
+
+    /// Shows the preview pane, or hides it.
+    fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview.update(cx, |preview, cx| {
+            let open = !preview.is_open();
+            preview.set_open(open, cx)
+        });
+    }
+
+    /// Shows the details pane, or hides it.
+    fn toggle_details(&mut self, cx: &mut Context<Self>) {
+        self.details.update(cx, |details, cx| {
+            let open = !details.is_open();
+            details.set_open(open, cx)
+        });
+    }
+
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The keys go to a field of the details pane while it has them.
+        if self.details.read(cx).typing(window, cx) {
+            self.details
+                .update(cx, |details, cx| details.key_down(event, cx));
+            return;
+        }
         let taken = self
             .pane()
             .clone()
@@ -539,6 +804,9 @@ impl FilesView {
         let key = event.keystroke.key.as_str();
         let held = &event.keystroke.modifiers;
         match (key, held.control, held.alt, held.shift) {
+            // The panes of Explorer, and F11 as Dolphin has it.
+            ("p", false, true, false) => self.toggle_preview(cx),
+            ("p", false, true, true) | ("f11", false, false, false) => self.toggle_details(cx),
             ("n", true, false, false) => {
                 Files::open(self.pane().read(cx).location().clone(), cx);
             }
@@ -606,6 +874,10 @@ impl FilesView {
         let tab = &self.tabs.all()[index];
         let title: SharedString = tab.active().read(cx).title(cx).into();
         let front = index == self.tabs.active_index();
+        // A tab takes drops into the folder of its pane in front.
+        let folder = tab.active().read(cx).folder();
+        let over = folder.is_some() && self.drag_over == Some(index);
+        let zone = folder.map(|folder| self.zones.zone(DropSpot::Tab(index), folder));
         let marker = theme.colors.primary;
         let drag = TabDrag {
             index,
@@ -658,6 +930,13 @@ impl FilesView {
             })
             .child(div().flex_1().min_w_0().child(one_line(title)))
             .child(close)
+            .relative()
+            .children(zone)
+            .when(over, |tab| {
+                tab.bg(theme.colors.primary.opacity(0.2))
+                    .border_b_2()
+                    .border_color(theme.colors.primary)
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| this.select_tab(index, window, cx)),
@@ -794,6 +1073,8 @@ impl FilesView {
             )
         };
         let split = self.tabs.active().is_split();
+        let previewing = self.preview.read(cx).is_open();
+        let detailing = self.details.read(cx).is_open();
         let navigation = div()
             .flex()
             .items_center()
@@ -825,6 +1106,7 @@ impl FilesView {
             Look::Icons => ICON_ICONS,
         };
         let view_pane = self.pane().clone();
+        let this = cx.entity().downgrade();
         let looks = div()
             .flex()
             .items_center()
@@ -842,7 +1124,10 @@ impl FilesView {
                             return;
                         }
                     };
-                    let entries = view_pane.update(cx, |pane, cx| pane.view_menu(cx));
+                    let mut entries = view_pane.update(cx, |pane, cx| pane.view_menu(cx));
+                    if let Some(this) = this.upgrade() {
+                        entries.extend(this.read(cx).panes_menu(&this, cx));
+                    }
                     Menus::open(entries, anchor, cx);
                 },
             ))
@@ -855,6 +1140,16 @@ impl FilesView {
                 tool_button(theme, "files-split", ICON_SPLIT, true)
                     .when(split, |button| button.text_color(theme.colors.primary))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_split(window, cx))),
+            )
+            .child(
+                tool_button(theme, "files-preview", ICON_PREVIEW, true)
+                    .when(previewing, |button| button.text_color(theme.colors.primary))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_preview(cx))),
+            )
+            .child(
+                tool_button(theme, "files-details", ICON_DETAILS_PANE, true)
+                    .when(detailing, |button| button.text_color(theme.colors.primary))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx))),
             );
         div()
             .h(px(TOOLBAR_HEIGHT))
@@ -958,10 +1253,21 @@ impl FilesView {
 }
 
 impl Render for FilesView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
         // The panes write where they take drops anew as they draw.
         self.zones.clear();
+        // The thumbnails of rows no longer in sight are called off.
+        self.thumbs.update(cx, |thumbs, _| thumbs.sweep());
+        // The panes at the side show the file the cursor is on.
+        let (entry, chosen) = {
+            let pane = self.pane().read(cx);
+            (pane.focused_entry(), pane.chosen_count())
+        };
+        self.preview
+            .update(cx, |preview, cx| preview.show(entry.as_ref(), window, cx));
+        self.details
+            .update(cx, |details, cx| details.show(entry, chosen, cx));
         div()
             .id("files")
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
@@ -979,7 +1285,9 @@ impl Render for FilesView {
                     .min_h_0()
                     .flex()
                     .child(self.sidebar.clone())
-                    .child(self.render_body(&theme, cx)),
+                    .child(self.render_body(&theme, cx))
+                    .child(self.preview.clone())
+                    .child(self.details.clone()),
             )
             .child(self.render_status(&theme, cx))
     }

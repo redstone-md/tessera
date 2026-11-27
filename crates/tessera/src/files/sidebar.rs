@@ -25,11 +25,12 @@ use super::pane::{
     ICON_UNPIN, drive_glyph,
 };
 use super::session::Session;
+use super::view::{DropPlaces, DropSpot};
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
-    Drive, ExplorerSettings, NameRules, Place, QuickAccess, QuickFolder, RecycleBin, ShellPlace,
-    onedrive, wsl_distributions,
+    Drive, ExplorerSettings, NameRules, Place, QuickAccess, QuickFolder, ShellPlace, onedrive,
+    wsl_distributions,
 };
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
@@ -65,7 +66,6 @@ pub enum SidebarEvent {
 #[derive(Clone, Debug, PartialEq)]
 enum Target {
     Location(Location),
-    RecycleBin,
     /// Nothing but opening below it, as for the root of WSL.
     Nothing,
 }
@@ -151,6 +151,10 @@ pub struct Sidebar {
     scroll: UniformListScrollHandle,
     /// Which folders the tree shows and how it names them.
     config: FilesConfig,
+    /// Where the window takes drops, which the folders of the tree are
+    /// written into as they are drawn, and the folder a drag is over.
+    places: DropPlaces,
+    drag_over: Option<PathBuf>,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
@@ -190,7 +194,11 @@ impl Sidebar {
             },
             Group {
                 heading: None,
-                nodes: vec![Node::leaf(Target::RecycleBin, say("Recycle Bin"), ICON_BIN)],
+                nodes: vec![Node::leaf(
+                    Target::Location(Location::RecycleBin),
+                    say("Recycle Bin"),
+                    ICON_BIN,
+                )],
             },
         ];
         let mut sidebar = Self {
@@ -199,6 +207,8 @@ impl Sidebar {
             current,
             scroll: UniformListScrollHandle::new(),
             config,
+            places: DropPlaces::default(),
+            drag_over: None,
         };
         sidebar.read_places(cx);
         sidebar.read_quick_access(cx);
@@ -208,6 +218,20 @@ impl Sidebar {
     }
 
     /// Lights the place the pane in front is at.
+    /// Has the folders of the tree take drops, into the places of the
+    /// window.
+    pub fn take_drops(&mut self, places: DropPlaces) {
+        self.places = places;
+    }
+
+    /// Marks the place of `folder` as the one a drag is over, or none.
+    pub fn mark_drag_over(&mut self, folder: Option<PathBuf>, cx: &mut Context<Self>) {
+        if self.drag_over != folder {
+            self.drag_over = folder;
+            cx.notify();
+        }
+    }
+
     pub fn set_current(&mut self, current: Location, cx: &mut Context<Self>) {
         if self.current != current {
             self.current = current;
@@ -493,11 +517,6 @@ impl Sidebar {
             (MouseButton::Left, Target::Location(location)) => {
                 cx.emit(SidebarEvent::Go(location.clone()))
             }
-            (MouseButton::Left, Target::RecycleBin) => {
-                if let Err(error) = RecycleBin::open() {
-                    report!("the Recycle Bin did not open: {error}");
-                }
-            }
             (MouseButton::Left, Target::Nothing) => self.toggle(address, cx),
             (MouseButton::Middle, Target::Location(location)) => {
                 cx.emit(SidebarEvent::OpenInNewTab(location.clone()))
@@ -591,6 +610,9 @@ impl Sidebar {
                 };
                 let node = self.node(&address)?;
                 let lit = node.target == Target::Location(self.current.clone());
+                let folder = node.path().map(Path::to_owned);
+                let over = folder.is_some() && folder == self.drag_over;
+                let zone = folder.map(|folder| self.places.zone(DropSpot::Side, folder));
                 let chevron = match (node.opens, node.expanded) {
                     (false, _) => "",
                     (true, true) => ICON_EXPANDED,
@@ -632,10 +654,17 @@ impl Sidebar {
                     .cursor_pointer()
                     .text_size(theme.typography.label_size)
                     .text_color(theme.colors.on_surface)
+                    .relative()
                     .when(lit, |item| item.bg(theme.colors.secondary_container))
                     .when(!lit, |item| {
                         item.hover(|style| style.bg(theme.colors.surface_container_highest))
                     })
+                    .when(over, |item| {
+                        item.bg(theme.colors.primary.opacity(0.2))
+                            .border_1()
+                            .border_color(theme.colors.primary)
+                    })
+                    .children(zone)
                     .child(chevron)
                     .child(
                         div()

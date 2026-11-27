@@ -357,6 +357,33 @@
 # restore = false
 # explorer = true
 
+# [file_view] says how the file manager pictures files and what it shows
+# beside its panes.
+#   thumbnails        whether files are drawn with a picture of what they
+#                     hold where their icons are 32 pixels or larger (true)
+#   folder_thumbnails whether folders are pictured too (true)
+#   thumbnail_size    the largest side a thumbnail is asked for at, in
+#                     pixels of the display, from 32 to 256 (256)
+#   overlays          whether the overlays programs register, as OneDrive
+#                     and Git clients do, are drawn over icons (true)
+#   preview           whether a window opens with the preview pane, Alt+P
+#                     (false)
+#   details           whether a window opens with the details pane,
+#                     Alt+Shift+P or F11 (false)
+#   preview_handlers  whether the preview handlers of programs draw the kinds
+#                     of files Tessera does not show itself, as PDF (true)
+#   preview_timeout   how many seconds a preview handler is waited for
+#                     before it is given up, from 1 to 60 (5)
+# [file_view]
+# thumbnails = true
+# folder_thumbnails = true
+# thumbnail_size = 256
+# overlays = true
+# preview = false
+# details = false
+# preview_handlers = true
+# preview_timeout = 5.0
+
 # [shell] says what Tessera does as the shell of the session, in the place of
 # Explorer (`tessera shell install` makes it that at the next sign-in,
 # `tessera shell revert` gives it back; see docs/SHELL.md). Beside Explorer
