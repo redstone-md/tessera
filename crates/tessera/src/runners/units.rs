@@ -274,8 +274,10 @@ fn leading_number(text: &str) -> Option<(f64, &str)> {
 /// written.
 fn split(text: &str) -> Option<(f64, String, String)> {
     let words: Vec<&str> = text.split_whitespace().collect();
-    let at =
-        { words.iter() }.rposition(|word| SEPARATORS.contains(&word.to_lowercase().as_str()))?;
+    // The last word is the unit asked for, never the separator: `in` is
+    // both, as in `5 ft to in`.
+    let at = { words[..words.len().saturating_sub(1)].iter() }
+        .rposition(|word| SEPARATORS.contains(&word.to_lowercase().as_str()))?;
     let (before, after) = (words[..at].join(" "), words[at + 1..].join(" "));
     if after.is_empty() {
         return None;
@@ -557,6 +559,8 @@ mod tests {
         assert!(near(converted("1 gal to l"), 3.785_411_784));
         assert!(near(converted("12inch to cm"), 30.48));
         assert!(near(converted("36,6 °с в f"), 97.88));
+        assert!(near(converted("5 ft to in"), 60.));
+        assert!(near(converted("10 cm in in"), 3.937_007_874));
     }
 
     #[test]

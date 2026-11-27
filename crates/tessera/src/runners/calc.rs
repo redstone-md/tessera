@@ -418,9 +418,10 @@ impl Calculation {
 }
 
 /// `text` without a trailing `to hex`, `in bin` and the like, and the
-/// base it names.
+/// base it names. The words are ASCII, so an ASCII lowercase copy keeps
+/// the byte offsets of `text` it is sliced at.
 fn split_conversion(text: &str) -> (&str, Option<Base>) {
-    let lower = text.to_lowercase();
+    let lower = text.to_ascii_lowercase();
     for word in [" to ", " in ", " as "] {
         if let Some(at) = lower.rfind(word)
             && let Some(base) = Base::named(lower[at + word.len()..].trim())
@@ -590,6 +591,9 @@ mod tests {
         assert_eq!(hex.based().as_deref(), Some("0x100"));
         // A fraction has no other base to be shown in.
         assert_eq!(shown("1 / 2 to hex").as_deref(), Some("0.5"));
+        assert_eq!(shown("255 TO HEX").as_deref(), Some("0xFF"));
+        // Letters that grow when lowercased leave the offsets as they are.
+        assert_eq!(shown("İİİİİİİİ to hex"), None);
     }
 
     #[test]
