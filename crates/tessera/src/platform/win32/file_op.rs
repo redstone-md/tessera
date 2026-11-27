@@ -1268,27 +1268,22 @@ impl UndoJournal {
     /// What the next undo takes back, as its entry in a menu says it, in
     /// English as the table of texts has it ("Undo copy", "Undo rename",
     /// or "Undo" for work of several kinds); `None` where there is
-    /// nothing to take back. `Language::say` gives it in the language of
-    /// the user.
-    pub fn undo_label() -> Option<&'static str> {
+    /// nothing to take back. Callers pass it through `Language::say`,
+    /// which gives it in the language of the user, as the menus of the
+    /// file manager and of the desktop do.
+    pub fn next_undo() -> Option<&'static str> {
         Self::shared(|journal| journal.done.last().map(|deeds| label(deeds, false)))
     }
 
-    /// What the next redo does again, as [`Self::undo_label`] says it.
-    pub fn redo_label() -> Option<&'static str> {
-        Self::shared(|journal| journal.undone.last().map(|deeds| label(deeds, true)))
-    }
-
-    /// [`Self::undo_label`] as a text of its own.
-    #[allow(dead_code, reason = "for the menus of the desktop")]
-    pub fn next_undo() -> Option<String> {
-        Self::undo_label().map(str::to_owned)
-    }
-
-    /// [`Self::redo_label`] as a text of its own.
-    #[allow(dead_code, reason = "for the menus of the desktop")]
-    pub fn next_redo() -> Option<String> {
-        Self::redo_label().map(str::to_owned)
+    /// What the next redo does again, as [`Self::next_undo`] says it;
+    /// `None` also where nothing of it can be done again, as for items
+    /// brought back from the Recycle Bin, which are not restored again.
+    pub fn next_redo() -> Option<&'static str> {
+        Self::shared(|journal| {
+            let deeds = journal.undone.last()?;
+            let again = deeds.iter().any(|deed| deed.again().is_some());
+            again.then(|| label(deeds, true))
+        })
     }
 }
 
@@ -1305,14 +1300,15 @@ fn label(deeds: &[FileDeed], again: bool) -> &'static str {
         "Undo new item",
         "Undo restore",
     ];
-    const REDO: [&str; 7] = [
+    // What was restored is not restored again: a redo of it is offered
+    // nowhere.
+    const REDO: [&str; 6] = [
         "Redo copy",
         "Redo move",
         "Redo rename",
         "Redo delete",
         "Redo new folder",
         "Redo new item",
-        "Redo restore",
     ];
     let kind = |deed: &FileDeed| match deed {
         FileDeed::Copied { .. } => 0,
@@ -1329,7 +1325,7 @@ fn label(deeds: &[FileDeed], again: bool) -> &'static str {
     let one_kind = first.filter(|first| deeds.iter().all(|deed| kind(deed) == *first));
     match (one_kind, again) {
         (Some(kind), false) => UNDO[kind],
-        (Some(kind), true) => REDO[kind],
+        (Some(kind), true) => REDO.get(kind).copied().unwrap_or("Redo"),
         (None, false) => "Undo",
         (None, true) => "Redo",
     }

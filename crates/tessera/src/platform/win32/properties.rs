@@ -45,6 +45,11 @@ use super::ShellThread;
 use super::shell_item::wide;
 use super::shell_items::take_text;
 
+/// How often a file held open by another program is tried, and how long
+/// is waited between the tries.
+const WRITE_TRIES: u32 = 4;
+const WRITE_PAUSE: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// A property of a file that Tessera shows, and for some writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -227,9 +232,36 @@ impl Properties {
         edits: Vec<(FileProperty, PropertyEdit)>,
     ) -> Receiver<Result<(), String>> {
         ShellThread::call_alone("file properties", move || {
-            write_values(&path, &edits).map_err(|error| format!("{error:#}"))
+            // A file another program holds open, as a preview handler
+            // letting go of it, is tried again a little later.
+            let mut tries = 1;
+            loop {
+                match write_values(&path, &edits) {
+                    Err(error) if tries < WRITE_TRIES && shared_away(&error) => {
+                        tries += 1;
+                        std::thread::sleep(WRITE_PAUSE);
+                    }
+                    written => return written.map_err(|error| format!("{error:#}")),
+                }
+            }
         })
     }
+}
+
+/// Whether `error` says the file is held open by another program.
+fn shared_away(error: &anyhow::Error) -> bool {
+    use windows::Win32::Foundation::{
+        ERROR_LOCK_VIOLATION, ERROR_SHARING_VIOLATION, STG_E_LOCKVIOLATION, STG_E_SHAREVIOLATION,
+    };
+    let held = [
+        ERROR_SHARING_VIOLATION.to_hresult(),
+        ERROR_LOCK_VIOLATION.to_hresult(),
+        STG_E_SHAREVIOLATION,
+        STG_E_LOCKVIOLATION,
+    ];
+    { error.chain() }
+        .filter_map(|cause| cause.downcast_ref::<windows::core::Error>())
+        .any(|cause| held.contains(&cause.code()))
 }
 
 /// The property store of the file at `path`.

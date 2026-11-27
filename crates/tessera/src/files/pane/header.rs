@@ -6,15 +6,16 @@
 //! columns, a heading is dragged to another place among them, and the
 //! edge before a heading is dragged to make its column wider or
 //! narrower. The values of the columns of the Shell are read for the
-//! rows in sight only, a batch a frame, on a thread of their own, and
-//! kept while the folder is shown; ordering by such a column reads them
-//! for every row.
+//! rows in sight only, from one queue of the pane, a batch at a time on a
+//! thread of their own, the rows asked for last first, and kept while the
+//! folder is shown; ordering by such a column reads them for every row.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use gpui::{
-    AnyElement, AppContext, AsyncApp, Context, DragMoveEvent, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, SharedString,
+    AnyElement, AppContext, AsyncApp, Context, DragMoveEvent, EntityId, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, SharedString,
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 
@@ -45,8 +46,11 @@ struct HeadingDrag {
     title: SharedString,
 }
 
-/// The edge before the heading at `index`, being dragged.
+/// The edge before the heading at `index` of the pane `pane`, being
+/// dragged; the headings of the other pane of a split tab hear its moves
+/// too, and leave them.
 struct EdgeDrag {
+    pane: EntityId,
     index: usize,
 }
 
@@ -90,9 +94,10 @@ pub(super) fn cloud_glyph(state: CloudState) -> &'static str {
 
 impl FolderPane {
     /// The columns the details show: those chosen for the location, with
-    /// the state of cloud files where the folder holds any.
+    /// the state of cloud files where the folder holds any and the user
+    /// did not choose the columns.
     pub(super) fn shown_columns(&self) -> Columns {
-        match self.cloudy {
+        match self.cloudy && !self.columns_kept {
             true => self.columns.with_status(),
             false => self.columns.clone(),
         }
@@ -102,26 +107,34 @@ impl FolderPane {
     /// starts with.
     pub(super) fn take_columns(&mut self, cx: &mut Context<Self>) {
         let location = self.history.current();
-        self.columns = FolderViews::columns(&columns_key(location), cx)
-            .unwrap_or_else(|| Columns::first_of(location));
+        let kept = FolderViews::columns(&columns_key(location), cx);
+        self.columns_kept = kept.is_some();
+        self.columns = kept.unwrap_or_else(|| Columns::first_of(location));
     }
 
     /// Keeps the columns of the location for the next time it is shown.
     pub(super) fn keep_columns(&mut self, cx: &mut Context<Self>) {
         self.columns_changed = false;
+        self.columns_kept = true;
         let key = columns_key(self.history.current());
         FolderViews::put_columns(key, &self.columns, cx);
     }
 
-    /// Shows `column`, or hides it where it is shown.
+    /// Shows `column`, or hides it where it is shown. The list is ordered
+    /// by the name again where the column it was ordered by is hidden.
     fn toggle_column(&mut self, column: Column, cx: &mut Context<Self>) {
         // A state shown because the folder holds cloud files is hidden by
         // taking it into the chosen columns first.
-        if column == Column::Status && self.cloudy && !self.columns.has(Column::Status) {
-            self.columns = self.columns.with_status();
-        }
+        self.columns = self.shown_columns();
         self.columns.toggle(column);
         self.keep_columns(cx);
+        if self.order().column == column && !self.columns.has(column) {
+            match self.history.current() {
+                Location::Home => self.home_order.column = Column::Name,
+                _ => self.order.column = Column::Name,
+            }
+            self.keep_view(cx);
+        }
         self.read_wanted(cx);
         self.arrange(cx);
     }
@@ -193,6 +206,7 @@ impl FolderPane {
         let icon_room = self.look.shape(self.zoom).icon;
         let marker = theme.colors.primary;
         let columns = self.shown_columns();
+        let pane = cx.entity_id();
         let headings = columns.shown().iter().enumerate().map(|(index, shown)| {
             let column = shown.column;
             let title: SharedString = language.say(column.title()).into();
@@ -214,7 +228,9 @@ impl FolderPane {
                     .cursor_col_resize()
                     .hover(|style| style.bg(theme.colors.primary.opacity(0.3)))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_drag(EdgeDrag { index }, |_, _, _, cx| cx.new(|_| EdgeGhost))
+                    .on_drag(EdgeDrag { pane, index }, |_, _, _, cx| {
+                        cx.new(|_| EdgeGhost)
+                    })
             });
             let heading = Self::cell(*shown, theme)
                 .id(("files-heading", index))
@@ -270,10 +286,17 @@ impl FolderPane {
                 }),
             )
             .on_drag_move(cx.listener(|this, event: &DragMoveEvent<EdgeDrag>, _, cx| {
-                let index = event.drag(cx).index;
-                this.drag_edge(index, event, cx)
+                let drag = event.drag(cx);
+                if drag.pane == cx.entity_id() {
+                    let index = drag.index;
+                    this.drag_edge(index, event, cx)
+                }
             }))
-            .on_drop(cx.listener(|this, _: &EdgeDrag, _, cx| this.keep_columns(cx)))
+            .on_drop(cx.listener(|this, drag: &EdgeDrag, _, cx| {
+                if drag.pane == cx.entity_id() {
+                    this.keep_columns(cx)
+                }
+            }))
             .into_any_element()
     }
 
@@ -350,10 +373,22 @@ impl FolderPane {
         self.read_properties(wanted, cx);
     }
 
-    /// Reads the properties of the shown columns of the files at `paths`
-    /// that are neither known nor asked for yet.
+    /// The properties read of each file: those of the shown columns, and
+    /// the one the list is ordered by, shown or not.
+    fn properties_read(&self) -> Vec<FileProperty> {
+        let mut properties = self.shown_columns().properties();
+        if let Some(order) = self.order().column.property()
+            && !properties.contains(&order)
+        {
+            properties.push(order);
+        }
+        properties
+    }
+
+    /// Reads the properties of the files at `paths` that are neither
+    /// known nor asked for yet, after those asked for before them.
     fn read_properties(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        let properties = self.shown_columns().properties();
+        let properties = self.properties_read();
         if properties.is_empty() {
             return;
         }
@@ -373,42 +408,51 @@ impl FolderPane {
                 self.properties_asked.insert((path.clone(), *property));
             }
         }
-        let location = self.history.current().clone();
-        // One batch after the other, on one thread at a time, each shown
-        // as it comes.
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            for batch in paths.chunks(BATCH) {
-                let batch = batch.to_vec();
-                let answer = Properties::read(batch.clone(), properties.clone());
-                let values = answer.recv().await.unwrap_or_default();
-                let read = this.update(cx, |this, cx| {
-                    for path in &batch {
-                        for property in &properties {
-                            this.properties_asked.remove(&(path.clone(), *property));
-                        }
-                    }
-                    // What was read for a place left is of no use.
-                    if *this.history.current() != location {
-                        return false;
-                    }
-                    for (path, values) in batch.into_iter().zip(values) {
-                        for (property, value) in properties.iter().zip(values) {
-                            this.properties.insert((path.clone(), *property), value);
-                        }
-                    }
-                    if this.order().column.property().is_some() {
-                        this.arrange(cx);
-                    } else {
-                        cx.notify();
-                    }
-                    true
-                });
-                if !matches!(read, Ok(true)) {
-                    break;
+        self.properties_waiting.extend(paths);
+        if self._properties.is_none() {
+            self._properties =
+                Some(cx.spawn(async move |this, cx| Self::read_waiting(this, cx).await));
+        }
+    }
+
+    /// Reads the properties of the files that wait, one batch after the
+    /// other on one thread at a time, those asked for last first, each
+    /// shown as it comes; it ends where none wait.
+    async fn read_waiting(this: WeakEntity<Self>, cx: &mut AsyncApp) {
+        loop {
+            let next = this.update(cx, |this, _| {
+                let from = this.properties_waiting.len().saturating_sub(BATCH);
+                let batch = this.properties_waiting.split_off(from);
+                if batch.is_empty() {
+                    this._properties = None;
+                    return None;
                 }
+                Some((batch, this.properties_read()))
+            });
+            let Ok(Some((batch, properties))) = next else {
+                return;
+            };
+            let answer = Properties::read(batch.clone(), properties.clone());
+            let values = answer.recv().await.unwrap_or_default();
+            let read = this.update(cx, |this, cx| {
+                let batch_paths: HashSet<&PathBuf> = batch.iter().collect();
+                this.properties_asked
+                    .retain(|(path, _)| !batch_paths.contains(path));
+                for (path, values) in batch.iter().zip(values) {
+                    for (property, value) in properties.iter().zip(values) {
+                        this.properties.insert((path.clone(), *property), value);
+                    }
+                }
+                if this.order().column.property().is_some() {
+                    this.arrange(cx);
+                } else {
+                    cx.notify();
+                }
+            });
+            if read.is_err() {
+                return;
             }
-        })
-        .detach();
+        }
     }
 
     /// What the entries are ordered by where the column of the order holds
@@ -443,10 +487,13 @@ impl FolderPane {
         }
     }
 
-    /// Forgets the properties read, as when another place is shown.
+    /// Forgets the properties read, and those waiting to be read, as when
+    /// another place is shown.
     pub(super) fn forget_properties(&mut self) {
         self.properties.clear();
         self.properties_asked.clear();
+        self.properties_waiting.clear();
+        self._properties = None;
         if let Ok(mut wanted) = self.wanted.try_borrow_mut() {
             wanted.clear();
         }

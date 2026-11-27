@@ -770,7 +770,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Redo delete" = "Повторити видалення"
 "Redo new folder" = "Повторити створення папки"
 "Redo new item" = "Повторити створення об'єкта"
-"Redo restore" = "Повторити відновлення"
 "Select a file to preview it" = "Виберіть файл для перегляду"
 "Only the beginning of the file is shown" = "Показано лише початок файлу"
 "There is no preview of this kind of file" = "Для файлів цього типу немає перегляду"

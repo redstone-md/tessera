@@ -34,8 +34,8 @@ use super::recycle_view::{self, Bin, BinDeed};
 use super::rename::{BatchRename, RenameEvent, apply, parent_key};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
 use super::session::{FolderView, FolderViews};
-use super::thumbs::{FileViewConfig, Picture, Thumbs};
-use super::view::DropPlaces;
+use super::thumbs::{FileViewConfig, Picture, Thumbs, drop_pictures};
+use super::view::{DropPlaces, DropSpot};
 use super::{Files, FilesConfig};
 use crate::field::TextField;
 use crate::i18n::Language;
@@ -251,13 +251,18 @@ pub struct FolderPane {
     thumbs: Entity<Thumbs>,
     _thumbs: Option<Subscription>,
     /// The overlays programs draw over the icons of the folder shown, and
-    /// their reading while it runs.
+    /// their reading while it runs; whether the folder changed while they
+    /// were read, so that they are read again once they come.
     overlays: Overlaid,
     _overlays: Option<Task<()>>,
+    overlays_again: bool,
     /// The columns of the details, as chosen for the location, and
     /// whether their widths changed since they were kept.
     columns: Columns,
     columns_changed: bool,
+    /// Whether the user chose the columns of the location, which then
+    /// shows the state of cloud files only where they took it in.
+    columns_kept: bool,
     /// Whether the folder holds files of a cloud folder, whose state a
     /// column then shows.
     cloudy: bool,
@@ -267,6 +272,10 @@ pub struct FolderPane {
     properties: HashMap<(PathBuf, FileProperty), Option<PropertyValue>>,
     properties_asked: HashSet<(PathBuf, FileProperty)>,
     wanted: RefCell<HashSet<PathBuf>>,
+    /// The files whose properties wait to be read, those asked for last
+    /// at the end, as they are read first, and the reading of them.
+    properties_waiting: Vec<PathBuf>,
+    _properties: Option<Task<()>>,
     /// What the Recycle Bin holds, where it is the place shown.
     bin: Bin,
     /// The letters typed over the list to choose by name.
@@ -392,12 +401,16 @@ impl FolderPane {
             _thumbs: None,
             overlays: Overlaid::default(),
             _overlays: None,
+            overlays_again: false,
             columns: Columns::of(&Column::ALL),
             columns_changed: false,
+            columns_kept: false,
             cloudy: false,
             properties: HashMap::new(),
             properties_asked: HashSet::new(),
             wanted: RefCell::new(HashSet::new()),
+            properties_waiting: Vec::new(),
+            _properties: None,
             bin: Bin::default(),
             typed: TypeAhead::default(),
             pending_names: None,
@@ -634,12 +647,19 @@ impl FolderPane {
 
     /// Asks the folder just read for the overlays programs draw over the
     /// icons of its items, away from the user interface; those drawn
-    /// before stay until the answer comes.
+    /// before stay until the answer comes. While the overlays of the
+    /// folder are read, as when it changes many times at once, they are
+    /// asked for again once, after they come, so that one thread at a
+    /// time asks the programs.
     fn took_entries(&mut self, cx: &mut Context<Self>) {
         let Some(folder) = self.folder() else {
             return;
         };
         if !FileViewConfig::of(cx).overlays || self.listing.entries().is_empty() {
+            return;
+        }
+        if self._overlays.is_some() {
+            self.overlays_again = true;
             return;
         }
         // The arrow of a shortcut is drawn by Tessera itself.
@@ -651,25 +671,37 @@ impl FolderPane {
         let marks = Overlays::of_folder(folder, names, side);
         self._overlays = Some(
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let Ok(marks) = marks.recv().await else {
-                    return;
-                };
+                let marks = marks.recv().await.ok();
                 this.update(cx, |this, cx| {
-                    let pictures = { marks.pictures.iter() }
-                        .filter_map(icon_of_pixels)
-                        .collect::<Vec<_>>();
-                    // A picture that cannot be made leaves its marks out.
-                    if pictures.len() == marks.pictures.len() {
-                        this.overlays = Overlaid {
-                            marks: marks.marks,
-                            pictures,
-                        };
-                        cx.notify();
+                    this._overlays = None;
+                    if let Some(marks) = marks {
+                        let pictures = { marks.pictures.iter() }
+                            .filter_map(icon_of_pixels)
+                            .collect::<Vec<_>>();
+                        // A picture that cannot be made leaves its marks out.
+                        if pictures.len() == marks.pictures.len() {
+                            let overlaid = Overlaid {
+                                marks: marks.marks,
+                                pictures,
+                            };
+                            this.take_overlays(overlaid, cx);
+                        }
+                    }
+                    if std::mem::take(&mut this.overlays_again) {
+                        this.took_entries(cx);
                     }
                 })
                 .ok();
             }),
         );
+    }
+
+    /// Draws `overlaid` in place of the overlays drawn before, letting go
+    /// of the textures of their pictures.
+    fn take_overlays(&mut self, overlaid: Overlaid, cx: &mut Context<Self>) {
+        let old = std::mem::replace(&mut self.overlays, overlaid);
+        drop_pictures(old.pictures, cx);
+        cx.notify();
     }
 
     /// Reads what lies in the Recycle Bin, away from the user interface.
@@ -965,7 +997,10 @@ impl FolderPane {
     fn arrived(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.clear();
         self.forget_properties();
-        self.overlays = Overlaid::default();
+        // The overlays of the place left are of no use.
+        self._overlays = None;
+        self.overlays_again = false;
+        self.take_overlays(Overlaid::default(), cx);
         self.bin = Bin::default();
         self.pending_names = None;
         self.rename = None;
@@ -1847,8 +1882,8 @@ impl FolderPane {
                     entries.push(entry(ICON_PASTE, "Paste", |this, cx| this.paste(cx)));
                 }
                 // Undo and redo say what they take back, as Explorer's do.
-                let undo = UndoJournal::undo_label().map(|label| (ICON_UNDO, label, false));
-                let redo = UndoJournal::redo_label().map(|label| (ICON_REDO, label, true));
+                let undo = UndoJournal::next_undo().map(|label| (ICON_UNDO, label, false));
+                let redo = UndoJournal::next_redo().map(|label| (ICON_REDO, label, true));
                 for (glyph, label, again) in undo.into_iter().chain(redo) {
                     let view = view.clone();
                     entries.push(MenuEntry::new(glyph, language.say(label), move |cx| {
@@ -2435,15 +2470,16 @@ impl FolderPane {
                 item.hover(|style| style.bg(theme.colors.surface_container_highest))
             })
             .when(entry.folder, |item| {
-                item.relative().child(self.drop_zone(entry.path.clone()))
+                item.relative()
+                    .child(self.drop_zone(entry.path.clone(), cx))
             });
         Self::pressable(item, position, cx)
     }
 
     /// An element over what holds it, which writes it down as a place
     /// that takes drops into `folder` where it is drawn.
-    fn drop_zone(&self, folder: PathBuf) -> impl IntoElement + use<> {
-        self.zones.zone(folder)
+    fn drop_zone(&self, folder: PathBuf, cx: &Context<Self>) -> impl IntoElement + use<> {
+        self.zones.zone(DropSpot::Pane(cx.entity_id()), folder)
     }
 
     /// The name of `entry` under its icon, or the field it is renamed in.
@@ -2787,7 +2823,7 @@ impl Render for FolderPane {
                 }),
             )
             // The folder shown takes drops beneath the rows of its folders.
-            .children(self.folder().map(|folder| self.drop_zone(folder)))
+            .children(self.folder().map(|folder| self.drop_zone(folder, cx)))
             .children(self.render_bin_bar(&theme, cx))
             .children(self.render_pattern(&theme))
             .child(content)

@@ -297,6 +297,21 @@ impl Thumbs {
     }
 }
 
+/// Lets go of the textures `pictures` were drawn with in every window,
+/// once the update under way ends: a window being updated is out of
+/// reach of [`App::drop_image`] until then. Pictures drawn with `img`
+/// keep their textures until the window closes otherwise.
+pub fn drop_pictures(pictures: Vec<Arc<RenderImage>>, cx: &mut App) {
+    if pictures.is_empty() {
+        return;
+    }
+    cx.defer(move |cx| {
+        for picture in pictures {
+            cx.drop_image(picture, None);
+        }
+    });
+}
+
 /// The size a thumbnail drawn `pixels` physical pixels wide is asked for
 /// at: the first of the sizes that is as large, at most `largest`.
 fn size_for(pixels: f32, largest: u32) -> u32 {

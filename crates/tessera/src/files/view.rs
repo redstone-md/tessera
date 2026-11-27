@@ -71,7 +71,17 @@ const ICON_DETAILS_PANE: &str = "\u{e946}";
 #[derive(Clone)]
 pub struct DropPlaces {
     zones: DropZones,
-    folders: Rc<RefCell<Vec<PathBuf>>>,
+    folders: Rc<RefCell<Vec<(DropSpot, PathBuf)>>>,
+}
+
+/// Which place of a window a drag is over, so that only that place is
+/// marked, not every other showing the same folder: the rows and the
+/// background of a pane, the side, or a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropSpot {
+    Pane(EntityId),
+    Side,
+    Tab(usize),
 }
 
 impl Default for DropPlaces {
@@ -84,11 +94,11 @@ impl Default for DropPlaces {
 }
 
 impl DropPlaces {
-    /// Writes down `bounds` as a place that takes drops into `folder`,
-    /// above those written before.
-    pub fn push(&self, bounds: Bounds<Pixels>, folder: PathBuf) {
+    /// Writes down `bounds` of `spot` as a place that takes drops into
+    /// `folder`, above those written before.
+    pub fn push(&self, bounds: Bounds<Pixels>, spot: DropSpot, folder: PathBuf) {
         if let Ok(mut folders) = self.folders.try_borrow_mut() {
-            folders.push(folder.clone());
+            folders.push((spot, folder.clone()));
         }
         self.zones.push(DropZone { bounds, folder });
     }
@@ -100,17 +110,17 @@ impl DropPlaces {
         }
     }
 
-    /// The folder of the place written down `index`th.
-    fn folder(&self, index: usize) -> Option<PathBuf> {
+    /// The place written down `index`th, with its folder.
+    fn folder(&self, index: usize) -> Option<(DropSpot, PathBuf)> {
         self.folders.try_borrow().ok()?.get(index).cloned()
     }
 
-    /// An element over what holds it, which writes it down as a place
-    /// that takes drops into `folder` where it is drawn.
-    pub fn zone(&self, folder: PathBuf) -> impl IntoElement + use<> {
+    /// An element over what holds it, which writes it down as the place
+    /// `spot` that takes drops into `folder` where it is drawn.
+    pub fn zone(&self, spot: DropSpot, folder: PathBuf) -> impl IntoElement + use<> {
         let places = self.clone();
         canvas(
-            move |bounds, _, _| places.push(bounds, folder),
+            move |bounds, _, _| places.push(bounds, spot, folder),
             |_, (), _, _| {},
         )
         .absolute()
@@ -175,9 +185,8 @@ pub struct FilesView {
     preview: Entity<PreviewPane>,
     details: Entity<DetailsPane>,
     _details: Subscription,
-    /// The folder a drag from another program is over, whose tab is
-    /// marked.
-    drag_over: Option<PathBuf>,
+    /// The tab a drag from another program is over, which is marked.
+    drag_over: Option<usize>,
     /// The window, and its native window as a number, for the windows of
     /// the Shell.
     handle: gpui::AnyWindowHandle,
@@ -237,13 +246,27 @@ impl FilesView {
         let file_view = FileViewConfig::of(cx);
         let preview = cx.new(|cx| PreviewPane::new(file_view.preview, window, cx));
         let details = cx.new(|cx| DetailsPane::new(file_view.details, thumbs.clone(), cx));
-        // A file whose properties were written is read anew where shown.
+        // The preview lets go of a file while its properties are written,
+        // and a file written is read anew where shown.
         let written = cx.subscribe(&details, |this, _, event: &DetailsEvent, cx| {
-            let DetailsEvent::Written(path) = event;
-            let paths = std::slice::from_ref(path);
-            for pane in this.tabs.all().iter().flat_map(Tab::panes) {
-                pane.update(cx, |pane, cx| pane.refresh_pictures(paths, cx));
+            match event {
+                DetailsEvent::Writing(path) => {
+                    let path = path.clone();
+                    this.preview
+                        .update(cx, |preview, cx| preview.hold(path, cx));
+                }
+                DetailsEvent::Written(path) => {
+                    let paths = std::slice::from_ref(path);
+                    for pane in this.tabs.all().iter().flat_map(Tab::panes) {
+                        pane.update(cx, |pane, cx| pane.refresh_pictures(paths, cx));
+                    }
+                    this.preview.update(cx, |preview, cx| preview.release(cx));
+                }
+                DetailsEvent::NotWritten(_) => {
+                    this.preview.update(cx, |preview, cx| preview.release(cx));
+                }
             }
+            cx.notify();
         });
         let hwnd = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
@@ -265,10 +288,10 @@ impl FilesView {
             handle: Window::window_handle(window),
             hwnd,
         };
-        view.show(window, cx);
         let this = cx.weak_entity();
         Files::window_opened(view.handle, this.clone(), cx);
-        // The window is told of once it is made.
+        // The window is told of once it is made, before `show` tells of
+        // where it went, as those who hear expect.
         cx.defer(move |cx| {
             let Some(view) = this.upgrade() else {
                 return;
@@ -276,6 +299,7 @@ impl FilesView {
             let opened = view.read(cx).described(&view, cx);
             Files::window_changed(WindowsChange::Opened(opened), cx);
         });
+        view.show(window, cx);
         view
     }
 
@@ -314,8 +338,8 @@ impl FilesView {
             while let Ok(event) = events.recv().await {
                 let heard = this.update(cx, |this, cx| match event {
                     DropEvent::Over { zone, .. } => {
-                        let folder = zone.and_then(|zone| this.zones.folder(zone));
-                        this.mark_drag_over(folder, cx);
+                        let over = zone.and_then(|zone| this.zones.folder(zone));
+                        this.mark_drag_over(over, cx);
                     }
                     DropEvent::Left | DropEvent::Dropped { .. } => this.mark_drag_over(None, cx),
                     DropEvent::Done { outcome, .. } => {
@@ -334,17 +358,27 @@ impl FilesView {
         Some(target)
     }
 
-    /// Marks `folder` wherever the window shows it, as the place a drag
-    /// is over: a row of a pane, a place at the side or a tab.
-    fn mark_drag_over(&mut self, folder: Option<PathBuf>, cx: &mut Context<Self>) {
+    /// Marks the place a drag is over, with its folder: a row of a pane,
+    /// a place at the side or a tab; the other places are not marked.
+    fn mark_drag_over(&mut self, over: Option<(DropSpot, PathBuf)>, cx: &mut Context<Self>) {
+        let marked = |spot: DropSpot| {
+            { over.as_ref() }
+                .filter(|(over, _)| *over == spot)
+                .map(|(_, folder)| folder.clone())
+        };
         for pane in self.tabs.all().iter().flat_map(Tab::panes) {
-            let folder = folder.clone();
+            let folder = marked(DropSpot::Pane(pane.entity_id()));
             pane.update(cx, |pane, cx| pane.mark_drag_over(folder, cx));
         }
+        let side = marked(DropSpot::Side);
         self.sidebar
-            .update(cx, |sidebar, cx| sidebar.mark_drag_over(folder.clone(), cx));
-        if self.drag_over != folder {
-            self.drag_over = folder;
+            .update(cx, |sidebar, cx| sidebar.mark_drag_over(side, cx));
+        let tab = match over {
+            Some((DropSpot::Tab(index), _)) => Some(index),
+            _ => None,
+        };
+        if self.drag_over != tab {
+            self.drag_over = tab;
             cx.notify();
         }
     }
@@ -706,7 +740,9 @@ impl FilesView {
         self.keep_session(cx);
         if let Some(view) = cx.entity().downgrade().upgrade() {
             let closed = self.described(&view, cx);
-            Files::window_changed(WindowsChange::Closed(closed), cx);
+            // Those who hear may read the windows, this one too, which
+            // cannot be read while it is being updated.
+            cx.defer(move |cx| Files::window_changed(WindowsChange::Closed(closed), cx));
         }
         window.remove_window();
     }
@@ -840,8 +876,8 @@ impl FilesView {
         let front = index == self.tabs.active_index();
         // A tab takes drops into the folder of its pane in front.
         let folder = tab.active().read(cx).folder();
-        let over = folder.is_some() && folder == self.drag_over;
-        let zone = folder.map(|folder| self.zones.zone(folder));
+        let over = folder.is_some() && self.drag_over == Some(index);
+        let zone = folder.map(|folder| self.zones.zone(DropSpot::Tab(index), folder));
         let marker = theme.colors.primary;
         let drag = TabDrag {
             index,

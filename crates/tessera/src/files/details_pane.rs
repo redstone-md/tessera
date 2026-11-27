@@ -48,8 +48,14 @@ const WRITTEN: [FileProperty; 3] = [
 /// What the details pane tells the window it is in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DetailsEvent {
+    /// The properties of the file at this path are about to be written:
+    /// what holds it open for reading, such as the preview pane, lets go
+    /// of it.
+    Writing(PathBuf),
     /// The properties of the file at this path were written.
     Written(PathBuf),
+    /// Writing the properties of the file at this path failed.
+    NotWritten(PathBuf),
 }
 
 /// The details pane of a window.
@@ -236,6 +242,7 @@ impl DetailsPane {
             return;
         }
         self.saving = true;
+        cx.emit(DetailsEvent::Writing(entry.path.clone()));
         let written = Properties::write(entry.path.clone(), edits);
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let written = written.recv().await;
@@ -246,8 +253,14 @@ impl DetailsPane {
                         cx.emit(DetailsEvent::Written(entry.path.clone()));
                         this.read(cx)
                     }
-                    Ok(Err(error)) => this.problem = Some(error),
-                    Err(_) => this.problem = Some("the properties were not written".to_owned()),
+                    Ok(Err(error)) => {
+                        cx.emit(DetailsEvent::NotWritten(entry.path.clone()));
+                        this.problem = Some(error)
+                    }
+                    Err(_) => {
+                        cx.emit(DetailsEvent::NotWritten(entry.path.clone()));
+                        this.problem = Some("the properties were not written".to_owned())
+                    }
                 }
                 cx.notify();
             })

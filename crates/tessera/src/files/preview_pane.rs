@@ -11,8 +11,9 @@
 //! order mark says, in a list of lines of which only those in sight are
 //! drawn. Every other kind is drawn by the preview handler a program
 //! registered for it, in a popup of its own over the pane
-//! ([`PreviewHost`]); a handler that does not answer in time is given up
-//! without holding the window, and the pane says so.
+//! ([`PreviewHost`]); a handler that does not answer in time is given up,
+//! and the pane says so. While the details pane writes the properties of
+//! the file shown, the pane lets go of it, and shows it again after.
 
 use std::cell::Cell;
 use std::fs::File;
@@ -24,14 +25,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gpui::{
-    AnyElement, AsyncApp, Bounds, Context, InteractiveElement, IntoElement, ObjectFit,
+    AnyElement, App, AsyncApp, Bounds, Context, InteractiveElement, IntoElement, ObjectFit,
     ParentElement, Pixels, Render, RenderImage, SharedString, Styled, StyledImage, Subscription,
     Task, WeakEntity, Window, canvas, div, img, px, uniform_list,
 };
 
 use super::model::Entry;
 use super::pane::within;
-use super::thumbs::FileViewConfig;
+use super::thumbs::{FileViewConfig, drop_pictures};
 use crate::i18n::Language;
 use crate::platform::{PreviewColors, PreviewHost, PreviewShown, decode_with_wic};
 use crate::theme::Theme;
@@ -155,6 +156,8 @@ pub struct PreviewPane {
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether the pane is shown.
     open: bool,
+    /// The file being written, which is not shown until it is written.
+    held: Option<PathBuf>,
     _moves: Option<Subscription>,
 }
 
@@ -169,6 +172,7 @@ impl PreviewPane {
             reading: None,
             bounds: Rc::new(Cell::new(None)),
             open,
+            held: None,
             _moves: Some(moves),
         }
     }
@@ -181,15 +185,43 @@ impl PreviewPane {
     pub fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.open = open;
         if !open {
-            self.clear();
+            self.clear(cx);
         }
         cx.notify();
     }
 
-    /// Lets go of the file shown, and hides the popup of its handler.
-    fn clear(&mut self) {
+    /// Lets go of the file at `path` while it is written, which a handler
+    /// may hold open, until [`Self::release`].
+    pub fn hold(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.file.as_ref().is_some_and(|(file, _)| *file == path) {
+            self.wait_for_held(cx);
+        }
+        self.held = Some(path);
+        cx.notify();
+    }
+
+    /// Shows again the file held while it was written, where the cursor
+    /// is still on it.
+    pub fn release(&mut self, cx: &mut Context<Self>) {
+        if self.held.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Lets go of the file shown, which is being written, saying it is
+    /// being read until it is written.
+    fn wait_for_held(&mut self, cx: &mut App) {
+        self.clear(cx);
+        self.shown = Shown::Reading;
+    }
+
+    /// Lets go of the file shown and the texture of its picture, and
+    /// hides the popup of its handler.
+    fn clear(&mut self, cx: &mut App) {
         self.file = None;
-        self.shown = Shown::Nothing;
+        if let Shown::Picture(picture) = std::mem::replace(&mut self.shown, Shown::Nothing) {
+            drop_pictures(vec![picture], cx);
+        }
         self.reading = None;
         if let Some(host) = &mut self.host {
             host.unload();
@@ -208,7 +240,16 @@ impl PreviewPane {
         if file == self.file {
             return;
         }
-        self.clear();
+        let held = file.as_ref().zip(self.held.as_ref());
+        if held.is_some_and(|((path, _), held)| path == held) {
+            // It is shown once it is written.
+            if self.file.is_some() {
+                self.wait_for_held(cx);
+                cx.notify();
+            }
+            return;
+        }
+        self.clear(cx);
         let Some((path, modified)) = file else {
             cx.notify();
             return;

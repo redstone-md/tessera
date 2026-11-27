@@ -1425,7 +1425,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Redo delete", "Повторить удаление"),
     ("Redo new folder", "Повторить создание папки"),
     ("Redo new item", "Повторить создание объекта"),
-    ("Redo restore", "Повторить восстановление"),
     ("Select a file to preview it", "Выберите файл для просмотра"),
     (
         "Only the beginning of the file is shown",

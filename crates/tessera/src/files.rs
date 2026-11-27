@@ -137,8 +137,9 @@ impl Files {
         .detach();
     }
 
-    /// Opens a window of the file manager with the tabs of `opening`.
-    fn open_with(opening: Opening, cx: &mut App) {
+    /// Opens a window of the file manager with the tabs of `opening`, and
+    /// gives it, where it opened.
+    fn open_with(opening: Opening, cx: &mut App) -> Option<gpui::WindowHandle<FilesView>> {
         let config = Self::config(cx);
         let bounds = Bounds::centered(None, size(px(OPEN_SIZE.0), px(OPEN_SIZE.1)), cx);
         let options = WindowOptions {
@@ -161,8 +162,12 @@ impl Files {
         let opened = cx.open_window(options, |window, cx| {
             cx.new(|cx| FilesView::new(opening, config, window, cx))
         });
-        if let Err(error) = opened {
-            report!("the file manager did not open: {error:#}");
+        match opened {
+            Ok(opened) => Some(opened),
+            Err(error) => {
+                report!("the file manager did not open: {error:#}");
+                None
+            }
         }
     }
 
@@ -331,13 +336,9 @@ impl Files {
     /// `SHOpenFolderAndSelectItems` ask.
     #[allow(dead_code, reason = "for the command lines of Explorer")]
     pub fn open_selecting(folder: PathBuf, names: Vec<std::ffi::OsString>, cx: &mut App) {
-        Self::open(Location::Folder(folder), cx);
-        // The window was made just now, and is the newest.
-        let newest = { cx.try_global::<OpenWindows>() }
-            .and_then(|open| open.windows.last().cloned())
-            .and_then(|(_, view)| view.upgrade());
-        if let Some(view) = newest {
-            view.update(cx, |view, cx| view.select_when_loaded(names, cx));
+        // Where no window opened, nothing is chosen.
+        if let Some(opened) = Self::open_with(Opening::at(Location::Folder(folder)), cx) {
+            { opened.update(cx, |view, _, cx| view.select_when_loaded(names, cx)) }.ok();
         }
     }
 

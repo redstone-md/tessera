@@ -26,6 +26,16 @@
 //! handler does not answer in time the file manager abandons its
 //! [`PreviewHost`]: the popup is hidden, its thread is left to itself,
 //! and the next preview gets a new one.
+//!
+//! Windows joins the input of the threads of an owned window and its
+//! owner, and of a window and the windows of other processes inside it.
+//! The thread of the popup lets go of the input of the file manager once
+//! the popup is made; where Windows joins them again all the same, a
+//! handler that hangs can still hold the keys and the focus of the file
+//! manager until it is abandoned, for as long as the timeout of previews.
+//! A request for a preview that a newer one followed before it was begun
+//! is dropped, so that moving the cursor over many files shows only the
+//! last.
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
@@ -46,10 +56,11 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER, CLSIDFromString, CoCreateInstance, STGM_READ,
-    STGM_SHARE_DENY_WRITE,
+    STGM_SHARE_DENY_NONE,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::IObjectWithSite;
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Shell::PropertiesSystem::{IInitializeWithFile, IInitializeWithStream};
 use windows::Win32::UI::Shell::{
     ASSOCF_INIT_DEFAULTTOSTAR, ASSOCF_NOTRUNCATE, ASSOCSTR_SHELLEXTENSION, AssocQueryStringW,
@@ -59,10 +70,10 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_HWNDPARENT,
-    GetClientRect, GetMessageW, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE,
-    SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    ShowWindowAsync, TranslateMessage, WM_APP, WM_ERASEBKGND, WNDCLASSW, WS_CLIPCHILDREN,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    GetClientRect, GetMessageW, GetWindowThreadProcessId, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage, WM_APP, WM_ERASEBKGND, WNDCLASSW,
+    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{GUID, HSTRING, Interface as _, PCWSTR, PWSTR, implement, w};
 
@@ -246,6 +257,19 @@ struct Host {
     quitting: bool,
 }
 
+impl Host {
+    /// Whether `command`, just taken from those waiting, is a preview
+    /// nobody waits for any more or one a newer preview follows: then it
+    /// is not begun.
+    fn superseded(&self, command: &Command) -> bool {
+        let Command::Show { answer, .. } = command else {
+            return false;
+        };
+        answer.is_closed() || { self.waiting.iter() }
+            .any(|waiting| matches!(waiting, Command::Show { .. }))
+    }
+}
+
 thread_local! {
     /// The popup of this thread, for its window procedure.
     static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
@@ -317,7 +341,16 @@ fn work() {
                     .position(|command| matches!(command, Command::Place(_) | Command::Hide))?;
                 return host.waiting.remove(at);
             }
-            let command = host.waiting.pop_front()?;
+            let command = loop {
+                let command = host.waiting.pop_front()?;
+                if !host.superseded(&command) {
+                    break command;
+                }
+                if let Command::Show { answer, .. } = command {
+                    let newer = "a newer preview was asked for".to_owned();
+                    answer.try_send(PreviewShown::Failed(newer)).ok();
+                }
+            };
             host.busy = !matches!(command, Command::Place(_) | Command::Hide);
             Some(command)
         });
@@ -385,16 +418,33 @@ fn perform(command: Command) {
                     SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
                 )
             };
+            // While the handler is told, COM may hand the popup messages:
+            // only placements are done then, which move the popup alone.
             let handler = HOST.with(|host| {
-                let host = host.borrow();
-                let host = host.as_ref()?;
-                (!host.busy).then(|| host.handler.clone()).flatten()
+                let mut host = host.borrow_mut();
+                let host = host.as_mut()?;
+                let handler = host.handler.clone().filter(|_| !host.busy)?;
+                host.busy = true;
+                Some(handler)
             });
             if let Some(handler) = handler {
-                let client = client_rect(window);
-                // SAFETY: the handler was made on this thread; the rectangle
-                // outlives the call.
-                let _ = unsafe { handler.SetRect(&raw const client) };
+                let mut client = client_rect(window);
+                loop {
+                    // SAFETY: the handler was made on this thread; the
+                    // rectangle outlives the call.
+                    let _ = unsafe { handler.SetRect(&raw const client) };
+                    // A placement done meanwhile is told too.
+                    let now = client_rect(window);
+                    if now == client {
+                        break;
+                    }
+                    client = now;
+                }
+                HOST.with(|host| {
+                    if let Some(host) = host.borrow_mut().as_mut() {
+                        host.busy = false;
+                    }
+                });
             }
         }
         Command::Hide => {
@@ -505,7 +555,9 @@ fn preview(
 /// COM is initialized on this thread, which made `handler`.
 unsafe fn initialize(handler: &IPreviewHandler, path: &Path) -> Result<()> {
     let name = HSTRING::from(path.to_string_lossy().replace('/', "\\"));
-    let mode = (STGM_READ | STGM_SHARE_DENY_WRITE).0;
+    // Others may write the file while it is shown, as the details pane
+    // writes its properties.
+    let mode = (STGM_READ | STGM_SHARE_DENY_NONE).0;
     // SAFETY: as the caller promises; the name outlives the calls.
     unsafe {
         if let Ok(taking) = handler.cast::<IInitializeWithStream>() {
@@ -581,7 +633,7 @@ fn create_window(owner: HWND) -> Result<HWND> {
                 "the class of the preview window was not registered"
             ));
         }
-        CreateWindowExW(
+        let window = CreateWindowExW(
             WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             CLASS,
             w!("Preview"),
@@ -595,7 +647,14 @@ fn create_window(owner: HWND) -> Result<HWND> {
             Some(module.into()),
             None,
         )
-        .context("the preview window could not be made")
+        .context("the preview window could not be made")?;
+        // Windows joined the input of this thread to that of the owner;
+        // a handler that hangs here should not hold the file manager.
+        let owner_thread = GetWindowThreadProcessId(owner, None);
+        if owner_thread != 0 {
+            let _ = AttachThreadInput(GetCurrentThreadId(), owner_thread, false);
+        }
+        Ok(window)
     }
 }
 

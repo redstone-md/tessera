@@ -25,7 +25,7 @@ use super::pane::{
     ICON_UNPIN, drive_glyph,
 };
 use super::session::Session;
-use super::view::DropPlaces;
+use super::view::{DropPlaces, DropSpot};
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
@@ -612,7 +612,7 @@ impl Sidebar {
                 let lit = node.target == Target::Location(self.current.clone());
                 let folder = node.path().map(Path::to_owned);
                 let over = folder.is_some() && folder == self.drag_over;
-                let zone = folder.map(|folder| self.places.zone(folder));
+                let zone = folder.map(|folder| self.places.zone(DropSpot::Side, folder));
                 let chevron = match (node.opens, node.expanded) {
                     (false, _) => "",
                     (true, true) => ICON_EXPANDED,

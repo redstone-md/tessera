@@ -769,7 +769,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Redo delete" = "Löschen wiederholen"
 "Redo new folder" = "Neuen Ordner wiederholen"
 "Redo new item" = "Neues Element wiederholen"
-"Redo restore" = "Wiederherstellen wiederholen"
 "Select a file to preview it" = "Wählen Sie eine Datei für die Vorschau aus"
 "Only the beginning of the file is shown" = "Nur der Anfang der Datei wird angezeigt"
 "There is no preview of this kind of file" = "Für diesen Dateityp gibt es keine Vorschau"

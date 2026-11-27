@@ -770,7 +770,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Redo delete" = "Rehacer eliminación"
 "Redo new folder" = "Rehacer nueva carpeta"
 "Redo new item" = "Rehacer nuevo elemento"
-"Redo restore" = "Rehacer restauración"
 "Select a file to preview it" = "Seleccione un archivo para obtener una vista previa"
 "Only the beginning of the file is shown" = "Solo se muestra el principio del archivo"
 "There is no preview of this kind of file" = "No hay vista previa para este tipo de archivo"

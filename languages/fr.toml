@@ -770,7 +770,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Redo delete" = "Rétablir la suppression"
 "Redo new folder" = "Rétablir le nouveau dossier"
 "Redo new item" = "Rétablir le nouvel élément"
-"Redo restore" = "Rétablir la restauration"
 "Select a file to preview it" = "Sélectionnez un fichier pour l'aperçu"
 "Only the beginning of the file is shown" = "Seul le début du fichier est affiché"
 "There is no preview of this kind of file" = "Aucun aperçu pour ce type de fichier"
