@@ -17,8 +17,11 @@ mod brightness;
 mod commands;
 mod connections;
 mod desktops;
+mod drag;
+mod drop_target;
 mod execute;
 mod explorer_view;
+mod file_op;
 mod files;
 mod hdr;
 mod hotkeys;
@@ -37,6 +40,8 @@ mod power;
 mod quick_access;
 mod renaming;
 mod shell_host;
+mod shell_item;
+mod shell_menu;
 mod shell_mode;
 mod shell_thread;
 mod shortcuts;
@@ -66,11 +71,14 @@ pub use brightness::ScreenBrightness;
 pub use commands::Commands;
 pub use connections::{Carrier, Connection, Vpn, VpnState, Wireless};
 pub use desktops::VirtualDesktops;
+pub use drag::{DragButton, DragOut, DropEffect, DropEffects, DropKeys, drop_effect, drop_into};
+pub use drop_target::{DropEvent, DropTarget, DropZone, DropZones};
 pub use execute::Process;
 pub use execute::{Launch, Show};
 pub use explorer_view::{
     Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
 };
+pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
     reveal_in_explorer, show_properties,
@@ -93,6 +101,8 @@ pub use quick_access::QuickFolder;
 pub use quick_access::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use renaming::rename_new;
 pub use shell_host::{HostOptions, ShellEvent, ShellHost};
+pub use shell_item::ShellId;
+pub use shell_menu::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use shell_mode::started_as_shell;
 pub use shell_mode::{explorer_running, shell_mode};
 pub use shell_thread::ShellThread;

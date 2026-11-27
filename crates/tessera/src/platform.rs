@@ -36,11 +36,31 @@ pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, s
     reason = "for the notifications that show the balloons of the tray"
 )]
 pub use win32::{Balloon, BalloonEvent, BalloonKind};
+#[allow(
+    unused_imports,
+    reason = "for the file manager and the desktop, which drag files out and take drops"
+)]
+pub use win32::{
+    DragButton, DragOut, DropEffect, DropEffects, DropEvent, DropKeys, DropTarget, DropZone,
+    DropZones, drop_effect, drop_into,
+};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,
 };
+#[allow(
+    unused_imports,
+    reason = "for the file manager and the desktop, which take work on files back"
+)]
+pub use win32::{
+    FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
+};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
+#[allow(
+    unused_imports,
+    reason = "for the file manager and the desktop, which show the menus of the Shell"
+)]
+pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"

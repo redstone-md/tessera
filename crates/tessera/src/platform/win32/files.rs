@@ -3,8 +3,9 @@
 
 //! What the file manager asks of Windows: the drives, what a file is
 //! (hidden or not), the clipboard of files that Explorer shares, and the
-//! operations of the Shell on files, which bring its own progress and
-//! conflict dialogs and put what is deleted into the Recycle Bin.
+//! short form of the operations of the Shell on files ([`FileWork`]), which
+//! bring its own progress and conflict dialogs, put what is deleted into the
+//! Recycle Bin and can be undone.
 #![allow(unsafe_code)]
 
 use std::ffi::OsString;
@@ -13,7 +14,6 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
 
 use anyhow::{Result, bail};
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, POINT};
@@ -26,10 +26,11 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::UI::Shell::{
-    DROPFILES, DragQueryFileW, FO_COPY, FO_DELETE, FO_MOVE, FOF_ALLOWUNDO, FOF_RENAMEONCOLLISION,
-    HDROP, SHFILEOPSTRUCTW, SHFileOperationW, SHOP_FILEPATH, SHObjectProperties,
+    DROPFILES, DragQueryFileW, HDROP, SHOP_FILEPATH, SHObjectProperties,
 };
 use windows::core::{BOOL, PCWSTR, w};
+
+use super::FileOperation;
 
 /// The attributes of a file that is hidden, or that belongs to the system.
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
@@ -169,8 +170,8 @@ fn path_list<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<u16> {
 }
 
 /// What the Shell does with files: each operation shows the progress,
-/// asks about conflicts and can be undone in Explorer, as Explorer's own
-/// do. They run on threads of their own, as their dialogs wait.
+/// asks about conflicts and goes into the [`UndoJournal`](super::UndoJournal) as Explorer's
+/// own do. It is the short form of a [`FileOperation`] of one kind.
 pub enum FileWork {
     /// Into the Recycle Bin.
     Recycle(Vec<PathBuf>),
@@ -184,54 +185,34 @@ pub enum FileWork {
         from: Vec<PathBuf>,
         to: PathBuf,
     },
+    /// The file or folder at `path` gets the name `name`.
+    Rename {
+        path: PathBuf,
+        name: String,
+    },
 }
 
 impl FileWork {
-    /// Has the Shell do the work, and `done` called on that thread after
-    /// it, whatever came of it. A failure is reported.
-    pub fn start(self, done: impl FnOnce() + Send + 'static) {
-        thread::spawn(move || {
-            if let Err(error) = self.run() {
-                report!("{error:#}");
-            }
-            done();
-        });
+    /// The operation that does the work.
+    pub fn operation(self) -> FileOperation {
+        let operation = FileOperation::new();
+        match self {
+            Self::Recycle(paths) => operation.recycle(paths),
+            Self::Erase(paths) => operation.erase(paths),
+            Self::Copy { from, to } => operation.copy(from, &to),
+            Self::Move { from, to } => operation.move_(from, &to),
+            Self::Rename { path, name } => operation.rename(&path, name),
+        }
     }
 
-    fn run(&self) -> Result<()> {
-        let (operation, from, to, mut flags) = match self {
-            Self::Recycle(from) => (FO_DELETE, from, None, FOF_ALLOWUNDO.0),
-            Self::Erase(from) => (FO_DELETE, from, None, 0),
-            Self::Copy { from, to } => (FO_COPY, from, Some(to), FOF_ALLOWUNDO.0),
-            Self::Move { from, to } => (FO_MOVE, from, Some(to), FOF_ALLOWUNDO.0),
-        };
-        if from.is_empty() {
-            return Ok(());
-        }
-        // A copy into the folder it comes from gets a name of its own.
-        if let (FO_COPY, Some(to)) = (operation, to)
-            && from.iter().any(|path| path.parent() == Some(to.as_path()))
-        {
-            flags |= FOF_RENAMEONCOLLISION.0;
-        }
-        let sources = path_list(from.iter().map(PathBuf::as_path));
-        let target = to.map(|to| path_list([to.as_path()]));
-        let mut operation = SHFILEOPSTRUCTW {
-            wFunc: operation,
-            pFrom: PCWSTR(sources.as_ptr()),
-            pTo: target
-                .as_ref()
-                .map_or(PCWSTR::null(), |target| PCWSTR(target.as_ptr())),
-            fFlags: flags as u16,
-            ..Default::default()
-        };
-        // SAFETY: both lists are ended by two NULs and outlive the call,
-        // which runs on a thread of its own with its dialogs.
-        let status = unsafe { SHFileOperationW(&raw mut operation) };
-        if status != 0 && !operation.fAnyOperationsAborted.as_bool() {
-            bail!("Windows did not finish the work on the files (error {status:#x})");
-        }
-        Ok(())
+    /// Has the Shell do the work on a thread of its own, and `done` called
+    /// on that thread after it, whatever came of it. A failure is
+    /// reported.
+    pub fn start(self, done: impl FnOnce() + Send + 'static) {
+        self.operation().then(move |outcome| {
+            outcome.report();
+            done();
+        });
     }
 }
 
