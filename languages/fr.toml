@@ -737,7 +737,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Personalize" = "Personnaliser"
 
 # declared-settings: settings of extensions and themes, layers of themes.
-"A changed setting reaches the running extension when Tessera starts again." = "Un réglage modifié parvient à l'extension en cours d'exécution quand Tessera redémarre."
 "Accent color" = "Couleur d'accentuation"
 "Accent variant" = "Variante d'accentuation"
 "Add a layer" = "Ajouter une couche"

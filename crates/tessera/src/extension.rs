@@ -292,26 +292,30 @@ impl ExtensionsModule {
     }
 
     /// Takes the settings `table` of the extension `id` over, as the
-    /// configuration holds them now: they are kept as what it reads. An
-    /// extension that runs is not told of new settings yet, so it reads
-    /// them once it is loaded again, as when Tessera starts.
-    pub fn settings_changed(id: &str, table: Option<&toml::Table>, _cx: &mut App) {
-        keep_settings(id, table);
+    /// configuration holds them now: they are kept as what it reads, and
+    /// the extension, which keeps running, is told of them through
+    /// [`host::Host::update_settings`], so its widgets show them at once.
+    pub fn settings_changed(id: &str, table: Option<&toml::Table>, cx: &mut App) {
+        let Some(settings) = keep_settings(id, table) else {
+            return;
+        };
+        if let Some(host) = host::running(id, cx) {
+            host.update(cx, |host, cx| host.update_settings(settings, cx));
+        }
     }
 }
 
 /// Keeps the settings `table` as what the extension `id` that was loaded
-/// reads; the settings it was started with where none of that name was.
-fn keep_settings(id: &str, table: Option<&toml::Table>) {
+/// reads, and gives them back; nothing where no extension of that name
+/// was loaded.
+fn keep_settings(id: &str, table: Option<&toml::Table>) -> Option<HashMap<String, String>> {
     let mut started = STARTED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let Some((declared, settings)) = started.as_mut().and_then(|started| started.get_mut(id))
-    else {
-        // No extension of that name runs, so none is to be told.
-        return;
-    };
+    // No extension of that name runs, so none is to be told.
+    let (declared, settings) = started.as_mut()?.get_mut(id)?;
     *settings = snapshot(id, declared, table);
+    Some(settings.clone())
 }
 
 /// The settings each extension that was loaded was started with, and
@@ -666,8 +670,9 @@ mod tests {
         };
         assert_eq!(module.settings_of(&manifest)["minutes"], "20");
         let table: toml::Table = toml::from_str("minutes = 30\n").unwrap();
-        keep_settings("kept", Some(&table));
-        keep_settings("not-loaded", Some(&table));
+        let told = keep_settings("kept", Some(&table)).unwrap();
+        assert_eq!(told["minutes"], "30");
+        assert!(keep_settings("not-loaded", Some(&table)).is_none());
         let started = STARTED.lock().unwrap();
         let started = started.as_ref().unwrap();
         assert_eq!(started["kept"].1["minutes"], "30");

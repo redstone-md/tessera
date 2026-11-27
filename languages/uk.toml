@@ -737,7 +737,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Personalize" = "Персоналізація"
 
 # declared-settings: settings of extensions and themes, layers of themes.
-"A changed setting reaches the running extension when Tessera starts again." = "Змінене налаштування дійде до запущеного розширення після перезапуску Tessera."
 "Accent color" = "Акцентний колір"
 "Accent variant" = "Варіант акценту"
 "Add a layer" = "Додати шар"

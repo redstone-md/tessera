@@ -660,17 +660,16 @@ impl Settings {
                 names.collect::<Vec<_>>()
             };
             self.seek(&extension.id, first + cards.len());
-            let remark = if extension.settings.is_empty() {
-                "This extension declares no settings; what it reads is written in config.toml."
-            } else {
-                "A changed setting reaches the running extension when Tessera starts again."
-            };
+            // A changed setting reaches the running extension at once.
+            let remark = extension.settings.is_empty().then_some(
+                "This extension declares no settings; what it reads is written in config.toml.",
+            );
             cards.push(self.declared_card(
                 owner,
                 extension.id.clone().into(),
                 &extension.settings,
                 &[],
-                Some(remark),
+                remark,
                 &affects,
                 config,
                 window,

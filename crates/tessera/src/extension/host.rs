@@ -185,10 +185,6 @@ impl Loaded {
 /// The host of the running extension `id`, made where it was not yet; for
 /// the settings, which hand a changed table to
 /// [`Host::update_settings`].
-#[allow(
-    dead_code,
-    reason = "the settings hand changed tables to running extensions"
-)]
 pub fn running(id: &str, cx: &mut App) -> Option<Entity<Host>> {
     Some(Loaded::get(id)?.host(cx))
 }
@@ -442,10 +438,6 @@ impl Host {
     /// configuration: `setting` answers with it from now on, the
     /// extension is told where it listens, and its widgets are drawn
     /// again.
-    #[allow(
-        dead_code,
-        reason = "the settings hand changed tables to running extensions"
-    )]
     pub fn update_settings(&mut self, settings: HashMap<String, String>, cx: &mut Context<Self>) {
         self.call_and_draw(
             move |instance| instance.settings_changed(settings).map(drop),
