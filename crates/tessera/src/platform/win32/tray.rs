@@ -1017,8 +1017,9 @@ fn upkeep(window: HWND) {
     if SERVING.replace(serving) != serving {
         if serving {
             // Explorer went: the applications that knew only Explorer
-            // bring their icons and bars here.
+            // bring their icons and bars here, Tessera's surfaces too.
             announce();
+            appbar::begin(window);
         } else {
             // Explorer came back and keeps the bars from now on.
             appbar::forget();

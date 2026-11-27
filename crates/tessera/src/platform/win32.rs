@@ -666,11 +666,24 @@ pub struct EdgeReservation {
 }
 
 impl EdgeReservation {
+    /// A number that grows whenever the surfaces are to take their place
+    /// again with [`Self::occupy`]: another edge bar moved, or what keeps
+    /// the bars changed, as when Explorer's taskbar went or came back.
+    pub fn generation() -> u64 {
+        appbar::places()
+    }
+
     /// Makes the reserved strip `thickness` physical pixels deep at `edge`
-    /// of the surface's display and moves the surface into it.
+    /// of the surface's display and moves the surface into it. The surface
+    /// registers again first, in case what keeps the bars changed since;
+    /// one that is registered already is refused, which changes nothing.
     pub fn occupy(&self, edge: ScreenEdge, thickness: i32) -> Result<()> {
         let hwnd = self.surface.hwnd;
         let mut data = self.surface.appbar_data();
+        data.uCallbackMessage = EDGE_NOTIFICATION;
+        // SAFETY: `data` is a correctly sized APPBARDATA that outlives the
+        // call, and `hwnd` is a live window owned by this thread.
+        unsafe { SHAppBarMessage(ABM_NEW, &mut data) };
         data.uEdge = edge.as_appbar_edge();
 
         // SAFETY: `data` and `monitor` are correctly sized structures that

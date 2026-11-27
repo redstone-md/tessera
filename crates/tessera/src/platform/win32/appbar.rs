@@ -17,13 +17,16 @@
 //! Everything here runs on the tray thread. The server never sends a
 //! message to a bar and waits: what bars are told is posted, as one of
 //! them is a window of GPUI, whose thread may be the one waiting for the
-//! answer. The work areas are set after the answer was given, from a
+//! answer. Tessera's own surfaces are not posted to at all, as GPUI does
+//! not hand them the messages of bars: a number grows instead that they
+//! look at, and they take their place again when it changed. The work areas are set after the answer was given, from a
 //! message the tray window posts to itself, as setting them tells every
 //! window and waits for them.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::mem::size_of;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -187,6 +190,9 @@ pub(super) struct Note {
     /// One of the `ABN_` codes.
     code: u32,
     lparam: isize,
+    /// Whether the bar is one of Tessera's surfaces, which is told by
+    /// [`places`] instead.
+    ours: bool,
 }
 
 /// The answer to a request and what follows from it.
@@ -538,20 +544,24 @@ impl AppBarServer {
 
     /// What tells each bar and hider whose window `to` accepts `code`.
     fn tell_all(&self, code: u32, lparam: isize, to: impl Fn(u32) -> bool) -> Vec<Note> {
-        let bars = self.bars.iter().map(|bar| (bar.window, bar.callback));
+        let bars = self
+            .bars
+            .iter()
+            .map(|bar| (bar.window, bar.callback, bar.ours));
         let hiders = self
             .hiders
             .iter()
-            .map(|hider| (hider.window, hider.callback));
+            .map(|hider| (hider.window, hider.callback, hider.ours));
         let mut notes: Vec<Note> = Vec::new();
-        for (window, callback) in bars.chain(hiders) {
+        for (window, callback, ours) in bars.chain(hiders) {
             let new = !notes.iter().any(|note| note.window == window);
-            if callback != 0 && new && to(window) {
+            if (callback != 0 || ours) && new && to(window) {
                 notes.push(Note {
                     window,
                     callback,
                     code,
                     lparam,
+                    ours,
                 });
             }
         }
@@ -667,6 +677,21 @@ fn changes(monitors: &[Monitor], areas: &[ScreenRect]) -> Vec<ScreenRect> {
     changed.into_iter().map(|(_, area)| area).collect()
 }
 
+/// Grows whenever Tessera's surfaces are to take their place at their edge
+/// again: another bar moved, or the bars have another server now.
+static PLACES: AtomicU64 = AtomicU64::new(0);
+
+/// The number that grows whenever Tessera's surfaces are to take their
+/// place again.
+pub(super) fn places() -> u64 {
+    PLACES.load(Ordering::Relaxed)
+}
+
+/// Has Tessera's surfaces take their place again.
+fn look_again() {
+    PLACES.fetch_add(1, Ordering::Relaxed);
+}
+
 thread_local! {
     static SERVER: RefCell<AppBarServer> = RefCell::default();
     /// Whether the tray window has posted itself the message to set the
@@ -680,9 +705,17 @@ fn handle(value: u32) -> HWND {
 }
 
 /// Posts each note to its bar. A bar whose window is gone, or that runs
-/// with higher privileges than the shell, does not receive it.
+/// with higher privileges than the shell, does not receive it. Tessera's
+/// surfaces see for themselves when an application fills their display,
+/// and only hear that they are to look at their place again.
 fn post(notes: &[Note]) {
     for note in notes {
+        if note.ours {
+            if note.code == ABN_POSCHANGED {
+                look_again();
+            }
+            continue;
+        }
         // SAFETY: posting passes plain numbers and fails harmlessly for a
         // window that is gone.
         unsafe {
@@ -832,11 +865,21 @@ pub(super) fn displays_changed(window: HWND) {
     rearrange_later(window);
 }
 
+/// Begins serving the bars, as Explorer's taskbar went: the work areas
+/// are set again without the room it took, and Tessera's surfaces, which
+/// registered with Explorer, register here.
+pub(super) fn begin(window: HWND) {
+    look_again();
+    rearrange_later(window);
+}
+
 /// Forgets every bar without touching the work areas, as Explorer came
-/// back and keeps the bars from now on.
+/// back and keeps the bars from now on. Tessera's surfaces register with
+/// Explorer.
 pub(super) fn forget() {
     SERVER.with_borrow_mut(|server| *server = AppBarServer::default());
     PENDING.set(false);
+    look_again();
 }
 
 #[cfg(test)]
@@ -1065,6 +1108,7 @@ mod tests {
                 callback: 0x8002,
                 code: ABN_POSCHANGED,
                 lparam: 0,
+                ours: false,
             }]
         );
         // The same place again is no news.
@@ -1078,6 +1122,24 @@ mod tests {
         // A bar that never took a place leaves nothing to rearrange.
         let removed = server.answer(&request(ABM_REMOVE, 2, 0, primary, 0), false, &monitors);
         assert!(!removed.rearranged && removed.notes.is_empty());
+    }
+
+    #[test]
+    fn a_surface_of_tessera_hears_of_moves_without_a_message() {
+        let primary = rect(0, 0, 1920, 1080);
+        let monitors = monitors();
+        let mut server = AppBarServer::default();
+        server.answer(&request(ABM_NEW, 1, 0, primary, 0), true, &monitors);
+        let other = dock(&mut server, 2, ABE_TOP, primary, 30);
+        let moved = request(ABM_SETPOS, 2, ABE_TOP, rect(0, 0, 1920, 60), 0);
+        let notes = server.answer(&moved, false, &monitors).notes;
+        assert_eq!(other, rect(0, 0, 1920, 30));
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].ours && notes[0].code == ABN_POSCHANGED);
+
+        let before = places();
+        post(&notes);
+        assert_eq!(places(), before + 1);
     }
 
     #[test]
@@ -1167,6 +1229,7 @@ mod tests {
                 callback: 0x8001,
                 code: ABN_FULLSCREENAPP,
                 lparam: 1,
+                ours: false,
             }]
         );
         assert!(server.fullscreen(primary, true, &monitors).is_empty());
