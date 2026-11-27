@@ -1317,20 +1317,21 @@ fn gpui_display(display: &Display, cx: &App) -> Option<DisplayId> {
 
 /// Where a floating window hangs from `point` of `display`.
 pub fn anchor_at(display: &Display, (x, y): (i32, i32), cx: &App) -> PopupAnchor {
-    PopupAnchor {
-        surface: ScreenRect {
-            left: x,
-            top: y,
-            right: x,
-            bottom: y,
-        },
-        edge: ScreenEdge::Top,
+    let point = ScreenRect {
+        left: x,
+        top: y,
+        right: x,
+        bottom: y,
+    };
+    PopupAnchor::new(
+        point,
+        ScreenEdge::Top,
         x,
-        screen: display.work,
-        scale: display.scale,
-        display_id: gpui_display(display, cx),
-        display: Some(display.key),
-    }
+        display.work,
+        display.scale,
+        gpui_display(display, cx),
+        Some(display.key),
+    )
 }
 
 /// What a window of snapping is to the other windows.

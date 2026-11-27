@@ -8,12 +8,12 @@ use std::mem;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
-use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
+use gpui::{App, AsyncApp, DisplayId, Global, Window, WindowHandle, px};
 
 use crate::actions::Actions;
 use crate::banners::Banners;
 use crate::clipboard::ClipHistory;
-use crate::config::{Config, Displays};
+use crate::config::Config;
 use crate::corners::Corners;
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
@@ -30,12 +30,13 @@ use crate::notices::Notices;
 use crate::notifications_store::NotificationStore;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
+use crate::platform::{DisplayName, ShellEvent, ShellHost, display_device, display_names};
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
 use crate::rules::Rules;
 use crate::snap::Snapper;
 use crate::startup::Startup;
-use crate::surface::{EdgeSurface, EdgeSurfaceView};
+use crate::surface::{EdgeSurface, EdgeSurfaceView, edge_of};
 use crate::switcher::Switcher;
 use crate::theme::Theme;
 use crate::tiling::Tiler;
@@ -48,11 +49,60 @@ use crate::workspaces::Workspaces;
 /// file an editor is still writing is not read.
 const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long the displays are to stay as they are after a change before
+/// the surfaces follow: Windows tells of a change several times while it
+/// makes it.
+const DISPLAYS_SETTLE: Duration = Duration::from_millis(600);
+
 /// An open surface and where it is.
 struct Surface {
     display: DisplayId,
+    /// The output of that display, as GDI names it, where it is known:
+    /// the ids of GPUI count the displays anew when one comes or goes.
+    device: Option<String>,
     edge: ScreenEdge,
     window: WindowHandle<EdgeSurfaceView<Panel>>,
+}
+
+impl Surface {
+    /// Whether the surface is on the display GPUI calls `display`, whose
+    /// output is `device`.
+    fn is_on(&self, display: DisplayId, device: Option<&str>) -> bool {
+        match (self.device.as_deref(), device) {
+            (Some(own), Some(device)) => own.eq_ignore_ascii_case(device),
+            _ => self.display == display,
+        }
+    }
+}
+
+/// What the displays are called and where they stand, as read when the
+/// shell started and again whenever the displays changed.
+#[derive(Default)]
+pub struct KnownDisplays(Vec<DisplayName>);
+
+impl Global for KnownDisplays {}
+
+impl KnownDisplays {
+    /// The displays, as last read.
+    pub fn all(cx: &App) -> &[DisplayName] {
+        cx.try_global::<Self>().map_or(&[], |known| &known.0)
+    }
+
+    /// What the display GPUI calls `display` is called, and its output.
+    fn name_of(display: DisplayId, cx: &App) -> (Option<DisplayName>, Option<String>) {
+        let device = display_device(u32::from(display) as usize);
+        let named = device.as_deref().and_then(|device| {
+            let known = Self::all(cx).iter();
+            { known }.find(|name| name.device.eq_ignore_ascii_case(device))
+        });
+        (named.cloned(), device)
+    }
+
+    /// The display the surface in `window` is on, as last read.
+    pub fn of_window(window: &Window, cx: &App) -> Option<DisplayName> {
+        let display = window.display(cx)?.id();
+        Self::name_of(display, cx).0
+    }
 }
 
 pub struct Shell {
@@ -88,6 +138,9 @@ impl Shell {
         // Without Explorer the surfaces reserve their edges through the tray.
         crate::platform::Tray::start_before_surfaces();
         Night::start(&config.night_light, cx);
+        // The surfaces choose their displays by these names, so they are
+        // read before the first opens; it asks the display driver once.
+        cx.set_global(KnownDisplays(display_names()));
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);
         if surfaces.is_empty() {
             bail!("the layout opened no surface");
@@ -118,7 +171,49 @@ impl Shell {
         Self::show_cards_later(cx);
         Self::watch(cx);
         Self::answer_windows_key(cx);
+        Self::follow_displays(cx);
         Ok(())
+    }
+
+    /// Has the surfaces follow the displays: when one comes, goes or
+    /// changes, and the displays have stayed as they are for a moment,
+    /// their names are read again away from the thread of the interface
+    /// and the surfaces open, close or are refilled as the layout says
+    /// for the displays there are now.
+    fn follow_displays(cx: &mut App) {
+        let events = ShellHost::events();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(event) = events.recv().await {
+                if !matches!(event, ShellEvent::DisplaysChanged) {
+                    continue;
+                }
+                // What else comes meanwhile is the same change.
+                loop {
+                    cx.background_executor().timer(DISPLAYS_SETTLE).await;
+                    let mut more = false;
+                    while events.try_recv().is_ok() {
+                        more = true;
+                    }
+                    if !more {
+                        break;
+                    }
+                }
+                let names = cx
+                    .background_executor()
+                    .spawn(async { display_names() })
+                    .await;
+                let followed = cx.update(|cx| {
+                    cx.set_global(KnownDisplays(names));
+                    let config = cx.global::<Self>().config.clone();
+                    Self::arrange(&config, cx);
+                    cx.refresh_windows();
+                });
+                if followed.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Takes the Windows key over while the configuration names a popup
@@ -176,10 +271,21 @@ impl Shell {
         let mut anywhere = None;
         for surface in Self::surfaces_nearest_first(cx) {
             let found = surface.update(cx, |view, window, cx| {
-                let middle = view.content().read(cx).popup_middle(name);
-                let middle = middle.or_else(|| Popups::standing(name, window, cx));
-                let x = middle.unwrap_or(window.viewport_size().width / 2.);
-                (middle.is_some(), PopupAnchor::at(window, x, cx))
+                let viewport = window.viewport_size();
+                let halfway = gpui::point(viewport.width / 2., viewport.height / 2.);
+                let middle = view.content().read(cx).popup_center(name);
+                // Where a widget said it opens the popup, along the surface.
+                let standing = || {
+                    let along = Popups::standing(name, window, cx)?;
+                    let vertical = edge_of(window, cx).is_some_and(ScreenEdge::is_vertical);
+                    Some(match vertical {
+                        true => gpui::point(halfway.x, along),
+                        false => gpui::point(along, halfway.y),
+                    })
+                };
+                let middle = middle.or_else(standing);
+                let at = middle.unwrap_or(halfway);
+                (middle.is_some(), PopupAnchor::at_point(window, at, cx))
             });
             match found {
                 Ok((true, Ok(anchor))) => return Some((true, anchor)),
@@ -199,7 +305,9 @@ impl Shell {
             .into_iter()
             .find_map(|surface| {
                 let anchor = surface.update(cx, |_, window, cx| {
-                    PopupAnchor::at(window, window.viewport_size().width / 2., cx)
+                    let viewport = window.viewport_size();
+                    let halfway = gpui::point(viewport.width / 2., viewport.height / 2.);
+                    PopupAnchor::at_point(window, halfway, cx)
                 });
                 anchor.ok()?.ok()
             })
@@ -355,6 +463,11 @@ impl Shell {
         cx.refresh_windows();
     }
 
+    /// The configuration in use.
+    pub fn config(cx: &App) -> &Config {
+        &cx.global::<Self>().config
+    }
+
     /// Takes over the configuration file right after Tessera wrote it,
     /// without waiting to notice the change.
     pub fn config_changed(cx: &mut App) {
@@ -426,43 +539,67 @@ impl Shell {
     /// The surfaces of `config` on the displays each one asks for, taken
     /// out of `open` where one is already at that edge of that display and
     /// opened otherwise. One that does not open is reported and left out.
+    ///
+    /// A surface appears on the displays its `displays` includes, with
+    /// what the overrides that name a display give there. Surfaces that
+    /// hide at the same edge of a display stand one after the other from
+    /// the edge, in the order of the file.
     fn open_surfaces(config: &Config, open: &mut Vec<Surface>, cx: &mut App) -> Vec<Surface> {
         let primary = cx.primary_display().map(|display| display.id());
         let mut surfaces = Vec::new();
         for display in cx.displays() {
+            let (name, device) = KnownDisplays::name_of(display.id(), cx);
+            let is_primary = name
+                .as_ref()
+                .map_or(Some(display.id()) == primary, |name| name.primary);
+            // How far from each edge the next surface that hides stands.
+            let mut insets: Vec<(ScreenEdge, f32)> = Vec::new();
             for (index, layout) in config.surfaces.iter().enumerate() {
-                if layout.displays == Displays::Primary && Some(display.id()) != primary {
+                if !layout.displays.includes(name.as_ref(), is_primary) {
                     continue;
                 }
-                let (edge, thickness) = (layout.edge, px(layout.thickness));
-                let hide = layout.hide;
+                let (placed, replaced) = layout.on_display(name.as_ref());
+                let edge = placed.edge;
+                let inset = match placed.hide.hides() {
+                    true => {
+                        let taken = insets.iter_mut().find(|(at, _)| *at == edge);
+                        let inset = taken.as_ref().map_or(0., |(_, inset)| *inset);
+                        match taken {
+                            Some((_, taken)) => *taken += placed.thickness,
+                            None => insets.push((edge, placed.thickness)),
+                        }
+                        inset
+                    }
+                    false => 0.,
+                };
+                let surface = EdgeSurface::of(&placed, px(inset));
+                let placed = &placed;
                 let kept = open
                     .iter()
-                    .position(|surface| surface.display == display.id() && surface.edge == edge)
+                    .position(|open| {
+                        open.is_on(display.id(), device.as_deref()) && open.edge == edge
+                    })
                     .map(|index| open.swap_remove(index))
-                    .filter(|surface| {
-                        let refilled = surface.window.update(cx, |view, window, cx| {
-                            view.refill(thickness, hide, window, cx, |display, cx| {
-                                Panel::new(index, layout, display, cx)
+                    .filter(|open| {
+                        let refilled = open.window.update(cx, |view, window, cx| {
+                            view.refill(surface, window, cx, |display, cx| {
+                                Panel::new(index, placed, replaced, display, cx)
                             });
                         });
                         refilled.is_ok()
                     });
-                if let Some(surface) = kept {
-                    surfaces.push(surface);
+                if let Some(mut kept) = kept {
+                    (kept.display, kept.device) = (display.id(), device.clone());
+                    surfaces.push(kept);
                     continue;
                 }
-                let surface = EdgeSurface {
-                    edge,
-                    thickness,
-                    hide,
-                };
                 let opened = surface.open(&display, cx, |display, cx| {
-                    Panel::new(index, layout, display, cx)
+                    Panel::new(index, placed, replaced, display, cx)
                 });
                 match opened {
                     Ok(window) => surfaces.push(Surface {
                         display: display.id(),
+                        device: device.clone(),
                         edge,
                         window,
                     }),

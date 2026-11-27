@@ -14,7 +14,7 @@ use gpui::{
 
 use crate::motion::Spring;
 use crate::platform::{NativeSurface, ScreenEdge};
-use crate::popup::{MARGIN, PopupAnchor, floating_travel, open_floating, retire_floating};
+use crate::popup::{MARGIN, PopupAnchor, floating_offset, open_floating, retire_floating};
 use crate::theme::Theme;
 use crate::ui::{one_line, text_width};
 
@@ -259,10 +259,14 @@ impl Render for TipView {
         if self.closing && self.visibility.is_settled() {
             retire_floating(window, cx);
         }
+        // A tip comes out of its surface, from the side beside a bar at
+        // the left or the right.
+        let offset = floating_offset(self.edge, visibility);
         let pill = div()
             .size_full()
             .relative()
-            .top(floating_travel(self.edge, visibility))
+            .left(offset.x)
+            .top(offset.y)
             .px(theme.spacing.medium)
             .flex()
             .items_center()
