@@ -1107,6 +1107,23 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # Each [[wallpaper.workspace]] does the same for a workspace (the first
 # being 1) on whatever display shows it, before the entry of the display.
 #
+# The number of a workspace is its place in the row of workspaces: when
+# one is taken away, the one that moves into its place shows its wallpaper.
+#
+# Adjustments, which [wallpaper] and each entry take: blur (pixels),
+# brightness, contrast and saturation (1 is as it is), flip ("horizontal",
+# "vertical" or "both"), overlay (a color "#rrggbbaa" laid over it, blend
+# "normal", "multiply", "screen", "overlay", "darken", "lighten" or
+# "soft-light") and position ("top-left" and the like, or [x, y] in
+# percent) for a picture that is cut, contained or centered. Videos are
+# mirrored, placed and overlaid, not blurred or toned. speed (0.25 to 4),
+# sound and volume (0 to 1) are for videos; pause_coverage (0.9; 0 never)
+# is how much of a display windows cover before its video stands still.
+# Each [[wallpaper.collections]] is a list with a name, images, video,
+# videos, interval and shuffle; collection = "name" shows it on all
+# displays, or in an entry on that display or workspace. The popup
+# wallpaper-settings, which the action of that name opens, sets these.
+#
 # [wallpaper]
 # images = ["C:/Users/me/Pictures/Wallpapers"]
 # interval = 600
@@ -1122,6 +1139,24 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # source = "daily"
 # daily = "bing"
 # mirror = true
+# collection = "Sea"
+# blur = 8
+# brightness = 0.9
+# contrast = 1.1
+# saturation = 1.2
+# flip = "horizontal"
+# overlay = { color = "#00000060", blend = "multiply" }
+# position = "top"
+# speed = 1.5
+# sound = true
+# volume = 0.3
+# pause_coverage = 0.9
+#
+# [[wallpaper.collections]]
+# name = "Sea"
+# images = ["C:/Users/me/Pictures/Sea"]
+# interval = 300
+# shuffle = true
 #
 # [[wallpaper.display]]
 # number = 2
@@ -1133,6 +1168,7 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #
 # The widget wallpaper, and the action wallpaper (arg "next" or
 # "previous"), show the next or the previous picture at once.
+# The action wallpaper-settings opens the settings of the wallpaper.
 
 # Each [[card]] is a panel of widgets that lies on the desktop, below every
 # window. corner is top-left, top-right (the default), bottom-left,

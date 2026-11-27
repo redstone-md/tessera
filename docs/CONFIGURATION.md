@@ -139,6 +139,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
 | `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
 | `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
+| `wallpaper-settings` | none | opens the settings of the wallpaper, or closes them where they are open |
 | `eject` | the letter of a drive, as `E` or `E:` | ejects that drive as its **Eject** button in the popup `devices` does: the device it is on, with every drive of it, or its medium where it is a disc or a card in a reader built in; a notice says how it went |
 | `switcher` | `next`, `previous`, `app-next`, `app-previous`, or none | opens the [window switcher](#the-window-switcher), or goes one window on (`next`, or none) or back (`previous`) in the open one; `app-next` and `app-previous` go through the windows of one application only. The choice is taken when the keys to hold of the `press` that did it are let go; for a `press` with none, the switcher stays open until a window is chosen. Done by `tessera do switcher`, it waits for the keys that are down as it is done, which are usually none. Its keys are taken from Windows, and it brings Alt+Tab (`next`), Alt+Shift+Tab (`previous`), Alt+` (`app-next`) and Alt+Shift+` (`app-previous`) where the keys of Windows are in use |
 
@@ -467,6 +468,56 @@ video = "C:/Users/me/Videos/focus.mp4"
 The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `previous`) have every display show the next or the previous picture of its list at once.
 
 `theme = "wallpaper"`, or `seed = "wallpaper"` in a theme file, derives the colors from the wallpaper, as `accent` does from the accent color.
+
+### Adjustments, collections and the settings
+
+Each of these keys is one of `[wallpaper]` and of each `[[wallpaper.display]]` and `[[wallpaper.workspace]]` entry; an entry takes what it leaves out from the table. The popup `wallpaper-settings` (the action of the same name opens it) sets most of them.
+
+```toml
+[wallpaper]
+collection = "Sea"      # the collection all displays show, in place of images and videos
+blur = 8                # pixels; 0 for none
+brightness = 0.9        # 1 is as it is
+contrast = 1.1
+saturation = 1.2
+flip = "horizontal"     # "vertical", "both" or "none"
+overlay = { color = "#00000060", blend = "multiply" }
+position = "top"        # or [30, 70], in percent across and down
+speed = 1.5             # videos, from 0.25 to 4
+sound = true            # the sound of videos, at volume
+volume = 0.3
+pause_coverage = 0.9    # videos stand still where windows cover this much; 0 never
+
+[[wallpaper.collections]]
+name = "Sea"
+images = ["C:/Users/me/Pictures/Sea"]
+video = "C:/Users/me/Videos/waves.mp4"   # and videos, as in the table
+interval = 300          # in place of interval and shuffle of the table
+shuffle = true
+
+[[wallpaper.display]]
+number = 2
+collection = "Sea"
+blur = 0
+```
+
+| Key | What it does |
+| --- | --- |
+| `blur` | A blur of so many pixels, as `blur()` of CSS: the standard deviation, from 0 to 200. |
+| `brightness`, `contrast`, `saturation` | Factors from 0 to 4, 1 for as it is, as the filters of CSS take them; brightness and contrast come first. |
+| `flip` | `horizontal`, `vertical` or `both` mirrors the picture, or the video. |
+| `overlay` | A color, `#rrggbbaa` or `#rrggbb`, laid over the picture as much as its alpha says, mixed as `blend` says: `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten` or `soft-light`. Over a video only `normal` and `darken` are done; the others are laid on as `normal`. |
+| `position` | Where a picture that is cut to cover its display, is contained in it or is centered lies: `center`, `top`, `bottom`, `left`, `right`, `top-left`, `top-right`, `bottom-left`, `bottom-right`, or `[x, y]` in percent. A video keeps to it too. |
+| `speed`, `sound`, `volume` | How fast videos play (0.25 to 4), whether their sound is heard and how loud (0 to 1). |
+| `pause_coverage` | Only in the table: the share of a display, 0 to 1, that the windows shown cover together at which a video there stands still; 0.9 without it, 0 never. |
+| `collection` | The name of one of `[[wallpaper.collections]]`, shown in place of `images`, `video` and `videos` of the same place. A name no collection has is reported, and the pictures of the place are shown. |
+| `[[wallpaper.collections]]` | `name`, `images`, `video`, `videos`, and `interval` and `shuffle` in place of those of the table. The tables are called `collections` because TOML cannot hold a key `collection` and tables of that name side by side. |
+
+Blur, brightness, contrast and saturation are not done to videos. Where the wallpaper of Windows is to be adjusted, Tessera draws it itself. `mirror` gives Windows the picture file without the adjustments.
+
+`[[wallpaper.workspace]]` is chosen by the `number` of the place of a workspace in the row of workspaces (`Workspaces::now(..).current`), not by the workspace itself: when a workspace is taken away, the one that moves into its place shows the wallpaper of that number. This is deliberate: a wallpaper belongs to a place in the row, as Seelen UI chooses a wallpaper by the index of a workspace.
+
+In shell mode Tessera answers programs that ask COM for `IDesktopWallpaper`, as Explorer would: a picture set for one display goes to its `[[wallpaper.display]]` entry, a picture for all, a slideshow, the position, the color and its options to `[wallpaper]`, in place of the pictures, videos and collection shown before. Whether Settings > Personalization uses it has not been tried.
 
 ## Notices, devices and privacy
 
