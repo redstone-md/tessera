@@ -26,6 +26,22 @@ pub enum Style {
     /// Icons alone, in a row, with the title of the chosen window under
     /// them.
     Icons,
+    /// The chosen window large in the middle, its neighbours to both
+    /// sides, smaller and fainter the further they are, with its title
+    /// under them.
+    Cover,
+    /// The chosen window in front, the windows after it stacked upward
+    /// and to the side behind it, smaller and fainter, with its title
+    /// under them.
+    Flip,
+}
+
+impl Style {
+    /// Whether the windows stand on a stage around the chosen one, as
+    /// `cover` and `flip` have them, rather than in cells.
+    pub fn is_stage(self) -> bool {
+        matches!(self, Self::Cover | Self::Flip)
+    }
 }
 
 /// A tile of icon and title, the side of its icon, and how many stand in
@@ -62,6 +78,9 @@ const LINE_GAP: f32 = 2.;
 /// A cell of the `icons` style and the side of its icon.
 const ICON_CELL: f32 = 80.;
 const LARGE_ICON: f32 = 56.;
+
+/// The stage of the `cover` and `flip` styles at its largest.
+const STAGE: (f32, f32) = (1800., 620.);
 
 /// The measures of a switcher.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -110,7 +129,24 @@ impl Layout {
             }
             (Style::List, _) => (LINE, None, LINE_ICON, 1, LINE_GAP),
             (Style::Icons, _) => ((ICON_CELL, ICON_CELL), None, LARGE_ICON, usize::MAX, gap),
+            (Style::Cover | Style::Flip, _) => {
+                let stage = (room.0.min(STAGE.0).max(1.), room.1.min(STAGE.1).max(1.));
+                (stage, Some(stage), SMALL_ICON, usize::MAX, gap)
+            }
         };
+        if style.is_stage() {
+            // One stage, the windows one after the other on it.
+            return Self {
+                style,
+                cell,
+                picture,
+                icon,
+                columns: count,
+                rows: 1,
+                seen_rows: 1,
+                gap,
+            };
+        }
         let columns = count.min(most).min(fitting(room.0, cell.0, gap)).max(1);
         let rows = count.div_ceil(columns);
         Self {
@@ -125,8 +161,12 @@ impl Layout {
         }
     }
 
-    /// The width and the height of the cells that are seen at once.
+    /// The width and the height of the cells that are seen at once, or
+    /// of the stage.
     pub fn grid(&self) -> (f32, f32) {
+        if self.style.is_stage() {
+            return self.cell;
+        }
         let along = |cells: usize, length: f32| {
             cells as f32 * length + cells.saturating_sub(1) as f32 * self.gap
         };
@@ -153,10 +193,14 @@ impl Layout {
     /// Where the choice goes from `at` of `count` cells with an arrow
     /// key: to the cell beside it, around the ends of the list, or to the
     /// one above or below it, where there is one. In a list, up and down
-    /// go around the ends as well.
+    /// go around the ends as well. In `flip`, up goes to the window
+    /// behind and down to the one before; in `cover` they do nothing.
     pub fn moved(&self, at: usize, count: usize, key: ChoiceKey) -> usize {
         let columns = self.columns;
         match key {
+            ChoiceKey::Up if self.style == Style::Flip => stepped(at, count, false),
+            ChoiceKey::Down if self.style == Style::Flip => stepped(at, count, true),
+            ChoiceKey::Up | ChoiceKey::Down if self.style == Style::Cover => at,
             ChoiceKey::Left => stepped(at, count, true),
             ChoiceKey::Right => stepped(at, count, false),
             ChoiceKey::Up if columns == 1 => stepped(at, count, true),
@@ -305,6 +349,27 @@ mod tests {
         assert_eq!(tiles.moved(5, 11, ChoiceKey::Down), 5);
         assert_eq!(tiles.moved(9, 11, ChoiceKey::Up), 1);
         assert_eq!(tiles.moved(1, 11, ChoiceKey::Up), 1);
+    }
+
+    #[test]
+    fn cover_and_flip_stand_on_one_stage() {
+        for style in [Style::Cover, Style::Flip] {
+            let stage = Layout::new(style, false, 12, ROOM, 8.);
+            assert_eq!((stage.columns, stage.rows, stage.seen_rows), (12, 1, 1));
+            assert_eq!(stage.grid(), (1800., 620.));
+            assert_eq!(stage.picture, Some((1800., 620.)));
+            assert_eq!(stage.cell_of(7), (7, 0));
+            assert_eq!(stage.first_row(0, 11), 0);
+            assert_eq!(stage.moved(11, 12, ChoiceKey::Right), 0);
+            assert_eq!(stage.moved(0, 12, ChoiceKey::Left), 11);
+        }
+        let small = Layout::new(Style::Cover, false, 3, (900., 400.), 8.);
+        assert_eq!(small.grid(), (900., 400.));
+        assert_eq!(small.moved(1, 3, ChoiceKey::Up), 1);
+        let flip = Layout::new(Style::Flip, false, 3, ROOM, 8.);
+        assert_eq!(flip.moved(1, 3, ChoiceKey::Up), 2);
+        assert_eq!(flip.moved(0, 3, ChoiceKey::Down), 2);
+        assert!(Style::Flip.is_stage() && !Style::Thumbnails.is_stage());
     }
 
     #[test]
