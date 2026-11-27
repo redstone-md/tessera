@@ -88,7 +88,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
-        Snapper::start(&config.snap, cx);
+        Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::start(&config.rules, cx);
         Corners::start(&config.corners, cx);
         // The keys come last: what a `[[key]]` names is checked against
@@ -276,7 +276,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
-        Snapper::configure(&config.snap, cx);
+        Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::configure(&config.rules, cx);
         Corners::configure(&config.corners, cx);
 

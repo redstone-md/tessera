@@ -23,13 +23,16 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
     GA_ROOT, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowRect,
-    GetWindowThreadProcessId, HTMAXBUTTON, IsWindowVisible, SMTO_ABORTIFHUNG, SMTO_BLOCK,
-    SPI_GETWINARRANGING, SPI_SETWINARRANGING, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
-    SendMessageTimeoutW, SystemParametersInfoW, WM_NCHITTEST, WindowFromPoint,
+    GetWindowThreadProcessId, HTBOTTOMRIGHT, HTLEFT, HTMAXBUTTON, IsWindowVisible,
+    SMTO_ABORTIFHUNG, SMTO_BLOCK, SPI_GETWINARRANGING, SPI_SETWINARRANGING,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageTimeoutW, SystemParametersInfoW, WM_NCHITTEST,
+    WindowFromPoint,
 };
 use windows::core::{BOOL, w};
 
-use super::{AppWindowId, DisplayKey, NOT_FILLING, ScreenRect, pointer_at, pointer_held};
+use super::{
+    AppWindowId, DisplayKey, NOT_FILLING, NativeSurface, ScreenRect, pointer_at, pointer_held,
+};
 
 /// The logical pixels a display has per inch at a scale of 1.
 const BASE_DPI: f32 = 96.;
@@ -183,6 +186,25 @@ impl WindowArranging {
     }
 }
 
+impl NativeSurface {
+    /// Asks for keyboard input to go to the window, as
+    /// [`Self::activate`] does. Windows refuses that when the last input
+    /// went to another program, as it has after a window of that program
+    /// was dragged; then a key nothing listens to is pressed from here,
+    /// which counts as input to Tessera, and the window is asked for
+    /// again.
+    pub fn take_keyboard(self) {
+        self.activate();
+        // SAFETY: the call takes no arguments and only reads which window
+        // is in front.
+        if unsafe { GetForegroundWindow() } == self.hwnd {
+            return;
+        }
+        super::windows_key::press_unassigned_key();
+        self.activate();
+    }
+}
+
 /// Whether a Shift key is held down.
 pub fn shift_held() -> bool {
     // SAFETY: the call takes a key and only reads its state.
@@ -209,10 +231,10 @@ pub fn window_at((x, y): (i32, i32)) -> Option<AppWindowId> {
 /// How long the window is given to say what is at a point of it.
 const HIT_TEST_TIMEOUT: u32 = 60;
 
-/// Whether `point` is on the maximize button of the window `id`, as the
-/// window itself says. A window that does not answer at once is not asked
-/// again until the pointer moves on.
-pub fn on_maximize_button(id: AppWindowId, (x, y): (i32, i32)) -> bool {
+/// What the window `id` says is at `point` of it, as one of the `HT`
+/// values of `WM_NCHITTEST`; `None` when it does not answer in time, as a
+/// window that hangs does not.
+fn hit_test(id: AppWindowId, (x, y): (i32, i32)) -> Option<u32> {
     let packed = ((y & 0xffff) << 16) | (x & 0xffff);
     let mut answer = 0usize;
     // SAFETY: `answer` outlives the call, which gives up on a window that
@@ -228,7 +250,22 @@ pub fn on_maximize_button(id: AppWindowId, (x, y): (i32, i32)) -> bool {
             Some(&raw mut answer),
         )
     };
-    answered.0 != 0 && answer == HTMAXBUTTON as usize
+    (answered.0 != 0).then_some(answer as u32)
+}
+
+/// Whether `point` is on the maximize button of the window `id`, as the
+/// window itself says. A window that does not answer at once is not asked
+/// again until the pointer moves on.
+pub fn on_maximize_button(id: AppWindowId, point: (i32, i32)) -> bool {
+    hit_test(id, point) == Some(HTMAXBUTTON)
+}
+
+/// Whether `point` is on the border of the window `id` that resizes it,
+/// on a side or at a corner, as the window itself says; `None` when it
+/// does not answer in time. The window waits for its program, so this is
+/// asked away from the thread of the user interface.
+pub fn on_resizing_border(id: AppWindowId, point: (i32, i32)) -> Option<bool> {
+    hit_test(id, point).map(|hit| (HTLEFT..=HTBOTTOMRIGHT).contains(&hit))
 }
 
 /// Whether the window in front fills all of `display`, as a game or a

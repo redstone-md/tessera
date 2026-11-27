@@ -4,18 +4,24 @@
 //! The snap assistant: once a window took part of a display, the other
 //! windows are offered for the rest, one part after another. A click on
 //! one puts it there; Esc, or a click elsewhere, leaves the rest as it is.
+//! A click elsewhere is also seen when Windows did not give the assistant
+//! the keyboard, and so is another window coming in front.
+
+use std::time::Duration;
 
 use gpui::{
-    App, Context, CursorStyle, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
-    WindowHandle, div, img, px,
+    App, AsyncApp, Context, CursorStyle, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, WeakEntity, Window, WindowHandle, div, img, px,
 };
 
 use super::{Kind, Snapper, move_floating, open_at};
 use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon};
 use crate::motion::{Interaction, Spring, staggered};
-use crate::platform::{AppWindow, AppWindowId, Display, ScreenEdge, ScreenRect};
+use crate::platform::{
+    AppWindow, AppWindowId, Display, ScreenEdge, ScreenRect, pointer_at, pointer_held,
+};
 use crate::popup::{floating_panel, retire_floating};
 use crate::theme::Theme;
 use crate::tiling::Tiler;
@@ -28,6 +34,9 @@ const OFFERED: usize = 12;
 /// icon, in logical pixels.
 const TILE: (f32, f32) = (152., 104.);
 const ICON: f32 = 40.;
+
+/// How often it is looked whether the user turned to something else.
+const LOOK: Duration = Duration::from_millis(100);
 
 /// A window that is offered.
 struct Entry {
@@ -93,6 +102,7 @@ impl AssistView {
                     this.close(cx);
                 }
             });
+            Self::close_when_turned_away(placed, cx);
             Self {
                 zones,
                 tiles: entries.iter().map(|_| Interaction::new(&motion)).collect(),
@@ -106,6 +116,44 @@ impl AssistView {
             }
         });
         opened.map(Some)
+    }
+
+    /// Closes the assistant once a button of the pointer is pressed away
+    /// from it, or a window of another program than Tessera comes in front
+    /// other than `placed`, which was in front when it opened. Windows may
+    /// not have given it the keyboard, so that it is never left and Esc
+    /// does not reach it.
+    fn close_when_turned_away(placed: AppWindowId, cx: &mut Context<Self>) {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor().timer(LOOK).await;
+                let front = AppWindowId::foreground();
+                let elsewhere = front
+                    .is_some_and(|front| front != placed && front.process() != std::process::id());
+                let pointer = pointer_at().filter(|_| pointer_held());
+                let going = this.update(cx, |this, cx| {
+                    let away = pointer
+                        .zip(this.zones.first())
+                        .is_some_and(|((x, y), zone)| {
+                            !((zone.left..zone.right).contains(&x)
+                                && (zone.top..zone.bottom).contains(&y))
+                        });
+                    if elsewhere || away {
+                        this.close(cx);
+                    }
+                    !this.closing
+                });
+                if !matches!(going, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Whether the view is going away.
+    pub fn is_closing(&self) -> bool {
+        self.closing
     }
 
     /// Starts closing; the window goes away once the motion has finished.

@@ -87,6 +87,7 @@ pub use shell_mode::{explorer_running, shell_mode};
 pub use shell_thread::ShellThread;
 pub use shortcuts::Shortcut;
 pub use show_desktop::ShowDesktop;
+pub use snap::on_resizing_border;
 pub use snap::{Display, MaximizeHover, WindowArranging, front_fills, shift_held};
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
 pub use taskbar::Taskbar;

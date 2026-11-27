@@ -13,6 +13,7 @@ pub use win32::Process;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::on_resizing_border;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,

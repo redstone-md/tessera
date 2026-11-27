@@ -14,8 +14,9 @@
 //! window to the next display. `snap-layouts` (Win+Z) opens small layouts
 //! of the display, and a click on a zone of one puts the window there;
 //! the same layouts open when the pointer rests on the maximize button of
-//! a window. After a window was dragged to a half, or put into a zone of a
-//! layout, the other windows are offered for the rest of the display.
+//! a window. After a window took a half, dragged there or with the keys,
+//! or was put into a zone of a layout, the other windows are offered for
+//! the rest of the display.
 //!
 //! Snapping by dragging is on by default only when Tessera is the shell.
 //! While it is on, the snapping of Windows itself is switched off until
@@ -37,10 +38,11 @@ use gpui::{
 use serde::Deserialize;
 
 use crate::actions::{Action, Actions};
+use crate::config::KeyConfig;
 use crate::module::{Module, WidgetRegistry};
 use crate::platform::{
     AppWindowId, Display, MaximizeHover, MoveEvent, MoveWatch, NativeSurface, ScreenEdge,
-    ScreenRect, WindowArranging, pointer_at, shell_mode, shift_held,
+    ScreenRect, WindowArranging, on_resizing_border, pointer_at, shell_mode, shift_held,
 };
 use crate::popup::{PopupAnchor, open_floating};
 use crate::tiling::{Tiler, Toward};
@@ -76,7 +78,8 @@ const HOVER_DELAYS: (u32, u32) = (100, 3000);
 const MOVED: i32 = 4;
 
 /// How much the size of a window may change while it is dragged before
-/// the drag counts as resizing it.
+/// the drag counts as resizing it, while the window has not said whether
+/// the drag began on its border.
 const RESIZED: i32 = 2;
 
 /// How far from where it was placed a snapped window may be and still be
@@ -604,6 +607,15 @@ impl Aim {
     }
 }
 
+/// Whether keys of Tessera's own snap the window in front: those the
+/// actions of snapping bring where `windows_keys` asks for the keys of
+/// Windows, by default when Tessera is the shell, or a `[[key]]` with the
+/// action `snap`.
+fn keys_bound(windows_keys: Option<bool>, keys: &[KeyConfig]) -> bool {
+    windows_keys.unwrap_or_else(shell_mode) || { keys.iter() }
+        .any(|key| key.action.as_deref() == Some("snap"))
+}
+
 /// A window that is being dragged.
 struct Drag {
     id: AppWindowId,
@@ -616,7 +628,12 @@ struct Drag {
     restored: ScreenRect,
     /// Whether the window was snapped when the drag began.
     snapped: bool,
-    /// Whether the size changed, so that the window is being resized.
+    /// Whether the drag began on the border that resizes the window, as
+    /// the window says once it answered.
+    resizing: Option<bool>,
+    /// Whether the size changed, which counts as resizing while the window
+    /// has not answered. A window also changes its size as it is dragged
+    /// onto a display of another scale, or out of being maximized.
     resized: bool,
     /// Whether it was moved by more than a click does.
     moved: bool,
@@ -629,6 +646,9 @@ struct Drag {
 #[derive(Default)]
 pub struct Snapper {
     config: SnapConfig,
+    /// Whether keys of Tessera's own snap the window in front, so that
+    /// Win with the arrows still snaps once Windows no longer does.
+    keys_bound: bool,
     settings: Settings,
     snapped: HashMap<AppWindowId, Snapped>,
     drag: Option<Drag>,
@@ -639,14 +659,24 @@ pub struct Snapper {
     arranging: Option<bool>,
     layouts: Option<WindowHandle<LayoutsView>>,
     assist: Option<WindowHandle<AssistView>>,
+    /// The window the assistant was opened beside, which the keys of
+    /// snapping are for while the assistant is in front.
+    assisted: Option<AppWindowId>,
 }
 
 impl Global for Snapper {}
 
 impl Snapper {
     /// Snaps as `config` says from now on, and gives Windows back its own
-    /// snapping when the shell quits.
-    pub fn start(config: &SnapConfig, cx: &mut App) {
+    /// snapping when the shell quits. `windows_keys` and `keys` are what
+    /// the configuration says of the keys of Windows and of `[[key]]`
+    /// entries.
+    pub fn start(
+        config: &SnapConfig,
+        windows_keys: Option<bool>,
+        keys: &[KeyConfig],
+        cx: &mut App,
+    ) {
         cx.set_global(Self::default());
         cx.on_app_quit(|cx| {
             cx.global_mut::<Self>().give_arranging_back();
@@ -655,23 +685,38 @@ impl Snapper {
         .detach();
         Self::watch_moves(cx);
         Self::watch_hover(cx);
-        Self::apply(config, cx);
+        Self::apply(config, keys_bound(windows_keys, keys), cx);
     }
 
     /// Takes over a configuration that was read again, if it says
-    /// something else about snapping.
-    pub fn configure(config: &SnapConfig, cx: &mut App) {
-        if cx.global::<Self>().config != *config {
-            Self::apply(config, cx);
+    /// something else about snapping or the keys that snap.
+    pub fn configure(
+        config: &SnapConfig,
+        windows_keys: Option<bool>,
+        keys: &[KeyConfig],
+        cx: &mut App,
+    ) {
+        let bound = keys_bound(windows_keys, keys);
+        let this = cx.global::<Self>();
+        if this.config != *config || this.keys_bound != bound {
+            Self::apply(config, bound, cx);
         }
     }
 
-    fn apply(config: &SnapConfig, cx: &mut App) {
+    fn apply(config: &SnapConfig, keys_bound: bool, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         this.config = config.clone();
+        this.keys_bound = keys_bound;
         this.settings = config.settings(shell_mode());
         if this.settings.dragging {
             this.take_arranging();
+            // Switching the snapping of Windows off also switches off its
+            // keys, which only Tessera's own then stand in for.
+            if !keys_bound && !WindowArranging::is_on() {
+                report!(
+                    "Win with the arrows and Win+Z do nothing while Tessera snaps: `windows_keys = true` at the top of config.toml binds Tessera's, as does a `[[key]]` with `action = \"snap\"`"
+                );
+            }
         } else {
             this.give_arranging_back();
         }
@@ -763,11 +808,28 @@ impl Snapper {
             pointer,
             restored,
             snapped,
+            resizing: None,
             resized: false,
             moved: false,
             aim: None,
             task,
         });
+        // The window is asked what the pointer is on away from here, as it
+        // may take a moment to answer.
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let asked = cx
+                .background_executor()
+                .spawn(async move { on_resizing_border(id, pointer) });
+            let resizing = asked.await;
+            cx.update(|cx| {
+                let drag = cx.global_mut::<Self>().drag.as_mut();
+                if let Some(drag) = drag.filter(|drag| drag.task == task) {
+                    drag.resizing = resizing;
+                }
+            })
+            .ok();
+        })
+        .detach();
         cx.spawn(async move |cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(FRAME).await;
@@ -798,7 +860,8 @@ impl Snapper {
         drag.moved |= (pointer.0 - drag.pointer.0).abs() > MOVED
             || (pointer.1 - drag.pointer.1).abs() > MOVED;
         let settings = &this.settings;
-        let aim = (settings.dragging && drag.moved && !drag.resized)
+        let resizing = drag.resizing.unwrap_or(drag.resized);
+        let aim = (settings.dragging && drag.moved && !resizing)
             .then(|| aim_at(pointer, settings))
             .flatten();
         if aim == drag.aim {
@@ -839,7 +902,7 @@ impl Snapper {
             preview.update(cx, |view, _, cx| view.close(cx)).ok();
         }
         let this = cx.global_mut::<Self>();
-        if drag.resized {
+        if drag.resizing.unwrap_or(drag.resized) {
             // A window resized by hand is where the user wants it.
             this.snapped.remove(&id);
             return;
@@ -930,11 +993,8 @@ impl Snapper {
             id.place_restored(normal, true);
             return;
         }
-        if id.is_maximized() {
-            id.restore();
-        }
         let rect = zone.rect(display.work, this.settings.gap);
-        id.place(rect);
+        Self::put(id, rect);
         this.snapped.insert(
             id,
             Snapped {
@@ -943,6 +1003,17 @@ impl Snapper {
                 restored,
             },
         );
+    }
+
+    /// Has what is seen of the window `id` cover `rect`. A maximized or
+    /// minimized window is restored there in one step: until it is
+    /// restored, its border is not as wide as it will be.
+    fn put(id: AppWindowId, rect: ScreenRect) {
+        if id.is_maximized() || id.is_minimized() {
+            id.place_restored(rect, false);
+        } else {
+            id.place(rect);
+        }
     }
 
     /// Offers the other windows for `zones` of `display`, once `placed`
@@ -961,7 +1032,11 @@ impl Snapper {
             open.update(cx, |view, _, cx| view.close(cx)).ok();
         }
         match AssistView::offer(placed, display, rects, cx) {
-            Ok(assist) => cx.global_mut::<Self>().assist = assist,
+            Ok(assist) => {
+                let this = cx.global_mut::<Self>();
+                this.assisted = assist.is_some().then_some(placed);
+                this.assist = assist;
+            }
             Err(error) => report!("the other windows are not offered: {error:#}"),
         }
     }
@@ -973,10 +1048,7 @@ impl Snapper {
         let Some(restored) = this.restored_of(id) else {
             return;
         };
-        if id.is_maximized() || id.is_minimized() {
-            id.restore();
-        }
-        id.place(rect);
+        Self::put(id, rect);
         id.raise();
         this.snapped.insert(
             id,
@@ -989,11 +1061,25 @@ impl Snapper {
     }
 
     /// The window the keys of snapping are for: the one in front, unless
-    /// it is one of Tessera or the tiling has it.
-    fn front(cx: &App) -> Option<AppWindowId> {
-        let front = AppWindowId::foreground()?;
-        let theirs = front.process() != std::process::id();
-        (theirs && !Tiler::manages(front, cx)).then_some(front)
+    /// it is one of Tessera or the tiling has it. While the assistant is
+    /// in front, as it is right after a window was snapped with the keys,
+    /// they are for the window it was opened beside, and it closes.
+    fn front(cx: &mut App) -> Option<AppWindowId> {
+        let mut front = AppWindowId::foreground()?;
+        if front.process() == std::process::id() {
+            let this = cx.global_mut::<Self>();
+            let (open, assisted) = (this.assist.take(), this.assisted.take());
+            let showing = open.is_some_and(|open| {
+                let closed = open.update(cx, |view, _, cx| {
+                    let showing = !view.is_closing();
+                    view.close(cx);
+                    showing
+                });
+                closed.unwrap_or(false)
+            });
+            front = assisted.filter(|_| showing)?;
+        }
+        (front.exists() && !Tiler::manages(front, cx)).then_some(front)
     }
 
     /// Does the action `snap` with `arg` to the window in front.
@@ -1035,6 +1121,9 @@ impl Snapper {
                 let restored = restored.or_else(|| id.frame());
                 if let Some(restored) = restored {
                     Self::snap_to(id, display, target.zone(), Some(target), restored, cx);
+                    if let Some(partner) = target.partner() {
+                        Self::assist(id, display, vec![partner.zone()], cx);
+                    }
                 }
             }
             Step::Across(toward, target) => {
@@ -1303,7 +1392,8 @@ fn settle(native: NativeSurface, frame: ScreenRect, kind: Kind) -> anyhow::Resul
         Kind::Popup => {
             native.adopt_as_popup()?;
             native.place(frame)?;
-            native.reveal(true);
+            native.reveal(false);
+            native.take_keyboard();
             Ok(())
         }
         Kind::Surface => {
