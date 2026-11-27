@@ -330,9 +330,14 @@ impl Runners {
     }
 
     /// Asks every runner about `query` on `executor`. The receiver gives
-    /// the answers of one runner at a time, as they come, and closes when
-    /// all have answered; dropping it leaves the answers unread.
-    pub fn ask(&self, query: Query, executor: &BackgroundExecutor) -> Receiver<Vec<Answer>> {
+    /// the answers of one runner at a time, as they come, each with the
+    /// place of its runner among these, and closes when all have
+    /// answered; dropping it leaves the answers unread.
+    pub fn ask(
+        &self,
+        query: Query,
+        executor: &BackgroundExecutor,
+    ) -> Receiver<(usize, Vec<Answer>)> {
         let (send, answers) = async_channel::unbounded();
         let query = Arc::new(query);
         for index in 0..self.list.len() {
@@ -343,7 +348,7 @@ impl Runners {
                         return;
                     }
                     let answers = list[index].answer(&query);
-                    send.try_send(answers).ok();
+                    send.try_send((index, answers)).ok();
                 })
                 .detach();
         }

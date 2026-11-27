@@ -198,6 +198,15 @@ enum Row {
     Answer(usize),
 }
 
+/// The entry a row showed, which the rows of other answers do not move
+/// the selection off: a shortcut by its place, an answer by its key, or
+/// by its title where it has none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Picked {
+    Shortcut(usize),
+    Answer { key: String, title: String },
+}
+
 /// What a shortcut is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -298,6 +307,10 @@ struct Launcher {
     apps: usize,
     /// What the runners answered for what is written, the best first.
     answers: Vec<Answer>,
+    /// What each runner answered last for what is written, by its place
+    /// among `runners`: a runner asked again keeps its answers until it
+    /// answers anew.
+    told: Vec<Vec<Answer>>,
     runners: Runners,
     /// The runners being asked, while they are; asking again gives the
     /// question before up.
@@ -310,6 +323,12 @@ struct Launcher {
     field: Entity<TextField>,
     /// The rows that match the query, best first.
     matches: Vec<Row>,
+    /// The rows of the applications and files among them, which the
+    /// answers of the runners are put around.
+    found: Vec<Row>,
+    /// Whether the user moved the selection since the text changed: it
+    /// then stays on its entry while the answers change around it.
+    moved: bool,
     /// The position in `matches` that Enter starts.
     selected: usize,
     /// The row the selection highlight is drawn at, and the tile of that
@@ -356,9 +375,12 @@ impl Launcher {
         let mut launcher = Self {
             pins,
             matches: Vec::new(),
+            found: Vec::new(),
+            moved: false,
             apps,
             shortcuts,
             answers: Vec::new(),
+            told: Vec::new(),
             runners: setup.runners,
             asking: None,
             armed: None,
@@ -447,10 +469,10 @@ impl Launcher {
         self.asked = Some(asked);
     }
 
-    /// Asks the runners what they make of what is written. Their answers
-    /// replace those of the text before as soon as the first runner has
-    /// answered, and the others join as they answer. A runner that is
-    /// still finding out is asked again in a moment, while the text stays.
+    /// Asks the runners what they make of what is written; each answer
+    /// joins the list as its runner gives it. A runner that is still
+    /// finding out is asked again in a moment, while the text stays, and
+    /// its answers stay until it answers again.
     fn consult(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx);
         let language = Language::of(cx);
@@ -462,16 +484,17 @@ impl Launcher {
                 else {
                     return;
                 };
-                let mut collected: Vec<Answer> = Vec::new();
-                while let Ok(batch) = answers.recv().await {
-                    collected.extend(batch);
-                    let shown = collected.clone();
-                    let updated = this.update(cx, |this, cx| this.answered_by_runners(shown, cx));
+                let mut waiting = false;
+                while let Ok((runner, batch)) = answers.recv().await {
+                    waiting |= batch.iter().any(|answer| answer.waiting);
+                    let updated = this.update(cx, |this, cx| {
+                        this.answered_by_runners(&text, runner, batch, cx);
+                    });
                     if updated.is_err() {
                         return;
                     }
                 }
-                if !collected.iter().any(|answer| answer.waiting) {
+                if !waiting {
                     return;
                 }
                 cx.background_executor().timer(ASK_AGAIN).await;
@@ -480,12 +503,64 @@ impl Launcher {
         self.asking = Some(asking);
     }
 
-    /// Has `answers` be what the runners answered.
-    fn answered_by_runners(&mut self, answers: Vec<Answer>, cx: &mut Context<Self>) {
+    /// Has `answers` be what the runner at `runner` answered to `text`,
+    /// unless the field says something else by now or it answered the
+    /// same before. Only the rows of the answers are put anew, and the
+    /// selection stays on the entry the user moved it to.
+    fn answered_by_runners(
+        &mut self,
+        text: &str,
+        runner: usize,
+        answers: Vec<Answer>,
+        cx: &mut Context<Self>,
+    ) {
+        if text != self.written {
+            return;
+        }
+        if self.told.len() <= runner {
+            self.told.resize_with(runner + 1, Vec::new);
+        }
+        if self.told[runner] == answers {
+            return;
+        }
+        self.told[runner] = answers;
+        let picked = self.moved.then(|| self.picked()).flatten();
         let history = cx.default_global::<History>();
-        self.answers = ranked(answers, |key| history.boost(key));
-        self.find(cx);
+        self.answers = ranked(self.told.concat(), |key| history.boost(key));
+        self.arrange();
+        let again = |picked: Picked| self.matches.iter().position(|row| self.is(row, &picked));
+        let row = picked.and_then(again).unwrap_or(self.selected);
+        self.select(row, cx);
         cx.notify();
+    }
+
+    /// What the selected row is, to find it again among other rows.
+    fn picked(&self) -> Option<Picked> {
+        Some(match *self.matches.get(self.selected)? {
+            Row::Shortcut(index) => Picked::Shortcut(index),
+            Row::Answer(index) => {
+                let answer = &self.answers[index];
+                Picked::Answer {
+                    key: answer.key.clone(),
+                    title: answer.title.clone(),
+                }
+            }
+        })
+    }
+
+    /// Whether `row` is the entry `picked` was.
+    fn is(&self, row: &Row, picked: &Picked) -> bool {
+        match (*row, picked) {
+            (Row::Shortcut(index), Picked::Shortcut(known)) => index == *known,
+            (Row::Answer(index), Picked::Answer { key, title }) => {
+                let answer = &self.answers[index];
+                match key.is_empty() {
+                    true => answer.key.is_empty() && answer.title == *title,
+                    false => answer.key == *key,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// What the field shows and the list is searched for.
@@ -501,6 +576,11 @@ impl Launcher {
         }
         self.written = text;
         self.armed = None;
+        // The answers to the text before are not shown, nor done by an
+        // Enter that comes before the runners answer this one.
+        self.told.clear();
+        self.answers.clear();
+        self.moved = false;
         if !self.tiled() {
             self.columns = 1;
         }
@@ -539,6 +619,13 @@ impl Launcher {
     /// the tiles show the applications alone, and the compact form only
     /// what the runners answer.
     fn find(&mut self, cx: &App) {
+        self.found = self.shortcuts_found(cx);
+        self.arrange();
+    }
+
+    /// The rows of the applications and files that match what is written,
+    /// best first.
+    fn shortcuts_found(&self, cx: &App) -> Vec<Row> {
         let text = self.text(cx);
         let typed = !text.trim().is_empty();
         let (apps, files) = self.shortcuts.split_at(self.apps);
@@ -546,15 +633,6 @@ impl Launcher {
             shortcuts.iter().map(|shortcut| shortcut.name.as_str())
         }
         let mut matches: Vec<Row> = Vec::new();
-        let answers = !self.tiled();
-        let strong = self
-            .answers
-            .iter()
-            .take_while(|answer| answer.score >= STRONG);
-        let strong = strong.count();
-        if answers {
-            matches.extend((0..strong).map(Row::Answer));
-        }
         if typed || self.form == Form::Full {
             let history = cx.try_global::<History>();
             let boost = |name: &str| match (typed, history) {
@@ -574,6 +652,23 @@ impl Launcher {
             let found = found.into_iter().take(FILES_SHOWN);
             matches.extend(found.map(|index| Row::Shortcut(index + self.apps)));
         }
+        matches
+    }
+
+    /// Puts the rows together: the answers the runners are sure of, the
+    /// applications and files found, and the other answers.
+    fn arrange(&mut self) {
+        let mut matches: Vec<Row> = Vec::new();
+        let answers = !self.tiled();
+        let strong = self
+            .answers
+            .iter()
+            .take_while(|answer| answer.score >= STRONG);
+        let strong = strong.count();
+        if answers {
+            matches.extend((0..strong).map(Row::Answer));
+        }
+        matches.extend_from_slice(&self.found);
         if answers {
             matches.extend((strong..self.answers.len()).map(Row::Answer));
         }
@@ -598,6 +693,7 @@ impl Launcher {
         let Some(wanted) = self.selected.checked_add_signed(steps) else {
             return;
         };
+        self.moved = true;
         self.select(wanted, cx);
         let row = match self.tiled() {
             true => TILE_HEIGHT,
