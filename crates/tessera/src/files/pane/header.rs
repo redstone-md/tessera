@@ -365,30 +365,34 @@ impl FolderPane {
                 })
             })
             .collect();
-        for batch in paths.chunks(BATCH) {
-            let batch = batch.to_vec();
-            for path in &batch {
-                for property in &properties {
-                    self.properties_asked.insert((path.clone(), *property));
-                }
+        if paths.is_empty() {
+            return;
+        }
+        for path in &paths {
+            for property in &properties {
+                self.properties_asked.insert((path.clone(), *property));
             }
-            let answer = Properties::read(batch.clone(), properties.clone());
-            let wanted = properties.clone();
-            let location = self.history.current().clone();
-            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        }
+        let location = self.history.current().clone();
+        // One batch after the other, on one thread at a time, each shown
+        // as it comes.
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            for batch in paths.chunks(BATCH) {
+                let batch = batch.to_vec();
+                let answer = Properties::read(batch.clone(), properties.clone());
                 let values = answer.recv().await.unwrap_or_default();
-                this.update(cx, |this, cx| {
+                let read = this.update(cx, |this, cx| {
                     for path in &batch {
-                        for property in &wanted {
+                        for property in &properties {
                             this.properties_asked.remove(&(path.clone(), *property));
                         }
                     }
                     // What was read for a place left is of no use.
                     if *this.history.current() != location {
-                        return;
+                        return false;
                     }
                     for (path, values) in batch.into_iter().zip(values) {
-                        for (property, value) in wanted.iter().zip(values) {
+                        for (property, value) in properties.iter().zip(values) {
                             this.properties.insert((path.clone(), *property), value);
                         }
                     }
@@ -397,11 +401,14 @@ impl FolderPane {
                     } else {
                         cx.notify();
                     }
-                })
-                .ok();
-            })
-            .detach();
-        }
+                    true
+                });
+                if !matches!(read, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// What the entries are ordered by where the column of the order holds

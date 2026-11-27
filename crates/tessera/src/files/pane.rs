@@ -704,6 +704,11 @@ impl FolderPane {
         );
     }
 
+    /// Whether the pane shows the Recycle Bin.
+    fn in_bin(&self) -> bool {
+        *self.history.current() == Location::RecycleBin
+    }
+
     /// Does `deed` of the bar of the Recycle Bin, and reads the bin again
     /// once it is done.
     fn bin_deed(&mut self, deed: BinDeed, cx: &mut Context<Self>) {
@@ -1028,7 +1033,7 @@ impl FolderPane {
 
     fn open(&mut self, entry: &Entry, window: &mut Window, cx: &mut Context<Self>) {
         // What lies in the Recycle Bin is brought back before it opens.
-        if *self.history.current() == Location::RecycleBin {
+        if self.in_bin() {
             return;
         }
         if entry.folder {
@@ -1068,7 +1073,7 @@ impl FolderPane {
     /// Puts what is chosen on the clipboard, which Explorer shares.
     fn put_on_clipboard(&mut self, cut: bool) {
         let chosen = self.chosen();
-        if chosen.is_empty() {
+        if chosen.is_empty() || self.in_bin() {
             return;
         }
         if let Err(error) = FileClipboard::put(&chosen, cut) {
@@ -1116,7 +1121,7 @@ impl FolderPane {
     /// Puts what is chosen into the Recycle Bin, or with `erase` deletes
     /// it for good, after the Shell asks.
     fn delete(&mut self, erase: bool, cx: &mut Context<Self>) {
-        if *self.history.current() == Location::RecycleBin {
+        if self.in_bin() {
             return self.bin_deed(BinDeed::Erase, cx);
         }
         let chosen = self.chosen();
@@ -1156,6 +1161,10 @@ impl FolderPane {
 
     /// Renames the chosen file or folder, where one is chosen.
     fn rename_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // What lies in the bin keeps the name it was deleted with.
+        if self.in_bin() {
+            return;
+        }
         let chosen = self.chosen();
         if chosen.len() > 1 {
             self.begin_batch_rename(chosen, window, cx);
@@ -1733,7 +1742,8 @@ impl FolderPane {
         }
         self.pressed = None;
         let chosen = self.chosen();
-        if chosen.is_empty() {
+        // What lies in the bin is brought back with its bar, not dragged.
+        if chosen.is_empty() || self.in_bin() {
             return;
         }
         let dragged = DragOut::new(chosen).start(window, cx);
@@ -1774,6 +1784,12 @@ impl FolderPane {
             }
         };
         let entries = self.menu_entries(cx);
+        // The Shell's verbs for what lies in the bin would act on the files
+        // there as if they were not deleted.
+        if self.in_bin() {
+            Menus::open(entries, anchor, cx);
+            return;
+        }
         let (chosen, folder) = (self.chosen(), self.folder());
         let kinds: Vec<(PathBuf, bool)> = { self.chosen_entries().into_iter() }
             .map(|entry| (entry.path, entry.folder))
@@ -1805,7 +1821,7 @@ impl FolderPane {
             };
         let chosen = self.chosen();
         let mut entries = Vec::new();
-        if *self.history.current() == Location::RecycleBin {
+        if self.in_bin() {
             let deeds = match chosen.is_empty() {
                 true => [BinDeed::RestoreAll, BinDeed::Empty],
                 false => [BinDeed::Restore, BinDeed::Erase],
@@ -2644,7 +2660,7 @@ impl FolderPane {
 
     /// The bar of the Recycle Bin over its list, where it is shown.
     fn render_bin_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if *self.history.current() != Location::RecycleBin {
+        if !self.in_bin() {
             return None;
         }
         let pane = cx.entity().downgrade();
