@@ -23,7 +23,7 @@ use crate::i18n::Language;
 use crate::modules::night::NightLightConfig;
 use crate::notifications_store::NotificationRule;
 use crate::platform::ScreenEdge;
-use crate::rules::RuleConfig;
+use crate::rules::{Pattern, RuleConfig};
 use crate::snap::SnapConfig;
 use crate::switcher::SwitcherConfig;
 use crate::tiling::TilingConfig;
@@ -202,16 +202,24 @@ impl TryFrom<DisplaysText> for Displays {
 /// the first being 1; by the name GDI gives its output, as `\\.\DISPLAY2`;
 /// or by the name the monitor gives itself, as the display settings of
 /// Windows show it, where `*` stands for any text and `?` for any one
-/// character. Names are compared without regard to case.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// character, or which a regular expression after `re:` describes. Names
+/// are compared without regard to case. The surfaces, the cards and the
+/// tiling name displays with it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "SelectorText")]
 pub enum DisplaySelector {
     Position(usize),
     Device(String),
     Name(String),
+    /// A regular expression the name of the monitor is matched against.
+    Expression(Pattern),
 }
 
 /// How the name GDI gives an output begins.
 const DEVICE_PREFIX: &str = r"\\.\";
+
+/// How a regular expression of a monitor's name begins.
+const EXPRESSION_PREFIX: &str = "re:";
 
 impl DisplaySelector {
     /// Reads a selector written as text: digits are a position, a text
@@ -234,6 +242,9 @@ impl DisplaySelector {
         if text.starts_with(DEVICE_PREFIX) {
             return Ok(Self::Device(text.to_owned()));
         }
+        if text.starts_with(EXPRESSION_PREFIX) {
+            return Pattern::parse(text).map(Self::Expression);
+        }
         Ok(Self::Name(text.to_owned()))
     }
 
@@ -243,6 +254,7 @@ impl DisplaySelector {
             Self::Position(position) => display.position == *position,
             Self::Device(device) => device.eq_ignore_ascii_case(&display.device),
             Self::Name(pattern) => wildcard_matches(pattern, &display.friendly),
+            Self::Expression(expression) => expression.matches(&display.friendly),
         }
     }
 
@@ -251,6 +263,7 @@ impl DisplaySelector {
         match self {
             Self::Position(position) => position.to_string(),
             Self::Device(text) | Self::Name(text) => text.clone(),
+            Self::Expression(expression) => expression.text().to_owned(),
         }
     }
 }
@@ -258,33 +271,7 @@ impl DisplaySelector {
 /// Whether `text` is what `pattern` describes, without regard to case:
 /// `*` stands for any text, also none, and `?` for any one character.
 fn wildcard_matches(pattern: &str, text: &str) -> bool {
-    let pattern: Vec<char> = pattern.chars().flat_map(char::to_lowercase).collect();
-    let text: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
-    let (mut at, mut from) = (0, 0);
-    // Where the last `*` was, and where in the text it began to stand.
-    let mut star: Option<(usize, usize)> = None;
-    while from < text.len() {
-        match pattern.get(at) {
-            Some('*') => {
-                star = Some((at, from));
-                at += 1;
-            }
-            Some(&wanted) if wanted == '?' || wanted == text[from] => {
-                at += 1;
-                from += 1;
-            }
-            _ => match star {
-                // The `*` stands for one character more.
-                Some((star_at, star_from)) => {
-                    at = star_at + 1;
-                    from = star_from + 1;
-                    star = Some((star_at, star_from + 1));
-                }
-                None => return false,
-            },
-        }
-    }
-    pattern[at..].iter().all(|&left| left == '*')
+    crate::rules::glob(&pattern.to_lowercase(), &text.to_lowercase())
 }
 
 /// A widget to place: its name, the popup a click on it opens, and the
@@ -996,6 +983,10 @@ mod tests {
         assert!(parse("*2720*").matches(&dell));
         assert!(!parse("DELL").matches(&dell));
         assert!(parse("DELL U2720Q").matches(&dell));
+        assert!(parse("re:^dell u27\\d0q$").matches(&dell));
+        assert!(!parse("re:^LG").matches(&dell));
+        assert_eq!(parse("re:^LG").text(), "re:^LG");
+        assert!(DisplaySelector::parse("re:(").is_err());
         assert!(DisplaySelector::parse("0").is_err());
         assert!(DisplaySelector::parse(" ").is_err());
         assert_eq!(parse(r"\\.\DISPLAY3").text(), r"\\.\DISPLAY3");

@@ -57,6 +57,7 @@ use crate::platform::{
     AppWindow, AppWindowId, Display, DisplayKey, MoveEvent, MoveWatch, ScreenRect, TileBorder,
     WindowEvents, pointer_held,
 };
+use crate::shell::KnownDisplays;
 use crate::theme::Theme;
 use crate::workspaces::Workspaces;
 
@@ -191,12 +192,22 @@ fn titled(pieces: &[String], title: &str) -> bool {
         .any(|piece| title.contains(&piece.to_lowercase()))
 }
 
-/// What a workspace of a display is kept under. Workspaces are counted
-/// by their place for now, so a workspace that is taken away hands what
-/// it kept to the one that comes into its place.
-pub fn workspace_slot(_display: DisplayKey, index: usize, _cx: &App) -> String {
-    index.to_string()
+/// What the workspace at `index` of `display` is kept under: its lasting
+/// number, so that a workspace taken away hands what it kept to none of
+/// the others; its place where it has no number yet, as a display whose
+/// own workspaces were not made yet.
+pub fn workspace_slot(display: DisplayKey, index: usize, cx: &App) -> String {
+    let id =
+        { cx.try_global::<Workspaces>() }.and_then(|_| Workspaces::id_of(Some(display), index, cx));
+    match id {
+        Some(id) => format!("{WORKSPACE_ID}{id}"),
+        None => index.to_string(),
+    }
 }
+
+/// What begins the key of a workspace kept by its lasting number, telling
+/// it from one kept by its place, as Tessera did before.
+const WORKSPACE_ID: &str = "id";
 
 /// Whether windows are tiled right now, and the layout of the display in
 /// front. It starts as the configuration says and changes with the
@@ -286,7 +297,7 @@ impl Look {
     fn now(cx: &App) -> Self {
         let displays = Display::all();
         let frames: Vec<ScreenRect> = displays.iter().map(|display| display.frame).collect();
-        let names = displays::names(&frames);
+        let names = displays::names(&frames, KnownDisplays::all(cx));
         let workspaces = cx.try_global::<Workspaces>().is_some();
         let displays = { displays.into_iter().zip(names) }
             .map(|(display, name)| {
@@ -319,14 +330,27 @@ impl Look {
 }
 
 impl Seen {
-    /// The place as it was kept before the device name of the display was
-    /// read, by the place of the display; `None` where that is its key.
-    fn former(&self) -> Option<PlaceKey> {
-        let former = PlaceKey {
-            display: self.name.position_key(),
-            workspace: self.place.workspace.clone(),
-        };
-        (former != self.place).then_some(former)
+    /// The keys the place was kept under before, most fitting first: by
+    /// the place of the display, as before its device name was read, and
+    /// by the place of the workspace, as before workspaces had lasting
+    /// numbers. What is kept under one of them is taken over once, by the
+    /// display and the workspace now at those places.
+    fn former(&self) -> Vec<PlaceKey> {
+        let displays = [self.place.display.clone(), self.name.position_key()];
+        let workspaces = [self.place.workspace.clone(), self.workspace.to_string()];
+        let mut former = Vec::new();
+        for workspace in &workspaces {
+            for display in &displays {
+                let key = PlaceKey {
+                    display: display.clone(),
+                    workspace: workspace.clone(),
+                };
+                if key != self.place && !former.contains(&key) {
+                    former.push(key);
+                }
+            }
+        }
+        former
     }
 }
 
@@ -1565,14 +1589,15 @@ struct Tick {
 }
 
 /// The tiles of the place `seen` shows, made from what was kept of it (or
-/// kept by the place of its display) if they are not there yet.
+/// under a key it had before) if they are not there yet.
 fn tiles_of<'a>(
     places: &'a mut HashMap<PlaceKey, Tiles>,
     kept: &mut BTreeMap<PlaceKey, Kept>,
     seen: &Seen,
 ) -> &'a mut Tiles {
     places.entry(seen.place.clone()).or_insert_with(|| {
-        let kept = { kept.remove(&seen.place) }.or_else(|| kept.remove(&seen.former()?));
+        let kept = { kept.remove(&seen.place) }
+            .or_else(|| { seen.former().into_iter() }.find_map(|former| kept.remove(&former)));
         Tiles::from_kept(kept.unwrap_or_default())
     })
 }

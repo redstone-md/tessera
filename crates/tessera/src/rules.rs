@@ -71,6 +71,8 @@ impl PartialEq for Pattern {
     }
 }
 
+impl Eq for Pattern {}
+
 impl<'de> Deserialize<'de> for Pattern {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
@@ -96,6 +98,11 @@ impl Pattern {
         })
     }
 
+    /// The pattern as it was written.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     /// Whether `name` is one the pattern names.
     pub fn matches(&self, name: &str) -> bool {
         match &self.matcher {
@@ -106,8 +113,9 @@ impl Pattern {
 }
 
 /// Whether all of `text` is what `pattern` describes, `*` standing for any
-/// text and `?` for any one character.
-fn glob(pattern: &str, text: &str) -> bool {
+/// text and `?` for any one character. Both are compared as they are, so
+/// what is to be found without regard to case is given in lowercase.
+pub fn glob(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) =
         (pattern.chars().collect(), text.chars().collect());
     let (mut at, mut from) = (0, 0);

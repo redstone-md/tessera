@@ -1078,10 +1078,6 @@ impl Workspaces {
     /// such workspace, or where every display has its own and `display`
     /// has shown none yet. For the virtual desktops of Windows it is made
     /// of the identifier of the desktop, once they were looked at.
-    #[allow(
-        dead_code,
-        reason = "for the tiling, which keeps a layout for each workspace"
-    )]
     pub fn id_of(display: Option<DisplayKey>, index: usize, cx: &App) -> Option<u64> {
         let this = cx.global::<Self>();
         if !this.owned() {

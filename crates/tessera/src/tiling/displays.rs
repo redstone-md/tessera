@@ -7,28 +7,16 @@
 //! A display is named by the name its monitor gives itself (a pattern
 //! with `*` and `?`, or a regular expression after `re:`), by its device
 //! name as Windows has it (`\\.\DISPLAY2`), or by its place counted from 1
-//! from the left; these are the names the `displays` of a `[[surface]]`
-//! take. What is said here is pure.
+//! from the left: the [`DisplaySelector`] the `displays` of a `[[surface]]`
+//! take, matched against the [`DisplayName`]s the shell reads. What is
+//! said here is pure.
 
-use serde::Deserialize;
-
+pub use crate::config::DisplaySelector;
+pub use crate::platform::DisplayName;
 use crate::platform::ScreenRect;
-use crate::rules::Pattern;
 
-/// What a display is called. The names of the monitors and the device
-/// names of Windows are not read yet, so both are empty and only the
-/// place of a display names it for now.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DisplayName {
-    /// The device name, as `\\.\DISPLAY1`.
-    pub device: String,
-    /// The name the monitor gives itself.
-    pub friendly: String,
-    /// The place from the left, counted from 1.
-    pub position: usize,
-    pub primary: bool,
-}
-
+// The keys of tiling-state.toml are the tiling's own business, so they
+// are given to the platform's name of a display here.
 impl DisplayName {
     /// What the display is kept under in `tiling-state.toml`: its device
     /// name, or its place where the name is not known.
@@ -49,64 +37,28 @@ impl DisplayName {
 }
 
 /// The names of the displays whose frames are `frames`, given from the
-/// left to the right: their places, and which is the main one, the one
-/// whose top left corner is where the screen begins.
-pub fn names(frames: &[ScreenRect]) -> Vec<DisplayName> {
+/// left to the right, out of `known`, the names the shell last read: the
+/// one at the same place from the left. Where `known` does not list as
+/// many displays, as while the displays change, a display is named by its
+/// place alone, and it is the main one where its top left corner is where
+/// the screen begins.
+pub fn names(frames: &[ScreenRect], known: &[DisplayName]) -> Vec<DisplayName> {
+    let current = known.len() == frames.len();
     { frames.iter().enumerate() }
-        .map(|(index, frame)| DisplayName {
-            device: String::new(),
-            friendly: String::new(),
-            position: index + 1,
-            primary: frame.left == 0 && frame.top == 0,
+        .map(|(index, frame)| {
+            let position = index + 1;
+            let named = known.iter().find(|name| name.position == position);
+            match named.filter(|_| current) {
+                Some(name) => name.clone(),
+                None => DisplayName {
+                    device: String::new(),
+                    friendly: String::new(),
+                    position,
+                    primary: frame.left == 0 && frame.top == 0,
+                },
+            }
         })
         .collect()
-}
-
-/// A way to name displays.
-#[derive(Clone, Debug, PartialEq)]
-pub enum DisplaySelector {
-    /// The place from the left, counted from 1.
-    Position(usize),
-    /// The device name, in lowercase.
-    Device(String),
-    /// The name the monitor gives itself.
-    Friendly(Pattern),
-}
-
-impl DisplaySelector {
-    /// The selector `text` is, or why it is none.
-    pub fn parse(text: &str) -> Result<Self, String> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err("a display is named by its name, its device name or its place".into());
-        }
-        if text.bytes().all(|byte| byte.is_ascii_digit()) {
-            return match text.parse::<usize>() {
-                Ok(position @ 1..) => Ok(Self::Position(position)),
-                _ => Err(format!("the places of displays begin at 1, not at {text}")),
-            };
-        }
-        if text.starts_with(r"\\.\") {
-            return Ok(Self::Device(text.to_lowercase()));
-        }
-        Pattern::parse(text).map(Self::Friendly)
-    }
-
-    /// Whether `display` is one the selector names.
-    pub fn matches(&self, display: &DisplayName) -> bool {
-        match self {
-            Self::Position(position) => display.position == *position,
-            Self::Device(device) => display.device.eq_ignore_ascii_case(device),
-            Self::Friendly(pattern) => pattern.matches(&display.friendly),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for DisplaySelector {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        Self::parse(&text).map_err(serde::de::Error::custom)
-    }
 }
 
 #[cfg(test)]
@@ -124,16 +76,32 @@ mod tests {
 
     #[test]
     fn displays_are_named_by_their_place_until_their_names_are_read() {
-        let names = names(&[rect(-1920, 0, 0, 1080), rect(0, 0, 2560, 1440)]);
-        assert_eq!(names[0].position, 1);
-        assert!(!names[0].primary && names[1].primary);
-        assert_eq!(names[1].key(), "#2");
-        let named = DisplayName {
-            device: r"\\.\DISPLAY3".to_owned(),
-            ..names[1].clone()
-        };
-        assert_eq!(named.key(), r"\\.\DISPLAY3");
-        assert_eq!(named.position_key(), "#2");
+        let frames = [rect(-1920, 0, 0, 1080), rect(0, 0, 2560, 1440)];
+        let unread = names(&frames, &[]);
+        assert_eq!(unread[0].position, 1);
+        assert!(!unread[0].primary && unread[1].primary);
+        assert_eq!(unread[1].key(), "#2");
+        // The names read are those of the displays at the same place.
+        let read = [
+            DisplayName {
+                device: r"\\.\DISPLAY3".to_owned(),
+                friendly: "DELL U2720Q".to_owned(),
+                position: 2,
+                primary: true,
+            },
+            DisplayName {
+                device: r"\\.\DISPLAY1".to_owned(),
+                friendly: "LG HDR".to_owned(),
+                position: 1,
+                primary: false,
+            },
+        ];
+        let named = names(&frames, &read);
+        assert_eq!(named[1], read[0]);
+        assert_eq!(named[1].key(), r"\\.\DISPLAY3");
+        assert_eq!(named[1].position_key(), "#2");
+        // While the displays change, the places name them.
+        assert_eq!(names(&frames, &read[..1])[1].key(), "#2");
     }
 
     #[test]

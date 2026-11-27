@@ -26,8 +26,8 @@ pub use win32::SessionKey;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
-pub use win32::UriScheme;
 pub use win32::TileBorder;
+pub use win32::UriScheme;
 pub use win32::decode_with_wic;
 #[allow(
     unused_imports,
