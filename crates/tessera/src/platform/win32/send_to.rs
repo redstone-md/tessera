@@ -11,9 +11,11 @@
 //! the removable drives. Sending is what Explorer does: the files are
 //! dropped on the place, as a data object handed to its drop target
 //! (`IDropTarget`), so a program gets them on its command line, a folder
-//! or a drive copies them, and a handler does its own work. The work
-//! runs on the [`ShellThread`], which keeps handling messages for the
-//! dialogs and the progress a handler shows.
+//! or a drive copies them, and a handler does its own work. A drop that
+//! copies, on a drive, a folder or a shortcut, runs on a thread of its
+//! own, as the copy may take long and wait for the user in its dialogs;
+//! a drop on a handler runs on the [`ShellThread`], which keeps handling
+//! messages for the work and the dialogs it goes on with after the drop.
 //!
 //! ```ignore
 //! let targets = SendToTarget::all();
@@ -91,11 +93,25 @@ impl SendToTarget {
     /// an archive, after it has answered.
     pub fn send(&self, paths: Vec<PathBuf>) -> Receiver<Result<(), String>> {
         let target = self.clone();
-        ShellThread::call(move || {
+        let work = move || {
             target
                 .drop_here(&paths)
                 .map_err(|error| format!("{error:#}"))
-        })
+        };
+        if self.copies() {
+            ShellThread::call_alone("send to", work)
+        } else {
+            ShellThread::call(work)
+        }
+    }
+
+    /// Whether a drop here is done once the drop returns, as for a copy:
+    /// on a drive, a folder, or a shortcut, which hands the files to the
+    /// folder or the program it points to. A handler of the Shell may go
+    /// on with its work on the thread of the drop afterwards.
+    fn copies(&self) -> bool {
+        self.kind == SendToKind::Drive || self.path.is_dir() || { self.path.extension() }
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
     }
 
     /// Drops `paths` on the place, on this thread, as a press of the left
