@@ -1148,6 +1148,35 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # height = 150
 # content = [{ widget = "clock", format = "%H:%M" }, "cpu", "memory"]
 
+# [desktop] says how Tessera draws the icons of the desktop: the files of the
+# desktop folder of the user and of the one all users share, and This PC,
+# the Recycle Bin, Network, Control Panel and the folder of the user where
+# Windows shows them ("Desktop icon settings"). Where Tessera is the shell
+# its windows of the icons are there on every display whatever icons says,
+# and take the clicks on the desktop and its menu; beside Explorer they are
+# there only with icons = true, and Explorer's own icons are hidden meanwhile.
+#   icons    whether Tessera draws the icons; without the key, only where it
+#            is the shell of the session
+#   size     "small", "medium" (default) or "large"; Ctrl+wheel steps it
+#   arrange  "grid" (default): where they were put, aligned to the grid;
+#            "free": where they were put; "auto": column after column in
+#            the order of sort
+#   sort     "name" (default), "size", "type" or "date"
+#   show     whether the icons are shown, "Show desktop icons" (true)
+#   layer    "child" (default): the icons are a child window of the desktop;
+#            "window": a window of their own kept below the others, for a
+#            Windows where the first does not show them
+# Where the icons stand is kept in desktop-icons.toml beside this file, for
+# each arrangement of displays.
+#
+# [desktop]
+# icons = true
+# size = "medium"
+# arrange = "grid"
+# sort = "name"
+# show = true
+# layer = "child"
+
 # [icons] replaces application icons. Each key is the file name of an
 # executable, each value an image file (PNG, JPEG or ICO); a relative path is
 # looked up in %APPDATA%\tessera.
