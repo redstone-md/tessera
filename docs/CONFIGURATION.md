@@ -470,7 +470,7 @@ The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `prev
 
 ## Notices, devices and privacy
 
-Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low. Tessera gives these as notices of its own, listed with the [notifications](#notifications) and shown as banners where banners are on, with buttons for what can be done about them. `[notices]` says which:
+Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low, and the balloons applications show at their icons of the notification area (those are always given, as only Tessera serving the icons receives them). Tessera gives these as notices of its own, listed with the [notifications](#notifications) and shown as banners where banners are on, with buttons for what can be done about them. `[notices]` says which:
 
 ```toml
 [notices]

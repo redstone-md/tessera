@@ -719,14 +719,12 @@ impl Tray {
     /// which shows the balloons, only the ends of those that arrived before
     /// do. Nothing arrives that came before the first call. The stream is
     /// one for the whole process, so one reader is meant to take it.
-    #[allow(dead_code, reason = "for the notifications that show balloons")]
     pub fn balloons() -> Receiver<Balloon> {
         balloon::subscribe()
     }
 
     /// Tells the application of the icon `id` what became of the balloon
     /// it showed there. A click lets it put a window in front.
-    #[allow(dead_code, reason = "for the notifications that show balloons")]
     pub fn balloon_event(id: u64, event: BalloonEvent) {
         let Some(target) = Target::of(id) else {
             return;

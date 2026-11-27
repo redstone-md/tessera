@@ -174,7 +174,7 @@ pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held
 pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
 pub use thumbnail::Thumbnail;
-pub use tray::{Balloon, BalloonEvent, BalloonKind};
+pub use tray::{Balloon, BalloonEvent};
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};

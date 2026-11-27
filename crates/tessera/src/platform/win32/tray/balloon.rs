@@ -56,7 +56,10 @@ impl BalloonKind {
 
 /// A balloon an application asked to show at its icon, or the end of one.
 #[derive(Clone, Debug)]
-#[allow(dead_code, reason = "for the notifications that show balloons")]
+#[allow(
+    dead_code,
+    reason = "the banners show a balloon as a notice and do not yet honour its kind, picture, sound and timing wishes"
+)]
 pub struct Balloon {
     /// The icon it belongs to, as [`super::TrayIcon::id`] names it. An icon
     /// shows one balloon at a time: a new one replaces the one before.
@@ -113,7 +116,10 @@ impl Balloon {
 
 /// What became of a balloon, as its application is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code, reason = "for the notifications that show balloons")]
+#[allow(
+    dead_code,
+    reason = "the banners do not yet tell when the banner of a balloon went"
+)]
 pub enum BalloonEvent {
     /// It is shown.
     Shown,

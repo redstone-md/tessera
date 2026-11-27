@@ -12,13 +12,17 @@
 //! buttons ([`NoticeAction`](crate::banners::NoticeAction)) for what can
 //! be done about it. Do not disturb holds the banners back but for urgent
 //! notices, such as a battery about to run out, which also stay until they
-//! are put away. This part only says which of them are given.
+//! are put away. This part says which of them are given, and gives the
+//! balloons applications show at their icons of the notification area
+//! where Tessera serves the icons itself, which Explorer would show.
 
-use gpui::App;
+use gpui::{App, AsyncApp, Global};
 use serde::Deserialize;
 
+use crate::banners::{Banners, Notice, NoticeAction};
+use crate::i18n::Language;
 use crate::modules::devices::Drives;
-use crate::platform::shell_mode;
+use crate::platform::{Balloon, BalloonEvent, Tray, shell_mode};
 use crate::power_warnings::PowerWarnings;
 
 /// What the configuration says about the notices Tessera gives in place of
@@ -49,6 +53,11 @@ impl NoticesConfig {
 /// Which notices are given.
 pub struct Notices;
 
+/// Marks that the balloons of the notification area are read.
+struct ReadingBalloons;
+
+impl Global for ReadingBalloons {}
+
 impl Notices {
     /// Takes over what the configuration says: drives that arrive and
     /// batteries that run low are looked out for while they are to be told
@@ -56,6 +65,54 @@ impl Notices {
     pub fn configure(config: &NoticesConfig, cx: &mut App) {
         Drives::tell_arrivals(config.drives(), cx);
         PowerWarnings::configure(config.battery(), cx);
+        Self::read_balloons(cx);
+    }
+
+    /// Posts the balloons that applications show at their icons as
+    /// notices, once for the whole run. Only where Tessera serves the
+    /// icons itself do balloons arrive; beside Explorer, Explorer shows
+    /// them.
+    fn read_balloons(cx: &mut App) {
+        if cx.has_global::<ReadingBalloons>() {
+            return;
+        }
+        cx.set_global(ReadingBalloons);
+        let balloons = Tray::balloons();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Ok(balloon) = balloons.recv().await {
+                if balloon.is_withdrawal() {
+                    continue;
+                }
+                if cx.update(|cx| Self::post_balloon(balloon, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Posts `balloon` as a notice whose button, and a click on its
+    /// banner, tell the application that it was clicked, and tells the
+    /// application that it is shown.
+    fn post_balloon(balloon: Balloon, cx: &mut App) {
+        let id = balloon.id;
+        let language = Language::of(cx);
+        let open = NoticeAction::new(language.say("Open"), move |_| {
+            Tray::balloon_event(id, BalloonEvent::Clicked);
+        });
+        let app = match balloon.tip.trim() {
+            "" => language.say("Notifications").to_owned(),
+            tip => tip.lines().next().unwrap_or(tip).to_owned(),
+        };
+        let notice = Notice {
+            app,
+            title: balloon.title,
+            body: balloon.text,
+            actions: vec![open],
+            ..Notice::default()
+        };
+        Banners::post(notice, cx);
+        Tray::balloon_event(id, BalloonEvent::Shown);
     }
 }
 
