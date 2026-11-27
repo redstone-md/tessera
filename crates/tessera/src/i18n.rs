@@ -2016,7 +2016,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Lighten", "Осветление"),
     ("Soft light", "Мягкий свет"),
     // system-settings: displays, power, performance mode.
-    ("Apply", "Применить"),
     (
         "At least one display has to stay on.",
         "Хотя бы один экран должен оставаться включённым.",
@@ -2030,7 +2029,6 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Keeps the screen on and the computer awake until switched off or Tessera closes.",
         "Экран не гаснет и компьютер не засыпает, пока это не выключено или Tessera не закрыта.",
     ),
-    ("Display {}", "Экран {}"),
     (
         "Drag the displays to arrange them; a click chooses one.",
         "Перетаскивайте экраны, чтобы расставить их; щелчок выбирает экран.",

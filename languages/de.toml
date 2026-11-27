@@ -1115,12 +1115,10 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Lighten" = "Aufhellen"
 "Soft light" = "Weiches Licht"
 # system-settings: displays, power, performance mode.
-"Apply" = "Übernehmen"
 "At least one display has to stay on." = "Mindestens ein Bildschirm muss eingeschaltet bleiben."
 "Block sleep" = "Kein Ruhezustand"
 "Block sleep and screen locking" = "Ruhezustand und Bildschirmsperre verhindern"
 "Keeps the screen on and the computer awake until switched off or Tessera closes." = "Hält den Bildschirm an und den Computer wach, bis es ausgeschaltet oder Tessera beendet wird."
-"Display {}" = "Bildschirm {}"
 "Drag the displays to arrange them; a click chooses one." = "Ziehen Sie die Bildschirme, um sie anzuordnen; ein Klick wählt einen aus."
 "In force: {}" = "Wirksam: {}"
 "Keep changes" = "Änderungen beibehalten"

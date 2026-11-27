@@ -1116,12 +1116,10 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Lighten" = "Освітлення"
 "Soft light" = "М'яке світло"
 # system-settings: displays, power, performance mode.
-"Apply" = "Застосувати"
 "At least one display has to stay on." = "Принаймні один екран має залишатися увімкненим."
 "Block sleep" = "Без сну"
 "Block sleep and screen locking" = "Заборонити сон і блокування екрана"
 "Keeps the screen on and the computer awake until switched off or Tessera closes." = "Екран не гасне і комп'ютер не засинає, доки це не вимкнено або Tessera не закрито."
-"Display {}" = "Екран {}"
 "Drag the displays to arrange them; a click chooses one." = "Перетягуйте екрани, щоб розставити їх; клацання вибирає екран."
 "In force: {}" = "Діє: {}"
 "Keep changes" = "Зберегти зміни"
