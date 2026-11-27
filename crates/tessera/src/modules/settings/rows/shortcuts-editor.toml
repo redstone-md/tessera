@@ -1,3 +1,354 @@
 # Rows of the settings filled by shortcuts-editor. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The Shortcuts page: every action with its keys, which it edits.
+[[card]]
+section = "Keys"
+title = "Shortcuts"
+page = "shortcuts"
+
+# The titles of the actions registered on main, and of those this
+# package adds. Every other package writes the titles of its own new
+# actions in its own rows file.
+
+[[action]]
+name = "popup"
+title = "Open a popup"
+arg = "The name of a popup"
+
+[[action]]
+name = "none"
+title = "Nothing"
+
+[[action]]
+name = "pause-keys"
+title = "Pause the shortcuts"
+arg = "on, off, or none to switch"
+
+[[action]]
+name = "activate-window"
+title = "Bring a window forward"
+arg = "exe:, class:, title: or app:, and ,start"
+
+[[action]]
+name = "desktop"
+title = "Show the desktop"
+arg = "toggle, minimize, restore or others"
+
+[[action]]
+name = "trash"
+title = "Recycle Bin"
+arg = "open, restore or empty"
+
+[[action]]
+name = "snap"
+title = "Snap the window in front"
+arg = "A side, a half, a corner, maximize, restore or minimize"
+
+[[action]]
+name = "snap-display"
+title = "Move the window to another display"
+arg = "next or previous"
+
+[[action]]
+name = "snap-layouts"
+title = "Show the snap layouts"
+
+[[action]]
+name = "tiling"
+title = "Change the tiling"
+arg = "The words of a tiling key"
+
+[[action]]
+name = "window-menu"
+title = "Open the window menu"
+
+[[action]]
+name = "kill-window"
+title = "End the program of a window"
+
+[[action]]
+name = "files"
+title = "Open the file manager"
+arg = "A folder"
+
+[[action]]
+name = "files-default"
+title = "Make Tessera's file manager the default"
+arg = "on or off"
+
+[[action]]
+name = "share"
+title = "Share files"
+arg = "Paths separated by |"
+
+[[action]]
+name = "map-drive"
+title = "Map a network drive"
+
+[[action]]
+name = "disconnect-drive"
+title = "Disconnect a network drive"
+arg = "The letter of a drive"
+
+[[action]]
+name = "add-network-location"
+title = "Add a network location"
+arg = "An address"
+
+[[action]]
+name = "shell"
+title = "Change the shell of the session"
+arg = "install, revert or explorer"
+
+[[action]]
+name = "run"
+title = "Open the Run dialog"
+
+[[action]]
+name = "runner"
+title = "Open the runner"
+
+[[action]]
+name = "winx"
+title = "Open the menu of Win+X"
+
+[[action]]
+name = "power-dialog"
+title = "Open the dialog to shut down"
+
+[[action]]
+name = "display-mode"
+title = "Choose how the displays are used"
+arg = "pc-screen-only, duplicate, extend or second-screen-only"
+
+[[action]]
+name = "display-settings"
+title = "Open the display settings"
+
+[[action]]
+name = "power-settings"
+title = "Open the power settings"
+
+[[action]]
+name = "inhibit"
+title = "Keep the machine awake"
+arg = "on or off"
+
+[[action]]
+name = "performance"
+title = "Change the performance mode"
+arg = "off, minimal, extreme or auto"
+
+[[action]]
+name = "input-language"
+title = "Switch the keyboard layout"
+arg = "next, previous or list"
+
+[[action]]
+name = "open"
+title = "Open a file, a program or an address"
+arg = "What to open"
+
+[[action]]
+name = "start"
+title = "Open the Start menu"
+arg = "The name of a popup"
+
+[[action]]
+name = "search"
+title = "Open the search"
+arg = "The name of a popup"
+
+[[action]]
+name = "quick-settings"
+title = "Open the quick settings"
+arg = "The name of a popup"
+
+[[action]]
+name = "notification-center"
+title = "Open the notification center"
+arg = "The name of a popup"
+
+[[action]]
+name = "screenshot"
+title = "Take a screenshot"
+
+[[action]]
+name = "dock"
+title = "Press a button of the dock"
+arg = "A number from 1 to 9"
+
+[[action]]
+name = "dock-new"
+title = "Start another window of a dock button"
+arg = "A number from 1 to 9"
+
+[[action]]
+name = "dock-cycle"
+title = "Bring the next window of a dock button forward"
+arg = "A number from 1 to 9"
+
+[[action]]
+name = "dock-menu"
+title = "Open the menu of a dock button"
+arg = "A number from 1 to 9"
+
+[[action]]
+name = "dock-focus"
+title = "Put the keyboard on the dock"
+
+[[action]]
+name = "quiet"
+title = "Do not disturb"
+arg = "toggle, on, off, morning or minutes"
+
+[[action]]
+name = "notify"
+title = "Show a notice"
+arg = "The text of a notice"
+
+[[action]]
+name = "clipboard"
+title = "Open the clipboard history"
+
+[[action]]
+name = "night-light"
+title = "Switch night light"
+arg = "on, off or toggle"
+
+[[action]]
+name = "volume"
+title = "Change the volume"
+arg = "up, down, mute or mute-microphone"
+
+[[action]]
+name = "brightness"
+title = "Change the brightness"
+arg = "up or down"
+
+[[action]]
+name = "media"
+title = "Control what is playing"
+arg = "toggle, play, pause, stop, next or previous"
+
+[[action]]
+name = "wallpaper"
+title = "Change the wallpaper"
+arg = "next or previous"
+
+[[action]]
+name = "wallpaper-settings"
+title = "Open the wallpaper settings"
+
+[[action]]
+name = "eject"
+title = "Eject a drive"
+arg = "The letter of a drive"
+
+[[action]]
+name = "extension-answer"
+title = "Choose an answer of an extension"
+arg = "An extension and an answer"
+
+[[action]]
+name = "switcher"
+title = "Switch between windows"
+arg = "next, previous, app-next or app-previous"
+
+[[action]]
+name = "install-resource"
+title = "Install from a link"
+arg = "A tessera:// link"
+
+[[action]]
+name = "workspace"
+title = "Go to a workspace"
+arg = "next, previous, a side, a number, add, remove or rename"
+
+[[action]]
+name = "send-window"
+title = "Send the window to a workspace"
+arg = "next, previous, a side or a number"
+
+[[action]]
+name = "sticky"
+title = "Show the window on every workspace"
+
+[[action]]
+name = "taskview"
+title = "Open Task View"
+arg = "workspace, all or app"
+
+[[action]]
+name = "present-windows"
+title = "Present the windows"
+arg = "workspace, all or app"
+
+[[action]]
+name = "peek-desktop"
+title = "Peek at the desktop"
+
+[[action]]
+name = "tray-focus"
+title = "Put the keyboard on the notification area"
+
+[[action]]
+name = "date-and-time"
+title = "Open the calendar"
+
+[[action]]
+name = "window-height"
+title = "Stretch the window to the full height"
+arg = "full or back"
+
+[[action]]
+name = "window-half"
+title = "Put the window in the top or bottom half"
+arg = "top or bottom"
+
+[[action]]
+name = "magnifier"
+title = "Magnifier"
+arg = "in, out or close"
+
+[[action]]
+name = "narrator"
+title = "Start Narrator"
+
+[[action]]
+name = "color-filters"
+title = "Open the color filters"
+
+[[action]]
+name = "quick-assist"
+title = "Open Quick Assist"
+
+[[action]]
+name = "feedback-hub"
+title = "Open Feedback Hub"
+
+[[action]]
+name = "copilot"
+title = "Open Copilot"
+
+[[action]]
+name = "notifications-keyboard"
+title = "Go to the notifications"
+
+[[action]]
+name = "sound-output"
+title = "Choose the sound output"
+
+[[action]]
+name = "bar-settings"
+title = "Open the settings of the bars"
+
+[[action]]
+name = "find-computers"
+title = "Find computers on the network"
+
+[[action]]
+name = "emoji-panel"
+title = "Open the emoji panel"
