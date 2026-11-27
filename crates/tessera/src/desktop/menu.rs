@@ -62,9 +62,9 @@ const ICON_TERMINAL: &str = "\u{e756}";
 const ICON_CHECK: &str = "\u{e73e}";
 const ICON_NONE: &str = "";
 
-/// The action of the wallpaper package that opens its settings, and the
-/// one that goes on to the next picture, which stands in for it until
-/// that package is there.
+/// The action that opens the settings of the wallpaper, and the one that
+/// goes on to the next picture, which stands in for it where the settings
+/// are not registered.
 const WALLPAPER_SETTINGS: &str = "wallpaper-settings";
 const WALLPAPER: &str = "wallpaper";
 

@@ -39,6 +39,7 @@ use crate::platform::{
 };
 use crate::popup::floating_window;
 use crate::theme::Theme;
+use crate::wallpaper::Wallpaper;
 
 /// How dark the displays get behind the window looked at, from 0 to 1.
 const DIM: f32 = 0.6;
@@ -347,9 +348,15 @@ impl PeekView {
         cx.notify();
     }
 
-    /// Has the desktop painted for this display, away from the thread of
-    /// the interface, and shown once it is.
+    /// Shows the wallpaper Tessera draws on this display, or else has the
+    /// desktop painted as Windows paints it, away from the thread of the
+    /// interface, and shown once it is.
     fn paint(&mut self, cx: &mut Context<Self>) {
+        if let Some(picture) = Wallpaper::picture_of(self.display.key, cx) {
+            self.picture = Some(picture);
+            self.pictured.animate_to(1.);
+            return;
+        }
         let (frame, looks) = (self.display.frame, self.looks);
         let painted = cx.background_executor().spawn(async move {
             let (width, height, pixels) = paint_desktop(frame)?;

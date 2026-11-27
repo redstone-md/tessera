@@ -517,10 +517,6 @@ impl Wallpaper {
     /// stills of what is shown already are made in the background, in a
     /// moment. A part of Tessera that is to show the wallpaper calls this
     /// as it starts, so that the first picture it asks for is there.
-    #[allow(
-        dead_code,
-        reason = "for the desktop peek, which asks for the pictures once it is merged"
-    )]
     pub fn keep_pictures(cx: &App) {
         if STILLS_WANTED.swap(true, Ordering::Relaxed) {
             return;
@@ -544,10 +540,6 @@ impl Wallpaper {
     ///
     /// A view that paints the still keeps the `Arc` only while it shows
     /// it, and lets GPUI drop it from its window then (`Window::drop_image`).
-    #[allow(
-        dead_code,
-        reason = "for the desktop peek, which asks for the pictures once it is merged"
-    )]
     pub fn picture_of(display: DisplayKey, cx: &App) -> Option<Arc<RenderImage>> {
         Self::keep_pictures(cx);
         let this = cx.try_global::<Self>()?;

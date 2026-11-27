@@ -168,6 +168,8 @@ impl Shell {
         }
         crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
+        // The peek at the desktop shows the wallpaper from its first time.
+        Wallpaper::keep_pictures(cx);
         Updates::start(config.registries(), cx);
         crate::desktop::Desktop::start(&config.desktop, cx);
         Banners::configure(&config.notifications, cx);
