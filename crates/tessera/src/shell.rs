@@ -156,6 +156,8 @@ impl Shell {
         IconPacks::start(cx);
         // Without Explorer the surfaces reserve their edges through the tray.
         crate::platform::Tray::start_before_surfaces();
+        // ITaskbarList3 reaches a taskbar through the tray, dock or none.
+        crate::platform::TaskbarList::start(crate::platform::shell_mode());
         Night::start(&config.night_light, cx);
         // The surfaces choose their displays by these names, so they are
         // read before the first opens; it asks the display driver once.

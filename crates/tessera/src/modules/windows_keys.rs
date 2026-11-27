@@ -18,8 +18,9 @@
 //!   connections, the radios, the volume and the brightness;
 //! - `screenshot` (Win+PrtScn) saves a picture of all displays in the
 //!   Screenshots folder;
-//! - `dock` does what a click on the button of that number in the dock
-//!   does, as `dock = n` of a `[[key]]` does; the dock brings its keys.
+//! - `dock` (Win+1 to Win+9) does what a click on the button of that
+//!   number in the dock does, as `dock = n` of a `[[key]]` does; the dock
+//!   brings its other keys.
 //!
 //! Win+L stays with Windows, which locks the session itself; so do
 //! Ctrl+Shift+Esc and the keys that switch the input language.
@@ -147,7 +148,7 @@ impl WindowsKeysModule {
             .taking_reserved_keys()
             .by_default("win+printscreen", None);
         all.push(("screenshot", screenshot));
-        let dock = Action::new(|number, cx| {
+        let mut dock = Action::new(|number, cx| {
             let number = number.and_then(|number| number.parse().ok());
             Docks::press(number.unwrap_or(0), cx);
         })
@@ -156,6 +157,11 @@ impl WindowsKeysModule {
             Some(Ok(1..=9)) => Ok(()),
             _ => Err("`dock` takes a number from 1 to 9 as `arg`".to_owned()),
         });
+        // Win+1 to Win+9 press the buttons of the dock, as on the taskbar.
+        for number in 1..=9 {
+            let number = number.to_string();
+            dock = dock.by_default(&format!("win+{number}"), Some(&number));
+        }
         all.push(("dock", dock));
         all
     }

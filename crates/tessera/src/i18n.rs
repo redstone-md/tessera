@@ -1652,6 +1652,13 @@ const RUSSIAN: &[(&str, &str)] = &[
     // taskview: Task View and Present Windows.
     ("Type to search", "Начните вводить для поиска"),
     ("No windows are open", "Нет открытых окон"),
+    // dock-taskbar: the menu of a button of the dock.
+    ("New window", "Новое окно"),
+    ("Unpin", "Открепить"),
+    ("Pin to the dock", "Закрепить на доке"),
+    ("Close window", "Закрыть окно"),
+    ("Close all windows", "Закрыть все окна"),
+    ("Window menu", "Меню окна"),
 ];
 
 #[cfg(test)]

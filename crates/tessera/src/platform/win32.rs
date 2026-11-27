@@ -78,6 +78,7 @@ mod switching;
 mod system;
 mod system_wallpaper;
 mod taskbar;
+mod taskbar_list;
 mod terminal;
 mod thumbnail;
 mod tile_border;
@@ -185,6 +186,9 @@ pub use startup::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
 pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
+pub use taskbar_list::{
+    GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton,
+};
 pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use tile_border::TileBorder;

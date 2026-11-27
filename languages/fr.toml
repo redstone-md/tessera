@@ -891,3 +891,10 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # taskview: Task View and Present Windows.
 "Type to search" = "Tapez pour rechercher"
 "No windows are open" = "Aucune fenêtre ouverte"
+# dock-taskbar: the menu of a button of the dock.
+"New window" = "Nouvelle fenêtre"
+"Unpin" = "Détacher"
+"Pin to the dock" = "Épingler au dock"
+"Close window" = "Fermer la fenêtre"
+"Close all windows" = "Fermer toutes les fenêtres"
+"Window menu" = "Menu de la fenêtre"

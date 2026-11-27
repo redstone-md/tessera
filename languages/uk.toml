@@ -891,3 +891,10 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # taskview: Task View and Present Windows.
 "Type to search" = "Почніть вводити для пошуку"
 "No windows are open" = "Немає відкритих вікон"
+# dock-taskbar: the menu of a button of the dock.
+"New window" = "Нове вікно"
+"Unpin" = "Відкріпити"
+"Pin to the dock" = "Закріпити на доку"
+"Close window" = "Закрити вікно"
+"Close all windows" = "Закрити всі вікна"
+"Window menu" = "Меню вікна"
