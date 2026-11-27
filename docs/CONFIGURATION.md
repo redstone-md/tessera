@@ -54,5 +54,64 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `night-light` | `on`, `off`, `toggle`, or none | switches night light on or off, or over without `arg` or with `toggle`: that of Windows or Tessera's own, as `[night_light] source` says |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Quick settings
+
+The popup `quick-settings` of the built-in configuration holds them as Windows 11 does: tiles in two columns, then the sliders of the volume and the brightness. No widget opens it until one is given `popup = "quick-settings"` or a key opens it:
+
+```toml
+[[key]]
+press = "win+a"          # taken from Windows, whose quick settings it opens
+action = "popup"
+arg = "quick-settings"
+```
+
+The widget `tiles` lays tiles out in rows; its option `tiles` lists them as any widgets are listed, and `columns` says how many stand in a row (2, at most 4). A tile with details has a narrow button beside it that unfolds them under its row; `detail` names another widget to unfold (a name or a table), or `""` for none.
+
+```toml
+[[popup]]
+name = "quick-settings"
+width = 380
+height = 720
+content = [{ widget = "tiles", columns = 2, tiles = [
+    { widget = "radio-tile", radio = "wifi" },      # unfolds "wifi"
+    { widget = "radio-tile", radio = "bluetooth" }, # unfolds "bluetooth"
+    "airplane",                                      # unfolds "radios"
+    { widget = "hotspot", detail = { widget = "hotspot-details", qr = false } },
+    "power-mode",                                    # unfolds "power-modes"
+    "night-light",                                   # unfolds "night-light-slider"
+] }, "volume-slider", "brightness-slider"]
+```
+
+| Widget | What it is |
+| --- | --- |
+| `tiles` | the grid above |
+| `radio-tile` | switches Wi-Fi or Bluetooth (`radio = "wifi"` or `"bluetooth"`) |
+| `airplane` | switches every radio off and later back on those that were on; lit while every radio is off. The airplane mode flag of Windows is not set, since Windows lets only its own quick settings set it |
+| `radios` | every radio of the machine with a switch of its own |
+| `hotspot` | starts and stops the mobile hotspot of the connection the machine reaches the internet through; its note counts the devices on it |
+| `hotspot-details` | the name of its network, its password (dots until a click), the devices on it, the band to send it on where the adapter has several, and a QR code a phone camera joins the network with (`qr = false` leaves it out); the name and the password are changed in the Windows settings it leads to |
+| `power-mode` | the power mode of Windows; a click puts the next one in use. Windows offers the modes only while the Balanced plan is in use |
+| `power-modes` | the three modes to choose from, and whether battery saver is on |
+| `night-light` | switches night light; with Tessera's own and a schedule it says until when |
+| `night-light-slider` | how warm the light is, in kelvins, and when it comes on |
+
+`[night_light]` chooses which night light these switch:
+
+```toml
+[night_light]
+source = "auto"      # "windows", "tessera", or "auto": that of Windows, or
+                     # Tessera's own when Tessera is the shell or Windows
+                     # keeps no state of it yet
+kelvins = 3400       # how warm Tessera's own is, 1200 to 6500
+schedule = "sun"     # "off", "sun" (needs latitude and longitude) or "hours"
+latitude = 55.75     # degrees, north positive
+longitude = 37.62    # degrees, east positive
+from = "21:00"       # for schedule = "hours"
+to = "07:00"
+```
+
+The night light of Windows is read from and written to the records Windows keeps for it in the CloudStore of the account, whose layout Windows does not document; Windows switches it by the schedule of its own settings, and `schedule` here does not apply to it. Tessera's own multiplies the gamma ramp of every display with the color of a light of that temperature and gives the displays their own ramps back when Tessera quits. Windows refuses ramps far from the straight line unless the DWORD `GdiIcmGammaRange` = 256 is set under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`; a refused ramp is reported once per display. With a schedule, a click on the tile holds until the schedule next changes its mind, as with Windows.
