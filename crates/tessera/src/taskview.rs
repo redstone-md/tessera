@@ -1012,6 +1012,10 @@ impl Screen {
         };
         self.chosen = self.chosen.and_then(fix);
         self.arrange();
+        // The choice goes on to another window where the chosen one went.
+        if self.chosen.is_none() && self.main {
+            self.chosen = self.order.first().copied();
+        }
         cx.notify();
     }
 
