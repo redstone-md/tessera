@@ -7,8 +7,11 @@
 //! for), the categories the application made, and its tasks, each under
 //! its title and with its icon.
 //!
-//! Reading a list loads shortcuts through COM and reading an icon asks the
-//! Shell, so both are done on the shell thread ([`ShellThread`]). What was
+//! Reading a list loads shortcuts through COM and asks the Shell for the
+//! names of their documents, and reading an icon asks the Shell too, which
+//! can wait for long on a document on the network or a drive that is gone.
+//! So both are done on threads of their own, set up as the shell thread
+//! ([`ShellThread::call_alone`]), and hold up no other work. What was
 //! read is kept here and given at once; a list is read anew when its files
 //! changed. The first time the list of an application is asked for nothing
 //! is known of it yet, so [`prefetch`] reads it ahead, as when the pointer
@@ -17,7 +20,9 @@
 //! Pinning to a jump list has no documented interface, so no entry offers
 //! it. Taking a recorded document off the list has one
 //! (`IApplicationDestinations::RemoveDestination`), and each recorded
-//! document that is not pinned has a button for it.
+//! document that is not pinned has a button for it; a recorded shortcut
+//! that starts a program with arguments has none, as it is not named to
+//! Windows by a path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -75,7 +80,7 @@ struct JumpLists {
 
 impl Global for JumpLists {}
 
-/// Reads the jump list of the application `app_id` on the shell thread, or
+/// Reads the jump list of the application `app_id` on a thread of its own, or
 /// again where its files changed, for [`entries`] to give.
 #[allow(
     dead_code,
@@ -90,7 +95,7 @@ pub fn prefetch(app_id: &str, cx: &mut App) {
         return;
     }
     let id = app_id.to_owned();
-    let read = ShellThread::call(move || JumpList::cached(&id));
+    let read = ShellThread::call_alone("jump list", move || JumpList::cached(&id));
     let id = app_id.to_owned();
     cx.spawn(async move |cx: &mut AsyncApp| {
         let list = read.recv().await;
@@ -124,7 +129,7 @@ fn read_icons(list: &JumpList, cx: &mut App) {
     if wanted.is_empty() {
         return;
     }
-    let read = ShellThread::call(move || {
+    let read = ShellThread::call_alone("jump list icons", move || {
         { wanted.into_iter() }
             .map(|(key, item)| (key, item.icon_pixels(PICTURE_PIXELS)))
             .collect::<Vec<_>>()
@@ -179,7 +184,7 @@ pub fn entries(app_id: &str, program: Option<&Path>, cx: &mut App) -> Vec<MenuEn
             };
             let entry =
                 MenuEntry::new(section.glyph, item.name.clone(), open).with_picture(picture);
-            entries.push(match section.removable && item.recorded {
+            entries.push(match section.removable && item.removable() {
                 true => {
                     let (app, item) = (app_id.to_owned(), item.clone());
                     entry.with_aside(ICON_REMOVE, move |cx| remove(&app, &item, cx))
@@ -192,7 +197,8 @@ pub fn entries(app_id: &str, program: Option<&Path>, cx: &mut App) -> Vec<MenuEn
 }
 
 /// Takes `item` off the jump list of `app_id`: at once from what is kept
-/// here, and from the record of Windows on the shell thread. A failure is
+/// here, and from the record of Windows on a thread of its own, as Windows
+/// looks for the document, which may wait on the network. A failure is
 /// reported.
 fn remove(app_id: &str, item: &JumpItem, cx: &mut App) {
     let lists = &mut cx.default_global::<JumpLists>().lists;
@@ -203,7 +209,7 @@ fn remove(app_id: &str, item: &JumpItem, cx: &mut App) {
         *list = Arc::new(changed);
     }
     let (app, taken) = (app_id.to_owned(), item.clone());
-    let removed = ShellThread::call(move || taken.remove(&app));
+    let removed = ShellThread::call_alone("jump list removal", move || taken.remove(&app));
     let (app, name) = (app_id.to_owned(), item.name.clone());
     cx.spawn(async move |cx: &mut AsyncApp| {
         if let Ok(Err(error)) = removed.recv().await {
