@@ -38,6 +38,7 @@ mod notifications_store;
 mod options;
 mod panel;
 mod peek;
+mod performance;
 mod platform;
 mod popup;
 mod power_warnings;

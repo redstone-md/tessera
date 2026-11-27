@@ -70,6 +70,9 @@ pub use win32::{AutoPlay, AutoPlayHandler, AutoPlayOffer, Chosen, Invoke, Medium
 pub use win32::{Balloon, BalloonEvent};
 pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{BluetoothScan, FoundDevice, Pairing, PairingFailure, PairingPrompt};
+pub use win32::{
+    ButtonAction, PowerChange, PowerSetting, PowerSettings, PowerState, SleepBlock, Supply,
+};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
@@ -91,6 +94,7 @@ pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
 };
 pub use win32::{DisplayName, display_device, display_names};
+pub use win32::{DisplayOutput, DisplaySetup, Rotation, VideoMode, hertz_text};
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
 pub use win32::{DriveDialog, NetworkDrives, SharePackage, reveal, reveal_with};
 pub use win32::{EdgeBand, EdgeSpan, HidingClaim};
@@ -112,6 +116,7 @@ pub use win32::{
 };
 #[allow(unused_imports, reason = "the parts the dock and its previews read")]
 pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton};
+pub use win32::{GpuLoad, GpuUsage};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{ImeMode, ImeState, TouchKeyboard};

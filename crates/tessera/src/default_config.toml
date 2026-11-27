@@ -489,6 +489,24 @@
 # hidden = ["C:/Program Files/Other/other.exe#1"]
 # order = []
 # new = "shown"
+# [performance] says how much the shell spends on looks: "off" moves
+# everything as the theme says, "minimal" has what slides arrive at once and
+# fades take half the time, "extreme" moves nothing. default is the mode on
+# mains power, on_battery on battery and on_energy_saver while energy saver
+# (battery saver on an older Windows) is on; a line left out falls back to
+# the one before. The tile and the action "performance" choose one by hand
+# until the power changes; "performance auto" gives the choice back.
+# [performance]
+# default = "off"
+# on_battery = "minimal"
+# on_energy_saver = "extreme"
+
+# [system] says how many seconds pass between two readings of the meters
+# (cpu, memory, network, gpu), from 1 to 60, two by default; battery and
+# disk are read no more than every 20 and 30 seconds. The option interval of
+# a meter wins over both. Meters of one kind read as often share a reading.
+# [system]
+# interval = 2
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top", "bottom", "left" or "right"
@@ -577,6 +595,19 @@
 #               option show, "percent" (default) or "used" for gigabytes
 #   "battery"   the charge of the battery, with option style as for "cpu";
 #               shows nothing on a machine without a battery
+#   "gpu"       how busy the graphics processors are: the busiest engine of
+#               any of them, as Task Manager shows it; option style as for
+#               "cpu", and option show, "percent" (default) or "memory" for
+#               the dedicated memory in use. Shows nothing where Windows
+#               gives no counters of the graphics processors
+#               Each of these meters, and "disk", takes option interval: the
+#               seconds between two readings, 1 to 60; see [system]
+#   "display-settings"  the arrangement of the displays, to drag, and the
+#               resolution, refresh rate, scale and orientation of each, for
+#               the popup display-settings; Apply tries them for 15 seconds
+#   "power-settings"  blocking sleep, the performance mode, when the screen
+#               goes off and the computer sleeps, and what the lid and the
+#               buttons do, for the popup power-settings
 #   "network"   the connection Windows reaches the internet through: an icon
 #               for a cable, Wi-Fi or a mobile network with its signal, and
 #               the name of the network; option show, "name" (default) or
@@ -906,6 +937,10 @@
 #               efficiency, balanced, best performance); a click puts the
 #               next in use. Windows offers them only with the Balanced
 #               plan. It unfolds "power-modes", the three to choose from
+#   "inhibit"   a tile that blocks sleep and screen locking until it is
+#               clicked again or Tessera quits, as the action inhibit does
+#   "performance"  a tile with the performance mode of the shell; a click
+#               puts the next one in force by hand, as the action does
 #   "night-light"  a tile that switches night light, that of Windows or
 #               Tessera's own as [night_light] says; it unfolds
 #               "night-light-slider", how warm the light is and when it
@@ -958,6 +993,9 @@ center = [{ widget = "windows", start = "launcher" }]
 # It also brings marketplace (in the middle, 720 by 560), holding the
 # marketplace widget with every kind and its updates; `tessera do popup
 # marketplace` opens it.
+# display-settings (600 by 760) and power-settings (440 by 720) stand in the
+# middle of the display, each holding the widget of the same name, and open
+# with the actions of the same names.
 
 [[popup]]
 name = "launcher"

@@ -13,6 +13,7 @@ mod command;
 mod connections;
 pub mod devices;
 mod display_mode;
+mod display_settings;
 mod focused;
 mod hdr;
 mod hotspot;
@@ -29,6 +30,7 @@ mod overview;
 mod plan;
 mod power_dialog;
 mod power_mode;
+mod power_settings;
 mod privacy;
 mod problems;
 mod quick;
@@ -36,11 +38,12 @@ mod run;
 mod runner;
 mod session;
 mod settings;
+mod settings_parts;
 mod sound;
 mod spacer;
 mod start;
 mod startup;
-mod system;
+pub mod system;
 mod tiling;
 mod trash;
 mod tray;
@@ -73,6 +76,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
         Box::new(display_mode::DisplayModeModule),
+        Box::new(display_settings::DisplaySettingsModule),
         Box::new(devices::DevicesModule),
         Box::new(FilesModule),
         Box::new(focused::FocusedModule),
@@ -120,6 +124,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(airplane::AirplaneModule),
         Box::new(hotspot::HotspotModule),
         Box::new(power_mode::PowerModeModule),
+        Box::new(power_settings::PowerSettingsModule),
         Box::new(night::NightModule),
         Box::new(crate::peek::PeekModule),
         Box::new(ExtensionsModule {

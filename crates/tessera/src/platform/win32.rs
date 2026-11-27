@@ -22,6 +22,7 @@ mod connections;
 mod desktop_folder;
 mod desktops;
 mod devices;
+mod display_config;
 mod display_mode;
 mod display_names;
 mod drag;
@@ -59,6 +60,7 @@ mod peek;
 mod plans;
 mod power;
 mod power_mode;
+mod power_settings;
 mod power_warnings;
 mod preview_host;
 mod privacy;
@@ -141,6 +143,7 @@ pub use desktops::{DesktopSurvey, DesktopWindow, desktop_of};
 pub use devices::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
+pub use display_config::{DisplayOutput, DisplaySetup, Rotation, VideoMode, hertz_text};
 pub use display_mode::DisplayMode;
 pub use display_names::{DisplayName, display_device, display_names};
 pub use drag::DragOut;
@@ -196,6 +199,9 @@ pub use plans::PowerPlan;
 pub use power::PowerAction;
 pub use power::PowerChoices;
 pub use power_mode::{PowerMode, PowerModeState};
+pub use power_settings::{
+    ButtonAction, PowerChange, PowerSetting, PowerSettings, PowerState, SleepBlock, Supply,
+};
 pub use power_warnings::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use preview_host::{PreviewColors, PreviewHost, PreviewShown};
 pub use privacy::{Capability, CapabilityUse, PrivacyWatch};
@@ -225,6 +231,7 @@ pub use snap::{Display, MaximizeHover, WindowArranging, front_fills, shift_held}
 pub use spell::SpellCheck;
 pub use startup::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
+pub use system::{GpuLoad, GpuUsage};
 pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
 pub use taskbar_list::{

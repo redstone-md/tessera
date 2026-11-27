@@ -778,18 +778,20 @@ pub struct Config {
     /// icon for an application or a kind of file gives it.
     #[serde(default)]
     pub icon_packs: Vec<String>,
-    // Wave 2, files-previews: thumbnails, preview and details panes of the file manager.
+    /// The thumbnails, the preview pane and the details pane of the file
+    /// manager.
     #[serde(default)]
     pub file_view: crate::files::FileViewConfig,
-    // Wave 2, desktop-icons: the icons of the desktop.
+    /// How Tessera draws the icons of the desktop.
     #[serde(default)]
     pub desktop: crate::desktop::DesktopConfig,
-    // Wave 2, system-settings: performance mode by power source and energy saver.
-    // #[serde(default)]
-    // pub performance: crate::performance::PerformanceConfig,
-    // Wave 2, system-settings: how often the system meters are read.
-    // #[serde(default)]
-    // pub system: crate::modules::system::SystemConfig,
+    /// The performance mode, chosen by the power source and the energy
+    /// saver.
+    #[serde(default)]
+    pub performance: crate::performance::PerformanceConfig,
+    /// How often the system meters are read.
+    #[serde(default)]
+    pub system: crate::modules::system::SystemConfig,
     /// What the pointer does to windows while a key is held, what clicks
     /// on title bars do, and whether the keyboard follows the pointer.
     #[serde(default)]

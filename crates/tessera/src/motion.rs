@@ -4,6 +4,7 @@
 //! Spring-driven motion: values that move toward a target and can be
 //! redirected at any moment without a jump.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -19,6 +20,55 @@ const MAX_STEP: Duration = Duration::from_millis(4);
 /// The longest gap between frames that is simulated; after a longer pause
 /// the spring continues from where it was instead of leaping ahead.
 const MAX_GAP: Duration = Duration::from_millis(64);
+
+/// How much the springs of the shell move, as the performance mode
+/// decides: fully, less, or not at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Calm {
+    /// Every spring moves as its theme says.
+    #[default]
+    Full,
+    /// Springs that bounce, which slide things into place, arrive at once;
+    /// the others, which fade, move four times as stiffly and so take half
+    /// the time.
+    Reduced,
+    /// Every spring arrives at once: nothing is animated.
+    Still,
+}
+
+impl Calm {
+    /// How much stiffer the springs that still move are while reduced.
+    const REDUCED_STIFFNESS: f32 = 4.;
+
+    /// The calm all springs follow from now on. Asked from any thread.
+    pub fn set(calm: Self) {
+        CALM.store(calm as u8, Ordering::Relaxed);
+    }
+
+    /// The calm in force now.
+    pub fn now() -> Self {
+        match CALM.load(Ordering::Relaxed) {
+            1 => Self::Reduced,
+            2 => Self::Still,
+            _ => Self::Full,
+        }
+    }
+
+    /// The stiffness `spec` moves with under this calm; `None` where it is
+    /// not to move but to arrive at once.
+    fn stiffness(self, spec: SpringSpec) -> Option<f32> {
+        match self {
+            Self::Full => Some(spec.stiffness),
+            // An underdamped spring overshoots: it slides something in.
+            Self::Reduced if spec.damping_ratio < 1. => None,
+            Self::Reduced => Some(spec.stiffness * Self::REDUCED_STIFFNESS),
+            Self::Still => None,
+        }
+    }
+}
+
+/// The [`Calm`] in force, as its number.
+static CALM: AtomicU8 = AtomicU8::new(Calm::Full as u8);
 
 /// How a spring moves.
 #[derive(Clone, Copy, Debug)]
@@ -96,23 +146,29 @@ impl Spring {
     }
 
     fn advance_to(&mut self, now: Instant) {
-        if self.is_settled() {
+        self.advance_under(now, Calm::now());
+    }
+
+    /// Advances the value to `now` as `calm` lets springs move.
+    fn advance_under(&mut self, now: Instant, calm: Calm) {
+        let moving = calm.stiffness(self.spec).filter(|_| !self.is_settled());
+        let Some(stiffness) = moving else {
             self.value = self.target;
             self.velocity = 0.;
             self.advanced_at = None;
             return;
-        }
+        };
         let elapsed = match self.advanced_at.replace(now) {
             Some(before) => now.saturating_duration_since(before).min(MAX_GAP),
             None => Duration::ZERO,
         };
-        let damping = 2. * self.spec.damping_ratio * self.spec.stiffness.sqrt();
+        let damping = 2. * self.spec.damping_ratio * stiffness.sqrt();
         let mut remaining = elapsed;
         while !remaining.is_zero() {
             let step = remaining.min(MAX_STEP);
             remaining -= step;
             let seconds = step.as_secs_f32();
-            let force = -self.spec.stiffness * (self.value - self.target) - damping * self.velocity;
+            let force = -stiffness * (self.value - self.target) - damping * self.velocity;
             self.velocity += force * seconds;
             self.value += self.velocity * seconds;
         }
@@ -279,7 +335,8 @@ mod tests {
         spring.animate_to(1.);
         (0..=120)
             .map(|frame| {
-                spring.advance_to(start + Duration::from_millis(frame * 1000 / 60));
+                let now = start + Duration::from_millis(frame * 1000 / 60);
+                spring.advance_under(now, Calm::Full);
                 spring.value
             })
             .fold(f32::MIN, f32::max)
@@ -304,7 +361,7 @@ mod tests {
     #[test]
     fn a_spring_at_rest_does_not_move() {
         let mut spring = Spring::new(BOUNCY, 0.5);
-        spring.advance_to(Instant::now() + Duration::from_secs(1));
+        spring.advance_under(Instant::now() + Duration::from_secs(1), Calm::Full);
         assert_eq!(spring.value, 0.5);
         assert!(spring.is_settled());
     }
@@ -323,8 +380,39 @@ mod tests {
         let mut spring = Spring::new(SMOOTH, 0.);
         let start = Instant::now();
         spring.animate_to(1.);
-        spring.advance_to(start);
-        spring.advance_to(start + Duration::from_secs(10));
+        spring.advance_under(start, Calm::Full);
+        spring.advance_under(start + Duration::from_secs(10), Calm::Full);
         assert!(spring.value < 0.6, "moved to {}", spring.value);
+    }
+
+    #[test]
+    fn a_still_shell_has_every_spring_arrive_at_once() {
+        for spec in [BOUNCY, SMOOTH] {
+            let mut spring = Spring::new(spec, 0.);
+            spring.animate_to(1.);
+            spring.advance_under(Instant::now(), Calm::Still);
+            assert_eq!(spring.value, 1.);
+            assert!(spring.is_settled());
+        }
+    }
+
+    #[test]
+    fn a_reduced_shell_slides_at_once_and_fades_quicker() {
+        let mut slide = Spring::new(BOUNCY, 0.);
+        slide.animate_to(1.);
+        slide.advance_under(Instant::now(), Calm::Reduced);
+        assert_eq!(slide.value, 1.);
+        // A fade a tenth of a second along gets further when reduced.
+        let along = |calm| {
+            let mut fade = Spring::new(SMOOTH, 0.);
+            let start = Instant::now();
+            fade.animate_to(1.);
+            (0..=6).for_each(|frame| {
+                fade.advance_under(start + Duration::from_millis(frame * 1000 / 60), calm)
+            });
+            fade.value
+        };
+        assert!(along(Calm::Reduced) > along(Calm::Full));
+        assert!(along(Calm::Reduced) < 1.);
     }
 }
