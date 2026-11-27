@@ -46,11 +46,11 @@ use crate::module::{Module, WidgetRegistry};
 use crate::modules::devices::{Drives, letter_of as drive_letter_of};
 use crate::modules::windows::FILES_APP;
 use crate::platform::Place;
-use crate::platform::ShellPath;
 use crate::platform::{
     AppWindow, DriveDialog, FolderHandler, NetworkDrives, RecycleBin, SharePackage, ShellThread,
     ShellWindows, known_folder_path, reveal_with, shell_mode, start_explorer,
 };
+use crate::platform::{JobWords, ShellPath};
 use crate::theme::Theme;
 use crate::ui::{icon, pill};
 
@@ -162,6 +162,17 @@ impl Global for Files {}
 impl Files {
     pub fn configure(config: &FilesConfig, cx: &mut App) {
         cx.default_global::<Self>().config = *config;
+        // The jobs on files are titled in the language shown.
+        let language = Language::of(cx);
+        let say = |text: &'static str| language.say(text).to_owned();
+        JobWords {
+            copying: say("Copying {} items to {}"),
+            moving: say("Moving {} items to {}"),
+            deleting: say("Deleting {} items"),
+            renaming: say("Renaming {} items"),
+            making: say("Making {} items in {}"),
+        }
+        .take();
         Self::take_reveals(config.own, cx);
         Drives::play_arrivals(config.autoplay.active(shell_mode()), cx);
         Self::serve_shell_windows(cx);

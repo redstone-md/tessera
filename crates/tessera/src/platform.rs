@@ -15,6 +15,7 @@ pub use win32::DisplayMode;
 pub use win32::EXPLORER_APP_ID;
 pub use win32::FileSearch;
 pub use win32::InputName;
+pub use win32::JobWords;
 pub use win32::Occupation;
 pub use win32::OwnInput;
 pub use win32::PowerChoices;

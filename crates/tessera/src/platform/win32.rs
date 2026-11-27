@@ -157,6 +157,7 @@ pub use explorer_view::{
     Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
 };
 pub use file_jobs::{FileJobEvent, FileJobState, FileJobs};
+pub use file_op::JobWords;
 pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
