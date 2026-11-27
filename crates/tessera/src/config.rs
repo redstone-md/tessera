@@ -17,6 +17,7 @@ use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::files::FilesConfig;
 use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
+use crate::modules::night::NightLightConfig;
 use crate::platform::ScreenEdge;
 use crate::switcher::SwitcherConfig;
 use crate::tiling::TilingConfig;
@@ -351,6 +352,10 @@ pub struct Config {
     /// surfaces of Tessera open.
     #[serde(default)]
     pub files: FilesConfig,
+    /// Which night light the quick settings switch, and when Tessera's
+    /// own comes on by itself.
+    #[serde(default)]
+    pub night_light: NightLightConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,

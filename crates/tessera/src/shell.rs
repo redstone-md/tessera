@@ -22,6 +22,7 @@ use crate::keys::Shortcuts;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
+use crate::modules::night::Night;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
@@ -76,6 +77,7 @@ impl Shell {
         cx.set_global(Tips::default());
         cx.set_global(Menus::default());
         cx.set_global(AppIcons::new(&config.icons));
+        Night::start(&config.night_light, cx);
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);
         if surfaces.is_empty() {
             bail!("the layout opened no surface");
@@ -270,6 +272,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        Night::configure(&config.night_light, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

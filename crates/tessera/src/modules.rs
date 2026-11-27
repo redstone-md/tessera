@@ -20,6 +20,7 @@ mod look;
 mod marketplace;
 mod media;
 mod network;
+pub mod night;
 mod notifications;
 mod overview;
 mod plan;
@@ -87,6 +88,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(airplane::AirplaneModule),
         Box::new(hotspot::HotspotModule),
         Box::new(power_mode::PowerModeModule),
+        Box::new(night::NightModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),
