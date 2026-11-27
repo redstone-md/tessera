@@ -44,6 +44,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::core::{HRESULT, HSTRING};
 
+use super::display_names;
+
 /// How often the configuration is asked again when it changed between
 /// asking for its size and reading it.
 const ATTEMPTS: usize = 3;
@@ -171,6 +173,9 @@ pub struct DisplayOutput {
     /// The name of its desktop for GDI, as `\\.\DISPLAY2`; empty while it
     /// is off.
     pub device: String,
+    /// The name the monitor gives itself, as `DELL U2720Q`, from the one
+    /// list of display names; empty while it is off.
+    pub friendly: String,
     pub active: bool,
     /// Where its top left corner stands on the desktop, in pixels.
     pub position: (i32, i32),
@@ -202,6 +207,7 @@ impl DisplayOutput {
             },
             number: None,
             device: String::new(),
+            friendly: String::new(),
             active: false,
             position: (0, 0),
             mode: VideoMode {
@@ -256,6 +262,7 @@ impl DisplaySetup {
         let (paths, modes) = query(QDC_ONLY_ACTIVE_PATHS)?;
         let (all_paths, _) = query(QDC_ALL_PATHS)?;
         let mut outputs: Vec<DisplayOutput> = Vec::new();
+        let names = display_names();
         for path in &paths {
             let source = SourceId {
                 adapter: adapter_of(path.sourceInfo.adapterId),
@@ -282,7 +289,12 @@ impl DisplaySetup {
                 .find(|output| output.source == Some(source))
                 .map(|output| output.id);
             let device = source_name(source).unwrap_or_default();
+            let friendly = { names.iter() }
+                .find(|name| name.device.eq_ignore_ascii_case(&device))
+                .map(|name| name.friendly.clone())
+                .unwrap_or_default();
             outputs.push(DisplayOutput {
+                friendly,
                 id,
                 number: display_number(&device),
                 modes: video_modes(&device),
@@ -311,6 +323,7 @@ impl DisplaySetup {
                     id,
                     number: None,
                     device: String::new(),
+                    friendly: String::new(),
                     active: false,
                     position: (0, 0),
                     mode: VideoMode {

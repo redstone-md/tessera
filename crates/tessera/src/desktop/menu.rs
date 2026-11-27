@@ -68,6 +68,9 @@ const ICON_NONE: &str = "";
 const WALLPAPER_SETTINGS: &str = "wallpaper-settings";
 const WALLPAPER: &str = "wallpaper";
 
+/// The action that opens the settings of the displays.
+const DISPLAY_SETTINGS: &str = "display-settings";
+
 /// The widgets the menu offers to put on a card of their own, with what
 /// the menu calls them; only those a module provides are offered.
 const CARD_WIDGETS: [(&str, &str); 8] = [
@@ -487,7 +490,15 @@ fn background_entries(
     entries.push(MenuEntry::new(
         ICON_DISPLAY,
         language.say("Display settings"),
-        |_| Launch::new("ms-settings:display").start(),
+        // Tessera's own popup, where it is there, as Windows' page needs
+        // the Settings app.
+        |cx| match cx
+            .try_global::<Actions>()
+            .and_then(|actions| actions.get(DISPLAY_SETTINGS))
+        {
+            Some(_) => Actions::run(DISPLAY_SETTINGS, None, cx),
+            None => Launch::new("ms-settings:display").start(),
+        },
     ));
     entries.push(MenuEntry::new(
         ICON_PERSONALIZE,

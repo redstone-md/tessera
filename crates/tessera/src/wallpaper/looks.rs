@@ -475,6 +475,17 @@ pub enum Plan {
     Video(VideoPlan),
 }
 
+impl Plan {
+    /// The same plan without the blur of its picture, as performance mode
+    /// asks where it saves on looks.
+    pub fn unblurred(mut self) -> Self {
+        if let Self::Picture { adjust, .. } = &mut self {
+            adjust.blur = 0.;
+        }
+        self
+    }
+}
+
 /// A look of videos, where `video` and `videos` give some, or else
 /// `then`.
 fn with_videos(

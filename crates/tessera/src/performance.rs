@@ -221,20 +221,12 @@ impl Performance {
     /// Whether the shell saves at least as much as Minimal says: slides
     /// are to arrive at once, and live thumbnails and blur are to be
     /// skipped.
-    #[allow(
-        dead_code,
-        reason = "for the previews, the live thumbnails and the blur, which skip it"
-    )]
     pub fn minimal(cx: &App) -> bool {
         Self::mode(cx) >= PerformanceMode::Minimal
     }
 
     /// Whether the shell saves all it can: nothing is to move, and live
     /// previews and video wallpapers are to pause.
-    #[allow(
-        dead_code,
-        reason = "for the live previews and video wallpapers, which pause in it"
-    )]
     pub fn extreme(cx: &App) -> bool {
         Self::mode(cx) == PerformanceMode::Extreme
     }

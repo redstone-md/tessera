@@ -323,6 +323,16 @@ fn rates_at(modes: &[VideoMode], size: (u32, u32)) -> Vec<u32> {
 }
 
 /// What an orientation is called.
+/// What a display is called: "Display 2", with the name the monitor
+/// gives itself where it is known, as Windows' settings call it.
+fn output_name(output: &DisplayOutput, number: u32, language: Language) -> String {
+    let name = fill(language.say("Display {}"), &[&number.to_string()]);
+    match output.friendly.is_empty() {
+        true => name,
+        false => format!("{name} \u{b7} {}", output.friendly),
+    }
+}
+
 fn rotation_label(rotation: Rotation) -> &'static str {
     match rotation {
         Rotation::Landscape => "Landscape",
@@ -990,10 +1000,7 @@ impl DisplaySettings {
             return Vec::new();
         };
         let mut rows = Vec::new();
-        let name = fill(
-            language.say("Display {}"),
-            &[&numbers[self.selected].to_string()],
-        );
+        let name = output_name(&output, numbers[self.selected], language);
         let mirrored = { output.mirror_of }
             .and_then(|main| self.draft.iter().position(|other| other.id == main));
         let note = match (output.active, mirrored) {
@@ -1260,7 +1267,7 @@ impl Render for DisplaySettings {
         if self.draft.len() > 1 {
             let choices: Vec<(usize, SharedString)> = { (0..self.draft.len()).zip(&numbers) }
                 .map(|(index, number)| {
-                    let mut name = fill(language.say("Display {}"), &[&number.to_string()]);
+                    let mut name = output_name(&self.draft[index], *number, language);
                     if !self.draft[index].active {
                         name = format!("{name} · {}", language.say("Off"));
                     }

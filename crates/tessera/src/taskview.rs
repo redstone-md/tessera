@@ -49,6 +49,7 @@ use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon};
 use crate::module::WidgetContext;
 use crate::motion::{InteractionState, Spring};
+use crate::performance::Performance;
 use crate::platform::{
     AppWindow, AppWindowId, Display, DisplayKey, NativeSurface, ScreenRect, Thumbnail, Veil,
     display_at, display_frames,
@@ -638,10 +639,12 @@ impl Tile {
         cx: &mut App,
     ) -> Vec<Self> {
         let motion = cx.global::<Theme>().motion;
+        // Performance mode skips the live pictures; the cards show icons.
+        let live = !Performance::minimal(cx);
         { windows.into_iter() }
             .filter(|seen| seen.display == display)
             .map(|seen| {
-                let picture = { seen.may_be_pictured() }
+                let picture = { live && seen.may_be_pictured() }
                     .then(|| Thumbnail::of(seen.id, native).ok())
                     .flatten()
                     .and_then(|thumbnail| {
@@ -1204,6 +1207,7 @@ impl Screen {
                 tile.still = Workspaces::still(id, cx);
             } else if tile.picture.is_none()
                 && let Some(native) = self.native
+                && !Performance::minimal(cx)
             {
                 // A window brought to the workspace shown has a picture
                 // again, from where it stands.

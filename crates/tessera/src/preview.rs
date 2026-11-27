@@ -19,6 +19,7 @@ use gpui::{
 use crate::icons::{Icon, icon_of_pixels};
 use crate::motion::{Interaction, Spring};
 use crate::peek::Peek;
+use crate::performance::Performance;
 use crate::platform::{
     AppWindowId, Media, MediaCommand, NativeSurface, ScreenEdge, ScreenRect, SessionKey,
     TaskbarList, ThumbButton, Thumbnail,
@@ -240,9 +241,11 @@ impl Previews {
         let room = room - padding * (targets.len() as f32 + 1.);
         open_floating(rough, anchor.display_id, false, cx, |window, cx| {
             let native = NativeSurface::of(window);
+            // Performance mode skips the live pictures.
+            let live = !Performance::minimal(cx);
             let thumbnails: Vec<Option<Thumbnail>> = { targets.iter() }
                 .map(|&target| {
-                    let native = native.as_ref().ok()?;
+                    let native = native.as_ref().ok().filter(|_| live)?;
                     Thumbnail::of(target, *native).ok()
                 })
                 .collect();

@@ -65,6 +65,7 @@ pub use self::looks::{FASTEST, PAUSE_COVERAGE, SHORTEST_INTERVAL, SLOWEST, Shown
 use self::looks::{Looks, Moment, Plan, Turns, VideoPlan, WindowsNow};
 use self::served::Served;
 use crate::motion::{Spring, SpringSpec};
+use crate::performance::Performance;
 use crate::platform::{
     AppWindow, BackdropPicture, Battery, DesktopBackdrop, DesktopVideo, DisplayKey, Poster,
     ScreenRect, ShellThread, SystemWallpaper, VideoLook, VideoOverlay, VideoState, decode_with_wic,
@@ -465,6 +466,13 @@ impl Wallpaper {
         // Without a `[wallpaper]` the wallpaper of Windows is followed,
         // for a theme of its colors.
         Self::begin(config, cx);
+        // A change of performance mode is looked at at once.
+        if let Some(performance) = Performance::entity(cx) {
+            cx.observe(&performance, |_, cx| {
+                cx.global::<Self>().poke.try_send(()).ok();
+            })
+            .detach();
+        }
     }
 
     /// Takes over a configuration that was read again, if it says
@@ -674,8 +682,10 @@ impl Wallpaper {
         }
     }
 
-    /// What each display at `frames` is to show at `moment`.
+    /// What each display at `frames` is to show at `moment`; pictures
+    /// are not blurred while performance mode saves on looks.
     fn plans(looks: &Looks, frames: &[ScreenRect], moment: &Moment, cx: &App) -> Vec<Plan> {
+        let blur = !Performance::minimal(cx);
         numbers(frames)
             .into_iter()
             .zip(frames)
@@ -683,7 +693,8 @@ impl Wallpaper {
                 let workspace = looks
                     .by_workspace()
                     .then(|| Workspaces::now(Some(display_at(*frame)), cx).current);
-                looks.of(number, workspace).plan(*frame, looks, moment)
+                let plan = looks.of(number, workspace).plan(*frame, looks, moment);
+                if blur { plan } else { plan.unblurred() }
             })
             .collect()
     }
@@ -1203,6 +1214,8 @@ impl Wallpaper {
         let on_battery =
             looks.pause_on_battery && Battery::read().is_some_and(|battery| !battery.plugged_in);
         cx.update(|cx| {
+            // Performance mode at its most pauses the videos too.
+            let still = on_battery || Performance::extreme(cx);
             let this = cx.global_mut::<Self>();
             if this.task != task {
                 return false;
@@ -1233,7 +1246,7 @@ impl Wallpaper {
                     }
                 }
                 playing.video.hide(hides);
-                playing.video.pause(on_battery);
+                playing.video.pause(still);
             }
             for at in failed.into_iter().rev() {
                 let playing = this.videos.remove(at);
