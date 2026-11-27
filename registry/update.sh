@@ -96,6 +96,7 @@ END
         "Dice, a coin and answers to questions asked in silence, offline."
     offer breaks "Eye breaks" \
         "Reminders to look away from the screen for a moment, every twenty minutes unless set otherwise."
+    offer system-monitor "System monitor" "An example of the interface 0.4: the processor and the memory in the bar; the network, the battery, what plays and the open windows in a popup; sys in the launcher."
     theme void "Void" 1.0.0 \
         "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
     theme expressive "Expressive" 1.0.0 \

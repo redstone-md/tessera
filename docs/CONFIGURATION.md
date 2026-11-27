@@ -142,6 +142,8 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
 | `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
 | `eject` | the letter of a drive, as `E` or `E:` | ejects that drive as its **Eject** button in the popup `devices` does: the device it is on, with every drive of it, or its medium where it is a disc or a card in a reader built in; a notice says how it went |
+| `<extension>.<shortcut>` | none | tells the extension of that id that the keys of its `[[shortcut]]` of that id were pressed, as [EXTENSIONS.md](EXTENSIONS.md#shortcuts) describes; it brings the `keys` of the shortcut where the keys of Windows are in use. The shortcuts are read when Tessera starts |
+| `extension-answer` | an extension and the id of one of its answers | tells the extension that its answer was chosen in the launcher, which starts `tessera do extension-answer` for an answer whose action is `run`; it brings no key |
 | `switcher` | `next`, `previous`, `app-next`, `app-previous`, or none | opens the [window switcher](#the-window-switcher), or goes one window on (`next`, or none) or back (`previous`) in the open one; `app-next` and `app-previous` go through the windows of one application only. The choice is taken when the keys to hold of the `press` that did it are let go; for a `press` with none, the switcher stays open until a window is chosen. Done by `tessera do switcher`, it waits for the keys that are down as it is done, which are usually none. Its keys are taken from Windows, and it brings Alt+Tab (`next`), Alt+Shift+Tab (`previous`), Alt+` (`app-next`) and Alt+Shift+` (`app-previous`) where the keys of Windows are in use |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
@@ -194,6 +196,7 @@ The `launcher` widget, the compact `runner` widget and the Run dialog `run` answ
 | `settings` | pages of the Settings app, items of the Control Panel and tools of Windows |
 | `emoji` | `:name`: emoji and symbols, copied when chosen |
 | `recent` | the documents of the Recent folder, by their names |
+| `extensions` | the answers of the extensions whose manifest has a `[runner]` table, as [EXTENSIONS.md](EXTENSIONS.md#runners) describes |
 
 The `launcher` and `runner` widgets take these options besides those of the launcher (`placeholder`, `folders`, `view`):
 

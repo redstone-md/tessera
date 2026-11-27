@@ -87,6 +87,23 @@ impl Guest for Counter {
     fn fetched(_request: u32, _outcome: Result<Response, String>) {
         // This extension starts no requests.
     }
+
+    fn settings_changed() {
+        // This extension reads no settings.
+    }
+
+    fn answer(_query: String) -> Vec<Answer> {
+        // This extension answers no launcher queries.
+        Vec::new()
+    }
+
+    fn run_answer(_id: String) {
+        // This extension gives no answers to run.
+    }
+
+    fn shortcut(_id: String) {
+        // This extension declares no shortcuts.
+    }
 }
 
 export!(Counter);

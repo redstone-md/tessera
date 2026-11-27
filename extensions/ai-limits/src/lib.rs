@@ -174,6 +174,24 @@ impl Guest for AiLimits {
     fn fetched(request: u32, outcome: Result<Response, String>) {
         with_app(|app| app.answered(request, outcome));
     }
+
+    fn settings_changed() {
+        // The settings are read once, when the extension starts; a changed
+        // one is used after Tessera starts the extension again.
+    }
+
+    fn answer(_query: String) -> Vec<Answer> {
+        // This extension answers no launcher queries.
+        Vec::new()
+    }
+
+    fn run_answer(_id: String) {
+        // This extension gives no answers to run.
+    }
+
+    fn shortcut(_id: String) {
+        // This extension declares no shortcuts.
+    }
 }
 
 export!(AiLimits);
