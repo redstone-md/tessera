@@ -80,6 +80,10 @@ pub struct Shown {
     /// How many seconds a picture stays.
     pub interval: u64,
     pub shuffle: bool,
+    /// The collection all displays show where it has an `interval` or a
+    /// `shuffle` of its own: those are what is shown above, and changed.
+    pub interval_in: Option<String>,
+    pub shuffle_in: Option<String>,
     pub fit: Fit,
     pub position: Option<Position>,
     pub blur: f32,
@@ -683,9 +687,22 @@ impl WallpaperConfig {
         self.source.unwrap_or_else(|| self.implied_source())
     }
 
+    /// Whether `source` is written, not left to the other keys.
+    pub fn names_source(&self) -> bool {
+        self.source.is_some()
+    }
+
     /// What the wallpaper settings show of this, as it is written: the
     /// values of the keys that are given, and what is used without them.
     pub fn shown(&self) -> Shown {
+        let chosen = { self.collections.iter() }
+            .find(|collection| self.collection.as_ref() == Some(&collection.name));
+        let own = |has: fn(&Collection) -> bool| {
+            chosen
+                .filter(|collection| has(collection))
+                .map(|collection| collection.name.clone())
+        };
+        let interval = chosen.and_then(|collection| collection.interval);
         Shown {
             source: self.source(),
             collections: { self.collections.iter() }
@@ -696,8 +713,12 @@ impl WallpaperConfig {
                 })
                 .collect(),
             collection: self.collection.clone(),
-            interval: self.interval.unwrap_or(INTERVAL).max(SHORTEST_INTERVAL),
-            shuffle: self.shuffle,
+            interval: { interval.or(self.interval) }
+                .unwrap_or(INTERVAL)
+                .max(SHORTEST_INTERVAL),
+            shuffle: { chosen.and_then(|collection| collection.shuffle) }.unwrap_or(self.shuffle),
+            interval_in: own(|collection| collection.interval.is_some()),
+            shuffle_in: own(|collection| collection.shuffle.is_some()),
             fit: self.fit,
             position: self.position,
             blur: self.blur.unwrap_or(0.),
@@ -1436,6 +1457,11 @@ mod tests {
         assert_eq!(shown.flip, Flip::Horizontal);
         assert_eq!(shown.displays, [(2, Some("Sea".to_owned()))]);
         assert_eq!(shown.source, Source::Files);
+        // The collection chosen for all has its own turns: they are shown.
+        assert_eq!(shown.interval, 300);
+        assert!(shown.shuffle);
+        assert_eq!(shown.interval_in.as_deref(), Some("Sea"));
+        assert_eq!(shown.shuffle_in.as_deref(), Some("Sea"));
         let (slideshow, shuffle, interval) = full.slideshow();
         assert_eq!(slideshow, [PathBuf::from("C:/Users/me/Pictures/Sea")]);
         assert!(shuffle);

@@ -180,11 +180,11 @@ fn answers_of(
 
 /// What is written to the configuration for `request`, the displays
 /// being at `frames`: a picture for one display is written to its entry,
-/// a picture for all to the wallpaper, in place of the pictures, videos
-/// and collection that were shown, so that it is what is seen.
+/// a picture or slideshow for all to the wallpaper, in place of the
+/// pictures, videos and collection shown before anywhere, so that it is
+/// what is seen.
 pub fn edits(request: &WallpaperRequest, frames: &[ScreenRect]) -> Vec<Edit> {
     let files = || Edit::Key("source", Some("files".into()));
-    let shown_alone = |key: &'static str| [Edit::Key(key, None), Edit::EveryDisplay(key)];
     match request {
         WallpaperRequest::Picture {
             display: Some(display),
@@ -213,14 +213,7 @@ pub fn edits(request: &WallpaperRequest, frames: &[ScreenRect]) -> Vec<Edit> {
             display: None,
             file,
         } => {
-            let mut wanted: Vec<Edit> = ["collection", "video", "videos", "images"]
-                .into_iter()
-                .flat_map(shown_alone)
-                .collect();
-            wanted.extend([
-                Edit::Key("images_light", None),
-                Edit::Key("images_dark", None),
-            ]);
+            let mut wanted = replace_shown();
             match file {
                 Some(file) => wanted.extend([
                     files(),
@@ -234,10 +227,13 @@ pub fn edits(request: &WallpaperRequest, frames: &[ScreenRect]) -> Vec<Edit> {
             let fit = Fit::of_windows(*position);
             vec![
                 Edit::Key("fit", Some(fit.name().into())),
-                Edit::EveryDisplay("fit"),
+                Edit::EveryPlace("fit"),
             ]
         }
+        // The color alone would have the wallpaper be the color where
+        // nothing else names what it is.
         WallpaperRequest::Color([red, green, blue]) => vec![
+            Edit::KeepSource,
             Edit::Key("gradient", None),
             Edit::Key(
                 "color",
@@ -245,10 +241,7 @@ pub fn edits(request: &WallpaperRequest, frames: &[ScreenRect]) -> Vec<Edit> {
             ),
         ],
         WallpaperRequest::Slideshow(paths) => {
-            let mut wanted: Vec<Edit> = ["collection", "images"]
-                .into_iter()
-                .flat_map(shown_alone)
-                .collect();
+            let mut wanted = replace_shown();
             wanted.extend([files(), Edit::Key("images", Some(paths_value(paths)))]);
             wanted
         }
@@ -269,6 +262,21 @@ pub fn edits(request: &WallpaperRequest, frames: &[ScreenRect]) -> Vec<Edit> {
         WallpaperRequest::Enable(false) => vec![Edit::Key("source", Some("color".into()))],
         WallpaperRequest::Advance { .. } => Vec::new(),
     }
+}
+
+/// Takes away the pictures, videos and collection of the wallpaper, of
+/// every display and of every workspace, so that what is written then is
+/// shown everywhere.
+fn replace_shown() -> Vec<Edit> {
+    let shown = ["collection", "video", "videos", "images"];
+    let mut wanted: Vec<Edit> = { shown.into_iter() }
+        .flat_map(|key| [Edit::Key(key, None), Edit::EveryPlace(key)])
+        .collect();
+    wanted.extend([
+        Edit::Key("images_light", None),
+        Edit::Key("images_dark", None),
+    ]);
+    wanted
 }
 
 #[cfg(test)]
@@ -292,7 +300,7 @@ mod tests {
             .map(|edit| match edit {
                 Edit::Key(key, value) => format!("{key}={}", shown(value)),
                 Edit::Display(number, key, value) => format!("{number}.{key}={}", shown(value)),
-                Edit::EveryDisplay(key) => format!("*.{key}"),
+                Edit::EveryPlace(key) => format!("*.{key}"),
                 other => format!("{other:?}"),
             })
             .collect()
@@ -333,15 +341,20 @@ mod tests {
             display: None,
             file: Some(PathBuf::from("hill.png")),
         };
-        let wanted = texts(&edits(&request, &[frame(0)]));
-        for key in ["collection", "video", "videos", "images"] {
-            assert!(wanted.contains(&format!("{key}=-")));
-            assert!(wanted.contains(&format!("*.{key}")));
+        let slideshow = WallpaperRequest::Slideshow(vec![PathBuf::from("hill.png")]);
+        for request in [request, slideshow] {
+            let wanted = texts(&edits(&request, &[frame(0)]));
+            for key in ["collection", "video", "videos", "images"] {
+                assert!(wanted.contains(&format!("{key}=-")));
+                assert!(wanted.contains(&format!("*.{key}")));
+            }
+            assert!(wanted.contains(&"images_light=-".to_owned()));
+            assert!(wanted.contains(&"images_dark=-".to_owned()));
+            assert!(wanted.ends_with(&[
+                "source=\"files\"".to_owned(),
+                "images=[\"hill.png\"]".to_owned()
+            ]));
         }
-        assert!(wanted.ends_with(&[
-            "source=\"files\"".to_owned(),
-            "images=[\"hill.png\"]".to_owned()
-        ]));
         let none = WallpaperRequest::Picture {
             display: None,
             file: None,
@@ -359,7 +372,7 @@ mod tests {
         let color = WallpaperRequest::Color([16, 32, 255]);
         assert_eq!(
             texts(&edits(&color, &[])),
-            ["gradient=-", "color=\"#1020ff\""]
+            ["KeepSource", "gradient=-", "color=\"#1020ff\""]
         );
         let position = WallpaperRequest::Position(WallpaperPosition::Tile);
         assert_eq!(texts(&edits(&position, &[])), ["fit=\"tile\"", "*.fit"]);

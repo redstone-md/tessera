@@ -517,7 +517,7 @@ Blur, brightness, contrast and saturation are not done to videos. Where the wall
 
 `[[wallpaper.workspace]]` is chosen by the `number` of the place of a workspace in the row of workspaces (`Workspaces::now(..).current`), not by the workspace itself: when a workspace is taken away, the one that moves into its place shows the wallpaper of that number. This is deliberate: a wallpaper belongs to a place in the row, as Seelen UI chooses a wallpaper by the index of a workspace.
 
-In shell mode Tessera answers programs that ask COM for `IDesktopWallpaper`, as Explorer would: a picture set for one display goes to its `[[wallpaper.display]]` entry, a picture for all, a slideshow, the position, the color and its options to `[wallpaper]`, in place of the pictures, videos and collection shown before. Whether Settings > Personalization uses it has not been tried.
+In shell mode Tessera answers programs that ask COM for `IDesktopWallpaper`, as Explorer would: a picture set for one display goes to its `[[wallpaper.display]]` entry, a picture for all, a slideshow, the position, the color and its options to `[wallpaper]`. A picture or slideshow for all takes the place of the pictures, videos and collection shown before, those of `[[wallpaper.display]]` and `[[wallpaper.workspace]]` entries and `images_light` and `images_dark` included. A color set alone writes `source` as it was, where the file left it out, so that the wallpaper does not become the color. Whether Settings > Personalization uses it has not been tried.
 
 ## Notices, devices and privacy
 

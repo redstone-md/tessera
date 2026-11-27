@@ -6,9 +6,11 @@
 //! the file, its comments included, stays as it is written.
 //!
 //! [`write`] and [`read`] read and write the file: they are for a thread
-//! other than that of the interface.
+//! other than that of the interface. One of them waits for another, so
+//! that each change is made to the file as the one before left it.
 
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use toml_edit::{Array, Value};
 
@@ -22,14 +24,20 @@ pub enum Edit {
     Key(&'static str, Option<Value>),
     /// A key of the entry `[[wallpaper.display]]` with a number.
     Display(usize, &'static str, Option<Value>),
-    /// A key taken away from every `[[wallpaper.display]]`.
-    EveryDisplay(&'static str),
+    /// A key taken away from every `[[wallpaper.display]]` and
+    /// `[[wallpaper.workspace]]`.
+    EveryPlace(&'static str),
+    /// `source` written as what it comes to, where the file leaves it to
+    /// the other keys, so that changing them does not change it.
+    KeepSource,
     /// A collection with a name and its pictures and folders.
     AddCollection(String, Vec<PathBuf>),
-    /// The collection at a place taken away, and every choice of it.
-    RemoveCollection(usize),
-    /// The collection at a place moved one on, or with `false` one back.
-    MoveCollection(usize, bool),
+    /// A key of the collection with a name, set or taken away.
+    Collection(String, &'static str, Option<Value>),
+    /// The collection with a name taken away, and every choice of it.
+    RemoveCollection(String),
+    /// The collection with a name moved one on, or with `false` one back.
+    MoveCollection(String, bool),
 }
 
 impl Edit {
@@ -40,13 +48,25 @@ impl Edit {
             Self::Display(number, key, value) => {
                 file.set_wallpaper_place("display", number, key, value)
             }
-            Self::EveryDisplay(key) => {
+            Self::EveryPlace(key) => {
                 file.clear_wallpaper_places("display", key);
+                file.clear_wallpaper_places("workspace", key);
                 true
             }
+            Self::KeepSource => match file.config() {
+                Ok(config) if config.wallpaper.names_source() => true,
+                Ok(config) => {
+                    let source = config.wallpaper.source().name();
+                    file.set_wallpaper("source", Some(source.into()))
+                }
+                Err(_) => false,
+            },
             Self::AddCollection(name, images) => file.add_wallpaper_collection(&name, &images),
-            Self::RemoveCollection(index) => file.remove_wallpaper_collection(index),
-            Self::MoveCollection(index, forward) => file.move_wallpaper_collection(index, forward),
+            Self::Collection(name, key, value) => file.set_wallpaper_collection(&name, key, value),
+            Self::RemoveCollection(name) => { file.wallpaper_collection_index(&name) }
+                .is_some_and(|index| file.remove_wallpaper_collection(index)),
+            Self::MoveCollection(name, forward) => { file.wallpaper_collection_index(&name) }
+                .is_some_and(|index| file.move_wallpaper_collection(index, forward)),
         }
     }
 
@@ -56,6 +76,9 @@ impl Edit {
         match (self, other) {
             (Self::Key(one, _), Self::Key(two, _)) => one == two,
             (Self::Display(one, key, _), Self::Display(two, other_key, _)) => {
+                one == two && key == other_key
+            }
+            (Self::Collection(one, key, _), Self::Collection(two, other_key, _)) => {
                 one == two && key == other_key
             }
             _ => false,
@@ -76,6 +99,7 @@ pub fn paths_value(paths: &[PathBuf]) -> Value {
 /// fit the file is left out; a file that would not be usable is not
 /// written.
 pub fn write(edits: Vec<Edit>) -> Result<WallpaperConfig, String> {
+    let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
     let mut file = ConfigFile::open()?;
     for edit in edits {
         edit.apply(&mut file);
@@ -86,8 +110,13 @@ pub fn write(edits: Vec<Edit>) -> Result<WallpaperConfig, String> {
 
 /// The configuration of the wallpaper the file holds.
 pub fn read() -> Result<WallpaperConfig, String> {
+    let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
     Ok(ConfigFile::open()?.config()?.wallpaper)
 }
+
+/// Held while the file is read and written, so that a change from the
+/// settings and one from a program are made one after the other.
+static WRITING: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -102,6 +131,10 @@ mod tests {
         assert!(display.same_key(&Edit::Display(2, "blur", Some(1.into()))));
         assert!(!display.same_key(&Edit::Display(1, "blur", None)));
         assert!(!display.same_key(&blur));
-        assert!(!Edit::RemoveCollection(0).same_key(&Edit::RemoveCollection(0)));
+        let sea = |key| Edit::Collection("sea".to_owned(), key, None);
+        assert!(sea("interval").same_key(&sea("interval")));
+        assert!(!sea("interval").same_key(&sea("shuffle")));
+        let removed = || Edit::RemoveCollection("sea".to_owned());
+        assert!(!removed().same_key(&removed()));
     }
 }

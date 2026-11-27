@@ -1205,6 +1205,39 @@ impl ConfigFile {
         }
         true
     }
+
+    /// Where among the collections the one named `name` is.
+    pub fn wallpaper_collection_index(&self, name: &str) -> Option<usize> {
+        { self.wallpaper_entries("collections") }
+            .position(|entry| entry.get("name").and_then(Item::as_str) == Some(name))
+    }
+
+    /// Sets `key` of the collection named `name`; `None` takes it away.
+    /// Whether there is such a collection is returned.
+    pub fn set_wallpaper_collection(
+        &mut self,
+        name: &str,
+        key: &str,
+        value: Option<Value>,
+    ) -> bool {
+        let Some(index) = self.wallpaper_collection_index(name) else {
+            return false;
+        };
+        let entry = { self.wallpaper_tables("collections") }
+            .and_then(|collections| collections.get_mut(index));
+        let Some(entry) = entry else {
+            return false;
+        };
+        match value {
+            Some(value) => {
+                entry.insert(key, Item::Value(value));
+            }
+            None => {
+                entry.remove(key);
+            }
+        }
+        true
+    }
 }
 
 /// `number` as a value of the file.
@@ -1263,6 +1296,13 @@ mod wallpaper_tests {
                 .collect()
         };
         assert_eq!(names(&edited), ["sea", "hills"]);
+        assert_eq!(edited.wallpaper_collection_index("hills"), Some(1));
+        assert_eq!(edited.wallpaper_collection_index("lakes"), None);
+        assert!(edited.set_wallpaper_collection("hills", "interval", Some(60.into())));
+        assert!(!edited.set_wallpaper_collection("lakes", "interval", None));
+        assert!(edited.document.to_string().contains("interval = 60"));
+        assert!(edited.set_wallpaper_collection("hills", "interval", None));
+        assert!(!edited.document.to_string().contains("interval"));
         assert!(edited.move_wallpaper_collection(0, true));
         assert_eq!(names(&edited), ["hills", "sea"]);
         assert!(!edited.move_wallpaper_collection(0, false));
@@ -1272,5 +1312,22 @@ mod wallpaper_tests {
         assert!(!text.contains("collection = \"sea\""), "{text}");
         assert!(!text.contains("[[wallpaper.display]]"));
         edited.config().expect("it stays usable");
+    }
+
+    #[test]
+    fn a_color_set_alone_keeps_where_the_wallpaper_comes_from() {
+        use crate::wallpaper::{Edit, Source};
+        let colored = |text: &str| {
+            let mut edited = file(text);
+            assert!(Edit::KeepSource.apply(&mut edited));
+            assert!(Edit::Key("color", Some("#102030".into())).apply(&mut edited));
+            edited.config().unwrap().wallpaper.source()
+        };
+        assert_eq!(colored(""), Source::Windows);
+        assert_eq!(
+            colored("[wallpaper]\nimages = [\"a.jpg\"]\n"),
+            Source::Files
+        );
+        assert_eq!(colored("[wallpaper]\nsource = \"color\"\n"), Source::Color);
     }
 }

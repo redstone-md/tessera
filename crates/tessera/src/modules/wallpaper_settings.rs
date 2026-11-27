@@ -293,6 +293,15 @@ impl Knob {
     }
 }
 
+/// The change of `key`, `interval` or `shuffle`: in the collection `own`
+/// where it has the key itself, else in `[wallpaper]`.
+fn turns_edit(own: Option<&String>, key: &'static str, value: Option<Value>) -> Edit {
+    match own {
+        Some(name) => Edit::Collection(name.clone(), key, value),
+        None => Edit::Key(key, value),
+    }
+}
+
 /// `seconds` as hours, minutes and seconds.
 fn duration_text(seconds: u64) -> String {
     let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
@@ -478,6 +487,13 @@ impl WallpaperSettings {
                 let color = [red, green, blue, value as u8];
                 Edit::Key("overlay", Some(overlay_value(color, blend)))
             }
+            Knob::Interval => {
+                let own = self
+                    .shown
+                    .as_ref()
+                    .and_then(|shown| shown.interval_in.as_ref());
+                turns_edit(own, knob.key(), knob.written(value))
+            }
             _ => Edit::Key(knob.key(), knob.written(value)),
         };
         self.queue(vec![edit], false, cx);
@@ -558,11 +574,26 @@ impl WallpaperSettings {
                 ],
                 None => Vec::new(),
             },
-            Control::Up(index) => vec![Edit::MoveCollection(*index, false)],
-            Control::Down(index) => vec![Edit::MoveCollection(*index, true)],
-            Control::Remove(index) => vec![Edit::RemoveCollection(*index)],
+            // By name: the list shown is not yet that of the file while a
+            // change before is being written.
+            Control::Up(index) => named(*index)
+                .map(|name| Edit::MoveCollection(name, false))
+                .into_iter()
+                .collect(),
+            Control::Down(index) => named(*index)
+                .map(|name| Edit::MoveCollection(name, true))
+                .into_iter()
+                .collect(),
+            Control::Remove(index) => named(*index)
+                .map(Edit::RemoveCollection)
+                .into_iter()
+                .collect(),
             Control::Add => Vec::new(),
-            Control::Shuffle => vec![Edit::Key("shuffle", Some((!shown.shuffle).into()))],
+            Control::Shuffle => vec![turns_edit(
+                shown.shuffle_in.as_ref(),
+                "shuffle",
+                Some((!shown.shuffle).into()),
+            )],
             Control::Fit(fit) => vec![Edit::Key("fit", Some(fit.name().into()))],
             Control::Place(place) => {
                 let value = (*place != Place::Center).then(|| place.name().into());
