@@ -215,9 +215,15 @@ impl DisplayOutput {
         }
     }
 
-    /// Whether it is the main display: the one at the origin.
+    /// Whether it is the main display: the one whose own desktop stands
+    /// at the origin. A display only switched on in a draft has no desktop
+    /// yet, and one that shows the same as another has none of its own.
     pub fn is_primary(&self) -> bool {
-        self.active && self.position == (0, 0)
+        self.active
+            && self.source.is_some()
+            && self.mirror_of.is_none()
+            && self.mode.width > 0
+            && self.position == (0, 0)
     }
 }
 
@@ -860,6 +866,31 @@ mod tests {
             unturned(DEVMODE_DISPLAY_ORIENTATION(2), mode(1920, 1080)),
             mode(1920, 1080)
         );
+    }
+
+    #[test]
+    fn only_a_desktop_of_its_own_at_the_origin_is_the_main_display() {
+        let mut main = DisplayOutput::test_output();
+        main.active = true;
+        main.source = Some(SourceId {
+            adapter: (0, 0),
+            id: 0,
+        });
+        main.mode = VideoMode {
+            width: 1920,
+            height: 1080,
+            hertz: 60,
+        };
+        assert!(main.is_primary());
+        // Switched on in a draft, with no desktop yet.
+        let mut switched_on = DisplayOutput::test_output();
+        switched_on.active = true;
+        assert!(!switched_on.is_primary());
+        let mut mirror = main.clone();
+        mirror.mirror_of = Some(main.id);
+        assert!(!mirror.is_primary());
+        main.position = (1920, 0);
+        assert!(!main.is_primary());
     }
 
     #[test]
