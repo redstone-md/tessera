@@ -242,6 +242,30 @@ The `launcher` widget, the compact `runner` widget and the Run dialog `run` answ
 | `emoji` | `:name`: emoji and symbols, copied when chosen |
 | `recent` | the documents of the Recent folder, by their names |
 | `extensions` | the answers of the extensions whose manifest has a `[runner]` table, as [EXTENSIONS.md](EXTENSIONS.md#runners) describes |
+| `bookmarks` | the bookmarks of Edge, Chrome, Brave, Vivaldi, Chromium and Firefox, by their titles and addresses |
+| `spell` | `spell necessary` or `necesary?`: the spelling of a word, by the spell checker of Windows in the languages of the user |
+| `time` | `time`, `time in UTC+3`, `time tokyo`, `15:00 berlin in new york`; until the table of zones of the clock is there, only offsets from UTC and `local` |
+| `terminal` | the profiles of Windows Terminal, opened with `wt -p` |
+| `sessions` | the folders and workspaces opened lately in Visual Studio Code, its Insiders release and VSCodium |
+| `unicode` | `U+2192`, `char right arrow`, `char →`: Unicode characters, copied when chosen |
+| `help` | `?`: the runners of the widget and how each is asked |
+| `extensions` | what the installed extensions answer, where an extension declares a runner |
+
+The name of a runner, or one of the short names `calc`, `convert`, `run`, `window`, `kill`, `bm`, `tz`, `wt`, `code` and `char`, and a colon before the text ask that runner alone: `calc: 2+2`, `char: arrow`, `wt: ubuntu`. With nothing after the colon, the help tells how that runner is asked. A keyword of a web search keeps its meaning, so a keyword of `web` that is also the name of a runner searches the web. The Run dialog runs commands only: the other runners, and a runner asked by its name, answer in the launcher and the runner.
+
+Before anything is typed the launcher shows what `view` says: `all` (the default: the tiles of every application), `list` (all of them one under another), `favorites` (the applications pinned to Start, which an `apps` widget shows) or `categories` (a rail of the folders of the Start menu beside the list of the applications in the chosen one; the shortcuts in no folder and the packaged applications have a category each). `tabs = true` puts a row of tabs above the list to switch between them; `view = "favorites"` and `view = "categories"` bring it unless `tabs = false`. A right click on an application or a file, the Menu key or Shift+F10 opens its menu: open, run as an administrator, open the file location, pin to Start or to the dock, add to the desktop, the page of a packaged application in the Settings app, uninstall (after a second Enter or click) and properties.
+
+The search for files of the index of Windows Search takes filters, alone or with words: `kind:` (`document`, `picture`, `video`, `music`, `folder`, `program`, `email`, `link`, `contact`, `calendar`, `note`, `playlist`, `game`), `ext:pdf,docx`, `modified:>2026-01-01` (`>`, `>=`, `<`, `<=`, `=`, or `today`, `yesterday`, `week`, `month`, `year`), `size:>10MB` and `in:~/Work`; `content:` before words looks for them in what files hold, and where four letters or more name no file that is looked for by itself. With `folders`, where the index is not asked, the filters do nothing.
+
+The widget `recommended` is what the Start menu of Windows 11 recommends: the applications whose shortcuts were made in the last `days` (7) and the files opened lately, at most `shown` (6), `columns` (2) in a row; `files = false` or `apps = false` leaves either out. Remove from list in the menu of an entry deletes the shortcut of a file in the Recent folder, or remembers an application in `recommended.toml` in the configuration directory (deleting that file shows them again).
+
+```toml
+[[popup]]
+name = "launcher"
+width = 640
+height = 760
+content = ["apps", "recommended", { widget = "launcher", view = "categories" }, "power"]
+```
 
 The `launcher` and `runner` widgets take these options besides those of the launcher (`placeholder`, `folders`, `view`):
 
@@ -251,6 +275,7 @@ The `launcher` and `runner` widgets take these options besides those of the laun
 - `currency = false` keeps Tessera from fetching exchange rates; rates kept from before are still used (`true`).
 - `recent = true` lists the documents opened lately while nothing is typed, in the list view (`false` for the launcher, `true` for the runner).
 - `settings = false` leaves out the pages of the settings (`true`).
+- `view`, what is shown before anything is typed: `all`, `list`, `favorites` or `categories` (`all`); `tabs` (`true` for `favorites` and `categories`, `false` otherwise), the row of tabs that switches it.
 
 ```toml
 [[popup]]

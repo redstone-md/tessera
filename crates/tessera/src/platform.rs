@@ -11,6 +11,7 @@ pub use win32::BinUsage;
 pub use win32::BrightnessLevel;
 pub use win32::DesktopClose;
 pub use win32::DisplayMode;
+pub use win32::FileSearch;
 pub use win32::InputName;
 pub use win32::Occupation;
 pub use win32::OwnInput;
@@ -31,6 +32,7 @@ pub use win32::SystemZone;
 pub use win32::TileBorder;
 pub use win32::TrayPromotion;
 pub use win32::UriScheme;
+pub use win32::SpellCheck;
 pub use win32::decode_with_wic;
 #[allow(
     unused_imports,
@@ -111,6 +113,7 @@ pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{PowerMode, PowerModeState};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
+pub use win32::{Removal, app_settings, put_on_desktop};
 pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};

@@ -762,6 +762,22 @@
 #               currency = false, which never fetches exchange rates from
 #               the European Central Bank, and recent = true, the documents
 #               opened lately while nothing is typed, in the list view
+#               More runners: "bookmarks" (of Edge, Chrome, Brave, Vivaldi
+#               and Firefox), "spell" (spell word, or word?), "time" (time
+#               in UTC+3, 15:00 utc+1 in utc-5), "terminal" (profiles of
+#               Windows Terminal), "sessions" (folders opened in Visual
+#               Studio Code and VSCodium), "unicode" (U+2192, char arrow),
+#               "help" (? lists them all) and "extensions". The name of a
+#               runner and a colon, as calc: 2+2, ask that runner alone.
+#               view, what stands before anything is typed: "all" (the
+#               default), "list", "favorites" (what is pinned to Start) or
+#               "categories" (the folders of the Start menu beside their
+#               applications); tabs = true shows tabs that switch them.
+#               Files are also found by kind:, ext:, modified:>2026-01-01,
+#               size:>10MB, in:~/folder and content: words. A right click,
+#               the Menu key or Shift+F10 opens the menu of an application
+#               or a file: open, as administrator, location, pin, desktop,
+#               uninstall, properties
 #   "runner"    the launcher as a single field, rows only once something is
 #               typed and the recent documents before; the options of
 #               "launcher", recent being true. It fills the popup "runner",
@@ -774,6 +790,12 @@
 #               how many stand in a row (5). The search pins and unpins
 #               with the button of a row, a right click on a pinned one
 #               unpins it; both rewrite this file
+#               (a right click on a pinned one now opens its menu, which
+#               unpins it among other things)
+#   "recommended" the applications installed lately and the files opened
+#               lately, as the Start menu of Windows 11 shows them;
+#               options shown (6), columns (2), days (7), files = false,
+#               apps = false
 #   "power"     buttons that lock the session, put the computer to sleep, sign
 #               out, restart and shut down; all but locking ask for a second
 #               click. Option actions, which of "lock", "sleep", "sign-out",
@@ -895,6 +917,8 @@ name = "launcher"
 width = 640
 height = 720
 content = ["apps", "launcher", "power"]
+# A Start menu after Windows 11, with what is recommended under the pins:
+# content = ["apps", "recommended", { widget = "launcher", view = "categories" }, "power"]
 
 [[popup]]
 name = "calendar"
