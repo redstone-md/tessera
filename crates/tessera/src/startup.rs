@@ -55,17 +55,27 @@ pub enum Startup {
 impl Global for Startup {}
 
 impl Startup {
+    /// What [`Self::configure`] does, at the start of Tessera.
+    pub fn start(config: &StartupConfig, cx: &mut App) {
+        Self::configure(config, cx);
+    }
+
     /// Starts the programs of the session after `config.delay` seconds,
     /// on a thread of their own, where Tessera is the shell and the
-    /// configuration does not say otherwise.
-    pub fn start(config: &StartupConfig, cx: &mut App) {
+    /// configuration does not say otherwise; at the start of Tessera, and
+    /// again when the configuration is read again and now has them start
+    /// where it did not. The mark of the session keeps them from starting
+    /// twice, and a configuration that says `run = false` before the delay
+    /// is over keeps them from starting at all.
+    pub fn configure(config: &StartupConfig, cx: &mut App) {
         let this = match (shell_mode(), config.run) {
             (false, _) => Self::BesideExplorer,
             (true, false) => Self::Off,
             (true, true) => Self::Starting,
         };
+        let before = cx.try_global::<Self>().copied();
         cx.set_global(this);
-        if this != Self::Starting {
+        if this != Self::Starting || before == Some(Self::Starting) {
             return;
         }
         let startup = SessionStartup {
@@ -75,6 +85,10 @@ impl Startup {
         let delay = Duration::from_secs(config.delay);
         cx.spawn(async move |cx: &mut AsyncApp| {
             cx.background_executor().timer(delay).await;
+            let still = cx.update(|cx| cx.try_global::<Self>() == Some(&Self::Starting));
+            if !still.unwrap_or(false) {
+                return;
+            }
             // Programs are waited for, for a minute at most each, so the
             // work is on a thread of its own and not one of GPUI's.
             let spawned = thread::Builder::new()

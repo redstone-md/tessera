@@ -272,6 +272,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        Startup::configure(&config.startup, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =
