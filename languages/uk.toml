@@ -364,7 +364,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "USB" = "USB"
 "Cameras" = "Камери"
 "Ethernet" = "Ethernet"
-"Mobile hotspot settings" = "Параметри мобільної точки доступу"
 "Airplane mode settings" = "Параметри режиму «У літаку»"
 "Proxy" = "Проксі-сервер"
 "Advanced network settings" = "Додаткові мережеві параметри"

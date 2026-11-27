@@ -364,7 +364,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "USB" = "USB"
 "Cameras" = "Caméras"
 "Ethernet" = "Ethernet"
-"Mobile hotspot settings" = "Paramètres du point d’accès sans fil mobile"
 "Airplane mode settings" = "Paramètres du mode Avion"
 "Proxy" = "Proxy"
 "Advanced network settings" = "Paramètres réseau avancés"

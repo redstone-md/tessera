@@ -364,7 +364,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "USB" = "USB"
 "Cameras" = "Cámaras"
 "Ethernet" = "Ethernet"
-"Mobile hotspot settings" = "Configuración de la zona con cobertura inalámbrica móvil"
 "Airplane mode settings" = "Configuración del modo avión"
 "Proxy" = "Proxy"
 "Advanced network settings" = "Configuración de red avanzada"

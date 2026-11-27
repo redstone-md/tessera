@@ -775,7 +775,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("USB", "USB"),
     ("Cameras", "Камеры"),
     ("Ethernet", "Ethernet"),
-    ("Mobile hotspot settings", "Параметры мобильного хот-спота"),
     ("Airplane mode settings", "Параметры режима «в самолёте»"),
     ("Proxy", "Прокси-сервер"),
     (
