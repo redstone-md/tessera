@@ -368,6 +368,14 @@ impl Manifest {
             if { shortcut.keys.as_deref() }.is_some_and(|keys| keys.trim().is_empty()) {
                 bail!("the shortcut `{}` has empty keys", shortcut.id);
             }
+            if let Some(keys) = &shortcut.keys
+                && crate::keys::Press::parse(keys).is_none()
+            {
+                bail!(
+                    "the shortcut `{}` has keys `{keys}`, which are no combination Tessera can hold",
+                    shortcut.id
+                );
+            }
             ids.push(&shortcut.id);
         }
         Ok(())
@@ -524,10 +532,17 @@ mod tests {
             shortcut("open", " "),
             format!("{}{}", shortcut("open", "A"), shortcut("open", "B")),
             format!("{}keys = \"\"\n", shortcut("open", "A")),
+            format!("{}keys = \"win+banana\"\n", shortcut("open", "A")),
+            format!("{}keys = \"m\"\n", shortcut("open", "A")),
         ] {
             let text = format!("id = \"a\"\n{shortcuts}");
             assert!(Manifest::parse(&text).is_err(), "{shortcuts} was accepted");
         }
+        let keyed = format!(
+            "id = \"a\"\n{}keys = \"win+alt+m\"\n",
+            shortcut("open", "A")
+        );
+        assert!(Manifest::parse(&keyed).is_ok());
     }
 
     #[test]
