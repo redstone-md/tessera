@@ -140,6 +140,16 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             switcher the window switcher, as switch above, until the
+#                      keys held when it was pressed are let go (with none
+#                      held it stays open until a window is chosen); arg
+#                      "next" (or none) and "previous" go through all the
+#                      windows it offers, "app-next" and "app-previous"
+#                      through those of the application of the window in
+#                      front, as alt+backquote does on other desktops.
+#                      Where the keys of Windows are in use (windows_keys,
+#                      or Tessera being the shell) it takes alt+tab and
+#                      alt+shift+tab unless a [[key]] presses them
 #
 # [[key]]
 # press = "win+v"
@@ -149,6 +159,11 @@
 # [[key]]
 # press = "win+d"
 # action = "desktop"
+#
+# [[key]]
+# press = "alt+backquote"
+# action = "switcher"
+# arg = "app-next"
 
 # The file manager of Tessera, which `tessera files [folder]`, the widget
 # `files` and the key above open. It reads folders without Explorer, opens
@@ -489,8 +504,32 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 # tiles are larger then, six in a row. A window Windows gives no picture
 # of shows its icon.
 #
+# style, scope and minimized of [switcher] choose how the switcher looks
+# and which windows it offers:
+#   style      "tiles" (default), "thumbnails" for large pictures of the
+#              windows, as large and as many in a row as the display gives
+#              room for, "list" for a line of icon, title and program for
+#              each window, or "icons" for a row of icons with the title
+#              of the chosen window under it; previews is for "tiles"
+#   scope      "workspace" (default) for the windows of the workspace that
+#              is shown, "display" for those on the display the switcher
+#              opens on, or "all" to add the windows of the other
+#              workspaces of Tessera's own ([workspaces] own); choosing
+#              one of those goes to its workspace
+#   minimized  "keep" (default) leaves minimized windows where they were
+#              used, "last" puts them after the others, "hide" leaves
+#              them out
+# While the switcher is open, typing narrows the windows to those whose
+# title or program has what was typed (Backspace takes a letter back, Esc
+# all of them), the wheel moves the choice, and Delete, Ctrl+W or a click
+# with the middle button asks the chosen window, or the one clicked, to
+# close.
+#
 # [switcher]
 # previews = true
+# style = "thumbnails"
+# scope = "display"
+# minimized = "last"
 
 # [flyout] with volume = true has Tessera show the volume of the default
 # audio output for a moment whenever it changes, whoever changed it: a pill
