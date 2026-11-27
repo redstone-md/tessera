@@ -40,7 +40,7 @@
 # Whether the keys of Windows that features of Tessera bring to their
 # actions are bound, where no [[key]] below presses the same keys. Without
 # the key in this file they are bound only when Tessera is the shell of the
-# session. The Run dialog brings win+r.
+# session. No feature brings such keys yet.
 # windows_keys = true
 
 # Each [[key]] is a key combination Tessera answers wherever it is pressed.
