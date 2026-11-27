@@ -689,18 +689,6 @@ The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `prev
 
 `theme = "wallpaper"`, or `seed = "wallpaper"` in a theme file, derives the colors from the wallpaper, as `accent` does from the accent color.
 
-## The icons of the desktop
-
-`[desktop]` sets how Tessera draws the icons of the desktop; the [features](FEATURES.md) tell what they do and what was tried.
-
-```toml
-[desktop]
-icons = true      # Tessera draws the icons; without the key only where it is the shell
-size = "medium"   # "small", "medium" or "large"; Ctrl+wheel and View > ... change it
-arrange = "grid"  # "grid", "free" or "auto"
-sort = "name"     # "name", "size", "type" or "date"
-show = true       # View > Show desktop icons
-layer = "child"   # or "window"
 ### Adjustments, collections and the settings
 
 Each of these keys is one of `[wallpaper]` and of each `[[wallpaper.display]]` and `[[wallpaper.workspace]]` entry; an entry takes what it leaves out from the table. The popup `wallpaper-settings` (the action of the same name opens it) sets most of them.
@@ -735,14 +723,6 @@ blur = 0
 
 | Key | What it does |
 | --- | --- |
-| `icons` | Whether Tessera draws the icons. Without the key it does where it is the shell of the session, and beside Explorer it leaves them to Explorer. Where Tessera is the shell its windows of the icons cover the desktop of every display whatever `icons` says, so that a click and the menu of the desktop are always Tessera's; with `icons = false` they draw nothing. Beside Explorer, `icons = true` hides Explorer's icons while Tessera draws its own, and shows them again when Tessera stops drawing them, quits or ends in any other way. |
-| `size` | 32, 48 or 96 logical pixels; Ctrl+wheel, Ctrl+plus and Ctrl+minus step it, Ctrl+Shift+2, 3 and 4 choose large, medium and small as on Explorer's desktop. |
-| `arrange` | `grid` keeps the icons where they were put, in the cells of a grid; `free` keeps them anywhere; `auto` arranges them column after column from the top left of the primary display, in the order of `sort`, and they cannot be put elsewhere. |
-| `sort` | The order of `auto`, and of the icons Sort by arranges once in the other two: the items of the Shell first, then folders, then files, by name, by size (the largest first), by type (the extension) or by date (the newest first). |
-| `show` | Whether the icons are shown at all; the menu of the desktop still opens without them. |
-| `layer` | How the window of the icons of a display is part of the desktop: `child` makes it a child window of Tessera's own desktop where Tessera is the shell, and beside Explorer of a window Tessera keeps below the others; `window` keeps it a window of its own below the others. `window` is there for a Windows where a child window does not show what GPUI draws. |
-
-The menu of the desktop writes `size`, `arrange`, `sort` and `show` here. Where the icons stand is kept in `desktop-icons.toml` beside `config.toml`, as a column and a row (and a display, counted from the left) for each icon, for each arrangement of displays: a display that goes takes its icons to the primary one, and they are back where they were when it comes back.
 | `blur` | A blur of so many pixels, as `blur()` of CSS: the standard deviation, from 0 to 200. |
 | `brightness`, `contrast`, `saturation` | Factors from 0 to 4, 1 for as it is, as the filters of CSS take them; brightness and contrast come first. |
 | `flip` | `horizontal`, `vertical` or `both` mirrors the picture, or the video. |
@@ -758,6 +738,31 @@ Blur, brightness, contrast and saturation are not done to videos. Where the wall
 `[[wallpaper.workspace]]` is chosen by the `number` of the place of a workspace in the row of workspaces (`Workspaces::now(..).current`), not by the workspace itself: when a workspace is taken away, the one that moves into its place shows the wallpaper of that number. This is deliberate: a wallpaper belongs to a place in the row, as Seelen UI chooses a wallpaper by the index of a workspace.
 
 In shell mode Tessera answers programs that ask COM for `IDesktopWallpaper`, as Explorer would: a picture set for one display goes to its `[[wallpaper.display]]` entry, a picture for all, a slideshow, the position, the color and its options to `[wallpaper]`. A picture or slideshow for all takes the place of the pictures, videos and collection shown before, those of `[[wallpaper.display]]` and `[[wallpaper.workspace]]` entries and `images_light` and `images_dark` included. A color set alone writes `source` as it was, where the file left it out, so that the wallpaper does not become the color. Whether Settings > Personalization uses it has not been tried.
+
+## The icons of the desktop
+
+`[desktop]` sets how Tessera draws the icons of the desktop; the [features](FEATURES.md) tell what they do and what was tried.
+
+```toml
+[desktop]
+icons = true      # Tessera draws the icons; without the key only where it is the shell
+size = "medium"   # "small", "medium" or "large"; Ctrl+wheel and View > ... change it
+arrange = "grid"  # "grid", "free" or "auto"
+sort = "name"     # "name", "size", "type" or "date"
+show = true       # View > Show desktop icons
+layer = "child"   # or "window"
+```
+
+| Key | What it does |
+| --- | --- |
+| `icons` | Whether Tessera draws the icons. Without the key it does where it is the shell of the session, and beside Explorer it leaves them to Explorer. Where Tessera is the shell its windows of the icons cover the desktop of every display whatever `icons` says, so that a click and the menu of the desktop are always Tessera's; with `icons = false` they draw nothing. Beside Explorer, `icons = true` hides Explorer's icons while Tessera draws its own, and shows them again when Tessera stops drawing them, quits or ends in any other way. |
+| `size` | 32, 48 or 96 logical pixels; Ctrl+wheel, Ctrl+plus and Ctrl+minus step it, Ctrl+Shift+2, 3 and 4 choose large, medium and small as on Explorer's desktop. |
+| `arrange` | `grid` keeps the icons where they were put, in the cells of a grid; `free` keeps them anywhere; `auto` arranges them column after column from the top left of the primary display, in the order of `sort`, and they cannot be put elsewhere. |
+| `sort` | The order of `auto`, and of the icons Sort by arranges once in the other two: the items of the Shell first, then folders, then files, by name, by size (the largest first), by type (the extension) or by date (the newest first). |
+| `show` | Whether the icons are shown at all; the menu of the desktop still opens without them. |
+| `layer` | How the window of the icons of a display is part of the desktop: `child` makes it a child window of Tessera's own desktop where Tessera is the shell, and beside Explorer of a window Tessera keeps below the others; `window` keeps it a window of its own below the others. `window` is there for a Windows where a child window does not show what GPUI draws. |
+
+The menu of the desktop writes `size`, `arrange`, `sort` and `show` here. Where the icons stand is kept in `desktop-icons.toml` beside `config.toml`, as a column and a row (and a display, counted from the left) for each icon, for each arrangement of displays: a display that goes takes its icons to the primary one, and they are back where they were when it comes back.
 
 ## Notices, devices and privacy
 
