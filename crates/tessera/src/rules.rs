@@ -562,7 +562,7 @@ impl Rules {
         Self::hand_over_tiling(cx);
         for (id, before, now) in changed {
             Self::undress(id, &before, &now);
-            Self::bound(id, &now, cx);
+            Self::bound(id, &now, None, cx);
         }
         if rules.is_empty() {
             return;
@@ -618,7 +618,7 @@ impl Rules {
             return;
         };
         let effective = seen.effective;
-        Self::bound(id, &effective, cx);
+        Self::bound(id, &effective, None, cx);
         Self::remember(id, &effective, cx);
     }
 
@@ -737,9 +737,12 @@ impl Rules {
         if effective.sticky == Some(true) {
             Self::stick(id, cx);
         }
-        let placed = match Self::recall(window, effective, cx) {
-            Some(placed) => Some(placed),
-            None => Self::place(window, effective, cx),
+        let (placed, maximizing) = match Self::recall(window, effective, cx) {
+            Some(placed) => (placed, placed.is_none()),
+            None => (
+                Self::place(window, effective, cx),
+                effective.maximize == Some(true),
+            ),
         };
         if let Some(seen) = cx.global_mut::<Self>().seen.get_mut(&id)
             && placed.is_some()
@@ -747,8 +750,8 @@ impl Rules {
             seen.placed = placed;
         }
         Self::dress(id, effective, true);
-        if effective.fullscreen != Some(true) {
-            Self::bound(id, effective, cx);
+        if effective.fullscreen != Some(true) && !maximizing {
+            Self::bound(id, effective, placed, cx);
         }
         if effective.minimized == Some(true) {
             id.minimize();
@@ -852,8 +855,9 @@ impl Rules {
 
     /// Puts `window` where the last window its remembering rule named
     /// was, if that is still on a display and the tiling does not have it.
-    /// Where it was put is returned.
-    fn recall(window: &AppWindow, effective: &Effective, cx: &App) -> Option<ScreenRect> {
+    /// Whether it was put there is returned, with where unless it is being
+    /// maximized.
+    fn recall(window: &AppWindow, effective: &Effective, cx: &App) -> Option<Option<ScreenRect>> {
         let rule = effective.remembered_as?;
         let kept = Memory::get(rule, cx)?;
         if Tiler::tiles(window, cx) || effective.fullscreen == Some(true) {
@@ -870,7 +874,7 @@ impl Rules {
             return None;
         }
         window.id.place_restored(frame, kept.maximized);
-        (!kept.maximized).then_some(frame)
+        Some((!kept.maximized).then_some(frame))
     }
 
     /// Remembers where the window `id` is, if a rule remembers its frame
@@ -893,15 +897,17 @@ impl Rules {
     }
 
     /// Keeps the window `id` within `min_size` and `max_size` of
-    /// `effective`, unless it is maximized, minimized or tiled.
-    fn bound(id: AppWindowId, effective: &Effective, cx: &App) {
+    /// `effective`, unless it is maximized, minimized or tiled: at `sent`,
+    /// where it was just sent, or else where it is.
+    fn bound(id: AppWindowId, effective: &Effective, sent: Option<ScreenRect>, cx: &App) {
         if effective.min_size.is_none() && effective.max_size.is_none() {
             return;
         }
         if id.is_maximized() || id.is_minimized() || Tiler::manages(id, cx) {
             return;
         }
-        let (Some(frame), Some(display)) = (id.frame(), Display::of_window(id)) else {
+        let (Some(frame), Some(display)) = (sent.or_else(|| id.frame()), Display::of_window(id))
+        else {
             return;
         };
         let fitted = bounded(frame, effective.min_size, effective.max_size, display.scale);

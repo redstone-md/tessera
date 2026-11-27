@@ -38,10 +38,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetClassNameW, GetMessageW, HC_ACTION, IsWindowVisible, LLMHF_INJECTED, MSG,
     MSLLHOOKSTRUCT, PostThreadMessageW, SPI_GETACTIVEWINDOWTRACKING, SPI_GETACTIVEWNDTRKTIMEOUT,
     SPI_GETACTIVEWNDTRKZORDER, SPI_SETACTIVEWINDOWTRACKING, SPI_SETACTIVEWNDTRKTIMEOUT,
-    SPI_SETACTIVEWNDTRKZORDER, SPIF_SENDCHANGE, SYSTEM_PARAMETERS_INFO_ACTION,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowsHookExW, SystemParametersInfoW,
-    UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP,
+    SPI_SETACTIVEWNDTRKZORDER, SYSTEM_PARAMETERS_INFO_ACTION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SetWindowsHookExW, SystemParametersInfoW, UnhookWindowsHookEx, WH_MOUSE_LL, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
 };
 use windows::core::BOOL;
 
@@ -348,6 +347,11 @@ const DESKTOP_KEY: &str = r"Control Panel\Desktop";
 const TRACKING_BIT: u8 = 0x01;
 const RAISING_BIT: u8 = 0x40;
 
+/// Sets a setting for the session only: nothing is written to the
+/// settings of the user, and no window is sent a message about it, which
+/// would wait for every program.
+const NOT_WRITTEN: SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS = SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0);
+
 impl ActiveTracking {
     /// What Windows does now.
     pub fn now() -> Option<Self> {
@@ -407,7 +411,7 @@ impl ActiveTracking {
             let value = std::ptr::without_provenance_mut::<c_void>(value);
             // SAFETY: Windows reads the value, not what it would point to,
             // and nothing is written to the settings of the user.
-            unsafe { SystemParametersInfoW(action, 0, Some(value), SPIF_SENDCHANGE) }.is_ok()
+            unsafe { SystemParametersInfoW(action, 0, Some(value), NOT_WRITTEN) }.is_ok()
         };
         let tracking = set(SPI_SETACTIVEWINDOWTRACKING, usize::from(self.on));
         let delay = set(SPI_SETACTIVEWNDTRKTIMEOUT, self.delay as usize);
