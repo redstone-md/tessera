@@ -13,7 +13,8 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError, mpsc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
 use super::host::{STOPPED, Worker};
@@ -46,6 +47,48 @@ pub struct Answering {
     /// What a query starts with to be handed to it, without that start.
     pub prefix: Option<String>,
     pub worker: Worker,
+    /// How many questions it was asked, which tells a question that a
+    /// later one replaced.
+    questions: Arc<AtomicU64>,
+}
+
+impl Answering {
+    pub fn new(id: String, prefix: Option<String>, worker: Worker) -> Self {
+        Self {
+            id,
+            prefix,
+            worker,
+            questions: Arc::default(),
+        }
+    }
+
+    /// Numbers a new question, which replaces those before it.
+    fn ask(&self) -> Question {
+        let number = self.questions.fetch_add(1, Ordering::Relaxed) + 1;
+        Question {
+            number,
+            questions: self.questions.clone(),
+            asked: Instant::now(),
+        }
+    }
+}
+
+/// A question to one extension, as its thread comes to it.
+struct Question {
+    number: u64,
+    questions: Arc<AtomicU64>,
+    asked: Instant,
+}
+
+impl Question {
+    /// Whether answering it is of no use any more: another question
+    /// replaced it, or its answers would come too late to be shown. Its
+    /// thread then goes on to what waits after it, the drawing of its
+    /// widgets among that, instead of working through stale questions
+    /// one per key typed.
+    fn is_stale(&self) -> bool {
+        self.questions.load(Ordering::Relaxed) != self.number || self.asked.elapsed() > BUDGET
+    }
 }
 
 /// The extensions that answer, as loaded last.
@@ -85,10 +128,14 @@ impl Runner for Extensions {
             let Some(text) = asked_of(query.text(), extension.prefix.as_deref()) else {
                 continue;
             };
+            let question = extension.ask();
             let (text, id, send) = (text.to_owned(), extension.id, send.clone());
             // Each answers on its own thread, all of them at once.
             extension.worker.send(
-                move |instance| instance.answer(&text),
+                move |instance| match question.is_stale() {
+                    true => Ok(Vec::new()),
+                    false => instance.answer(&text),
+                },
                 move |outcome| {
                     let answers = match outcome {
                         Ok(called) => taken(&id, called.value),
@@ -283,6 +330,22 @@ mod tests {
             Some("do extension-answer monitor 7")
         );
         assert_eq!(answers[2].glyph, ICON_EXTENSION);
+    }
+
+    #[test]
+    fn a_question_is_stale_once_another_is_asked_or_its_time_is_up() {
+        let questions = Arc::new(AtomicU64::new(0));
+        let ask = |asked| Question {
+            number: questions.fetch_add(1, Ordering::Relaxed) + 1,
+            questions: questions.clone(),
+            asked,
+        };
+        let first = ask(Instant::now());
+        assert!(!first.is_stale());
+        let second = ask(Instant::now());
+        assert!(first.is_stale() && !second.is_stale());
+        let late = ask(Instant::now() - BUDGET - Duration::from_millis(1));
+        assert!(late.is_stale());
     }
 
     #[test]

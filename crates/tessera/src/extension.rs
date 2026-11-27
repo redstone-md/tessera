@@ -215,11 +215,11 @@ impl ExtensionsModule {
             })?;
         }
         if let Some(answers) = &manifest.runner {
-            runner::add(Answering {
-                id: manifest.id.clone(),
-                prefix: answers.prefix.clone(),
+            runner::add(Answering::new(
+                manifest.id.clone(),
+                answers.prefix.clone(),
                 worker,
-            });
+            ));
         }
         Loaded::add(loaded);
         Ok(())
