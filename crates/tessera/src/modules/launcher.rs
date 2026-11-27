@@ -19,6 +19,12 @@
 //!
 //! The `runner` widget of modules/runner.rs is the same search in a
 //! compact form: a field, and the rows only once something is typed.
+//!
+//! While nothing is typed the applications are shown all of them, as the
+//! favorites or by category (launcher/views.rs), as the option `view`
+//! says; with `tabs` a row of tabs switches between those.
+
+mod views;
 
 use std::cell::Cell;
 use std::cmp::Reverse;
@@ -48,6 +54,8 @@ use crate::runners::{
 };
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
+
+use views::{Groups, View};
 
 const ICON_SEARCH: &str = "\u{e721}";
 const ICON_PIN: &str = "\u{e718}";
@@ -150,7 +158,11 @@ pub fn launcher_view(context: &WidgetContext, form: Form, cx: &mut App) -> AnyVi
     };
     let folders = context.texts("folders");
     let folders = folders.map(|folders| folders.iter().map(|f| folder_named(f)).collect());
-    let tiles = form == Form::Full && context.text("view") != Some("list");
+    let (view, tiles) = View::named(context.text("view"));
+    let tiles = form == Form::Full && tiles;
+    // The tabs are there where the layout asks for a view of its own.
+    let chose = matches!(view, View::Favorites | View::Categories);
+    let tabs = form == Form::Full && context.flag("tabs").unwrap_or(chose);
     let defaults = RunnerOptions {
         recent_when_empty: form == Form::Compact,
     };
@@ -159,6 +171,8 @@ pub fn launcher_view(context: &WidgetContext, form: Form, cx: &mut App) -> AnyVi
         placeholder: SharedString::new(placeholder),
         folders,
         tiles,
+        view,
+        tabs,
         form,
         runners,
     };
@@ -314,6 +328,8 @@ struct Setup {
     placeholder: SharedString,
     folders: Option<Vec<PathBuf>>,
     tiles: bool,
+    view: View,
+    tabs: bool,
     form: Form,
     runners: Runners,
 }
@@ -381,16 +397,29 @@ struct Launcher {
     answered: Option<String>,
     /// The menu of an application or a file, while it is open.
     menu: MenuSlot,
+    /// What is shown while nothing is typed, and whether the tabs that
+    /// switch it are there.
+    view: View,
+    tabs: bool,
+    /// The categories of the applications, and the one shown.
+    groups: Groups,
+    group: usize,
 }
 
 impl Launcher {
     fn new(setup: Setup, cx: &mut Context<Self>) -> Self {
         let shortcuts = Shortcut::start_menu();
         let apps = shortcuts.len();
+        let groups = Groups::of(&shortcuts);
         let field = cx.new(|cx| TextField::new(setup.placeholder, cx).with_glyph(ICON_SEARCH));
         cx.observe(&field, |this, _, cx| this.typed(cx)).detach();
         let pins = Pins::shared(cx);
-        cx.observe(&pins, |_, _, cx| cx.notify()).detach();
+        cx.observe(&pins, |this, _, cx| {
+            // The favorites are what is pinned.
+            this.find(cx);
+            cx.notify();
+        })
+        .detach();
         History::read(cx);
         let indexed = setup.folders.is_none();
         Self::read(setup.folders.unwrap_or_default(), cx);
@@ -422,6 +451,10 @@ impl Launcher {
             asked: None,
             answered: None,
             menu: MenuSlot::default(),
+            view: setup.view,
+            tabs: setup.tabs,
+            groups,
+            group: 0,
         };
         launcher.find(cx);
         // What the runners say before anything is typed, such as the
@@ -618,9 +651,51 @@ impl Launcher {
         cx.notify();
     }
 
-    /// Whether the entries stand as tiles: nothing is looked for.
+    /// Whether the entries stand as tiles: nothing is looked for, and the
+    /// categories are not shown, which are a list.
     fn tiled(&self) -> bool {
-        self.tiles && self.written.trim().is_empty()
+        self.tiles && self.browsing() && self.view != View::Categories
+    }
+
+    /// Whether the applications are looked through rather than searched:
+    /// nothing is written in the search of the Start menu.
+    fn browsing(&self) -> bool {
+        self.form == Form::Full && self.written.trim().is_empty()
+    }
+
+    /// Shows `view` while nothing is written.
+    fn choose_view(&mut self, view: View, cx: &mut Context<Self>) {
+        self.view = view;
+        self.shown_anew(cx);
+    }
+
+    /// Shows the category at `group` of the categories.
+    fn choose_group(&mut self, group: usize, cx: &mut Context<Self>) {
+        self.group = group.min(self.groups.names.len().saturating_sub(1));
+        self.shown_anew(cx);
+    }
+
+    /// Other entries are shown: the list starts at the top.
+    fn shown_anew(&mut self, cx: &mut Context<Self>) {
+        if !self.tiled() {
+            self.columns = 1;
+        }
+        self.find(cx);
+        self.scroll.set_offset(point(px(0.), px(0.)));
+        self.select(0, cx);
+        cx.notify();
+    }
+
+    /// The applications the view shows while nothing is written, by their
+    /// places among `shortcuts`.
+    fn browsed(&self, cx: &App) -> Vec<usize> {
+        match self.view {
+            View::All => (0..self.apps).collect(),
+            View::Favorites => {
+                views::favorites(&self.shortcuts[..self.apps], self.pins.read(cx).names())
+            }
+            View::Categories => self.groups.members(self.group),
+        }
     }
 
     /// Has the highlight go to the selected entry.
@@ -659,7 +734,10 @@ impl Launcher {
             shortcuts.iter().map(|shortcut| shortcut.name.as_str())
         }
         let mut matches: Vec<Row> = Vec::new();
-        if typed || self.form == Form::Full {
+        if !typed && self.form == Form::Full {
+            return self.browsed(cx).into_iter().map(Row::Shortcut).collect();
+        }
+        if typed {
             let history = cx.try_global::<History>();
             let boost = |name: &str| match (typed, history) {
                 (true, Some(history)) => history.boost(&app_key(name)),
@@ -685,7 +763,9 @@ impl Launcher {
     /// applications and files found, and the other answers.
     fn arrange(&mut self) {
         let mut matches: Vec<Row> = Vec::new();
-        let answers = !self.tiled();
+        // The favorites and a category are shown without the answers to
+        // nothing, such as the documents opened lately.
+        let answers = !self.tiled() && !(self.browsing() && self.view != View::All);
         let strong = self
             .answers
             .iter()
@@ -839,6 +919,14 @@ impl Launcher {
             // have no caret to move.
             "right" if self.tiled() => self.step(1, cx),
             "left" if self.tiled() => self.step(-1, cx),
+            // The field is empty here too: the arrows go through the
+            // categories.
+            "right" if self.browsing() && self.view == View::Categories => {
+                self.choose_group(self.group + 1, cx);
+            }
+            "left" if self.browsing() && self.view == View::Categories => {
+                self.choose_group(self.group.saturating_sub(1), cx);
+            }
             _ => {}
         }
     }
@@ -1145,6 +1233,7 @@ impl Launcher {
             (Form::Compact, true) => {
                 language.say("Applications, windows, commands, calculations and more")
             }
+            (Form::Full, true) => views::empty_text(self.view, language),
             _ => language.say("Nothing matches"),
         };
         div()
@@ -1282,6 +1371,40 @@ impl Render for Launcher {
             self.focused = true;
             self.field.read(cx).focus(window);
         }
+        let browsing = self.browsing();
+        let tabs = (self.tabs && browsing).then(|| {
+            views::render_tabs(self.view, &theme, cx, |this: &mut Self, view, cx| {
+                this.choose_view(view, cx);
+            })
+        });
+        let list = self.render_list(&theme, window, cx);
+        let body = match browsing && self.view == View::Categories {
+            true => div()
+                .flex_1()
+                .min_h(px(0.))
+                .flex()
+                .gap(theme.spacing.small)
+                .child(views::render_rail(
+                    &self.groups,
+                    self.group,
+                    &theme,
+                    cx,
+                    |this: &mut Self, group, cx| {
+                        this.choose_group(group, cx);
+                    },
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .child(list),
+                )
+                .into_any_element(),
+            false => list,
+        };
         div()
             .flex_1()
             .min_h(px(0.))
@@ -1290,7 +1413,8 @@ impl Render for Launcher {
             .gap(theme.spacing.small)
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
             .child(div().flex_none().flex().child(self.field.clone()))
-            .child(self.render_list(&theme, window, cx))
+            .children(tabs)
+            .child(body)
             .children(self.menu.render())
     }
 }

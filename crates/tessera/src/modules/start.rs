@@ -136,6 +136,11 @@ impl Pins {
         self.shown
     }
 
+    /// The names of the pinned applications, in their order.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
     pub fn holds(&self, name: &str) -> bool {
         let name = name.to_lowercase();
         self.names.iter().any(|pin| pin.to_lowercase() == name)
