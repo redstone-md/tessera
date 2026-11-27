@@ -101,7 +101,7 @@ fn text_of(name: &[u16]) -> Vec<u16> {
 }
 
 /// The connections between the adapters and the displays in use.
-fn paths() -> Vec<DISPLAYCONFIG_PATH_INFO> {
+pub(super) fn paths() -> Vec<DISPLAYCONFIG_PATH_INFO> {
     let (mut path_count, mut mode_count) = (0, 0);
     // SAFETY: the counts outlive the calls, and the lists are as long as
     // the counts say.

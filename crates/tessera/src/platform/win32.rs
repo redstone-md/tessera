@@ -73,6 +73,7 @@ pub use jump::{JumpTask, RecentDocument, app_id_of_program};
 pub use keyboard::{InputLanguage, Typing};
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use network::{Link, Network};
+pub use notifications::Occupation;
 pub use notifications::{Notification, Notifications};
 pub use pace::Pace;
 pub use packaged::{app_id_in, app_path};
