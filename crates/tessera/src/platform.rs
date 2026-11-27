@@ -46,8 +46,8 @@ pub use win32::{HostOptions, ShellEvent, ShellHost};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
-pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
+pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 #[allow(
     unused_imports,
     reason = "for the features that ask Explorer while it runs"
