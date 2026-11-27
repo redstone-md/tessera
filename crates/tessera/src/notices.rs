@@ -34,6 +34,7 @@ use crate::modules::devices::Drives;
 use crate::motion::{Interaction, Spring};
 use crate::platform::{NativeSurface, ScreenRect, shell_mode};
 use crate::popup::{MARGIN, open_floating, retire_floating};
+use crate::power_warnings::PowerWarnings;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, release_hover, state_layer};
@@ -146,6 +147,7 @@ impl Notices {
     pub fn configure(config: &NoticesConfig, cx: &mut App) {
         cx.default_global::<Self>().config = config.clone();
         Drives::tell_arrivals(config.drives(), cx);
+        PowerWarnings::configure(config.battery(), cx);
     }
 
     /// Shows `notice`, unless do not disturb holds it back.

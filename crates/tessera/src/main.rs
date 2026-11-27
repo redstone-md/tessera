@@ -28,6 +28,7 @@ mod notices;
 mod panel;
 mod platform;
 mod popup;
+mod power_warnings;
 mod preview;
 mod shell;
 mod surface;
