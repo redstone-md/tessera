@@ -380,6 +380,15 @@ impl Shell {
         cx.refresh_windows();
     }
 
+    /// Builds the surfaces again after the pictures of the icons changed,
+    /// as a reload does when `icons` changes, without loading the
+    /// extensions again or closing the open popup.
+    pub fn icons_changed(cx: &mut App) {
+        let config = cx.global::<Self>().config.clone();
+        Self::arrange(&config, cx);
+        cx.refresh_windows();
+    }
+
     /// Opens the cards once what the bars took to be made has been let
     /// go. Every window is charged with some megabytes more for about
     /// three seconds after it is made; bars and cards made together took

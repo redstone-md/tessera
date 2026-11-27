@@ -472,8 +472,9 @@ impl IconPacks {
 
     /// Looks at the files of the packs in use every few seconds, away
     /// from the user interface, and loads the packs again once a change
-    /// has settled. Widgets keep the icons they were built with, so they
-    /// are built again too, as after an extension changed.
+    /// has settled. Widgets keep the icons they were built with, so the
+    /// surfaces are built again too, as after a change of `icons`; the
+    /// extensions are not loaded again and an open popup stays.
     fn watch(cx: &mut App) {
         cx.spawn(async move |cx: &mut AsyncApp| {
             let mut applied: Option<(Vec<PathBuf>, u64)> = None;
@@ -501,7 +502,7 @@ impl IconPacks {
                         let reloaded = cx.update(|cx| {
                             let icons = cx.global::<AppIcons>().reloaded();
                             cx.set_global(icons);
-                            Shell::extensions_changed(cx);
+                            Shell::icons_changed(cx);
                         });
                         if reloaded.is_err() {
                             break;
