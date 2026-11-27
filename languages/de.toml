@@ -323,3 +323,17 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 
 # Quick settings: the power plans.
 "Windows tells of no power plan" = "Windows nennt keinen Energiesparplan"
+
+# Quick settings: microphones, media sessions and flyouts.
+"Input" = "Eingabe"
+"Sound settings" = "Toneinstellungen"
+"Spatial sound" = "Räumlicher Klang"
+"On" = "Ein"
+"Microphone off" = "Mikrofon aus"
+"Microphone on" = "Mikrofon an"
+"Caps Lock on" = "Feststelltaste an"
+"Caps Lock off" = "Feststelltaste aus"
+"Num Lock on" = "Num-Taste an"
+"Num Lock off" = "Num-Taste aus"
+"Nothing is playing" = "Es wird nichts abgespielt"
+"Unnamed" = "Unbenannt"

@@ -54,6 +54,9 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `volume` | `up`, `down`, `mute` or `mute-microphone` | turns the default output a step up (and lifts its mute) or down, as Windows counts steps for it (2 of 100 for most), mutes it or lifts its mute, or mutes the default microphone or lifts its mute; the flyout shows what came of it where `[flyout]` wants it. In shell mode the volume and microphone keys of a keyboard run it |
+| `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
+| `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. In shell mode the media keys of a keyboard run it |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -64,4 +67,27 @@ The `plan` widget shows the power plan in use, and a click on it opens the popup
 ```toml
 start = [{ widget = "plan", name = false }]            # opens the list
 end = [{ widget = "plan", cycle = true, popup = "" }]  # goes on to the next plan
+```
+
+The sound popup can hold, besides `volume-slider`, `microphone-slider`, `audio-outputs` and `volume-mixer`, the widget `audio-inputs`: the microphones, where a click on one makes it the default, each with its own mute button and slider (`volumes = false` leaves those out). `audio-outputs` takes `volumes = true` for a slider under each output too. `spatial-sound` is a row that says whether the default output renders spatial sound, and nothing where it cannot; Windows lets no program choose the format, so its click opens the sound settings, as the row `sound-settings` does.
+
+```toml
+[[popup]]
+name = "sound"
+width = 360
+height = 680
+content = ["volume-slider", "microphone-slider", "audio-outputs", "audio-inputs", "spatial-sound", "volume-mixer", "sound-settings"]
+```
+
+`media-controls` shows a chip for each application that has a media session while there are several, and shuffle and repeat buttons where the player tells them; it needs no option.
+
+`[flyout]` says which changes a flyout shows, each `false` unless set: `volume`, `brightness` (the built-in panel of a laptop, whose keys change it), `microphone` (muted or not), `locks` (Caps Lock and Num Lock) and `layout` (the window in front switched to another keyboard layout). `place` is where it hangs in what the bars leave of the display the pointer is on: `bottom` (the default), `top`, `top-left`, `top-right`, `bottom-left` or `bottom-right`. In shell mode Windows shows no indicator of its own, so these are the only ones.
+
+```toml
+[flyout]
+volume = true
+brightness = true
+locks = true
+layout = true
+place = "top-right"
 ```

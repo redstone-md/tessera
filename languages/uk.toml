@@ -324,3 +324,17 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 # Quick settings: the power plans.
 "Windows tells of no power plan" = "Windows не повідомляє жодної схеми живлення"
+
+# Quick settings: microphones, media sessions and flyouts.
+"Input" = "Введення"
+"Sound settings" = "Параметри звуку"
+"Spatial sound" = "Просторовий звук"
+"On" = "Увімкнено"
+"Microphone off" = "Мікрофон вимкнено"
+"Microphone on" = "Мікрофон увімкнено"
+"Caps Lock on" = "Caps Lock увімкнено"
+"Caps Lock off" = "Caps Lock вимкнено"
+"Num Lock on" = "Num Lock увімкнено"
+"Num Lock off" = "Num Lock вимкнено"
+"Nothing is playing" = "Нічого не відтворюється"
+"Unnamed" = "Без назви"

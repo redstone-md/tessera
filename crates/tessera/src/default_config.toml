@@ -140,6 +140,15 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             volume   arg "up" or "down" turns the default output a step,
+#                      "mute" mutes it or lifts the mute, "mute-microphone"
+#                      does that to the default microphone; in shell mode
+#                      the volume keys of a keyboard run it
+#             brightness  arg "up" or "down": the display under the pointer
+#                      a tenth brighter or darker
+#             media    arg "toggle", "play", "pause", "stop", "next" or
+#                      "previous", for the player media-controls shows; in
+#                      shell mode the media keys of a keyboard run it
 #
 # [[key]]
 # press = "win+v"
@@ -209,6 +218,9 @@
 #   "media"     what is playing, on one line; absent while no application
 #               offers anything; option width, the most it takes, in pixels
 #   "media-controls"  what is playing, with its picture and buttons to skip and pause
+#               and to shuffle and repeat where the player lets them;
+#               while several applications play, a chip for each chooses
+#               the one shown
 #   "wifi"      the Wi-Fi networks in reach, for a popup; a click joins
 #               one Windows has the settings of or anyone may join, and
 #               asks for the password of another; two right clicks on a
@@ -243,6 +255,14 @@
 #               plays through the default output
 #   "audio-outputs"  the audio outputs; a click on one makes it the
 #               default
+#               Option volumes, true for a slider under each output
+#   "audio-inputs"  the microphones; a click on one makes it the default.
+#               Each has a mute button and a slider for its own volume;
+#               option volumes, false to leave them out
+#   "spatial-sound"  whether the default output renders spatial sound;
+#               nothing where it cannot. Windows lets no program choose
+#               the format, so a click opens the sound settings
+#   "sound-settings"  a row that opens the sound settings of Windows
 #   "brightness"  how bright the display of the surface is, as an icon and
 #               a percentage; nothing on a display that does not say
 #   "brightness-slider"  a slider for the brightness of the display it is
@@ -505,6 +525,16 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 #
 # [flyout]
 # volume = true
+# brightness = true   the built-in panel of a laptop, whose keys change it
+# microphone = true   the default microphone muted, or no longer
+# locks = true        Caps Lock and Num Lock
+# layout = true       the window in front switched to another keyboard layout
+# place = "bottom"    or "top", "top-left", "top-right", "bottom-left",
+#                     "bottom-right"
+#
+# In shell mode Windows shows no indicator of its own, and the volume and
+# media keys of a keyboard reach Tessera, which runs the actions volume and
+# media for them.
 
 # [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
 # every display, each scaled to cover it. images lists picture files (.jpg,
