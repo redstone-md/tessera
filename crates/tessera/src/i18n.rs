@@ -709,6 +709,9 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // Wallpaper: the widget and the theme of its colors.
+    ("Wallpaper", "Обои"),
+    ("Wallpaper colors", "Цвета обоев"),
 ];
 
 #[cfg(test)]

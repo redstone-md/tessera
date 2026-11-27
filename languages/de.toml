@@ -320,3 +320,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # Settings: keys that name an action.
 "Action" = "Aktion"
 "The action is written in the file by hand." = "Die Aktion wird von Hand in die Datei geschrieben."
+
+# Wallpaper: the widget and the theme of its colors.
+"Wallpaper" = "Hintergrundbild"
+"Wallpaper colors" = "Farben des Hintergrundbilds"

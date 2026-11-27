@@ -321,3 +321,7 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# Wallpaper: the widget and the theme of its colors.
+"Wallpaper" = "Шпалери"
+"Wallpaper colors" = "Кольори шпалер"
