@@ -283,9 +283,7 @@ fn asked(text: &str) -> Option<Asked> {
 
 /// Whether `word` stands between two zones.
 fn is_between(word: &str) -> bool {
-    BETWEEN
-        .iter()
-        .any(|between| word.eq_ignore_ascii_case(between) || word.to_lowercase() == *between)
+    BETWEEN.contains(&word.to_lowercase().as_str())
 }
 
 /// The time in the zone `place` at `utc`, as an answer says it: the

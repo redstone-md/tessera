@@ -9,7 +9,7 @@
 //! none, and the packaged applications stand together, as Windows gives
 //! no category for them.
 
-use std::path::{Component, Path};
+use std::path::Path;
 
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Pixels,
@@ -93,18 +93,17 @@ pub fn group_of(path: &Path) -> Group {
     if app_id_in(path).is_some() {
         return Group::Packaged;
     }
-    let parts: Vec<String> = { path.components() }
-        .filter_map(|part| match part {
-            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
-            _ => None,
-        })
+    // Either kind of slash parts a path, as Windows takes both.
+    let path = path.to_string_lossy();
+    let parts: Vec<&str> = { path.split(['\\', '/']) }
+        .filter(|part| !part.is_empty())
         .collect();
     let programs = { parts.windows(2) }.position(|pair| {
         pair[0].eq_ignore_ascii_case("Start Menu") && pair[1].eq_ignore_ascii_case("Programs")
     });
     match programs.map(|at| &parts[at + 2..]) {
         // A folder, and the shortcut in it or deeper.
-        Some([folder, _, ..]) => Group::Folder(folder.clone()),
+        Some([folder, _, ..]) => Group::Folder((*folder).to_owned()),
         _ => Group::Loose,
     }
 }
