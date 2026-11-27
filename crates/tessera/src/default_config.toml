@@ -250,6 +250,11 @@
 #                      alt+tab, alt+shift+tab, alt+backquote (app-next) and
 #                      alt+shift+backquote (app-previous) unless a [[key]]
 #                      presses them
+#             peek-desktop the desktop in front of every window,
+#                      with an outline where each window is, until the
+#                      keys to hold of its press are let go (done by
+#                      `tessera do`, until it is done again); where the
+#                      keys of Windows are in use it takes win+comma
 #
 # [[key]]
 # press = "win+v"
