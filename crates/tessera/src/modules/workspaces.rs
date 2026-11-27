@@ -51,6 +51,10 @@ const SHOWN_STRETCH: f32 = 0.8;
 /// in rows on a bar; on a lower bar they stay in one row.
 const LOWEST_ROW: Pixels = px(10.);
 
+/// How many pills wide a surface may be at most to count as a bar at the
+/// left or right edge.
+const NARROW_BAR: f32 = 3.;
+
 /// How many pixels of scrolling make a notch of the wheel.
 const WHEEL_LINE: f32 = 40.;
 
@@ -344,7 +348,7 @@ impl Workspaces {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let anchor = match vertical(window) {
+        let anchor = match vertical(window, cx) {
             // Beside a column, the menu hangs from the pointer.
             true => PopupAnchor::under(window, event.position, cx),
             false => PopupAnchor::at(window, event.position.x, cx),
@@ -491,11 +495,12 @@ impl Workspaces {
     }
 }
 
-/// Whether the window of the widget is higher than wide, as a bar at the
-/// left or right edge is.
-fn vertical(window: &Window) -> bool {
+/// Whether the window of the widget is a bar at the left or right edge:
+/// higher than wide, and narrow, unlike a popup.
+fn vertical(window: &Window, cx: &App) -> bool {
     let size = window.bounds().size;
-    size.height > size.width
+    let narrow = cx.global::<Theme>().bar.pill_height * NARROW_BAR;
+    size.height > size.width && size.width < narrow
 }
 
 /// How the buttons of `count` workspaces in `rows` rows are laid out on a
@@ -637,7 +642,7 @@ impl Render for Workspaces {
         let layout = layout_of(
             count,
             self.grid.rows,
-            vertical(window),
+            vertical(window, cx),
             pill,
             gap,
             LOWEST_ROW,
