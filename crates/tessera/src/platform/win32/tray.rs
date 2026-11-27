@@ -24,7 +24,9 @@
 //!
 //! A message posted to an application that runs with higher privileges
 //! than the shell is dropped by Windows, so such an application does not
-//! hear of clicks on its icon or of what became of its balloons.
+//! hear of clicks on its icon or of what became of its balloons. A shell
+//! that runs with higher privileges than an application does not hear
+//! from it in turn.
 
 mod balloon;
 
@@ -845,11 +847,13 @@ fn create_window() -> Result<HWND> {
         )
         .context("the window could not be created")?;
         // A shell started with higher privileges than the applications
-        // still hears from them. Failing that, it hears from its equals.
-        for message in [WM_COPYDATA, taskbar_created()] {
-            if message != 0 {
-                let _ = ChangeWindowMessageFilterEx(window, message, MSGFLT_ALLOW, None);
-            }
+        // hears that a taskbar was created from them. Their icons and bars
+        // it does not hear: a bar's request names a process and memory in
+        // it that the shell writes to, which a program of lower privileges
+        // must not have done for it in another elevated process.
+        let created = taskbar_created();
+        if created != 0 {
+            let _ = ChangeWindowMessageFilterEx(window, created, MSGFLT_ALLOW, None);
         }
         raise(window);
         Ok(window)
