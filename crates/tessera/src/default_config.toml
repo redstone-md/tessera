@@ -40,7 +40,7 @@
 # Whether the keys of Windows that features of Tessera bring to their
 # actions are bound, where no [[key]] below presses the same keys. Without
 # the key in this file they are bound only when Tessera is the shell of the
-# session. No feature brings such keys yet.
+# session. The Run dialog brings win+r.
 # windows_keys = true
 
 # Each [[key]] is a key combination Tessera answers wherever it is pressed.
@@ -140,6 +140,18 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             run      the Run dialog, the popup "run"; win+r is taken from
+#                      Windows, and bound to it with the keys of Windows
+#             runner   the compact runner, the popup "runner"; it brings no
+#                      key, as alt+space is the window menu of Windows
+#
+# [[key]]
+# press = "alt+space"
+# action = "runner"
+#
+# [[key]]
+# press = "win+r"
+# action = "run"
 #
 # [[key]]
 # press = "win+v"
@@ -334,6 +346,29 @@
 #               settings by their names; settings = false leaves them out.
 #               Until something is written the applications stand as
 #               tiles in rows; view = "list" keeps them one under another
+#               The runners answer what is typed as well: calculations,
+#               conversions of units and currencies, commands and paths
+#               (> runs in a terminal), web searches (g:, ddg:, wiki:,
+#               gh:, yt:, maps:), open windows, kill <name>, locking and
+#               shutting down, pages of the settings and tools of
+#               Windows, emoji (:name) and recent documents; what they are
+#               sure of stands above the applications. Options runners,
+#               the names of those to ask ("calculator", "units",
+#               "command", "web", "search", "windows", "processes",
+#               "power", "settings", "emoji", "recent"; all without it),
+#               web, a table of more keywords as { so =
+#               "https://stackoverflow.com/search?q={}" }, engine, the
+#               keyword the last row searches the web with ("ddg"),
+#               currency = false, which never fetches exchange rates from
+#               the European Central Bank, and recent = true, the documents
+#               opened lately while nothing is typed, in the list view
+#   "runner"    the launcher as a single field, rows only once something is
+#               typed and the recent documents before; the options of
+#               "launcher", recent being true. It fills the popup "runner",
+#               which stands near the top of the display (place = "top")
+#   "run"       the Run dialog: runs a program, a folder, a document or an
+#               address, with the history of the Run dialog of Explorer;
+#               it fills the popup "run"
 #   "apps"      the applications pinned to the Start menu, as a grid; options
 #               pinned, their names as the search shows them, and columns,
 #               how many stand in a row (5). The search pins and unpins
@@ -369,6 +404,8 @@ center = [{ widget = "windows", start = "launcher" }]
 #                  two columns share the width evenly
 #   place          "surface" (default): at the widget that opened it;
 #                  "center": in the middle of the display, the rest dimmed
+#                  "top": near the top of the display, in the middle of its
+#                  width, the rest not dimmed
 #   content        widgets, stacked from the top
 
 [[popup]]
