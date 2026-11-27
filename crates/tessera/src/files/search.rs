@@ -6,10 +6,11 @@
 //! its index answers at once (with the names that have, for every word
 //! written, a word beginning with it); elsewhere the folders are read one
 //! after another on a thread of their own (finding the words anywhere in
-//! a name), and what is found comes in batches while they are. Dropping
-//! the search stops it.
+//! a name), and what is found comes in batches while they are. Either
+//! way, hidden files, and what is in hidden folders, are found only where
+//! the pane shows them. Dropping the search stops it.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -120,11 +121,17 @@ fn search(
         match SearchIndex::files_under(root, query, FOUND_MOST) {
             Ok(paths) => {
                 let capped = paths.len() >= FOUND_MOST;
+                let mut folders = ShownFolders::new(root, shown);
                 let entries: Vec<Entry> = { paths.into_iter() }
                     .take_while(|_| !stop.load(Ordering::Relaxed))
                     .filter_map(|path| {
                         let metadata = fs::symlink_metadata(&path).ok()?;
-                        Some(Entry::of(path, &metadata, &mut rules))
+                        let entry = Entry::of(path, &metadata, &mut rules);
+                        let inside = entry
+                            .path
+                            .parent()
+                            .is_none_or(|folder| folders.shows(folder, &mut rules));
+                        (inside && shown.shows(&entry)).then_some(entry)
                     })
                     .collect();
                 found.send_blocking(Found::Some(entries)).ok();
@@ -144,6 +151,49 @@ fn search(
         capped,
     };
     found.send_blocking(done).ok();
+}
+
+/// Which folders below a root the crawl would go into: those shown, in
+/// folders shown. For the answers of the index, which hold what is in
+/// hidden folders too.
+struct ShownFolders<'a> {
+    root: &'a Path,
+    shown: Shown,
+    /// Whether each folder asked about is shown, with those above it.
+    known: HashMap<PathBuf, bool>,
+}
+
+impl<'a> ShownFolders<'a> {
+    fn new(root: &'a Path, shown: Shown) -> Self {
+        Self {
+            root,
+            shown,
+            known: HashMap::new(),
+        }
+    }
+
+    /// Whether `folder`, and every folder between it and the root, is
+    /// shown; the root itself always is.
+    fn shows(&mut self, folder: &Path, rules: &mut NameRules) -> bool {
+        if folder == self.root || !folder.starts_with(self.root) {
+            return true;
+        }
+        if let Some(&known) = self.known.get(folder) {
+            return known;
+        }
+        let itself = fs::symlink_metadata(folder)
+            .map(|metadata| {
+                self.shown
+                    .shows(&Entry::of(folder.to_owned(), &metadata, rules))
+            })
+            .unwrap_or(true);
+        let above = folder
+            .parent()
+            .is_none_or(|parent| self.shows(parent, rules));
+        let shows = itself && above;
+        self.known.insert(folder.to_owned(), shows);
+        shows
+    }
 }
 
 /// Reads the folders below `root`, nearest first, handing over what

@@ -7,11 +7,12 @@
 use std::mem::offset_of;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED, CoCreateInstance,
-    CoInitializeEx, CoUninitialize,
+    CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
 use windows::Win32::System::Search::{
     CSearchManager, DBACCESSOR_ROWDATA, DBBINDING, DBMEMOWNER_CLIENTOWNED, DBPARAMIO_NOTPARAM,
@@ -74,8 +75,11 @@ impl SearchIndex {
             let initialized =
                 CoInitializeEx(None, COINIT_MULTITHREADED | COINIT_DISABLE_OLE1DDE).is_ok();
             let covered = (|| -> Result<bool> {
+                // The search manager is served by the service of Windows
+                // Search, out of this process.
                 let manager: ISearchManager =
-                    CoCreateInstance(&CSearchManager, None, CLSCTX_INPROC_SERVER)?;
+                    CoCreateInstance(&CSearchManager, None, CLSCTX_LOCAL_SERVER)
+                        .context("the search manager of Windows Search cannot be made")?;
                 let scopes = manager
                     .GetCatalog(&HSTRING::from(CATALOG))?
                     .GetCrawlScopeManager()?;
@@ -84,7 +88,14 @@ impl SearchIndex {
             if initialized {
                 CoUninitialize();
             }
-            covered.unwrap_or(false)
+            covered.unwrap_or_else(|error| {
+                // Told once, as every search asks.
+                static TOLD: AtomicBool = AtomicBool::new(false);
+                if !TOLD.swap(true, Ordering::Relaxed) {
+                    report!("Windows Search cannot be asked what it indexes: {error:#}");
+                }
+                false
+            })
         }
     }
 
