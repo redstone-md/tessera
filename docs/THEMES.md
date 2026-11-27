@@ -35,7 +35,7 @@ The theme in use is made exactly so:
 
 1. Start from the built-in theme.
 2. Apply the base theme, and then each layer in turn, each over the result so far, in three steps:
-   1. its `seed` and `scheme`: where it sets either, every color role is derived again, from the seed and the scheme last set by it or by a theme below it, so a layer that sets a seed replaces the `[colors]` of the themes below, and a layer that sets only `scheme = "light"` derives the colors of the seed below it in light;
+   1. its `seed` and `scheme`: where it sets either, every color role is derived again, from the seed and the scheme last set by it or by a theme below it, so a layer that sets a seed replaces the `[colors]` of the themes below, and a layer that sets only `scheme = "light"` derives the colors of the seed below it in light; where no seed was set, a dark scheme gives the built-in colors again;
    2. its own tokens: `[colors]`, then the lengths, font and springs;
    3. its own settings, with the values `[theme_options.<its name>]` gives them (see below), in the order they are declared.
 3. Correct the contrast once, at the end, unless `contrast = false`.

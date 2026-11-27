@@ -83,7 +83,7 @@ kind = "choice"
 label = "Density"
 choices = [
     { value = "unset", label = "Default" },
-    { value = "compact", label = "Compact", overlay = { spacing = { tiny = 3, small = 7, medium = 12 }, bar = { pill_height = 32 } } },
+    { value = "compact", label = "Compact", overlay = { spacing = { tiny = 2, small = 5, medium = 10 }, bar = { pill_height = 26 } } },
     { value = "comfortable", label = "Comfortable", overlay = { spacing = { tiny = 5, small = 11, medium = 18 }, bar = { pill_height = 40 } } },
 ]
 

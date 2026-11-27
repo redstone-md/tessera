@@ -630,6 +630,11 @@ impl Merge {
                 self.scheme = file.scheme;
             }
             self.theme.followed = Followed::default();
+            if self.seed.is_none() {
+                // Derived without a seed, a dark scheme keeps the built-in
+                // colors, which light ones derived below would replace.
+                self.theme.colors = Theme::default().colors;
+            }
             let scheme = self.scheme.unwrap_or_default();
             self.theme.derive(self.seed.as_deref(), scheme, name);
         }
@@ -1318,6 +1323,21 @@ mod tests {
         let light = file("scheme = \"light\"\n");
         let theme = stacked(&[(&base, None), (&light, None)], false);
         let red = tonal::roles([0xff, 0, 0], true);
+        assert_eq!(theme.colors.surface_container, red.surface_container);
+    }
+
+    #[test]
+    fn a_dark_scheme_over_a_light_one_without_a_seed_is_dark_again() {
+        let light = file("scheme = \"light\"\n");
+        let dark = file("scheme = \"dark\"\n");
+        let theme = stacked(&[(&light, None), (&dark, None)], false);
+        let built_in = Theme::default().colors;
+        assert_eq!(theme.colors.surface_container, built_in.surface_container);
+        assert_eq!(theme.colors.on_surface, built_in.on_surface);
+        // A seed below is kept and derived dark.
+        let seeded = file("seed = \"#ff0000\"\nscheme = \"light\"\n");
+        let theme = stacked(&[(&seeded, None), (&dark, None)], false);
+        let red = tonal::roles([0xff, 0, 0], false);
         assert_eq!(theme.colors.surface_container, red.surface_container);
     }
 
