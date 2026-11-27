@@ -22,6 +22,7 @@ mod notifications;
 mod overview;
 mod plan;
 mod problems;
+mod run;
 mod runner;
 mod session;
 mod settings;
@@ -55,6 +56,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(keyboard::KeyboardModule),
         Box::new(label::LabelModule),
         Box::new(launcher::LauncherModule),
+        Box::new(run::RunModule),
         Box::new(runner::RunnerModule),
         Box::new(marketplace::MarketplaceModule {
             registries: config.registries(),
