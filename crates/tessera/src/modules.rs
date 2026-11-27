@@ -12,6 +12,7 @@ mod command;
 mod connections;
 mod focused;
 mod hdr;
+mod hotspot;
 mod keyboard;
 mod label;
 mod launcher;
@@ -83,6 +84,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(overview::OverviewModule),
         Box::new(quick::QuickModule),
         Box::new(airplane::AirplaneModule),
+        Box::new(hotspot::HotspotModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),
