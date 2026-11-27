@@ -27,6 +27,7 @@ mod execute;
 mod explorer_view;
 mod file_op;
 mod files;
+mod fonts;
 mod hdr;
 mod hotkeys;
 mod hotspot;
@@ -121,6 +122,7 @@ pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
     show_properties,
 };
+pub use fonts::font_families;
 pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
 pub use hotspot::{Hotspot, HotspotBand, HotspotInfo, HotspotState};

@@ -28,6 +28,7 @@ pub use win32::ShellThread;
 pub use win32::ShowDesktop;
 pub use win32::decode_with_wic;
 pub use win32::display_at;
+pub use win32::font_families;
 pub use win32::on_resizing_border;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
