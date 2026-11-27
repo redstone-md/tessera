@@ -504,3 +504,14 @@ center = [{ widget = "clock", popup = "calendar", format = "%a %-d %b  %H:%M", z
 
 `zones` names time zones in any of three ways, in small or capital letters: an identifier of the IANA database (`Europe/Berlin`, `America/New_York`, old ones such as `Asia/Calcutta` and `US/Eastern` too), a zone as Windows names it (`W. Europe Standard Time`, as in the time zone settings of Windows) or a city (`Berlin`, `New York`, `São Paulo`, the cities that name zones and some large ones that do not, such as `Munich` or `Mumbai`). While the pointer rests on the clock, its tip gives the date and, for each zone, its city, the time there and how far it is from universal time, as `Tokyo 22:05 UTC+09:00`; the calendar lists the same under the month. Windows is asked for the time in a zone, with the rules of daylight saving time it keeps for every year, so a zone Windows does not have tells no time. A name that names no zone is reported in the log and left out.
 
+```toml
+[[popup]]
+name = "calendar"
+width = 620
+height = 520
+content = [{ widget = "calendar", week_start = "monday", week_numbers = true, calendars = ["C:/Users/me/Documents/family.ics", "webcal://example.org/holidays.ics"] }]
+side = ["notifications"]
+```
+
+`week_numbers = true` puts the week of the year before each row, counted as ISO 8601 does: the week of its Thursday. `calendars` names iCalendar files (`.ics`) by their path, and feeds by an `https://` or `webcal://` address (a `webcal:` feed is read over HTTPS); they are read when a calendar first names them and every half hour after, on a thread that may wait, up to 16 MB each. Their events put a dot under each day they take place on; a click on a day lists its events under the month, those of all day first, then by their start, each with its place. Times in universal time and in a zone named by `TZID` (an IANA identifier or a zone of Windows, as Outlook writes them) are shown in local time; a `TZID` Tessera does not know is read as local time. Recurring events follow `RRULE` with `FREQ=DAILY`, `WEEKLY`, `MONTHLY` or `YEARLY` and `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY` (such as `MO,WE`, `-1FR` or `4TH`), `BYMONTHDAY` and `BYMONTH`; `EXDATE` takes times out, an event with `RECURRENCE-ID` moves one, and `STATUS:CANCELLED` takes one away. A rule with parts Tessera does not follow, such as `BYSETPOS` or `FREQ=HOURLY`, shows the event at its first time only. Tessera has no holidays of its own: a public feed of the holidays of a country, which many calendar services offer as an `.ics` address, is named here like any other.
+

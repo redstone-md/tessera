@@ -87,10 +87,15 @@ impl Zone {
         i32::try_from((local - at_utc).num_minutes()).ok()
     }
 
+    /// The universal time when it is `local` in this zone.
+    pub fn utc_of(&self, local: NaiveDateTime) -> Option<NaiveDateTime> {
+        SystemZone::named(&self.windows_id)?.utc_of(local)
+    }
+
     /// The time of day in `to` when it is `local` in this zone.
     #[allow(dead_code, reason = "for the `time` runner of the launcher")]
     pub fn convert(&self, local: NaiveDateTime, to: &Zone) -> Option<NaiveDateTime> {
-        let utc = SystemZone::named(&self.windows_id)?.utc_of(local)?;
+        let utc = self.utc_of(local)?;
         to.local_of(utc)
     }
 

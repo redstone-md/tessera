@@ -734,3 +734,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Kill process" = "Prozess beenden"
 "Media" = "Medien"
 "Personalize" = "Anpassen"
+# flyouts-input-clock.
+"All day" = "Ganztägig"
+"No events" = "Keine Termine"

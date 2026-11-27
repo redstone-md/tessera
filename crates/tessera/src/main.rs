@@ -11,6 +11,7 @@ mod report;
 mod actions;
 mod badges;
 mod banners;
+mod calendar_events;
 mod clipboard;
 mod config;
 mod corners;

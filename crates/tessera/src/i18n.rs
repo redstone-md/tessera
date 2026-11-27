@@ -1384,6 +1384,9 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // flyouts-input-clock.
+    ("All day", "Весь день"),
+    ("No events", "Нет событий"),
 ];
 
 #[cfg(test)]

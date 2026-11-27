@@ -735,3 +735,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+# flyouts-input-clock.
+"All day" = "Весь день"
+"No events" = "Немає подій"
