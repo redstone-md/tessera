@@ -706,6 +706,11 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // Window snapping, rules, hot corners and the window menu.
+    (
+        "Choose a window for this space",
+        "Выберите окно для этого места",
+    ),
 ];
 
 #[cfg(test)]

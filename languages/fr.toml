@@ -321,3 +321,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # Settings: keys that name an action.
 "Action" = "Action"
 "The action is written in the file by hand." = "L’action est écrite à la main dans le fichier."
+
+# Window snapping, rules, hot corners and the window menu.
+"Choose a window for this space" = "Choisissez une fenêtre pour cet espace"

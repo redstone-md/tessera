@@ -681,6 +681,18 @@ impl Tiler {
         .detach();
     }
 
+    /// Whether the window `id` is tiled now, so that it is left to the
+    /// tiling.
+    pub fn manages(id: AppWindowId, cx: &App) -> bool {
+        let enabled = cx
+            .try_global::<TilingMode>()
+            .is_some_and(|mode| mode.enabled);
+        enabled
+            && cx
+                .try_global::<Self>()
+                .is_some_and(|this| this.order.contains(&id))
+    }
+
     /// The window in front and the window on the side `toward` of it,
     /// among the windows tiling covers, and whether both are on one
     /// display.

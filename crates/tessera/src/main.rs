@@ -29,6 +29,7 @@ mod platform;
 mod popup;
 mod preview;
 mod shell;
+mod snap;
 mod surface;
 mod switcher;
 mod theme;

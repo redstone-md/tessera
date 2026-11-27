@@ -18,6 +18,7 @@ use crate::files::FilesConfig;
 use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
 use crate::platform::ScreenEdge;
+use crate::snap::SnapConfig;
 use crate::switcher::SwitcherConfig;
 use crate::tiling::TilingConfig;
 use crate::wallpaper::WallpaperConfig;
@@ -362,6 +363,9 @@ pub struct Config {
     /// a program.
     #[serde(default, rename = "key")]
     pub keys: Vec<KeyConfig>,
+    /// How windows snap to the edges, zones and layouts of the displays.
+    #[serde(default)]
+    pub snap: SnapConfig,
 }
 
 impl Config {
