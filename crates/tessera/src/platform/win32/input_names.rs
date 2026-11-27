@@ -9,7 +9,11 @@
 //! names are read on a short thread of its own that takes on each layout
 //! in turn; no window of anyone else is touched. Reading them asks the
 //! registry, so it is done away from the thread that draws.
+//!
+//! [`OwnInput`] switches the layout of Tessera's own windows, which a
+//! request to a window of another program does not reach.
 
+use std::ffi::c_void;
 use std::thread;
 
 use windows::Win32::Foundation::ERROR_SUCCESS;
@@ -17,10 +21,15 @@ use windows::Win32::Globalization::{
     GetLocaleInfoEx, LCIDToLocaleName, LOCALE_ALLOW_NEUTRAL_NAMES, LOCALE_SLOCALIZEDDISPLAYNAME,
 };
 use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ActivateKeyboardLayout, GetKeyboardLayoutList, GetKeyboardLayoutNameW, HKL, KLF_NOTELLSHELL,
+    KLF_SETFORPROCESS,
 };
 use windows::Win32::UI::Shell::SHLoadIndirectString;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetWindowThreadProcessId, HKL_NEXT, HKL_PREV,
+};
 use windows::core::PCWSTR;
 
 /// Where Windows describes each keyboard layout, under its identifier.
@@ -49,6 +58,36 @@ impl InputName {
             Ok(Ok(names)) => names,
             _ => Vec::new(),
         }
+    }
+}
+
+/// The keyboard layout Tessera's own windows are typed in.
+pub struct OwnInput;
+
+impl OwnInput {
+    /// Whether the window in front is one of Tessera, as the launcher is
+    /// while its search field is typed into.
+    pub fn in_front() -> bool {
+        // SAFETY: the calls only read system state; `process` outlives the
+        // call that writes it.
+        unsafe {
+            let window = GetForegroundWindow();
+            let mut process = 0;
+            !window.is_invalid()
+                && GetWindowThreadProcessId(window, Some(&raw mut process)) != 0
+                && process == GetCurrentProcessId()
+        }
+    }
+
+    /// Takes on the layout after the one in use, or the one before it when
+    /// `back`, in every window of Tessera. It is to be called on the
+    /// thread of the windows, whose focused window Windows tells.
+    pub fn step(back: bool) -> windows::core::Result<()> {
+        let step = if back { HKL_PREV } else { HKL_NEXT };
+        // SAFETY: the next and the previous layout are values Windows
+        // defines for this call, which changes only this program.
+        unsafe { ActivateKeyboardLayout(HKL(step as usize as *mut c_void), KLF_SETFORPROCESS) }
+            .map(|_| ())
     }
 }
 

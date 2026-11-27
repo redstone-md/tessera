@@ -74,6 +74,7 @@ pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
 pub use icon::IconPixels;
 pub use index::SearchIndex;
 pub use input_names::InputName;
+pub use input_names::OwnInput;
 pub use jump::{JumpTask, RecentDocument, app_id_of_program};
 pub use keyboard::{InputLanguage, Typing};
 pub use media::{Media, MediaCommand, NowPlaying, Position};

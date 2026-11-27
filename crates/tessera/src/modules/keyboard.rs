@@ -7,13 +7,16 @@
 //! The widget `keyboard-list`, in the popup of the same name, lists the
 //! keyboard layouts with the names Windows gives them, the one in use
 //! marked; choosing one asks the window that was in front for it. The
-//! action `input-language` asks that window for the next layout (Win+Space
-//! where the keys of Windows are in use), for the one before (`previous`,
-//! Win+Shift+Space) or opens the list (`list`). The switcher of Win+Space
-//! is part of Explorer; Ctrl+Shift and Alt+Shift are switched by Windows
-//! itself and stay with it.
+//! action `input-language` asks the window in front for the next layout
+//! (Win+Space where the keys of Windows are in use) or for the one before
+//! (`previous`, Win+Shift+Space); where a window of Tessera is in front,
+//! as the launcher is while its search field is typed into, Tessera takes
+//! on that layout itself. `list` opens the list. The switcher Windows
+//! shows while Win+Space is held is part of Explorer and is not shown;
+//! Ctrl+Shift and Alt+Shift are switched by Windows itself and stay with
+//! it.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, AppContext, AsyncApp, Context, FontWeight, Global, InteractiveElement, IntoElement,
@@ -26,7 +29,7 @@ use crate::config::{PopupConfig, WidgetSpec};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{InputLanguage, InputName, Typing};
+use crate::platform::{InputLanguage, InputName, OwnInput, Typing};
 use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -47,6 +50,11 @@ const LAYOUT_ROW: f32 = 52.;
 /// How often the language is looked at: Windows announces a change only to
 /// the window it happens in.
 const CHECK_INTERVAL: Duration = Duration::from_millis(400);
+
+/// How long a layout asked for is taken to be the one of its window:
+/// Windows answers the request a moment later, and a second press in
+/// between goes on from the layout asked for, not from the one before.
+const ASKED_FOR: Duration = Duration::from_millis(500);
 
 pub struct KeyboardModule;
 
@@ -95,7 +103,11 @@ impl Module for KeyboardModule {
 /// Tessera: the one a choice of the list is for, once a popup of Tessera
 /// is in front.
 #[derive(Default)]
-struct TypedInto(Option<Typing>);
+struct TypedInto {
+    typing: Option<Typing>,
+    /// When the layout of `typing` was asked for, if it was.
+    asked: Option<Instant>,
+}
 
 impl Global for TypedInto {}
 
@@ -104,14 +116,43 @@ impl TypedInto {
     /// before it.
     fn window(cx: &mut App) -> Option<Typing> {
         Self::seen(Typing::in_front(), cx);
-        cx.default_global::<Self>().0
+        cx.default_global::<Self>().typing
     }
 
+    /// Takes in the window seen in front. While a layout asked for this
+    /// very window may still be on its way, the one asked for stands.
     fn seen(typing: Option<Typing>, cx: &mut App) {
-        if typing.is_some() {
-            cx.default_global::<Self>().0 = typing;
+        let Some(typing) = typing else {
+            return;
+        };
+        let this = cx.default_global::<Self>();
+        let waiting = this
+            .asked
+            .is_some_and(|asked| may_be_unanswered(asked, Instant::now()));
+        if waiting && this.typing.is_some_and(|known| same_window(known, typing)) {
+            return;
         }
+        this.typing = Some(typing);
     }
+
+    /// Remembers that `typing` was asked for `language` just now.
+    fn asked(mut typing: Typing, language: InputLanguage, cx: &mut App) {
+        typing.language = language;
+        let this = cx.default_global::<Self>();
+        (this.typing, this.asked) = (Some(typing), Some(Instant::now()));
+    }
+}
+
+/// Whether a window asked for a layout at `asked` may not have answered
+/// by `now`.
+fn may_be_unanswered(asked: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(asked) < ASKED_FOR
+}
+
+/// Whether `one` and `other` are the same window, whatever their layouts.
+fn same_window(one: Typing, mut other: Typing) -> bool {
+    other.language = one.language;
+    one == other
 }
 
 /// The layout after `language` among `languages`, or before it when
@@ -125,27 +166,37 @@ fn step(language: InputLanguage, languages: &[InputLanguage], back: bool) -> Opt
     }
 }
 
-/// Asks `typing` for the layout after its own, or before it when `back`.
-fn switch_next(typing: Typing, back: bool) {
-    let Some(next) = step(typing.language, &InputLanguage::installed(), back) else {
-        return;
-    };
-    if let Err(error) = typing.switch_to(next) {
-        report!("the input language was not switched: {error:#}");
+/// Asks `typing` for `language`, and remembers it was asked.
+fn switch(typing: Typing, language: InputLanguage, cx: &mut App) {
+    match typing.switch_to(language) {
+        Ok(()) => TypedInto::asked(typing, language, cx),
+        Err(error) => report!("the input language was not switched: {error:#}"),
     }
 }
 
-/// Does the action `input-language` with `arg`.
+/// Asks `typing` for the layout after its own, or before it when `back`.
+fn switch_next(typing: Typing, back: bool, cx: &mut App) {
+    if let Some(next) = step(typing.language, &InputLanguage::installed(), back) {
+        switch(typing, next, cx);
+    }
+}
+
+/// Does the action `input-language` with `arg`: the next or the previous
+/// layout go to the window in front, which may be one of Tessera.
 fn input_language(arg: Option<&str>, cx: &mut App) {
-    let typing = TypedInto::window(cx);
-    match arg {
-        Some("list") => Shell::toggle_popup(LIST, cx),
-        Some("previous") => typing
-            .into_iter()
-            .for_each(|typing| switch_next(typing, true)),
-        _ => typing
-            .into_iter()
-            .for_each(|typing| switch_next(typing, false)),
+    if arg == Some("list") {
+        Shell::toggle_popup(LIST, cx);
+        return;
+    }
+    let back = arg == Some("previous");
+    if OwnInput::in_front() {
+        if let Err(error) = OwnInput::step(back) {
+            report!("the input language was not switched: {error:#}");
+        }
+        return;
+    }
+    if let Some(typing) = TypedInto::window(cx) {
+        switch_next(typing, back, cx);
     }
 }
 
@@ -195,9 +246,11 @@ impl Keyboard {
         cx.notify();
     }
 
-    fn switch(&self) {
-        if let Some(typing) = self.typing {
-            switch_next(typing, false);
+    /// Asks the window for the next layout. A click on a bar leaves the
+    /// window in front, which may not have answered the click before.
+    fn switch(&self, cx: &mut App) {
+        if let Some(typing) = TypedInto::window(cx).or(self.typing) {
+            switch_next(typing, false, cx);
         }
     }
 }
@@ -219,7 +272,7 @@ impl Render for Keyboard {
         let button = pill(&theme)
             .id("keyboard")
             .bg(state_layer(&theme, ground, state))
-            .on_click(cx.listener(|this, _, _, _| this.switch()))
+            .on_click(cx.listener(|this, _, _, cx| this.switch(cx)))
             .child(icon(&theme, ICON_KEYBOARD))
             .child(div().font_weight(FontWeight::MEDIUM).child(code));
         Interaction::track(button, cx, |this: &mut Self| Some(&mut this.interaction))
@@ -288,10 +341,8 @@ impl LayoutList {
     /// Asks the window for the layout `index` and closes the list.
     fn take(&mut self, index: usize, cx: &mut Context<Self>) {
         let layout = { self.layouts.as_ref() }.and_then(|layouts| layouts.get(index));
-        if let (Some(typing), Some(layout)) = (self.typing, layout)
-            && let Err(error) = typing.switch_to(layout.language)
-        {
-            report!("the input language was not switched: {error:#}");
+        if let (Some(typing), Some(layout)) = (self.typing, layout) {
+            switch(typing, layout.language, cx);
         }
         cx.defer(Popups::close);
     }
@@ -415,6 +466,18 @@ mod tests {
             .map(|key| key.press)
             .collect();
         assert_eq!(presses, ["win+space", "win+shift+space"]);
+    }
+
+    #[test]
+    fn a_layout_asked_for_stands_only_for_a_moment() {
+        let asked = Instant::now();
+        assert!(may_be_unanswered(asked, asked));
+        assert!(may_be_unanswered(asked, asked + ASKED_FOR / 2));
+        assert!(!may_be_unanswered(asked, asked + ASKED_FOR));
+        assert!(
+            may_be_unanswered(asked + ASKED_FOR, asked),
+            "a clock that went back"
+        );
     }
 
     #[test]
