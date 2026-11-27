@@ -19,8 +19,10 @@ const ICON_END: &str = "\u{e7ba}";
 /// How many letters the windows wait for.
 const LETTERS: usize = 2;
 
-/// The score of a window whose title starts with what is typed.
-const SCORE_WINDOW: u16 = 700;
+/// The score of a window whose title starts with what is typed: below
+/// the applications, so that typing the name of a program starts it
+/// rather than going to a window it has open.
+const SCORE_WINDOW: u16 = 480;
 
 /// The score of a program that `kill` names, and how many are offered.
 const SCORE_KILL: u16 = 900;

@@ -20,9 +20,14 @@ const ICON_PANEL: &str = "\u{e80f}";
 /// How many letters the pages and the actions wait for.
 const LETTERS: usize = 2;
 
-/// The scores of an action of the session and of a page whose name
-/// starts with what is typed; pages come after the applications.
+/// The scores of an action of the session whose name or other name is
+/// typed whole or starts with at least [`SURE_LETTERS`] typed, which
+/// stands above the applications, of one that only starts with what is
+/// typed, which comes after them, and of a page whose name starts with
+/// what is typed; pages come after the applications too.
 const SCORE_POWER: u16 = 800;
+const SCORE_POWER_UNSURE: u16 = 450;
+const SURE_LETTERS: usize = 5;
 const SCORE_PAGE: u16 = 400;
 
 /// What can be done to the session: the action, what it is called, its
@@ -280,7 +285,15 @@ impl Runner for Power {
                 let names = [query.say(english), english];
                 let best = best_rank(names, keywords, query.lower())?;
                 let detail = query.say("Session and power");
-                let score = ranked_score(SCORE_POWER, best);
+                let whole = { keywords.split(',').chain(names) }
+                    .any(|name| name.to_lowercase() == query.lower());
+                let sure = whole || query.letters() >= SURE_LETTERS;
+                let best_score = if sure {
+                    SCORE_POWER
+                } else {
+                    SCORE_POWER_UNSURE
+                };
+                let score = ranked_score(best_score, best);
                 let answer = Answer::new(query.say(english), detail, glyph, score, {
                     AnswerAction::Power(action)
                 });
@@ -341,8 +354,14 @@ mod tests {
         let reboot = Power.answer(&Query::new("reboot", Language::English));
         assert_eq!(reboot.len(), 1);
         assert_eq!(reboot[0].action, AnswerAction::Power(PowerAction::Restart));
+        assert!(reboot[0].score >= crate::runners::STRONG);
         let off = Power.answer(&Query::new("shut", Language::English));
         assert_eq!(off[0].action, AnswerAction::Power(PowerAction::ShutDown));
+        // Four letters that only start a name may be meant for an
+        // application, which comes first then.
+        assert!(off[0].score < crate::runners::STRONG);
+        let lock = Power.answer(&Query::new("lock", Language::English));
+        assert!(lock[0].score >= crate::runners::STRONG);
         assert!(Power.answer(&Query::new("l", Language::English)).is_empty());
     }
 }
