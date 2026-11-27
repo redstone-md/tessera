@@ -4,7 +4,7 @@
 //! Top-level application windows, as a task switcher would list them.
 
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, Once, PoisonError};
 use std::time::{Duration, Instant};
@@ -24,9 +24,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, 
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClassNameW,
     GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNA,
-    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, InternalGetWindowText,
+    IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
     ShowWindowAsync, WINDOWPLACEMENT, WM_CLOSE, WS_CHILD, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -36,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PWSTR};
 
-use super::{DisplayKey, ScreenRect};
+use super::{DisplayKey, NativeSurface, ScreenRect};
 
 /// Identifies a top-level window for as long as it exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -62,6 +62,12 @@ impl AppWindowId {
     pub fn exists(self) -> bool {
         // SAFETY: the call only reads whether the handle names a window.
         unsafe { IsWindow(Some(self.hwnd())).as_bool() }
+    }
+
+    /// The window of `window`, a window of GPUI.
+    pub fn of(window: &gpui::Window) -> Option<Self> {
+        let surface = NativeSurface::of(window).ok()?;
+        Some(Self(surface.hwnd.0 as isize))
     }
 
     /// Whether the window is shown; a minimized window is.
@@ -263,9 +269,17 @@ impl AppWindowId {
     /// What the window's title bar says; empty if Windows does not tell.
     pub fn title(self) -> String {
         let mut buffer = [0u16; 512];
+        // A window of this process is not asked: asking it waits for its
+        // thread. What it was last titled is read instead.
+        let own = self.process() == std::process::id();
         // SAFETY: the buffer outlives the call, which writes no more than
         // its length.
-        let length = unsafe { GetWindowTextW(self.hwnd(), &mut buffer) };
+        let length = unsafe {
+            match own {
+                true => InternalGetWindowText(self.hwnd(), &mut buffer),
+                false => GetWindowTextW(self.hwnd(), &mut buffer),
+            }
+        };
         String::from_utf16_lossy(&buffer[..length.max(0) as usize])
     }
 
@@ -335,6 +349,26 @@ impl WindowEvents {
                     unsafe { SetWinEventHook(first, last, None, Some(happened), 0, 0, flags) };
                 !hook.is_invalid()
             });
+            // The windows of this process that are listed, those of the
+            // file manager, are watched apart: every other window of the
+            // process is left out in `happened_own`.
+            for (first, last) in Self::WATCHED {
+                // SAFETY: as above; only the events of this process come.
+                let hook = unsafe {
+                    SetWinEventHook(
+                        first,
+                        last,
+                        None,
+                        Some(happened_own),
+                        std::process::id(),
+                        0,
+                        WINEVENT_OUTOFCONTEXT,
+                    )
+                };
+                if hook.is_invalid() {
+                    report!("the windows of the file manager are not watched");
+                }
+            }
             WATCHING.store(accepted.into(), Ordering::Relaxed);
         });
         Self::watched()
@@ -377,6 +411,45 @@ unsafe extern "system" fn happened(
     }
 }
 
+unsafe extern "system" fn happened_own(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    object: i32,
+    child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if object == OBJID_WINDOW.0 && child == 0 && own_mark(hwnd).is_some() {
+        HAPPENED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// A window of Tessera that is listed among the application windows; see
+/// [`AppWindow::mark_own`].
+#[derive(Clone, Debug)]
+struct OwnMark {
+    hwnd: isize,
+    app_id: String,
+    /// The file whose icon the window shows.
+    icon: PathBuf,
+}
+
+/// The windows of Tessera that are listed.
+static OWN_MARKS: Mutex<Vec<OwnMark>> = Mutex::new(Vec::new());
+
+/// What `hwnd` was marked as, if it was; a window that is gone is
+/// forgotten.
+fn own_mark(hwnd: HWND) -> Option<OwnMark> {
+    let mut marks = OWN_MARKS.lock().unwrap_or_else(PoisonError::into_inner);
+    // SAFETY: the call only reads whether a handle names a window.
+    marks.retain(|mark| unsafe { IsWindow(Some(HWND(mark.hwnd as *mut c_void))) }.as_bool());
+    marks
+        .iter()
+        .find(|mark| mark.hwnd == hwnd.0 as isize)
+        .cloned()
+}
+
 /// A window the user would expect to find in a task switcher.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppWindow {
@@ -404,11 +477,54 @@ impl AppWindow {
     /// it when it is pinned: the packaged application, or else the program
     /// file.
     pub fn program(&self) -> Option<PathBuf> {
+        if let Some(mark) = own_mark(self.id.hwnd()) {
+            return Some(mark.icon);
+        }
         let app = self.app_id.as_deref().map(super::packaged::app_path);
         app.or_else(|| self.executable.clone())
     }
 
+    /// Lists `window`, a window of Tessera, among the application
+    /// windows from now on, as a window of the application `app_id`
+    /// whose icon is that of the file `icon`, or of Tessera's own program
+    /// without one; see [`Self::enumerate`]. Only for the windows of the
+    /// file manager, with `app_id` `Tessera.Files`: never for a bar, a
+    /// popup or a card. The mark goes with the window.
+    #[allow(dead_code, reason = "the file manager marks its windows")]
+    pub fn mark_own(window: &gpui::Window, app_id: &str, icon: Option<&Path>) {
+        let Ok(surface) = NativeSurface::of(window) else {
+            return;
+        };
+        let icon = icon
+            .map(Path::to_owned)
+            .or_else(|| std::env::current_exe().ok());
+        let mark = OwnMark {
+            hwnd: surface.hwnd.0 as isize,
+            app_id: app_id.to_owned(),
+            icon: icon.unwrap_or_default(),
+        };
+        let mut marks = OWN_MARKS.lock().unwrap_or_else(PoisonError::into_inner);
+        marks.retain(|other| other.hwnd != mark.hwnd);
+        marks.push(mark);
+        drop(marks);
+        HAPPENED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Whether the window is one of Tessera's that is listed, as those of
+    /// the file manager are.
+    pub fn is_own(&self) -> bool {
+        own_mark(self.id.hwnd()).is_some()
+    }
+
     /// Lists application windows in z-order, topmost first.
+    ///
+    /// The windows of Tessera are left out, but for those marked with
+    /// [`Self::mark_own`]: the windows of the file manager, each listed
+    /// with its `app_id` (`Tessera.Files`), the executable of Tessera and
+    /// the icon it was marked with (see [`Self::program`]). Bars, popups,
+    /// cards and every other window of Tessera are never listed, so the
+    /// dock, the window switcher, tiling and the rules, which all read
+    /// this list, may take every window in it for one of an application.
     ///
     /// Every bar asks at the same moment, when something happened to a
     /// window, and the answer costs a look into each process. The list
@@ -467,7 +583,9 @@ impl AppWindow {
             let mut process = 0u32;
             GetWindowThreadProcessId(hwnd, Some(&raw mut process));
             if process == GetCurrentProcessId() {
-                return None;
+                // A marked window of Tessera is not asked for its title.
+                let shown = IsWindowVisible(hwnd).as_bool() && !is_cloaked(hwnd);
+                return (shown && own_mark(hwnd).is_some()).then_some((hwnd, process));
             }
             if !IsWindowVisible(hwnd).as_bool() || GetWindowTextLengthW(hwnd) <= 0 {
                 return None;
@@ -479,14 +597,7 @@ impl AppWindow {
             if extended & WS_EX_TOOLWINDOW.0 != 0 {
                 return None;
             }
-            let mut cloaked = 0u32;
-            let _ = DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_CLOAKED,
-                (&raw mut cloaked).cast(),
-                size_of::<u32>() as u32,
-            );
-            if cloaked != 0 {
+            if is_cloaked(hwnd) {
                 return None;
             }
             Some((hwnd, process))
@@ -494,7 +605,10 @@ impl AppWindow {
     }
 
     fn describe(hwnd: HWND, process: u32) -> Self {
-        let (executable, app_id) = program_of(hwnd, process);
+        let (executable, app_id) = match own_mark(hwnd) {
+            Some(mark) => (std::env::current_exe().ok(), Some(mark.app_id)),
+            None => program_of(hwnd, process),
+        };
         Self {
             id: AppWindowId(hwnd.0 as isize),
             display: display_of(hwnd),
@@ -502,6 +616,23 @@ impl AppWindow {
             app_id,
         }
     }
+}
+
+/// Whether Windows hides `hwnd` without its knowing, as it does the
+/// windows of other virtual desktops.
+fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked = 0u32;
+    // SAFETY: `cloaked` is as large as the call is told and outlives it;
+    // a window that is gone makes the call fail, which reads as shown.
+    let _ = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        )
+    };
+    cloaked != 0
 }
 
 unsafe extern "system" fn collect(hwnd: HWND, state: LPARAM) -> BOOL {
