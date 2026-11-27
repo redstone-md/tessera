@@ -4,6 +4,10 @@
 //! What the configuration file holds, changed without editing it by hand:
 //! a rail of parts on the left, and the cards of the part chosen on the
 //! right. Widget: `settings`, made for a popup in the middle of the display.
+//! The settings that extensions and themes declare are drawn by the
+//! controls of [`controls`].
+
+mod controls;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -32,6 +36,7 @@ use crate::theme::WALLPAPER_THEME;
 use crate::theme::{ACCENT_THEME, Theme};
 use crate::tiling::TileLayout;
 use crate::ui::{icon, state_layer, switch};
+use controls::{DeclaredState, Deed, Owner, RowKey};
 
 /// The directory of the configuration directory that holds theme files.
 const THEMES_DIRECTORY: &str = "themes";
@@ -663,6 +668,17 @@ enum Control {
     KeyDeed(usize, usize),
     /// Gives the deed of a combination this one of its answers.
     KeyValue(usize, usize),
+    /// Does this to a setting an extension or a theme declares.
+    Declared(RowKey, Deed),
+    /// Takes every declared setting of an extension or a theme out of the
+    /// file.
+    ResetAll(Owner),
+    /// Stacks the theme at this place of the theme files over the others.
+    AddLayer(usize),
+    /// Takes the theme at this place of the stack off it.
+    DropLayer(usize),
+    /// Moves the theme at this place of the stack up it, or down.
+    ShiftLayer(usize, bool),
 }
 
 /// The deeds of a key combination as they are shown, in the order of
@@ -983,6 +999,8 @@ struct Settings {
     interactions: HashMap<Control, Interaction>,
     /// The programs that start with the session, read when first shown.
     startup: Option<AnyView>,
+    /// What extensions and themes declare can be set, and their controls.
+    declared: DeclaredState,
 }
 
 impl Settings {
@@ -1017,12 +1035,15 @@ impl Settings {
             key_list: Spring::new(motion.spatial_fast, 0.),
             interactions: HashMap::new(),
             startup: None,
+            declared: DeclaredState::new(),
         };
         match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
             Ok((config, table)) => (this.config, this.table) = (Some(config), table),
             Err(error) => this.failure = Some(error.into()),
         }
         this.look_around(cx);
+        this.read_declared(cx);
+        this.arrive(cx);
         this
     }
 
@@ -1137,6 +1158,7 @@ impl Settings {
                 if let Ok(market) = market.clone().downcast::<Marketplace>() {
                     let changed = |this: &mut Self, _, _: &Changed, cx: &mut Context<Self>| {
                         this.themes = themes();
+                        this.read_declared(cx);
                         cx.notify();
                     };
                     cx.subscribe(&market, changed).detach();
@@ -1148,6 +1170,9 @@ impl Settings {
     }
 
     fn act(&mut self, control: &Control, cx: &mut Context<Self>) {
+        if self.act_declared(control, cx) {
+            return;
+        }
         match *control {
             Control::Section(section) => self.show(section, cx),
             Control::Quit => cx.quit(),
@@ -1363,6 +1388,12 @@ impl Settings {
                     true
                 });
             }
+            // Done above.
+            Control::Declared(..)
+            | Control::ResetAll(_)
+            | Control::AddLayer(_)
+            | Control::DropLayer(_)
+            | Control::ShiftLayer(..) => {}
         }
     }
 
@@ -2495,8 +2526,16 @@ impl Settings {
                     wide.push(self.key_card(index, key, window, cx));
                 }
             }
-            Section::Themes => wide.push(self.themes(config.theme.as_deref(), window, cx)),
-            Section::Widgets | Section::Tray | Section::Windows | Section::Extensions => {}
+            Section::Themes => {
+                wide.push(self.themes(config.theme.as_deref(), window, cx));
+                let first = usize::from(self.failure.is_some()) + wide.len();
+                wide.extend(self.theme_cards(config, first, window, cx));
+            }
+            Section::Extensions => {
+                let first = usize::from(self.failure.is_some()) + wide.len();
+                wide.extend(self.extension_cards(config, first, window, cx));
+            }
+            Section::Widgets | Section::Tray | Section::Windows => {}
         }
         shared.extend(self.setting_cards(section, config, window, cx));
         (wide, shared)
@@ -2575,6 +2614,7 @@ impl Render for Settings {
             .min_w(px(0.))
             .min_h(px(0.))
             .overflow_y_scroll()
+            .track_scroll(&self.declared.scroll)
             .flex()
             .flex_col()
             .gap(theme.spacing.medium)
