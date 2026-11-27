@@ -320,3 +320,18 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # Settings: keys that name an action.
 "Action" = "Aktion"
 "The action is written in the file by hand." = "Die Aktion wird von Hand in die Datei geschrieben."
+
+# The window switcher: its styles and filters.
+"Workspace" = "Arbeitsbereich"
+"Icon tiles" = "Symbolkacheln"
+"Large pictures" = "Große Bilder"
+"Compact list" = "Kompakte Liste"
+"Row of icons" = "Symbolreihe"
+"Which windows" = "Welche Fenster"
+"This workspace" = "Dieser Arbeitsbereich"
+"This display" = "Dieser Bildschirm"
+"All workspaces" = "Alle Arbeitsbereiche"
+"Minimized windows" = "Minimierte Fenster"
+"In their place" = "An ihrem Platz"
+"After the others" = "Nach den anderen"
+"Left out" = "Ausgelassen"

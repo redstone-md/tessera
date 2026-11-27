@@ -321,3 +321,18 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# The window switcher: its styles and filters.
+"Workspace" = "Робоча область"
+"Icon tiles" = "Плитки значків"
+"Large pictures" = "Великі зображення"
+"Compact list" = "Компактний список"
+"Row of icons" = "Ряд значків"
+"Which windows" = "Які вікна"
+"This workspace" = "Ця робоча область"
+"This display" = "Цей дисплей"
+"All workspaces" = "Усі робочі області"
+"Minimized windows" = "Згорнуті вікна"
+"In their place" = "На своєму місці"
+"After the others" = "Після інших"
+"Left out" = "Не показувати"
