@@ -17,7 +17,7 @@ use crate::config::edit::ConfigFile;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
-use crate::platform::{PowerAction, Shortcut};
+use crate::platform::{PowerAction, PowerChoices, Shortcut};
 use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -37,7 +37,7 @@ const STAGGER: f32 = 0.5;
 
 /// The side of a power button, and the most its question adds to it.
 const POWER_BUTTON: Pixels = px(40.);
-const QUESTION_WIDTH: Pixels = px(120.);
+const QUESTION_WIDTH: Pixels = px(160.);
 
 /// How long a button waits for the click that confirms it.
 const CONFIRMATION: Duration = Duration::from_secs(4);
@@ -61,17 +61,20 @@ impl Module for StartModule {
         })?;
         widgets.register_panel("power", |context, cx| {
             let named = context.texts("actions");
-            let actions = match named {
+            let mut actions: Vec<PowerAction> = match named {
                 Some(names) => names.iter().filter_map(|name| action_named(name)).collect(),
                 // Hibernation is switched off on many machines, so it is
                 // offered only where a layout asks for it.
                 None => ACTIONS
                     .iter()
                     .map(|&(action, ..)| action)
-                    .filter(|&action| action != PowerAction::Hibernate)
+                    .filter(|&action| !OFFERED_WHEN_ASKED.contains(&action))
                     .collect(),
             };
-            cx.new(|_| Power::new(actions)).into()
+            if context.flag("updates").unwrap_or(true) {
+                actions = with_updates(&actions);
+            }
+            cx.new(|cx| Power::new(actions, cx)).into()
         })
     }
 }
@@ -285,8 +288,9 @@ impl Render for Apps {
 
 /// The actions in the order their buttons stand, each with the name a
 /// layout calls it by, its icon and what it asks before it acts.
-const ACTIONS: [(PowerAction, &str, &str, &str); 6] = [
+const ACTIONS: [(PowerAction, &str, &str, &str); 9] = [
     (PowerAction::Lock, "lock", "\u{e72e}", ""),
+    (PowerAction::SwitchUser, "switch-user", "\u{e748}", ""),
     (PowerAction::Sleep, "sleep", "\u{e708}", "Sleep?"),
     (
         PowerAction::Hibernate,
@@ -295,9 +299,54 @@ const ACTIONS: [(PowerAction, &str, &str, &str); 6] = [
         "Hibernate?",
     ),
     (PowerAction::SignOut, "sign-out", "\u{f3b1}", "Sign out?"),
+    (
+        PowerAction::UpdateRestart,
+        "update-restart",
+        "\u{e895}",
+        "Update, restart?",
+    ),
     (PowerAction::Restart, "restart", "\u{e777}", "Restart?"),
+    (
+        PowerAction::UpdateShutDown,
+        "update-shut-down",
+        "\u{e895}",
+        "Update, shut down?",
+    ),
     (PowerAction::ShutDown, "shut-down", "\u{e7e8}", "Shut down?"),
 ];
+
+/// The actions offered only where a layout names them: hibernation is
+/// switched off on many machines, switching the user is rarely wanted
+/// from a bar, and the two that install updates come by themselves next
+/// to restarting and shutting down while updates wait.
+const OFFERED_WHEN_ASKED: [PowerAction; 4] = [
+    PowerAction::Hibernate,
+    PowerAction::SwitchUser,
+    PowerAction::UpdateRestart,
+    PowerAction::UpdateShutDown,
+];
+
+/// `actions` with the action that installs updates before restarting or
+/// shutting down put before restarting and shutting down, where it is not
+/// there already. Whether updates wait is asked when the buttons are
+/// shown; until then, and where none wait, those buttons are left out.
+fn with_updates(actions: &[PowerAction]) -> Vec<PowerAction> {
+    let mut with = Vec::with_capacity(actions.len() + 2);
+    for &action in actions {
+        let before = match action {
+            PowerAction::Restart => Some(PowerAction::UpdateRestart),
+            PowerAction::ShutDown => Some(PowerAction::UpdateShutDown),
+            _ => None,
+        };
+        if let Some(before) = before
+            && !actions.contains(&before)
+        {
+            with.push(before);
+        }
+        with.push(action);
+    }
+    with
+}
 
 fn action_named(name: &str) -> Option<PowerAction> {
     let known = ACTIONS.iter().find(|(_, known, ..)| *known == name);
@@ -312,7 +361,8 @@ fn action_named(name: &str) -> Option<PowerAction> {
 /// `pressed` is carried out. Only locking, which loses nothing, acts at
 /// the first click.
 fn press(armed: Option<PowerAction>, pressed: PowerAction) -> (Option<PowerAction>, bool) {
-    if pressed == PowerAction::Lock || armed == Some(pressed) {
+    let harmless = matches!(pressed, PowerAction::Lock | PowerAction::SwitchUser);
+    if harmless || armed == Some(pressed) {
         (None, true)
     } else {
         (Some(pressed), false)
@@ -329,6 +379,9 @@ struct PowerButton {
 /// restart and shut down.
 struct Power {
     actions: Vec<PowerAction>,
+    /// What the computer can do, once it has been read; until then only
+    /// what needs no asking is shown.
+    choices: Option<PowerChoices>,
     /// The action whose button was clicked once and asks to be clicked
     /// again.
     armed: Option<PowerAction>,
@@ -338,12 +391,45 @@ struct Power {
 }
 
 impl Power {
-    fn new(actions: Vec<PowerAction>) -> Self {
+    fn new(actions: Vec<PowerAction>, cx: &mut Context<Self>) -> Self {
+        let asked = actions.iter().any(|&action| {
+            matches!(
+                action,
+                PowerAction::UpdateRestart | PowerAction::UpdateShutDown
+            )
+        });
+        if asked {
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let choices = cx
+                    .background_executor()
+                    .spawn(async { PowerChoices::read() });
+                let choices = choices.await;
+                this.update(cx, |this, cx| {
+                    this.choices = Some(choices);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
         Self {
             actions,
+            choices: None,
             armed: None,
             clicks: 0,
             buttons: HashMap::new(),
+        }
+    }
+
+    /// Whether the button of `action` stands: one that installs updates
+    /// only once it is known that updates wait. A layout that names
+    /// sleep or hibernation gets them whatever the computer says.
+    fn shows(&self, action: PowerAction) -> bool {
+        match action {
+            PowerAction::UpdateRestart | PowerAction::UpdateShutDown => {
+                self.choices.is_some_and(|choices| choices.offers(action))
+            }
+            _ => true,
         }
     }
 
@@ -444,7 +530,9 @@ impl Render for Power {
         let theme = *cx.global::<Theme>();
         let mut buttons = Vec::new();
         for action in self.actions.clone() {
-            buttons.push(self.button(action, window, cx));
+            if self.shows(action) {
+                buttons.push(self.button(action, window, cx));
+            }
         }
         div()
             .flex_none()
@@ -482,7 +570,38 @@ mod tests {
     }
 
     #[test]
+    fn the_buttons_that_install_updates_stand_before_restarting_and_shutting_down() {
+        use PowerAction::{Lock, Restart, ShutDown, Sleep, UpdateRestart, UpdateShutDown};
+        assert_eq!(
+            with_updates(&[Lock, Sleep, Restart, ShutDown]),
+            [
+                Lock,
+                Sleep,
+                UpdateRestart,
+                Restart,
+                UpdateShutDown,
+                ShutDown
+            ]
+        );
+        assert_eq!(
+            with_updates(&[ShutDown, UpdateShutDown]),
+            [ShutDown, UpdateShutDown]
+        );
+        assert_eq!(with_updates(&[Lock]), [Lock]);
+    }
+
+    #[test]
+    fn switching_the_user_acts_at_the_first_click() {
+        assert_eq!(press(None, PowerAction::SwitchUser), (None, true));
+    }
+
+    #[test]
     fn a_layout_names_the_actions() {
+        assert_eq!(
+            action_named("update-restart"),
+            Some(PowerAction::UpdateRestart)
+        );
+        assert_eq!(action_named("switch-user"), Some(PowerAction::SwitchUser));
         assert_eq!(action_named("sign-out"), Some(PowerAction::SignOut));
         assert_eq!(action_named("hibernate"), Some(PowerAction::Hibernate));
         assert_eq!(action_named("explode"), None);

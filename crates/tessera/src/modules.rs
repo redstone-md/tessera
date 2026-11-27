@@ -9,6 +9,7 @@ mod calendar;
 mod clock;
 mod command;
 mod connections;
+mod display_mode;
 mod focused;
 mod hdr;
 mod keyboard;
@@ -21,6 +22,7 @@ mod network;
 mod notifications;
 mod overview;
 mod plan;
+mod power_dialog;
 mod problems;
 mod run;
 mod runner;
@@ -37,6 +39,8 @@ mod update;
 mod user;
 mod wifi;
 pub mod windows;
+mod windows_keys;
+mod winx;
 mod workspaces;
 
 use crate::config::Config;
@@ -44,6 +48,7 @@ use crate::extension::ExtensionsModule;
 use crate::files::FilesModule;
 use crate::module::Module;
 use crate::session::ShellModule;
+pub use power_dialog::DesktopClosing;
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
@@ -53,6 +58,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(calendar::CalendarModule),
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
+        Box::new(display_mode::DisplayModeModule),
         Box::new(FilesModule),
         Box::new(focused::FocusedModule),
         Box::new(keyboard::KeyboardModule),
@@ -79,12 +85,15 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(look::LookModule),
         Box::new(hdr::HdrModule),
         Box::new(plan::PlanModule),
+        Box::new(power_dialog::PowerDialogModule),
         Box::new(trash::TrashModule),
         Box::new(update::UpdateModule),
         Box::new(tray::TrayModule),
         Box::new(user::UserModule),
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
+        Box::new(windows_keys::WindowsKeysModule),
+        Box::new(winx::WinxModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
         Box::new(ExtensionsModule {

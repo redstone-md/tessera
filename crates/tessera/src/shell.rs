@@ -22,6 +22,7 @@ use crate::keys::Shortcuts;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
+use crate::modules::DesktopClosing;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
@@ -93,6 +94,7 @@ impl Shell {
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
+        DesktopClosing::start(config.windows_keys, cx);
         cx.set_global(Self {
             config,
             surfaces,
@@ -146,6 +148,17 @@ impl Shell {
     /// that opens it with a click, on the display the pointer is on if it
     /// has one, and in the middle of a surface when no widget does.
     pub fn toggle_popup(name: &str, cx: &mut App) {
+        match Self::popup_anchor(name, cx) {
+            Some((_, anchor)) => Popups::toggle(name, anchor, cx),
+            None => report!("the popup `{name}` has nowhere to open"),
+        }
+    }
+
+    /// Where the popup `name` opens: at the widget that opens it with a
+    /// click, on the display the pointer is on if it has one, with `true`;
+    /// in the middle of a surface when no widget does, with `false`; and
+    /// `None` when there is no surface.
+    pub fn popup_anchor(name: &str, cx: &mut App) -> Option<(bool, PopupAnchor)> {
         let mut anywhere = None;
         for surface in Self::surfaces_nearest_first(cx) {
             let found = surface.update(cx, |view, window, cx| {
@@ -155,17 +168,14 @@ impl Shell {
                 (middle.is_some(), PopupAnchor::at(window, x, cx))
             });
             match found {
-                Ok((true, Ok(anchor))) => return Popups::toggle(name, anchor, cx),
+                Ok((true, Ok(anchor))) => return Some((true, anchor)),
                 Ok((false, Ok(anchor))) => {
                     anywhere.get_or_insert(anchor);
                 }
                 _ => {}
             }
         }
-        match anywhere {
-            Some(anchor) => Popups::toggle(name, anchor, cx),
-            None => report!("the popup `{name}` has nowhere to open"),
-        }
+        anywhere.map(|anchor| (false, anchor))
     }
 
     /// Where a window opens that stands in the middle of a display: on
@@ -280,6 +290,7 @@ impl Shell {
         Tiler::configure(&config.tiling, cx);
         Workspaces::configure(&config.workspaces, cx);
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
+        DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);

@@ -6,6 +6,11 @@
 mod win32;
 
 pub use win32::BinUsage;
+pub use win32::DesktopClose;
+pub use win32::DisplayMode;
+pub use win32::InputName;
+pub use win32::OwnInput;
+pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
 pub use win32::QuickFolder;
@@ -18,6 +23,7 @@ pub use win32::RecycledItem;
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
 pub use win32::rename_new;
+pub use win32::save_screenshot;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,

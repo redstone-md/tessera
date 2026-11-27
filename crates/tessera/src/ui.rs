@@ -3,6 +3,7 @@
 
 //! Building blocks shared by shell surfaces.
 
+mod choice;
 mod list;
 mod slider;
 
@@ -20,6 +21,7 @@ use crate::motion::{InteractionState, mix};
 use crate::platform::{NativeSurface, Place};
 use crate::theme::Theme;
 
+pub use choice::{Chooser, Pick, choice_button, choice_row, choice_row_of};
 pub use list::{LIST_MIN_HEIGHT, ROW_HEIGHT, list_row, list_title, switch};
 pub use slider::Slider;
 
