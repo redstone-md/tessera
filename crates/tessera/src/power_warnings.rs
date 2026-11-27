@@ -191,6 +191,7 @@ fn notice(warning: Warning, percent: u8, levels: &BatteryLevels, language: Langu
         }),
         actions: vec![settings],
         urgent: warning != Warning::Low,
+        ..Notice::default()
     }
 }
 

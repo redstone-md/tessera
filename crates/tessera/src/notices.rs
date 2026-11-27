@@ -16,12 +16,17 @@
 //! balloons applications show at their icons of the notification area
 //! where Tessera serves the icons itself, which Explorer would show.
 
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use gpui::{App, AsyncApp, Global};
 use serde::Deserialize;
 
-use crate::banners::{Banners, Notice, NoticeAction};
+use crate::banners::{Banners, Notice, NoticeAction, OnGone};
 use crate::i18n::Language;
 use crate::modules::devices::Drives;
+use crate::notifications_store::NotificationStore;
 use crate::platform::{Balloon, BalloonEvent, Tray, shell_mode};
 use crate::power_warnings::PowerWarnings;
 
@@ -53,8 +58,25 @@ impl NoticesConfig {
 /// Which notices are given.
 pub struct Notices;
 
-/// Marks that the balloons of the notification area are read.
-struct ReadingBalloons;
+/// Marks that the balloons of the notification area are read, and keeps
+/// the balloon each icon shows: the icon, by its id in the tray, and the
+/// notice of the balloon in the store of notifications.
+#[derive(Default)]
+struct ReadingBalloons {
+    shown: HashMap<u64, u64>,
+}
+
+impl ReadingBalloons {
+    /// Forgets that the icon `id` shows the balloon of the notice `key`;
+    /// `false` where it shows another, or none.
+    fn forget(id: u64, key: u64, cx: &mut App) -> bool {
+        let shown = &mut cx.default_global::<Self>().shown;
+        match shown.get(&id) == Some(&key) {
+            true => shown.remove(&id).is_some(),
+            false => false,
+        }
+    }
+}
 
 impl Global for ReadingBalloons {}
 
@@ -76,14 +98,15 @@ impl Notices {
         if cx.has_global::<ReadingBalloons>() {
             return;
         }
-        cx.set_global(ReadingBalloons);
+        cx.set_global(ReadingBalloons::default());
         let balloons = Tray::balloons();
         cx.spawn(async move |cx: &mut AsyncApp| {
             while let Ok(balloon) = balloons.recv().await {
-                if balloon.is_withdrawal() {
-                    continue;
-                }
-                if cx.update(|cx| Self::post_balloon(balloon, cx)).is_err() {
+                let done = match balloon.is_withdrawal() {
+                    true => cx.update(|cx| Self::end_balloon(balloon.id, false, cx)),
+                    false => cx.update(|cx| Self::post_balloon(balloon, cx)),
+                };
+                if done.is_err() {
                     break;
                 }
             }
@@ -91,27 +114,78 @@ impl Notices {
         .detach();
     }
 
+    /// Takes away the banner of the balloon the icon `id` shows, and tells
+    /// the application that it is hidden. Where the application took it
+    /// back or removed its icon, its notice goes from the list as well;
+    /// with `keep`, as a new balloon replaces it, the notice stays listed.
+    fn end_balloon(id: u64, keep: bool, cx: &mut App) {
+        let Some(key) = cx.default_global::<ReadingBalloons>().shown.remove(&id) else {
+            return;
+        };
+        Banners::withdraw(key, cx);
+        if !keep {
+            NotificationStore::dismiss(&[key], cx);
+        }
+        Tray::balloon_event(id, BalloonEvent::Hidden);
+    }
+
     /// Posts `balloon` as a notice whose button, and a click on its
-    /// banner, tell the application that it was clicked, and tells the
-    /// application that it is shown.
+    /// banner, tell the application that it was clicked. The application
+    /// is told that it is shown, and when its banner goes by itself or is
+    /// closed, that it timed out; where it comes as no banner, as while
+    /// banners are off or held back, that it timed out at once, and a
+    /// balloon that is to be shown at once or not at all is not kept.
     fn post_balloon(balloon: Balloon, cx: &mut App) {
         let id = balloon.id;
+        let realtime = balloon.realtime;
+        // An icon shows one balloon at a time.
+        Self::end_balloon(id, true, cx);
+        // The key of the notice is known once it is posted.
+        let posted_key = Rc::new(Cell::new(None));
         let language = Language::of(cx);
-        let open = NoticeAction::new(language.say("Open"), move |_| {
-            Tray::balloon_event(id, BalloonEvent::Clicked);
+        let open = NoticeAction::new(language.say("Open"), {
+            let posted_key = posted_key.clone();
+            move |cx| {
+                if let Some(key) = posted_key.get() {
+                    ReadingBalloons::forget(id, key, cx);
+                }
+                Tray::balloon_event(id, BalloonEvent::Clicked);
+            }
         });
         let app = match balloon.tip.trim() {
             "" => language.say("Notifications").to_owned(),
             tip => tip.lines().next().unwrap_or(tip).to_owned(),
         };
+        let on_gone = OnGone::new({
+            let posted_key = posted_key.clone();
+            move |cx| {
+                if let Some(key) = posted_key.get()
+                    && ReadingBalloons::forget(id, key, cx)
+                {
+                    Tray::balloon_event(id, BalloonEvent::TimedOut);
+                }
+            }
+        });
         let notice = Notice {
             app,
             title: balloon.title,
             body: balloon.text,
             actions: vec![open],
+            on_gone,
             ..Notice::default()
         };
-        Banners::post(notice, cx);
+        let posted = Banners::post(notice, cx);
+        posted_key.set(Some(posted.key));
+        if !posted.shown {
+            if realtime {
+                NotificationStore::dismiss(&[posted.key], cx);
+            }
+            Tray::balloon_event(id, BalloonEvent::TimedOut);
+            return;
+        }
+        cx.default_global::<ReadingBalloons>()
+            .shown
+            .insert(id, posted.key);
         Tray::balloon_event(id, BalloonEvent::Shown);
     }
 }

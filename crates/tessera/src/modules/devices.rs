@@ -438,6 +438,7 @@ fn arrival_notice(drive: &RemovableDrive, language: Language) -> Notice {
         glyph: Some(drive_glyph(drive)),
         actions: vec![open, eject],
         urgent: false,
+        ..Notice::default()
     }
 }
 

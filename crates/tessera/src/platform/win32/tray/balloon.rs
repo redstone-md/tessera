@@ -116,10 +116,6 @@ impl Balloon {
 
 /// What became of a balloon, as its application is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "the banners do not yet tell when the banner of a balloon went"
-)]
 pub enum BalloonEvent {
     /// It is shown.
     Shown,

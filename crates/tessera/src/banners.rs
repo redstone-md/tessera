@@ -22,6 +22,7 @@
 //! can carry buttons, which those of Windows cannot, as Windows does not
 //! tell what the buttons of a notification are.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -375,6 +376,43 @@ impl NoticeAction {
     }
 }
 
+/// What is done once when the banner of a notice goes without a click on
+/// it or on its buttons: its time ran out, the user closed it, or newer
+/// banners pushed it out. Clones share it, and it is done at most once.
+#[derive(Clone, Default)]
+pub struct OnGone(Rc<Cell<Option<GoneDeed>>>);
+
+/// What an [`OnGone`] does.
+type GoneDeed = Box<dyn FnOnce(&mut App)>;
+
+impl OnGone {
+    pub fn new(gone: impl FnOnce(&mut App) + 'static) -> Self {
+        Self(Rc::new(Cell::new(Some(Box::new(gone)))))
+    }
+
+    /// Does it, unless it was done or disarmed before.
+    fn fire(&self, cx: &mut App) {
+        if let Some(gone) = self.0.take() {
+            gone(cx);
+        }
+    }
+
+    /// Makes sure it is never done.
+    fn disarm(&self) {
+        self.0.take();
+    }
+}
+
+/// What [`Banners::post`] did with a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Posted {
+    /// The notice in the store of notifications.
+    pub key: u64,
+    /// Whether it came as a banner; otherwise it is only listed, as while
+    /// banners are off or held back.
+    pub shown: bool,
+}
+
 /// A notice of Tessera itself, to post with [`Banners::post`].
 #[derive(Clone, Default)]
 pub struct Notice {
@@ -391,6 +429,9 @@ pub struct Notice {
     /// or held back, and stays until it is put away, as a warning of an
     /// empty battery should.
     pub urgent: bool,
+    /// What is done when its banner goes by itself or is closed; nothing
+    /// is done for a notice that comes as no banner.
+    pub on_gone: OnGone,
 }
 
 /// What a banner shows, and what a click on it does.
@@ -407,6 +448,7 @@ struct BannerItem {
     body: String,
     glyph: &'static str,
     actions: Vec<NoticeAction>,
+    on_gone: OnGone,
 }
 
 /// The banners and do not disturb.
@@ -534,6 +576,7 @@ impl Banners {
                 body: entry.body.clone(),
                 glyph: APP_GLYPH,
                 actions: Vec::new(),
+                on_gone: OnGone::default(),
             })
             .collect();
         Self::show(items, stay, cx);
@@ -542,7 +585,7 @@ impl Banners {
     /// Posts `notice`: it is listed with the notifications, and comes as a
     /// banner where banners are shown and not held back, or where it is
     /// urgent, and then stays until it is put away.
-    pub fn post(notice: Notice, cx: &mut App) {
+    pub fn post(notice: Notice, cx: &mut App) -> Posted {
         let Notice {
             app,
             title,
@@ -550,11 +593,12 @@ impl Banners {
             glyph,
             actions,
             urgent,
+            on_gone,
         } = notice;
         let key = NotificationStore::add_own(app.clone(), title.clone(), body.clone(), cx);
         let banners = cx.default_global::<Self>().config.banners;
         if !urgent && !(banners && Self::hush(cx).is_none()) {
-            return;
+            return Posted { key, shown: false };
         }
         let stay = match urgent {
             true => Duration::MAX,
@@ -569,15 +613,26 @@ impl Banners {
             body,
             glyph: glyph.unwrap_or(APP_GLYPH),
             actions,
+            on_gone,
         };
-        Self::show(vec![item], stay, cx);
+        let shown = Self::show(vec![item], stay, cx);
+        Posted { key, shown }
+    }
+
+    /// Takes the banner of the notification `key` away, if it is shown,
+    /// without doing what the notice asked for when its banner goes.
+    pub fn withdraw(key: u64, cx: &mut App) {
+        if let Some(open) = cx.try_global::<Self>().and_then(|this| this.open) {
+            open.update(cx, |view, _, cx| view.withdraw(key, cx)).ok();
+        }
     }
 
     /// Shows `items` above the banners there are, opening the window of
-    /// the banners if it is not open.
-    fn show(items: Vec<BannerItem>, stay: Duration, cx: &mut App) {
+    /// the banners if it is not open. `false` where they could not be
+    /// shown.
+    fn show(items: Vec<BannerItem>, stay: Duration, cx: &mut App) -> bool {
         if items.is_empty() {
-            return;
+            return false;
         }
         let stack = cx.global::<Self>().config.stack();
         if let Some(open) = cx.global::<Self>().open {
@@ -585,19 +640,19 @@ impl Banners {
                 view.show(items.clone(), stay, stack, window, cx)
             });
             if matches!(shown, Ok(true)) {
-                return;
+                return true;
             }
         }
-        Self::open(items, stay, stack, cx);
+        Self::open(items, stay, stack, cx)
     }
 
     /// Opens the window of the banners with `items` in it, in the corner
     /// the configuration names of what the bars leave of the display the
-    /// pointer is on.
-    fn open(items: Vec<BannerItem>, stay: Duration, stack: usize, cx: &mut App) {
+    /// pointer is on. `false` where it did not open.
+    fn open(items: Vec<BannerItem>, stay: Duration, stack: usize, cx: &mut App) -> bool {
         let Some(anchor) = Shell::middle_anchor(cx) else {
             report!("the banners have nowhere to open");
-            return;
+            return false;
         };
         let area = anchor.display.and_then(|display| display.work_area());
         let hanging = Hanging {
@@ -627,8 +682,14 @@ impl Banners {
             BannerView::new(items, stay, stack, hanging, cx)
         });
         match opened {
-            Ok(window) => cx.global_mut::<Self>().open = Some(window),
-            Err(error) => report!("the banners did not open: {error:#}"),
+            Ok(window) => {
+                cx.global_mut::<Self>().open = Some(window);
+                true
+            }
+            Err(error) => {
+                report!("the banners did not open: {error:#}");
+                false
+            }
         }
     }
 }
@@ -868,6 +929,15 @@ impl BannerView {
         }
     }
 
+    /// Has the banner of the notification `key` leave without doing what
+    /// its notice asked for when it goes.
+    fn withdraw(&mut self, key: u64, cx: &mut Context<Self>) {
+        if let Some(banner) = self.banner(key) {
+            banner.item.on_gone.disarm();
+        }
+        self.hide(key, cx);
+    }
+
     /// Does what a click on the banner `key` does: opens the application
     /// of a notification of Windows, which then leaves the notification
     /// center, or does what the first button of a notice does.
@@ -876,7 +946,7 @@ impl BannerView {
             return;
         };
         let item = banner.item.clone();
-        self.hide(key, cx);
+        self.withdraw(key, cx);
         if item.windows {
             cx.defer(move |cx| NotificationStore::open(key, cx));
         } else if let Some(action) = item.actions.first() {
@@ -898,7 +968,7 @@ impl BannerView {
         else {
             return;
         };
-        self.hide(key, cx);
+        self.withdraw(key, cx);
         cx.defer(move |cx| run(cx));
     }
 
@@ -1061,7 +1131,12 @@ impl Render for BannerView {
             .collect();
         // A banner that has finished leaving was just drawn at no height.
         let before = banners.len();
-        banners.retain(|banner| !(banner.leaving && banner.presence.is_settled()));
+        let left = |banner: &Banner| banner.leaving && banner.presence.is_settled();
+        for banner in banners.iter().filter(|banner| left(banner)) {
+            let on_gone = banner.item.on_gone.clone();
+            cx.defer(move |cx| on_gone.fire(cx));
+        }
+        banners.retain(|banner| !left(banner));
         // The newest banner is the one nearest the corner.
         if corner.bottom() {
             slots.reverse();
