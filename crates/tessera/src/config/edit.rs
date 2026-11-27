@@ -1011,3 +1011,266 @@ content = ["apps"]
         file.config().expect("it stays usable");
     }
 }
+
+// wallpaper-looks: the wallpaper, its displays, workspaces and collections.
+impl ConfigFile {
+    /// The table `[wallpaper]`, made where there is none; `None` where
+    /// the file has something else under that name.
+    fn wallpaper_table(&mut self) -> Option<&mut Table> {
+        let item = self.document.entry("wallpaper");
+        let item = item.or_insert_with(|| Item::Table(Table::new()));
+        item.as_table_mut()
+    }
+
+    /// The entries `[[wallpaper.<kind>]]`, made where there are none.
+    fn wallpaper_tables(&mut self, kind: &str) -> Option<&mut ArrayOfTables> {
+        let item = self.wallpaper_table()?.entry(kind);
+        let item = item.or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        item.as_array_of_tables_mut()
+    }
+
+    /// The entries `[[wallpaper.<kind>]]` as they are.
+    fn wallpaper_entries(&self, kind: &str) -> impl Iterator<Item = &Table> {
+        let entries = { self.document.get("wallpaper") }
+            .and_then(Item::as_table)
+            .and_then(|wallpaper| wallpaper.get(kind))
+            .and_then(Item::as_array_of_tables);
+        entries.into_iter().flat_map(ArrayOfTables::iter)
+    }
+
+    /// Takes away `[wallpaper]` and its entries of `kind` where nothing is
+    /// left in them.
+    fn tidy_wallpaper(&mut self, kind: &str) {
+        let wallpaper = self.document.get_mut("wallpaper");
+        let Some(wallpaper) = wallpaper.and_then(Item::as_table_mut) else {
+            return;
+        };
+        let empty = { wallpaper.get(kind) }
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(ArrayOfTables::is_empty);
+        if empty {
+            wallpaper.remove(kind);
+        }
+        if wallpaper.is_empty() {
+            self.document.remove("wallpaper");
+        }
+    }
+
+    /// Sets `key` of `[wallpaper]`; `None` takes it away. Whether the
+    /// file has a `[wallpaper]` keys can be set in is returned.
+    pub fn set_wallpaper(&mut self, key: &str, value: Option<Value>) -> bool {
+        self.set_in("wallpaper", key, value)
+    }
+
+    /// Sets `key` of the entry `[[wallpaper.<kind>]]` whose `number` is
+    /// `number`, `kind` being `display` or `workspace`; the entry is made
+    /// where there is none, and taken away where only its number is left.
+    pub fn set_wallpaper_place(
+        &mut self,
+        kind: &str,
+        number: usize,
+        key: &str,
+        value: Option<Value>,
+    ) -> bool {
+        let Some(entries) = self.wallpaper_tables(kind) else {
+            return false;
+        };
+        let numbered = |entry: &Table| {
+            let of = entry.get("number").and_then(Item::as_integer);
+            of == i64::try_from(number).ok()
+        };
+        let found = entries.iter().position(numbered);
+        let at = match (found, &value) {
+            (Some(at), _) => at,
+            (None, None) => {
+                self.tidy_wallpaper(kind);
+                return true;
+            }
+            (None, Some(_)) => {
+                let mut entry = Table::new();
+                entry.insert("number", value_of_number(number));
+                entries.push(entry);
+                entries.len() - 1
+            }
+        };
+        let Some(entry) = entries.get_mut(at) else {
+            return false;
+        };
+        match value {
+            Some(value) => {
+                entry.insert(key, Item::Value(value));
+            }
+            None => {
+                entry.remove(key);
+            }
+        }
+        if entry.len() == 1 && entry.contains_key("number") {
+            entries.remove(at);
+        }
+        self.tidy_wallpaper(kind);
+        true
+    }
+
+    /// Takes `key` away from every entry `[[wallpaper.<kind>]]`, and the
+    /// entries where only their number is left.
+    pub fn clear_wallpaper_places(&mut self, kind: &str, key: &str) {
+        for number in self.wallpaper_numbers(kind) {
+            self.set_wallpaper_place(kind, number, key, None);
+        }
+    }
+
+    /// The numbers of the entries `[[wallpaper.<kind>]]`.
+    fn wallpaper_numbers(&self, kind: &str) -> Vec<usize> {
+        { self.wallpaper_entries(kind) }
+            .filter_map(|entry| entry.get("number")?.as_integer())
+            .filter_map(|number| usize::try_from(number).ok())
+            .collect()
+    }
+
+    /// Adds a collection `[[wallpaper.collections]]` named `name` with the
+    /// pictures and folders `images`, after the others.
+    pub fn add_wallpaper_collection(&mut self, name: &str, images: &[PathBuf]) -> bool {
+        let Some(collections) = self.wallpaper_tables("collections") else {
+            return false;
+        };
+        let mut entry = Table::new();
+        entry.insert("name", value(name));
+        let images: Array = { images.iter() }
+            .map(|image| image.to_string_lossy().into_owned())
+            .collect();
+        entry.insert("images", Item::Value(Value::Array(images)));
+        collections.push(entry);
+        true
+    }
+
+    /// Takes away the collection at `index`, and every `collection` that
+    /// names it.
+    pub fn remove_wallpaper_collection(&mut self, index: usize) -> bool {
+        let Some(collections) = self.wallpaper_tables("collections") else {
+            return false;
+        };
+        let name = { collections.get(index) }
+            .and_then(|entry| entry.get("name")?.as_str())
+            .map(str::to_owned);
+        let Some(name) = name else {
+            self.tidy_wallpaper("collections");
+            return false;
+        };
+        collections.remove(index);
+        self.tidy_wallpaper("collections");
+        let chosen = { self.document.get("wallpaper") }
+            .and_then(Item::as_table)
+            .and_then(|wallpaper| wallpaper.get("collection")?.as_str())
+            == Some(name.as_str());
+        if chosen {
+            self.set_wallpaper("collection", None);
+        }
+        for kind in ["display", "workspace"] {
+            let showing: Vec<usize> = { self.wallpaper_entries(kind) }
+                .filter(|entry| entry.get("collection").and_then(Item::as_str) == Some(&name))
+                .filter_map(|entry| entry.get("number")?.as_integer())
+                .filter_map(|number| usize::try_from(number).ok())
+                .collect();
+            for number in showing {
+                self.set_wallpaper_place(kind, number, "collection", None);
+            }
+        }
+        true
+    }
+
+    /// Moves the collection at `index` one place on, or back, among the
+    /// collections. Whether there was a place to move it to is returned.
+    pub fn move_wallpaper_collection(&mut self, index: usize, forward: bool) -> bool {
+        let Some(collections) = self.wallpaper_tables("collections") else {
+            return false;
+        };
+        let other = if forward {
+            index + 1
+        } else {
+            index.wrapping_sub(1)
+        };
+        if index >= collections.len() || other >= collections.len() {
+            self.tidy_wallpaper("collections");
+            return false;
+        }
+        let mut entries: Vec<Table> = collections.iter().cloned().collect();
+        // The file is written in the order of the places tables were read
+        // at, so the two take each other's place there too.
+        let places: Vec<Option<isize>> = entries.iter().map(Table::position).collect();
+        entries.swap(index, other);
+        collections.clear();
+        for (mut entry, place) in entries.into_iter().zip(places) {
+            entry.set_position(place);
+            collections.push(entry);
+        }
+        true
+    }
+}
+
+/// `number` as a value of the file.
+fn value_of_number(number: usize) -> Item {
+    value(i64::try_from(number).unwrap_or(i64::MAX))
+}
+
+#[cfg(test)]
+mod wallpaper_tests {
+    use super::*;
+
+    fn file(text: &str) -> ConfigFile {
+        ConfigFile::parse(text).unwrap()
+    }
+
+    #[test]
+    fn keys_of_a_display_are_set_in_an_entry_of_its_own() {
+        let mut edited = file("# Mine.\n[wallpaper]\nfit = \"cover\" # kept\n");
+        assert!(edited.set_wallpaper("blur", Some(8.into())));
+        assert!(edited.set_wallpaper_place("display", 2, "collection", Some("sea".into())));
+        assert!(edited.set_wallpaper_place("display", 2, "brightness", Some(0.5.into())));
+        let text = edited.document.to_string();
+        assert!(text.contains("# kept"));
+        assert!(text.contains("[[wallpaper.display]]\nnumber = 2\ncollection = \"sea\""));
+        assert!(text.contains("blur = 8"));
+        // Without its keys the entry goes, and so does the table.
+        assert!(edited.set_wallpaper_place("display", 2, "collection", None));
+        assert!(edited.set_wallpaper_place("display", 2, "brightness", None));
+        assert!(
+            !edited
+                .document
+                .to_string()
+                .contains("[[wallpaper.display]]")
+        );
+        let mut empty = file("");
+        assert!(empty.set_wallpaper_place("workspace", 1, "blur", None));
+        assert_eq!(empty.document.to_string(), "");
+    }
+
+    #[test]
+    fn collections_are_added_moved_and_taken_away_with_their_names() {
+        let mut edited = file("");
+        assert!(edited.add_wallpaper_collection("sea", &[PathBuf::from(r"C:\Sea")]));
+        assert!(edited.add_wallpaper_collection("hills", &[]));
+        assert!(edited.set_wallpaper("collection", Some("sea".into())));
+        assert!(edited.set_wallpaper_place("display", 1, "collection", Some("sea".into())));
+        edited.config().expect("it is usable");
+        let names = |edited: &ConfigFile| -> Vec<String> {
+            let table = edited.table().unwrap();
+            let collections = table["wallpaper"]["collections"]
+                .as_array()
+                .unwrap()
+                .clone();
+            { collections.iter() }
+                .map(|entry| entry["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(names(&edited), ["sea", "hills"]);
+        assert!(edited.move_wallpaper_collection(0, true));
+        assert_eq!(names(&edited), ["hills", "sea"]);
+        assert!(!edited.move_wallpaper_collection(0, false));
+        assert!(edited.remove_wallpaper_collection(1));
+        assert_eq!(names(&edited), ["hills"]);
+        let text = edited.document.to_string();
+        assert!(!text.contains("collection = \"sea\""), "{text}");
+        assert!(!text.contains("[[wallpaper.display]]"));
+        edited.config().expect("it stays usable");
+    }
+}

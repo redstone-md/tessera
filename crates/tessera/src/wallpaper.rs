@@ -23,37 +23,52 @@
 //! wallpaper of Windows every few seconds, works out what each display is
 //! to show ([`looks::Plan`]) and changes only the windows whose plan
 //! changed. Everything that waits, reading files and asking Windows, is
-//! done off the thread of the interface.
+//! done off the thread of the interface, and so are the adjustments of a
+//! picture (`blur`, `brightness`, `overlay` and the others, see
+//! [`adjust`]), which are made once each time a picture is shown.
+//!
+//! In shell mode, where Explorer does not answer for the wallpaper,
+//! Tessera answers the programs that ask for `IDesktopWallpaper` itself
+//! (see [`served`]): what they set is written to the configuration.
 
 mod accent;
+mod adjust;
 mod compose;
 mod daily;
+mod edit;
 mod looks;
+mod served;
 
 use std::collections::HashSet;
 use std::future::Future as _;
 use std::path::{Path, PathBuf};
 use std::pin::{Pin, pin};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
 use chrono::{Local, NaiveDate, Timelike as _};
-use gpui::{App, AsyncApp, Global};
+use gpui::{App, AsyncApp, Global, RenderImage};
 use image::{ImageReader, RgbImage};
 use serde::{Deserialize, Serialize};
 
-use self::compose::{Fit, around, compose};
+use self::adjust::Adjustments;
+pub use self::adjust::{Blend, Flip, Place, Position, parse_rgba};
+pub use self::compose::Fit;
+use self::compose::{Ground, around, compose, still};
 use self::daily::{Daily, DailyPicture};
+pub use self::edit::{Edit, read as read_settings, write as write_settings};
 pub use self::looks::WallpaperConfig;
-use self::looks::{Looks, Moment, Plan, WindowsNow};
+pub use self::looks::{FASTEST, PAUSE_COVERAGE, SHORTEST_INTERVAL, SLOWEST, Shown, Source};
+use self::looks::{Looks, Moment, Plan, Turns, VideoPlan, WindowsNow};
+use self::served::Served;
 use crate::motion::{Spring, SpringSpec};
 use crate::platform::{
-    AppWindow, BackdropPicture, Battery, DesktopBackdrop, DesktopVideo, ScreenRect, ShellThread,
-    SystemWallpaper, VideoState, decode_with_wic, display_at, display_frames, light_mode,
-    memory_held, user_locale,
+    AppWindow, BackdropPicture, Battery, DesktopBackdrop, DesktopVideo, DisplayKey, Poster,
+    ScreenRect, ShellThread, SystemWallpaper, VideoLook, VideoOverlay, VideoState, decode_with_wic,
+    display_at, display_frames, light_mode, memory_held, user_locale,
 };
 use crate::theme::Theme;
 use crate::workspaces::Workspaces;
@@ -101,6 +116,13 @@ static MIRROR_ASKED: AtomicU64 = AtomicU64::new(0);
 
 /// When the wallpaper was first asked for, which is as Tessera starts.
 static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Whether a still of what each display shows is kept, for
+/// [`Wallpaper::picture_of`]: from the first time one is asked for.
+static STILLS_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// The longer side of such a still at most, in pixels.
+const STILL_LONGEST: u32 = 2560;
 
 /// The color the wallpaper stands out with, as `0x1RRGGBB`, or 0 where it
 /// is not known.
@@ -174,22 +196,57 @@ fn read(path: &Path) -> anyhow::Result<RgbImage> {
     Ok(image)
 }
 
-/// Whether one of `windows` hides a display at `frame`: lies over nine
-/// tenths of it or more.
-fn hidden(frame: ScreenRect, windows: &[ScreenRect]) -> bool {
-    let area = |frame: ScreenRect| {
+/// The share of the display at `frame` that `windows` cover together,
+/// from 0 to 1: where they lie over each other it is counted once.
+fn covered(frame: ScreenRect, windows: &[ScreenRect]) -> f32 {
+    let area = |frame: &ScreenRect| {
         let wide = i64::from((frame.right - frame.left).max(0));
         wide * i64::from((frame.bottom - frame.top).max(0))
     };
-    windows.iter().any(|window| {
-        let shared = ScreenRect {
+    let whole = area(&frame);
+    if whole == 0 {
+        return 0.;
+    }
+    let within: Vec<ScreenRect> = windows
+        .iter()
+        .map(|window| ScreenRect {
             left: window.left.max(frame.left),
             top: window.top.max(frame.top),
             right: window.right.min(frame.right),
             bottom: window.bottom.min(frame.bottom),
-        };
-        area(shared) * 10 >= area(frame) * 9 && area(frame) > 0
-    })
+        })
+        .filter(|window| area(window) > 0)
+        .collect();
+    // The display is cut into strips at every side of a window; in each
+    // the windows across all of it cover one length of it or several.
+    let mut sides: Vec<i32> = within.iter().flat_map(|w| [w.left, w.right]).collect();
+    sides.sort_unstable();
+    sides.dedup();
+    let mut shared = 0_i64;
+    for strip in sides.windows(2) {
+        let (from, to) = (strip[0], strip[1]);
+        let mut lengths: Vec<(i32, i32)> = { within.iter() }
+            .filter(|window| window.left <= from && window.right >= to)
+            .map(|window| (window.top, window.bottom))
+            .collect();
+        lengths.sort_unstable();
+        let (mut down, mut reach) = (0_i64, i32::MIN);
+        for (top, bottom) in lengths {
+            let start = top.max(reach);
+            if bottom > start {
+                down += i64::from(bottom - start);
+            }
+            reach = reach.max(bottom);
+        }
+        shared += i64::from(to - from) * down;
+    }
+    (shared as f64 / whole as f64) as f32
+}
+
+/// Whether windows that cover `share` of a display hold its video still,
+/// where they do from `pause_at` on; at 0 they never do.
+fn holds(share: f32, pause_at: f32) -> bool {
+    pause_at > 0. && share >= pause_at
 }
 
 /// The number of each of the displays with the bounds `frames`: they are
@@ -212,18 +269,82 @@ fn primary(frames: &[ScreenRect]) -> usize {
 
 /// The displays, by their place in `plans`, that are to play each list of
 /// videos; displays with the same list share one decode.
-fn video_groups(plans: &[Plan]) -> Vec<(Vec<PathBuf>, Vec<usize>)> {
-    let mut groups: Vec<(Vec<PathBuf>, Vec<usize>)> = Vec::new();
+fn video_groups(plans: &[Plan]) -> Vec<(VideoPlan, Vec<usize>)> {
+    let mut groups: Vec<(VideoPlan, Vec<usize>)> = Vec::new();
     for (index, plan) in plans.iter().enumerate() {
-        let Plan::Video(files) = plan else {
+        let Plan::Video(videos) = plan else {
             continue;
         };
-        match groups.iter_mut().find(|(of, _)| of == files) {
+        match groups.iter_mut().find(|(of, _)| of == videos) {
             Some((_, displays)) => displays.push(index),
-            None => groups.push((files.clone(), vec![index])),
+            None => groups.push((videos.clone(), vec![index])),
         }
     }
     groups
+}
+
+/// How the platform is to play `plan`.
+fn video_look(plan: &VideoPlan) -> VideoLook {
+    let adjust = plan.adjust;
+    let overlay = adjust.overlay.map(|overlay| {
+        let darken = overlay.blend == Blend::Darken;
+        if !matches!(overlay.blend, Blend::Normal | Blend::Darken) {
+            report!(
+                "the overlay of a video is laid on as `normal`: the compositor has no `{}`",
+                overlay.blend.name()
+            );
+        }
+        VideoOverlay {
+            color: overlay.color,
+            darken,
+        }
+    });
+    VideoLook {
+        speed: plan.sound.speed,
+        sound: plan.sound.sound,
+        volume: plan.sound.volume,
+        flip_across: adjust.flip.across(),
+        flip_down: adjust.flip.down(),
+        anchor: (adjust.anchor.x, adjust.anchor.y),
+        overlay,
+    }
+}
+
+/// `pixels` as a still for the interface.
+fn render_image(pixels: image::RgbaImage) -> Arc<RenderImage> {
+    Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))
+}
+
+/// A still of what the display at `frame` shows of a video whose frame
+/// is `poster`, mirrored, placed and overlaid as `adjust` says.
+fn poster_still(
+    poster: &Poster,
+    frame: ScreenRect,
+    adjust: &Adjustments,
+) -> Option<Arc<RenderImage>> {
+    let rgb: Vec<u8> = { poster.pixels.as_chunks::<4>().0.iter() }
+        .flat_map(|&[blue, green, red, _]| [red, green, blue])
+        .collect();
+    let image = RgbImage::from_raw(poster.width, poster.height, rgb)?;
+    // At the size of the still, not of the display: a frame is no
+    // sharper than it is.
+    let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+    let (wide, high) =
+        compose::shrunk_size(width.unsigned_abs(), height.unsigned_abs(), STILL_LONGEST);
+    let shown = ScreenRect {
+        left: 0,
+        top: 0,
+        right: wide as i32,
+        bottom: high as i32,
+    };
+    let fitted = compose(
+        Some(&image),
+        shown,
+        shown,
+        (Fit::Cover, Ground::default()),
+        adjust,
+    );
+    Some(render_image(still(&fitted, STILL_LONGEST)))
 }
 
 /// Waits for `duration`, or until `poke` gets something or is closed.
@@ -238,6 +359,13 @@ async fn nap(duration: Duration, poke: &async_channel::Receiver<()>, cx: &AsyncA
     .await;
 }
 
+/// A still of what a display shows, where stills are kept.
+type Still = Option<Arc<RenderImage>>;
+
+/// A picture made for a plan, with the color it stands out with and its
+/// still, which displays of the same size share.
+type Fitted = (Plan, Arc<BackdropPicture>, Option<[u8; 3]>, Still);
+
 /// What one display shows: the plan it was last brought to, and the
 /// window of its picture.
 #[derive(Default)]
@@ -247,16 +375,21 @@ struct Slot {
     /// The window of the picture before, which a new one fades in over
     /// and which goes after.
     under: Option<DesktopBackdrop>,
+    /// A still of the picture, where stills are kept.
+    still: Option<Arc<RenderImage>>,
 }
 
 /// Videos that play on some displays.
 struct Playing {
-    files: Vec<PathBuf>,
+    plan: VideoPlan,
     /// The displays, by their place among the frames.
     displays: Vec<usize>,
     video: DesktopVideo,
     /// Whether the memory was looked at once more after it came in.
     weighed: bool,
+    /// A still of a frame for each of the displays, where stills are
+    /// kept and a frame was taken.
+    stills: Vec<Option<Arc<RenderImage>>>,
 }
 
 /// What is known of the picture of the day.
@@ -273,8 +406,10 @@ pub struct Wallpaper {
     config: WallpaperConfig,
     /// Counts configurations, so that the task of an earlier one stops.
     task: usize,
-    /// The displays the slots are for.
+    /// The displays the slots are for, and how other parts of Tessera
+    /// know them.
     frames: Vec<ScreenRect>,
+    keys: Vec<DisplayKey>,
     slots: Vec<Slot>,
     videos: Vec<Playing>,
     /// Videos that could not be played, and are not tried again until the
@@ -290,6 +425,8 @@ pub struct Wallpaper {
     daily: Option<DailyPicture>,
     /// What was last made the wallpaper of Windows with `mirror`.
     mirrored: Option<SystemWallpaper>,
+    /// What answers for the wallpaper as Explorer would, in shell mode.
+    served: Option<Served>,
 }
 
 impl Global for Wallpaper {}
@@ -304,6 +441,7 @@ impl Wallpaper {
             config: WallpaperConfig::default(),
             task: 0,
             frames: Vec::new(),
+            keys: Vec::new(),
             slots: Vec::new(),
             videos: Vec::new(),
             failed: HashSet::new(),
@@ -312,12 +450,15 @@ impl Wallpaper {
             poked,
             daily: None,
             mirrored: None,
+            served: None,
         });
-        cx.on_app_quit(|_| {
+        cx.on_app_quit(|cx| {
+            cx.global_mut::<Self>().served = None;
             Mirror::restore_before_exit();
             async {}
         })
         .detach();
+        Served::start(config, cx);
         if !config.mirror {
             Mirror::restore_later();
         }
@@ -344,6 +485,7 @@ impl Wallpaper {
     /// Starts the task that keeps the wallpaper as `config` says, and has
     /// the one before stop.
     fn begin(config: &WallpaperConfig, cx: &mut App) {
+        Served::configure(config, cx);
         let this = cx.global_mut::<Self>();
         this.config = config.clone();
         this.task += 1;
@@ -370,6 +512,57 @@ impl Wallpaper {
         this.poke.try_send(()).ok();
     }
 
+    /// Has a still kept of what each display shows from now on, for
+    /// [`Self::picture_of`], which does this itself the first time. The
+    /// stills of what is shown already are made in the background, in a
+    /// moment. A part of Tessera that is to show the wallpaper calls this
+    /// as it starts, so that the first picture it asks for is there.
+    #[allow(
+        dead_code,
+        reason = "for the desktop peek, which asks for the pictures once it is merged"
+    )]
+    pub fn keep_pictures(cx: &App) {
+        if STILLS_WANTED.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let Some(this) = cx.try_global::<Self>() else {
+            return;
+        };
+        for playing in &this.videos {
+            playing.video.want_posters();
+        }
+        this.poke.try_send(()).ok();
+    }
+
+    /// The picture Tessera shows on the display `display`: the composed
+    /// still, adjusted, or a frame of the video there, mirrored, placed
+    /// and overlaid. `None` where Tessera draws no wallpaper of its own
+    /// there, as where the desktop window draws the wallpaper of Windows,
+    /// and until the still is made: stills are kept only once
+    /// [`Self::keep_pictures`] was called, and this calls it. A still is
+    /// no larger than 2560 pixels on its longer side.
+    ///
+    /// A view that paints the still keeps the `Arc` only while it shows
+    /// it, and lets GPUI drop it from its window then (`Window::drop_image`).
+    #[allow(
+        dead_code,
+        reason = "for the desktop peek, which asks for the pictures once it is merged"
+    )]
+    pub fn picture_of(display: DisplayKey, cx: &App) -> Option<Arc<RenderImage>> {
+        Self::keep_pictures(cx);
+        let this = cx.try_global::<Self>()?;
+        let index = this.keys.iter().position(|key| *key == display)?;
+        let slot = this.slots.get(index)?;
+        match &slot.plan {
+            Plan::Nothing => None,
+            Plan::Video(_) => this.videos.iter().find_map(|playing| {
+                let at = playing.displays.iter().position(|shown| *shown == index)?;
+                playing.stills.get(at)?.clone()
+            }),
+            Plan::Picture { .. } | Plan::Fill(_) => slot.still.clone(),
+        }
+    }
+
     /// Keeps the wallpaper as the configuration of `task` says, until the
     /// wallpaper is configured anew.
     async fn keep(
@@ -387,8 +580,8 @@ impl Wallpaper {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos() as u64);
-        let mut turn = 0_i64;
-        let mut turned = Instant::now();
+        let intervals = looks.intervals();
+        let mut turns = Turns::default();
         let mut windows: Option<WindowsNow> = None;
         let mut painted = true;
         let mut looked: Option<Instant> = None;
@@ -408,7 +601,8 @@ impl Wallpaper {
                     })
                     .await;
                 let follows = cx.update(|cx| cx.global::<Theme>().follows_wallpaper())?;
-                if looks.shows_windows() && (!painted || follows) {
+                let drawn = !painted || follows || looks.adjusts_windows();
+                if looks.shows_windows() && drawn {
                     let frames = display_frames();
                     let read = ShellThread::call(move || WindowsNow::read(&frames));
                     windows = read.recv().await.ok();
@@ -422,12 +616,9 @@ impl Wallpaper {
             }
 
             let step = cx.update(|cx| std::mem::take(&mut cx.global_mut::<Self>().step))?;
+            turns.tick(&intervals, now);
             if step != 0 {
-                turn = turn.saturating_add(step as i64);
-                turned = now;
-            } else if looks.rotates() && turned.elapsed() >= looks.interval {
-                turn = turn.saturating_add(1);
-                turned = now;
+                turns.step(step as i64, now);
             }
 
             let plans = cx.update(|cx| {
@@ -435,7 +626,7 @@ impl Wallpaper {
                 (this.task == task).then(|| {
                     let moment = Moment {
                         dark: Self::dark(&looks),
-                        turn,
+                        turns: &turns,
                         seed,
                         windows: windows.as_ref(),
                         painted,
@@ -459,11 +650,15 @@ impl Wallpaper {
                 if mirror {
                     Self::mirror(task, &frames, &wanted, cx)?;
                 }
+                Served::shown(&frames, &wanted, windows.as_ref(), cx)?;
                 planned = Some(plans);
             }
             if let Some((frames, plans)) = &planned {
                 let windows = windows.as_ref();
                 Self::follow_color(task, frames, plans, windows, &mut colored, cx).await?;
+                if STILLS_WANTED.load(Ordering::Relaxed) {
+                    Self::fill_stills(task, frames, plans, cx).await?;
+                }
             }
 
             let pause = if looks.by_workspace() {
@@ -523,6 +718,7 @@ impl Wallpaper {
                 this.slots.clear();
                 this.slots.resize_with(frames.len(), Slot::default);
                 this.frames = frames.to_vec();
+                this.keys = frames.iter().map(|frame| display_at(*frame)).collect();
             }
             let changed = this.slots.iter().zip(plans).enumerate();
             let changed = changed.filter(|(_, (slot, plan))| {
@@ -536,22 +732,22 @@ impl Wallpaper {
         if !Self::show_pictures(task, frames, plans, &changed, fade, cx).await? {
             return Ok(false);
         }
-        for (files, displays) in video_groups(plans) {
+        for (videos, displays) in video_groups(plans) {
             let playing = cx.update(|cx| {
                 let this = cx.global::<Self>();
                 let same =
-                    |playing: &Playing| playing.files == files && playing.displays == displays;
+                    |playing: &Playing| playing.plan == videos && playing.displays == displays;
                 this.videos.iter().any(same)
             })?;
             if playing {
                 continue;
             }
-            match Self::play(task, frames, &files, &displays, fade, cx).await {
+            match Self::play(task, frames, &videos, &displays, fade, cx).await {
                 Ok(true) => {}
                 Ok(false) => return Ok(false),
                 Err(error) => {
                     report!("the wallpaper video is left out: {error:#}");
-                    cx.update(|cx| cx.global_mut::<Self>().failed.extend(files))?;
+                    cx.update(|cx| cx.global_mut::<Self>().failed.extend(videos.files))?;
                 }
             }
         }
@@ -585,27 +781,24 @@ impl Wallpaper {
         let mut read_last: Option<(PathBuf, Arc<RgbImage>)> = None;
         // With the color it stands out with, which the primary display
         // gives the theme whether it made the picture or took it over.
-        let mut fitted: Option<(Plan, Arc<BackdropPicture>, Option<[u8; 3]>)> = None;
+        let mut fitted: Option<Fitted> = None;
         let mut fading = Vec::new();
+        let stills = STILLS_WANTED.load(Ordering::Relaxed);
         for &index in changed {
             let plan = &plans[index];
             let frame = frames[index];
-            let (file, fit, ground) = match plan {
-                Plan::Picture {
-                    file, fit, ground, ..
-                } => (Some(file), *fit, *ground),
-                Plan::Fill(ground) => (None, Fit::Cover, *ground),
-                _ => continue,
+            let Some((file, fit, ground, adjust)) = Self::drawn(plan) else {
+                continue;
             };
             let size = (
                 (frame.right - frame.left).unsigned_abs(),
                 (frame.bottom - frame.top).unsigned_abs(),
             );
-            let (picture, color) = match fitted.take() {
-                Some((of, picture, color))
+            let (picture, color, kept) = match fitted.take() {
+                Some((of, picture, color, kept))
                     if of == *plan && picture.size() == size && fit != Fit::Span =>
                 {
-                    (picture, color)
+                    (picture, color, kept)
                 }
                 // The one of another size is let go of before the next
                 // is made.
@@ -633,18 +826,20 @@ impl Wallpaper {
                     if let (Some(file), Some(image)) = (file, &image) {
                         read_last = Some((file.clone(), image.clone()));
                     }
-                    let (shown, color) = cx
+                    let (shown, color, kept) = cx
                         .background_executor()
                         .spawn(async move {
                             let color = match &image {
                                 Some(image) => accent::dominant_color(image),
                                 None => Some(ground.middle()),
                             };
-                            let shown = compose(image.as_deref(), frame, desktop, fit, ground);
-                            (shown, color)
+                            let shown =
+                                compose(image.as_deref(), frame, desktop, (fit, ground), &adjust);
+                            let kept = stills.then(|| render_image(still(&shown, STILL_LONGEST)));
+                            (shown, color, kept)
                         })
                         .await;
-                    (Arc::new(shown), color)
+                    (Arc::new(shown), color, kept)
                 }
             };
             if index == first {
@@ -664,6 +859,7 @@ impl Wallpaper {
                         Err(error) => return Some(Err(error)),
                     }
                 }
+                slot.still = kept.clone();
                 slot.backdrop
                     .as_ref()
                     .map(|backdrop| backdrop.set(&picture))
@@ -673,7 +869,7 @@ impl Wallpaper {
                 Some(Ok(())) => fading.push(index),
                 Some(Err(error)) => report!("a display gets no wallpaper: {error:#}"),
             }
-            fitted = Some((plan.clone(), picture, color));
+            fitted = Some((plan.clone(), picture, color, kept));
         }
         drop(fitted);
         drop(read_last);
@@ -706,13 +902,17 @@ impl Wallpaper {
     async fn play(
         task: usize,
         frames: &[ScreenRect],
-        files: &[PathBuf],
+        videos: &VideoPlan,
         displays: &[usize],
         fade: SpringSpec,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<bool> {
+        let files = &videos.files;
         let shown: Vec<ScreenRect> = displays.iter().map(|&index| frames[index]).collect();
-        let video = DesktopVideo::open(&shown, files)?;
+        let video = DesktopVideo::open(&shown, files, video_look(videos))?;
+        if STILLS_WANTED.load(Ordering::Relaxed) {
+            video.want_posters();
+        }
         let began = Instant::now();
         loop {
             cx.background_executor().timer(VIDEO_CHECK).await;
@@ -753,18 +953,132 @@ impl Wallpaper {
                 let slot = &mut this.slots[index];
                 slot.backdrop = None;
                 slot.under = None;
-                slot.plan = Plan::Video(files.to_vec());
+                slot.still = None;
+                slot.plan = Plan::Video(videos.clone());
             }
             this.videos
                 .retain(|playing| !playing.displays.iter().any(|at| displays.contains(at)));
             this.videos.push(Playing {
-                files: files.to_vec(),
+                plan: videos.clone(),
                 displays: displays.to_vec(),
                 video,
                 weighed: false,
+                stills: vec![None; displays.len()],
             });
             true
         })
+    }
+
+    /// What a display draws itself for `plan`: the file of its picture,
+    /// if it has one, how it is fitted, what lies under it and the
+    /// adjustments; `None` where it draws nothing itself.
+    fn drawn(plan: &Plan) -> Option<(Option<&PathBuf>, Fit, Ground, Adjustments)> {
+        match plan {
+            Plan::Picture {
+                file,
+                fit,
+                ground,
+                adjust,
+                ..
+            } => Some((Some(file), *fit, *ground, *adjust)),
+            Plan::Fill(ground) => Some((None, Fit::Cover, *ground, Adjustments::default())),
+            Plan::Nothing | Plan::Video(_) => None,
+        }
+    }
+
+    /// Makes the stills that are missing of what the displays at `frames`
+    /// show as `plans` say: of pictures that were shown before stills
+    /// were kept, and of the poster frames videos took since. Says
+    /// nothing of whether `task` is the current one; the next look does.
+    async fn fill_stills(
+        task: usize,
+        frames: &[ScreenRect],
+        plans: &[Plan],
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<()> {
+        let desktop = around(frames).unwrap_or(ScreenRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        });
+        let missing: Vec<usize> = cx.update(|cx| {
+            let this = cx.global::<Self>();
+            { this.slots.iter().enumerate() }
+                .filter(|(index, slot)| {
+                    slot.still.is_none() && plans.get(*index) == Some(&slot.plan)
+                })
+                .filter(|(_, slot)| Self::drawn(&slot.plan).is_some())
+                .map(|(index, _)| index)
+                .collect()
+        })?;
+        for index in missing {
+            let plan = plans[index].clone();
+            let frame = frames[index];
+            let made = cx
+                .background_executor()
+                .spawn(async move {
+                    let (file, fit, ground, adjust) = Self::drawn(&plan)?;
+                    let image = match file {
+                        Some(file) => Some(read(file).ok()?),
+                        None => None,
+                    };
+                    let shown = compose(image.as_ref(), frame, desktop, (fit, ground), &adjust);
+                    Some((plan, render_image(still(&shown, STILL_LONGEST))))
+                })
+                .await;
+            let Some((plan, made)) = made else {
+                continue;
+            };
+            cx.update(|cx| {
+                let this = cx.global_mut::<Self>();
+                if let Some(slot) = this.slots.get_mut(index)
+                    && this.task == task
+                    && slot.plan == plan
+                {
+                    slot.still = Some(made);
+                }
+            })?;
+        }
+        // The poster frames the videos took since they were asked last.
+        let posters: Vec<(usize, Poster)> = cx.update(|cx| {
+            let this = cx.global::<Self>();
+            { this.videos.iter().enumerate() }
+                .filter_map(|(at, playing)| Some((at, playing.video.take_poster()?)))
+                .collect()
+        })?;
+        for (at, poster) in posters {
+            let shown = cx.update(|cx| {
+                let this = cx.global::<Self>();
+                let playing = this.videos.get(at)?;
+                let frames: Vec<ScreenRect> = { playing.displays.iter() }
+                    .filter_map(|&index| this.frames.get(index).copied())
+                    .collect();
+                Some((playing.plan.clone(), frames))
+            })?;
+            let Some((plan, shown)) = shown else {
+                continue;
+            };
+            let adjust = plan.adjust;
+            let stills = cx
+                .background_executor()
+                .spawn(async move {
+                    { shown.iter() }
+                        .map(|frame| poster_still(&poster, *frame, &adjust))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            cx.update(|cx| {
+                let this = cx.global_mut::<Self>();
+                if let Some(playing) = this.videos.get_mut(at)
+                    && playing.plan == plan
+                    && stills.len() == playing.displays.len()
+                {
+                    playing.stills = stills;
+                }
+            })?;
+        }
+        Ok(())
     }
 
     /// Fades out the windows of displays that are to show nothing of
@@ -778,8 +1092,8 @@ impl Wallpaper {
     ) -> anyhow::Result<bool> {
         let groups = video_groups(plans);
         let wanted = |playing: &Playing| {
-            let same = |(files, displays): &(Vec<PathBuf>, Vec<usize>)| {
-                *files == playing.files && *displays == playing.displays
+            let same = |(videos, displays): &(VideoPlan, Vec<usize>)| {
+                *videos == playing.plan && *displays == playing.displays
             };
             groups.iter().any(same)
         };
@@ -814,6 +1128,7 @@ impl Wallpaper {
                     let slot = &mut this.slots[index];
                     slot.plan = Plan::Nothing;
                     slot.under = None;
+                    slot.still = None;
                     slot.backdrop.take()
                 })
                 .collect();
@@ -875,8 +1190,9 @@ impl Wallpaper {
 
     /// Looks after the videos that play: one that failed or takes too
     /// much memory is left out, the others are held still where windows
-    /// hide all their displays or, as configured, while the machine runs
-    /// on its battery. Says whether `task` is still the current one.
+    /// cover as much of each of their displays as `pause_coverage` says
+    /// or, as configured, while the machine runs on its battery. Says
+    /// whether `task` is still the current one.
     async fn tend_videos(task: usize, looks: &Looks, cx: &mut AsyncApp) -> anyhow::Result<bool> {
         let playing = cx.update(|cx| !cx.global::<Self>().videos.is_empty())?;
         if !playing {
@@ -902,7 +1218,7 @@ impl Wallpaper {
             let mut failed = Vec::new();
             for (at, playing) in this.videos.iter_mut().enumerate() {
                 if let VideoState::Failed(why) = playing.video.state() {
-                    report!("{} stopped playing: {why}", names(&playing.files));
+                    report!("{} stopped playing: {why}", names(&playing.plan.files));
                     failed.push(at);
                     continue;
                 }
@@ -910,7 +1226,7 @@ impl Wallpaper {
                     // Once more when it has played a while; what Tessera
                     // holds later for other things is not laid to it.
                     playing.weighed = true;
-                    if let Err(error) = video_fits(&playing.files) {
+                    if let Err(error) = video_fits(&playing.plan.files) {
                         report!("the wallpaper video is left out: {error:#}");
                         failed.push(at);
                         continue;
@@ -918,11 +1234,9 @@ impl Wallpaper {
                 }
                 let mut hides = 0;
                 for (bit, index) in playing.displays.iter().enumerate().take(32) {
-                    if this
-                        .frames
-                        .get(*index)
-                        .is_some_and(|frame| hidden(*frame, &windows))
-                    {
+                    let share =
+                        { this.frames.get(*index) }.map_or(0., |frame| covered(*frame, &windows));
+                    if holds(share, looks.pause_coverage) {
                         hides |= 1 << bit;
                     }
                 }
@@ -936,7 +1250,7 @@ impl Wallpaper {
                         slot.plan = Plan::Nothing;
                     }
                 }
-                this.failed.extend(playing.files);
+                this.failed.extend(playing.plan.files);
             }
             true
         })
@@ -1309,7 +1623,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_display_is_hidden_by_a_window_over_nearly_all_of_it() {
+    fn windows_cover_a_display_together_counted_once() {
         let frame = ScreenRect {
             left: 100,
             top: 0,
@@ -1322,15 +1636,21 @@ mod tests {
             right,
             bottom,
         };
+        let close = |share: f32, wanted: f32| (share - wanted).abs() < 1e-4;
         // A maximized window under a bar, and one that reaches past the display.
-        assert!(hidden(frame, &[window(100, 40, 1100, 1000)]));
-        assert!(hidden(frame, &[window(0, -8, 3000, 1008)]));
-        assert!(!hidden(
-            frame,
-            &[window(100, 0, 600, 1000), window(600, 0, 1100, 1000)]
-        ));
-        assert!(!hidden(frame, &[window(1100, 0, 2100, 1000)]));
-        assert!(!hidden(frame, &[]));
+        assert!(close(covered(frame, &[window(100, 40, 1100, 1000)]), 0.96));
+        assert!(close(covered(frame, &[window(0, -8, 3000, 1008)]), 1.));
+        // Two halves side by side cover all of it.
+        let halves = [window(100, 0, 600, 1000), window(600, 0, 1100, 1000)];
+        assert!(close(covered(frame, &halves), 1.));
+        // Where they lie over each other, it is counted once.
+        let over = [window(100, 0, 700, 500), window(400, 0, 1100, 500)];
+        assert!(close(covered(frame, &over), 0.5));
+        assert!(close(covered(frame, &[window(1100, 0, 2100, 1000)]), 0.));
+        assert!(close(covered(frame, &[]), 0.));
+        assert!(holds(0.96, 0.9) && !holds(0.5, 0.9));
+        // At 0 a video is never held still.
+        assert!(!holds(1., 0.));
     }
 
     #[test]
@@ -1354,8 +1674,13 @@ mod tests {
 
     #[test]
     fn displays_with_the_same_videos_share_them() {
-        let one = vec![PathBuf::from("a.mp4")];
-        let two = vec![PathBuf::from("b.mp4")];
+        let videos = |file: &str| VideoPlan {
+            files: vec![PathBuf::from(file)],
+            adjust: Adjustments::default(),
+            sound: looks::VideoSound::default(),
+        };
+        let one = videos("a.mp4");
+        let two = videos("b.mp4");
         let plans = [
             Plan::Video(one.clone()),
             Plan::Nothing,
