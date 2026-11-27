@@ -5,13 +5,17 @@
 //! compact readout, and `brightness-slider`, the control to change it.
 //! Action: `brightness`, which makes the display under the pointer a step
 //! brighter or darker.
+//!
+//! The wheel over `brightness` makes the display brighter or darker by
+//! `step` percent (5 without the option) and shows the brightness flyout.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, IntoElement, ParentElement,
-    Render, Styled, Subscription, WeakEntity, Window, div,
+    App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollWheelEvent, Styled, Subscription, WeakEntity, Window,
+    div,
 };
 
 use crate::actions::{Action, Actions};
@@ -21,6 +25,8 @@ use crate::module::{Module, WidgetRegistry};
 use crate::platform::{BrightnessLevel, DisplayKey, ScreenBrightness};
 use crate::theme::Theme;
 use crate::ui::{Slider, icon, pill};
+
+use super::sound::{Wheel, wheel_step};
 
 const ICON_BRIGHTNESS: &str = "\u{e706}";
 
@@ -36,6 +42,10 @@ const MONITOR_INTERVAL: Duration = Duration::from_secs(5);
 /// a laptop do.
 const STEP: f32 = 0.1;
 
+/// How many percent a notch of the wheel over the widget changes the
+/// brightness unless `step` says otherwise.
+const WHEEL_STEP: i32 = 5;
+
 pub struct BrightnessModule;
 
 impl Module for BrightnessModule {
@@ -46,9 +56,12 @@ impl Module for BrightnessModule {
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("brightness", |context, cx| {
             let brightness = Brightness::shared(context.display, cx);
+            let step = wheel_step(context, WHEEL_STEP);
             cx.new(|cx| BrightnessReadout {
                 _changes: cx.observe(&brightness, |_, _, cx| cx.notify()),
                 brightness,
+                wheel: Wheel::default(),
+                step,
             })
             .into()
         })?;
@@ -242,6 +255,17 @@ impl Brightness {
         Flyouts::show(Reading::Brightness(share), cx);
     }
 
+    /// Makes the display `points` percent brighter, or darker below 0, from
+    /// what it was last set to or read, and shows that in the flyout.
+    fn nudge(&mut self, points: i32, cx: &mut Context<Self>) {
+        let Some(share) = self.share else {
+            return;
+        };
+        let share = (share + points as f32 / 100.).clamp(0., 1.);
+        self.set(share, cx);
+        Flyouts::show(Reading::Brightness(share), cx);
+    }
+
     /// Lets go of itself once the steps of the action are made.
     fn settle(&mut self) {
         if !self.busy && self.wanted.is_none() && self.steps == 0 {
@@ -296,6 +320,9 @@ impl Brightness {
 /// display that does not say.
 struct BrightnessReadout {
     brightness: Entity<Brightness>,
+    wheel: Wheel,
+    /// How many percent a notch of the wheel changes the brightness.
+    step: i32,
     _changes: Subscription,
 }
 
@@ -305,6 +332,14 @@ impl Render for BrightnessReadout {
         match self.brightness.read(cx).share {
             Some(share) => pill(&theme)
                 .font_weight(FontWeight::MEDIUM)
+                .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                    let notches = this.wheel.notches(event);
+                    if notches != 0 {
+                        let points = notches * this.step;
+                        this.brightness
+                            .update(cx, |brightness, cx| brightness.nudge(points, cx));
+                    }
+                }))
                 .child(icon(&theme, ICON_BRIGHTNESS))
                 .child(percent(share))
                 .into_any_element(),

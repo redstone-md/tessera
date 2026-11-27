@@ -434,6 +434,8 @@
 #               width, the most it takes, in pixels
 #   "media"     what is playing, on one line; absent while no application
 #               offers anything; option width, the most it takes, in pixels
+#               (the wheel over it turns the volume by step percent, 2, and
+#               with Shift held goes to the next piece or back)
 #   "media-controls"  what is playing, with its picture and buttons to skip and pause
 #               and to shuffle and repeat where the player lets them;
 #               while several applications play, a chip for each chooses
@@ -457,6 +459,8 @@
 #   "bluetooth-button"  the Bluetooth icon, shown only on a machine that
 #               has Bluetooth
 #   "volume"    the output volume, as an icon and a percentage
+#               (the wheel over it turns the volume by step percent, 2,
+#               from 1 to 25, and shows the volume flyout)
 #   "workspaces"  a numbered button for each virtual desktop of Windows,
 #               or for each workspace of [workspaces], the shown one
 #               standing out; a click goes there
@@ -487,6 +491,8 @@
 #   "sound-settings"  a row that opens the sound settings of Windows
 #   "brightness"  how bright the display of the surface is, as an icon and
 #               a percentage; nothing on a display that does not say
+#               (the wheel over it changes it by step percent, 5, from 1
+#               to 25)
 #   "brightness-slider"  a slider for the brightness of the display it is
 #               shown on
 #   "tray"      the notification icons of applications; option tips, true

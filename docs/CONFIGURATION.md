@@ -530,3 +530,10 @@ side = ["notifications"]
 ## Typing and the wheel
 
 The widget `keyboard` shows, after the letters of the layout of the window in front, the mode of its input method where that layout has one, as the input indicator of Explorer: `A` while it types letters as they are, `あ` (hiragana), `カ` (katakana) or `Ａ` (letters of full width) for Japanese, `가` for Korean, `中` or `英` for Chinese. It is read through the window in front (`WM_IME_CONTROL`) every 0.4 seconds while the widget is shown, on a thread that may wait; a click on the mode switches the input method on or off, a click on the letters goes on to the next layout as before. With `layout = true` in `[flyout]`, the layout flyout gives the mode too. `touch-keyboard` is a button that shows and hides the touch keyboard of Windows, as the button of the taskbar of Explorer does; it starts the touch keyboard (TabTip.exe) where it does not run yet.
+
+```toml
+end = ["touch-keyboard", "keyboard", { widget = "volume", step = 5 }, { widget = "brightness", step = 10 }]
+```
+
+The wheel over `volume` turns the default output up or down by `step` percent (2 without the option, from 1 to 25) and over `brightness` makes its display brighter or darker by `step` percent (5 without it), each with its flyout where `[flyout]` wants it. Over `media` the wheel turns the volume as over `volume`, and with Shift held goes to the next piece (down) or back to the one before (up). A mouse wheel turns one step a notch; a touchpad one step for every 40 pixels it scrolls.
+

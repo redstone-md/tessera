@@ -9,6 +9,11 @@
 //! whether the output renders spatial sound; and `sound-settings`, the way
 //! to the sound settings of Windows. Action: `volume`, which turns the
 //! default output up or down or mutes it, as the volume keys do.
+//!
+//! The wheel over `volume` turns the default output up or down by `step`
+//! percent (2 without the option) and shows the volume flyout, as the
+//! volume of Plasma does; [`Wheel`] counts the notches for the media and
+//! brightness widgets too.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -16,8 +21,8 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, div, px,
+    IntoElement, ParentElement, Pixels, Render, ScrollDelta, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 
 use crate::actions::{Action, Actions};
@@ -62,6 +67,61 @@ const NAME_SIZE: f32 = 11.;
 /// How high a row is that leads to the settings.
 const SLIM_ROW: f32 = 40.;
 
+/// How many percent a notch of the wheel over `volume` turns the volume
+/// unless `step` says otherwise, as the volume keys do for most outputs.
+pub(super) const WHEEL_STEP: i32 = 2;
+
+/// How many logical pixels of a touchpad make a notch of the wheel.
+const PIXELS_PER_NOTCH: f32 = 40.;
+
+/// The notches of the wheel over a widget: each turn of a mouse wheel is
+/// one, whatever the lines Windows makes of it; the pixels of a touchpad
+/// are added up until they make one. The wheel turned with Shift held,
+/// which Windows turns sideways, counts the same.
+#[derive(Default)]
+pub(super) struct Wheel {
+    /// The part of a notch the touchpad turned so far.
+    rest: f32,
+}
+
+impl Wheel {
+    /// How many notches `event` turns the wheel, up above 0.
+    pub(super) fn notches(&mut self, event: &ScrollWheelEvent) -> i32 {
+        notches_of(event.delta, &mut self.rest)
+    }
+}
+
+/// How many notches `delta` turns the wheel, up above 0, with `rest` the
+/// part of a notch a touchpad turned before.
+fn notches_of(delta: ScrollDelta, rest: &mut f32) -> i32 {
+    let along = |x: f32, y: f32| if y != 0. { y } else { x };
+    match delta {
+        ScrollDelta::Lines(lines) => {
+            *rest = 0.;
+            let turned = along(lines.x, lines.y);
+            if turned == 0. {
+                0
+            } else {
+                turned.signum() as i32
+            }
+        }
+        ScrollDelta::Pixels(pixels) => {
+            *rest += along(f32::from(pixels.x), f32::from(pixels.y)) / PIXELS_PER_NOTCH;
+            let whole = rest.trunc();
+            *rest -= whole;
+            whole as i32
+        }
+    }
+}
+
+/// The `step` option of a widget the wheel turns, in percent from 1 to 25.
+pub(super) fn wheel_step(context: &crate::module::WidgetContext, default: i32) -> i32 {
+    let step = context
+        .number("step")
+        .map_or(default, |step| step.round() as i32);
+    step.clamp(1, 25)
+}
+
 pub struct SoundModule;
 
 impl Module for SoundModule {
@@ -70,11 +130,14 @@ impl Module for SoundModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("volume", |_, cx| {
+        widgets.register("volume", |context, cx| {
             let sound = Sound::shared(cx);
+            let step = wheel_step(context, WHEEL_STEP);
             cx.new(|cx| VolumeReadout {
                 _changes: cx.observe(&sound, |_, _, cx| cx.notify()),
                 sound,
+                wheel: Wheel::default(),
+                step,
             })
             .into()
         })?;
@@ -164,6 +227,9 @@ pub enum VolumeChange {
     Mute,
     /// Mutes the default microphone, or lifts its mute.
     MuteMicrophone,
+    /// Turns the output up by this many percent, or down below 0; up
+    /// lifts the mute.
+    By(i32),
 }
 
 impl VolumeChange {
@@ -194,6 +260,13 @@ impl VolumeChange {
                 output.set_muted(false)?;
             }
             Self::Down => output.step(false)?,
+            Self::By(points) => {
+                let volume = output.volume()? + points as f32 / 100.;
+                output.set_volume(volume.clamp(0., 1.))?;
+                if points > 0 {
+                    output.set_muted(false)?;
+                }
+            }
             _ => output.set_muted(!output.is_muted()?)?,
         }
         Ok(Reading::Volume {
@@ -569,9 +642,13 @@ impl Channel {
     }
 }
 
-/// Shows the volume as an icon and a percentage.
+/// Shows the volume as an icon and a percentage; the wheel over it turns
+/// the volume.
 struct VolumeReadout {
     sound: Entity<Sound>,
+    wheel: Wheel,
+    /// How many percent a notch turns the volume.
+    step: i32,
     _changes: Subscription,
 }
 
@@ -582,7 +659,14 @@ impl Render for VolumeReadout {
         if !sound.known {
             return div().into_any_element();
         }
-        let readout = pill(&theme).font_weight(FontWeight::MEDIUM);
+        let readout = pill(&theme)
+            .font_weight(FontWeight::MEDIUM)
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let notches = this.wheel.notches(event);
+                if notches != 0 {
+                    VolumeChange::By(notches * this.step).apply(cx);
+                }
+            }));
         let readout = match sound.level {
             Some(level) => readout
                 .child(icon(&theme, level.icon()))
@@ -1255,5 +1339,23 @@ mod tests {
     #[test]
     fn a_list_shows_two_rows_and_a_half() {
         assert_eq!(seen_height(px(56.), px(8.)), px(156.));
+    }
+
+    #[test]
+    fn a_turn_of_the_wheel_is_a_notch_and_a_touchpad_adds_up() {
+        use gpui::{point, px};
+        let mut rest = 0.;
+        // Windows makes three lines of a notch, sideways with Shift held.
+        assert_eq!(notches_of(ScrollDelta::Lines(point(0., 3.)), &mut rest), 1);
+        assert_eq!(
+            notches_of(ScrollDelta::Lines(point(0., -3.)), &mut rest),
+            -1
+        );
+        assert_eq!(notches_of(ScrollDelta::Lines(point(3., 0.)), &mut rest), 1);
+        assert_eq!(notches_of(ScrollDelta::Lines(point(0., 0.)), &mut rest), 0);
+        let pixels = |y: f32| ScrollDelta::Pixels(point(px(0.), px(y)));
+        assert_eq!(notches_of(pixels(25.), &mut rest), 0);
+        assert_eq!(notches_of(pixels(25.), &mut rest), 1);
+        assert_eq!(notches_of(pixels(-100.), &mut rest), -2);
     }
 }
