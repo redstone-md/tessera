@@ -419,7 +419,7 @@ impl Render for InstallPrompt {
             Step::Reading => {
                 body.push(caption(say("Reading the registries…").into()).into_any_element())
             }
-            Step::Installing => body.push(caption(say("Downloading…").into()).into_any_element()),
+            Step::Installing => body.push(caption(say("Installing…").into()).into_any_element()),
             Step::Failed(error) => {
                 body.push(caption(error.clone()).into_any_element());
                 buttons.push(button(0, "Close", true, close));
