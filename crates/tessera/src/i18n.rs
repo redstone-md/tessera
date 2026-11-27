@@ -228,6 +228,20 @@ impl Language {
         found.map_or(text, |&(_, said)| said)
     }
 
+    /// `text` in this language, or as it is where the table lacks it, for
+    /// a text that is read from a file rather than written in the code,
+    /// such as the label a setting is declared with.
+    pub fn translate(self, text: &str) -> String {
+        let said = match self {
+            Self::English => None,
+            Self::Russian => { RUSSIAN.iter() }
+                .find(|(english, _)| *english == text)
+                .map(|&(_, said)| said),
+            Self::File(tongue) => tongue.file.texts.get(text).map(String::as_str),
+        };
+        said.unwrap_or(text).to_owned()
+    }
+
     /// The word of the calendar with the number `index`, counted from
     /// January or Monday as 0; `None` where it is the English one.
     fn word(self, word: Word, index: usize) -> Option<&'static str> {
