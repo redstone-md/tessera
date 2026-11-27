@@ -36,6 +36,7 @@ use gpui::{
 use serde::Deserialize;
 
 use crate::config::edit::ConfigFile;
+use crate::icons::Icon;
 use crate::motion::{Interaction, Spring};
 use crate::notifications_store::{NotificationStore, unix_now};
 use crate::platform::{NativeSurface, Occupation, ScreenRect};
@@ -688,6 +689,8 @@ impl Hanging {
 /// One banner and the motion it is in.
 struct Banner {
     item: BannerItem,
+    /// The logo of its application, once the store has found it.
+    logo: Icon,
     /// 0 while absent, 1 when fully shown.
     presence: Spring,
     /// How long it still stays.
@@ -730,6 +733,10 @@ impl BannerView {
             }
         })
         .detach();
+        // The logo of an application seen for the first time is found
+        // after its banner is shown.
+        cx.observe_global::<NotificationStore>(Self::take_logos)
+            .detach();
         let room = slots(items.iter().take(stack));
         let mut this = Self {
             banners: Vec::new(),
@@ -765,6 +772,9 @@ impl BannerView {
     fn add(&mut self, items: Vec<BannerItem>, stay: Duration, cx: &mut Context<Self>) {
         let motion = cx.global::<Theme>().motion;
         for item in items {
+            let logo = cx
+                .try_global::<NotificationStore>()
+                .and_then(|store| store.logo(&item.app_id));
             let mut presence = Spring::new(motion.spatial, 0.);
             presence.animate_to(1.);
             self.banners.insert(
@@ -776,6 +786,7 @@ impl BannerView {
                         .map(|_| Interaction::new(&motion))
                         .collect(),
                     item,
+                    logo,
                     presence,
                     left: stay,
                     leaving: false,
@@ -788,6 +799,23 @@ impl BannerView {
             banner.leave();
         }
         cx.notify();
+    }
+
+    /// Takes the logos the store found for banners shown without one.
+    fn take_logos(&mut self, cx: &mut Context<Self>) {
+        let Some(store) = cx.try_global::<NotificationStore>() else {
+            return;
+        };
+        let mut found = false;
+        let waiting = { self.banners.iter_mut() }
+            .filter(|banner| banner.logo.is_none() && !banner.item.app_id.is_empty());
+        for banner in waiting {
+            banner.logo = store.logo(&banner.item.app_id);
+            found |= banner.logo.is_some();
+        }
+        if found {
+            cx.notify();
+        }
     }
 
     /// Sizes the window for the banners there are.
@@ -885,10 +913,7 @@ impl BannerView {
         let item = &banner.item;
         let key = item.key;
         let caption_size = theme.typography.label_size * CAPTION_SHARE;
-        let logo = cx
-            .try_global::<NotificationStore>()
-            .and_then(|store| store.logo(&item.app_id));
-        let mark = match logo {
+        let mark = match banner.logo.clone() {
             Some(logo) => img(logo).size(LOGO).flex_none().into_any_element(),
             None => icon(&theme, item.glyph)
                 .flex_none()
