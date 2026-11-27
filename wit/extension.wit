@@ -53,7 +53,9 @@ world extension {
         /// What the empty field says.
         placeholder: string,
         /// The text the field shows when it is first drawn, and again
-        /// whenever `render` gives a value other than the one before.
+        /// whenever `render` gives a value other than the one before,
+        /// unless it is a text typed into the field that the extension
+        /// was told of, coming back.
         value: string,
     }
 

@@ -56,22 +56,61 @@ struct Field {
     field: Entity<TextField>,
     /// The value the extension gave it last.
     given: String,
-    /// The texts the extension was told of lately, the last one last. A
-    /// value it gives back that is one of them is what was typed, coming
-    /// back late perhaps, and is not put into the field over what is
-    /// typed by now.
-    told: VecDeque<String>,
+    told: Told,
+}
+
+/// What a field told the extension.
+#[derive(Debug, Default)]
+struct Told {
+    /// The texts the extension was told of and has not given back yet,
+    /// the last one last.
+    pending: VecDeque<String>,
+    /// The text the field held when the extension was told last, or when
+    /// the extension put one in.
+    last: String,
 }
 
 /// How many texts told to the extension a field remembers.
 const TOLD_KEPT: usize = 16;
 
-impl Field {
-    fn told(&mut self, text: String) {
-        if self.told.len() == TOLD_KEPT {
-            self.told.pop_front();
+impl Told {
+    /// Nothing told yet, with `text` in the field.
+    fn holding(text: String) -> Self {
+        Self {
+            pending: VecDeque::new(),
+            last: text,
         }
-        self.told.push_back(text);
+    }
+
+    /// Whether the extension knows that the field holds `text`.
+    fn knows(&self, text: &str) -> bool {
+        self.last == text
+    }
+
+    fn push(&mut self, text: String) {
+        if self.pending.len() == TOLD_KEPT {
+            self.pending.pop_front();
+        }
+        self.pending.push_back(text.clone());
+        self.last = text;
+    }
+
+    /// Whether `value`, which the extension gives the field, is one of the
+    /// texts it was told of coming back, perhaps late, and so is not put
+    /// over what is typed by now. The texts are given back in the order
+    /// they were told, so it and those before it are forgotten; any other
+    /// value is one the extension chose, and everything is forgotten.
+    fn given_back(&mut self, value: &str) -> bool {
+        match self.pending.iter().position(|text| text == value) {
+            Some(at) => {
+                self.pending.drain(..=at);
+                true
+            }
+            None => {
+                *self = Self::holding(value.to_owned());
+                false
+            }
+        }
     }
 }
 
@@ -329,10 +368,10 @@ impl ExtensionWidget {
             let Some(known) = this.fields.get_mut(&id) else {
                 return;
             };
-            if known.told.back() == Some(&text) {
+            if known.told.knows(&text) {
                 return;
             }
-            known.told(text.clone());
+            known.told.push(text.clone());
             let action = format!("input-changed:{id}:{text}");
             this.tell(action, Some(format!("input:{id}")), cx);
         })
@@ -340,7 +379,7 @@ impl ExtensionWidget {
         Field {
             field,
             given: input.value.clone(),
-            told: VecDeque::from([input.value.clone()]),
+            told: Told::holding(input.value.clone()),
         }
     }
 
@@ -351,8 +390,7 @@ impl ExtensionWidget {
             field.given = input.value.clone();
             // What was typed and given back as it is stays, caret and all.
             let typed = field.field.read(cx).text();
-            if typed != input.value && !field.told.contains(&input.value) {
-                field.told = VecDeque::from([input.value.clone()]);
+            if !field.told.given_back(&input.value) && typed != input.value {
                 let value = input.value.clone();
                 field
                     .field
@@ -777,5 +815,28 @@ mod tests {
         assert_eq!(share_of(&slider(-1., 1., 1.)), 1.);
         assert_eq!(share_of(&slider(5., 5., 5.)), 0.);
         assert_eq!(share_of(&slider(0., 1., 9.)), 1.);
+    }
+
+    #[test]
+    fn a_field_is_emptied_after_enter_and_keeps_texts_given_back_late() {
+        let mut told = Told::holding(String::new());
+        for text in ["a", "ab", "abc"] {
+            told.push(text.to_owned());
+        }
+        assert!(told.knows("abc"));
+        // Given back late, in order: none is put over "abc".
+        assert!(told.given_back("a"));
+        assert!(told.given_back("abc"));
+        // Emptied after Enter: the field held "" once, which is no
+        // reason to keep "abc".
+        assert!(!told.given_back(""));
+        assert!(told.knows(""));
+        // A text typed before and chosen again by the extension is put.
+        told.push("ab".to_owned());
+        assert!(told.given_back("ab"));
+        assert!(!told.given_back("ab"));
+        // One the extension chose is not taken for typed.
+        let mut told = Told::holding("start".to_owned());
+        assert!(!told.given_back("start"));
     }
 }
