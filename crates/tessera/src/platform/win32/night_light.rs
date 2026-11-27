@@ -24,11 +24,16 @@
 //! `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`; a refused ramp
 //! is reported and the warmest one accepted stays. Windows also puts the
 //! ramps back when a display changes its mode, so the night light is
-//! asked again from time to time.
+//! asked again from time to time. The ramps the displays had before are
+//! kept in a file while they are tinted, so that a Tessera that was
+//! stopped without giving them back gives them back when it starts again.
 
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::ErrorKind;
 use std::ops::Range;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvError, Sender, TryRecvError};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -369,13 +374,60 @@ fn tinted(original: &Ramp, tint: [f32; 3]) -> Ramp {
     ramp
 }
 
-/// Whether `ramp` looks tinted already rather than calibrated: its blue
-/// ends well below its red, as one that Tessera left behind when it was
-/// stopped without putting the original back.
+/// Whether `ramp` looks like one Tessera tinted rather than one a
+/// calibration made, for a display whose own ramp was not kept: the
+/// straight line with each channel scaled by its share of the light of
+/// some temperature between [`WARMEST`] and [`COLDEST`], as Tessera leaves
+/// behind when it is stopped without putting the original back.
 fn looks_tinted(ramp: &Ramp) -> bool {
-    let red = f32::from(ramp[RAMP - 1]);
-    let blue = f32::from(ramp[RAMP * 3 - 1]);
-    red == 0. || blue < red * 0.9
+    let shares = [1, 2, 3].map(|channel| f32::from(ramp[RAMP * channel - 1]) / 65_535.);
+    let straight_scaled = tinted(&straight(), shares)
+        .iter()
+        .zip(ramp)
+        .all(|(scaled, entry)| scaled.abs_diff(*entry) <= 2);
+    let warmth = |kelvins| {
+        let light = tint(kelvins);
+        light
+            .iter()
+            .zip(shares)
+            .all(|(light, share)| (light - share).abs() < 0.01)
+    };
+    straight_scaled && !is_daylight(shares) && (WARMEST..=COLDEST).step_by(10).any(warmth)
+}
+
+/// The ramps of `originals` as the file that keeps them holds them: a line
+/// for each display, its name and then the entries of its ramp.
+fn kept_text(originals: &HashMap<Vec<u16>, Ramp>) -> String {
+    let mut text = String::new();
+    for (device, ramp) in originals {
+        let name = device.strip_suffix(&[0]).unwrap_or(device);
+        text.push_str(&String::from_utf16_lossy(name));
+        for entry in ramp {
+            text.push_str(&format!(" {entry}"));
+        }
+        text.push('\n');
+    }
+    text
+}
+
+/// The ramps a file written by [`kept_text`] holds, by the name of the
+/// device ending in its NUL; a line that is not one is passed over.
+fn kept_ramps(text: &str) -> HashMap<Vec<u16>, Ramp> {
+    let mut originals = HashMap::new();
+    for line in text.lines() {
+        let mut words = line.split(' ');
+        let Some(name) = words.next().filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let entries: Option<Vec<u16>> = words.map(|word| word.parse().ok()).collect();
+        let Some(Ok(ramp)) = entries.map(Ramp::try_from) else {
+            continue;
+        };
+        let mut device: Vec<u16> = name.encode_utf16().collect();
+        device.push(0);
+        originals.insert(device, ramp);
+    }
+    originals
 }
 
 /// Whether `tint` changes nothing.
@@ -399,6 +451,52 @@ struct Gamma {
     refused: HashSet<Vec<u16>>,
     /// Whether the originals were put back for good, as Tessera quits.
     closed: bool,
+    /// The file the originals are kept in while the displays are tinted.
+    kept: Option<PathBuf>,
+}
+
+impl Gamma {
+    /// Writes the originals into their file, or takes the file away when
+    /// there are none.
+    fn keep(&self) {
+        let Some(kept) = &self.kept else {
+            return;
+        };
+        let done = match self.originals.is_empty() {
+            true => forget(kept),
+            false => write_kept(kept, &kept_text(&self.originals)),
+        };
+        if let Err(error) = done {
+            report!(
+                "night light cannot keep the colors of the displays in {}: {error}",
+                kept.display()
+            );
+        }
+    }
+}
+
+fn write_kept(kept: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(directory) = kept.parent() {
+        fs::create_dir_all(directory)?;
+    }
+    fs::write(kept, text)
+}
+
+/// Takes away the file `kept`, which may not be there.
+fn forget(kept: &Path) -> std::io::Result<()> {
+    match fs::remove_file(kept) {
+        Err(error) if error.kind() != ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// What the thread of [`GammaNight`] is asked to do.
+enum Order {
+    /// Tint the displays for a light of so many kelvins, or not at all.
+    Show(Option<u32>),
+    /// Keep the originals in this file, and give back first those a
+    /// Tessera that was stopped left in it.
+    Heal(PathBuf),
 }
 
 static GAMMA: LazyLock<Mutex<Gamma>> = LazyLock::new(|| {
@@ -407,6 +505,7 @@ static GAMMA: LazyLock<Mutex<Gamma>> = LazyLock::new(|| {
         shown: [1.; 3],
         refused: HashSet::new(),
         closed: false,
+        kept: None,
     })
 });
 
@@ -419,7 +518,19 @@ impl GammaNight {
     /// back their own colors with `None`. Asking again for what is shown
     /// gives it again to displays that lost it.
     pub fn show(kelvins: Option<u32>) {
-        static ORDERS: OnceLock<Mutex<Sender<Option<u32>>>> = OnceLock::new();
+        Self::order(Order::Show(kelvins));
+    }
+
+    /// Keeps the ramps the displays had before they were tinted in the
+    /// file `kept`, and gives back now those that a Tessera stopped
+    /// without giving them back left there. Asked before anything is
+    /// shown, so that what is left tinted is not taken for the original.
+    pub fn heal(kept: PathBuf) {
+        Self::order(Order::Heal(kept));
+    }
+
+    fn order(order: Order) {
+        static ORDERS: OnceLock<Mutex<Sender<Order>>> = OnceLock::new();
         let orders = ORDERS.get_or_init(|| {
             let (sender, receiver) = mpsc::channel();
             let started = thread::Builder::new()
@@ -430,7 +541,7 @@ impl GammaNight {
             }
             Mutex::new(sender)
         });
-        let sent = orders.lock().map(|orders| orders.send(kelvins));
+        let sent = orders.lock().map(|orders| orders.send(order));
         if !matches!(sent, Ok(Ok(()))) {
             report!("night light cannot tint the displays: its thread is gone");
         }
@@ -448,24 +559,79 @@ impl GammaNight {
                 dc.set(original);
             }
         }
+        gamma.originals.clear();
+        gamma.keep();
+    }
+}
+
+/// Gives back the ramps a Tessera that was stopped left in `kept`, and
+/// keeps the originals there from now on. A display tinted already in
+/// this run takes the kept ramp as its original instead.
+fn heal(kept: PathBuf) {
+    let text = match fs::read_to_string(&kept) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            report!(
+                "night light cannot read the colors of the displays from {}: {error}",
+                kept.display()
+            );
+            String::new()
+        }
+    };
+    let Ok(mut gamma) = GAMMA.lock() else {
+        return;
+    };
+    gamma.kept = Some(kept);
+    if gamma.closed {
+        return;
+    }
+    for (device, original) in kept_ramps(&text) {
+        if let Some(held) = gamma.originals.get_mut(&device) {
+            *held = original;
+        } else if let Some(dc) = DisplayDc::open(&device) {
+            dc.set(&original);
+        }
+    }
+    gamma.keep();
+}
+
+/// The latest tint asked for among the orders that came, each heal done as
+/// it comes; with `wait`, it waits for one. `Err` once no order can come.
+fn latest(orders: &Receiver<Order>, wait: bool) -> Result<Option<Option<u32>>, RecvError> {
+    let mut wanted = None;
+    loop {
+        let order = match wait && wanted.is_none() {
+            true => orders.recv()?,
+            false => match orders.try_recv() {
+                Ok(order) => order,
+                Err(TryRecvError::Empty) => return Ok(wanted),
+                Err(TryRecvError::Disconnected) if wanted.is_some() => return Ok(wanted),
+                Err(TryRecvError::Disconnected) => return Err(RecvError),
+            },
+        };
+        match order {
+            Order::Show(kelvins) => wanted = Some(kelvins),
+            Order::Heal(kept) => heal(kept),
+        }
     }
 }
 
 /// What the thread of [`GammaNight`] does: fades to each tint asked for,
 /// taking the latest when several were asked meanwhile.
-fn fade(orders: &Receiver<Option<u32>>) {
-    let Ok(mut wanted) = orders.recv() else {
+fn fade(orders: &Receiver<Order>) {
+    let Ok(Some(mut wanted)) = latest(orders, true) else {
         return;
     };
     'orders: loop {
-        while let Ok(later) = orders.try_recv() {
+        if let Ok(Some(later)) = latest(orders, false) {
             wanted = later;
         }
         let goal = wanted.map_or([1.; 3], tint);
         let from = GAMMA.lock().map_or([1.; 3], |gamma| gamma.shown);
         let steps = if from == goal { 1 } else { FADE_STEPS };
         for step in 1..=steps {
-            if let Ok(later) = orders.try_recv() {
+            if let Ok(Some(later)) = latest(orders, false) {
                 wanted = later;
                 continue 'orders;
             }
@@ -477,9 +643,9 @@ fn fade(orders: &Receiver<Option<u32>>) {
                 thread::sleep(FADE_STEP);
             }
         }
-        match orders.recv() {
-            Ok(next) => wanted = next,
-            Err(_) => return,
+        match latest(orders, true) {
+            Ok(Some(next)) => wanted = next,
+            _ => return,
         }
     }
 }
@@ -493,6 +659,7 @@ fn show_tint(tint: [f32; 3]) {
         return;
     }
     let daylight = is_daylight(tint);
+    let mut found = false;
     for device in displays() {
         let Some(dc) = DisplayDc::open(&device) else {
             continue;
@@ -503,6 +670,7 @@ fn show_tint(tint: [f32; 3]) {
                 let read = dc.get().filter(|ramp| !looks_tinted(ramp));
                 let original = read.unwrap_or_else(straight);
                 gamma.originals.insert(device.clone(), original);
+                found = true;
                 original
             }
         };
@@ -519,6 +687,9 @@ fn show_tint(tint: [f32; 3]) {
         }
     }
     gamma.shown = tint;
+    if found {
+        gamma.keep();
+    }
 }
 
 /// The device names of the displays that are part of the desktop, each
@@ -697,8 +868,36 @@ mod tests {
         assert_eq!(ramp[RAMP * 2 - 1], 32_768);
         assert_eq!(ramp[RAMP * 3 - 1], 0);
         assert_eq!(ramp[RAMP + 2], 257);
-        assert!(looks_tinted(&ramp));
         assert!(!looks_tinted(&straight()));
+    }
+
+    #[test]
+    fn a_ramp_tinted_by_night_light_is_told_from_a_calibration() {
+        // What Tessera leaves behind, however warm, even barely.
+        for kelvins in [WARMEST, 2700, 4500, 5800, 6200] {
+            assert!(
+                looks_tinted(&tinted(&straight(), tint(kelvins))),
+                "{kelvins}"
+            );
+        }
+        // A calibration that takes much blue away along a curve is not.
+        let mut calibrated = straight();
+        for (index, entry) in calibrated[RAMP * 2..].iter_mut().enumerate() {
+            let level = index as f32 / (RAMP - 1) as f32;
+            *entry = (level.powf(1.1) * 0.8 * 65_535.).round() as u16;
+        }
+        assert!(!looks_tinted(&calibrated));
+        // Nor is one that scales the channels as no light does.
+        assert!(!looks_tinted(&tinted(&straight(), [1., 0.5, 0.9])));
+    }
+
+    #[test]
+    fn the_kept_ramps_are_read_as_they_are_written() {
+        let mut originals = HashMap::new();
+        let device: Vec<u16> = "\\\\.\\DISPLAY1\0".encode_utf16().collect();
+        originals.insert(device, tinted(&straight(), [1., 0.9, 0.8]));
+        assert_eq!(kept_ramps(&kept_text(&originals)), originals);
+        assert!(kept_ramps("DISPLAY2 1 2 3\n\n").is_empty());
     }
 
     /// Reads night light of the machine it runs on; changes nothing.

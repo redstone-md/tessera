@@ -563,7 +563,9 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #              under HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM);
 #              "auto" (default) for that of Windows, or Tessera's own when
 #              Tessera is the shell or Windows keeps no state of it
-#   kelvins    how warm Tessera's own is, 1200 (warmest) to 6500 (3400)
+#   kelvins    how warm Tessera's own is, 1200 (warmest) to 6500 (3400),
+#              when Tessera starts; the warmth set on "night-light-slider"
+#              is forgotten when Tessera quits
 #   schedule   when Tessera's own comes on: "off" (default), "sun" from
 #              sunset to sunrise at latitude and longitude (degrees, north
 #              and east positive), or "hours" from from to to. A click on

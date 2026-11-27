@@ -33,6 +33,7 @@ use super::quick::{
     unusable_note,
 };
 use crate::actions::{Action, Actions};
+use crate::config::config_dir;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::Interaction;
@@ -46,6 +47,10 @@ const ICON_NIGHT: &str = "\u{e708}";
 /// night light given again to displays that lost it when their mode
 /// changed.
 const TICK: Duration = Duration::from_secs(30);
+
+/// The file of the configuration directory that keeps the colors the
+/// displays had while Tessera's own night light tints them.
+const KEPT_RAMPS: &str = "night-light-ramps";
 
 const SETTINGS: SettingsPage = SettingsPage {
     address: "ms-settings:nightlight",
@@ -173,10 +178,30 @@ fn sun(date: NaiveDate, latitude: f64, longitude: f64) -> Sun {
     }
 }
 
+/// What the schedule says at a moment.
+#[derive(Clone, Debug, PartialEq)]
+struct Plan {
+    /// Whether it has Tessera's own night light on.
+    on: bool,
+    /// The times after that moment when it switches, in order, with what
+    /// it switches to.
+    turns: Vec<(DateTime<Utc>, bool)>,
+}
+
+impl Plan {
+    /// When the light next becomes other than `shown`: the next turn of
+    /// the schedule, or with a click holding against it the first that
+    /// agrees with the click no more.
+    fn next_change(&self, shown: bool) -> Option<DateTime<Utc>> {
+        let turn = self.turns.iter().find(|(_, on)| *on != shown);
+        turn.map(|(at, _)| *at)
+    }
+}
+
 impl NightLightConfig {
-    /// Whether the schedule has Tessera's own night light on at `now`, and
-    /// when it next changes that; `None` without a schedule.
-    fn scheduled<Tz: TimeZone>(&self, now: &DateTime<Tz>) -> Option<(bool, Option<DateTime<Utc>>)> {
+    /// What the schedule says at `now`; `None` without a schedule, or
+    /// with a place that is not one.
+    fn scheduled<Tz: TimeZone>(&self, now: &DateTime<Tz>) -> Option<Plan> {
         let zone = now.timezone();
         let today = now.date_naive();
         let mut turns: Vec<(DateTime<Utc>, bool)> = Vec::new();
@@ -198,6 +223,9 @@ impl NightLightConfig {
                     }
                 }
                 NightSchedule::Sun => {
+                    if self.place_mistake().is_some() {
+                        return None;
+                    }
                     let (Some(latitude), Some(longitude)) = (self.latitude, self.longitude) else {
                         return None;
                     };
@@ -213,9 +241,9 @@ impl NightLightConfig {
         turns.sort_by_key(|(at, _)| *at);
         let now = now.with_timezone(&Utc);
         let last = turns.iter().rev().find(|(at, _)| *at <= now);
-        let next = turns.iter().find(|(at, _)| *at > now).map(|(at, _)| *at);
         let on = polar.or(last.map(|(_, on)| *on)).unwrap_or(false);
-        Some((on, next))
+        turns.retain(|(at, _)| *at > now);
+        Some(Plan { on, turns })
     }
 
     /// What is wrong with the place, for a report.
@@ -302,7 +330,8 @@ pub struct Night {
     /// How warm Tessera's own is.
     kelvins: u32,
     hand: Option<Hand>,
-    /// When the schedule next switches Tessera's own.
+    /// When Tessera's own next changes by itself, as the schedule and a
+    /// click that holds against it have it.
     next: Option<DateTime<Utc>>,
     /// The warmth last asked of Windows that is not written yet, and
     /// whether one is being written.
@@ -316,15 +345,19 @@ struct SharedNight(Entity<Night>);
 impl Global for SharedNight {}
 
 impl Night {
-    /// Starts night light as `config` says: the schedule is looked at now
-    /// and every half minute, and the colors of the displays are given
-    /// back when Tessera quits.
+    /// Starts night light as `config` says: the colors that a Tessera
+    /// stopped without giving them back left on the displays are given
+    /// back, the schedule is looked at now and every half minute, and the
+    /// colors of the displays are given back when Tessera quits.
     pub fn start(config: &NightLightConfig, cx: &mut App) {
         if cx.has_global::<SharedNight>() {
             return Self::configure(config, cx);
         }
         if let Some(mistake) = config.place_mistake() {
             report!("[night_light] has no schedule: {mistake}");
+        }
+        if let Some(directory) = config_dir() {
+            GammaNight::heal(directory.join(KEPT_RAMPS));
         }
         let windows = Reading::<WindowsNightSource>::shared(cx);
         let night = cx.new(|cx| Self::new(config.clone(), windows, cx));
@@ -458,9 +491,9 @@ impl Night {
         if self.light != Light::Tessera {
             return;
         }
-        let scheduled = self.config.scheduled(&Local::now());
-        let next = scheduled.and_then(|(_, next)| next);
-        let on = decide(scheduled.map(|(on, _)| on), &mut self.hand, self.on);
+        let plan = self.config.scheduled(&Local::now());
+        let on = decide(plan.as_ref().map(|plan| plan.on), &mut self.hand, self.on);
+        let next = plan.and_then(|plan| plan.next_change(on));
         if (on, next) != (self.on, self.next) {
             cx.notify();
         }
@@ -494,10 +527,11 @@ impl Night {
         match self.light {
             Light::Tessera => {
                 let on = on.unwrap_or(!self.on);
-                let scheduled = self.config.scheduled(&Local::now());
+                let plan = self.config.scheduled(&Local::now());
+                self.next = plan.as_ref().and_then(|plan| plan.next_change(on));
                 self.hand = Some(Hand {
                     on,
-                    scheduled: scheduled.map(|(on, _)| on),
+                    scheduled: plan.map(|plan| plan.on),
                 });
                 self.show_own(on);
                 cx.notify();
@@ -855,15 +889,24 @@ mod tests {
                 .unwrap()
         };
         let config = hours("21:00", "07:00");
-        let (on, next) = config.scheduled(&at(27, 22, 15)).unwrap();
-        assert!(on);
-        assert_eq!(next, Some(at(28, 7, 0).with_timezone(&Utc)));
-        let (on, next) = config.scheduled(&at(27, 6, 59)).unwrap();
-        assert!(on);
-        assert_eq!(next, Some(at(27, 7, 0).with_timezone(&Utc)));
-        let (on, next) = config.scheduled(&at(27, 12, 0)).unwrap();
-        assert!(!on);
-        assert_eq!(next, Some(at(27, 21, 0).with_timezone(&Utc)));
+        let plan = config.scheduled(&at(27, 22, 15)).unwrap();
+        assert!(plan.on);
+        assert_eq!(
+            plan.next_change(true),
+            Some(at(28, 7, 0).with_timezone(&Utc))
+        );
+        let plan = config.scheduled(&at(27, 6, 59)).unwrap();
+        assert!(plan.on);
+        assert_eq!(
+            plan.next_change(true),
+            Some(at(27, 7, 0).with_timezone(&Utc))
+        );
+        let plan = config.scheduled(&at(27, 12, 0)).unwrap();
+        assert!(!plan.on);
+        assert_eq!(
+            plan.next_change(false),
+            Some(at(27, 21, 0).with_timezone(&Utc))
+        );
         // The same hours in a day, and no schedule, say nothing.
         assert_eq!(hours("08:00", "08:00").scheduled(&at(27, 9, 0)), None);
         assert_eq!(NightLightConfig::default().scheduled(&at(27, 9, 0)), None);
@@ -880,11 +923,15 @@ mod tests {
         let at = |hour, minute| {
             Utc.from_utc_datetime(&date(2024, 6, 21).and_hms_opt(hour, minute, 0).unwrap())
         };
-        let (on, next) = config.scheduled(&at(12, 0)).unwrap();
-        assert!(!on);
-        assert!(next.is_some_and(|next| next.hour() == 20));
-        let (on, next) = config.scheduled(&at(23, 0)).unwrap();
-        assert!(on);
+        let plan = config.scheduled(&at(12, 0)).unwrap();
+        assert!(!plan.on);
+        assert!(
+            plan.next_change(false)
+                .is_some_and(|next| next.hour() == 20)
+        );
+        let plan = config.scheduled(&at(23, 0)).unwrap();
+        assert!(plan.on);
+        let next = plan.next_change(true);
         assert!(next.is_some_and(|next| next.day() == 22 && next.hour() == 3));
         // Without the place there is no schedule.
         let nowhere = NightLightConfig {
@@ -894,6 +941,33 @@ mod tests {
         assert_eq!(nowhere.scheduled(&at(23, 0)), None);
         assert!(nowhere.place_mistake().is_some());
         assert_eq!(config.place_mistake(), None);
+        // Nor with a place that is not one.
+        let beyond = NightLightConfig {
+            latitude: Some(95.),
+            ..config.clone()
+        };
+        assert_eq!(beyond.scheduled(&at(23, 0)), None);
+        assert!(beyond.place_mistake().is_some());
+    }
+
+    #[test]
+    fn a_click_against_the_schedule_holds_until_the_schedule_agrees_no_more() {
+        let zone = FixedOffset::east_opt(0).unwrap();
+        let at = |day, hour| {
+            zone.from_local_datetime(&date(2026, 11, day).and_hms_opt(hour, 0, 0).unwrap())
+                .unwrap()
+        };
+        // Switched off at 22:00 by hand: the schedule goes off at 07:00,
+        // which changes nothing, and the light comes on at 21:00.
+        let plan = hours("21:00", "07:00").scheduled(&at(27, 22)).unwrap();
+        assert!(plan.on);
+        assert_eq!(
+            plan.next_change(false),
+            Some(at(28, 21).with_timezone(&Utc))
+        );
+        // Switched on at noon by hand: it stays on until 07:00.
+        let plan = hours("21:00", "07:00").scheduled(&at(27, 12)).unwrap();
+        assert_eq!(plan.next_change(true), Some(at(28, 7).with_timezone(&Utc)));
     }
 
     #[test]
