@@ -320,3 +320,7 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 # Settings: keys that name an action.
 "Action" = "Aktion"
 "The action is written in the file by hand." = "Die Aktion wird von Hand in die Datei geschrieben."
+
+# files-verbs-extras: the menu of the Recycle Bin.
+"Restore all items" = "Alle Elemente wiederherstellen"
+"Empty the Recycle Bin" = "Papierkorb leeren"

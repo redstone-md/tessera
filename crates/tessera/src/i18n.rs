@@ -706,6 +706,9 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // files-verbs-extras: the menu of the Recycle Bin.
+    ("Restore all items", "Восстановить все объекты"),
+    ("Empty the Recycle Bin", "Очистить корзину"),
 ];
 
 #[cfg(test)]

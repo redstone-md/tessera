@@ -321,3 +321,7 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# files-verbs-extras: the menu of the Recycle Bin.
+"Restore all items" = "Відновити всі об’єкти"
+"Empty the Recycle Bin" = "Очистити кошик"

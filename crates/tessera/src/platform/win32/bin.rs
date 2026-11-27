@@ -108,11 +108,6 @@ pub struct RecycledItem {
 }
 
 impl RecycleBin {
-    /// How many items lie in the bin, or `None` if Windows does not tell.
-    pub fn items() -> Option<u64> {
-        Self::usage().map(|usage| usage.items)
-    }
-
     /// How many items lie in the bin and how much they take, or `None` if
     /// Windows does not tell. It looks at every drive, which may wait for
     /// a drive that is slow to answer: never call it on the thread of
