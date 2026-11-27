@@ -24,7 +24,7 @@ use crate::actions::{Action, Actions};
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::platform::{Launch, PowerAction, PowerChoices};
+use crate::platform::{Launch, PowerAction, PowerChoices, terminal, windows_terminal};
 use crate::popup::{PopupAnchor, Popups};
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -262,21 +262,12 @@ fn system_folder() -> Option<PathBuf> {
     Some(PathBuf::from(env::var_os("SystemRoot")?).join("System32"))
 }
 
-/// Where the alias of Windows Terminal lies when it is installed.
-fn terminal_alias() -> Option<PathBuf> {
-    let local = PathBuf::from(env::var_os("LOCALAPPDATA")?);
-    Some(local.join(r"Microsoft\WindowsApps\wt.exe"))
-}
-
 impl Found {
     fn read() -> Self {
-        // The alias of an application is a link that only Windows can
-        // follow, so it is looked at itself.
-        let present =
-            |path: Option<PathBuf>| path.is_some_and(|path| path.symlink_metadata().is_ok());
+        let mobility = system_folder().map(|folder| folder.join("mblctr.exe"));
         Self {
-            mobility: present(system_folder().map(|folder| folder.join("mblctr.exe"))),
-            terminal: present(terminal_alias()),
+            mobility: mobility.is_some_and(|path| path.symlink_metadata().is_ok()),
+            terminal: windows_terminal().is_some(),
             power: PowerChoices::read(),
         }
     }
@@ -303,20 +294,14 @@ impl Found {
 
 impl Deed {
     /// Does it; the menu has closed before.
-    fn run(self, found: Found, cx: &mut App) {
+    fn run(self, cx: &mut App) {
         match self {
             Self::Open(target) => Launch::new(target).start(),
             Self::Terminal { admin } => {
-                let program = if found.terminal {
-                    "wt.exe"
-                } else {
-                    "powershell.exe"
-                };
-                let launch = Launch::new(program);
-                match admin {
-                    true => launch.verb("runas").start(),
-                    false => launch.start(),
-                }
+                // Which terminal there is is read from the disk.
+                { cx.background_executor() }
+                    .spawn(async move { terminal(None, None, admin).start() })
+                    .detach();
             }
             Self::Mobility => {
                 if let Some(folder) = system_folder() {
@@ -447,10 +432,9 @@ impl WinxMenu {
             cx.notify();
             return;
         }
-        let found = self.found;
         cx.defer(move |cx| {
             Popups::close(cx);
-            row.entry.deed.run(found, cx);
+            row.entry.deed.run(cx);
         });
     }
 

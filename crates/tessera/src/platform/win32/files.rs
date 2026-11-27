@@ -229,20 +229,6 @@ pub fn show_properties(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Opens a terminal in `folder`: Windows Terminal where it is installed,
-/// or else the command prompt.
-pub fn open_terminal(folder: &Path) -> Result<()> {
-    let terminal = Command::new("wt.exe").arg("-d").arg(folder).spawn();
-    if terminal.is_ok() {
-        return Ok(());
-    }
-    Command::new("cmd.exe")
-        .args(["/c", "start", "cmd.exe", "/k", "cd", "/d"])
-        .arg(folder)
-        .spawn()?;
-    Ok(())
-}
-
 /// Has Explorer open a window with `path` selected in its folder.
 pub fn reveal_in_explorer(path: &Path) -> Result<()> {
     let mut argument = OsString::from("/select,");

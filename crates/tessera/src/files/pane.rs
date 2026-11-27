@@ -14,9 +14,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Local};
 use gpui::{
-    AnyElement, AnyWindowHandle, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, KeyDownEvent, ListAlignment, ListOffset, ListState,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Context, Entity, EventEmitter,
+    FocusHandle, InteractiveElement, IntoElement, KeyDownEvent, ListAlignment, ListOffset,
+    ListState, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
     SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, canvas, div, img,
     list, prelude::FluentBuilder, px,
 };
@@ -36,7 +36,7 @@ use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
     Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
-    QuickAccess, disk_space, open_terminal, recent_files, reveal_in_explorer, show_properties,
+    QuickAccess, disk_space, recent_files, reveal_in_explorer, show_properties, terminal,
 };
 use crate::platform::{FileDeed, Made, UndoJournal};
 use crate::popup::PopupAnchor;
@@ -1392,11 +1392,9 @@ impl FolderPane {
                 if FileClipboard::take().is_some() {
                     entries.push(entry(ICON_PASTE, "Paste", |this, cx| this.paste(cx)));
                 }
-                entries.push(entry(ICON_TERMINAL, "Open in terminal", |this, _| {
-                    if let Some(folder) = this.folder()
-                        && let Err(error) = open_terminal(&folder)
-                    {
-                        report!("{error:#}");
+                entries.push(entry(ICON_TERMINAL, "Open in terminal", |this, cx| {
+                    if let Some(folder) = this.folder() {
+                        open_terminal(folder, cx);
                     }
                 }));
             }
@@ -1457,11 +1455,9 @@ impl FolderPane {
                     Files::open(Location::Folder(path), cx);
                 }
             }));
-            entries.push(entry(ICON_TERMINAL, "Open in terminal", |this, _| {
-                if let Some(path) = this.chosen().first()
-                    && let Err(error) = open_terminal(path)
-                {
-                    report!("{error:#}");
+            entries.push(entry(ICON_TERMINAL, "Open in terminal", |this, cx| {
+                if let Some(path) = this.chosen().into_iter().next() {
+                    open_terminal(path, cx);
                 }
             }));
         }
@@ -2318,4 +2314,12 @@ impl Render for FolderPane {
                 .size_full(),
             )
     }
+}
+
+/// Opens a terminal in `folder`; which terminal there is is read from
+/// the disk, away from the user interface.
+fn open_terminal(folder: PathBuf, cx: &App) {
+    { cx.background_executor() }
+        .spawn(async move { terminal(Some(&folder), None, false).start() })
+        .detach();
 }

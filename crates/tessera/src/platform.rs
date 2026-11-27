@@ -43,9 +43,9 @@ pub use win32::{
     Taskbar, Thumbnail, Tray, TrayButton, TrayIcon, Typing, Veil, VideoState, VirtualDesktops, Vpn,
     VpnState, Wifi, WifiNetwork, WifiReach, WifiSecurity, WindowEvents, WindowsKey, Wireless,
     accent_color, app_id_in, app_id_of_program, app_path, desktop_look, desktop_pixels, disk_space,
-    display_frames, is_hidden, light_mode, memory_held, open_terminal, password_fits, pointer_at,
-    pointer_held, pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer,
-    set_light_mode, show_properties,
+    display_frames, is_hidden, light_mode, memory_held, password_fits, pointer_at, pointer_held,
+    pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer, set_light_mode,
+    show_properties,
 };
 pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names};
 pub use win32::{Balloon, BalloonEvent};
@@ -109,3 +109,4 @@ pub use win32::{expand_variables, find_program, recent_folder};
     reason = "for the features that ask Explorer while it runs"
 )]
 pub use win32::{explorer_running, shell_mode};
+pub use win32::{terminal, windows_terminal};

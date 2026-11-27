@@ -148,28 +148,6 @@ impl Command {
     }
 }
 
-/// What starts a terminal that runs `line` and stays open: Windows
-/// Terminal where it is there, else the command prompt; with `admin`,
-/// as an administrator. It looks for the terminal on the disk: not for
-/// the thread of GPUI.
-pub fn terminal_launch(line: &str, admin: bool) -> Launch {
-    let launch = match find_program("wt.exe") {
-        // A `;` would start another tab of Windows Terminal.
-        Some(terminal) => {
-            Launch::new(terminal).arguments(format!("cmd.exe /k {}", line.replace(';', "\\;")))
-        }
-        None => {
-            let shell = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_owned());
-            Launch::new(shell).arguments(format!("/k {line}"))
-        }
-    };
-    let launch = launch.named(format!("`{line}`"));
-    match admin {
-        true => launch.verb("runas"),
-        false => launch,
-    }
-}
-
 /// `text` as an address to open, where it is one.
 fn address(text: &str) -> Option<String> {
     if text.contains(char::is_whitespace) {

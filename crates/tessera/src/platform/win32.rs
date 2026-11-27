@@ -74,6 +74,7 @@ mod switching;
 mod system;
 mod system_wallpaper;
 mod taskbar;
+mod terminal;
 mod thumbnail;
 mod tray;
 mod veil;
@@ -117,8 +118,8 @@ pub use explorer_view::{
 };
 pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name};
 pub use files::{
-    Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, open_terminal,
-    reveal_in_explorer, show_properties,
+    Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
+    show_properties,
 };
 pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
@@ -173,6 +174,7 @@ pub use startup::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use system::{Battery, MemoryLoad, NetworkTraffic, ProcessorLoad, memory_held};
 pub use system_wallpaper::{SystemWallpaper, WallpaperPosition, user_locale};
 pub use taskbar::Taskbar;
+pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use tray::{Balloon, BalloonEvent};
 pub use tray::{Tray, TrayButton, TrayIcon};

@@ -36,9 +36,9 @@ use gpui::{App, BackgroundExecutor, ClipboardItem};
 use crate::files::Files;
 use crate::i18n::Language;
 use crate::module::WidgetContext;
-use crate::platform::{AppWindowId, PowerAction, RunningProcess};
+use crate::platform::{self, AppWindowId, PowerAction, RunningProcess};
 
-pub use command::{Command, completions, terminal_launch};
+pub use command::{Command, completions};
 pub use history::History;
 
 /// The names of the runners, in the order they are asked.
@@ -146,7 +146,7 @@ impl AnswerAction {
                 // Which terminal there is is read from the disk.
                 let line = command.line();
                 cx.background_executor()
-                    .spawn(async move { terminal_launch(&line, admin).start() })
+                    .spawn(async move { platform::terminal(None, Some(&line), admin).start() })
                     .detach();
             }
             Self::Run(command) => {
