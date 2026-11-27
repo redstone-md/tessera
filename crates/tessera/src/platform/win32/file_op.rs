@@ -498,7 +498,6 @@ impl FileOperation {
     }
 
     /// Brings `item` back from the Recycle Bin to `to`, where it was.
-    #[allow(dead_code, reason = "for the view of the Recycle Bin")]
     pub fn restore(mut self, item: ShellId, to: &Path) -> Self {
         self.steps.push(Step::Restore {
             item,
@@ -523,7 +522,6 @@ impl FileOperation {
         self
     }
 
-    #[allow(dead_code, reason = "for the file manager and the desktop")]
     pub fn is_empty(&self) -> bool {
         self.steps.is_empty()
     }
@@ -532,7 +530,6 @@ impl FileOperation {
     /// receiver yields what was done, and is closed without an answer if
     /// the work failed in a way that ended it. Await it from a task of
     /// GPUI. Nothing is reported; [`Outcome::report`] does that.
-    #[allow(dead_code, reason = "for the file manager and the desktop")]
     pub fn start(self) -> Receiver<Outcome> {
         let (answer, answered) = async_channel::bounded(1);
         self.then(move |outcome| {

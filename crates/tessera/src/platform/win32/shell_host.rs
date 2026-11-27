@@ -175,7 +175,6 @@ const READY_EVENTS: [PCWSTR; 4] = [
 
 /// Something the shell of the session was told.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code, reason = "each feature listens to the events it needs")]
 pub enum ShellEvent {
     /// A top-level window without owner was made.
     Created(AppWindowId),

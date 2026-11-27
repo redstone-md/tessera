@@ -259,7 +259,6 @@ pub fn reveal_with(revealer: Option<Sender<PathBuf>>) {
 /// Shows `path` chosen in its folder: in Tessera Files where it shows
 /// folders (`[files] own`, see [`reveal_with`]), and else in Explorer, as
 /// [`reveal_in_explorer`] does. It returns at once, from any thread.
-#[allow(dead_code, reason = "for the surfaces that show a file in its folder")]
 pub fn reveal(path: &Path) -> Result<()> {
     let handed = REVEALER.lock().ok().and_then(|held| {
         held.as_ref()

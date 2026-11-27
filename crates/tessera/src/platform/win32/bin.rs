@@ -133,7 +133,6 @@ impl RecycleBin {
 
     /// Every item in the bin, the latest deleted first. The receiver
     /// yields once.
-    #[allow(dead_code, reason = "for the view of the bin in the file manager")]
     pub fn list() -> Receiver<Result<Vec<RecycledItem>, String>> {
         ShellThread::call(|| list().map_err(|error| format!("{error:#}")))
     }
@@ -201,7 +200,6 @@ impl RecycleBin {
     /// Erases `items` for good; with `confirm` the Shell asks the user
     /// first, as Explorer does. It runs on a thread of its own. The
     /// receiver yields once.
-    #[allow(dead_code, reason = "for the view of the bin in the file manager")]
     pub fn erase(items: Vec<RecycledItem>, confirm: bool) -> Receiver<Result<(), String>> {
         ShellThread::call_alone("erase from the bin", move || {
             invoke(&items, VERB_ERASE, confirm).map_err(|error| format!("{error:#}"))

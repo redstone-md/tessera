@@ -170,24 +170,6 @@ impl VirtualDesktops {
     }
 }
 
-/// The desktop the window `id` is on, counted from zero: the one shown
-/// for a window on every desktop, and `None` for a window Windows puts on
-/// no desktop or where it does not tell. This waits for the thread of the
-/// desktops, which may wait for Explorer, so it is not to be called on
-/// the thread of GPUI; [`VirtualDesktops::survey`] answers without
-/// waiting.
-#[allow(
-    dead_code,
-    reason = "for the dock and the rules, which ask of one window"
-)]
-pub fn desktop_of(id: AppWindowId) -> Option<usize> {
-    let asked = ask(move |manager| {
-        let order = order();
-        desktop_in(manager?, id.hwnd(), &order, current_index(&order))
-    });
-    asked.recv_blocking().ok().flatten()
-}
-
 /// Presses `keys` one after the other while Windows and Ctrl are held,
 /// marked as made here so that the watcher of the Windows key leaves them
 /// alone. Whether Windows took every key is returned.

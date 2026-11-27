@@ -136,7 +136,6 @@ impl ShellThread {
     /// gives its answer: the receiver yields it once, and is closed
     /// without an answer if `work` panicked. Await it from a task of GPUI
     /// with `recv().await`; never block the thread of GPUI on it.
-    #[allow(dead_code, reason = "for the packages that ask the Shell for answers")]
     pub fn call<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> Receiver<R> {
         let (answer, answered) = async_channel::bounded(1);
         Self::run(move || {
@@ -177,7 +176,6 @@ impl ShellThread {
     /// runs; the others are. A handler that panics is reported and removed.
     /// It is to be called on the shell thread, and the interception dropped
     /// there too; elsewhere it does nothing.
-    #[allow(dead_code, reason = "for the context menus of the Shell")]
     pub(super) fn intercept(
         handler: impl FnMut(u32, WPARAM, LPARAM) -> Option<LRESULT> + 'static,
     ) -> Interception {
@@ -214,7 +212,6 @@ impl ShellThread {
 
     /// Has `work` done as [`Self::run_alone`] does, and gives its answer
     /// as [`Self::call`] does.
-    #[allow(dead_code, reason = "for the packages that ask the Shell for answers")]
     pub fn call_alone<R: Send + 'static>(
         name: &str,
         work: impl FnOnce() -> R + Send + 'static,
@@ -230,7 +227,6 @@ impl ShellThread {
 /// While it exists, a handler sees the messages of the hidden window; see
 /// [`ShellThread::intercept`].
 #[must_use = "the handler is removed when this is dropped"]
-#[allow(dead_code, reason = "for the context menus of the Shell")]
 pub(super) struct Interception(u64);
 
 impl Drop for Interception {

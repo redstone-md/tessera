@@ -139,7 +139,7 @@ pub use desktop_folder::{
     virtual_items,
 };
 pub use desktops::VirtualDesktops;
-pub use desktops::{DesktopSurvey, DesktopWindow, desktop_of};
+pub use desktops::{DesktopSurvey, DesktopWindow};
 pub use devices::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };

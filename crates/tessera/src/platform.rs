@@ -20,13 +20,8 @@ pub use win32::PowerChoices;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
 pub use win32::QuickFolder;
-#[allow(unused_imports, reason = "for the view of the bin in the file manager")]
 pub use win32::RecycledItem;
 pub use win32::SessionKey;
-#[allow(
-    unused_imports,
-    reason = "for the packages that hand work to the Shell"
-)]
 pub use win32::ShellThread;
 pub use win32::ShellWindows;
 pub use win32::ShowDesktop;
@@ -36,11 +31,6 @@ pub use win32::TileBorder;
 pub use win32::TrayPromotion;
 pub use win32::UriScheme;
 pub use win32::decode_with_wic;
-#[allow(
-    unused_imports,
-    reason = "for the dock and the rules, which ask of one window"
-)]
-pub use win32::desktop_of;
 pub use win32::display_at;
 pub use win32::font_families;
 pub use win32::on_resizing_border;

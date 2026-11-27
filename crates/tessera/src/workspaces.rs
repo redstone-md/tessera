@@ -1087,23 +1087,6 @@ impl Workspaces {
         this.peek(display)?.ids.get(index).copied()
     }
 
-    /// Where the workspace numbered `id` is on `display` now.
-    #[allow(
-        dead_code,
-        reason = "for the tiling, which keeps a layout for each workspace"
-    )]
-    pub fn index_of(display: Option<DisplayKey>, id: u64, cx: &App) -> Option<usize> {
-        let this = cx.global::<Self>();
-        let ids = match this.owned() {
-            true => &this.peek(display)?.ids,
-            false => {
-                this.survey.want();
-                &this.survey.found.as_ref()?.ids
-            }
-        };
-        ids.iter().position(|&kept| kept == id)
-    }
-
     /// A number that changes whenever a workspace is made or removed, or
     /// the workspaces start over.
     pub fn generation(cx: &App) -> u64 {
