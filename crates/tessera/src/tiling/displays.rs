@@ -34,9 +34,17 @@ impl DisplayName {
     /// name, or its place where the name is not known.
     pub fn key(&self) -> String {
         match self.device.is_empty() {
-            true => format!("#{}", self.position),
+            true => self.position_key(),
             false => self.device.clone(),
         }
+    }
+
+    /// What the display was kept under before its device name was read:
+    /// its place. What was kept under it is taken over by the display now
+    /// at that place, the first time it has nothing kept under its device
+    /// name.
+    pub fn position_key(&self) -> String {
+        format!("#{}", self.position)
     }
 }
 
@@ -125,6 +133,7 @@ mod tests {
             ..names[1].clone()
         };
         assert_eq!(named.key(), r"\\.\DISPLAY3");
+        assert_eq!(named.position_key(), "#2");
     }
 
     #[test]

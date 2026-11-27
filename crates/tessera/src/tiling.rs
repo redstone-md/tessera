@@ -318,6 +318,18 @@ impl Look {
     }
 }
 
+impl Seen {
+    /// The place as it was kept before the device name of the display was
+    /// read, by the place of the display; `None` where that is its key.
+    fn former(&self) -> Option<PlaceKey> {
+        let former = PlaceKey {
+            display: self.name.position_key(),
+            workspace: self.place.workspace.clone(),
+        };
+        (former != self.place).then_some(former)
+    }
+}
+
 /// A place as it was last arranged.
 struct Shown {
     display: DisplayKey,
@@ -778,7 +790,7 @@ impl Tiler {
         let place = this.config.place(&seen.name, seen.workspace);
         let knobs = this.knobs;
         let library = &this.library;
-        let tiles = tiles_of(&mut this.places, &mut this.kept, &seen.place);
+        let tiles = tiles_of(&mut this.places, &mut this.kept, seen);
         let choice = tiles.chosen.clone().unwrap_or(place.layout.clone());
         let layout = layout_of(library, &choice);
         let front = look.front.filter(|&id| tiles.holds(id));
@@ -805,7 +817,7 @@ impl Tiler {
             return;
         };
         let configured = this.config.place(&seen.name, seen.workspace).layout;
-        let tiles = tiles_of(&mut this.places, &mut this.kept, &seen.place);
+        let tiles = tiles_of(&mut this.places, &mut this.kept, seen);
         tiles.chosen = (choice != configured).then_some(choice.clone());
         this.nudged = true;
         this.note();
@@ -1200,7 +1212,7 @@ impl Tiler {
                 .map(|window| window.id)
                 .collect();
             let place = self.config.place(&seen.name, seen.workspace);
-            let tiles = tiles_of(&mut self.places, &mut self.kept, &seen.place);
+            let tiles = tiles_of(&mut self.places, &mut self.kept, seen);
             let choice = tiles.chosen.clone().unwrap_or(place.layout.clone());
             let layout = layout_of(&self.library, &choice);
             let area = place.area(seen.work);
@@ -1514,16 +1526,17 @@ struct Tick {
     scan: Option<Option<u64>>,
 }
 
-/// The tiles of the place `key`, made from what was kept of it if they
-/// are not there yet.
+/// The tiles of the place `seen` shows, made from what was kept of it (or
+/// kept by the place of its display) if they are not there yet.
 fn tiles_of<'a>(
     places: &'a mut HashMap<PlaceKey, Tiles>,
     kept: &mut BTreeMap<PlaceKey, Kept>,
-    key: &PlaceKey,
+    seen: &Seen,
 ) -> &'a mut Tiles {
-    places
-        .entry(key.clone())
-        .or_insert_with(|| Tiles::from_kept(kept.remove(key).unwrap_or_default()))
+    places.entry(seen.place.clone()).or_insert_with(|| {
+        let kept = { kept.remove(&seen.place) }.or_else(|| kept.remove(&seen.former()?));
+        Tiles::from_kept(kept.unwrap_or_default())
+    })
 }
 
 /// The layout `choice` names; a file that is not there gives `master`.
