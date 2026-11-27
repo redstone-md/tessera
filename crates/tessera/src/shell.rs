@@ -12,6 +12,7 @@ use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
 use crate::actions::Actions;
 use crate::banners::Banners;
+use crate::clipboard::ClipHistory;
 use crate::config::{Config, Displays};
 use crate::desk::Cards;
 use crate::extension::installed_stamp;
@@ -85,6 +86,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        ClipHistory::start(&config.clipboard, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -270,6 +272,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        ClipHistory::configure(&config.clipboard, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

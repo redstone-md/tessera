@@ -12,6 +12,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::banners::NotificationsConfig;
+use crate::clipboard::ClipboardConfig;
 use crate::desk::CardConfig;
 use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::files::FilesConfig;
@@ -351,6 +352,10 @@ pub struct Config {
     /// surfaces of Tessera open.
     #[serde(default)]
     pub files: FilesConfig,
+    /// Whether Tessera keeps a history of the clipboard, and how long it
+    /// is.
+    #[serde(default)]
+    pub clipboard: ClipboardConfig,
     /// The popup that the Windows key, pressed by itself, opens and closes
     /// instead of the Start menu of Windows.
     pub windows_key: Option<String>,
