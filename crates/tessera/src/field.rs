@@ -201,6 +201,11 @@ impl TextField {
         format!("{before}{}{after}", self.composing)
     }
 
+    /// Whether some of the text is selected, which Ctrl+C would copy.
+    pub fn has_selection(&self) -> bool {
+        !self.line.selected().is_empty()
+    }
+
     /// Whether dots stand for what is typed.
     pub fn hides(&self) -> bool {
         self.hidden
@@ -246,6 +251,18 @@ impl TextField {
         };
         self.composing.clear();
         self.scrolled = px(0.);
+        self.stir(cx);
+    }
+
+    /// Puts `text` in the field with the caret after it and nothing
+    /// selected, as a completion is taken.
+    pub fn put_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.line = Line {
+            text: text.to_owned(),
+            caret: text.len(),
+            anchor: text.len(),
+        };
+        self.composing.clear();
         self.stir(cx);
     }
 
