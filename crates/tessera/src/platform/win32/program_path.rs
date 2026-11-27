@@ -14,13 +14,12 @@ use std::path::PathBuf;
 
 use windows::Win32::Storage::FileSystem::SearchPathW;
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegGetValueW,
-};
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use windows::Win32::UI::Shell::{FOLDERID_Recent, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 use windows::core::PCWSTR;
 
 use super::execute::expand_environment;
+use super::registry::registry_text;
 
 /// Where installers register the programs that start by their name
 /// alone, one key per program file name.
@@ -82,31 +81,9 @@ fn extensions_to_try(name: &str, pathext: &str) -> Vec<String> {
 }
 
 /// The program the App Paths key `file` of `root` names, if it is
-/// there.
+/// there: its default value, expanded where it is of the expanding kind.
 fn registered_path(root: HKEY, file: &str) -> Option<PathBuf> {
-    let key: Vec<u16> = format!(r"{APP_PATHS}\{file}")
-        .encode_utf16()
-        .chain([0])
-        .collect();
-    let mut text = vec![0u16; PATH_LENGTH];
-    let mut size = (text.len() * size_of::<u16>()) as u32;
-    // SAFETY: `size` is the size in bytes of `text`, which outlives the
-    // call, and the key is NUL-terminated; the default value is read and
-    // expanded where it is of the expanding kind.
-    let status = unsafe {
-        RegGetValueW(
-            root,
-            PCWSTR(key.as_ptr()),
-            PCWSTR::null(),
-            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    status.ok().ok()?;
-    let length = text.iter().position(|&unit| unit == 0)?;
-    let path = String::from_utf16_lossy(&text[..length]);
+    let path = registry_text(root, &format!(r"{APP_PATHS}\{file}"), None, PATH_LENGTH)?;
     let path = path.trim().trim_matches('"');
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
@@ -177,5 +154,12 @@ mod tests {
         assert_eq!(find_program(r"C:\Windows\notepad.exe"), None);
         assert_eq!(find_program("tools/run"), None);
         assert_eq!(find_program("  "), None);
+    }
+
+    #[test]
+    fn a_program_registered_only_under_app_paths_is_found() {
+        // Edge is on no folder of `PATH`; only its App Paths key names it.
+        let edge = find_program("msedge").expect("msedge is registered under App Paths");
+        assert!({ edge.file_name() }.is_some_and(|name| name.eq_ignore_ascii_case("msedge.exe")));
     }
 }

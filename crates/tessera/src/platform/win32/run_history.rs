@@ -14,10 +14,10 @@
 #![allow(unsafe_code)]
 
 use anyhow::{Result, bail};
-use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegGetValueW, RegSetKeyValueW,
-};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
 use windows::core::PCWSTR;
+
+use super::registry::registry_text;
 
 /// The key of the history, under the user's hive.
 const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU";
@@ -71,26 +71,7 @@ impl RunHistory {
 
 /// The text value `name` of the history.
 fn read(name: &str) -> Option<String> {
-    let key: Vec<u16> = KEY.encode_utf16().chain([0]).collect();
-    let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
-    let mut text = vec![0u16; VALUE_LENGTH];
-    let mut size = (text.len() * size_of::<u16>()) as u32;
-    // SAFETY: `size` is the size in bytes of `text`, which outlives the
-    // call; the names are NUL-terminated.
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            PCWSTR(key.as_ptr()),
-            PCWSTR(name.as_ptr()),
-            RRF_RT_REG_SZ,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    status.ok().ok()?;
-    let length = text.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&text[..length]))
+    registry_text(HKEY_CURRENT_USER, KEY, Some(name), VALUE_LENGTH)
 }
 
 /// Writes the text value `name` of the history; the key is made if it

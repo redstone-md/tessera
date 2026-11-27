@@ -34,6 +34,7 @@ mod plans;
 mod power;
 mod processes;
 mod program_path;
+mod registry;
 mod run_history;
 mod shell_mode;
 mod shell_thread;
