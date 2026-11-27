@@ -631,13 +631,16 @@
 #               that window for it. For the popup keyboard-list
 #   "winx-menu" the menu of Win+X, for the popup winx
 #   "winx"      a button that opens the menu of Win+X under it
-#   "marketplace"  what the registries offer, to install, update and
-#               remove; the registries are read at the start, daily and with
-#               Check for updates. Fills the height left in its popup and
-#               scrolls. Option show, one kind or a list of "extensions",
-#               "themes", "icon-packs", "wallpapers", "tiling-layouts"
-#               (every kind, with a tab each, without it); option columns,
-#               1 (default) to 4. Its foot registers tessera:// links
+#   "marketplace"  the extensions the registries offer, to install, update
+#               and remove; contacts the registries when it is shown. Fills
+#               the height left in its popup and scrolls. Option show,
+#               "extensions" (default) or "themes" for the themes they
+#               offer; option columns, 1 (default) to 4
+#               It offers icon packs, wallpapers and tiling layouts too:
+#               show also takes "icon-packs", "wallpapers", "tiling-layouts"
+#               or a list of kinds, and without it every kind is shown, with
+#               a tab each. The registries are read at the start, daily and
+#               with Check for updates. Its foot registers tessera:// links
 #
 # Widgets of the quick settings:
 #   "tiles"     tiles in a grid, as the quick settings of Windows 11 show
