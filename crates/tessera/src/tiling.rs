@@ -632,11 +632,14 @@ impl Tiler {
         let look = arranging.then(|| Look::now(cx));
         let this = cx.global_mut::<Self>();
         let mut front_layout = None;
+        let mut relabel = false;
         if let Some(look) = &look {
             (*seen, *looked) = (Some(now), Instant::now());
             this.nudged = false;
             this.held.clear();
+            let before = this.layouts_shown();
             this.arrange(look, spring);
+            relabel = this.layouts_shown() != before;
             front_layout = this.front_layout(look);
         }
         this.step(Instant::now());
@@ -645,10 +648,15 @@ impl Tiler {
         let scan = (mode.enabled && this.layouts_due()).then_some(this.layouts_stamp);
         let moving = fading || !this.moves.is_empty();
         let waiting = this.changed.is_some();
-        if let Some(layout) = front_layout.filter(|layout| *layout != mode.layout) {
+        // The widgets of every display look again where the layout of any
+        // display changed, not only that of the display in front.
+        let front_changed = front_layout
+            .as_ref()
+            .is_some_and(|layout| *layout != mode.layout);
+        if front_changed || relabel {
             cx.set_global(TilingMode {
                 enabled: mode.enabled,
-                layout,
+                layout: front_layout.unwrap_or(mode.layout),
             });
         }
         if !(mode.enabled || moving || waiting || write.is_some()) {
@@ -910,6 +918,13 @@ impl Tiler {
         let display = self.front_display(look)?;
         let shown = self.shown.iter().find(|shown| shown.display == display)?;
         Some(shown.layout.clone())
+    }
+
+    /// The layout of the workspace each display shows, by display.
+    fn layouts_shown(&self) -> Vec<(DisplayKey, LayoutChoice)> {
+        { self.shown.iter() }
+            .map(|shown| (shown.display, shown.layout.clone()))
+            .collect()
     }
 
     /// The tiled window in front and the window on the side `toward` of it,
