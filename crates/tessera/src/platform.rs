@@ -62,6 +62,7 @@ pub use win32::{
 pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
 };
+pub use win32::{DisplayOutput, DisplaySetup, Rotation, VideoMode, hertz_text};
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,

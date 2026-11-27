@@ -13,6 +13,7 @@ mod command;
 mod connections;
 pub mod devices;
 mod display_mode;
+mod display_settings;
 mod focused;
 mod hdr;
 mod hotspot;
@@ -70,6 +71,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
         Box::new(display_mode::DisplayModeModule),
+        Box::new(display_settings::DisplaySettingsModule),
         Box::new(devices::DevicesModule),
         Box::new(FilesModule),
         Box::new(focused::FocusedModule),

@@ -20,6 +20,7 @@ mod commands;
 mod connections;
 mod desktops;
 mod devices;
+mod display_config;
 mod display_mode;
 mod drag;
 mod drop_target;
@@ -109,6 +110,7 @@ pub use desktops::VirtualDesktops;
 pub use devices::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
+pub use display_config::{DisplayOutput, DisplaySetup, Rotation, VideoMode, hertz_text};
 pub use display_mode::DisplayMode;
 pub use drag::DragOut;
 pub use drop_target::{DropEvent, DropTarget, DropZone, DropZones};
