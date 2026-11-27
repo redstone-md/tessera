@@ -20,6 +20,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -303,6 +304,10 @@ pub struct IconPacks {
     /// that cannot be used, which was reported.
     /// Each with whether it is in the colors of the theme.
     drawn: RefCell<HashMap<DrawnKey, (Icon, bool)>>,
+    /// The pictures read of the icons that follow the theme, by icon and
+    /// size, so that a change of the theme paints them again without
+    /// reading and drawing their files again.
+    sources: RefCell<HashMap<(PackIcon, u32), Rc<Source>>>,
 }
 
 impl IconPacks {
@@ -336,6 +341,7 @@ impl IconPacks {
             packs,
             tints: Cell::default(),
             drawn: RefCell::default(),
+            sources: RefCell::default(),
         }
     }
 
@@ -406,7 +412,9 @@ impl IconPacks {
         let tinted = icon.follows_theme();
         let tints = self.tints.get();
         let tint = if active { tints.active } else { tints.rest };
-        let drawn = draw(icon, size, tint)
+        let drawn = self
+            .source(icon, size)
+            .map(|source| source.painted(icon, size, tint))
             .inspect_err(|error| report!("the icon {} is not used: {error:#}", icon.file.display()))
             .ok()
             .flatten();
@@ -414,8 +422,23 @@ impl IconPacks {
         drawn
     }
 
+    /// The picture read of `icon` at `size`, kept where the icon follows
+    /// the theme and so is painted again when the theme changes.
+    fn source(&self, icon: &PackIcon, size: u32) -> anyhow::Result<Rc<Source>> {
+        let key = (icon.clone(), size);
+        if let Some(source) = self.sources.borrow().get(&key) {
+            return Ok(source.clone());
+        }
+        let source = Rc::new(Source::read(icon, size)?);
+        if icon.follows_theme() {
+            self.sources.borrow_mut().insert(key, source.clone());
+        }
+        Ok(source)
+    }
+
     /// Takes the colors of `theme` for the icons that follow it; those
-    /// drawn in other colors are drawn again when next asked for.
+    /// drawn in other colors are painted again when next asked for, from
+    /// the pictures already read.
     pub fn follow_theme(&self, theme: &Theme) {
         let tints = Tints::of(theme);
         if self.tints.replace(tints) != tints {
@@ -523,23 +546,44 @@ fn stamp_of(directories: &[PathBuf]) -> u64 {
     hasher.finish()
 }
 
-/// The picture of `icon` in a square of `size` pixels, painted with
-/// `tint` where it follows the theme.
-fn draw(icon: &PackIcon, size: u32, tint: [u8; 4]) -> anyhow::Result<Icon> {
-    let picture = read_picture(&icon.file, size)?;
-    let picture = if icon.monochrome {
-        monochrome(&picture, tint)
-    } else if let Some(mask) = icon.mask_file() {
-        let mask = read_picture(mask, size)
-            .with_context(|| format!("its mask {} cannot be used", mask.display()))?;
-        masked(picture, &mask, tint)
-    } else {
-        picture.into_rgba8()
-    };
-    Ok(crate::icons::prepared(
-        DynamicImage::ImageRgba8(picture),
-        size,
-    ))
+/// The pictures of an icon read from its files at a size, before they
+/// are painted in the colors of the theme.
+struct Source {
+    picture: DynamicImage,
+    /// The mask of an icon that has one, at the size of the picture.
+    mask: Option<DynamicImage>,
+}
+
+impl Source {
+    fn read(icon: &PackIcon, size: u32) -> anyhow::Result<Self> {
+        let picture = read_picture(&icon.file, size)?;
+        let mask = match icon.mask_file().filter(|_| !icon.monochrome) {
+            Some(mask) => {
+                let mask = read_picture(mask, size)
+                    .with_context(|| format!("its mask {} cannot be used", mask.display()))?;
+                let (width, height) = (picture.width(), picture.height());
+                Some(match mask.width() == width && mask.height() == height {
+                    true => mask,
+                    false => mask.resize_exact(width, height, FilterType::Triangle),
+                })
+            }
+            None => None,
+        };
+        Ok(Self { picture, mask })
+    }
+
+    /// The picture of `icon` in a square of `size` pixels, painted with
+    /// `tint` where it follows the theme.
+    fn painted(&self, icon: &PackIcon, size: u32, tint: [u8; 4]) -> Icon {
+        let picture = if icon.monochrome {
+            monochrome(&self.picture, tint)
+        } else if let Some(mask) = &self.mask {
+            masked(self.picture.clone(), mask, tint)
+        } else {
+            self.picture.to_rgba8()
+        };
+        crate::icons::prepared(DynamicImage::ImageRgba8(picture), size)
+    }
 }
 
 /// The picture file at `path`, an SVG drawn at `size` pixels.
@@ -675,11 +719,15 @@ fn monochrome(picture: &DynamicImage, tint: [u8; 4]) -> RgbaImage {
 fn masked(picture: DynamicImage, mask: &DynamicImage, tint: [u8; 4]) -> RgbaImage {
     let mut picture = picture.into_rgba8();
     let (width, height) = picture.dimensions();
+    let resized;
     let mask = match mask.width() == width && mask.height() == height {
-        true => mask.clone(),
-        false => mask.resize_exact(width, height, FilterType::Triangle),
+        true => mask,
+        false => {
+            resized = mask.resize_exact(width, height, FilterType::Triangle);
+            &resized
+        }
     };
-    for (pixel, covered) in picture.pixels_mut().zip(coverage(&mask)) {
+    for (pixel, covered) in picture.pixels_mut().zip(coverage(mask)) {
         pixel.0 = over(pixel.0, tint, scaled(covered, tint[3]));
     }
     picture
