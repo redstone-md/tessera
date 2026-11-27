@@ -246,8 +246,12 @@ impl Asked {
             ["move", side] => key.carry = said(side),
             // A word that is no number is one no application has.
             ["dock", number] => key.dock = Some(number.parse().unwrap_or(0)),
-            ["files"] => key.files = said(""),
-            ["files", folder] => key.files = said(folder),
+            // Every word is kept, as Explorer's command line may have
+            // several (`/n /e,C:\x`).
+            ["files", ref words @ ..] => {
+                let words = words.iter().map(|word| (*word).to_owned()).collect();
+                return Ok(Self::Deed(Deed::Files(words)));
+            }
             ["do", name] => key.action = said(name),
             // An argument with spaces may come as several words.
             ["do", name, ref arg @ ..] => {
@@ -285,8 +289,9 @@ pub(crate) enum Deed {
     },
     /// What a click on the button of this number in the dock does.
     Dock(usize),
-    /// Opens the file manager at the folder named so.
-    Files(String),
+    /// Opens the file manager where these words name, read as Explorer
+    /// reads its command line: a folder, or `/select,<path>` and the like.
+    Files(Vec<String>),
     /// Does the action registered as `name`, with `arg`.
     Action {
         name: String,
@@ -319,7 +324,7 @@ impl Deed {
             }),
             key.files
                 .as_ref()
-                .map(|folder| Ok(Self::Files(folder.clone()))),
+                .map(|folder| Ok(Self::Files(vec![folder.clone()]))),
             key.action
                 .as_deref()
                 .map(|name| Self::action(name, key.arg.as_deref(), actions)),
@@ -421,7 +426,7 @@ impl Deed {
             Self::Focus(toward) => Tiler::focus(*toward, cx),
             Self::Carry(toward) => Tiler::carry(*toward, cx),
             Self::Dock(number) => Docks::press(*number, cx),
-            Self::Files(folder) => Files::open(Files::named(folder), cx),
+            Self::Files(words) => Files::open_command(words, cx),
             Self::Action { name, arg } => Actions::run(name, arg.as_deref(), cx),
             Self::Run(command) => start_program(command),
         }

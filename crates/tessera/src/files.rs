@@ -27,8 +27,10 @@ use session::{Opening, Session};
 use view::FilesView;
 
 use crate::actions::{Action, Actions};
+use crate::explorer_args::{Destination, ExplorerArgs, KnownPlace, Places, explorer_command_line};
 use crate::module::{Module, WidgetRegistry};
 use crate::platform::Place;
+use crate::platform::{ShellThread, known_folder_path, start_explorer};
 use crate::theme::Theme;
 use crate::ui::{icon, pill};
 
@@ -171,6 +173,51 @@ impl Files {
         true
     }
 
+    /// Opens what `words` name, read as Explorer reads its command line
+    /// (see [`crate::explorer_args`]): a folder, `/select,<path>`,
+    /// `shell:Downloads`, a `search-ms:` search and the like. What is no
+    /// folder of the file system, such as Control Panel, is handed to
+    /// Explorer with the same words. Known folders and paths are looked
+    /// up away from the user interface.
+    pub fn open_command(words: &[String], cx: &mut App) {
+        let args = ExplorerArgs::parse(words);
+        if args.target.is_none() && args.root.is_none() {
+            Self::open_named("", cx);
+            return;
+        }
+        let line = explorer_command_line(words);
+        let found =
+            ShellThread::call_alone("explorer words", move || args.destination(&SystemPlaces));
+        cx.spawn(async move |cx| {
+            let Ok(destination) = found.recv().await else {
+                return;
+            };
+            cx.update(|cx| match destination {
+                Destination::Default => Self::open_named("", cx),
+                Destination::Open(location) => Self::open(location, cx),
+                Destination::Select(path) => Self::open_at_item(&path, cx),
+                Destination::Explorer => {
+                    if let Err(error) = start_explorer(&line, false) {
+                        report!("{error:#}");
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens the folder around `path`, where `path` is to be chosen.
+    /// Choosing it waits for the panes to be able to choose an item by
+    /// name; until then the folder opens with nothing chosen.
+    pub fn open_at_item(path: &Path, cx: &mut App) {
+        let folder = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => path,
+        };
+        Self::open(Location::Folder(folder.to_owned()), cx);
+    }
+
     /// Where a window opens that names no folder: the folder of the user.
     pub fn home() -> Location {
         Place::Home
@@ -199,6 +246,29 @@ impl Files {
     }
 }
 
+/// The places of this computer as Explorer's command lines name them:
+/// known folders through the Shell, paths through the file system. Asked
+/// away from the user interface, as both may wait.
+pub struct SystemPlaces;
+
+impl Places for SystemPlaces {
+    fn known(&self, name: &str) -> KnownPlace {
+        known_folder_path(name).map_or(KnownPlace::Virtual, KnownPlace::Folder)
+    }
+
+    fn named(&self, word: &str) -> Location {
+        Files::named(word)
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+}
+
 /// The module of the file manager: the widget `files` opens a window of
 /// it, at the folder its option `folder` names, and so does the action
 /// `files`, at the folder of its argument.
@@ -220,8 +290,9 @@ impl Module for FilesModule {
         // Windows keeps Win+E, which opens Explorer, to itself; it is
         // taken where the keys of Windows are in use, as in shell mode,
         // where nothing else answers it.
-        let open = |folder: Option<&str>, cx: &mut App| {
-            Files::open_named(folder.unwrap_or_default(), cx);
+        let open = |folder: Option<&str>, cx: &mut App| match folder {
+            Some(folder) => Files::open_command(&[folder.to_owned()], cx),
+            None => Files::open_named("", cx),
         };
         let open = { Action::new(open).taking_any_arg() }
             .taking_reserved_keys()

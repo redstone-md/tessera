@@ -32,7 +32,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     AppContext, AsyncApp, Context, Global, InteractiveElement, IntoElement, ParentElement, Render,
@@ -42,10 +42,16 @@ use serde::Deserialize;
 
 use crate::actions::{Action, Actions};
 use crate::config::{Config, PopupConfig, WidgetSpec};
+use crate::explorer_args::{Destination, ExplorerArgs, explorer_command_line};
+use crate::files::SystemPlaces;
 use crate::flyout::Flyouts;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
+use crate::platform::{
+    Commands, FolderHandler, RunningProcess, start_explorer, started_by_files_fallback,
+    tell_problem,
+};
 use crate::platform::{
     ExplorerShell, HostOptions, NextShell, SHELL_FLAG, ShellEvent, ShellHost, ShellRegistration,
     Taskbar, attach_console, is_safe_mode, own_program_name, recovery_keys_held, shell_mode,
@@ -191,10 +197,14 @@ impl ShellCommand {
     }
 }
 
-/// Runs `tessera shell install|revert|status` if the arguments ask for it,
-/// and gives the exit code; the caller exits then.
+/// Runs `tessera shell install|revert|status` and `tessera files ...` if
+/// the arguments ask for it, and gives the exit code; the caller exits
+/// then.
 pub fn run_command_if_requested(arguments: impl Iterator<Item = String>) -> Option<i32> {
     let words: Vec<String> = arguments.collect();
+    if let Some(command) = FilesCommand::of(&words) {
+        return Some(command.run());
+    }
     let command = ShellCommand::of(&words)?;
     attach_console();
     Some(match command {
@@ -204,6 +214,182 @@ pub fn run_command_if_requested(arguments: impl Iterator<Item = String>) -> Opti
             2
         }
     })
+}
+
+/// How long a start of `tessera files` waits for a Tessera to take what
+/// it names: one that is busy, or one it started itself.
+const HAND_OVER_TIME: Duration = Duration::from_secs(15);
+
+/// How long it waits for another Tessera that runs but does not listen
+/// yet, as one that is starting, before it starts one itself.
+const STARTING_TIME: Duration = Duration::from_secs(3);
+
+/// How often it tries again meanwhile.
+const HAND_OVER_LOOK: Duration = Duration::from_millis(250);
+
+/// Windows' answer to a pipe all of whose instances are busy.
+const ERROR_PIPE_BUSY: i32 = 231;
+
+/// What `tessera files` is asked to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum FilesCommand {
+    /// Make Tessera Files open the folders of the file system.
+    Install,
+    /// Give that back.
+    Revert,
+    /// Print what opens folders.
+    Status,
+    /// Open what the words after `files` name, read as Explorer reads its
+    /// command line.
+    Open(Vec<String>),
+}
+
+impl FilesCommand {
+    /// What the words of the command line ask for: `None` where they are
+    /// not `files ...`.
+    fn of(words: &[String]) -> Option<Self> {
+        let (first, rest) = words.split_first()?;
+        if first != "files" {
+            return None;
+        }
+        Some(match rest {
+            [word] if word == "install" => Self::Install,
+            [word] if word == "revert" => Self::Revert,
+            [word] if word == "status" => Self::Status,
+            _ => Self::Open(rest.to_vec()),
+        })
+    }
+
+    /// Does it and gives the exit code.
+    fn run(self) -> i32 {
+        let done = match self {
+            Self::Open(words) => return open_files(&words),
+            Self::Install => FolderHandler::install(),
+            Self::Revert => FolderHandler::revert(),
+            Self::Status => Ok(FolderHandler::read()),
+        };
+        attach_console();
+        match done {
+            Ok(handler) => {
+                for line in handler.describe(&own_program_name()) {
+                    println!("{line}");
+                }
+                0
+            }
+            Err(error) => {
+                eprintln!("tessera: {error:#}");
+                1
+            }
+        }
+    }
+}
+
+/// Opens what `words` name in Tessera Files, as the verbs of folders
+/// written by `tessera files install` ask: the running Tessera gets them;
+/// where none runs, this program starts Tessera and hands them over once
+/// it listens; only where that fails does Explorer get them, marked so
+/// that it cannot hand them back. Whatever is no folder of the file
+/// system goes to Explorer at once, with the same words.
+fn open_files(words: &[String]) -> i32 {
+    if started_by_files_fallback() {
+        let language = Config::load().language;
+        tell_problem(
+            "Tessera Files",
+            language.say("Tessera Files could not open the folder, and Explorer gave it back. Start Tessera and try again, or run `tessera files revert` to have Explorer open folders."),
+        );
+        return 1;
+    }
+    let line = explorer_command_line(words);
+    if ExplorerArgs::parse(words).destination(&SystemPlaces) == Destination::Explorer {
+        return to_explorer(&line, false);
+    }
+    let text: Vec<&str> = std::iter::once("files")
+        .chain(words.iter().map(String::as_str))
+        .collect();
+    match hand_to_files(&text.join("\n")) {
+        true => 0,
+        false => to_explorer(&line, true),
+    }
+}
+
+/// Has Explorer open `line`, and gives the exit code.
+fn to_explorer(line: &str, fallback: bool) -> i32 {
+    match start_explorer(line, fallback) {
+        Ok(()) => 0,
+        Err(error) => {
+            report!("{error:#}");
+            1
+        }
+    }
+}
+
+/// What came of handing words to a running Tessera.
+enum Handed {
+    Done,
+    /// A Tessera listens but is taking other words.
+    Busy,
+    Nobody,
+}
+
+impl Handed {
+    fn by_sending(text: &str) -> Self {
+        match Commands::send(text) {
+            Ok(()) => Self::Done,
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) => Self::Busy,
+            Err(_) => Self::Nobody,
+        }
+    }
+}
+
+/// Hands `text` to the running Tessera, starting one where none listens,
+/// and says whether it got there within [`HAND_OVER_TIME`]. Another
+/// Tessera that runs but does not listen yet is given [`STARTING_TIME`]
+/// first, so that a Tessera that is starting is not started twice.
+fn hand_to_files(text: &str) -> bool {
+    let began = Instant::now();
+    let mut started: Option<std::process::Child> = None;
+    loop {
+        match (Handed::by_sending(text), &mut started) {
+            (Handed::Done, _) => return true,
+            (Handed::Busy, _) => {}
+            (Handed::Nobody, Some(child)) => {
+                if child.try_wait().ok().flatten().is_some() {
+                    report!("the Tessera started for a folder ended before it listened");
+                    return false;
+                }
+            }
+            (Handed::Nobody, None) => {
+                let program = own_program_name();
+                let other = { RunningProcess::all().into_iter() }
+                    .any(|process| process.name.eq_ignore_ascii_case(&program));
+                if !other || began.elapsed() >= STARTING_TIME {
+                    match start_tessera() {
+                        Ok(child) => started = Some(child),
+                        Err(error) => {
+                            report!("Tessera did not start for a folder: {error:#}");
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        if began.elapsed() >= HAND_OVER_TIME {
+            return false;
+        }
+        thread::sleep(HAND_OVER_LOOK);
+    }
+}
+
+/// Starts this program without arguments, as a Tessera of its own that
+/// outlives this process.
+fn start_tessera() -> anyhow::Result<std::process::Child> {
+    let program = std::env::current_exe()?;
+    let child = std::process::Command::new(program)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(child)
 }
 
 /// Is the short process that starts Explorer as the shell once Tessera
@@ -768,6 +954,31 @@ mod tests {
             ShellCommand::of(&words("shell remove now")),
             Some(Err(_))
         ));
+    }
+
+    #[test]
+    fn the_command_line_asks_for_a_files_command() {
+        assert_eq!(FilesCommand::of(&words("shell install")), None);
+        assert_eq!(
+            FilesCommand::of(&words("files install")),
+            Some(FilesCommand::Install)
+        );
+        assert_eq!(
+            FilesCommand::of(&words("files revert")),
+            Some(FilesCommand::Revert)
+        );
+        assert_eq!(
+            FilesCommand::of(&words("files status")),
+            Some(FilesCommand::Status)
+        );
+        assert_eq!(
+            FilesCommand::of(&words("files")),
+            Some(FilesCommand::Open(Vec::new()))
+        );
+        assert_eq!(
+            FilesCommand::of(&words("files /n /e,C:\\x")),
+            Some(FilesCommand::Open(words("/n /e,C:\\x")))
+        );
     }
 
     #[test]
