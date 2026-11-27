@@ -25,13 +25,12 @@ use windows::UI::Notifications::Management::{
     UserNotificationListener, UserNotificationListenerAccessStatus,
 };
 use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, UserNotification};
-use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{
     QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 use windows::core::Result as WindowsResult;
 
+use super::execute::own_window_in_front;
 use super::hdr::paths;
 
 /// Seconds between 1601, where Windows starts counting, and 1970.
@@ -237,25 +236,10 @@ impl Occupation {
         let busy = match state {
             Some(QUNS_RUNNING_D3D_FULL_SCREEN) => Some(Self::Game),
             Some(QUNS_PRESENTATION_MODE) => Some(Self::Presenting),
-            Some(QUNS_BUSY) if !own_window_in_front() => Some(Self::Fullscreen),
+            Some(QUNS_BUSY) if own_window_in_front().is_none() => Some(Self::Fullscreen),
             _ => None,
         };
         busy.or_else(|| (duplicating && display_duplicated()).then_some(Self::Duplicating))
-    }
-}
-
-/// Whether the window in front is one of this program.
-fn own_window_in_front() -> bool {
-    let mut process = 0;
-    // SAFETY: the calls only read which window is in front and whose it
-    // is; `process` outlives the call that fills it.
-    unsafe {
-        let window = GetForegroundWindow();
-        if window.is_invalid() {
-            return false;
-        }
-        GetWindowThreadProcessId(window, Some(&raw mut process));
-        process == GetCurrentProcessId()
     }
 }
 
