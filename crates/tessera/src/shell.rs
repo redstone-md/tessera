@@ -19,6 +19,7 @@ use crate::desk::Cards;
 use crate::extension::installed_stamp;
 use crate::files::Files;
 use crate::flyout::Flyouts;
+use crate::icon_packs::IconPacks;
 use crate::icons::AppIcons;
 use crate::keys::Shortcuts;
 use crate::menu::Menus;
@@ -84,7 +85,8 @@ impl Shell {
         cx.set_global(Previews::default());
         cx.set_global(Tips::default());
         cx.set_global(Menus::default());
-        cx.set_global(AppIcons::new(&config.icons));
+        cx.set_global(AppIcons::from_config(&config));
+        IconPacks::start(cx);
         // Without Explorer the surfaces reserve their edges through the tray.
         crate::platform::Tray::start_before_surfaces();
         Night::start(&config.night_light, cx);
@@ -322,7 +324,7 @@ impl Shell {
         let old = &cx.global::<Self>().config;
         let extensions =
             old.extensions != config.extensions || old.registries() != config.registries();
-        let icons = old.icons != config.icons;
+        let icons = old.icons != config.icons || old.icon_packs != config.icon_packs;
         let surfaces = old.surfaces != config.surfaces;
         let cards = old.cards != config.cards;
         // An open popup stays while it is still what the configuration
@@ -341,7 +343,7 @@ impl Shell {
             cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         }
         if icons {
-            cx.set_global(AppIcons::new(&config.icons));
+            cx.set_global(AppIcons::from_config(&config));
         }
         if (extensions || icons || surfaces) && !Self::arrange(&config, cx) {
             config.surfaces = cx.global::<Self>().config.surfaces.clone();

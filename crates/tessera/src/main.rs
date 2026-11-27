@@ -20,6 +20,7 @@ mod field;
 mod files;
 mod flyout;
 mod i18n;
+mod icon_packs;
 mod icons;
 mod keys;
 mod menu;
