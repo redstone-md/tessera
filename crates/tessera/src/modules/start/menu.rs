@@ -234,7 +234,7 @@ fn tell(name: &str, done: Result<&'static str, (&'static str, String)>, cx: &mut
         Err((failed, why)) => (language.say(failed).to_owned(), format!("{name}: {why}")),
     };
     let notice = Notice {
-        app: language.say("Start").to_owned(),
+        app: language.say("Start menu").to_owned(),
         title,
         body,
         glyph: Some(ICON_OPEN),
