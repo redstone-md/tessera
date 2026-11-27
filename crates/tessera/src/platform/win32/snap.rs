@@ -222,7 +222,7 @@ const HIT_TEST_TIMEOUT: u32 = 60;
 /// What the window `id` says is at `point` of it, as one of the `HT`
 /// values of `WM_NCHITTEST`; `None` when it does not answer in time, as a
 /// window that hangs does not.
-fn hit_test(id: AppWindowId, (x, y): (i32, i32)) -> Option<u32> {
+pub(super) fn hit_test(id: AppWindowId, (x, y): (i32, i32)) -> Option<u32> {
     let packed = ((y & 0xffff) << 16) | (x & 0xffff);
     let mut answer = 0usize;
     // SAFETY: `answer` outlives the call, which gives up on a window that
