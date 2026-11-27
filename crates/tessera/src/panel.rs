@@ -629,7 +629,15 @@ impl Panel {
             .border_1()
             .border_color(color.opacity(strength.clamp(0., 1.)))
             .bg(color.opacity((strength * HANDLE_FILL).clamp(0., 1.)))
-            .occlude();
+            .occlude()
+            // The outline keeps the pointer from the bar under it, so it
+            // opens the menu of its widget itself.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.context_menu(event, window, cx);
+                }),
+            );
         if !editable {
             return div()
                 .relative()
