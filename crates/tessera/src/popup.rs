@@ -403,6 +403,11 @@ impl Popups {
         cx.global::<Self>().open.is_some()
     }
 
+    /// Whether the popup `name` is the one open.
+    pub fn shows(name: &str, cx: &App) -> bool {
+        { cx.global::<Self>().open.as_ref() }.is_some_and(|(open, _)| open == name)
+    }
+
     /// Closes the open popup, if there is one.
     pub fn close(cx: &mut App) {
         if let Some((_, window)) = cx.global_mut::<Self>().open.take() {

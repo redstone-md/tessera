@@ -136,8 +136,13 @@ fn follow(arg: Option<&str>, cx: &mut App) {
         }
     };
     match link {
-        // The settings cannot be opened at a part yet.
-        Link::Open { .. } => Shell::toggle_popup(SETTINGS_POPUP, cx),
+        // The settings cannot be opened at a part yet. A link opens them
+        // and never closes them.
+        Link::Open { .. } => {
+            if !Popups::shows(SETTINGS_POPUP, cx) {
+                Shell::toggle_popup(SETTINGS_POPUP, cx);
+            }
+        }
         Link::Install { .. } => {
             let shown = cx.default_global::<Requested>().shown;
             cx.global_mut::<Requested>().link = Some(link);
