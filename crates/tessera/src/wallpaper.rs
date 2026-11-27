@@ -1,46 +1,72 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! A wallpaper of Tessera's own: pictures shown behind the icons of the
-//! desktop on every display, one fading into the next, or a video that
-//! plays there again and again.
+//! The wallpaper behind the icons of the desktop, on every display:
+//! pictures that fade one into the next, a color or a gradient, videos,
+//! a picture of the day, or the wallpaper of Windows.
 //!
-//! The wallpaper of Windows is left as it is and shows again when Tessera
-//! exits, because the pictures are drawn in windows of Tessera that sit
-//! over it. Those are plain windows, not ones of the user interface: a
-//! picture is kept once for each display, at the size of the display, and
-//! a video is drawn by Windows.
+//! What Tessera draws lies in windows of its own over the wallpaper of
+//! Windows, which is left as it is and shows again when Tessera exits,
+//! unless `mirror` makes Tessera's picture the wallpaper of Windows too;
+//! the one before is then put back as Tessera exits. The windows are
+//! plain ones, not ones of the user interface: a picture is kept once for
+//! each display, at the size of the display, and a video is drawn by
+//! Windows.
+//!
+//! The wallpaper of Windows itself is drawn by the desktop window: that
+//! of Explorer, or in shell mode Tessera's own, which paints it with
+//! `PaintDesktop`. Tessera opens no window for it there, and draws it
+//! itself only where another program's desktop window is in its place.
+//!
+//! A task looks at the displays, the workspaces, the time of day and the
+//! wallpaper of Windows every few seconds, works out what each display is
+//! to show ([`looks::Plan`]) and changes only the windows whose plan
+//! changed. Everything that waits, reading files and asking Windows, is
+//! done off the thread of the interface.
 
-use std::collections::VecDeque;
+mod accent;
+mod compose;
+mod daily;
+mod looks;
+
+use std::collections::HashSet;
+use std::future::Future as _;
 use std::path::{Path, PathBuf};
+use std::pin::{Pin, pin};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::task::Poll;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
+use chrono::{Local, NaiveDate, Timelike as _};
 use gpui::{App, AsyncApp, Global};
-use image::RgbImage;
-use serde::Deserialize;
+use image::{ImageReader, RgbImage};
+use serde::{Deserialize, Serialize};
 
+use self::compose::{Fit, around, compose};
+use self::daily::{Daily, DailyPicture};
+pub use self::looks::WallpaperConfig;
+use self::looks::{Looks, Moment, Plan, WindowsNow};
 use crate::motion::{Spring, SpringSpec};
 use crate::platform::{
-    AppWindow, BackdropPicture, DesktopBackdrop, DesktopVideo, ScreenRect, VideoState,
-    display_frames, memory_held,
+    AppWindow, BackdropPicture, Battery, DesktopBackdrop, DesktopVideo, ScreenRect, ShellThread,
+    SystemWallpaper, VideoState, decode_with_wic, display_at, display_frames, light_mode,
+    memory_held, user_locale,
 };
 use crate::theme::Theme;
-
-/// How long a picture stays unless the configuration says, in seconds.
-const INTERVAL: u64 = 600;
-
-/// The shortest time a picture stays, in seconds: reading the next one
-/// takes time and memory.
-const SHORTEST_INTERVAL: u64 = 5;
+use crate::workspaces::Workspaces;
 
 /// How long one step of a fade stays on the screen.
 const FRAME: Duration = Duration::from_millis(16);
 
-/// How often the displays are looked at for a change while a picture
-/// stays.
+/// How often the displays, the wallpaper of Windows and the videos are
+/// looked at.
 const DISPLAY_CHECK: Duration = Duration::from_secs(2);
+
+/// How often the workspaces are looked at, where some has a wallpaper of
+/// its own.
+const WORKSPACE_CHECK: Duration = Duration::from_millis(250);
 
 /// How often a video is asked how far it has come while it is read.
 const VIDEO_CHECK: Duration = Duration::from_millis(50);
@@ -50,21 +76,57 @@ const VIDEO_CHECK: Duration = Duration::from_millis(50);
 /// a video: one after the other stays under what both at once take.
 const VIDEO_AFTER_START: Duration = Duration::from_secs(8);
 
+/// How long a video may take to have its first frame.
+const VIDEO_PATIENCE: Duration = Duration::from_secs(15);
+
+/// The memory Tessera may hold with its videos, in bytes. A video takes
+/// memory by its size and by how Windows decodes it, which is known only
+/// once it plays: one that takes Tessera over this is left out.
+const VIDEO_MEMORY: u64 = 200 * 1024 * 1024;
+
+/// How long after a failed try the picture of the day is asked for again.
+const DAILY_RETRY: Duration = Duration::from_secs(30 * 60);
+
+/// How long Tessera waits as it exits for the wallpaper of Windows to be
+/// put back.
+const RESTORE_PATIENCE: Duration = Duration::from_secs(2);
+
 /// When the wallpaper was first asked for, which is as Tessera starts.
 static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
-/// The memory Tessera may hold with a video, in bytes. A video takes
-/// memory by its size and by how Windows decodes it, which is known only
-/// once it plays: one that takes more is left out.
-const VIDEO_MEMORY: u64 = 200 * 1024 * 1024;
+/// The color the wallpaper stands out with, as `0x1RRGGBB`, or 0 where it
+/// is not known.
+static COLOR: AtomicU32 = AtomicU32::new(0);
 
-/// Fails where Tessera holds more memory with the video of `path` than
+/// The color the wallpaper of the first display stands out with, as red,
+/// green and blue, for a theme whose seed is `wallpaper`; `None` until a
+/// picture was read, and while a video plays.
+pub fn wallpaper_color() -> Option<[u8; 3]> {
+    let value = COLOR.load(Ordering::Relaxed);
+    let [_, red, green, blue] = value.to_be_bytes();
+    (value != 0).then_some([red, green, blue])
+}
+
+fn set_wallpaper_color(color: Option<[u8; 3]>) {
+    let value = color.map_or(0, |[red, green, blue]| {
+        u32::from_be_bytes([1, red, green, blue])
+    });
+    COLOR.store(value, Ordering::Relaxed);
+}
+
+/// The directory of what Tessera keeps for this machine,
+/// `%LOCALAPPDATA%\tessera`.
+fn local_data() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("tessera"))
+}
+
+/// Fails where Tessera holds more memory with the videos of `files` than
 /// it may.
-fn video_fits(path: &Path) -> anyhow::Result<()> {
+fn video_fits(files: &[PathBuf]) -> anyhow::Result<()> {
     match memory_held() {
         Some(held) if held > VIDEO_MEMORY => anyhow::bail!(
             "{} has Tessera hold {} MB, more than the {} MB it stays under",
-            path.display(),
+            names(files),
             held / (1024 * 1024),
             VIDEO_MEMORY / (1024 * 1024)
         ),
@@ -72,295 +134,36 @@ fn video_fits(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// How long a video may take to have its first frame.
-const VIDEO_PATIENCE: Duration = Duration::from_secs(15);
-
-/// The kinds of file taken from a directory, by extension.
-const KINDS: [&str; 3] = ["jpg", "jpeg", "png"];
-
-/// What the configuration says about the wallpaper.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WallpaperConfig {
-    /// Picture files, and directories whose picture files are taken, in
-    /// the order of their names. Without any, Tessera draws no wallpaper.
-    #[serde(default)]
-    images: Vec<PathBuf>,
-    /// How many seconds a picture stays before the next one.
-    interval: Option<u64>,
-    /// A video file to play instead of the pictures, which are shown
-    /// where it cannot be played.
-    video: Option<PathBuf>,
-    /// The pictures of single displays, in place of `images` there.
-    #[serde(default, rename = "display")]
-    displays: Vec<DisplayWallpaper>,
-    /// How a picture that has not the shape of its display is fitted.
-    #[serde(default)]
-    fit: Fit,
+/// The files `files`, as they are named in a report.
+fn names(files: &[PathBuf]) -> String {
+    let names: Vec<String> = files
+        .iter()
+        .map(|file| file.display().to_string())
+        .collect();
+    names.join(", ")
 }
 
-/// A part of a picture or of a display: its left, top, width and height.
-type Part = (u32, u32, u32, u32);
-
-/// How a picture that has not the shape of its display is fitted to it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Fit {
-    /// Scaled until it covers the display; what sticks out is cut off.
-    #[default]
-    Cover,
-    /// Scaled until all of it is seen; the rest of the display is black.
-    Contain,
-    /// Scaled to the display in both directions, which changes its shape.
-    Stretch,
-}
-
-impl Fit {
-    /// The part of a picture of `width` by `height` pixels that is shown
-    /// on a display of `over_width` by `over_height`, and the part of the
-    /// display it is shown in, each as left, top, width and height.
-    fn parts(
-        self,
-        (width, height): (u32, u32),
-        (over_width, over_height): (u32, u32),
-    ) -> (Part, Part) {
-        let whole = (0, 0, width, height);
-        let all = (0, 0, over_width, over_height);
-        match self {
-            Self::Cover => (covering_part(width, height, over_width, over_height), all),
-            Self::Stretch => (whole, all),
-            // The part of the display with the shape of the picture is
-            // found as the part of a picture with the shape of a display.
-            Self::Contain => (whole, covering_part(over_width, over_height, width, height)),
-        }
-    }
-}
-
-/// What the configuration says about the wallpaper of one display.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DisplayWallpaper {
-    /// Which display: they are counted from the left, and from the top
-    /// where two begin equally far left, the first being 1.
-    number: usize,
-    /// Picture files and directories, as `images` of the wallpaper.
-    /// Without any, Tessera draws no wallpaper on the display.
-    #[serde(default)]
-    images: Vec<PathBuf>,
-}
-
-/// The pictures each display goes through.
-#[derive(Debug, Default, PartialEq)]
-struct Playlists {
-    /// Those of a display that has none of its own.
-    all: Vec<PathBuf>,
-    /// Those of single displays, by their number.
-    own: Vec<(usize, Vec<PathBuf>)>,
-    fit: Fit,
-}
-
-impl Playlists {
-    /// The pictures of the display with the number `number`.
-    fn of(&self, number: usize) -> &[PathBuf] {
-        let own = self.own.iter().find(|(of, _)| *of == number);
-        own.map_or(&self.all, |(_, pictures)| pictures)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.all.is_empty() && self.own.iter().all(|(_, pictures)| pictures.is_empty())
-    }
-
-    /// Whether a display has more than one picture to go through.
-    fn change(&self) -> bool {
-        self.all.len() > 1 || self.own.iter().any(|(_, pictures)| pictures.len() > 1)
-    }
-}
-
-/// The number of each of the displays with the bounds `frames`: they are
-/// counted from the left, and from the top where two begin equally far
-/// left, the first being 1.
-fn numbers(frames: &[ScreenRect]) -> Vec<usize> {
-    let before = |frame: &ScreenRect| {
-        let earlier = |other: &&ScreenRect| (other.left, other.top) < (frame.left, frame.top);
-        frames.iter().filter(earlier).count()
-    };
-    frames.iter().map(|frame| before(frame) + 1).collect()
-}
-
-impl WallpaperConfig {
-    fn interval(&self) -> Duration {
-        let seconds = self.interval.unwrap_or(INTERVAL);
-        if seconds < SHORTEST_INTERVAL {
-            report!(
-                "`wallpaper.interval` is under {SHORTEST_INTERVAL} seconds, which it is taken as"
-            );
-        }
-        Duration::from_secs(seconds.max(SHORTEST_INTERVAL))
-    }
-
-    /// The pictures the configuration has each display go through.
-    fn playlists(&self) -> Playlists {
-        let own = self.displays.iter();
-        Playlists {
-            all: pictures(&self.images),
-            own: own
-                .map(|display| (display.number, pictures(&display.images)))
-                .collect(),
-            fit: self.fit,
-        }
-    }
-}
-
-/// The picture files `named` are, those of a directory in the order of
-/// their names. What cannot be read is reported.
-fn pictures(named: &[PathBuf]) -> Vec<PathBuf> {
-    let mut pictures = Vec::new();
-    for path in named {
-        if !path.is_dir() {
-            pictures.push(path.clone());
-            continue;
-        }
-        match std::fs::read_dir(path) {
-            Ok(entries) => {
-                let mut found: Vec<PathBuf> = entries
-                    .filter_map(|entry| Some(entry.ok()?.path()))
-                    .filter(|path| is_picture(path))
-                    .collect();
-                found.sort();
-                pictures.extend(found);
-            }
-            Err(error) => report!(
-                "the wallpaper directory {} cannot be read: {error}",
-                path.display()
-            ),
-        }
-    }
-    pictures
-}
-
-/// Whether the name of `path` ends as a picture file's does.
-fn is_picture(path: &Path) -> bool {
-    path.extension().is_some_and(|extension| {
-        KINDS
-            .iter()
-            .any(|kind| extension.eq_ignore_ascii_case(kind))
-    })
-}
-
-/// The pixels of the picture in the file `path`.
+/// The pixels of the picture in the file `path`, whatever its name says:
+/// read by Tessera where it knows the format, and otherwise by a codec of
+/// Windows (HEIC, AVIF, JPEG XR).
 fn read(path: &Path) -> anyhow::Result<RgbImage> {
-    let image = image::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
+    let own = ImageReader::open(path)
+        .and_then(ImageReader::with_guessed_format)
+        .map_err(anyhow::Error::from)
+        .and_then(|reader| Ok(reader.decode()?));
+    let image = match own {
+        Ok(image) => image.into_rgb8(),
+        Err(error) => {
+            let (width, height, pixels) = decode_with_wic(path)
+                .map_err(|wic| error.context(format!("{wic:#}")))
+                .with_context(|| format!("{} cannot be read", path.display()))?;
+            RgbImage::from_raw(width, height, pixels).context("Windows gave too few pixels")?
+        }
+    };
     if image.width() == 0 || image.height() == 0 {
         anyhow::bail!("{} is an empty picture", path.display());
     }
-    Ok(image.into_rgb8())
-}
-
-/// For each of `to` pixels in a row that `from` pixels are scaled to: the
-/// first of the pixels it is mixed from, and the share of that one and of
-/// each after it. The shares fall off evenly with the distance and sum
-/// to 1.
-fn shares(from: u32, to: u32) -> Vec<(usize, Vec<f32>)> {
-    let ratio = from as f32 / to as f32;
-    // How far a pixel reaches: over its neighbours, and when the row gets
-    // shorter over all the pixels that go into one.
-    let reach = ratio.max(1.);
-    (0..to)
-        .map(|index| {
-            let centre = (index as f32 + 0.5) * ratio;
-            let first = (centre - reach).floor().max(0.) as usize;
-            let end = ((centre + reach).ceil() as usize).clamp(first + 1, from as usize);
-            let mut shares: Vec<f32> = (first..end)
-                .map(|source| (1. - ((source as f32 + 0.5 - centre) / reach).abs()).max(0.))
-                .collect();
-            let sum: f32 = shares.iter().sum();
-            if sum > 0. {
-                shares.iter_mut().for_each(|share| *share /= sum);
-            } else {
-                let even = 1. / shares.len() as f32;
-                shares.fill(even);
-            }
-            (first, shares)
-        })
-        .collect()
-}
-
-/// `image` as a picture of `width` by `height` pixels, fitted as `how`
-/// says: what sticks out is cut off evenly at both sides, and what the
-/// picture does not reach is black, evenly at both sides too.
-///
-/// The scaling is done here, a few rows at a time: that of the `image`
-/// crate first makes a copy of the whole picture that is four times its
-/// size in memory.
-fn fit(image: &RgbImage, width: u32, height: u32, how: Fit) -> BackdropPicture {
-    let (part, place) = how.parts((image.width(), image.height()), (width, height));
-    let (left, top, wide, high) = part;
-    let (place_left, place_top, place_wide, place_high) = place;
-    let across = shares(wide, place_wide);
-    let down = shares(high, place_high);
-    let source = image.as_raw();
-    let source_row = image.width() as usize * 3;
-    let row = place_wide as usize * 3;
-    let stride = BackdropPicture::stride(width);
-    let mut pixels = vec![0; stride * height as usize];
-    let rows = pixels.chunks_exact_mut(stride).skip(place_top as usize);
-    let rows = rows.map(|row| &mut row[place_left as usize * 3..]);
-    // Rows of the source scaled across, with their number, kept as long
-    // as a row of the picture is still mixed from them.
-    let mut scaled: VecDeque<(usize, Vec<f32>)> = VecDeque::new();
-    let mut mixed = vec![0.; row];
-    for ((first, shares), out) in down.iter().zip(rows) {
-        while scaled.front().is_some_and(|(number, _)| number < first) {
-            scaled.pop_front();
-        }
-        let mut next = scaled.back().map_or(*first, |(number, _)| number + 1);
-        while next < first + shares.len() {
-            let start = (top as usize + next) * source_row + left as usize * 3;
-            let line = &source[start..start + wide as usize * 3];
-            let mut wide_row = vec![0.; row];
-            for ((first, shares), to) in across.iter().zip(wide_row.as_chunks_mut::<3>().0) {
-                for (share, from) in shares.iter().zip(line[first * 3..].as_chunks::<3>().0) {
-                    // Windows expects blue first.
-                    to[0] += share * f32::from(from[2]);
-                    to[1] += share * f32::from(from[1]);
-                    to[2] += share * f32::from(from[0]);
-                }
-            }
-            scaled.push_back((next, wide_row));
-            next += 1;
-        }
-        mixed.fill(0.);
-        for (share, (_, line)) in shares.iter().zip(&scaled) {
-            for (to, from) in mixed.iter_mut().zip(line) {
-                *to += share * from;
-            }
-        }
-        for (to, from) in out.iter_mut().zip(&mixed) {
-            *to = from.round().clamp(0., 255.) as u8;
-        }
-    }
-    BackdropPicture::new(width, height, pixels)
-}
-
-/// The part of a picture of `width` by `height` pixels that has the shape
-/// of `over_width` by `over_height` and is as large as can be, in the
-/// middle of the picture: its left, top, width and height.
-fn covering_part(
-    width: u32,
-    height: u32,
-    over_width: u32,
-    over_height: u32,
-) -> (u32, u32, u32, u32) {
-    let (wide, high) = (u64::from(width), u64::from(height));
-    let (over_wide, over_high) = (u64::from(over_width.max(1)), u64::from(over_height.max(1)));
-    if wide * over_high > high * over_wide {
-        // Wider in shape: the sides go.
-        let kept = ((high * over_wide / over_high) as u32).clamp(1, width);
-        ((width - kept) / 2, 0, kept, height)
-    } else {
-        let kept = ((wide * over_high / over_wide) as u32).clamp(1, height);
-        (0, (height - kept) / 2, width, kept)
-    }
+    Ok(image)
 }
 
 /// Whether one of `windows` hides a display at `frame`: lies over nine
@@ -381,344 +184,659 @@ fn hidden(frame: ScreenRect, windows: &[ScreenRect]) -> bool {
     })
 }
 
-/// The wallpaper windows and the pictures they go through.
+/// The number of each of the displays with the bounds `frames`: they are
+/// counted from the left, and from the top where two begin equally far
+/// left, the first being 1.
+fn numbers(frames: &[ScreenRect]) -> Vec<usize> {
+    let before = |frame: &ScreenRect| {
+        let earlier = |other: &&ScreenRect| (other.left, other.top) < (frame.left, frame.top);
+        frames.iter().filter(earlier).count()
+    };
+    frames.iter().map(|frame| before(frame) + 1).collect()
+}
+
+/// Which of `frames` is the primary display, whose corner is where the
+/// desktop begins; the first where none is.
+fn primary(frames: &[ScreenRect]) -> usize {
+    let at_origin = |frame: &ScreenRect| frame.left == 0 && frame.top == 0;
+    frames.iter().position(at_origin).unwrap_or(0)
+}
+
+/// The displays, by their place in `plans`, that are to play each list of
+/// videos; displays with the same list share one decode.
+fn video_groups(plans: &[Plan]) -> Vec<(Vec<PathBuf>, Vec<usize>)> {
+    let mut groups: Vec<(Vec<PathBuf>, Vec<usize>)> = Vec::new();
+    for (index, plan) in plans.iter().enumerate() {
+        let Plan::Video(files) = plan else {
+            continue;
+        };
+        match groups.iter_mut().find(|(of, _)| of == files) {
+            Some((_, displays)) => displays.push(index),
+            None => groups.push((files.clone(), vec![index])),
+        }
+    }
+    groups
+}
+
+/// Waits for `duration`, or until `poke` gets something or is closed.
+async fn nap(duration: Duration, poke: &async_channel::Receiver<()>, cx: &AsyncApp) {
+    let mut timer = cx.background_executor().timer(duration);
+    let mut poked = pin!(poke.recv());
+    std::future::poll_fn(|context| {
+        let done = Pin::new(&mut timer).poll(context).is_ready()
+            || poked.as_mut().poll(context).is_ready();
+        if done { Poll::Ready(()) } else { Poll::Pending }
+    })
+    .await;
+}
+
+/// What one display shows: the plan it was last brought to, and the
+/// window of its picture.
+#[derive(Default)]
+struct Slot {
+    plan: Plan,
+    backdrop: Option<DesktopBackdrop>,
+    /// The window of the picture before, which a new one fades in over
+    /// and which goes after.
+    under: Option<DesktopBackdrop>,
+}
+
+/// Videos that play on some displays.
+struct Playing {
+    files: Vec<PathBuf>,
+    /// The displays, by their place among the frames.
+    displays: Vec<usize>,
+    video: DesktopVideo,
+    /// Whether the memory was looked at once more after it came in.
+    weighed: bool,
+}
+
+/// What is known of the picture of the day.
+#[derive(Default)]
+struct DailyWatch {
+    /// The day whose picture is at hand.
+    day: Option<NaiveDate>,
+    /// When the picture of which day was last fetched.
+    asked: Option<(NaiveDate, Instant)>,
+}
+
+/// The wallpaper windows and what they show.
 pub struct Wallpaper {
     config: WallpaperConfig,
-    /// The windows of the pictures, each with the number of its display.
-    backdrops: Vec<(usize, DesktopBackdrop)>,
-    /// The video, where one plays.
-    video: Option<DesktopVideo>,
-    /// The displays the windows were opened for.
-    frames: Vec<ScreenRect>,
     /// Counts configurations, so that the task of an earlier one stops.
     task: usize,
+    /// The displays the slots are for.
+    frames: Vec<ScreenRect>,
+    slots: Vec<Slot>,
+    videos: Vec<Playing>,
+    /// Videos that could not be played, and are not tried again until the
+    /// wallpaper is configured anew.
+    failed: HashSet<PathBuf>,
+    /// How many pictures the action `wallpaper` asked to go on by, not yet
+    /// done.
+    step: isize,
+    /// Wakes the task early, for the action.
+    poke: async_channel::Sender<()>,
+    poked: async_channel::Receiver<()>,
+    /// The picture of the day, where there is one.
+    daily: Option<DailyPicture>,
+    /// What was last made the wallpaper of Windows with `mirror`.
+    mirrored: Option<SystemWallpaper>,
 }
 
 impl Global for Wallpaper {}
 
 impl Wallpaper {
-    /// Draws the wallpaper `config` asks for, if it asks for one.
+    /// Draws the wallpaper `config` asks for, and puts back a wallpaper of
+    /// Windows that a Tessera before this one left changed.
     pub fn start(config: &WallpaperConfig, cx: &mut App) {
         STARTED.get_or_init(Instant::now);
+        let (poke, poked) = async_channel::bounded(1);
         cx.set_global(Self {
             config: WallpaperConfig::default(),
-            backdrops: Vec::new(),
-            video: None,
-            frames: Vec::new(),
             task: 0,
+            frames: Vec::new(),
+            slots: Vec::new(),
+            videos: Vec::new(),
+            failed: HashSet::new(),
+            step: 0,
+            poke,
+            poked,
+            daily: None,
+            mirrored: None,
         });
-        Self::configure(config, cx);
+        cx.on_app_quit(|_| {
+            Mirror::restore_before_exit();
+            async {}
+        })
+        .detach();
+        if !config.mirror {
+            Mirror::restore_later();
+        }
+        // Without a `[wallpaper]` the wallpaper of Windows is followed,
+        // for a theme of its colors.
+        Self::begin(config, cx);
     }
 
     /// Takes over a configuration that was read again, if it says
-    /// something else about the wallpaper than the one before.
+    /// something else about the wallpaper than the one before. What every
+    /// display shows is worked out anew, and only what changed fades.
     pub fn configure(config: &WallpaperConfig, cx: &mut App) {
         let this = cx.global_mut::<Self>();
         if this.config == *config {
             return;
         }
+        if this.config.mirror && !config.mirror {
+            this.mirrored = None;
+            Mirror::restore_later();
+        }
+        Self::begin(config, cx);
+    }
+
+    /// Starts the task that keeps the wallpaper as `config` says, and has
+    /// the one before stop.
+    fn begin(config: &WallpaperConfig, cx: &mut App) {
+        let this = cx.global_mut::<Self>();
         this.config = config.clone();
         this.task += 1;
+        this.failed.clear();
         let task = this.task;
-        let pictures = config.playlists();
-        let video = config.video.clone();
-        // The windows go: those of the other kind, and those of displays
-        // that may have other pictures now or none.
-        this.video = None;
-        this.backdrops.clear();
-        this.frames.clear();
-        if pictures.is_empty() && video.is_none() {
-            return;
-        }
-        let interval = config.interval();
+        let config = config.clone();
         let fade = cx.global::<Theme>().motion.effects;
         cx.spawn(async move |cx: &mut AsyncApp| {
-            if let Some(video) = video {
-                match Self::play(task, &video, fade, cx).await {
-                    Ok(()) => return,
-                    Err(error) => report!("the wallpaper video is left out: {error:#}"),
-                }
-                let current = cx.update(|cx| {
-                    let this = cx.global_mut::<Self>();
-                    if this.task == task {
-                        this.video = None;
-                        this.frames.clear();
-                    }
-                    this.task == task
-                });
-                if !matches!(current, Ok(true)) || pictures.is_empty() {
-                    return;
-                }
-            }
-            let mut next = 0;
-            loop {
-                let Ok(Some(sizes)) = cx.update(|cx| Self::sizes(task, &pictures, cx)) else {
-                    return;
-                };
-                match Self::show(task, &pictures, next, &sizes, fade, cx).await {
-                    Ok(true) => {}
-                    Ok(false) => return,
-                    Err(error) => report!("a wallpaper picture is left out: {error:#}"),
-                }
-                // The picture stays, unless the displays change: then the
-                // windows are opened anew and get the same picture.
-                let until = pictures.change().then(|| Instant::now() + interval);
-                loop {
-                    cx.background_executor().timer(DISPLAY_CHECK).await;
-                    match cx.update(|cx| Self::displays_changed(task, cx)) {
-                        Ok(Some(true)) => break,
-                        Ok(Some(false)) => {}
-                        _ => return,
-                    }
-                    if until.is_some_and(|until| Instant::now() >= until) {
-                        next += 1;
-                        break;
-                    }
-                }
+            if let Err(error) = Self::keep(task, config, fade, cx).await {
+                report!("the wallpaper stopped: {error:#}");
             }
         })
         .detach();
     }
 
-    /// Plays the video in the file at `path` on every display until the
-    /// wallpaper is configured anew, and returns then. Fails where the
-    /// video cannot be played.
-    async fn play(
+    /// Has every display show the next picture of its list, or with a
+    /// negative `by` the one before, at once; the interval begins anew.
+    pub fn go_on(by: isize, cx: &mut App) {
+        if !cx.has_global::<Self>() {
+            return;
+        }
+        let this = cx.global_mut::<Self>();
+        this.step += by;
+        this.poke.try_send(()).ok();
+    }
+
+    /// Keeps the wallpaper as the configuration of `task` says, until the
+    /// wallpaper is configured anew.
+    async fn keep(
         task: usize,
-        path: &Path,
+        config: WallpaperConfig,
         fade: SpringSpec,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<()> {
-        let early = VIDEO_AFTER_START.saturating_sub(STARTED.get_or_init(Instant::now).elapsed());
-        if !early.is_zero() {
-            cx.background_executor().timer(early).await;
-        }
+        let mirror = config.mirror;
+        let looks = cx
+            .background_executor()
+            .spawn(async move { config.looks() })
+            .await;
+        let poked = cx.update(|cx| cx.global::<Self>().poked.clone())?;
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos() as u64);
+        let mut turn = 0_usize;
+        let mut turned = Instant::now();
+        let mut windows: Option<WindowsNow> = None;
+        let mut painted = true;
+        let mut looked: Option<Instant> = None;
+        let mut daily_watch = DailyWatch::default();
+        let mut planned: Option<(Vec<ScreenRect>, Vec<Plan>)> = None;
+        let mut colored = None;
         loop {
-            // The windows are opened for the displays there are.
-            let opened = cx.update(|cx| {
-                let this = cx.global_mut::<Self>();
-                if this.task != task {
-                    return Ok(false);
+            let now = Instant::now();
+            if looked.is_none_or(|looked| now >= looked + DISPLAY_CHECK) {
+                looked = Some(now);
+                painted = cx
+                    .background_executor()
+                    .spawn(async { SystemWallpaper::painted_by_desktop() })
+                    .await;
+                let follows = cx.update(|cx| cx.global::<Theme>().follows_wallpaper())?;
+                if looks.shows_windows() && (!painted || follows) {
+                    let frames = display_frames();
+                    let read = ShellThread::call(move || WindowsNow::read(&frames));
+                    windows = read.recv().await.ok();
                 }
-                this.video = None;
-                let frames = display_frames();
-                this.video = Some(DesktopVideo::open(&frames, path)?);
-                this.frames = frames;
-                anyhow::Ok(true)
-            })??;
-            if !opened {
-                return Ok(());
-            }
-
-            let began = Instant::now();
-            loop {
-                cx.background_executor().timer(VIDEO_CHECK).await;
-                let state = cx.update(|cx| {
-                    let this = cx.global::<Self>();
-                    let video = this.video.as_ref().filter(|_| this.task == task);
-                    video.map(DesktopVideo::state)
-                })?;
-                match state {
-                    None => return Ok(()),
-                    Some(VideoState::Failed(why)) => {
-                        anyhow::bail!("{} cannot be played: {why}", path.display())
-                    }
-                    Some(VideoState::Playing) => break,
-                    Some(VideoState::Loading) => {}
+                if let Some(daily) = looks.daily() {
+                    Self::keep_daily(task, daily, &mut daily_watch, cx).await?;
                 }
-                video_fits(path)?;
-                if began.elapsed() > VIDEO_PATIENCE {
-                    anyhow::bail!("{} did not begin to play", path.display());
-                }
-            }
-
-            let mut presence = Spring::new(fade, 0.);
-            presence.animate_to(1.);
-            let mut shown = 0.;
-            while shown < 1. {
-                cx.background_executor().timer(FRAME).await;
-                crate::platform::Pace::quicken();
-                let mut now = presence.value_at(Instant::now()).clamp(shown, 1.);
-                if presence.is_settled() {
-                    now = 1.;
-                }
-                let current = cx.update(|cx| {
-                    let this = cx.global::<Self>();
-                    if let Some(video) = this.video.as_ref().filter(|_| this.task == task) {
-                        video.advance(now);
-                    }
-                    this.task == task
-                })?;
-                if !current {
+                if !Self::tend_videos(task, &looks, cx).await? {
                     return Ok(());
                 }
-                shown = now;
             }
-            video_fits(path)?;
 
-            // The video goes on where it is seen, until the displays
-            // change: then the windows are opened anew.
-            let mut weighed = false;
-            loop {
-                cx.background_executor().timer(DISPLAY_CHECK).await;
-                if !weighed {
-                    // Once more when it has played a while; what Tessera
-                    // holds later for other things is not laid to it.
-                    video_fits(path)?;
-                    weighed = true;
-                }
-                let windows = cx
-                    .background_executor()
-                    .spawn(async {
-                        let windows = AppWindow::enumerate();
-                        let shown = windows.iter().filter(|window| window.id.is_shown());
-                        shown
-                            .filter_map(|window| window.id.frame())
-                            .collect::<Vec<_>>()
-                    })
-                    .await;
-                let failed = cx.update(|cx| {
-                    let this = cx.global::<Self>();
-                    if this.task != task {
-                        return None;
-                    }
-                    if this.frames != display_frames() {
-                        return Some(Ok(true));
-                    }
-                    let video = this.video.as_ref()?;
-                    if let VideoState::Failed(why) = video.state() {
-                        return Some(Err(why));
-                    }
-                    let mut displays = 0;
-                    for (index, frame) in this.frames.iter().enumerate().take(32) {
-                        if hidden(*frame, &windows) {
-                            displays |= 1 << index;
-                        }
-                    }
-                    video.hide(displays);
-                    Some(Ok(false))
-                })?;
-                match failed {
-                    None => return Ok(()),
-                    Some(Ok(true)) => break,
-                    Some(Ok(false)) => {}
-                    Some(Err(why)) => anyhow::bail!("{} stopped playing: {why}", path.display()),
-                }
+            let step = cx.update(|cx| std::mem::take(&mut cx.global_mut::<Self>().step))?;
+            if step != 0 {
+                turn = turn.wrapping_add_signed(step);
+                turned = now;
+            } else if looks.rotates() && turned.elapsed() >= looks.interval {
+                turn = turn.wrapping_add(1);
+                turned = now;
             }
-        }
-    }
 
-    /// Whether the displays are no longer the ones the windows were
-    /// opened for, unless `task` is not the current one.
-    fn displays_changed(task: usize, cx: &App) -> Option<bool> {
-        let this = cx.global::<Self>();
-        (this.task == task).then(|| this.frames != display_frames())
-    }
-
-    /// The windows of the wallpaper, which are opened anew first if the
-    /// displays changed: for each the number of its display and its size.
-    /// Only a display `playlists` has pictures for gets one. Nothing if
-    /// `task` is not the current one or no display takes a window.
-    fn sizes(task: usize, playlists: &Playlists, cx: &mut App) -> Option<Vec<(usize, u32, u32)>> {
-        let this = cx.global_mut::<Self>();
-        if this.task != task {
-            return None;
-        }
-        let frames = display_frames();
-        if this.frames != frames {
-            // The old windows go first, and their pictures with them.
-            this.backdrops.clear();
-            this.backdrops = numbers(&frames)
-                .into_iter()
-                .zip(&frames)
-                .filter(|(number, _)| !playlists.of(*number).is_empty())
-                .filter_map(|(number, frame)| {
-                    DesktopBackdrop::open(*frame)
-                        .inspect_err(|error| report!("a display gets no wallpaper: {error:#}"))
-                        .ok()
-                        .map(|backdrop| (number, backdrop))
+            let plans = cx.update(|cx| {
+                let this = cx.global::<Self>();
+                (this.task == task).then(|| {
+                    let moment = Moment {
+                        dark: Self::dark(&looks),
+                        turn,
+                        seed,
+                        windows: windows.as_ref(),
+                        painted,
+                        daily: this.daily.as_ref().map(|daily| daily.file.as_path()),
+                        failed: &this.failed,
+                        videos: STARTED.get_or_init(Instant::now).elapsed() >= VIDEO_AFTER_START,
+                    };
+                    let frames = display_frames();
+                    let plans = Self::plans(&looks, &frames, &moment, cx);
+                    (frames, plans)
                 })
-                .collect();
-            this.frames = frames;
+            })?;
+            let Some(plans) = plans else {
+                return Ok(());
+            };
+            if planned.as_ref() != Some(&plans) {
+                let (frames, wanted) = plans.clone();
+                if !Self::apply(task, &frames, &wanted, fade, cx).await? {
+                    return Ok(());
+                }
+                if mirror {
+                    Self::mirror(task, &frames, &wanted, cx)?;
+                }
+                planned = Some(plans);
+            }
+            if let Some((frames, plans)) = &planned {
+                let windows = windows.as_ref();
+                Self::follow_color(task, frames, plans, windows, &mut colored, cx).await?;
+            }
+
+            let pause = if looks.by_workspace() {
+                WORKSPACE_CHECK
+            } else {
+                DISPLAY_CHECK
+            };
+            nap(pause, &poked, cx).await;
         }
-        (!this.backdrops.is_empty()).then(|| {
-            let sized = this.backdrops.iter().map(|(number, backdrop)| {
-                let (width, height) = backdrop.size();
-                (*number, width, height)
-            });
-            sized.collect()
-        })
     }
 
-    /// Fades every window over to the picture that is the `turn`th of
-    /// its display's in `playlists`; `sizes` is what [`Self::sizes`]
-    /// gave. A picture that cannot be read is reported and its display
-    /// keeps what it shows. Says whether `task` was the current one to
-    /// the end.
-    async fn show(
+    /// Whether the dark pictures are due: in the dark hours, or without
+    /// them while Windows is dark.
+    fn dark(looks: &Looks) -> bool {
+        match looks.dark_hours {
+            Some(hours) => {
+                let now = Local::now();
+                looks::is_dark(now.hour() * 60 + now.minute(), hours)
+            }
+            None => light_mode() == Some(false),
+        }
+    }
+
+    /// What each display at `frames` is to show at `moment`.
+    fn plans(looks: &Looks, frames: &[ScreenRect], moment: &Moment, cx: &App) -> Vec<Plan> {
+        numbers(frames)
+            .into_iter()
+            .zip(frames)
+            .map(|(number, frame)| {
+                let workspace = looks
+                    .by_workspace()
+                    .then(|| Workspaces::now(Some(display_at(*frame)), cx).current);
+                looks.of(number, workspace).plan(*frame, looks, moment)
+            })
+            .collect()
+    }
+
+    /// Brings the windows of the displays at `frames` to `plans`: new
+    /// pictures and colors fade in over what was there, videos fade in
+    /// once they play, and what is to show nothing fades out. Says whether
+    /// `task` was the current one to the end.
+    async fn apply(
         task: usize,
-        playlists: &Playlists,
-        turn: usize,
-        sizes: &[(usize, u32, u32)],
+        frames: &[ScreenRect],
+        plans: &[Plan],
         fade: SpringSpec,
         cx: &mut AsyncApp,
     ) -> anyhow::Result<bool> {
-        // Displays that show the same file share what was read, and those
-        // of one size the scaled picture as well.
-        let mut read_last: Option<(PathBuf, Arc<RgbImage>)> = None;
-        let mut fitted: Option<(PathBuf, Arc<BackdropPicture>)> = None;
-        let how = playlists.fit;
-        for (index, &(number, width, height)) in sizes.iter().enumerate() {
-            let pictures = playlists.of(number);
-            let Some(path) = pictures.get(turn % pictures.len().max(1)) else {
+        let changed = cx.update(|cx| {
+            let this = cx.global_mut::<Self>();
+            if this.task != task {
+                return None;
+            }
+            if this.frames != frames {
+                // The old windows go first, and their pictures with them.
+                this.videos.clear();
+                this.slots.clear();
+                this.slots.resize_with(frames.len(), Slot::default);
+                this.frames = frames.to_vec();
+            }
+            let changed = this.slots.iter().zip(plans).enumerate();
+            let changed = changed.filter(|(_, (slot, plan))| {
+                slot.plan != **plan && matches!(plan, Plan::Picture { .. } | Plan::Fill(_))
+            });
+            Some(changed.map(|(index, _)| index).collect::<Vec<_>>())
+        })?;
+        let Some(changed) = changed else {
+            return Ok(false);
+        };
+        if !Self::show_pictures(task, frames, plans, &changed, fade, cx).await? {
+            return Ok(false);
+        }
+        for (files, displays) in video_groups(plans) {
+            let playing = cx.update(|cx| {
+                let this = cx.global::<Self>();
+                let same =
+                    |playing: &Playing| playing.files == files && playing.displays == displays;
+                this.videos.iter().any(same)
+            })?;
+            if playing {
                 continue;
+            }
+            match Self::play(task, frames, &files, &displays, fade, cx).await {
+                Ok(true) => {}
+                Ok(false) => return Ok(false),
+                Err(error) => {
+                    report!("the wallpaper video is left out: {error:#}");
+                    cx.update(|cx| cx.global_mut::<Self>().failed.extend(files))?;
+                }
+            }
+        }
+        Self::clear_away(task, plans, fade, cx).await
+    }
+
+    /// Fades the displays `changed` over to the pictures and colors of
+    /// `plans`. A picture that cannot be read is reported and its display
+    /// keeps what it shows. Says whether `task` was the current one to
+    /// the end.
+    async fn show_pictures(
+        task: usize,
+        frames: &[ScreenRect],
+        plans: &[Plan],
+        changed: &[usize],
+        fade: SpringSpec,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<bool> {
+        if changed.is_empty() {
+            return Ok(true);
+        }
+        let desktop = around(frames).unwrap_or(ScreenRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        });
+        let first = primary(frames);
+        // Displays that show the same file share what was read, and those
+        // of one size the fitted picture as well.
+        let mut read_last: Option<(PathBuf, Arc<RgbImage>)> = None;
+        let mut fitted: Option<(Plan, Arc<BackdropPicture>)> = None;
+        let mut fading = Vec::new();
+        for &index in changed {
+            let plan = &plans[index];
+            let frame = frames[index];
+            let (file, fit, ground) = match plan {
+                Plan::Picture {
+                    file, fit, ground, ..
+                } => (Some(file), *fit, *ground),
+                Plan::Fill(ground) => (None, Fit::Cover, *ground),
+                _ => continue,
             };
+            let size = (
+                (frame.right - frame.left).unsigned_abs(),
+                (frame.bottom - frame.top).unsigned_abs(),
+            );
             let picture = match fitted.take() {
-                Some((of, picture)) if of == *path && picture.size() == (width, height) => picture,
+                Some((of, picture))
+                    if of == *plan && picture.size() == size && fit != Fit::Span =>
+                {
+                    picture
+                }
                 // The one of another size is let go of before the next
                 // is made.
                 _ => {
-                    let image = match read_last.take() {
-                        Some((of, image)) if of == *path => image,
-                        _ => {
-                            let file = path.clone();
-                            let image = cx
-                                .background_executor()
-                                .spawn(async move { read(&file) })
-                                .await;
-                            match image {
-                                Ok(image) => Arc::new(image),
-                                Err(error) => {
-                                    report!("a wallpaper picture is left out: {error:#}");
-                                    continue;
+                    let image = match file {
+                        None => None,
+                        Some(file) => match read_last.take() {
+                            Some((of, image)) if of == *file => Some(image),
+                            _ => {
+                                let path = file.clone();
+                                let image = cx
+                                    .background_executor()
+                                    .spawn(async move { read(&path) })
+                                    .await;
+                                match image {
+                                    Ok(image) => Some(Arc::new(image)),
+                                    Err(error) => {
+                                        report!("a wallpaper picture is left out: {error:#}");
+                                        continue;
+                                    }
                                 }
                             }
-                        }
+                        },
                     };
-                    read_last = Some((path.clone(), image.clone()));
-                    let scaled = cx
+                    if let (Some(file), Some(image)) = (file, &image) {
+                        read_last = Some((file.clone(), image.clone()));
+                    }
+                    let picture = cx
                         .background_executor()
-                        .spawn(async move { fit(&image, width, height, how) })
+                        .spawn(async move {
+                            let color = match &image {
+                                Some(image) => accent::dominant_color(image),
+                                None => Some(ground.middle()),
+                            };
+                            let shown = compose(image.as_deref(), frame, desktop, fit, ground);
+                            (shown, color)
+                        })
                         .await;
-                    Arc::new(scaled)
+                    if index == first {
+                        set_wallpaper_color(picture.1);
+                    }
+                    Arc::new(picture.0)
                 }
             };
             let taken = cx.update(|cx| {
-                let this = cx.global::<Self>();
-                (this.task == task).then(|| match this.backdrops.get(index) {
-                    Some((_, backdrop)) => backdrop.set(&picture),
-                    None => Ok(()),
-                })
+                let this = cx.global_mut::<Self>();
+                if this.task != task {
+                    return None;
+                }
+                let slot = &mut this.slots[index];
+                if slot.backdrop.is_none() || matches!(slot.plan, Plan::Video(_)) {
+                    // A new window lies over every one before it, a video
+                    // as well, which goes once the picture is in.
+                    match DesktopBackdrop::open(frame) {
+                        Ok(backdrop) => slot.under = slot.backdrop.replace(backdrop),
+                        Err(error) => return Some(Err(error)),
+                    }
+                }
+                slot.backdrop
+                    .as_ref()
+                    .map(|backdrop| backdrop.set(&picture))
             })?;
             match taken {
-                Some(taken) => taken?,
                 None => return Ok(false),
+                Some(Ok(())) => fading.push(index),
+                Some(Err(error)) => report!("a display gets no wallpaper: {error:#}"),
             }
-            fitted = Some((path.clone(), picture));
+            fitted = Some((plan.clone(), picture));
         }
         drop(fitted);
         drop(read_last);
 
+        let faded = Self::fade(task, fade, cx, |this, from, to| {
+            for &index in &fading {
+                if let Some(backdrop) = &this.slots[index].backdrop {
+                    backdrop.advance(from, to);
+                }
+            }
+        })
+        .await?;
+        if faded {
+            cx.update(|cx| {
+                let this = cx.global_mut::<Self>();
+                for &index in &fading {
+                    let slot = &mut this.slots[index];
+                    slot.plan = plans[index].clone();
+                    slot.under = None;
+                }
+            })?;
+        }
+        Ok(faded)
+    }
+
+    /// Plays `files` on the displays `displays` of `frames`, and once it
+    /// has faded in lets go of what they showed before. Fails where the
+    /// videos cannot be played. Says whether `task` was the current one to
+    /// the end.
+    async fn play(
+        task: usize,
+        frames: &[ScreenRect],
+        files: &[PathBuf],
+        displays: &[usize],
+        fade: SpringSpec,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<bool> {
+        let shown: Vec<ScreenRect> = displays.iter().map(|&index| frames[index]).collect();
+        let video = DesktopVideo::open(&shown, files)?;
+        let began = Instant::now();
+        loop {
+            cx.background_executor().timer(VIDEO_CHECK).await;
+            match video.state() {
+                VideoState::Failed(why) => {
+                    anyhow::bail!("{} cannot be played: {why}", names(files))
+                }
+                VideoState::Playing => break,
+                VideoState::Loading => {}
+            }
+            video_fits(files)?;
+            if began.elapsed() > VIDEO_PATIENCE {
+                anyhow::bail!("{} did not begin to play", names(files));
+            }
+            if !cx.update(|cx| cx.global::<Self>().task == task)? {
+                return Ok(false);
+            }
+        }
+        let mut presence = Spring::new(fade, 0.);
+        presence.animate_to(1.);
+        loop {
+            cx.background_executor().timer(FRAME).await;
+            crate::platform::Pace::quicken();
+            let now = presence.value_at(Instant::now()).clamp(0., 1.);
+            let now = if presence.is_settled() { 1. } else { now };
+            video.advance(now);
+            if now >= 1. {
+                break;
+            }
+        }
+        video_fits(files)?;
+        cx.update(|cx| {
+            let this = cx.global_mut::<Self>();
+            if this.task != task {
+                return false;
+            }
+            for &index in displays {
+                let slot = &mut this.slots[index];
+                slot.backdrop = None;
+                slot.under = None;
+                slot.plan = Plan::Video(files.to_vec());
+            }
+            this.videos
+                .retain(|playing| !playing.displays.iter().any(|at| displays.contains(at)));
+            this.videos.push(Playing {
+                files: files.to_vec(),
+                displays: displays.to_vec(),
+                video,
+                weighed: false,
+            });
+            true
+        })
+    }
+
+    /// Fades out the windows of displays that are to show nothing of
+    /// Tessera's, and lets go of videos no display plays any more. Says
+    /// whether `task` was the current one to the end.
+    async fn clear_away(
+        task: usize,
+        plans: &[Plan],
+        fade: SpringSpec,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<bool> {
+        let groups = video_groups(plans);
+        let wanted = |playing: &Playing| {
+            let same = |(files, displays): &(Vec<PathBuf>, Vec<usize>)| {
+                *files == playing.files && *displays == playing.displays
+            };
+            groups.iter().any(same)
+        };
+        let nothing = |index: usize| matches!(plans.get(index), Some(Plan::Nothing));
+        let (going, fading) = cx
+            .update(|cx| {
+                let this = cx.global_mut::<Self>();
+                if this.task != task {
+                    return None;
+                }
+                // Videos that something else was faded in over go at once.
+                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut this.videos)
+                    .into_iter()
+                    .partition(|playing| {
+                        !wanted(playing) && !playing.displays.iter().copied().all(nothing)
+                    });
+                drop(gone);
+                this.videos = kept;
+                let going: Vec<usize> = (0..this.slots.len())
+                    .filter(|&index| nothing(index) && this.slots[index].plan != Plan::Nothing)
+                    .collect();
+                let fading = this.videos.iter().enumerate();
+                let fading = fading.filter(|(_, playing)| !wanted(playing));
+                Some((going, fading.map(|(at, _)| at).collect::<Vec<_>>()))
+            })?
+            .unwrap_or_default();
+        if going.is_empty() && fading.is_empty() {
+            return cx.update(|cx| cx.global::<Self>().task == task);
+        }
+        let faded = Self::fade(task, fade, cx, |this, _, to| {
+            for &index in &going {
+                if let Some(backdrop) = &this.slots[index].backdrop {
+                    backdrop.recede(to);
+                }
+            }
+            for &at in &fading {
+                if let Some(playing) = this.videos.get(at) {
+                    playing.video.advance(1. - to);
+                }
+            }
+        })
+        .await?;
+        if faded {
+            cx.update(|cx| {
+                let this = cx.global_mut::<Self>();
+                for &index in &going {
+                    let slot = &mut this.slots[index];
+                    slot.backdrop = None;
+                    slot.under = None;
+                    slot.plan = Plan::Nothing;
+                }
+                for &at in fading.iter().rev() {
+                    let playing = this.videos.remove(at);
+                    for index in &playing.displays {
+                        this.slots[*index].plan = Plan::Nothing;
+                    }
+                }
+            })?;
+        }
+        Ok(faded)
+    }
+
+    /// Moves `step` from 0 to 1 with the spring `fade`, a frame at a
+    /// time: it is given the global, how far it was and how far it is to
+    /// be. Says whether `task` was the current one to the end.
+    async fn fade(
+        task: usize,
+        fade: SpringSpec,
+        cx: &mut AsyncApp,
+        step: impl Fn(&Self, f32, f32),
+    ) -> anyhow::Result<bool> {
         let mut presence = Spring::new(fade, 0.);
         presence.animate_to(1.);
         let mut shown = 0.;
@@ -734,9 +852,7 @@ impl Wallpaper {
                 if this.task != task {
                     return false;
                 }
-                for (_, backdrop) in &this.backdrops {
-                    backdrop.advance(shown, now);
-                }
+                step(this, shown, now);
                 true
             })?;
             if !current {
@@ -746,93 +862,371 @@ impl Wallpaper {
         }
         Ok(true)
     }
+
+    /// Looks after the videos that play: one that failed or takes too
+    /// much memory is left out, the others are held still where windows
+    /// hide all their displays or, as configured, while the machine runs
+    /// on its battery. Says whether `task` is still the current one.
+    async fn tend_videos(task: usize, looks: &Looks, cx: &mut AsyncApp) -> anyhow::Result<bool> {
+        let playing = cx.update(|cx| !cx.global::<Self>().videos.is_empty())?;
+        if !playing {
+            return cx.update(|cx| cx.global::<Self>().task == task);
+        }
+        let windows = cx
+            .background_executor()
+            .spawn(async {
+                let windows = AppWindow::enumerate();
+                let shown = windows.iter().filter(|window| window.id.is_shown());
+                shown
+                    .filter_map(|window| window.id.frame())
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        let on_battery =
+            looks.pause_on_battery && Battery::read().is_some_and(|battery| !battery.plugged_in);
+        cx.update(|cx| {
+            let this = cx.global_mut::<Self>();
+            if this.task != task {
+                return false;
+            }
+            let mut failed = Vec::new();
+            for (at, playing) in this.videos.iter_mut().enumerate() {
+                if let VideoState::Failed(why) = playing.video.state() {
+                    report!("{} stopped playing: {why}", names(&playing.files));
+                    failed.push(at);
+                    continue;
+                }
+                if !playing.weighed {
+                    // Once more when it has played a while; what Tessera
+                    // holds later for other things is not laid to it.
+                    playing.weighed = true;
+                    if let Err(error) = video_fits(&playing.files) {
+                        report!("the wallpaper video is left out: {error:#}");
+                        failed.push(at);
+                        continue;
+                    }
+                }
+                let mut hides = 0;
+                for (bit, index) in playing.displays.iter().enumerate().take(32) {
+                    if this
+                        .frames
+                        .get(*index)
+                        .is_some_and(|frame| hidden(*frame, &windows))
+                    {
+                        hides |= 1 << bit;
+                    }
+                }
+                playing.video.hide(hides);
+                playing.video.pause(on_battery);
+            }
+            for at in failed.into_iter().rev() {
+                let playing = this.videos.remove(at);
+                for index in &playing.displays {
+                    if let Some(slot) = this.slots.get_mut(*index) {
+                        slot.plan = Plan::Nothing;
+                    }
+                }
+                this.failed.extend(playing.files);
+            }
+            true
+        })
+    }
+
+    /// Has the picture of the day of `daily` at hand: the one of today
+    /// where it was fetched, or else the newest kept while today's is
+    /// fetched in the background, once a day and again half an hour after
+    /// a failed try.
+    async fn keep_daily(
+        task: usize,
+        daily: Daily,
+        watch: &mut DailyWatch,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<()> {
+        let today = Local::now().date_naive();
+        if watch.day == Some(today) {
+            return Ok(());
+        }
+        let (of_today, newest) = cx
+            .background_executor()
+            .spawn(async move { (daily.of(today), daily.newest()) })
+            .await;
+        if of_today.is_some() {
+            watch.day = Some(today);
+        }
+        let shown = of_today.or(newest);
+        cx.update(|cx| {
+            let this = cx.global_mut::<Self>();
+            if this.task == task && shown.is_some() && this.daily != shown {
+                this.daily = shown;
+            }
+        })?;
+        let due = watch
+            .asked
+            .is_none_or(|(day, when)| day != today || when.elapsed() >= DAILY_RETRY);
+        if watch.day == Some(today) || !due {
+            return Ok(());
+        }
+        watch.asked = Some((today, Instant::now()));
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let picture = cx
+                .background_executor()
+                .spawn(async move { daily.fetch(today, user_locale().as_deref()) })
+                .await;
+            match picture {
+                Ok(picture) => {
+                    let _ = cx.update(|cx| {
+                        let this = cx.global_mut::<Self>();
+                        if this.task == task {
+                            this.daily = Some(picture);
+                            this.poke.try_send(()).ok();
+                        }
+                    });
+                }
+                Err(error) => report!("the picture of the day is not there: {error:#}"),
+            }
+        })
+        .detach();
+        Ok(())
+    }
+
+    /// Keeps the color the wallpaper stands out with for the theme: from
+    /// the picture or the color of the first display, which
+    /// [`Self::show_pictures`] took as it showed it, or from the wallpaper
+    /// of Windows where Tessera draws nothing there and the theme follows
+    /// the wallpaper. A video gives none. `read` is the picture of Windows
+    /// the color was last taken from, which is not read again.
+    async fn follow_color(
+        task: usize,
+        frames: &[ScreenRect],
+        plans: &[Plan],
+        windows: Option<&WindowsNow>,
+        read_from: &mut Option<(PathBuf, Option<SystemTime>)>,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<()> {
+        let first = primary(frames);
+        let Some(frame) = frames.get(first) else {
+            return Ok(());
+        };
+        match plans.get(first) {
+            Some(Plan::Video(_)) => {
+                *read_from = None;
+                set_wallpaper_color(None);
+            }
+            Some(Plan::Nothing) => {
+                let follows = cx.update(|cx| {
+                    let this = cx.global::<Self>();
+                    this.task == task && cx.global::<Theme>().follows_wallpaper()
+                })?;
+                let Some(now) = windows.filter(|_| follows) else {
+                    return Ok(());
+                };
+                let Some(file) = now.wallpaper.picture_of(*frame) else {
+                    *read_from = None;
+                    set_wallpaper_color(Some(now.wallpaper.color));
+                    return Ok(());
+                };
+                let key = (file.to_path_buf(), now.written.get(file).copied());
+                if read_from.as_ref() == Some(&key) {
+                    return Ok(());
+                }
+                let path = key.0.clone();
+                *read_from = Some(key);
+                let found = cx
+                    .background_executor()
+                    .spawn(async move {
+                        read(&path)
+                            .ok()
+                            .and_then(|image| accent::dominant_color(&image))
+                    })
+                    .await;
+                set_wallpaper_color(found.or(Some(now.wallpaper.color)));
+            }
+            _ => *read_from = None,
+        }
+        Ok(())
+    }
+
+    /// Makes the pictures of `plans` the wallpaper of Windows, where they
+    /// are Tessera's own and changed since the last time, remembering the
+    /// wallpaper there was before the first time.
+    fn mirror(
+        task: usize,
+        frames: &[ScreenRect],
+        plans: &[Plan],
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<()> {
+        let first = primary(frames);
+        let (fit, ground) = match plans.get(first) {
+            Some(Plan::Picture {
+                fit,
+                ground,
+                own: true,
+                ..
+            }) => (*fit, *ground),
+            _ => return Ok(()),
+        };
+        let pictures: Vec<(ScreenRect, Option<PathBuf>)> = frames
+            .iter()
+            .zip(plans)
+            .map(|(frame, plan)| match plan {
+                Plan::Picture {
+                    file, own: true, ..
+                } => (*frame, Some(file.clone())),
+                _ => (*frame, None),
+            })
+            .collect();
+        let wanted = SystemWallpaper {
+            pictures,
+            position: fit.to_windows(),
+            color: ground.middle(),
+        };
+        let changed = cx.update(|cx| {
+            let this = cx.global_mut::<Self>();
+            let changed = this.task == task && this.mirrored.as_ref() != Some(&wanted);
+            if changed {
+                this.mirrored = Some(wanted.clone());
+            }
+            changed
+        })?;
+        if changed {
+            ShellThread::run_alone("wallpaper", move || {
+                if let Err(error) = Mirror::set(&wanted) {
+                    report!("the wallpaper of Windows was not changed: {error:#}");
+                }
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The wallpaper of Windows that `mirror` replaced, kept in a file until
+/// it is put back, so that it is put back after Tessera ended without
+/// doing so too.
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Mirror {
+    fit: Fit,
+    color: [u8; 3],
+    #[serde(default, rename = "picture")]
+    pictures: Vec<MirroredPicture>,
+}
+
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+struct MirroredPicture {
+    /// The left, top, right and bottom of the display.
+    display: [i32; 4],
+    file: Option<PathBuf>,
+}
+
+impl Mirror {
+    /// The file the wallpaper before is kept in.
+    fn file() -> Option<PathBuf> {
+        Some(local_data()?.join("wallpaper-before.toml"))
+    }
+
+    fn of(wallpaper: &SystemWallpaper) -> Self {
+        Self {
+            fit: Fit::of_windows(wallpaper.position),
+            color: wallpaper.color,
+            pictures: wallpaper
+                .pictures
+                .iter()
+                .map(|(frame, file)| MirroredPicture {
+                    display: [frame.left, frame.top, frame.right, frame.bottom],
+                    file: file.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn to_wallpaper(&self) -> SystemWallpaper {
+        SystemWallpaper {
+            pictures: self
+                .pictures
+                .iter()
+                .map(|picture| {
+                    let [left, top, right, bottom] = picture.display;
+                    let frame = ScreenRect {
+                        left,
+                        top,
+                        right,
+                        bottom,
+                    };
+                    (frame, picture.file.clone())
+                })
+                .collect(),
+            position: self.fit.to_windows(),
+            color: self.color,
+        }
+    }
+
+    /// Makes `wanted` the wallpaper of Windows, after keeping the one
+    /// there is where none is kept yet. For a thread with COM.
+    fn set(wanted: &SystemWallpaper) -> anyhow::Result<()> {
+        let file = Self::file().context("there is no directory for local data")?;
+        if !file.exists() {
+            let frames: Vec<ScreenRect> = wanted.pictures.iter().map(|(frame, _)| *frame).collect();
+            let before = Self::of(&SystemWallpaper::read(&frames));
+            if let Some(directory) = file.parent() {
+                std::fs::create_dir_all(directory)?;
+            }
+            std::fs::write(&file, toml::to_string(&before)?)
+                .with_context(|| format!("{} cannot be written", file.display()))?;
+        }
+        wanted.write()
+    }
+
+    /// Puts back the wallpaper that was kept, if one is, and forgets it.
+    /// For a thread with COM.
+    fn restore() -> anyhow::Result<()> {
+        let Some(file) = Self::file().filter(|file| file.exists()) else {
+            return Ok(());
+        };
+        let text = std::fs::read_to_string(&file)?;
+        let before: Self = toml::from_str(&text)
+            .with_context(|| format!("{} is not a wallpaper", file.display()))?;
+        before.to_wallpaper().write()?;
+        std::fs::remove_file(&file)?;
+        Ok(())
+    }
+
+    /// Puts back the wallpaper that was kept, if one is, on a thread of
+    /// its own.
+    fn restore_later() {
+        ShellThread::run_alone("wallpaper", || {
+            if let Err(error) = Self::restore() {
+                report!("the wallpaper of Windows was not put back: {error:#}");
+            }
+        });
+    }
+
+    /// Puts back the wallpaper that was kept, waiting for it a moment,
+    /// as Tessera exits.
+    fn restore_before_exit() {
+        if Self::file().is_none_or(|file| !file.exists()) {
+            return;
+        }
+        let answer = ShellThread::call_alone("wallpaper", Self::restore);
+        let until = Instant::now() + RESTORE_PATIENCE;
+        while Instant::now() < until {
+            match answer.try_recv() {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => {
+                    report!("the wallpaper of Windows was not put back: {error:#}");
+                    return;
+                }
+                Err(async_channel::TryRecvError::Closed) => return,
+                Err(async_channel::TryRecvError::Empty) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+        report!("the wallpaper of Windows is put back after Tessera exits");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_part_of_a_picture_that_covers_has_the_shape_of_the_display() {
-        // Wider in shape: the sides go.
-        assert_eq!(covering_part(8000, 2000, 2000, 1000), (2000, 0, 4000, 2000));
-        // Higher in shape: top and bottom go.
-        assert_eq!(covering_part(4000, 6000, 2000, 1000), (0, 2000, 4000, 2000));
-        // The same shape: all of it, larger or smaller.
-        assert_eq!(covering_part(1000, 500, 2000, 1000), (0, 0, 1000, 500));
-        assert_eq!(covering_part(1, 900, 3440, 1440), (0, 449, 1, 1));
-    }
-
-    #[test]
-    fn the_shares_of_the_pixels_mixed_into_one_sum_to_one() {
-        for (from, to) in [(3840, 2560), (1000, 3440), (7, 7), (1, 5), (5, 1)] {
-            let shares = shares(from, to);
-            assert_eq!(shares.len(), to as usize);
-            for (first, shares) in shares {
-                assert!(first + shares.len() <= from as usize);
-                assert!((shares.iter().sum::<f32>() - 1.).abs() < 1e-4);
-            }
-        }
-    }
-
-    #[test]
-    fn a_picture_is_cut_shown_whole_or_stretched() {
-        // Twice as wide as high, on a square display.
-        let image = RgbImage::from_fn(8, 4, |x, _| image::Rgb([if x < 4 { 40 } else { 200 }; 3]));
-        assert_eq!(
-            Fit::Cover.parts((8, 4), (4, 4)),
-            ((2, 0, 4, 4), (0, 0, 4, 4))
-        );
-        assert_eq!(
-            Fit::Contain.parts((8, 4), (4, 4)),
-            ((0, 0, 8, 4), (0, 1, 4, 2))
-        );
-        assert_eq!(
-            Fit::Stretch.parts((8, 4), (4, 4)),
-            ((0, 0, 8, 4), (0, 0, 4, 4))
-        );
-
-        let whole = fit(&image, 4, 4, Fit::Contain);
-        let rows: Vec<&[u8]> = whole.pixels().chunks(12).collect();
-        assert_eq!(rows[0], [0; 12]);
-        assert_eq!(rows[1][..3], [40; 3]);
-        assert_eq!(rows[1][9..], [200; 3]);
-        assert_eq!(rows[2], rows[1]);
-        assert_eq!(rows[3], [0; 12]);
-
-        let stretched = fit(&image, 4, 4, Fit::Stretch);
-        assert!(stretched.pixels().chunks(12).all(|row| row == rows[1]));
-
-        let config: WallpaperConfig = toml::from_str("fit = \"contain\"").unwrap();
-        assert_eq!(config.playlists().fit, Fit::Contain);
-        assert_eq!(WallpaperConfig::default().fit, Fit::Cover);
-    }
-
-    #[test]
-    fn a_picture_scaled_down_keeps_its_halves() {
-        // Left half dark, right half bright.
-        let image = RgbImage::from_fn(8, 4, |x, _| image::Rgb([if x < 4 { 0 } else { 200 }; 3]));
-        let picture = fit(&image, 4, 2, Fit::Cover);
-        let row = &picture.pixels()[..12];
-        assert_eq!(row[..3], [0, 0, 0]);
-        assert_eq!(row[9..], [200, 200, 200]);
-    }
-
-    #[test]
-    fn a_picture_is_fitted_to_the_display_with_blue_first() {
-        let mut image = RgbImage::new(4, 2);
-        for pixel in image.pixels_mut() {
-            pixel.0 = [10, 20, 30];
-        }
-        let picture = fit(&image, 3, 3, Fit::Cover);
-        assert_eq!(picture.size(), (3, 3));
-        // Three pixels take nine bytes, a row twelve.
-        assert_eq!(BackdropPicture::stride(3), 12);
-        assert_eq!(
-            picture.pixels()[..12],
-            [30, 20, 10, 30, 20, 10, 30, 20, 10, 0, 0, 0]
-        );
-    }
 
     #[test]
     fn a_display_is_hidden_by_a_window_over_nearly_all_of_it() {
@@ -860,14 +1254,6 @@ mod tests {
     }
 
     #[test]
-    fn pictures_are_known_by_their_extension_in_any_case() {
-        assert!(is_picture(Path::new(r"C:\Pictures\sea.JPG")));
-        assert!(is_picture(Path::new("hill.png")));
-        assert!(!is_picture(Path::new("notes.txt")));
-        assert!(!is_picture(Path::new("png")));
-    }
-
-    #[test]
     fn displays_are_counted_from_the_left_and_then_from_the_top() {
         let frame = |left, top| ScreenRect {
             left,
@@ -882,43 +1268,52 @@ mod tests {
             frame(-100, -50),
         ];
         assert_eq!(numbers(&frames), [3, 2, 4, 1]);
+        assert_eq!(primary(&frames), 0);
+        assert_eq!(primary(&frames[1..]), 0);
     }
 
     #[test]
-    fn a_display_with_pictures_of_its_own_does_not_take_the_others() {
-        let config: WallpaperConfig = toml::from_str(
-            r#"
-            images = ['C:\all.png']
-            [[display]]
-            number = 2
-            images = ['C:\two.png', 'C:\more.png']
-            [[display]]
-            number = 3
-            "#,
-        )
-        .unwrap();
-        let playlists = config.playlists();
-        assert_eq!(playlists.of(1), [PathBuf::from(r"C:\all.png")]);
-        assert_eq!(playlists.of(2).len(), 2);
-        assert!(playlists.of(3).is_empty());
-        assert!(playlists.change());
-        assert!(!playlists.is_empty());
+    fn displays_with_the_same_videos_share_them() {
+        let one = vec![PathBuf::from("a.mp4")];
+        let two = vec![PathBuf::from("b.mp4")];
+        let plans = [
+            Plan::Video(one.clone()),
+            Plan::Nothing,
+            Plan::Video(two.clone()),
+            Plan::Video(one.clone()),
+        ];
+        assert_eq!(video_groups(&plans), [(one, vec![0, 3]), (two, vec![2])]);
     }
 
     #[test]
-    fn a_directory_gives_its_pictures_in_the_order_of_their_names() {
-        let directory =
-            std::env::temp_dir().join(format!("tessera-wallpaper-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        for name in ["b.png", "a.jpg", "c.txt"] {
-            std::fs::write(directory.join(name), []).unwrap();
-        }
-        let single = PathBuf::from(r"C:\elsewhere\one.png");
-        let pictures = pictures(&[single.clone(), directory.clone()]);
-        std::fs::remove_dir_all(&directory).unwrap();
-        assert_eq!(
-            pictures,
-            [single, directory.join("a.jpg"), directory.join("b.png")]
-        );
+    fn the_color_of_the_wallpaper_is_kept_with_a_mark() {
+        set_wallpaper_color(Some([0, 0, 0]));
+        assert_eq!(wallpaper_color(), Some([0, 0, 0]));
+        set_wallpaper_color(Some([1, 2, 3]));
+        assert_eq!(wallpaper_color(), Some([1, 2, 3]));
+        set_wallpaper_color(None);
+        assert_eq!(wallpaper_color(), None);
+    }
+
+    #[test]
+    fn the_wallpaper_before_is_written_and_read_back() {
+        let before = Mirror {
+            fit: Fit::Span,
+            color: [10, 20, 30],
+            pictures: vec![
+                MirroredPicture {
+                    display: [0, 0, 2560, 1440],
+                    file: Some(PathBuf::from(r"C:\Pictures\one.jpg")),
+                },
+                MirroredPicture {
+                    display: [2560, 0, 5120, 1440],
+                    file: None,
+                },
+            ],
+        };
+        let text = toml::to_string(&before).unwrap();
+        assert_eq!(toml::from_str::<Mirror>(&text).unwrap(), before);
+        let wallpaper = before.to_wallpaper();
+        assert_eq!(Mirror::of(&wallpaper), before);
     }
 }
