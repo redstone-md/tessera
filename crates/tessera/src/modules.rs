@@ -29,6 +29,7 @@ mod overview;
 mod plan;
 mod power_dialog;
 mod power_mode;
+mod power_settings;
 mod privacy;
 mod problems;
 mod quick;
@@ -114,6 +115,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(airplane::AirplaneModule),
         Box::new(hotspot::HotspotModule),
         Box::new(power_mode::PowerModeModule),
+        Box::new(power_settings::PowerSettingsModule),
         Box::new(night::NightModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
