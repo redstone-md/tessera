@@ -11,16 +11,18 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, AnyView, App, AppContext, AsyncApp, Bounds, Context, CursorStyle, DispatchPhase,
-    Div, DragMoveEvent, Global, InteractiveElement, IntoElement, MouseUpEvent, ParentElement,
-    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    canvas, div, px,
+    AnyElement, AnyView, App, AppContext, AsyncApp, Axis, Bounds, Context, CursorStyle,
+    DispatchPhase, Div, DragMoveEvent, Global, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, canvas, div, linear_color_stop,
+    linear_gradient, px,
 };
 
+use crate::bar_menu::{BarMenu, BarTarget};
 use crate::config::edit::{ConfigFile, Place, Slot};
 use crate::config::{SurfaceConfig, WidgetSpec};
 use crate::i18n::Language;
-use crate::menu::{MenuEntry, Menus};
+use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::motion::{Interaction, Spring};
 use crate::platform::{
@@ -28,6 +30,7 @@ use crate::platform::{
 };
 use crate::popup::{PopupAnchor, Popups};
 use crate::shell::Shell;
+use crate::surface::bar_theme;
 use crate::theme::{Ground, Theme};
 use crate::ui::{HOVER_LAYER, PRESS_LAYER, centered_row, icon};
 
@@ -75,6 +78,32 @@ pub const OUTLINE_SWING: f32 = 0.3;
 pub const HANDLE_FILL: f32 = 0.25;
 /// How much of a widget is left to see while it is dragged.
 const LIFTED: f32 = 0.35;
+
+/// The widgets that answer a click with the right button themselves: a
+/// click with the right button on one opens the menu of the bar only with
+/// Shift held, or while the widgets are arranged.
+const OWN_MENUS: [&str; 5] = ["windows", "tray", "trash", "wallpaper", "workspaces"];
+
+/// The widget that takes the free room of its slot with `flexible = true`.
+pub const SPACER_WIDGET: &str = "spacer";
+
+/// The widgets that draw no text and so need no field behind them, nor a
+/// cell of their own on a bar at the left or the right.
+const PLAIN: [&str; 2] = [SPACER_WIDGET, "separator"];
+
+/// How wide the fade is at a side where a widget wider than a bar at the
+/// left or the right is cut.
+const FADE: Pixels = px(8.);
+
+/// Whether `spec` is a spacer that takes the free room of its slot.
+pub fn is_flexible(spec: &WidgetSpec) -> bool {
+    spec.widget == SPACER_WIDGET
+        && spec
+            .options
+            .get("flexible")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false)
+}
 
 /// Whether the widgets of the surfaces are being arranged by hand.
 #[derive(Default)]
@@ -225,15 +254,29 @@ pub struct Panel {
     ground: Option<Ground>,
     /// Whether the desktop under the surface is being looked at.
     watching: bool,
+    /// Whether the widgets have fields of their own, where the surface
+    /// says instead of the theme.
+    floating: Option<bool>,
+    /// For each slot, whether its widgets are those of the file's surface
+    /// and so arranged by hand; an override for the display replaced the
+    /// others.
+    editable: [bool; 3],
+    /// For each slot, whether a spacer in it takes its free room.
+    flexible: [bool; 3],
+    /// How many menus had opened when the right button last went down,
+    /// so that a widget that opened its own for the click is left to it.
+    menus_before: Rc<Cell<u64>>,
 }
 
 impl Panel {
     /// Instantiates the widgets `layout` names, which is the surface at
-    /// `surface` of the configuration. Unknown names are reported and left
-    /// out.
+    /// `surface` of the configuration as it is on its display; `replaced`
+    /// says which slots an override for the display gave. Unknown names
+    /// are reported and left out.
     pub fn new(
         surface: usize,
         layout: &SurfaceConfig,
+        replaced: [bool; 3],
         display: Option<DisplayKey>,
         cx: &mut App,
     ) -> Self {
@@ -285,7 +328,27 @@ impl Panel {
             visitor: None,
             ground: None,
             watching: false,
+            floating: layout.floating,
+            editable: replaced.map(|replaced| !replaced),
+            flexible: [&layout.start, &layout.center, &layout.end]
+                .map(|slot| slot.iter().any(is_flexible)),
+            menus_before: Rc::default(),
         }
+    }
+
+    /// Whether the surface runs down its display, at the left or the right.
+    fn vertical(&self) -> bool {
+        self.edge.is_vertical()
+    }
+
+    /// Of a point in the surface, how far it is along the surface.
+    fn along(&self, position: Point<Pixels>) -> Pixels {
+        self.edge.along_of(position.x, position.y)
+    }
+
+    /// The theme as this surface has it.
+    fn theme(&self, cx: &App) -> Theme {
+        bar_theme(*cx.global::<Theme>(), self.floating)
     }
 
     /// Starts looking at the desktop under the surface, where the bars
@@ -293,21 +356,26 @@ impl Panel {
     /// the interface: when the wallpaper is seen to change, once more a
     /// [`GROUND_CHECK`] later, since a wallpaper fades in, and every
     /// [`GROUND_KEPT`] otherwise.
+    ///
+    /// A bar at the left or the right is not looked at: what is read of
+    /// the desktop is compared across a bar, not down it.
     fn watch_ground(&mut self, theme: &Theme, window: &Window, cx: &mut Context<Self>) {
-        if self.watching || !theme.grounds_bars() {
+        if self.watching || !theme.grounds_bars() || self.vertical() {
             return;
         }
         let Ok(frame) = NativeSurface::of(window).and_then(|native| native.frame()) else {
             return;
         };
         self.watching = true;
+        let floating = self.floating;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut seen = None;
             let mut again = false;
             let mut read_at: Option<Instant> = None;
             let mut ground = None;
             loop {
-                let wanted = cx.update(|cx| cx.global::<Theme>().grounds_bars());
+                let wanted =
+                    cx.update(|cx| bar_theme(*cx.global::<Theme>(), floating).grounds_bars());
                 if matches!(wanted, Ok(true)) {
                     let look = cx.background_executor().spawn(async { desktop_look() });
                     let look = Some(look.await);
@@ -349,7 +417,7 @@ impl Panel {
         theme: &Theme,
         window: &Window,
     ) -> Option<Div> {
-        if !theme.grounds_bars() {
+        if !theme.grounds_bars() || window.viewport_size().height > window.viewport_size().width {
             return None;
         }
         let unread = ground
@@ -378,17 +446,19 @@ impl Panel {
 
     /// The middle of the first widget that opens the popup `name`, if
     /// there is one and it has been drawn.
-    pub fn popup_middle(&self, name: &str) -> Option<Pixels> {
+    pub fn popup_center(&self, name: &str) -> Option<Point<Pixels>> {
         let mut placed = self.slots.iter().flatten();
         let bounds = placed
             .find(|placed| placed.popup.as_deref() == Some(name))?
             .bounds
             .get()?;
-        Some(bounds.center().x)
+        Some(bounds.center())
     }
 
+    /// Opens the popup `name` at the pointer, which is on the widget that
+    /// opens it.
     fn open_popup(&self, name: &str, window: &Window, cx: &mut App) {
-        match PopupAnchor::at(window, window.mouse_position().x, cx) {
+        match PopupAnchor::at_point(window, window.mouse_position(), cx) {
             Ok(anchor) => Popups::toggle(name, anchor, cx),
             Err(error) => report!("the popup `{name}` has nowhere to open: {error:#}"),
         }
@@ -405,19 +475,44 @@ impl Panel {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let vertical = self.vertical();
         let placed = &mut self.slots[slot][index];
-        let field = Self::field(placed, self.ground.as_ref(), theme, window);
+        let plain = PLAIN.contains(&placed.name.as_ref());
         let seen = placed.bounds.clone();
         let measure = move |bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
             seen.set(Some(bounds));
         };
+        if plain && placed.popup.is_none() {
+            // Drawn as it is, so that a spacer can take the free room.
+            return placed.view.clone().into_any_element();
+        }
+        let field = Self::field(placed, self.ground.as_ref(), theme, window);
+        let element = Self::button(placed, field, measure, slot, index, theme, window, cx);
+        match vertical && !plain {
+            true => Self::cell(element, placed.bounds.get(), theme, window),
+            false => element,
+        }
+    }
+
+    /// The widget `placed`, at `index` of `slot`, over its `field` if it
+    /// has one, and in a button with a state layer over it where it opens
+    /// a popup; `measure` learns where it is.
+    #[allow(clippy::too_many_arguments, reason = "one widget and where it is")]
+    fn button(
+        placed: &mut Placed,
+        field: Option<Div>,
+        measure: impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + 'static,
+        slot: usize,
+        index: usize,
+        theme: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(popup) = placed.popup.clone() else {
-            let Some(field) = field else {
-                return placed.view.clone().into_any_element();
-            };
             return div()
                 .relative()
-                .child(field)
+                .flex_none()
+                .children(field)
                 .child(placed.view.clone())
                 .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
                 .into_any_element();
@@ -444,6 +539,44 @@ impl Panel {
             Some(&mut this.slots.get_mut(slot)?.get_mut(index)?.interaction)
         })
         .into_any_element()
+    }
+
+    /// `element`, a widget on a bar at the left or the right, in a cell as
+    /// wide as the bar, in its middle. A widget wider than the bar, as it
+    /// was `drawn` last, is cut at both sides behind a short fade into the
+    /// color of the fields; on a flat bar, which has no fields, it is cut
+    /// without one.
+    fn cell(
+        element: AnyElement,
+        drawn: Option<Bounds<Pixels>>,
+        theme: &Theme,
+        window: &Window,
+    ) -> AnyElement {
+        let wide = drawn.is_some_and(|drawn| drawn.size.width > window.viewport_size().width);
+        let color = theme.on_bar(theme.colors.surface_container);
+        let fade = |angle: f32| {
+            div()
+                .absolute()
+                .top_0()
+                .h_full()
+                .w(FADE)
+                .bg(linear_gradient(
+                    angle,
+                    linear_color_stop(color, 0.),
+                    linear_color_stop(color.opacity(0.), 1.),
+                ))
+        };
+        let fades = wide.then(|| [fade(90.).left_0(), fade(270.).right_0()]);
+        div()
+            .relative()
+            .w_full()
+            .flex()
+            .flex_none()
+            .justify_center()
+            .overflow_hidden()
+            .child(element)
+            .children(fades.into_iter().flatten())
+            .into_any_element()
     }
 
     /// The widget at `index` of `slot` while the widgets are arranged: it
@@ -482,6 +615,10 @@ impl Panel {
             discarding: self.discarding.clone(),
         };
         let panel = cx.entity().downgrade();
+        // The widgets of a slot an override gave for the display are
+        // arranged in the file: they stay where they are.
+        let editable = self.editable[slot];
+        let strength = if editable { strength } else { strength / 2. };
         let outline = div()
             .id(("panel-handle", slot * 1000 + index))
             .absolute()
@@ -492,9 +629,21 @@ impl Panel {
             .border_1()
             .border_color(color.opacity(strength.clamp(0., 1.)))
             .bg(color.opacity((strength * HANDLE_FILL).clamp(0., 1.)))
-            .cursor(CursorStyle::OpenHand)
-            .occlude()
-            .on_drag(dragged, move |dragged: &Dragged, _, _, cx| {
+            .occlude();
+        if !editable {
+            return div()
+                .relative()
+                .flex_none()
+                .min_w(HANDLE_MIN)
+                .min_h(HANDLE_MIN)
+                .child(placed.view.clone())
+                .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+                .child(outline)
+                .into_any_element();
+        }
+        let outline = outline.cursor(CursorStyle::OpenHand).on_drag(
+            dragged,
+            move |dragged: &Dragged, _, _, cx| {
                 let place = dragged.place;
                 let taken = panel.update(cx, |this, cx| {
                     this.dragged = Some(place);
@@ -503,7 +652,8 @@ impl Panel {
                 taken.ok();
                 let (name, discarding) = (dragged.name.clone(), dragged.discarding.clone());
                 cx.new(|_| Ghost { name, discarding })
-            });
+            },
+        );
         div()
             .relative()
             .flex_none()
@@ -516,16 +666,24 @@ impl Panel {
             .into_any_element()
     }
 
-    /// The line that shows where the dragged widget would go.
-    fn marker(theme: &Theme, grown: f32, window: &Window) -> AnyElement {
+    /// The line that shows where the dragged widget would go: across the
+    /// surface, as it is between two widgets.
+    fn marker(theme: &Theme, grown: f32, vertical: bool, window: &Window) -> AnyElement {
         let grown = grown.clamp(0., 1.);
-        div()
+        let viewport = window.viewport_size();
+        let line = div()
             .flex_none()
-            .w(MARKER_WIDTH)
-            .h(window.viewport_size().height * MARKER_HEIGHT * grown)
             .rounded(theme.shape.full)
-            .bg(theme.colors.primary.opacity(grown))
-            .into_any_element()
+            .bg(theme.colors.primary.opacity(grown));
+        match vertical {
+            true => line
+                .h(MARKER_WIDTH)
+                .w(viewport.width * MARKER_HEIGHT * grown),
+            false => line
+                .w(MARKER_WIDTH)
+                .h(viewport.height * MARKER_HEIGHT * grown),
+        }
+        .into_any_element()
     }
 
     /// The button that offers the widgets there are, to add one to `slot`.
@@ -555,8 +713,16 @@ impl Panel {
     }
 
     /// The button that ends arranging.
-    fn done_button(theme: &Theme, chrome: f32, cx: &mut Context<Self>) -> AnyElement {
+    /// On a bar at the left or the right it shows its mark alone, which
+    /// fits the width of the bar.
+    fn done_button(
+        theme: &Theme,
+        chrome: f32,
+        vertical: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let hovered = theme.colors.primary.opacity(0.85);
+        let label = (!vertical).then(|| Language::of(cx).say("Done"));
         div()
             .id("panel-done")
             .flex_none()
@@ -575,31 +741,70 @@ impl Panel {
             .whitespace_nowrap()
             .on_click(|_, _, cx| Arranging::set(false, cx))
             .child(icon(theme, ICON_DONE).text_size(theme.typography.label_size))
-            .child(Language::of(cx).say("Done"))
+            .children(label)
             .into_any_element()
     }
 
     /// Opens the list of the widgets there are; the one chosen is added to
     /// `slot` of this surface.
     fn offer(&self, slot: usize, window: &Window, cx: &mut App) {
-        let surface = self.surface;
-        let slot = Slot::ALL[slot];
-        let names = cx.global::<WidgetRegistry>().names();
-        let entries = names
-            .into_iter()
-            .map(|name| {
-                let widget = name.clone();
-                MenuEntry::new(ICON_ADD, name, move |cx| {
-                    let widget = widget.clone();
-                    // The menu this is chosen in is still handling the
-                    // click; the surfaces are made again after it.
-                    cx.defer(move |cx| rewrite(cx, |file| file.add(surface, slot, &widget)));
-                })
-            })
-            .collect();
-        match PopupAnchor::at(window, window.mouse_position().x, cx) {
+        let entries = BarMenu::addable(self.surface, Slot::ALL[slot], cx);
+        match PopupAnchor::at_point(window, window.mouse_position(), cx) {
             Ok(anchor) => Menus::open(entries, anchor, cx),
             Err(error) => report!("the list of widgets has nowhere to open: {error:#}"),
+        }
+    }
+
+    /// The widget under `position` of the surface: its slot and its place
+    /// among those drawn there.
+    fn widget_at(&self, position: Point<Pixels>) -> Option<(usize, usize)> {
+        self.slots.iter().enumerate().find_map(|(slot, placed)| {
+            let index = placed.iter().position(|placed| {
+                placed
+                    .bounds
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&position))
+            })?;
+            Some((slot, index))
+        })
+    }
+
+    /// Answers a click with the right button at `position`: the menu of
+    /// the widget there, or of the bar where no widget is. A widget that
+    /// answers the button itself is left to it unless Shift is held or the
+    /// widgets are arranged, as is one that opened a menu for the click.
+    fn context_menu(&self, event: &MouseDownEvent, window: &Window, cx: &mut App) {
+        let arranging = Arranging::is_on(cx);
+        let forced = event.modifiers.shift || arranging;
+        if !forced && Menus::opened(cx) != self.menus_before.get() {
+            return;
+        }
+        let target = match self.widget_at(event.position) {
+            Some((slot, index)) => {
+                let placed = &self.slots[slot][index];
+                if !forced && OWN_MENUS.contains(&placed.name.as_ref()) {
+                    return;
+                }
+                BarTarget::Widget {
+                    place: Place {
+                        surface: self.surface,
+                        slot: Slot::ALL[slot],
+                        index: placed.index,
+                    },
+                    name: placed.name.clone(),
+                    editable: self.editable[slot],
+                }
+            }
+            None => BarTarget::Bar {
+                slot: Slot::ALL[self
+                    .place_for(self.along(event.position))
+                    .map_or(1, |(slot, _)| slot)],
+            },
+        };
+        let edge = self.edge;
+        match PopupAnchor::at_point(window, event.position, cx) {
+            Ok(anchor) => BarMenu::open(self.surface, edge, target, anchor, window, cx),
+            Err(error) => report!("the menu of the bar has nowhere to open: {error:#}"),
         }
     }
 
@@ -611,8 +816,13 @@ impl Panel {
         if self.dragged.is_none() {
             return;
         }
-        let height = window.viewport_size().height;
-        let aim = if position.y < -AWAY || position.y > height + AWAY {
+        // Across the surface is out of it, along it is a place in it.
+        let viewport = window.viewport_size();
+        let (across, depth) = match self.vertical() {
+            true => (position.x, viewport.width),
+            false => (position.y, viewport.height),
+        };
+        let aim = if across < -AWAY || across > depth + AWAY {
             let abroad = self.aim_abroad(cx);
             if abroad.is_none() {
                 self.end_visit(cx);
@@ -620,7 +830,7 @@ impl Panel {
             abroad.or(Some(Aim::Away))
         } else {
             self.end_visit(cx);
-            self.place_for(position.x)
+            self.place_for(self.along(position))
                 .map(|(slot, index)| Aim::Before(slot, index))
         };
         if aim != self.aim {
@@ -632,22 +842,26 @@ impl Panel {
         }
     }
 
-    /// The slot nearest to `x` of this panel and the place in it before the
-    /// first widget whose middle is past `x`.
+    /// The slot nearest to `x`, a distance along this panel, and the place
+    /// in it before the first widget whose middle is past `x`.
     fn place_for(&self, x: Pixels) -> Option<(usize, usize)> {
+        let edge = self.edge;
+        let start = |bounds: Bounds<Pixels>| edge.along_of(bounds.left(), bounds.top());
+        let end = |bounds: Bounds<Pixels>| edge.along_of(bounds.right(), bounds.bottom());
         let distance = |bounds: Bounds<Pixels>| {
-            let before = bounds.left() - x;
-            let after = x - bounds.right();
+            let before = start(bounds) - x;
+            let after = x - end(bounds);
             before.max(after).max(px(0.))
         };
         let (slot, _) = (0..self.slots.len())
+            .filter(|&slot| self.editable[slot])
             .filter_map(|slot| Some((slot, distance(self.places[slot].get()?))))
             .min_by(|(_, one), (_, other)| {
                 one.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
             })?;
         let next = self.slots[slot].iter().find(|placed| {
             let bounds = placed.bounds.get();
-            bounds.is_some_and(|bounds| bounds.center().x > x)
+            bounds.is_some_and(|bounds| self.along(bounds.center()) > x)
         });
         Some((slot, next.map_or(self.counts[slot], |placed| placed.index)))
     }
@@ -677,12 +891,16 @@ impl Panel {
             if panel.entity_id() == me {
                 return None;
             }
-            let (surface, (frame, scale)) = panel
-                .read_with(cx, |other, _| Some((other.surface, other.frame?)))
+            let (surface, edge, (frame, scale)) = panel
+                .read_with(cx, |other, _| {
+                    Some((other.surface, other.edge, other.frame?))
+                })
                 .ok()??;
             let inside =
                 (frame.left..frame.right).contains(&x) && (frame.top..frame.bottom).contains(&y);
-            inside.then(|| (panel, surface, px((x - frame.left) as f32 / scale)))
+            // How far along the other surface the pointer is.
+            let along = edge.along_of(x - frame.left, y - frame.top);
+            inside.then(|| (panel, surface, px(along as f32 / scale)))
         });
         let (panel, surface, at) = over?;
         if self.visited.as_ref() != Some(&panel) {
@@ -766,37 +984,76 @@ impl Panel {
         let widgets: Vec<AnyElement> = (0..self.slots[slot].len())
             .map(|index| self.widget(slot, index, theme, window, cx))
             .collect();
-        // How wide the slot is decides how the row is laid out, so a
-        // width that changed has the row drawn again.
+        // How long the slot is decides how the row is laid out, so a
+        // length that changed has the row drawn again.
         let seen = self.places[slot].clone();
+        let edge = self.edge;
         let measure = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
             let before = seen.replace(Some(bounds));
-            let changed = before
-                .is_none_or(|before| (before.size.width - bounds.size.width).abs() > FIT_SLACK);
+            let long =
+                |bounds: Bounds<Pixels>| edge.along_of(bounds.size.width, bounds.size.height);
+            let changed =
+                before.is_none_or(|before| (long(before) - long(bounds)).abs() > FIT_SLACK);
             if changed {
                 window.request_animation_frame();
             }
         };
-        div()
-            .relative()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(theme.spacing.small)
+        self.line_of(slot, theme)
             .children(widgets)
             .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
     }
 
-    /// The width the first slot is given where the slots have no room to
-    /// keep the middle one in the middle of a surface `width` wide; `None`
-    /// where they have.
-    fn lead(&self, theme: &Theme, width: Pixels) -> Option<Pixels> {
-        let wide = |slot: usize| {
-            let place: Option<Bounds<Pixels>> = self.places[slot].get();
-            place.map_or(px(0.), |place| place.size.width)
+    /// The container of the widgets of `slot`: a row on a bar at the top
+    /// or the bottom, a column as wide as the bar on one at the left or
+    /// the right. One with a spacer that takes the free room takes all the
+    /// room its side of the bar has.
+    fn line_of(&self, slot: usize, theme: &Theme) -> Div {
+        let line = div()
+            .relative()
+            .flex()
+            .items_center()
+            .gap(theme.spacing.small);
+        let line = match self.vertical() {
+            true => line.flex_col().w_full(),
+            false => line,
         };
-        let room = width - theme.spacing.small * 2.;
-        lead_of([wide(0), wide(1), wide(2)], room, theme.spacing.small)
+        match self.flexible[slot] && slot != 1 {
+            true => line.flex_1(),
+            false => line.flex_none(),
+        }
+    }
+
+    /// The length the first slot is given where the slots have no room to
+    /// keep the middle one in the middle of a surface `length` long; `None`
+    /// where they have.
+    fn lead(&self, theme: &Theme, length: Pixels) -> Option<Pixels> {
+        if self.flexible[0] || self.flexible[2] {
+            // A side that takes its free room fills it; the middle stays.
+            return None;
+        }
+        let edge = self.edge;
+        let long = |slot: usize| {
+            let place: Option<Bounds<Pixels>> = self.places[slot].get();
+            place.map_or(px(0.), |place| {
+                edge.along_of(place.size.width, place.size.height)
+            })
+        };
+        let room = length - theme.spacing.small * 2.;
+        lead_of([long(0), long(1), long(2)], room, theme.spacing.small)
+    }
+
+    /// The three slots laid out along the surface, the middle one in the
+    /// middle where the sides leave it room.
+    fn arranged_line(
+        &self,
+        theme: &Theme,
+        [start, center, end]: [Div; 3],
+        lead: Option<Pixels>,
+    ) -> Div {
+        if !self.vertical() {
+            return centered_row(theme, start, center, end, lead);
+        }
+        centered_column(theme, start, center, end, lead)
     }
 
     /// A slot while the widgets are arranged: its widgets as handles, the
@@ -819,34 +1076,78 @@ impl Panel {
             _ => None,
         };
         let grown = self.marker.value(window);
+        let vertical = self.vertical();
         let mut marked = false;
         let mut children = Vec::new();
         for index in 0..self.slots[slot].len() {
             if !marked && aimed.is_some_and(|aimed| self.slots[slot][index].index >= aimed) {
-                children.push(Self::marker(theme, grown, window));
+                children.push(Self::marker(theme, grown, vertical, window));
                 marked = true;
             }
-            children.push(self.handle(slot, index, theme, chrome, cx));
+            let handle = self.handle(slot, index, theme, chrome, cx);
+            children.push(match vertical {
+                true => Self::cell(handle, None, theme, window),
+                false => handle,
+            });
         }
         if !marked && aimed.is_some() {
-            children.push(Self::marker(theme, grown, window));
+            children.push(Self::marker(theme, grown, vertical, window));
         }
-        children.push(Self::add_button(slot, theme, chrome, cx));
+        if self.editable[slot] {
+            children.push(Self::add_button(slot, theme, chrome, cx));
+        }
         if slot + 1 == self.slots.len() {
-            children.push(Self::done_button(theme, chrome, cx));
+            children.push(Self::done_button(theme, chrome, vertical, cx));
         }
         let seen = self.places[slot].clone();
         let measure = move |bounds: Bounds<Pixels>, _: &mut Window, _: &mut App| {
             seen.set(Some(bounds));
         };
-        div()
+        let line = div()
             .relative()
             .flex()
             .items_center()
-            .gap(theme.spacing.small)
-            .children(children)
-            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+            .gap(theme.spacing.small);
+        match vertical {
+            true => line.flex_col().w_full(),
+            false => line,
+        }
+        .children(children)
+        .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
     }
+}
+
+/// A column that keeps `center` in the middle of a bar at the left or the
+/// right, as [`centered_row`] keeps it in the middle of one at the top or
+/// the bottom: where the sides have no room for that, `lead` is the
+/// height `start` is given instead.
+fn centered_column(theme: &Theme, start: Div, center: Div, end: Div, lead: Option<Pixels>) -> Div {
+    let column = div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .py(theme.spacing.small);
+    let side = || {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .min_h_0()
+            .overflow_hidden()
+    };
+    if let Some(lead) = lead {
+        return column
+            .gap(theme.spacing.small)
+            .child(side().flex_none().h(lead).justify_start().child(start))
+            .child(center.flex_none())
+            .child(side().flex_1().justify_end().child(end));
+    }
+    column
+        .child(side().flex_1().justify_start().child(start))
+        .child(center.flex_none())
+        .child(side().flex_1().justify_end().child(end))
 }
 
 /// Changes the configuration file with `change` and takes the file over at
@@ -866,30 +1167,51 @@ pub fn rewrite(cx: &mut App, change: impl FnOnce(&mut ConfigFile) -> bool) {
 
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = *cx.global::<Theme>();
+        let theme = self.theme(cx);
         let entrance = self.entrance.value(window);
-        let hidden = window.viewport_size().height * (1. - entrance);
-        let offset = match self.edge {
-            ScreenEdge::Top => -hidden,
-            ScreenEdge::Bottom => hidden,
+        let viewport = window.viewport_size();
+        let depth = match self.edge.across() {
+            Axis::Vertical => viewport.height,
+            Axis::Horizontal => viewport.width,
+        };
+        let offset = self.edge.travel(depth * (1. - entrance));
+        // How many menus had opened before a widget saw the right button
+        // go down, to tell whether it opened one for the click.
+        let menus_before = self.menus_before.clone();
+        let before_widgets = move |_: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
+            let menus_before = menus_before.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture && event.button == MouseButton::Right {
+                    menus_before.set(Menus::opened(cx));
+                }
+            });
         };
         let root = div()
             .size_full()
             .relative()
-            .top(offset)
-            .opacity(entrance.clamp(0., 1.));
+            .left(offset.x)
+            .top(offset.y)
+            .opacity(entrance.clamp(0., 1.))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.context_menu(event, window, cx);
+                }),
+            )
+            .child(canvas(|_, _, _| {}, before_widgets).absolute().size_0());
         let arranging = Arranging::is_on(cx);
         if (self.chrome.target() > 0.5) != arranging {
             self.chrome.animate_to(if arranging { 1. } else { 0. });
         }
+        let length = self.edge.along_of(viewport.width, viewport.height);
         if !arranging {
             self.dragged = None;
             self.aim = None;
             (self.frame, self.visited, self.visitor) = (None, None, None);
             self.watch_ground(&theme, window, cx);
-            let [start, center, end] = [0, 1, 2].map(|slot| self.slot(slot, &theme, window, cx));
-            let lead = self.lead(&theme, window.viewport_size().width);
-            return root.child(centered_row(&theme, start, center, end, lead));
+            let slots = [0, 1, 2].map(|slot| self.slot(slot, &theme, window, cx));
+            let lead = self.lead(&theme, length);
+            return root.child(self.arranged_line(&theme, slots, lead));
         }
         // A drag that ended anywhere but over this surface is over too.
         if self.dragged.is_some() && !cx.has_active_drag() {
@@ -910,22 +1232,23 @@ impl Render for Panel {
         }
         let native = NativeSurface::of(window).and_then(|native| native.frame());
         self.frame = native.ok().map(|frame| (frame, window.scale_factor()));
+        let vertical = self.vertical();
         let visitor = self.visitor.clone().map(|(name, at)| {
-            div()
+            let ghost = div()
                 .absolute()
-                .top_0()
-                .left(at + theme.spacing.small)
-                .h_full()
                 .flex()
                 .items_center()
-                .child(Ghost::pill(&theme, name, false))
+                .child(Ghost::pill(&theme, name, false));
+            match vertical {
+                true => ghost.left_0().top(at).w_full().justify_center(),
+                false => ghost.top_0().left(at + theme.spacing.small).h_full(),
+            }
         });
         // The outlines keep breathing.
         crate::platform::Pace::quicken();
         window.request_animation_frame();
         let chrome = self.chrome.value(window);
-        let [start, center, end] =
-            [0, 1, 2].map(|slot| self.arranged_slot(slot, &theme, chrome, window, cx));
+        let slots = [0, 1, 2].map(|slot| self.arranged_slot(slot, &theme, chrome, window, cx));
         let panel = cx.entity().downgrade();
         // The button is let go of anywhere, also past the surface, where
         // nothing of it is under the pointer.
@@ -942,7 +1265,7 @@ impl Render for Panel {
                 this.aim_at(event.event.position, window, cx);
             }),
         )
-        .child(centered_row(&theme, start, center, end, None))
+        .child(self.arranged_line(&theme, slots, None))
         .children(visitor)
         .child(canvas(|_, _, _| {}, listen).absolute().size_0())
     }
