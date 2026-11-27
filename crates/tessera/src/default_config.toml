@@ -504,6 +504,26 @@
 #               (it does without the option). An application is told by
 #               the identifier it posts under, or by the name of its
 #               program file where Windows made that identifier up
+#               Option group, "always" or "never": "never" gives each
+#               window a button of its own. Option labels, true: each
+#               button shows the title of its window. Option counter,
+#               true: the number of windows instead of the dots. Option
+#               show, "display", "all", "workspace" or "minimized": which
+#               windows get buttons. Option sort, "pinned", "opened" or
+#               "name". Option middle, "new" or "close": what the middle
+#               button does. Option wheel, true: the wheel over a button
+#               goes through its windows. Option reveal_on_attention,
+#               "while_flashing", "until_activated" or "never": when a
+#               dock that hides is shown for a window that asks for
+#               attention (read, not yet followed by the surfaces).
+#               A window whose [[rule]] says skip_dock = true gets no
+#               button. As the shell, a button shows the progress and the
+#               overlay icon applications give the taskbar, and the
+#               buttons they put under their pictures are in the preview.
+#               A dock taller than wide lays its buttons out in a column.
+#               Its keys where windows_keys is on: win+1 to win+9 (dock),
+#               win+shift+n (dock-new), win+ctrl+n (dock-cycle),
+#               win+alt+n (dock-menu) and win+t (dock-focus)
 #   "tiling"    whether and how windows are tiled; a click goes on to the
 #               next layout, and after the last one to no tiling
 #   "appearance" a sun while Windows is light and a moon while it is

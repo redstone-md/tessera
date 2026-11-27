@@ -490,3 +490,43 @@ end = ["devices", "privacy", "tray", "volume"]
 ```
 
 `devices` is an icon that is there only while something can be taken out of the machine; a click opens the popup `devices` with `devices-list`, a row for each drive and device with **Open** and **Eject**. `privacy` shows an icon for the microphone, the camera and the location while an application uses it, with a tip that names the applications; a click opens the popup `privacy` with `privacy-list`. Both popups can be replaced by a `[[popup]]` of the same name, or the lists put into another one.
+
+## The dock as a taskbar
+
+The `windows` widget is the dock. Besides `pinned`, `start`, `start-icon`, `badges` and `all_displays`, its options make it a taskbar:
+
+```toml
+[[surface]]
+edge = "bottom"
+thickness = 56
+center = [{ widget = "windows", start = "launcher", group = "never", labels = true, middle = "close", wheel = true }]
+```
+
+| Option | Values | What it does |
+|---|---|---|
+| `group` | `always` (default), `never` | `never` gives each window a button of its own; a pinned application keeps one window on its button and the others get their own. |
+| `labels` | `false` (default), `true` | Each button shows the title of its window beside the icon, four buttons wide. In a column the titles show only where the dock is at least two and a half buttons wide. |
+| `counter` | `false` (default), `true` | The number of windows beside the dot instead of up to two more dots. |
+| `show` | `display` (default), `all`, `workspace`, `minimized` | Which windows get buttons: those of the dock's display, those of every display (as `all_displays = true`), those of the workspace shown, or only the minimized ones of the dock's display. Windows of other workspaces are hidden or cloaked and never listed; `workspace` reads Tessera's own workspaces and lists every display's windows where Windows' virtual desktops are in use. |
+| `sort` | `pinned` (default), `opened`, `name` | The order of the buttons: the pinned applications first and then the others as they opened, every application as it opened its first window (pinned ones that do not run after them), or by the name of the application. |
+| `middle` | `new` (default), `close` | What a click with the middle button does: start another window, or close the windows of the button. |
+| `wheel` | `false` (default), `true` | The wheel over a button goes through its windows, bringing each forward. |
+| `reveal_on_attention` | `while_flashing` (default), `until_activated`, `never` | When a dock that hides is shown because a window asks for attention. The value is read; the surfaces that hide do not follow it yet. |
+
+A window whose `[[rule]]` says `skip_dock = true` gets no button. A window that flashes to ask for attention marks its button with a pulsing tint and a dot until it is activated. A right click on the Start button opens the menu of Win+X (the action `winx`).
+
+As the shell of the session, the dock also hears what applications tell the taskbar through `ITaskbarList3`: their progress (along the bottom of the button, in the primary color, a lighter hue while paused and red after a failure, a travelling segment where the end is not known), their overlay icon (at the lower right, in the place of the badge), the tooltip of their picture (the title of their preview) and the buttons they put under their picture (under it in the preview). Windows that minimize fly to their button. Beside Explorer all of that stays with Explorer's taskbar.
+
+A dock taller than wide, as on a bar at the left or right edge, lays its buttons out in a column, with the dot, the progress and the mark of attention on the side where the display has more room, and opens its previews and menus beside itself.
+
+The keys of the dock are bound where `windows_keys` is on, as the taskbar binds them:
+
+| Action | Keys | What it does |
+|---|---|---|
+| `dock` (arg `1` to `9`) | Win+1 to Win+9 | What a click on that button does. |
+| `dock-new` (arg `1` to `9`) | Win+Shift+1 to Win+Shift+9 | Starts another window of that button's application. |
+| `dock-cycle` (arg `1` to `9`) | Win+Ctrl+1 to Win+Ctrl+9 | Brings the next window of that button forward. |
+| `dock-menu` (arg `1` to `9`) | Win+Alt+1 to Win+Alt+9 | Opens the menu of that button. |
+| `dock-focus` | Win+T | Puts the keyboard on the dock: the arrows go from button to button, Enter does what a click does, a digit presses that button, the Menu key or Shift+F10 opens the menu, Esc gives the keyboard back. |
+
+The numbers count the buttons of the dock on the display the pointer is on, or else of the first dock.
