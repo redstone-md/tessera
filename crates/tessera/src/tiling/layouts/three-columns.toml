@@ -1,0 +1,22 @@
+# A tiling layout that comes with Tessera: the first window in a wide
+# column in the middle, the second in a column on its left once there are
+# three, and the others stacked in a column on the right.
+name = "Three columns"
+
+[structure]
+kind = "horizontal"
+
+# The left column is there only from three windows on.
+[[structure.children]]
+kind = "leaf"
+priority = 2
+condition = { windows_at_least = 3 }
+
+[[structure.children]]
+kind = "leaf"
+grow = 2
+priority = 1
+
+[[structure.children]]
+kind = "vertical"
+priority = 3
