@@ -9,6 +9,7 @@
 //! Every call waits for Windows to answer, so none belongs on the thread
 //! that draws.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -91,11 +92,22 @@ impl Repeat {
     }
 }
 
-/// An application that has a media session, for a choice between them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionInfo {
+/// Tells one media session from another. An application may have several
+/// sessions, as a browser has one for each tab or window that plays, all
+/// under the same name: they are told apart by their order.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SessionKey {
     /// As [`NowPlaying::app`].
     pub app: String,
+    /// How many sessions of the same application come before it, in the
+    /// order of Windows.
+    pub occurrence: usize,
+}
+
+/// A media session, for a choice between them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionInfo {
+    pub key: SessionKey,
     pub title: String,
     pub artist: String,
     pub playing: bool,
@@ -166,23 +178,34 @@ pub enum MediaCommand {
     Repeat(Repeat),
 }
 
-/// The media applications of the signed-in user. Where a call takes an
-/// application, `None` is the one Windows considers current, and so is an
-/// application that no longer has a session.
+/// The media applications of the signed-in user. Where a call takes a
+/// session, `None` is the one Windows considers current, and so is a
+/// session that is gone.
 pub struct Media;
 
 impl Media {
-    /// Every application that has a session, in the order of Windows.
+    /// Every session, in the order of Windows. A session that cannot be
+    /// read is left out.
     pub fn sessions() -> Result<Vec<SessionInfo>, String> {
         let read = || -> WindowsResult<Vec<SessionInfo>> {
             let manager = manager()?;
             let current = manager.GetCurrentSession().ok();
-            let current = current.and_then(|session| session.SourceAppUserModelId().ok());
             let sessions = manager.GetSessions()?;
             let mut listed = Vec::new();
+            // How many sessions of each application came before.
+            let mut seen = HashMap::<String, usize>::new();
             for index in 0..sessions.Size()? {
-                let session = sessions.GetAt(index)?;
-                let app = session.SourceAppUserModelId()?;
+                let Ok(session) = sessions.GetAt(index) else {
+                    continue;
+                };
+                let Ok(app) = session.SourceAppUserModelId() else {
+                    continue;
+                };
+                let app = app.to_string();
+                // Counted even if it is left out below, as `session` counts.
+                let seen = seen.entry(app.clone()).or_default();
+                let occurrence = *seen;
+                *seen += 1;
                 // An application may still be starting and tell nothing.
                 let properties = session
                     .TryGetMediaPropertiesAsync()
@@ -195,24 +218,40 @@ impl Media {
                     Ok(properties) => (text(properties.Title()), text(properties.Artist())),
                     Err(_) => Default::default(),
                 };
-                let playback = session.GetPlaybackInfo()?;
+                let playing = session
+                    .GetPlaybackInfo()
+                    .and_then(|playback| playback.PlaybackStatus());
+                let Ok(playing) = playing else {
+                    continue;
+                };
                 listed.push(SessionInfo {
-                    current: current.as_ref() == Some(&app),
-                    app: app.to_string(),
+                    // The same object, as COM tells: an application may
+                    // have more than one session.
+                    current: current.as_ref() == Some(&session),
+                    key: SessionKey { app, occurrence },
                     title,
                     artist,
-                    playing: playback.PlaybackStatus()? == Status::Playing,
+                    playing: playing == Status::Playing,
                 });
+            }
+            // Should Windows give another object for the current session,
+            // the first session of its application stands for it.
+            let current = current.and_then(|session| session.SourceAppUserModelId().ok());
+            if !listed.iter().any(|session| session.current)
+                && let Some(current) = current.map(|app| app.to_string())
+                && let Some(first) = listed.iter_mut().find(|session| session.key.app == current)
+            {
+                first.current = true;
             }
             Ok(listed)
         };
         read().map_err(|error| format!("the media applications could not be listed: {error}"))
     }
 
-    /// What `app` plays; `None` while no application offers anything.
-    pub fn now_playing(app: Option<&str>) -> Result<Option<NowPlaying>, String> {
+    /// What `key` plays; `None` while no application offers anything.
+    pub fn now_playing(key: Option<&SessionKey>) -> Result<Option<NowPlaying>, String> {
         let read = || -> WindowsResult<Option<NowPlaying>> {
-            let Some(session) = session(app)? else {
+            let Some(session) = session(key)? else {
                 return Ok(None);
             };
             let properties = session.TryGetMediaPropertiesAsync()?.get()?;
@@ -254,11 +293,11 @@ impl Media {
         read().map_err(|error| format!("what is playing could not be read: {error}"))
     }
 
-    /// The picture `app` shows for what it plays, as the image file it
+    /// The picture `key` shows for what it plays, as the image file it
     /// offers; `None` while there is none.
-    pub fn cover(app: Option<&str>) -> Result<Option<Vec<u8>>, String> {
+    pub fn cover(key: Option<&SessionKey>) -> Result<Option<Vec<u8>>, String> {
         let read = || -> WindowsResult<Option<Vec<u8>>> {
-            let Some(session) = session(app)? else {
+            let Some(session) = session(key)? else {
                 return Ok(None);
             };
             let properties = session.TryGetMediaPropertiesAsync()?.get()?;
@@ -281,11 +320,11 @@ impl Media {
         read().map_err(|error| format!("the picture of what is playing could not be read: {error}"))
     }
 
-    /// Passes `command` to `app`. Whether the application followed it is
+    /// Passes `command` to `key`. Whether the application followed it is
     /// not known.
-    pub fn send(app: Option<&str>, command: MediaCommand) -> Result<(), String> {
+    pub fn send(key: Option<&SessionKey>, command: MediaCommand) -> Result<(), String> {
         let send = || -> WindowsResult<()> {
-            let Some(session) = session(app)? else {
+            let Some(session) = session(key)? else {
                 return Ok(());
             };
             match command {
@@ -323,16 +362,25 @@ fn manager() -> WindowsResult<&'static Manager> {
     }
 }
 
-/// The session of `app`, or the one Windows considers current, if any
+/// The session `key` names, or the one Windows considers current, if any
 /// application has one.
-fn session(app: Option<&str>) -> WindowsResult<Option<Session>> {
+fn session(key: Option<&SessionKey>) -> WindowsResult<Option<Session>> {
     let manager = manager()?;
-    if let Some(app) = app {
+    if let Some(key) = key {
         let sessions = manager.GetSessions()?;
+        let mut before = 0;
         for index in 0..sessions.Size()? {
-            let session = sessions.GetAt(index)?;
-            if session.SourceAppUserModelId()? == app {
-                return Ok(Some(session));
+            let Ok(session) = sessions.GetAt(index) else {
+                continue;
+            };
+            if session
+                .SourceAppUserModelId()
+                .is_ok_and(|app| app == key.app.as_str())
+            {
+                if before == key.occurrence {
+                    return Ok(Some(session));
+                }
+                before += 1;
             }
         }
     }

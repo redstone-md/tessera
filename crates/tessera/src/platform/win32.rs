@@ -77,6 +77,7 @@ pub use index::SearchIndex;
 pub use jump::{JumpTask, RecentDocument, app_id_of_program};
 pub use key_locks::{KeyLocks, window_in_front};
 pub use keyboard::{InputLanguage, Typing};
+pub use media::SessionKey;
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use media::{Repeat, SessionInfo};
 pub use network::{Link, Network};
