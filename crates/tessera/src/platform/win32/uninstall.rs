@@ -313,7 +313,8 @@ pub fn split_command(line: &str) -> (Option<String>, String) {
             None => (Some(rest.to_owned()), String::new()),
         };
     }
-    let lower = line.to_lowercase();
+    // Lowered in ASCII alone, so that its places are those of `line`.
+    let lower = line.to_ascii_lowercase();
     let ends = { lower.match_indices(".exe") }
         .map(|(at, _)| at + 4)
         .filter(|&end| lower[end..].is_empty() || lower[end..].starts_with(' '));
@@ -473,6 +474,11 @@ mod tests {
             ("rundll32".to_owned(), "thing,Entry".to_owned())
         );
         assert_eq!(split_command("  "), (None, String::new()));
+        // A letter longer or shorter when lowered moves nothing.
+        assert_eq!(
+            split(r"C:\İzmir ẞ\App.EXE /quiet"),
+            (r"C:\İzmir ẞ\App.EXE".to_owned(), "/quiet".to_owned())
+        );
     }
 
     #[test]

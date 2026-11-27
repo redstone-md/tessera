@@ -134,7 +134,9 @@ fn shown_path(uri: &str) -> String {
             // The editor writes the drive letter small.
             let mut letters = path.chars();
             match (letters.next(), letters.next()) {
-                (Some(drive), Some(':')) => format!("{}{}", drive.to_ascii_uppercase(), &path[1..]),
+                (Some(drive), Some(':')) if drive.is_ascii_alphabetic() => {
+                    format!("{}{}", drive.to_ascii_uppercase(), &path[1..])
+                }
                 _ => path,
             }
         }
@@ -345,5 +347,7 @@ mod tests {
             "vscode-remote://wsl+Ubuntu/home/me"
         );
         assert_eq!(decoded("%e2%86%92 %zz"), "→ %zz");
+        // Only a letter of ASCII before the colon is a drive.
+        assert_eq!(shown_path("file:///é:/x"), r"é:\x");
     }
 }
