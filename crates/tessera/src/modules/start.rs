@@ -3,13 +3,18 @@
 
 //! The parts of a Start menu besides the search: the pinned applications
 //! and the buttons that end the session. Widgets: `apps`, `power`.
+//!
+//! A right click on a pinned application opens its menu (start/menu.rs),
+//! the one the rows of the launcher have too.
+
+mod menu;
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, Global, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, Styled, WeakEntity, Window, div, img, px, relative,
 };
 
@@ -22,6 +27,8 @@ use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, state_layer};
+
+pub use menu::{AppMenu, ItemKind, MenuSlot};
 
 /// How many pinned applications a row holds unless the layout says.
 const DEFAULT_COLUMNS: usize = 5;
@@ -169,6 +176,8 @@ struct Apps {
     appear: Spring,
     /// Pointer feedback of the tiles, by the name they stand for.
     interactions: HashMap<String, Interaction>,
+    /// The menu of a tile, while it is open.
+    menu: MenuSlot,
 }
 
 impl Apps {
@@ -182,6 +191,7 @@ impl Apps {
             columns,
             appear,
             interactions: HashMap::new(),
+            menu: MenuSlot::default(),
         }
     }
 
@@ -260,9 +270,18 @@ impl Apps {
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, _, _, cx| {
-                    this.interactions.remove(&unpinned);
-                    this.pins.update(cx, |pins, cx| pins.toggle(&unpinned, cx));
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    // A pin whose shortcut is gone has nothing but itself
+                    // to take away.
+                    let Some(shortcut) = this.shortcut(&unpinned).cloned() else {
+                        this.interactions.remove(&unpinned);
+                        this.pins.update(cx, |pins, cx| pins.toggle(&unpinned, cx));
+                        return;
+                    };
+                    let make =
+                        |cx: &mut Context<AppMenu>| AppMenu::new(shortcut, ItemKind::App, None, cx);
+                    this.menu
+                        .open(event.position, make, |this: &mut Self| &mut this.menu, cx);
                 }),
             );
         Interaction::track(tile, cx, move |this: &mut Self| {
@@ -282,7 +301,12 @@ impl Render for Apps {
         for (index, name) in names.iter().enumerate() {
             tiles.push(self.tile(index, names.len(), name, window, cx));
         }
-        div().flex_none().flex().flex_wrap().children(tiles)
+        div()
+            .flex_none()
+            .flex()
+            .flex_wrap()
+            .children(tiles)
+            .children(self.menu.render())
     }
 }
 

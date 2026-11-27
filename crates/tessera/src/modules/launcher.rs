@@ -14,6 +14,8 @@
 //! Enter runs a command in a terminal, Ctrl+Shift+Enter as an
 //! administrator, and Ctrl+C copies the result of a calculation or a
 //! conversion. Ending the session or a process asks for Enter once more.
+//! A right click on an application or a file, the Menu key or Shift+F10
+//! opens its menu (modules/start/menu.rs).
 //!
 //! The `runner` widget of modules/runner.rs is the same search in a
 //! compact form: a field, and the rows only once something is typed.
@@ -27,9 +29,9 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, AnyView, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, Hsla,
-    InteractiveElement, IntoElement, KeyDownEvent, Modifiers, ParentElement, Pixels, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div,
-    img, point, px, relative,
+    InteractiveElement, IntoElement, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, Task, WeakEntity, Window, div, img, point, px, relative,
 };
 
 use crate::field::TextField;
@@ -37,7 +39,7 @@ use crate::files::Files;
 use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::module::{Module, WidgetContext, WidgetRegistry};
-use crate::modules::start::Pins;
+use crate::modules::start::{AppMenu, ItemKind, MenuSlot, Pins};
 use crate::motion::Spring;
 use crate::platform::{FileSearch, Launch, SearchIndex, Shortcut};
 use crate::popup::Popups;
@@ -377,6 +379,8 @@ struct Launcher {
     asked: Option<Task<()>>,
     /// What was written when Windows Search gave the files held now.
     answered: Option<String>,
+    /// The menu of an application or a file, while it is open.
+    menu: MenuSlot,
 }
 
 impl Launcher {
@@ -417,6 +421,7 @@ impl Launcher {
             indexed,
             asked: None,
             answered: None,
+            menu: MenuSlot::default(),
         };
         launcher.find(cx);
         // What the runners say before anything is typed, such as the
@@ -788,10 +793,43 @@ impl Launcher {
         }
     }
 
+    /// Opens the menu of the application or file in `row` at `at`, a
+    /// point of the window; the answers of the runners have none.
+    fn open_menu(&mut self, row: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(Row::Shortcut(index)) = self.matches.get(row).copied() else {
+            return;
+        };
+        let kind = match self.kind(index) {
+            Kind::App => ItemKind::App,
+            Kind::File => ItemKind::File,
+        };
+        let shortcut = self.shortcuts[index].clone();
+        self.select(row, cx);
+        let make = |cx: &mut Context<AppMenu>| AppMenu::new(shortcut, kind, None, cx);
+        self.menu
+            .open(at, make, |this: &mut Self| &mut this.menu, cx);
+    }
+
+    /// Where the menu of the selected entry opens from the keyboard: at
+    /// the lower left of its row or tile, in the window.
+    fn menu_point(&self, cx: &App) -> Point<Pixels> {
+        let list = self.scroll.bounds();
+        let (row, part) = match self.tiled() {
+            true => (TILE_HEIGHT, list.size.width / self.columns as f32),
+            false => (cx.global::<Theme>().launcher.row_height, px(0.)),
+        };
+        let line = (self.selected / self.columns) as f32;
+        let across = (self.selected % self.columns) as f32;
+        let top = list.origin.y + self.scroll.offset().y + row * (line + 1.);
+        point(list.origin.x + part * across + px(16.), top)
+    }
+
     /// Handles the keys that are not text; text goes to the field.
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let keys = &event.keystroke.modifiers;
         match event.keystroke.key.as_str() {
+            "menu" => self.open_menu(self.selected, self.menu_point(cx), cx),
+            "f10" if keys.shift => self.open_menu(self.selected, self.menu_point(cx), cx),
             "escape" => cx.defer(Popups::close),
             "enter" => self.launch(self.selected, keys, cx),
             "c" if keys.control && !keys.shift => self.copy(cx),
@@ -926,6 +964,12 @@ impl Launcher {
                     .child(one_line(SharedString::new(name))),
             )
             .children(pin)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_menu(row, event.position, cx);
+                }),
+            )
             .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 this.launch(row, &event.modifiers(), cx);
@@ -1011,6 +1055,12 @@ impl Launcher {
             )
             .children(side)
             .children(button)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_menu(row, event.position, cx);
+                }),
+            )
             .on_mouse_move(cx.listener(move |this, _, _, cx| this.select(row, cx)))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 this.launch(row, &event.modifiers(), cx);
@@ -1226,7 +1276,9 @@ fn round_button(
 impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        if !self.focused {
+        // The keys come back to the field once a menu has taken them.
+        let lost = !self.menu.is_open() && !self.field.read(cx).is_focused(window);
+        if !self.focused || lost {
             self.focused = true;
             self.field.read(cx).focus(window);
         }
@@ -1239,6 +1291,7 @@ impl Render for Launcher {
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
             .child(div().flex_none().flex().child(self.field.clone()))
             .child(self.render_list(&theme, window, cx))
+            .children(self.menu.render())
     }
 }
 
