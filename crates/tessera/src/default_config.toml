@@ -256,6 +256,9 @@
 #               Option bluetooth, true or false: whether the Bluetooth icon
 #               of Windows is among them. Without the option it is not: the
 #               widgets below show Bluetooth
+#               An application that draws the description of its icon
+#               itself gets no description from the bar; it is told when
+#               the pointer comes onto its icon instead
 #   "windows"   a button for each application with windows on the display,
 #               which a click goes through and a click with the middle
 #               button starts once more; option pinned,

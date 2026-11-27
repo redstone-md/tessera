@@ -164,15 +164,18 @@ impl TrayStrip {
     }
 
     /// The pointer came onto the icon `id`, or left it: its description
-    /// comes out of the bar under it after a moment, or goes.
+    /// comes out of the bar under it after a moment, or goes. The
+    /// application hears of it, and one that draws its own description
+    /// shows that instead.
     fn tip(&self, id: u64, hovered: bool, window: &Window, cx: &mut Context<Self>) {
         let key = (TIP_KIND, id);
         let item = self.items.iter().find(|item| item.icon.id == id);
         let target = item
             .filter(|item| hovered && !item.leaving)
-            .and_then(|item| Some((tip_line(&item.icon.tip), item.drawn.get()?)));
-        let Some((tip, drawn)) = target else {
+            .and_then(|item| Some((item, tip_line(&item.icon.tip), item.drawn.get()?)));
+        let Some((item, tip, drawn)) = target else {
             Tips::leave(key, cx);
+            Tray::hover(id, false);
             return;
         };
         // The strip of every display shows the icon; the application is
@@ -180,6 +183,10 @@ impl TrayStrip {
         if let Some(place) = SurfacePlace::of_window(window) {
             let (frame, menu) = place.of(drawn);
             Tray::locate(id, frame, menu);
+        }
+        Tray::hover(id, true);
+        if item.icon.draws_own_tip {
+            return;
         }
         let middle = drawn.origin.x + drawn.size.width / 2.;
         match PopupAnchor::at(window, middle, cx) {
@@ -217,9 +224,13 @@ impl TrayStrip {
                 theme.on_bar(theme.colors.surface_container),
                 state,
             ))
-            .on_click(move |_, _, cx| {
+            .on_click(move |event, _, cx| {
                 Tips::close(cx);
-                Tray::press(id, TrayButton::Left);
+                let button = match event.click_count() {
+                    2 => TrayButton::Double,
+                    _ => TrayButton::Left,
+                };
+                Tray::press(id, button);
             })
             .on_mouse_up(MouseButton::Right, move |_, _, cx| {
                 Tips::close(cx);
