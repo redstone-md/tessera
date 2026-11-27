@@ -291,9 +291,13 @@ impl BackdropPicture {
     }
 
     /// The bytes of the picture.
-    #[cfg(test)]
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    /// The bytes of the picture, to change.
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
+        &mut self.pixels
     }
 
     /// A picture of `pixels`, which must hold `height` rows.

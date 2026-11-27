@@ -104,7 +104,7 @@ impl WallpaperPosition {
         }
     }
 
-    fn of_explorer(position: DESKTOP_WALLPAPER_POSITION) -> Self {
+    pub(super) fn of_explorer(position: DESKTOP_WALLPAPER_POSITION) -> Self {
         match position {
             DWPOS_TILE => Self::Tile,
             DWPOS_STRETCH => Self::Stretch,
@@ -115,7 +115,7 @@ impl WallpaperPosition {
         }
     }
 
-    fn to_explorer(self) -> DESKTOP_WALLPAPER_POSITION {
+    pub(super) fn to_explorer(self) -> DESKTOP_WALLPAPER_POSITION {
         match self {
             Self::Center => DWPOS_CENTER,
             Self::Tile => DWPOS_TILE,
@@ -474,12 +474,12 @@ fn desktop_color() -> [u8; 3] {
 }
 
 /// `color` as red, green and blue; Windows keeps red in the low byte.
-fn rgb(color: COLORREF) -> [u8; 3] {
+pub(super) fn rgb(color: COLORREF) -> [u8; 3] {
     let [red, green, blue, _] = color.0.to_le_bytes();
     [red, green, blue]
 }
 
-fn colorref([red, green, blue]: [u8; 3]) -> COLORREF {
+pub(super) fn colorref([red, green, blue]: [u8; 3]) -> COLORREF {
     COLORREF(u32::from_le_bytes([red, green, blue, 0]))
 }
 

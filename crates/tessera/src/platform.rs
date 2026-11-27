@@ -125,6 +125,7 @@ pub use win32::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
 )]
 pub use win32::{Launch, Show};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
+pub use win32::{Poster, VideoLook, VideoOverlay};
 pub use win32::{PowerMode, PowerModeState};
 pub use win32::{PreviewColors, PreviewHost, PreviewShown};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
@@ -134,6 +135,7 @@ pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{SystemWallpaper, WallpaperPosition, user_locale};
+pub use win32::{WallpaperAnswers, WallpaperRequest, WallpaperServer};
 pub use win32::{expand_variables, find_program, recent_folder};
 #[allow(
     unused_imports,
