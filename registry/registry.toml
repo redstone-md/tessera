@@ -1,5 +1,6 @@
-# The extensions and themes Tessera offers to install unless its
-# configuration names other registries. Written by update.sh; see the README for the format.
+# The extensions, themes, icon packs, wallpapers and tiling layouts
+# Tessera offers to install unless its configuration names other
+# registries. Written by update.sh; see the README for the format.
 name = "Tessera"
 
 [[extension]]
@@ -10,7 +11,7 @@ version = "0.1.0"
 manifest = "counter/extension.toml"
 manifest_sha256 = "80a8698094b015324983e9d7d082adfc3937c805ad73dd4955de924d9dd99063"
 wasm = "counter/extension.wasm"
-wasm_sha256 = "4393420012a76d38101edde2b6602cb8e6e19188c435bfbec7bf3c7e340f5374"
+wasm_sha256 = "a0dbf4d90dba524917fdf5ed7ae886fcf8067d51965724a1e1b2e32de7692305"
 preview = "counter/icon.png"
 preview_sha256 = "b01b2eece52ee078438f7913eaef6eef67055b6e8a4abb68585196872d7a7c8e"
 
@@ -18,11 +19,11 @@ preview_sha256 = "b01b2eece52ee078438f7913eaef6eef67055b6e8a4abb68585196872d7a7c
 id = "ai-limits"
 name = "AI limits"
 description = "What is left of the usage limits of Claude, Codex, OpenRouter and DeepSeek, and when they reset."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "ai-limits/extension.toml"
-manifest_sha256 = "756bc4cf6c8b17373ed2050a17a9f5072c2ea853fbc21f67531e132729ea4758"
+manifest_sha256 = "74610f0b712005d3e3e29e28b8910030adfce1a70e7146b59e7c34f8fb08d3cf"
 wasm = "ai-limits/extension.wasm"
-wasm_sha256 = "874fb61a6e4edca967f836263286910d41b2420f4ea21a52020aad86f4c1a185"
+wasm_sha256 = "a568b73482b772ded484518a477ede14dc1d95178ea094ac8b7cb7379d81f3e4"
 preview = "ai-limits/icon.png"
 preview_sha256 = "087b1bc36c53a85816b1745cda2d8f25b08dd813443e80ff76e35a764f00bc27"
 
@@ -30,11 +31,11 @@ preview_sha256 = "087b1bc36c53a85816b1745cda2d8f25b08dd813443e80ff76e35a764f00bc
 id = "device-battery"
 name = "Device battery"
 description = "An example: the charge of a Bluetooth device in the bar, and every paired device in a popup."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "device-battery/extension.toml"
-manifest_sha256 = "8acdfa5ecfc387728944a22298bc446637ebbce2dadd97e229a9c90a749ca805"
+manifest_sha256 = "16f774a3d84de27fd05b2701d7c78fbfb4a744323db0195fceb087fdade2076f"
 wasm = "device-battery/extension.wasm"
-wasm_sha256 = "4688666ca68f23cad3d160b152e11917d4fe6fc412e5077a88fef2b004f7dee7"
+wasm_sha256 = "98511bde00849184f57af7ae8e7f44bc549f0a0942f0280a51965868e123bdf7"
 preview = "device-battery/icon.png"
 preview_sha256 = "fc0467123a53e8e6a9fc6a71b920e9b04e131c6e3e9da7b1be6c3155e467d2a5"
 
@@ -42,11 +43,11 @@ preview_sha256 = "fc0467123a53e8e6a9fc6a71b920e9b04e131c6e3e9da7b1be6c3155e467d2
 id = "weather"
 name = "Weather"
 description = "The weather now and on the next days at a place named in the configuration, from Open-Meteo."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "weather/extension.toml"
-manifest_sha256 = "1ac140f6fd5cbc303f217c26ac0b05e69a7d97bccf4b841d964886c8592eba82"
+manifest_sha256 = "23bf5bc00a30a6cbd397f151d7fee59acd34b8a62d76864aacf7651c596be252"
 wasm = "weather/extension.wasm"
-wasm_sha256 = "6501df6c09f3abd0420ecd3c0aa940f0c70305f699abbd20133c8476f69af5f6"
+wasm_sha256 = "6821874a815a4126dd8aa59d4bdc212bbd0ec0d8b75390ff057267afd9efa107"
 preview = "weather/icon.png"
 preview_sha256 = "bacfd4ed627d64e601a4ffb9f3b8632d49898f201daa9e7bdbdd72552335941f"
 
@@ -54,11 +55,11 @@ preview_sha256 = "bacfd4ed627d64e601a4ffb9f3b8632d49898f201daa9e7bdbdd7255233594
 id = "pomodoro"
 name = "Pomodoro"
 description = "A focus timer of work and breaks for the bar, counting the rounds done today; it keeps time across restarts."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "pomodoro/extension.toml"
-manifest_sha256 = "8a5665801054b6bd03aa5ae652b909401d659854eed94f52d0ead3ad319d19e6"
+manifest_sha256 = "94a8d6e0142355cf6b9af03eff2a988b0c9b585c1597d13cf766e92a22411dd6"
 wasm = "pomodoro/extension.wasm"
-wasm_sha256 = "4d5a70dad567f04dcc6af72a1885c9ab2f817726483d94209990333abf2355c0"
+wasm_sha256 = "58e4108e1b750d1b369d6962e93fc5eb8039a80e109c5e82b97712eedbdbfc02"
 preview = "pomodoro/icon.png"
 preview_sha256 = "7220453563aeec202bc9ff592d497dfbd7a098d6467bb1f4c8731b557ffad5fb"
 
@@ -66,11 +67,11 @@ preview_sha256 = "7220453563aeec202bc9ff592d497dfbd7a098d6467bb1f4c8731b557ffad5
 id = "crypto"
 name = "Crypto prices"
 description = "Prices of coins and their change over a day, from CoinGecko."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "crypto/extension.toml"
-manifest_sha256 = "8c3c66ea005fc288fa85e192e37530db3ee0ecf064ddffb3d44bb40b13cc2d5a"
+manifest_sha256 = "900d9c0611362dd1d3fa39c66fbb24f39322965329c1865be95be352d3ee1068"
 wasm = "crypto/extension.wasm"
-wasm_sha256 = "5070236ad8306920095f99710e1c4ab197c8b6e17cd26f7a3fc3edb35bfbe55f"
+wasm_sha256 = "fe6b70a2841b1e837ec56c17ed6b323e8aba7a9ecd348b11d5e4677d8682e160"
 preview = "crypto/icon.png"
 preview_sha256 = "d62f2d1c3afb1b911e9da2723e2372241516531c0520edf13e796b0827c2fc10"
 
@@ -78,11 +79,11 @@ preview_sha256 = "d62f2d1c3afb1b911e9da2723e2372241516531c0520edf13e796b0827c2fc
 id = "exchange"
 name = "Exchange rates"
 description = "Currency exchange rates against a base currency, from ExchangeRate-API, updated daily."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "exchange/extension.toml"
-manifest_sha256 = "af0552f8301df11a5128d6cf7ec528ef01f4199266789f90fc62b716c72a9d01"
+manifest_sha256 = "1666ee596749e8c37b8e61e5b242d6fcd99bb7a8e4cecfb5447b34a3d95a74ce"
 wasm = "exchange/extension.wasm"
-wasm_sha256 = "6561a1da8e854d02baed80f6132c31c75468a3d0ca5c30f5ef037b2ebede3caf"
+wasm_sha256 = "174538e6d5ccc924229d9bc5557e56a4419f139d2c0a49d6acf841ebdae0bc76"
 preview = "exchange/icon.png"
 preview_sha256 = "cf1c9626a85b7f7b8fa910f3634a62460550e44817dda2ace776df70b9a12ac0"
 
@@ -90,11 +91,11 @@ preview_sha256 = "cf1c9626a85b7f7b8fa910f3634a62460550e44817dda2ace776df70b9a12a
 id = "hacker-news"
 name = "Hacker News"
 description = "The top stories of Hacker News with their points and comments."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "hacker-news/extension.toml"
-manifest_sha256 = "ab4b1997ebbd14a8c8f0a8bce74e1070ef4b176ca53670acee78941c33524b00"
+manifest_sha256 = "0eb295bbc61ac4d8d563bcd7924ae56ce6fe366de93204f4bf161836b04339e8"
 wasm = "hacker-news/extension.wasm"
-wasm_sha256 = "728e82bded2643183b35e2625828165a85b0f08dd48ef98092e069000a11c21a"
+wasm_sha256 = "3328f64b277f92f1eff0caaef65133f47464537961972296209c5d44bda57190"
 preview = "hacker-news/icon.png"
 preview_sha256 = "81a76b22c0f388b5f119d65bd6226defa2aaa869b8379ab0f8bc43d799ee4479"
 
@@ -102,11 +103,11 @@ preview_sha256 = "81a76b22c0f388b5f119d65bd6226defa2aaa869b8379ab0f8bc43d799ee44
 id = "moon"
 name = "Moon"
 description = "The phase of the moon, how much of it is lit and when it is next full or new, worked out offline."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "moon/extension.toml"
-manifest_sha256 = "d6c18129e177304585813bce24b7adcc65a1df5968e2ae33baf848f53c7b4fa0"
+manifest_sha256 = "e44cb67ae65285bec9b67de0b2fd8e753a69cedf89a8adf49fb8cfddcd0040a0"
 wasm = "moon/extension.wasm"
-wasm_sha256 = "e315a39d6ec24abd1f1eed5888a60afc1a19fe10f8389b0a4f1ba63ce924b9fb"
+wasm_sha256 = "3e9dfb6b5355ab38ad959d65d857de6a6a24e1c3a24b2b70264bde8a7fd501b8"
 preview = "moon/icon.png"
 preview_sha256 = "8b37700b8d20185eff439dc37c6dea6c0cad57a5c540745fdded1a626dd384cc"
 
@@ -114,11 +115,11 @@ preview_sha256 = "8b37700b8d20185eff439dc37c6dea6c0cad57a5c540745fdded1a626dd384
 id = "countdown"
 name = "Countdown"
 description = "The time left until named dates of the configuration, the nearest one in the bar."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "countdown/extension.toml"
-manifest_sha256 = "808e7efb2c16ffc12a140d4eb56d443b546c31c1f81b197e2074ecbcdf66b339"
+manifest_sha256 = "b0f543b922aef66430e052f2f2321e4efec5053c738a15928d455d36f2bc4318"
 wasm = "countdown/extension.wasm"
-wasm_sha256 = "f5c0fe5591460cb9751c0a79b0688f476a5d643f95b4dddb2983108be52ef652"
+wasm_sha256 = "515fdbfcd67309eef7c0336b680721a8c122ad759ecf8ec01dca5d638692879d"
 preview = "countdown/icon.png"
 preview_sha256 = "f70aa74c7fd17c53a58545644c21ab4e4385c178d85ea264690867b75d5486a6"
 
@@ -126,11 +127,11 @@ preview_sha256 = "f70aa74c7fd17c53a58545644c21ab4e4385c178d85ea264690867b75d5486
 id = "world-clock"
 name = "World clock"
 description = "The time in other places, at fixed offsets from UTC named in the configuration."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "world-clock/extension.toml"
-manifest_sha256 = "30d434bbe6cbdb479bb5701bc4ef4a3f7c36cfd0b98201dac653be2edfe44eb2"
+manifest_sha256 = "9c15e4dc8d375ec38f32d8b951c2b7c4492739c0c74efb26f4219084b4714d6e"
 wasm = "world-clock/extension.wasm"
-wasm_sha256 = "ed0ae1bdf62dd7209b0a4b8622a34e46faf315257fb9d9f47bbb708fa20c0733"
+wasm_sha256 = "da34ff59ba9a1eaf1573c00b2c821e0bc125ea06764628381575f2bb852a44fc"
 preview = "world-clock/icon.png"
 preview_sha256 = "62242ca7a10dae32fd7c1e376487547126358f307ffe3dd65300cd5f6a89329a"
 
@@ -138,11 +139,11 @@ preview_sha256 = "62242ca7a10dae32fd7c1e376487547126358f307ffe3dd65300cd5f6a8932
 id = "habits"
 name = "Habits"
 description = "Daily habits to check off in a popup, with streaks kept across restarts."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "habits/extension.toml"
-manifest_sha256 = "458f9db29f0d1db16fbb01113283ec7605e7e0622bafc712d158ebcdee3b4a9a"
+manifest_sha256 = "3fd162904507d819fc5fff6bec0201816399c2892fc346e82f9d5137a4872d19"
 wasm = "habits/extension.wasm"
-wasm_sha256 = "e1fcdeeb7bc3e3d42514b72ef14f3d1652042280fdfbbac0c1557fcd9b238339"
+wasm_sha256 = "165824d1102355d44e2394e7a1db5d96d64d375f869996d317b604928c188314"
 preview = "habits/icon.png"
 preview_sha256 = "f3f06ab658b39face7c5eb48e91bf65f818b714f0c95610550bb12fa8c685591"
 
@@ -150,11 +151,11 @@ preview_sha256 = "f3f06ab658b39face7c5eb48e91bf65f818b714f0c95610550bb12fa8c6855
 id = "github-stats"
 name = "GitHub stats"
 description = "Stars, forks and open issues of GitHub repositories named in the configuration."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "github-stats/extension.toml"
-manifest_sha256 = "bbcaa30bf71afb3b8ce2d08e1fb8329297fcc168af62d6b622ae1e0f2e10b817"
+manifest_sha256 = "a93923dcf20946fc2d466d4e92f2d91a058b2f6b1013b6cfe8bbfa9a552f3164"
 wasm = "github-stats/extension.wasm"
-wasm_sha256 = "3ab9471f9eeea1f3d4b7a8a6e801fa6d4ff09be2c615b6b6f7546607bf7deb08"
+wasm_sha256 = "8d3158b92addfefc3c88a5f02b1dd2cdb11942339a0992c46b08024f907800c3"
 preview = "github-stats/icon.png"
 preview_sha256 = "925a660d9826110f253be9412d5862e29f3f226ba1011e4d79720aa7490c015e"
 
@@ -162,11 +163,11 @@ preview_sha256 = "925a660d9826110f253be9412d5862e29f3f226ba1011e4d79720aa7490c01
 id = "air-quality"
 name = "Air quality"
 description = "The European Air Quality Index, particles and ozone at a place named in the configuration, from Open-Meteo."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "air-quality/extension.toml"
-manifest_sha256 = "76ca275a1decd14e83d6888cbeb25b0d1de1dbff2db4afd1b9100307f0d96c61"
+manifest_sha256 = "074c0e7e2df878f6a1c0a6c6f86f0f4bfe5d59816f67f85301218d4f7fd31bbb"
 wasm = "air-quality/extension.wasm"
-wasm_sha256 = "21f169f518f475d365b40571d41222c30b4ffc77a76d1f806605f31be94c273e"
+wasm_sha256 = "10c19c9231b800a62a58f0df0bcb9de2fb983a7f0caae3490a9ef09303e44d2b"
 preview = "air-quality/icon.png"
 preview_sha256 = "351722ea07fdcf6494d45152c2b0e8d410b22829e4096de2b59278cddec327d7"
 
@@ -178,7 +179,7 @@ version = "0.1.0"
 manifest = "dice/extension.toml"
 manifest_sha256 = "4d2469e62abb35f3af778b52f9f4e8e4fea908c0c0ecd480ed2b19229f811b42"
 wasm = "dice/extension.wasm"
-wasm_sha256 = "2685b50e9eed53d670676d7cc4f01166388a3738f391bd89de0f7bd764ce41be"
+wasm_sha256 = "a3d638cb19e1f7a4943e6319d9b0090cec10e0a4d078079893419299792883cb"
 preview = "dice/icon.png"
 preview_sha256 = "16eb43b474c1025a6435e664225a7a6b0f3f574c12f53c7a6ddb34849da5b762"
 
@@ -186,21 +187,31 @@ preview_sha256 = "16eb43b474c1025a6435e664225a7a6b0f3f574c12f53c7a6ddb34849da5b7
 id = "breaks"
 name = "Eye breaks"
 description = "Reminders to look away from the screen for a moment, every twenty minutes unless set otherwise."
-version = "0.1.0"
+version = "0.2.0"
 manifest = "breaks/extension.toml"
-manifest_sha256 = "104988a0c75959f818ead296f9894ad617291a3bcf9e1c91730f206355aff061"
+manifest_sha256 = "c20c5763351e1909224bb40dddc9a66781a716641525ad5d014ffda5300a60ef"
 wasm = "breaks/extension.wasm"
-wasm_sha256 = "3bfec6705ab4838bd77f1beacd1f7b40fb7732a3d6b6e4ae12a6cffea5c60f85"
+wasm_sha256 = "15401ca41f1ca10b26927b0d9e30e11ec076cc6e359c6f3735478c7f80110309"
 preview = "breaks/icon.png"
 preview_sha256 = "ebbdbdb77e5ef5a6d863207efe6aa42a4b0973fa286384bf73ed19ef382d4888"
+
+[[extension]]
+id = "system-monitor"
+name = "System monitor"
+description = "An example of the interface 0.4: the processor and the memory in the bar; the network, the battery, what plays and the open windows in a popup; sys in the launcher."
+version = "0.1.0"
+manifest = "system-monitor/extension.toml"
+manifest_sha256 = "a1bd101802ec1f487591c2160295eb9a382f543a71229cf550e2571aaf505cb8"
+wasm = "system-monitor/extension.wasm"
+wasm_sha256 = "40d152b27063e2aadcfe9b0fd4e610762081c0c8cb9fde810e2ad8db1b07c7bc"
 
 [[theme]]
 id = "void"
 name = "Void"
 description = "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/void.toml"
-sha256 = "9a05aa138b9f314fca34d5253628acb8b509327b63015f8de44e86e67a9660d1"
+sha256 = "17837b3440d03cc98868b159b58a3194d530486c21d396d6bbdd5065f4518816"
 preview = "previews/void.jpg"
 preview_sha256 = "9621c6c8e5944bd6148441bc3cef28aa01a1c5bba6a2ec57d0ca0c70fe8ed6a9"
 
@@ -208,9 +219,9 @@ preview_sha256 = "9621c6c8e5944bd6148441bc3cef28aa01a1c5bba6a2ec57d0ca0c70fe8ed6
 id = "expressive"
 name = "Expressive"
 description = "Larger, rounder and livelier than what is built in."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/expressive.toml"
-sha256 = "93c0204a6a638c8f87fa4aa02aed0c0f725945c614624aa205fcb19fdd86818c"
+sha256 = "2454028102d8327ba45ae0df668d451ab95f12d77f6b25e336dadfe7e2b01de1"
 preview = "previews/expressive.jpg"
 preview_sha256 = "2b2aac0abeec73ce0358526fd97f222b7a0a8b3b4ec95502f2c53ff9257031ef"
 
@@ -218,9 +229,9 @@ preview_sha256 = "2b2aac0abeec73ce0358526fd97f222b7a0a8b3b4ec95502f2c53ff9257031
 id = "compact"
 name = "Compact"
 description = "Small, square and calm; nothing overshoots."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/compact.toml"
-sha256 = "ea5d1372192a67e91d522b56dce64f985359826146fef0b2f051c2280485f0c9"
+sha256 = "a4ae6d6a421ea3c5df77958ac993f35b59114adb78bb084c900dedbaeeaef6e6"
 preview = "previews/compact.jpg"
 preview_sha256 = "f6ea9766de388fae51b8131656c56294e43ca2e0fabb2b8c85f3c5d814ee60ec"
 
@@ -238,9 +249,9 @@ preview_sha256 = "b01cf9f63c47ea398e548e4009fbc11a231c7902ace486279c67c5e9381b1b
 id = "sakura"
 name = "Sakura"
 description = "Soft blossom pinks on cream, light and round, with a gentle bounce."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/sakura.toml"
-sha256 = "f1ef0e4a9503d6fef1ca0cca21f25fa49c72466af2a291f8a5f5ed236458af62"
+sha256 = "5f87d6235686a41c12eaf13407aa7c108385c89cef455ec1bcf6cf080de6b644"
 preview = "previews/sakura.jpg"
 preview_sha256 = "cebca0fc3c771bf1dc9ed4c73879ee55f7674e5014478870d20227d8b92a5f24"
 
@@ -258,9 +269,9 @@ preview_sha256 = "8083e7cbfabb28279d34ad1f2909b81b3bf4b260fe8c498998d170e515db96
 id = "ember"
 name = "Ember"
 description = "Warm charcoal with glowing orange, like coals after the fire."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/ember.toml"
-sha256 = "d19b164b6678a4c43661fbbfc52df45aa2f51a91687c886599a535743a6d4767"
+sha256 = "5dec48fe9915a65e14d98f6661d0e3098fa39bb1618b2c7b5531fe5317091537"
 preview = "previews/ember.jpg"
 preview_sha256 = "16e19601dde23e11e9efb3132dd2b90c91ce24f6e3fcf5219c8325c3a262f04b"
 
@@ -268,9 +279,9 @@ preview_sha256 = "16e19601dde23e11e9efb3132dd2b90c91ce24f6e3fcf5219c8325c3a262f0
 id = "glacier"
 name = "Glacier"
 description = "Crisp ice blues on white; light, tidy and calm."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/glacier.toml"
-sha256 = "75df0e3ccd9002f9069200098ddaf4665c260db392cdbd832d5e0317f26709cd"
+sha256 = "a7f6532bcdbffe98f8c91f680280b65add79f581fe4a414ca2995a485dce8a19"
 preview = "previews/glacier.jpg"
 preview_sha256 = "827edf0ebfd5691c64fc42c2ba7f116172fb18240a38e4576210c32d2569b373"
 
@@ -278,9 +289,9 @@ preview_sha256 = "827edf0ebfd5691c64fc42c2ba7f116172fb18240a38e4576210c32d2569b3
 id = "forest"
 name = "Forest"
 description = "Deep moss greens and misty light from an old-growth wood."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/forest.toml"
-sha256 = "654fdbcf0b99c1a493845632179739553bd0525525818666ccd70248c9f092ee"
+sha256 = "8e95f6268cbccb784624e486e593b9df3c73e8593fa4ef3d078fbdfaf23ab274"
 preview = "previews/forest.jpg"
 preview_sha256 = "84ee0e654cecac8b20144d69e006410721fc7bf7eccb21740370faa6c588f06c"
 
@@ -288,9 +299,9 @@ preview_sha256 = "84ee0e654cecac8b20144d69e006410721fc7bf7eccb21740370faa6c588f0
 id = "paper"
 name = "Paper"
 description = "Ink on warm paper. Flat bars, square-ish shapes, no fuss."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/paper.toml"
-sha256 = "3669da1b28d7b3d6373c3c5196b674ea673ecb8e4a13646322c76d30202dc5d9"
+sha256 = "9d480df61190f66d08adf345c1b5e2d11e2c28912e90ac0a7524717f6ddd7845"
 preview = "previews/paper.jpg"
 preview_sha256 = "5b17b46ce009553410bc66a713d152bcb49ccc6d9b8b0dacf5b5d74dd64e397f"
 
@@ -308,9 +319,9 @@ preview_sha256 = "9cd26d5012b25794259bcd0f7e7dbadb4da45f81e33aa8ee9c6a854e1d079b
 id = "ocean"
 name = "Ocean"
 description = "Navy depths and aqua light from beneath the waves."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/ocean.toml"
-sha256 = "f53aff42bfa43e99f4e569de99c70f6c2694562f1bbd3f10babb61d51c61ee31"
+sha256 = "6e4c42929b192fd97f1c82f8f519622d44b6c40aa23c8686e726e00b094ac9da"
 preview = "previews/ocean.jpg"
 preview_sha256 = "251f3b8b09d778d63a437f0474f63048e2cd57998ceb1df1318935e3403cbc01"
 
@@ -318,9 +329,9 @@ preview_sha256 = "251f3b8b09d778d63a437f0474f63048e2cd57998ceb1df1318935e3403cbc
 id = "lilac"
 name = "Lilac"
 description = "Lavender fields at golden hour, pastel and airy."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/lilac.toml"
-sha256 = "ea408aabd68e33374b51208ed37195ccd12941cf75a28258a20b41d0981b9461"
+sha256 = "4f13bb28b362ad17977af2c13a4e83c40624a3d98a1ce18e11a380630c3bbdf1"
 preview = "previews/lilac.jpg"
 preview_sha256 = "a9a37fc3245005c5ac03b0171605bd8a57bf676f331708f3c3c28c3e1941874d"
 
@@ -368,9 +379,9 @@ preview_sha256 = "35a0f0a1fa5bb867d19866b9da4054da286680a9fe296cd0b7910a01c6b97a
 id = "nebula"
 name = "Nebula"
 description = "Magenta and indigo clouds of a distant nebula."
-version = "1.0.0"
+version = "1.1.0"
 file = "themes/nebula.toml"
-sha256 = "980640c029a40984182abdbe271e7d29a5cc8ea6cff93175787a767573cb67cf"
+sha256 = "e18edc1ce84a1e8afc22bad3cd967ea4fd09fbcbe392ff718dd6a6b743475d74"
 preview = "previews/nebula.jpg"
 preview_sha256 = "e1828d5cc532ee542aa909201147e29ef97de9e149bd2c16bb923b1211f2263f"
 
@@ -403,3 +414,109 @@ file = "themes/arcade.toml"
 sha256 = "8861505027f30855ae7b8dc8c431a458821b1b8c0558f9cd91487c8932ad8566"
 preview = "previews/arcade.jpg"
 preview_sha256 = "76fc0a7c3efe9b85ca6385cc2090e1b26c7a52b2c795e9160a99638b346873f5"
+
+[[theme]]
+id = "dense"
+name = "Dense"
+description = "A layer: less space between and inside things and smaller bars and dock, over any theme."
+version = "1.0.0"
+file = "themes/dense.toml"
+sha256 = "45c85eef9ec25709cce7072d0bc8625930d7bb89cbb6132c66509a4481245cbf"
+
+[[theme]]
+id = "round"
+name = "Round"
+description = "A layer: rounder corners over any theme, and nothing else."
+version = "1.0.0"
+file = "themes/round.toml"
+sha256 = "87b3fe88e2e41a9163e742aafd2fbcf9b1ec2bc41c0c81eb336e5d71d2993483"
+
+[[icon_pack]]
+id = "line"
+name = "Line"
+description = "Thin line icons in the colors of the theme for common programs and kinds of files."
+version = "1.0.0"
+manifest = "icon-packs/line/icon-pack.toml"
+manifest_sha256 = "3ae2193f5561c1e4f33156aa24aa1f721c998ca7e2bc5c76655b3e8341d27274"
+files = [
+    { path = "apps/browser.svg", sha256 = "e13eacc2446bbb9721d70cb6131f6c47dbb6a51dbe4a39c52c7aee824de260af" },
+    { path = "apps/calculator.svg", sha256 = "a8c6c4521abf7cf289684f1cbad930704deade2b85e98d233d420cffb4e22503" },
+    { path = "apps/code.svg", sha256 = "74c75efcc0fedc2af605f40508e6d61f86a635fd623a520d3f5aa62cf531fe75" },
+    { path = "apps/explorer.svg", sha256 = "a365b40d5d2882abaffe57444cbce891b1f6dbcc0d90c5d0fa770c87a0562202" },
+    { path = "apps/notepad.svg", sha256 = "487ec250c057c0c65cc719030d9f4c8ead2ff98d80303001e989ccdc760de068" },
+    { path = "apps/settings.svg", sha256 = "41e846b746364b2e52193675a8d9d5b2084fc86e1f8006666802e874c3d0a426" },
+    { path = "apps/terminal.svg", sha256 = "3ecb4244514c281455834aae61100d11474058a32b6ad67cbb4ef61f878ebc4f" },
+    { path = "files/archive.svg", sha256 = "4a1b113476da86158d3d03a09709b29715c2043bf653de5a9d61f7cb2f107b0d" },
+    { path = "files/bin-empty.svg", sha256 = "d5c1a4d8e7ed5f47b5bb6c60b8c6ffa1764e74cd16ef12dd5273d8a71c77328d" },
+    { path = "files/bin-full.svg", sha256 = "ee082095c58842501488a8b0bd98fd1a1880d53fc7440f2b201e6daff4b84e3d" },
+    { path = "files/document.svg", sha256 = "5c1013fe7ee2608cb2c7d01a527f48208eea8dcd97ced37fa665c58fb86011e8" },
+    { path = "files/drive.svg", sha256 = "1a7b5efd8fdd4f5c8245baf308fc85bcd67c94192e00a80c73a65f339f3abf2b" },
+    { path = "files/folder-mask.png", sha256 = "0a1d3b7882feb8309aef372dca2bbd52a315f9c2cb398e4a0d5e6f21cd747edd" },
+    { path = "files/folder.png", sha256 = "a566249f4b472d6401ca1b295f02dec624364537e9f896b3413675648c1ea82c" },
+    { path = "files/music.svg", sha256 = "34d665f134e80ae75f1da6c2f8a248aa8387b616838ace25823f9923342a30cf" },
+    { path = "files/picture.svg", sha256 = "c7d2e943e90f056f10a1cc8e23f990333b9e0cab557a7757beb688a21cab3561" },
+    { path = "files/text.svg", sha256 = "cb113553891bc151eb2473cc160c7820d8f385066b5a2047be970ee830cb91da" },
+    { path = "files/video.svg", sha256 = "1141c780c229eee012e6964cf1651cd0718a6bdca3a24dd7ff99309bdddf5946" },
+]
+preview = "icon-packs/line.png"
+preview_sha256 = "095dc3de5cd59768fea7ca5ec195be60ce77ca8bc038ddfc209638a653f5d316"
+
+[[wallpaper]]
+id = "aurora"
+name = "Aurora"
+description = "Northern lights over a frozen fjord."
+version = "1.0.0"
+file = "wallpapers/aurora.jpg"
+sha256 = "41e75351bd452199406cad64f957da66214c5d3dcdd977f90cee5ef9daa71caa"
+preview = "wallpapers/aurora.jpg"
+preview_sha256 = "41e75351bd452199406cad64f957da66214c5d3dcdd977f90cee5ef9daa71caa"
+
+[[wallpaper]]
+id = "forest"
+name = "Forest"
+description = "Misty light in an old-growth wood."
+version = "1.0.0"
+file = "wallpapers/forest.jpg"
+sha256 = "2607f325957ac361259d60d87c179b097a976ad597cd1bb5c7d8ad53cf468cdb"
+preview = "wallpapers/forest.jpg"
+preview_sha256 = "2607f325957ac361259d60d87c179b097a976ad597cd1bb5c7d8ad53cf468cdb"
+
+[[wallpaper]]
+id = "ocean"
+name = "Ocean"
+description = "Light from beneath the waves."
+version = "1.0.0"
+file = "wallpapers/ocean.jpg"
+sha256 = "40c1e0b5d2573e6c17bb9a53247beca3f3d1a670b3e4f4b553b959a0751cd06e"
+preview = "wallpapers/ocean.jpg"
+preview_sha256 = "40c1e0b5d2573e6c17bb9a53247beca3f3d1a670b3e4f4b553b959a0751cd06e"
+
+[[wallpaper]]
+id = "sunset"
+name = "Sunset"
+description = "Dusk over the dunes."
+version = "1.0.0"
+file = "wallpapers/sunset.jpg"
+sha256 = "dc524720269233f9835beb69c343645eeef31e23fe807abdfda17657c34f84ed"
+preview = "wallpapers/sunset.jpg"
+preview_sha256 = "dc524720269233f9835beb69c343645eeef31e23fe807abdfda17657c34f84ed"
+
+[[wallpaper]]
+id = "glacier"
+name = "Glacier"
+description = "Ice blues on a clear day."
+version = "1.0.0"
+file = "wallpapers/glacier.jpg"
+sha256 = "b7a6d1bd5b777deaf8eb751e80651605983896302628ca8cb0a45d188cfc3893"
+preview = "wallpapers/glacier.jpg"
+preview_sha256 = "b7a6d1bd5b777deaf8eb751e80651605983896302628ca8cb0a45d188cfc3893"
+
+[[wallpaper]]
+id = "nebula"
+name = "Nebula"
+description = "Clouds of a distant nebula."
+version = "1.0.0"
+file = "wallpapers/nebula.jpg"
+sha256 = "8a3a44d098f0f12d327047daeae1367d93df9bc062ee0ec872ed01482832980b"
+preview = "wallpapers/nebula.jpg"
+preview_sha256 = "8a3a44d098f0f12d327047daeae1367d93df9bc062ee0ec872ed01482832980b"

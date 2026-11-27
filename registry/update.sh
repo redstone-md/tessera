@@ -166,31 +166,31 @@ END
     offer breaks "Eye breaks" \
         "Reminders to look away from the screen for a moment, every twenty minutes unless set otherwise."
     offer system-monitor "System monitor" "An example of the interface 0.4: the processor and the memory in the bar; the network, the battery, what plays and the open windows in a popup; sys in the launcher."
-    theme void "Void" 1.0.0 \
+    theme void "Void" 1.1.0 \
         "Flat bars without fields behind the widgets, small and quiet, after the desktops of tiling window managers."
-    theme expressive "Expressive" 1.0.0 \
+    theme expressive "Expressive" 1.1.0 \
         "Larger, rounder and livelier than what is built in."
-    theme compact "Compact" 1.0.0 \
+    theme compact "Compact" 1.1.0 \
         "Small, square and calm; nothing overshoots."
     theme aurora "Aurora" 1.0.0 \
         "Night teal and violet, after northern lights over a frozen fjord."
-    theme sakura "Sakura" 1.0.0 \
+    theme sakura "Sakura" 1.1.0 \
         "Soft blossom pinks on cream, light and round, with a gentle bounce."
     theme synthwave "Synthwave" 1.0.0 \
         "Neon pink and electric cyan on a deep purple night."
-    theme ember "Ember" 1.0.0 \
+    theme ember "Ember" 1.1.0 \
         "Warm charcoal with glowing orange, like coals after the fire."
-    theme glacier "Glacier" 1.0.0 \
+    theme glacier "Glacier" 1.1.0 \
         "Crisp ice blues on white; light, tidy and calm."
-    theme forest "Forest" 1.0.0 \
+    theme forest "Forest" 1.1.0 \
         "Deep moss greens and misty light from an old-growth wood."
-    theme paper "Paper" 1.0.0 \
+    theme paper "Paper" 1.1.0 \
         "Ink on warm paper. Flat bars, square-ish shapes, no fuss."
     theme oled "OLED" 1.0.0 \
         "True black and white for OLED panels: flat, small and still."
-    theme ocean "Ocean" 1.0.0 \
+    theme ocean "Ocean" 1.1.0 \
         "Navy depths and aqua light from beneath the waves."
-    theme lilac "Lilac" 1.0.0 \
+    theme lilac "Lilac" 1.1.0 \
         "Lavender fields at golden hour, pastel and airy."
     theme terminal "Terminal" 1.0.0 \
         "Phosphor green on black in a monospaced font; for those who live in a shell."
@@ -200,7 +200,7 @@ END
         "Coffee browns and caramel; cosy and easy on the eyes."
     theme citrus "Citrus" 1.0.0 \
         "Lemon and lime on a sunny cream; playful and bright."
-    theme nebula "Nebula" 1.0.0 \
+    theme nebula "Nebula" 1.1.0 \
         "Magenta and indigo clouds of a distant nebula."
     theme sandstone "Sandstone" 1.0.0 \
         "Terracotta and sand from a sunlit canyon; warm and light."
@@ -208,6 +208,10 @@ END
         "Black and signal yellow at the highest contrast, for clear reading."
     theme arcade "Arcade" 1.0.0 \
         "Square pixels, red neon and teal: an evening at the arcade."
+    theme dense "Dense" 1.0.0 \
+        "A layer: less space between and inside things and smaller bars and dock, over any theme."
+    theme round "Round" 1.0.0 \
+        "A layer: rounder corners over any theme, and nothing else."
     offer_icon_pack line "Line" 1.0.0 \
         "Thin line icons in the colors of the theme for common programs and kinds of files."
     offer_wallpaper aurora "Aurora" 1.0.0 \
