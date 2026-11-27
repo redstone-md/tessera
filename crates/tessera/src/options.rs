@@ -544,7 +544,7 @@ impl OptionDecl {
 
 /// Whether pairs survive being written as `name=value; name=value`: no
 /// separator in a name or a value, and no `=` in a name.
-fn check_pairs(pairs: &[(String, String)]) -> Result<(), String> {
+pub fn check_pairs(pairs: &[(String, String)]) -> Result<(), String> {
     for (name, value) in pairs {
         if name.trim().is_empty() || value.trim().is_empty() {
             return Err(format!("`{name}={value}` lacks a name or a value"));

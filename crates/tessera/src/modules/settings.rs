@@ -1138,6 +1138,9 @@ impl Settings {
             return;
         }
         self.section = section;
+        // One handle scrolls the page of every section, which opens at
+        // its top.
+        self.declared.scroll.set_offset(gpui::Point::default());
         let place = Section::ALL.iter().position(|other| *other == section);
         self.mark.animate_to(place.unwrap_or_default() as f32);
         self.arrival.jump_to(0.);

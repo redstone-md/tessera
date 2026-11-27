@@ -186,7 +186,9 @@ enum Held {
 /// What the settings keep of the declared settings.
 pub(super) struct DeclaredState {
     read: Declared,
-    held: HashMap<RowKey, Held>,
+    /// The controls that keep something, each with the declaration it was
+    /// made for.
+    held: HashMap<RowKey, (OptionDecl, Held)>,
     /// The setting whose list of choices or fonts is open.
     opened: Option<RowKey>,
     /// The card that was asked for, lit while the light fades.
@@ -221,8 +223,9 @@ struct Destination {
 impl Global for Destination {}
 
 /// What a control wants written: a value, or `None` to take the key out.
-/// It is checked against the declaration before it is written.
-pub(super) struct Commit(Option<toml::Value>);
+/// It is checked against the declaration before it is written. An error
+/// says why what the control holds cannot be written.
+pub(super) struct Commit(Result<Option<toml::Value>, String>);
 
 /// The names of the themes in use: the base, or the built-in one, and
 /// those stacked over it.
@@ -367,9 +370,7 @@ impl Settings {
         let value = match value.map(|value| decl.validate(&value)) {
             Some(Ok(value)) => Some(value),
             Some(Err(error)) => {
-                let label = decl.label.text(Language::of(cx));
-                self.failure = Some(format!("{label}: {error}").into());
-                cx.notify();
+                self.refuse(&decl, &error, cx);
                 return;
             }
             None => None,
@@ -381,6 +382,13 @@ impl Settings {
         self.change(cx, move |file| {
             row.owner.write(file, &row.key, value.as_ref())
         });
+    }
+
+    /// Says that what the control of `decl` holds is not written, and why.
+    fn refuse(&mut self, decl: &OptionDecl, error: &str, cx: &mut Context<Self>) {
+        let label = decl.label.text(Language::of(cx));
+        self.failure = Some(format!("{label}: {error}").into());
+        cx.notify();
     }
 
     /// Does what the controls of declared settings and of the layers of
@@ -561,9 +569,12 @@ impl Settings {
     }
 
     /// The control of `row` that keeps something of its own, made where
-    /// it is not there yet; it tells the settings what it wants written.
+    /// it is not there yet or was made for another declaration, as after
+    /// a theme or an extension was changed; it tells the settings what it
+    /// wants written.
     fn held(&mut self, row: &RowKey, decl: &OptionDecl, cx: &mut Context<Self>) -> &mut Held {
-        if !self.declared.held.contains_key(row) {
+        let made = self.declared.held.get(row).map(|(made, _)| made);
+        if made != Some(decl) {
             let language = Language::of(cx);
             let theme = *cx.global::<Theme>();
             let placeholder = { decl.placeholder.as_ref().or(decl.unset_label.as_ref()) }
@@ -594,9 +605,10 @@ impl Settings {
                     Held::Field(field)
                 }
             };
-            self.declared.held.insert(row.clone(), held);
+            self.declared.held.insert(row.clone(), (decl.clone(), held));
         }
-        self.declared.held.get_mut(row).expect("it was just made")
+        let (_, held) = self.declared.held.get_mut(row).expect("it was just made");
+        held
     }
 
     /// Writes what `control` asks for at `row`.
@@ -609,7 +621,14 @@ impl Settings {
         let row = row.clone();
         let commit =
             move |this: &mut Self, _: Entity<C>, commit: &Commit, cx: &mut Context<Self>| {
-                this.write_declared(&row, commit.0.clone(), cx);
+                match &commit.0 {
+                    Ok(value) => this.write_declared(&row, value.clone(), cx),
+                    Err(error) => {
+                        if let Some(decl) = this.declaration(&row) {
+                            this.refuse(&decl, error, cx);
+                        }
+                    }
+                }
             };
         cx.subscribe(control, commit).detach();
     }
@@ -1357,7 +1376,7 @@ impl DeclaredField {
         let trimmed = text.trim();
         self.written = text.clone();
         let value = (!trimmed.is_empty()).then(|| toml::Value::String(trimmed.to_owned()));
-        cx.emit(Commit(value));
+        cx.emit(Commit(Ok(value)));
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -1471,7 +1490,7 @@ impl DeclaredSlider {
         self.pause = None;
         if self.moved {
             self.moved = false;
-            cx.emit(Commit(Some(self.decl.number_value(self.number))));
+            cx.emit(Commit(Ok(Some(self.decl.number_value(self.number)))));
         }
     }
 
@@ -1500,9 +1519,14 @@ impl Render for DeclaredSlider {
             .flex()
             .items_center()
             .gap(theme.spacing.small)
+            // The track is told of the press first, and takes it for a
+            // turn of the wheel: the drag that starts writes when it ends.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.held = true),
+                cx.listener(|this, _, _, _| {
+                    this.held = true;
+                    this.pause = None;
+                }),
             )
             .on_mouse_up(
                 MouseButton::Left,
@@ -1630,14 +1654,24 @@ impl DeclaredList {
     }
 
     /// Asks for what the rows hold to be written: as a list of texts, or
-    /// as pairs; no value where there is nothing.
+    /// as pairs; no value where there is nothing. Pairs that would not be
+    /// read back as they are, such as a name with a `=`, are not written:
+    /// they stay as typed, and the settings say why.
     fn commit(&mut self, cx: &mut Context<Self>) {
         self.pause = None;
-        self.typed = false;
         let items = self.items(cx);
         if items == self.written {
+            self.typed = false;
             return;
         }
+        if self.pairs
+            && let Err(error) = crate::options::check_pairs(&items)
+        {
+            self.typed = true;
+            cx.emit(Commit(Err(error)));
+            return;
+        }
+        self.typed = false;
         self.written = items.clone();
         let value = (!items.is_empty()).then(|| {
             if self.pairs {
@@ -1646,7 +1680,7 @@ impl DeclaredList {
                 toml::Value::Array(items.into_iter().map(|(name, _)| name.into()).collect())
             }
         });
-        cx.emit(Commit(value));
+        cx.emit(Commit(Ok(value)));
     }
 
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1884,11 +1918,9 @@ impl FontPicker {
                     })
                     .font_family(SharedString::from(family.clone()))
                     .child(family.clone())
-                    .on_click(
-                        cx.listener(move |_, _, _, cx| {
-                            cx.emit(Commit(Some(picked.clone().into())))
-                        }),
-                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(Commit(Ok(Some(picked.clone().into()))))
+                    }))
                     .into_any_element(),
             );
         }
