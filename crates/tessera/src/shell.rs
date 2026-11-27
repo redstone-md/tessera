@@ -87,6 +87,8 @@ impl Shell {
         cx.set_global(AppIcons::new(&config.icons));
         // Without Explorer the surfaces reserve their edges through the tray.
         crate::platform::Tray::start_before_surfaces();
+        // ITaskbarList3 reaches a taskbar through the tray, dock or none.
+        crate::platform::TaskbarList::start(crate::platform::shell_mode());
         Night::start(&config.night_light, cx);
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);
         if surfaces.is_empty() {
