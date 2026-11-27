@@ -422,6 +422,27 @@
 # drives = true
 # battery = true
 
+# Which notification icons stand in the bar and which wait in the overflow
+# that the button at the end of a `tray` strip opens, and their order. An
+# icon is named by its global identifier, as "{7820AE78-...}", or by its
+# program and number, as "C:/Program Files/App/app.exe#1"; an entry may
+# also name every icon of a program by its path or file name ("app.exe"),
+# or one of them by file name and number ("app.exe#2"). The entry that
+# names an icon most closely decides. Moving an icon from its menu
+# (Shift with the right button, or the middle button) or dragging it
+# writes these lists.
+#   shown   icons that stand in the bar
+#   hidden  icons that wait in the overflow
+#   order   the order of the icons in both; others follow as they came
+#   new     where an icon goes that the lists do not name and Windows has
+#           no choice for (Settings > Taskbar > Other system tray icons):
+#           "shown" (default) or "hidden"
+# [tray]
+# shown = ["app.exe"]
+# hidden = ["C:/Program Files/Other/other.exe#1"]
+# order = []
+# new = "shown"
+
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top", "bottom", "left" or "right"
 #   thickness  reserved screen space, in logical pixels
@@ -524,12 +545,20 @@
 #               one Windows has the settings of or anyone may join, and
 #               asks for the password of another; two right clicks on a
 #               saved one forget it
+#               The connected network has a button that leaves it, and a
+#               row under the networks joins one that hides its name
+
 #   "problems"  how many things went wrong since Tessera started; shows
 #               nothing while there are none, and opens the list of them
 #   "problem-list"  what went wrong, the latest first, with a button that
 #               forgets it all; for a popup
 #   "bluetooth" the paired Bluetooth devices, for a popup: which are
 #               connected, and the charge of those that report one
+#               While the popup is open, the devices in reach that can be
+#               paired are listed under them; a click pairs one, asking
+#               for its PIN where it wants one. Two right clicks on a
+#               paired device remove it
+
 #   "connections"  what the machine is connected through, for a popup:
 #               each connection with its address and speed, the VPN
 #               connections Windows keeps, which a click connects and
@@ -576,8 +605,10 @@
 #               or false: whether the description of the icon under the
 #               pointer comes out of the bar under it. Without the option
 #               it does.
-#               Option limit, a number: only that many icons are shown,
-#               and a button unrolls the strip to the others.
+#               Option limit, a number: at most that many icons stand in
+#               the bar; the others wait in the overflow with the hidden
+#               ones (see [tray]).
+
 #               Option bluetooth, true or false: whether the Bluetooth icon
 #               of Windows is among them. Without the option it is not: the
 #               widgets below show Bluetooth

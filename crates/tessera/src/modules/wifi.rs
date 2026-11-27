@@ -5,6 +5,8 @@
 //! which a click joins a network: at once where Windows has its settings
 //! or anyone may join, and after its password was typed otherwise. Two
 //! clicks of the right button have Windows forget the settings of one.
+//! The connected network has a button that leaves it, and a row under the
+//! networks joins one that hides its name.
 
 use std::time::Duration;
 
@@ -18,9 +20,9 @@ use crate::field::TextField;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
-use crate::platform::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
+use crate::platform::{Launch, Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
 use crate::theme::Theme;
-use crate::ui::{LIST_MIN_HEIGHT, icon, list_row, state_layer};
+use crate::ui::{LIST_MIN_HEIGHT, choice_button, icon, list_row, state_layer};
 
 /// How often the list is read while it is shown.
 const READ_INTERVAL: Duration = Duration::from_secs(3);
@@ -44,6 +46,29 @@ const ICON_LOCK: &str = "\u{e72e}";
 const ICON_CONNECTED: &str = "\u{e73e}";
 const ICON_SHOW: &str = "\u{e7b3}";
 const ICON_HIDE: &str = "\u{ed1a}";
+const ICON_HIDDEN_NETWORK: &str = "\u{e710}";
+
+/// Where the Wi-Fi settings of Windows are, for networks joined there.
+const WIFI_SETTINGS: &str = "ms-settings:network-wifi";
+
+/// The ways a network that hides its name can be secured here, each with
+/// what its choice says.
+const HIDDEN_SECURITY: [(WifiSecurity, &str); 3] = [
+    (WifiSecurity::Password, "WPA2-Personal"),
+    (WifiSecurity::Password3, "WPA3-Personal"),
+    (WifiSecurity::Open, "Open network"),
+];
+
+/// Why a network that hides its name cannot be joined with `name`,
+/// `security` and `password`; `None` where it can be tried.
+fn hidden_refusal(name: &str, security: WifiSecurity, password: &str) -> Option<&'static str> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 32 {
+        return Some("The name of a network has 1 to 32 Latin characters");
+    }
+    (security != WifiSecurity::Open && !password_fits(password))
+        .then_some("A password has 8 to 63 Latin characters")
+}
 
 pub struct WifiModule;
 
@@ -120,6 +145,23 @@ struct WifiList {
     go: Interaction,
     /// The saved network one more click of the right button forgets.
     forgetting: Option<String>,
+    /// The button of the connected network that leaves it, and whether it
+    /// was clicked and Windows has not answered yet.
+    leave: Interaction,
+    leaving: bool,
+    /// The row that unfolds the form for a network that hides its name,
+    /// whether it is unfolded, and how far.
+    hidden_row: Interaction,
+    hidden_open: bool,
+    hidden_unfold: Spring,
+    hidden_name: Entity<TextField>,
+    hidden_password: Entity<TextField>,
+    hidden_security: WifiSecurity,
+    /// The choices of the security, the button that joins, and the one
+    /// that opens the Wi-Fi settings of Windows.
+    hidden_choices: [Interaction; 3],
+    hidden_go: Interaction,
+    settings: Interaction,
 }
 
 impl WifiList {
@@ -149,7 +191,10 @@ impl WifiList {
         .detach();
         let motion = cx.global::<Theme>().motion;
         let password = SharedString::new(Language::of(cx).say("Password"));
+        let hidden_password = cx.new(|cx| TextField::new(password.clone(), cx).hiding());
         let password = cx.new(|cx| TextField::new(password, cx).hiding());
+        let name = SharedString::new(Language::of(cx).say("Network name"));
+        let hidden_name = cx.new(|cx| TextField::new(name, cx));
         Self {
             reach: None,
             joining: None,
@@ -163,7 +208,206 @@ impl WifiList {
             eye: Interaction::new(&motion),
             go: Interaction::new(&motion),
             forgetting: None,
+            leave: Interaction::new(&motion),
+            leaving: false,
+            hidden_row: Interaction::new(&motion),
+            hidden_open: false,
+            hidden_unfold: Spring::new(motion.spatial_fast, 0.),
+            hidden_name,
+            hidden_password,
+            hidden_security: WifiSecurity::Password,
+            hidden_choices: [(); 3].map(|()| Interaction::new(&motion)),
+            hidden_go: Interaction::new(&motion),
+            settings: Interaction::new(&motion),
         }
+    }
+
+    /// Leaves the network the machine is connected to.
+    fn disconnect(&mut self, cx: &mut Context<Self>) {
+        if self.leaving {
+            return;
+        }
+        self.leaving = true;
+        self.failure = None;
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            // Windows may join the network again at once, as its profile
+            // says it does by itself, so the list is read right after and
+            // the button no longer waits for the network to drop out.
+            let left = cx
+                .background_executor()
+                .spawn(async { Wifi::disconnect().map(|()| Wifi::reach()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.leaving = false;
+                match left {
+                    Ok(read) => this.take(read, cx),
+                    Err(error) => this.fail(error, cx),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Unfolds the form for a network that hides its name, or folds it.
+    fn toggle_hidden(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.hidden_open = !self.hidden_open;
+        self.hidden_unfold
+            .animate_to(if self.hidden_open { 1. } else { 0. });
+        if self.hidden_open {
+            self.fold(cx);
+            self.failure = None;
+            self.hidden_name.update(cx, |field, cx| {
+                field.clear(cx);
+                field.focus(window);
+            });
+            self.hidden_password.update(cx, |field, cx| {
+                field.clear(cx);
+                field.hide(true, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    /// Joins the network that hides its name with what the form says.
+    fn submit_hidden(&mut self, cx: &mut Context<Self>) {
+        let name = self.hidden_name.read(cx).text().trim().to_owned();
+        let password = self.hidden_password.read(cx).text();
+        let security = self.hidden_security;
+        if let Some(refusal) = hidden_refusal(&name, security, &password) {
+            self.failure = Some(Language::of(cx).say(refusal).to_owned());
+            cx.notify();
+            return;
+        }
+        self.hidden_open = false;
+        self.hidden_unfold.animate_to(0.);
+        self.joining = Some(Joining {
+            network: name.clone(),
+            made: true,
+            reads: 0,
+        });
+        self.failure = None;
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let joined = cx
+                .background_executor()
+                .spawn(async move { Wifi::join_hidden(&name, security, &password) })
+                .await;
+            if let Err(error) = joined {
+                let _ = this.update(cx, |this, cx| this.fail(error, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// The row that unfolds the form for a network that hides its name,
+    /// and the form as far as it is unfolded.
+    fn hidden(&mut self, theme: &Theme, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let language = Language::of(cx);
+        let state = self.hidden_row.state(window);
+        let row = list_row(
+            theme,
+            ICON_HIDDEN_NETWORK,
+            self.hidden_open,
+            language.say("Join a hidden network"),
+            language.say("For a network that does not show its name"),
+        )
+        .id("wifi-hidden")
+        .bg(state_layer(
+            theme,
+            theme.colors.surface_container_highest,
+            state,
+        ));
+        let row = Interaction::track(row, cx, |this: &mut Self| Some(&mut this.hidden_row))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_hidden(window, cx)));
+        let shown = self.hidden_unfold.value(window).clamp(0., 1.);
+        if shown < 0.01 {
+            return row.into_any_element();
+        }
+        let choices: Vec<AnyElement> = HIDDEN_SECURITY
+            .iter()
+            .enumerate()
+            .map(|(index, &(security, label))| {
+                let chosen = self.hidden_security == security;
+                let state = self.hidden_choices[index].state(window);
+                let choice = choice_button(theme, language.say(label), chosen, state)
+                    .id(("wifi-hidden-security", index));
+                Interaction::track(choice, cx, move |this: &mut Self| {
+                    this.hidden_choices.get_mut(index)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.hidden_security = security;
+                    cx.notify();
+                }))
+                .into_any_element()
+            })
+            .collect();
+        let secured = self.hidden_security != WifiSecurity::Open;
+        let go = choice_button(
+            theme,
+            language.say("Join"),
+            true,
+            self.hidden_go.state(window),
+        )
+        .id("wifi-hidden-go");
+        let go = Interaction::track(go, cx, |this: &mut Self| Some(&mut this.hidden_go))
+            .on_click(cx.listener(|this, _, _, cx| this.submit_hidden(cx)));
+        let settings = choice_button(
+            theme,
+            language.say("Wi-Fi settings"),
+            false,
+            self.settings.state(window),
+        )
+        .id("wifi-settings");
+        let settings = Interaction::track(settings, cx, |this: &mut Self| Some(&mut this.settings))
+            .on_click(|_, _, _| Launch::new(WIFI_SETTINGS).start());
+        let height = theme.launcher.field_height;
+        let form = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(theme.spacing.small)
+            .pt(theme.spacing.small)
+            .opacity(shown)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "enter" => this.submit_hidden(cx),
+                    "escape" => this.toggle_hidden(window, cx),
+                    _ => {}
+                }
+            }))
+            .child(div().h(height).flex().child(self.hidden_name.clone()))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(theme.spacing.small)
+                    .children(choices),
+            )
+            .children(secured.then(|| div().h(height).flex().child(self.hidden_password.clone())))
+            .child(
+                div()
+                    .text_color(theme.colors.on_surface_variant)
+                    .child(SharedString::new(language.say(
+                    "WPA-Enterprise and WEP networks are joined in the Wi-Fi settings of Windows",
+                ))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(theme.spacing.small)
+                    .child(settings)
+                    .child(go),
+            );
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .child(row)
+            .child(form)
+            .into_any_element()
     }
 
     /// The networks of the last reading.
@@ -498,6 +742,18 @@ impl WifiList {
             false => row,
         };
         let row = Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index));
+        if network.connected {
+            let language = Language::of(cx);
+            let label = match self.leaving {
+                true => "Disconnecting",
+                false => "Disconnect",
+            };
+            let leave = choice_button(theme, language.say(label), false, self.leave.state(window))
+                .id("wifi-disconnect");
+            let leave = Interaction::track(leave, cx, |this: &mut Self| Some(&mut this.leave))
+                .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx)));
+            return row.child(leave).into_any_element();
+        }
         if !joinable {
             return row.into_any_element();
         }
@@ -558,16 +814,20 @@ impl Render for WifiList {
             }
             Some(Ok(WifiReach::Networks(networks))) => networks,
         };
-        if networks.is_empty() {
-            let text = language.say("No network is in reach");
-            return frame.child(self.message(&theme, text, window));
-        }
         let count = networks.len();
-        let rows: Vec<AnyElement> = networks
+        let mut rows: Vec<AnyElement> = networks
             .iter()
             .enumerate()
             .map(|(index, network)| self.row(index, count, network, &theme, window, cx))
             .collect();
+        if networks.is_empty() {
+            let text = language.say("No network is in reach");
+            rows.push(self.message(&theme, text, window).into_any_element());
+        }
+        if !networks.iter().any(|network| network.connected) {
+            self.leaving = false;
+        }
+        rows.push(self.hidden(&theme, window, cx));
         frame
             .children(rows)
             .children(self.failure.clone().map(|failure| {
@@ -597,6 +857,18 @@ mod tests {
             connected,
             profile: known.then(|| "Home".to_owned()),
         }
+    }
+
+    #[test]
+    fn a_hidden_network_needs_a_name_and_a_password_that_fits() {
+        assert!(hidden_refusal("", WifiSecurity::Open, "").is_some());
+        assert!(hidden_refusal(&"x".repeat(33), WifiSecurity::Open, "").is_some());
+        assert_eq!(hidden_refusal("Home", WifiSecurity::Open, ""), None);
+        assert!(hidden_refusal("Home", WifiSecurity::Password, "short").is_some());
+        assert_eq!(
+            hidden_refusal(" Home ", WifiSecurity::Password3, "longenough"),
+            None
+        );
     }
 
     #[test]

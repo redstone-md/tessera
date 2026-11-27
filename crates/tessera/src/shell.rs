@@ -183,6 +183,7 @@ impl Shell {
         Corners::start(&config.corners, cx);
         ClipHistory::start(&config.clipboard, cx);
         Notices::configure(&config.notices, cx);
+        crate::tray_settings::TraySettings::configure(&config.tray, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -454,6 +455,7 @@ impl Shell {
         ClipHistory::configure(&config.clipboard, cx);
         Night::configure(&config.night_light, cx);
         Notices::configure(&config.notices, cx);
+        crate::tray_settings::TraySettings::configure(&config.tray, cx);
 
         // New settings of extensions alone keep the popups and the widgets:
         // the settings themselves write them.

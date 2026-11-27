@@ -107,6 +107,7 @@ pub use backdrop::{
 pub use bin::RecycleBin;
 pub use bin::{BinUsage, RecycledItem};
 pub use bluetooth::{Bluetooth, PairedDevice};
+pub use bluetooth::{BluetoothScan, FoundDevice, Pairing, PairingFailure, PairingPrompt};
 pub use brightness::BrightnessLevel;
 pub use brightness::ScreenBrightness;
 pub use clipboard_watch::{Clip, ClipboardWatch, Offer, paste_into};
@@ -195,6 +196,8 @@ pub use taskbar_list::{
 pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use tile_border::TileBorder;
+pub use tray::BalloonKind;
+pub use tray::TrayPromotion;
 pub use tray::{Balloon, BalloonEvent};
 pub use tray::{Tray, TrayButton, TrayIcon};
 pub use uri_scheme::UriScheme;

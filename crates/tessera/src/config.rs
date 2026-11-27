@@ -797,8 +797,8 @@ pub struct Config {
     #[serde(default)]
     pub rule_templates: Vec<String>,
     // Wave 2, tray-bluetooth: which notification icons are shown, hidden and in what order.
-    // #[serde(default)]
-    // pub tray: crate::tray_settings::TrayConfig,
+    #[serde(default)]
+    pub tray: crate::tray_settings::TrayConfig,
 }
 
 impl Config {

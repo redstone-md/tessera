@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The Bluetooth devices paired with the machine.
+//! The Bluetooth devices paired with the machine, those in reach that can
+//! be paired, pairing them and removing them.
 //!
 //! Every call waits for Windows to answer, so none belongs on the thread
 //! that draws.
@@ -9,10 +10,17 @@
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::ptr::null_mut;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
+use async_channel::{Receiver, Sender};
 use windows::Devices::Bluetooth::{BluetoothAdapter, BluetoothDevice, BluetoothLEDevice};
-use windows::Devices::Enumeration::DeviceInformation;
-use windows::Foundation::IPropertyValue;
+use windows::Devices::Enumeration::{
+    DeviceInformation, DeviceInformationCustomPairing, DeviceInformationUpdate, DevicePairingKinds,
+    DevicePairingRequestedEventArgs, DevicePairingResultStatus, DeviceUnpairingResultStatus,
+    DeviceWatcher,
+};
+use windows::Foundation::{IPropertyValue, TypedEventHandler};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_GETIDLIST_FILTER_ENUMERATOR, CM_GETIDLIST_FILTER_PRESENT, CM_Get_DevNode_PropertyW,
     CM_Get_Device_ID_List_SizeW, CM_Get_Device_ID_ListW, CM_LOCATE_DEVNODE_NORMAL,
@@ -39,6 +47,14 @@ use super::packaged::take;
 const IS_CONNECTED: &str = "System.Devices.Aep.IsConnected";
 const ADDRESS: &str = "System.Devices.Aep.DeviceAddress";
 const CONTAINER: &str = "System.Devices.Aep.ContainerId";
+const IS_PAIRED: &str = "System.Devices.Aep.IsPaired";
+const CAN_PAIR: &str = "System.Devices.Aep.CanPair";
+
+/// How long a pairing waits for the user to answer the device.
+const ANSWER_WAIT: Duration = Duration::from_secs(120);
+
+/// How many prompts of a pairing wait for the user interface.
+const PROMPTS_WAITING: usize = 4;
 
 /// The container of the device an audio endpoint belongs to: what Windows
 /// holds the parts of one physical device together by.
@@ -88,7 +104,15 @@ impl Bluetooth {
     /// The paired devices, the connected ones first, each group by name.
     /// Empty without Bluetooth.
     pub fn devices() -> Result<Vec<PairedDevice>, String> {
-        let read = || -> WindowsResult<Vec<(Option<u64>, PairedDevice)>> {
+        let devices = Self::paired_devices()?;
+        Ok(devices.into_iter().map(|(_, device)| device).collect())
+    }
+
+    /// The paired devices as [`Self::devices`] lists them, each with what
+    /// Windows names it by, to remove it with: one name for each kind of
+    /// Bluetooth it was paired by.
+    pub fn paired_devices() -> Result<Vec<(Vec<String>, PairedDevice)>, String> {
+        let read = || -> WindowsResult<Vec<Listed>> {
             let mut devices = paired(&BluetoothDevice::GetDeviceSelectorFromPairingState(true)?)?;
             let low_energy = BluetoothLEDevice::GetDeviceSelectorFromPairingState(true)?;
             devices.extend(paired(&low_energy)?);
@@ -101,7 +125,7 @@ impl Bluetooth {
             .into_iter()
             .map(|(container, _)| container)
             .collect();
-        for device in &mut devices {
+        for (_, device) in &mut devices {
             device.audio = device
                 .audio
                 .filter(|container| sounding.contains(container));
@@ -159,6 +183,365 @@ impl Bluetooth {
     }
 }
 
+/// A Bluetooth device in reach that is not paired and can be.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundDevice {
+    /// What Windows names the device by, to pair it with.
+    pub id: String,
+    pub name: String,
+    /// Whether it speaks Bluetooth Low Energy rather than the classic kind.
+    pub low_energy: bool,
+}
+
+/// What the user is asked while a device pairs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PairingPrompt {
+    /// The PIN to type on the device; the pairing goes on by itself.
+    Show(String),
+    /// Whether the device shows this PIN too; answered with yes or no.
+    Confirm(String),
+    /// The PIN the device shows or came with, to type here.
+    Enter,
+}
+
+/// Why a device was not paired.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PairingFailure {
+    /// The device, or the PIN given, was refused.
+    Refused,
+    /// The device did not answer in time.
+    TimedOut,
+    /// The device is not ready, as when it is not in its pairing mode.
+    NotReady,
+    /// The user cancelled.
+    Cancelled,
+    /// Windows gave another reason, which this names.
+    Other(String),
+}
+
+impl PairingFailure {
+    fn of(status: DevicePairingResultStatus) -> Self {
+        match status {
+            DevicePairingResultStatus::AuthenticationFailure
+            | DevicePairingResultStatus::AuthenticationNotAllowed
+            | DevicePairingResultStatus::ConnectionRejected
+            | DevicePairingResultStatus::RejectedByHandler
+            | DevicePairingResultStatus::AccessDenied => Self::Refused,
+            DevicePairingResultStatus::AuthenticationTimeout => Self::TimedOut,
+            DevicePairingResultStatus::NotReadyToPair
+            | DevicePairingResultStatus::HardwareFailure
+            | DevicePairingResultStatus::TooManyConnections => Self::NotReady,
+            DevicePairingResultStatus::PairingCanceled => Self::Cancelled,
+            status => Self::Other(format!("Windows answered with status {}", status.0)),
+        }
+    }
+}
+
+/// A device being paired: what the user is asked, how it ended, and the
+/// way to answer.
+pub struct Pairing {
+    /// What the user is to be asked, as the device asks for it.
+    pub prompts: Receiver<PairingPrompt>,
+    /// How the pairing ended, once it has.
+    pub outcome: Receiver<Result<(), PairingFailure>>,
+    answers: mpsc::Sender<Option<String>>,
+}
+
+impl Pairing {
+    /// Answers the last prompt: the PIN typed for
+    /// [`PairingPrompt::Enter`], any text for yes to
+    /// [`PairingPrompt::Confirm`], and `None` for no, which cancels.
+    pub fn answer(&self, answer: Option<String>) {
+        let _ = self.answers.send(answer);
+    }
+}
+
+/// The search for Bluetooth devices to pair, which runs until it is
+/// dropped. Windows keeps looking the whole time, so it is meant to run
+/// only while the list it fills is shown.
+pub struct BluetoothScan {
+    watchers: Vec<DeviceWatcher>,
+    found: Arc<Mutex<Found>>,
+    changes: Receiver<()>,
+}
+
+/// What a search found, by the identifier of each device: what Windows
+/// said of it, and what of that is shown, if it can be paired.
+#[derive(Default)]
+struct Found {
+    devices: HashMap<String, (DeviceInformation, Option<FoundDevice>)>,
+}
+
+fn locked(found: &Mutex<Found>) -> std::sync::MutexGuard<'_, Found> {
+    found
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+impl BluetoothScan {
+    /// Starts looking for classic and low energy devices that are not
+    /// paired.
+    pub fn start() -> Result<Self, String> {
+        let found = Arc::new(Mutex::new(Found::default()));
+        let (signal, changes) = async_channel::bounded(1);
+        let mut watchers = Vec::new();
+        let selectors = [
+            (
+                BluetoothDevice::GetDeviceSelectorFromPairingState(false),
+                false,
+            ),
+            (
+                BluetoothLEDevice::GetDeviceSelectorFromPairingState(false),
+                true,
+            ),
+        ];
+        for (selector, low_energy) in selectors {
+            let watcher = selector
+                .and_then(|selector| watch(&selector, low_energy, &found, &signal))
+                .map_err(|error| format!("Windows does not look for Bluetooth devices: {error}"))?;
+            watchers.push(watcher);
+        }
+        Ok(Self {
+            watchers,
+            found,
+            changes,
+        })
+    }
+
+    /// The devices found so far that can be paired, by name.
+    pub fn found(&self) -> Vec<FoundDevice> {
+        let found = locked(&self.found);
+        let mut devices: Vec<FoundDevice> = { found.devices.values() }
+            .filter_map(|(_, device)| device.clone())
+            .collect();
+        devices.sort_by(|one, other| {
+            let order = (one.name.to_lowercase(), &one.id);
+            order.cmp(&(other.name.to_lowercase(), &other.id))
+        });
+        devices
+    }
+
+    /// A signal for each change of what was found; a reader that falls
+    /// behind gets one for several.
+    pub fn changes(&self) -> Receiver<()> {
+        self.changes.clone()
+    }
+}
+
+impl Drop for BluetoothScan {
+    fn drop(&mut self) {
+        for watcher in &self.watchers {
+            let _ = watcher.Stop();
+        }
+    }
+}
+
+/// Starts a watcher of the devices `selector` picks, which records them in
+/// `found` and signals each change on `signal`.
+fn watch(
+    selector: &HSTRING,
+    low_energy: bool,
+    found: &Arc<Mutex<Found>>,
+    signal: &Sender<()>,
+) -> WindowsResult<DeviceWatcher> {
+    let wanted = [IS_PAIRED, CAN_PAIR].map(HSTRING::from).to_vec();
+    let watcher = DeviceInformation::CreateWatcherAqsFilterAndAdditionalProperties(
+        selector,
+        &IIterable::<HSTRING>::from(wanted),
+    )?;
+    let (added, added_signal) = (found.clone(), signal.clone());
+    watcher.Added(&TypedEventHandler::new(
+        move |_, info: windows::core::Ref<'_, DeviceInformation>| {
+            if let Some(info) = info.as_ref() {
+                let device = snapshot(info, low_energy);
+                let id = info.Id()?.to_string();
+                locked(&added).devices.insert(id, (info.clone(), device));
+                let _ = added_signal.force_send(());
+            }
+            Ok(())
+        },
+    ))?;
+    let (updated, updated_signal) = (found.clone(), signal.clone());
+    watcher.Updated(&TypedEventHandler::new(
+        move |_, update: windows::core::Ref<'_, DeviceInformationUpdate>| {
+            if let Some(update) = update.as_ref() {
+                let id = update.Id()?.to_string();
+                let mut found = locked(&updated);
+                if let Some((info, device)) = found.devices.get_mut(&id) {
+                    info.Update(update)?;
+                    *device = snapshot(info, low_energy);
+                    let _ = updated_signal.force_send(());
+                }
+            }
+            Ok(())
+        },
+    ))?;
+    let (removed, removed_signal) = (found.clone(), signal.clone());
+    watcher.Removed(&TypedEventHandler::new(
+        move |_, update: windows::core::Ref<'_, DeviceInformationUpdate>| {
+            if let Some(update) = update.as_ref() {
+                let id = update.Id()?.to_string();
+                if locked(&removed).devices.remove(&id).is_some() {
+                    let _ = removed_signal.force_send(());
+                }
+            }
+            Ok(())
+        },
+    ))?;
+    watcher.Start()?;
+    Ok(watcher)
+}
+
+/// What is shown of the device `info`: nothing for one without a name, one
+/// that is paired by now, or one Windows says cannot be paired.
+fn snapshot(info: &DeviceInformation, low_energy: bool) -> Option<FoundDevice> {
+    let properties = info.Properties().ok()?;
+    let flag = |name: &str| {
+        let value = properties.Lookup(&HSTRING::from(name)).ok()?;
+        value.cast::<IPropertyValue>().ok()?.GetBoolean().ok()
+    };
+    let name = info.Name().ok()?.to_string();
+    let shown =
+        !name.trim().is_empty() && flag(IS_PAIRED) != Some(true) && flag(CAN_PAIR) != Some(false);
+    shown.then(|| FoundDevice {
+        id: info.Id().map(|id| id.to_string()).unwrap_or_default(),
+        name,
+        low_energy,
+    })
+}
+
+/// Pairs the device `id` with the machine and answers what it asks: a
+/// device that only wants a yes gets it, one that shows a PIN or wants one
+/// asks the user through `prompts` and waits for `answers`.
+fn pair(
+    id: &str,
+    prompts: Sender<PairingPrompt>,
+    answers: mpsc::Receiver<Option<String>>,
+) -> Result<(), PairingFailure> {
+    let failed = |error: windows::core::Error| PairingFailure::Other(error.message());
+    let info = DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))
+        .and_then(|found| found.get())
+        .map_err(failed)?;
+    let custom = info
+        .Pairing()
+        .and_then(|pairing| pairing.Custom())
+        .map_err(failed)?;
+    let answers = Mutex::new(answers);
+    let handler =
+        TypedEventHandler::<DeviceInformationCustomPairing, DevicePairingRequestedEventArgs>::new(
+            move |_, args: windows::core::Ref<'_, DevicePairingRequestedEventArgs>| {
+                let Some(args) = args.as_ref() else {
+                    return Ok(());
+                };
+                let kind = args.PairingKind()?;
+                if kind == DevicePairingKinds::ConfirmOnly {
+                    return args.Accept();
+                }
+                if kind == DevicePairingKinds::DisplayPin {
+                    let _ = prompts.force_send(PairingPrompt::Show(args.Pin()?.to_string()));
+                    return args.Accept();
+                }
+                let prompt = match kind {
+                    DevicePairingKinds::ConfirmPinMatch => {
+                        PairingPrompt::Confirm(args.Pin()?.to_string())
+                    }
+                    DevicePairingKinds::ProvidePin => PairingPrompt::Enter,
+                    _ => return Ok(()),
+                };
+                // The answer comes from the user; Windows waits for it while
+                // the deferral is held.
+                let deferral = args.GetDeferral()?;
+                let _ = prompts.force_send(prompt);
+                let answers = answers
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let accepted = match answers.recv_timeout(ANSWER_WAIT) {
+                    Ok(Some(pin)) if kind == DevicePairingKinds::ProvidePin => {
+                        args.AcceptWithPin(&HSTRING::from(pin))
+                    }
+                    Ok(Some(_)) => args.Accept(),
+                    Ok(None) | Err(_) => Ok(()),
+                };
+                deferral.Complete()?;
+                accepted
+            },
+        );
+    let token = custom.PairingRequested(&handler).map_err(failed)?;
+    let kinds = DevicePairingKinds::ConfirmOnly
+        | DevicePairingKinds::DisplayPin
+        | DevicePairingKinds::ProvidePin
+        | DevicePairingKinds::ConfirmPinMatch;
+    let result = custom
+        .PairAsync(kinds)
+        .and_then(|pairing| pairing.get())
+        .and_then(|result| result.Status());
+    let _ = custom.RemovePairingRequested(token);
+    match result.map_err(failed)? {
+        DevicePairingResultStatus::Paired | DevicePairingResultStatus::AlreadyPaired => Ok(()),
+        status => Err(PairingFailure::of(status)),
+    }
+}
+
+impl Bluetooth {
+    /// Starts pairing the device `id`, which a [`BluetoothScan`] found, on
+    /// a thread of its own: Windows waits for the device, and for the
+    /// user where the device asks for a PIN.
+    pub fn pair(id: String) -> Pairing {
+        let (prompts, prompted) = async_channel::bounded(PROMPTS_WAITING);
+        let (ended, outcome) = async_channel::bounded(1);
+        let (answers, answered) = mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("bluetooth-pairing".to_owned())
+            .spawn({
+                let ended = ended.clone();
+                move || {
+                    let _ = ended.force_send(pair(&id, prompts, answered));
+                }
+            });
+        if let Err(error) = started {
+            let failure = PairingFailure::Other(format!("the pairing did not start: {error}"));
+            let _ = ended.force_send(Err(failure));
+        }
+        Pairing {
+            prompts: prompted,
+            outcome,
+            answers,
+        }
+    }
+
+    /// Removes the pairings of the device that Windows names by `ids`, as
+    /// Windows' settings do with "Remove device": a device that speaks both
+    /// kinds of Bluetooth has one for each.
+    pub fn unpair(ids: &[String]) -> Result<(), String> {
+        // Each is tried; the first that fails is told.
+        let removed = ids.iter().map(|id| unpair(id));
+        removed.fold(Ok(()), Result::and)
+    }
+}
+
+/// Removes the pairing `id`.
+fn unpair(id: &str) -> Result<(), String> {
+    let status = DeviceInformation::CreateFromIdAsync(&HSTRING::from(id))
+        .and_then(|found| found.get())
+        .and_then(|info| info.Pairing())
+        .and_then(|pairing| pairing.UnpairAsync())
+        .and_then(|unpairing| unpairing.get())
+        .and_then(|result| result.Status())
+        .map_err(|error| format!("the device was not removed: {}", error.message()))?;
+    match status {
+        DeviceUnpairingResultStatus::Unpaired | DeviceUnpairingResultStatus::AlreadyUnpaired => {
+            Ok(())
+        }
+        DeviceUnpairingResultStatus::AccessDenied => {
+            Err("the device was not removed: Windows denied it".to_owned())
+        }
+        status => Err(format!(
+            "the device was not removed: Windows answered with status {}",
+            status.0
+        )),
+    }
+}
+
 /// The Bluetooth devices behind the audio endpoints, those in use and
 /// those that wait for their device, each with the container of its
 /// device. One device may be there several times: for playing, for
@@ -211,8 +594,12 @@ fn is_bluetooth(id: &str) -> bool {
     id.to_lowercase().contains(BLUETOOTH_PATH)
 }
 
-/// The paired devices `selector` picks, each with its address if it has one.
-fn paired(selector: &HSTRING) -> WindowsResult<Vec<(Option<u64>, PairedDevice)>> {
+/// A paired device as it is listed: its address if it has one, what
+/// Windows names it by, and what is shown of it.
+type Listed = (Option<u64>, String, PairedDevice);
+
+/// The paired devices `selector` picks.
+fn paired(selector: &HSTRING) -> WindowsResult<Vec<Listed>> {
     let wanted = [IS_CONNECTED, ADDRESS, CONTAINER]
         .map(HSTRING::from)
         .to_vec();
@@ -233,6 +620,7 @@ fn paired(selector: &HSTRING) -> WindowsResult<Vec<(Option<u64>, PairedDevice)>>
         let container = property(CONTAINER).and_then(|value| value.GetGuid().ok());
         devices.push((
             address.and_then(|address| address_of(&address.to_string())),
+            device.Id()?.to_string(),
             PairedDevice {
                 name: device.Name()?.to_string(),
                 connected: connected.unwrap_or(false),
@@ -246,28 +634,33 @@ fn paired(selector: &HSTRING) -> WindowsResult<Vec<(Option<u64>, PairedDevice)>>
 
 /// `devices` in the order they are shown in, with their charge from
 /// `batteries`, which goes by address. A device that speaks both kinds of
-/// Bluetooth is listed by both and kept once.
+/// Bluetooth is listed by both and kept once, under the name of the first
+/// and with what Windows names both by.
 fn arranged(
-    devices: Vec<(Option<u64>, PairedDevice)>,
+    devices: Vec<Listed>,
     batteries: &HashMap<u64, u8>,
-) -> Vec<PairedDevice> {
-    let mut kept: Vec<(Option<u64>, PairedDevice)> = Vec::new();
-    for (address, mut device) in devices {
+) -> Vec<(Vec<String>, PairedDevice)> {
+    let mut kept: Vec<(Option<u64>, Vec<String>, PairedDevice)> = Vec::new();
+    for (address, id, mut device) in devices {
         device.battery = address.and_then(|address| batteries.get(&address).copied());
-        let twin = kept.iter_mut().find(|(other, kept)| match address {
+        let twin = kept.iter_mut().find(|(other, _, kept)| match address {
             Some(address) => *other == Some(address),
             None => other.is_none() && kept.name == device.name,
         });
         match twin {
-            Some((_, twin)) => {
+            Some((_, ids, twin)) => {
+                ids.push(id);
                 twin.connected |= device.connected;
                 twin.audio = twin.audio.or(device.audio);
             }
-            None => kept.push((address, device)),
+            None => kept.push((address, vec![id], device)),
         }
     }
-    let mut devices: Vec<_> = kept.into_iter().map(|(_, device)| device).collect();
-    devices.sort_by(|one, other| {
+    let mut devices: Vec<_> = kept
+        .into_iter()
+        .map(|(_, ids, device)| (ids, device))
+        .collect();
+    devices.sort_by(|(_, one), (_, other)| {
         let order = (!one.connected, one.name.to_lowercase());
         order.cmp(&(!other.connected, other.name.to_lowercase()))
     });
@@ -358,6 +751,7 @@ mod tests {
     fn device(name: &str, connected: bool) -> PairedDevice {
         PairedDevice {
             name: name.to_owned(),
+
             connected,
             battery: None,
             audio: None,
@@ -406,18 +800,23 @@ mod tests {
         let batteries = HashMap::from([(2, 80)]);
         let listed = arranged(
             vec![
-                (Some(1), device("Speaker", false)),
-                (Some(2), device("Mouse", false)),
-                (Some(2), device("Mouse", true)),
-                (None, device("Alpha", false)),
+                (Some(1), "s".to_owned(), device("Speaker", false)),
+                (Some(2), "classic".to_owned(), device("Mouse", false)),
+                (Some(2), "low".to_owned(), device("Mouse", true)),
+                (None, "a".to_owned(), device("Alpha", false)),
             ],
             &batteries,
         );
         let mut mouse = device("Mouse", true);
         mouse.battery = Some(80);
+        let ids = |ids: &[&str]| ids.iter().map(|&id| id.to_owned()).collect::<Vec<_>>();
         assert_eq!(
             listed,
-            vec![mouse, device("Alpha", false), device("Speaker", false)]
+            vec![
+                (ids(&["classic", "low"]), mouse),
+                (ids(&["a"]), device("Alpha", false)),
+                (ids(&["s"]), device("Speaker", false))
+            ]
         );
     }
 

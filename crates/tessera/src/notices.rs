@@ -25,9 +25,10 @@ use serde::Deserialize;
 
 use crate::banners::{Banners, Notice, NoticeAction, OnGone};
 use crate::i18n::Language;
+use crate::icons::icon_of_pixels;
 use crate::modules::devices::Drives;
 use crate::notifications_store::NotificationStore;
-use crate::platform::{Balloon, BalloonEvent, Tray, shell_mode};
+use crate::platform::{Balloon, BalloonEvent, BalloonKind, Tray, shell_mode};
 use crate::power_warnings::PowerWarnings;
 
 /// What the configuration says about the notices Tessera gives in place of
@@ -57,6 +58,18 @@ impl NoticesConfig {
 
 /// Which notices are given.
 pub struct Notices;
+
+/// The glyph a balloon of `kind` is shown with, where it brings no
+/// picture of its own: the information, warning and error signs, as
+/// Explorer draws them.
+fn balloon_glyph(kind: BalloonKind) -> Option<&'static str> {
+    match kind {
+        BalloonKind::Info => Some("\u{e946}"),
+        BalloonKind::Warning => Some("\u{e7ba}"),
+        BalloonKind::Error => Some("\u{ea39}"),
+        BalloonKind::User | BalloonKind::None => None,
+    }
+}
 
 /// Marks that the balloons of the notification area are read, and keeps
 /// the balloon each icon shows: the icon, by its id in the tray, and the
@@ -140,6 +153,12 @@ impl Notices {
         let realtime = balloon.realtime;
         // An icon shows one balloon at a time.
         Self::end_balloon(id, true, cx);
+        // A balloon that asks to respect quiet time is dropped while do
+        // not disturb holds, as Windows drops it.
+        if balloon.respect_quiet && Banners::hush(cx).is_some() {
+            Tray::balloon_event(id, BalloonEvent::TimedOut);
+            return;
+        }
         // The key of the notice is known once it is posted.
         let posted_key = Rc::new(Cell::new(None));
         let language = Language::of(cx);
@@ -166,10 +185,16 @@ impl Notices {
                 }
             }
         });
+        let picture = match balloon.kind {
+            BalloonKind::User => balloon.icon.as_deref().and_then(icon_of_pixels),
+            _ => None,
+        };
         let notice = Notice {
             app,
             title: balloon.title,
             body: balloon.text,
+            glyph: balloon_glyph(balloon.kind),
+            picture,
             actions: vec![open],
             on_gone,
             ..Notice::default()
@@ -193,6 +218,15 @@ impl Notices {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_balloon_is_shown_with_the_sign_of_its_kind() {
+        assert_eq!(balloon_glyph(BalloonKind::Warning), Some("\u{e7ba}"));
+        assert!(balloon_glyph(BalloonKind::Info).is_some());
+        assert!(balloon_glyph(BalloonKind::Error).is_some());
+        assert_eq!(balloon_glyph(BalloonKind::User), None);
+        assert_eq!(balloon_glyph(BalloonKind::None), None);
+    }
 
     #[test]
     fn what_is_told_of_can_be_chosen() {

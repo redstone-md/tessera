@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Tessera contributors.
 
 //! The Wi-Fi networks in reach, as Windows last saw them; joining one
-//! Windows has the settings of, or one whose password is given here; and
+//! Windows has the settings of, or one whose password is given here, or
+//! one that hides its name; leaving the network the machine is on; and
 //! having Windows forget the settings of one.
 //!
 //! Every call waits for Windows to answer, so none belongs on the thread
@@ -19,8 +20,8 @@ use windows::Win32::NetworkManagement::WiFi::{
     DOT11_AUTH_ALGORITHM, WLAN_AVAILABLE_NETWORK, WLAN_AVAILABLE_NETWORK_CONNECTED,
     WLAN_AVAILABLE_NETWORK_HAS_PROFILE, WLAN_AVAILABLE_NETWORK_LIST, WLAN_CONNECTION_PARAMETERS,
     WLAN_INTERFACE_INFO_LIST, WLAN_PROFILE_USER, WlanCloseHandle, WlanConnect, WlanDeleteProfile,
-    WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList, WlanOpenHandle, WlanScan,
-    WlanSetProfile, dot11_BSS_type_any, wlan_connection_mode_profile,
+    WlanDisconnect, WlanEnumInterfaces, WlanFreeMemory, WlanGetAvailableNetworkList,
+    WlanOpenHandle, WlanScan, WlanSetProfile, dot11_BSS_type_any, wlan_connection_mode_profile,
 };
 use windows::core::{GUID, HSTRING, PCWSTR};
 
@@ -29,6 +30,9 @@ const CLIENT_VERSION: u32 = 2;
 
 /// The fewest and the most characters a password of a network has.
 const PASSWORD_LENGTHS: std::ops::RangeInclusive<usize> = 8..=63;
+
+/// The most bytes the name of a network has.
+const SSID_LENGTH: usize = 32;
 
 /// How a network lets a machine in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +152,49 @@ impl Wifi {
     /// network is. Whether it joined is seen in [`Self::reach`] later; a
     /// wrong password shows only in that it never does.
     pub fn join(network: &WifiNetwork, password: &str) -> Result<(), String> {
-        let settings = HSTRING::from(profile_of(network, password)?);
+        Self::save_and_join(network, &profile_of(network, password, false)?)
+    }
+
+    /// Has Windows save settings for the network called `name` that does
+    /// not send its name, secured as `security` says with `password`, and
+    /// asks it to join, as [`Self::join`] does. Windows then looks for the
+    /// network by asking for its name.
+    pub fn join_hidden(name: &str, security: WifiSecurity, password: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() || name.len() > SSID_LENGTH {
+            return Err("the name of a network has 1 to 32 bytes".to_owned());
+        }
+        let network = WifiNetwork {
+            name: name.to_owned(),
+            ssid: name.as_bytes().to_vec(),
+            security,
+            bars: 0,
+            secured: security != WifiSecurity::Open,
+            connected: false,
+            profile: None,
+        };
+        Self::save_and_join(&network, &profile_of(&network, password, true)?)
+    }
+
+    /// Leaves the network every adapter is connected to. An adapter that
+    /// is connected to none is passed over.
+    pub fn disconnect() -> Result<(), String> {
+        let client = Client::open()?;
+        let mut failure = None;
+        for adapter in client.adapters()? {
+            // SAFETY: the handle is open and the identifier outlives the call.
+            let status = unsafe { WlanDisconnect(client.0, &adapter, None) };
+            if let Err(error) = check(status, "Windows did not leave the network") {
+                failure = Some(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// Has Windows save `settings` for `network`, for this user alone, and
+    /// asks it to join.
+    fn save_and_join(network: &WifiNetwork, settings: &str) -> Result<(), String> {
+        let settings = HSTRING::from(settings);
         let client = Client::open()?;
         let adapters = client.adapters()?;
         let mut saved = Vec::new();
@@ -200,8 +246,9 @@ impl Wifi {
 }
 
 /// The settings Windows saves to join `network` with `password`, which an
-/// open network has none of.
-fn profile_of(network: &WifiNetwork, password: &str) -> Result<String, String> {
+/// open network has none of. With `hidden` Windows is told the network
+/// does not send its name, so that it asks for it.
+fn profile_of(network: &WifiNetwork, password: &str, hidden: bool) -> Result<String, String> {
     let way = match network.security {
         WifiSecurity::Open => None,
         WifiSecurity::Password => Some("WPA2PSK"),
@@ -234,7 +281,8 @@ fn profile_of(network: &WifiNetwork, password: &str) -> Result<String, String> {
         "<?xml version=\"1.0\"?>\
          <WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">\
          <name>{name}</name>\
-         <SSIDConfig><SSID><hex>{hex}</hex><name>{name}</name></SSID></SSIDConfig>\
+         <SSIDConfig><SSID><hex>{hex}</hex><name>{name}</name></SSID>\
+         <nonBroadcast>{hidden}</nonBroadcast></SSIDConfig>\
          <connectionType>ESS</connectionType>\
          <connectionMode>auto</connectionMode>\
          <MSM><security>{security}</security></MSM>\
@@ -486,21 +534,23 @@ mod tests {
     #[test]
     fn the_settings_of_a_network_hold_its_name_and_password_escaped() {
         let mut cafe = network("Tom & <Jerry>", 3, false, false);
-        let settings = profile_of(&cafe, "p<ss\"word&1").unwrap();
+        let settings = profile_of(&cafe, "p<ss\"word&1", false).unwrap();
+        assert!(settings.contains("<nonBroadcast>false</nonBroadcast>"));
         assert!(settings.contains("<name>Tom &amp; &lt;Jerry&gt;</name>"));
         assert!(settings.contains("<hex>546F6D2026203C4A657272793E</hex>"));
         assert!(settings.contains("<authentication>WPA2PSK</authentication>"));
         assert!(settings.contains("<keyMaterial>p&lt;ss&quot;word&amp;1</keyMaterial>"));
         cafe.security = WifiSecurity::Password3;
-        let settings = profile_of(&cafe, "password").unwrap();
+        let settings = profile_of(&cafe, "password", true).unwrap();
         assert!(settings.contains("<authentication>WPA3SAE</authentication>"));
+        assert!(settings.contains("<nonBroadcast>true</nonBroadcast>"));
         // An open network has no key, whatever is given.
         cafe.security = WifiSecurity::Open;
-        let settings = profile_of(&cafe, "").unwrap();
+        let settings = profile_of(&cafe, "", false).unwrap();
         assert!(settings.contains("<authentication>open</authentication>"));
         assert!(!settings.contains("sharedKey"));
         cafe.security = WifiSecurity::Other;
-        assert!(profile_of(&cafe, "password").is_err());
+        assert!(profile_of(&cafe, "password", false).is_err());
     }
 
     #[test]
@@ -511,7 +561,9 @@ mod tests {
         assert!(!password_fits(&"x".repeat(64)));
         assert!(!password_fits("пароль12"));
         let home = network("Home", 3, false, false);
-        assert!(profile_of(&home, "short").is_err());
+        assert!(profile_of(&home, "short", false).is_err());
+        assert!(Wifi::join_hidden("", WifiSecurity::Open, "").is_err());
+        assert!(Wifi::join_hidden(&"x".repeat(33), WifiSecurity::Open, "").is_err());
     }
 
     #[test]

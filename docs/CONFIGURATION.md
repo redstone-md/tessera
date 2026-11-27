@@ -189,6 +189,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `taskview` | `workspace`, `all`, `app`, or none | opens [Task View](#task-view), or closes it: the windows of each display spread as live pictures, with the workspaces along the top; `all` shows those of every workspace, `app` those of the application in front. Its keys are taken from Windows, and it brings Win+Tab where the keys of Windows are in use |
 | `present-windows` | `workspace`, `all`, `app`, or none | the same without the workspaces along the top; it brings no key |
 | `peek-desktop` | none | shows the desktop in front of every window, with a thin outline where each window is, until the keys to hold of its `press` are let go; done by `tessera do peek-desktop`, or by a `press` without keys to hold, it shows the desktop until it is done again or a click lands on it. The desktop is the picture Windows paints behind its windows, without the wallpaper Tessera draws itself. Its keys are taken from Windows, and it brings Win+comma where the keys of Windows are in use |
+| `tray-focus` | none | puts the keyboard on the [notification area](#the-notification-area) of the display the pointer is on; Win+B is bound to it by default where the keys of Windows are in use |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -707,3 +708,20 @@ The keys of the dock are bound where `windows_keys` is on, as the taskbar binds 
 | `dock-focus` | Win+T | Puts the keyboard on the dock: the arrows go from button to button, Enter does what a click does, a digit presses that button, the Menu key or Shift+F10 opens the menu, Esc gives the keyboard back. |
 
 The numbers count the buttons of the dock on the display the pointer is on, or else of the first dock.
+## The notification area
+
+`[tray]` says which icons of the notification area stand in the bar and which wait in the overflow, the grid that the button at the end of a `tray` strip opens, and in what order they come:
+
+```toml
+[tray]
+shown = ["app.exe"]
+hidden = ["C:/Program Files/Other/other.exe#1", "{7820AE78-23E3-4229-82C1-E41CB67D5B9C}"]
+order = ["C:/Program Files/App/app.exe#1"]
+new = "shown"
+```
+
+An icon is named by the global identifier its application gave it, written as `{…}`, or else by its program and the number the program gave it, as `C:/Program Files/App/app.exe#1` (slashes either way, case ignored); an icon of a program Windows does not name, as one running with higher privileges, is named by the class of its window, as `class:Name#1`. An entry may name every icon of a program by its path or by its file name alone (`app.exe`), or one of them by file name and number (`app.exe#2`). Where entries of `shown` and `hidden` both name an icon, the one that names it more closely decides, and of two that name it as closely, `shown`. An icon no entry names stands where the user put it in the settings of Windows (Taskbar > Other system tray icons), and an icon Windows has no choice for either stands where `new` says: `"shown"` (the default) or `"hidden"`. `order` orders the icons of the bar and of the overflow alike; icons it does not name follow in the order they came.
+
+Tessera writes these lists itself: dragging an icon writes `order`, and where it goes from the bar to the overflow or back, its exact name into `shown` or `hidden`; so does Tessera's own menu of an icon, opened with Shift and the right button or with the middle button, with **Move to overflow** and **Show in bar**. Entries of `order` for icons that are not there now keep their place after the icon they followed. The `limit` option of a `tray` widget caps how many icons stand in its bar; those over it wait in the overflow before the hidden ones. The `bluetooth` option of the widget still leaves the Bluetooth icon of Windows out unless it is `true`.
+
+The action `tray-focus` puts the keyboard on the strip of the display the pointer is on; where the keys of Windows are in use (`windows_keys`), Win+B is bound to it unless a `[[key]]` uses those keys. The arrows, Tab, Home and End move through the icons and the button of the overflow, Enter or Space chooses, Shift+F10 or the menu key asks for the menu of an icon, and Esc gives the keyboard back.

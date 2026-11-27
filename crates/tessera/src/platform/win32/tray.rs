@@ -29,17 +29,20 @@
 //! from it in turn.
 
 mod balloon;
+mod promoted;
 
 pub use balloon::{Balloon, BalloonEvent, BalloonKind};
+pub use promoted::TrayPromotion;
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use anyhow::{Context as _, Result, anyhow};
-use async_channel::Receiver;
+use async_channel::{Receiver, Sender};
 use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -59,6 +62,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use super::ScreenRect;
+use super::app_windows::executable_of;
 use super::appbar::{self, Request};
 use super::icon::IconPixels;
 use balloon::NIF_REALTIME;
@@ -277,6 +281,43 @@ struct Entry {
     image_version: u64,
     /// Whether a balloon of the icon was published and not yet ended.
     balloon: bool,
+    /// The global identifier the icon was added with, if it has one.
+    guid: Option<[u8; 16]>,
+    /// The window `owner` was read for, and what was read: the class of
+    /// the window and the program of its process.
+    described: u32,
+    owner: Owner,
+}
+
+/// What is known of the window an icon was added for.
+#[derive(Clone, Debug, Default)]
+struct Owner {
+    class: String,
+    /// The program of its process, unless Windows does not tell it, as for
+    /// a process that runs with higher privileges than the shell.
+    executable: Option<Arc<PathBuf>>,
+}
+
+impl Owner {
+    /// Reads what is known of the window `window`.
+    fn of(window: u32) -> Self {
+        let mut name = [0u16; 256];
+        let mut process = 0;
+        // SAFETY: the buffer and the out-parameter outlive the calls,
+        // which fill nothing for a window that is gone.
+        let length = unsafe {
+            GetWindowThreadProcessId(handle(window), Some(&raw mut process));
+            GetClassNameW(handle(window), &mut name)
+        };
+        let length = length.max(0) as usize;
+        Self {
+            class: String::from_utf16_lossy(&name[..length]),
+            executable: (process != 0)
+                .then(|| executable_of(process))
+                .flatten()
+                .map(Arc::new),
+        }
+    }
 }
 
 impl Entry {
@@ -300,6 +341,9 @@ struct Icons {
     balloons: Vec<Balloon>,
     /// The icons whose balloon was handed to the reader and not yet ended.
     published: HashSet<u64>,
+    /// The icons whose applications asked since this was last taken for
+    /// the keyboard to go back to the notification area.
+    focus_requests: Vec<u64>,
 }
 
 impl Icons {
@@ -338,6 +382,9 @@ impl Icons {
                         pixels: None,
                         image_version: 0,
                         balloon: false,
+                        guid: (notice.flags & NIF_GUID != 0).then_some(notice.guid),
+                        described: 0,
+                        owner: Owner::default(),
                     }
                 });
                 (entry.window, entry.uid) = (notice.window, notice.uid);
@@ -401,13 +448,37 @@ impl Icons {
                 }
                 entry.version = notice.version;
             }
-            // The keyboard stays where it is: the strip of icons takes no
-            // focus.
-            NIM_SETFOCUS => return self.entries.contains_key(&identity),
+            // The application finished what it showed for its icon with
+            // the keyboard and hands the keyboard back to the strip, which
+            // decides whether it takes it.
+            NIM_SETFOCUS => {
+                let Some(entry) = self.entries.get(&identity) else {
+                    return false;
+                };
+                self.focus_requests.push(entry.id);
+                return true;
+            }
             _ => return false,
         }
         self.generation += 1;
         true
+    }
+
+    /// Reads what is known of the window of each icon that was added, or
+    /// moved to another window, since this was last done; `describe`
+    /// reads it.
+    fn describe_owners(&mut self, describe: impl Fn(u32) -> Owner) {
+        let mut changed = false;
+        for entry in self.entries.values_mut() {
+            if entry.described != entry.window {
+                entry.described = entry.window;
+                entry.owner = describe(entry.window);
+                changed = true;
+            }
+        }
+        if changed {
+            self.generation += 1;
+        }
     }
 
     /// Forgets the icons whose window `exists` denies.
@@ -471,7 +542,10 @@ impl Icons {
             .filter(|entry| !entry.hidden)
             .map(|entry| TrayIcon {
                 id: entry.id,
-                owner: entry.window,
+                uid: entry.uid,
+                guid: entry.guid,
+                executable: entry.owner.executable.clone(),
+                class: entry.owner.class.clone(),
                 tip: entry.tip.clone(),
                 draws_own_tip: entry.draws_own_tip(),
                 pixels: entry.pixels.clone(),
@@ -488,8 +562,16 @@ impl Icons {
 pub struct TrayIcon {
     /// Identifies the icon for as long as its application keeps it.
     pub id: u64,
-    /// The window the application gave the icon for.
-    owner: u32,
+    /// The number the application gave the icon, which tells its icons
+    /// apart.
+    pub uid: u32,
+    /// The global identifier the application gave the icon, which names
+    /// it across runs, if it gave one.
+    pub guid: Option<[u8; 16]>,
+    /// The program of the application, unless Windows does not tell it.
+    pub executable: Option<Arc<PathBuf>>,
+    /// The class of the window the application gave the icon for.
+    class: String,
     /// What the application says about the icon; may be empty.
     pub tip: String,
     /// Whether the application shows what describes the icon itself when
@@ -503,11 +585,13 @@ pub struct TrayIcon {
 impl TrayIcon {
     /// Whether this is the icon Windows itself shows for Bluetooth.
     pub fn is_of_bluetooth(&self) -> bool {
-        let mut name = [0u16; 64];
-        // SAFETY: the buffer outlives the call, which fills nothing for a
-        // window that is gone.
-        let length = unsafe { GetClassNameW(handle(self.owner), &mut name) }.max(0) as usize;
-        String::from_utf16_lossy(&name[..length]) == BLUETOOTH_CLASS
+        self.class == BLUETOOTH_CLASS
+    }
+
+    /// The class of the window the application gave the icon for, which
+    /// names the icon where the program is not known.
+    pub fn owner_class(&self) -> &str {
+        &self.class
     }
 }
 
@@ -522,8 +606,10 @@ pub enum TrayButton {
     /// The right button was pressed and released on it.
     Right,
     /// It was chosen with the keyboard.
-    #[allow(dead_code, reason = "for the keys that move through the bar")]
     Keyboard,
+    /// Its menu was asked for with the keyboard: Shift+F10 or the menu
+    /// key.
+    KeyboardMenu,
 }
 
 /// The messages an icon of `version` is sent for `button`.
@@ -536,6 +622,8 @@ fn events(button: TrayButton, version: u32) -> &'static [u32] {
         (TrayButton::Right, true) => &[WM_RBUTTONDOWN, WM_RBUTTONUP, WM_CONTEXTMENU],
         (TrayButton::Keyboard, false) => &[WM_LBUTTONDOWN, WM_LBUTTONUP],
         (TrayButton::Keyboard, true) => &[NIN_KEYSELECT],
+        (TrayButton::KeyboardMenu, false) => &[WM_RBUTTONDOWN, WM_RBUTTONUP],
+        (TrayButton::KeyboardMenu, true) => &[WM_CONTEXTMENU],
     }
 }
 
@@ -656,6 +744,17 @@ impl Target {
 
 static ICONS: OnceLock<Mutex<Icons>> = OnceLock::new();
 
+/// How many requests for the keyboard wait for a reader.
+const FOCUS_WAITING: usize = 4;
+
+/// Whether a reader asked for the requests for the keyboard.
+static FOCUS_SUBSCRIBED: AtomicBool = AtomicBool::new(false);
+
+fn focus_channel() -> &'static (Sender<u64>, Receiver<u64>) {
+    static CHANNEL: OnceLock<(Sender<u64>, Receiver<u64>)> = OnceLock::new();
+    CHANNEL.get_or_init(|| async_channel::bounded(FOCUS_WAITING))
+}
+
 fn icons() -> std::sync::MutexGuard<'static, Icons> {
     let icons = ICONS.get_or_init(Mutex::default);
     icons
@@ -721,6 +820,22 @@ impl Tray {
     /// one for the whole process, so one reader is meant to take it.
     pub fn balloons() -> Receiver<Balloon> {
         balloon::subscribe()
+    }
+
+    /// The icons whose applications ask for the keyboard to go back to
+    /// the notification area, as they do with `NIM_SETFOCUS` after they
+    /// closed a menu that was opened with the keyboard. Nothing arrives
+    /// that came before the first call; one reader is meant to take them.
+    pub fn focus_requests() -> Receiver<u64> {
+        FOCUS_SUBSCRIBED.store(true, Ordering::Relaxed);
+        focus_channel().1.clone()
+    }
+
+    /// The choices the user made in the settings of Windows about which
+    /// icons stand in the taskbar and which in its overflow. Reading the
+    /// registry waits, so this does not belong on the thread that draws.
+    pub fn windows_choices() -> Vec<TrayPromotion> {
+        promoted::read()
     }
 
     /// Tells the application of the icon `id` what became of the balloon
@@ -1005,12 +1120,19 @@ unsafe fn pass_on(explorer: HWND, sender: WPARAM, data: &COPYDATASTRUCT) -> LRES
 /// `serving` says whether the shell serves the icons itself.
 fn record(data: &[u8], serving: bool) -> bool {
     let notice = Notice::parse(data);
-    let (accepted, balloons) = {
+    let (accepted, balloons, focus) = {
         let mut icons = icons();
         let accepted = icons.apply(&notice, serving, load_icon);
-        (accepted, icons.take_balloons(serving))
+        icons.describe_owners(Owner::of);
+        let focus = std::mem::take(&mut icons.focus_requests);
+        (accepted, icons.take_balloons(serving), focus)
     };
     balloons.into_iter().for_each(balloon::publish);
+    if FOCUS_SUBSCRIBED.load(Ordering::Relaxed) {
+        for id in focus {
+            let _ = focus_channel().0.force_send(id);
+        }
+    }
     accepted
 }
 
@@ -1457,6 +1579,48 @@ mod tests {
     }
 
     #[test]
+    fn an_application_hands_the_keyboard_back_for_a_known_icon() {
+        let mut icons = Icons::default();
+        icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), false, pixels);
+        assert!(icons.focus_requests.is_empty());
+        icons.apply(&notice(NIM_ADD, 10, 1, 0, ""), false, pixels);
+        let generation = icons.generation;
+        assert!(icons.apply(&notice(NIM_SETFOCUS, 10, 1, 0, ""), false, pixels));
+        assert_eq!(icons.focus_requests, vec![icons.shown()[0].id]);
+        assert_eq!(icons.generation, generation);
+    }
+
+    #[test]
+    fn the_owner_of_an_icon_is_read_once_for_each_window() {
+        let mut icons = Icons::default();
+        let mut data = bytes(NIM_ADD, 10, 1, NIF_GUID, "");
+        data[at::GUID..at::GUID + 16].copy_from_slice(&[5; 16]);
+        icons.apply(&Notice::parse(&data), false, pixels);
+        let reads = Cell::new(0);
+        let describe = |window: u32| {
+            reads.set(reads.get() + 1);
+            Owner {
+                class: format!("Class{window}"),
+                executable: Some(Arc::new(PathBuf::from("C:\\App\\app.exe"))),
+            }
+        };
+        icons.describe_owners(describe);
+        icons.describe_owners(describe);
+        assert_eq!(reads.get(), 1);
+        let icon = &icons.shown()[0];
+        assert_eq!((icon.owner_class(), icon.guid), ("Class10", Some([5; 16])));
+        assert!(icon.executable.is_some() && !icon.is_of_bluetooth());
+
+        // The same icon, by its identifier, now of another window.
+        let mut data = bytes(NIM_MODIFY, 20, 1, NIF_GUID, "");
+        data[at::GUID..at::GUID + 16].copy_from_slice(&[5; 16]);
+        icons.apply(&Notice::parse(&data), false, pixels);
+        icons.describe_owners(describe);
+        assert_eq!(reads.get(), 2);
+        assert_eq!(icons.shown()[0].owner_class(), "Class20");
+    }
+
+    #[test]
     fn an_icon_of_version_4_draws_its_own_description_unless_it_asks() {
         let mut icons = Icons::default();
         icons.apply(&notice(NIM_ADD, 10, 1, NIF_TIP, "Volume"), false, pixels);
@@ -1493,6 +1657,11 @@ mod tests {
             &[WM_LBUTTONDBLCLK, WM_LBUTTONUP]
         );
         assert_eq!(events(TrayButton::Keyboard, 4), &[NIN_KEYSELECT]);
+        assert_eq!(events(TrayButton::KeyboardMenu, 4), &[WM_CONTEXTMENU]);
+        assert_eq!(
+            events(TrayButton::KeyboardMenu, 0),
+            &[WM_RBUTTONDOWN, WM_RBUTTONUP]
+        );
         assert_eq!(
             events(TrayButton::Keyboard, 0),
             &[WM_LBUTTONDOWN, WM_LBUTTONUP]
