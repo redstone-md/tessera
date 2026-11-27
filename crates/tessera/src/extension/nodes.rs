@@ -55,6 +55,7 @@ impl Content {
             ));
             nodes.truncate(NODE_LIMIT);
         }
+        problems.extend(own_children(&mut nodes));
         let mut shown = vec![true; nodes.len()];
         let mut digests = HashMap::new();
         let mut ids = HashSet::new();
@@ -85,6 +86,34 @@ impl Content {
     pub fn shows(&self, index: usize) -> bool {
         self.shown.get(index).copied().unwrap_or(false)
     }
+}
+
+/// Leaves every node at most one parent: a child is kept only where it
+/// comes later in the list than its parent and no earlier parent claimed
+/// it, so drawing the tree visits each node once and never loops. Says
+/// which parents lost children.
+fn own_children(nodes: &mut [Node]) -> Vec<String> {
+    let count = nodes.len();
+    let mut claimed = vec![false; count];
+    let mut problems = Vec::new();
+    for (index, node) in nodes.iter_mut().enumerate() {
+        let before = node.children.len();
+        node.children.retain(|&child| {
+            let child = child as usize;
+            let kept = child > index && child < count && !claimed[child];
+            if kept {
+                claimed[child] = true;
+            }
+            kept
+        });
+        let dropped = before - node.children.len();
+        if dropped > 0 {
+            problems.push(format!(
+                "node {index}: {dropped} of its children are not later nodes of its own; they are left out here"
+            ));
+        }
+    }
+    problems
 }
 
 /// Fails, saying why, where `kind` breaks a rule; numbers out of their
@@ -210,9 +239,11 @@ pub fn picture_kind(bytes: &[u8]) -> Option<PictureKind> {
     }
 }
 
-/// Whether `app` names an application whose icon can be shown: a path
-/// that ends in `.exe`, or an AppUserModelID of a packaged application,
-/// a package family and an application apart by `!`.
+/// Whether `app` names an application whose icon can be shown: a path on
+/// a local drive (`C:\\` or `C:/`) that ends in `.exe`, or an AppUserModelID
+/// of a packaged application, a package family and an application apart
+/// by `!`. A network path is refused, since reading its icon would reach
+/// another computer for an extension that may not.
 pub fn is_app(app: &str) -> bool {
     if app.is_empty() || app.len() > APP_LIMIT {
         return false;
@@ -226,8 +257,22 @@ pub fn is_app(app: &str) -> bool {
         };
         return plain(family) && plain(name) && family.contains('_');
     }
-    let lower = app.to_ascii_lowercase();
-    lower.ends_with(".exe") && (lower.contains(":\\") || lower.contains(":/"))
+    is_program_file(app)
+}
+
+/// Whether `app` is the path of a program file on a local drive.
+fn is_program_file(app: &str) -> bool {
+    let bytes = app.as_bytes();
+    let on_drive = bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    on_drive && app.to_ascii_lowercase().ends_with(".exe")
+}
+
+/// Whether `app` is the AppUserModelID of a packaged application.
+pub fn is_packaged(app: &str) -> bool {
+    app.contains('!') && is_app(app)
 }
 
 /// What tells one picture from another.
@@ -313,6 +358,11 @@ mod tests {
             "Calculator!App",
             "Microsoft_x!",
             "a_b!c d",
+            "//attacker/share/a:/x.exe",
+            r"\\?\UNC\host\share\x:\a.exe",
+            r"\\host\share\x.exe",
+            r"C:\",
+            r"1:\x.exe",
         ] {
             assert!(!is_app(wrong), "{wrong}");
         }
@@ -371,6 +421,33 @@ mod tests {
             matches!(content.nodes[14].kind, NodeKind::Scroll(height) if height == SCROLL_HEIGHT)
         );
         assert!(content.shows(1) && !content.shows(2) && !content.shows(99));
+    }
+
+    #[test]
+    fn every_node_has_one_parent_that_comes_before_it() {
+        let parent = |children: &[u32]| Node {
+            kind: NodeKind::Column,
+            children: children.to_vec(),
+        };
+        // 0 holds 1 and 2; 1 asks for 2 again, itself and one beyond the
+        // end; 2 asks for 0 above it and 3.
+        let nodes = vec![
+            parent(&[1, 2]),
+            parent(&[2, 1, 9]),
+            parent(&[0, 3]),
+            node(NodeKind::Spacer),
+        ];
+        let (content, problems) = Content::checked(nodes, &Permissions::default());
+        let children: Vec<&[u32]> = content.nodes.iter().map(|n| &n.children[..]).collect();
+        assert_eq!(children, [&[1, 2][..], &[], &[3], &[]]);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        // A chain where each node names the next two is drawn once each.
+        let nodes = (0..NODE_LIMIT as u32)
+            .map(|index| parent(&[index + 1, index + 2]))
+            .collect();
+        let (content, _) = Content::checked(nodes, &Permissions::default());
+        let edges: usize = content.nodes.iter().map(|n| n.children.len()).sum();
+        assert!(edges < NODE_LIMIT);
     }
 
     #[test]
