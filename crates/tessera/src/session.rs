@@ -19,15 +19,19 @@
 //! - [`start_host`], which starts the thread that answers Windows
 //!   ([`ShellHost`]).
 //!
-//! Once the surfaces are open, [`Shell::start`] calls [`surfaces_ready`],
-//! which tells Windows the shell is ready and listens to the events of
-//! the host. A Tessera that quits as the shell of the session, other than
-//! at the end of the session or to start again, starts Explorer as the
-//! shell after it is gone, so the session is not left without one.
+//! Once GPUI runs, `main` calls [`app_started`] before the surfaces are
+//! opened, so that a start that fails still quits as below. Once the
+//! surfaces are open, [`Shell::start`] calls [`surfaces_ready`], which
+//! tells Windows the shell is ready and listens to the events of the
+//! host. A Tessera that quits or panics as the shell of the session,
+//! other than at the end of the session or to start again, starts
+//! Explorer as the shell after it is gone, so the session is not left
+//! without one.
 
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
@@ -37,18 +41,20 @@ use gpui::{
 use serde::Deserialize;
 
 use crate::actions::{Action, Actions};
-use crate::config::{Config, PopupConfig, WidgetSpec, config_dir};
+use crate::config::{Config, PopupConfig, WidgetSpec};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring};
 use crate::platform::{
-    AppWindowId, ExplorerShell, HostOptions, NextShell, SHELL_FLAG, ShellEvent, ShellHost,
-    ShellRegistration, Taskbar, attach_console, is_safe_mode, own_program_name, recovery_keys_held,
-    shell_mode, started_as_shell,
+    ExplorerShell, HostOptions, NextShell, SHELL_FLAG, ShellEvent, ShellHost, ShellRegistration,
+    Taskbar, attach_console, is_safe_mode, own_program_name, recovery_keys_held, shell_mode,
+    started_as_shell,
 };
+use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::state_layer;
+use crate::workspaces::Workspaces;
 
 /// How many starts as the shell within [`CRASH_WINDOW`] give the session
 /// to Explorer.
@@ -63,10 +69,6 @@ const STARTS_FILE: &str = "shell-starts.txt";
 /// The file that tells the next Tessera why the session went to Explorer.
 const FALLBACK_FILE: &str = "shell-fallback.txt";
 
-/// The file of the windows the workspaces hid, which workspaces.rs writes
-/// as lines of the window and its process.
-const HIDDEN_WINDOWS: &str = "hidden-windows";
-
 /// The flag of a start that takes over from another Tessera.
 const SUCCESSOR_FLAG: &str = "--start-after";
 
@@ -77,6 +79,10 @@ const SHELL_WORKSPACES: usize = 4;
 /// The action that asks how to end the session, which another part of
 /// Tessera may register.
 const POWER_DIALOG: &str = "power-dialog";
+
+/// The widget with the buttons that end the session, whose popup Alt+F4
+/// on the desktop opens while there is no [`POWER_DIALOG`].
+const POWER_WIDGET: &str = "power";
 
 /// The popup that holds the `shell` widget.
 const POPUP: &str = "shell";
@@ -116,13 +122,13 @@ impl ShellConfig {
     }
 }
 
-/// The `[shell]` in use, for the quitting shell.
+/// The `[shell]` in use, for the panel.
 struct ShellSettings(ShellConfig);
 
 impl Global for ShellSettings {}
 
-/// Whether the session was given to Explorer from here already.
-static HANDED: AtomicBool = AtomicBool::new(false);
+/// `quit_to_explorer` of the `[shell]` in use, where a panic can read it.
+static QUIT_TO_EXPLORER: AtomicBool = AtomicBool::new(true);
 
 /// What `tessera shell` is asked to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,7 +209,7 @@ pub fn run_command_if_requested(arguments: impl Iterator<Item = String>) -> Opti
 /// is gone, if the arguments ask for it; says whether they did. The
 /// windows the workspaces left hidden are shown first.
 pub fn hand_over_if_requested(arguments: impl Iterator<Item = String>) -> bool {
-    ExplorerShell::run_if_requested(arguments, show_hidden_windows)
+    ExplorerShell::run_if_requested(arguments, Workspaces::recover)
 }
 
 /// Notes whether Tessera was started as the shell, with `--shell`, before
@@ -241,7 +247,7 @@ pub fn guard(arguments: impl Iterator<Item = String>) -> bool {
     if let Err(error) = ShellRegistration::revert() {
         report!("Tessera stays the shell: {error:#}");
     }
-    show_hidden_windows();
+    Workspaces::recover();
     let explorer = ExplorerShell::start_now();
     if let Err(error) = &explorer {
         report!("Explorer was not started as the shell: {error:#}");
@@ -263,22 +269,43 @@ pub fn adjust(config: &mut Config) {
 }
 
 /// Starts the thread that answers Windows, with the `[shell]` of the
-/// configuration.
+/// configuration. The host shows the windows the workspaces hid by
+/// itself at the end of the session, and as the shell a panic of the
+/// thread of GPUI starts Explorer as the shell.
 pub fn start_host(config: &ShellConfig) {
+    QUIT_TO_EXPLORER.store(config.quit_to_explorer, Ordering::SeqCst);
+    ShellHost::on_session_end(Workspaces::recover);
+    if shell_mode() {
+        leave_on_panic();
+    }
     ShellHost::start(config.options());
 }
 
 /// Applies a new `[shell]`.
 pub fn reconfigure(config: &ShellConfig, cx: &mut gpui::App) {
+    QUIT_TO_EXPLORER.store(config.quit_to_explorer, Ordering::SeqCst);
     ShellHost::configure(config.options());
     cx.set_global(ShellSettings(config.clone()));
 }
 
-/// What the shell does once its surfaces are open: tells Windows it is
-/// ready, answers the events of the host, and decides what happens to the
-/// session when it quits.
-pub fn surfaces_ready(config: &ShellConfig, cx: &mut gpui::App) {
+/// What the shell does once GPUI runs, before it opens anything: decides
+/// what happens to the session when it quits, also when the surfaces
+/// then fail to open.
+pub fn app_started(config: &ShellConfig, cx: &mut gpui::App) {
     cx.set_global(ShellSettings(config.clone()));
+    cx.on_app_quit(|_| {
+        quitting();
+        // GPUI drops the windows, and with them the space the surfaces
+        // held, after every callback and before it polls what they give:
+        // only then is the end of the session told that Tessera is done.
+        async { ShellHost::session_restored() }
+    })
+    .detach();
+}
+
+/// What the shell does once its surfaces are open: tells Windows it is
+/// ready and answers the events of the host.
+pub fn surfaces_ready(cx: &mut gpui::App) {
     let events = ShellHost::events();
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Ok(event) = events.recv().await {
@@ -288,13 +315,6 @@ pub fn surfaces_ready(config: &ShellConfig, cx: &mut gpui::App) {
         }
     })
     .detach();
-    // The workspaces and the tiling show what they hid when the app
-    // quits, from callbacks given before this one, which runs last.
-    cx.on_app_quit(|cx| {
-        quitting(cx);
-        async {}
-    })
-    .detach();
     ShellHost::signal_ready();
 }
 
@@ -302,37 +322,62 @@ pub fn surfaces_ready(config: &ShellConfig, cx: &mut gpui::App) {
 fn answer(event: ShellEvent, cx: &mut gpui::App) {
     match event {
         ShellEvent::StartRequested => Shell::start_requested(cx),
-        ShellEvent::CloseRequested => {
-            let known = { cx.try_global::<Actions>() }
-                .is_some_and(|actions| actions.get(POWER_DIALOG).is_some());
-            if known {
-                Actions::run(POWER_DIALOG, None, cx);
-            } else {
-                report!("Alt+F4 on the desktop opens no dialog: no action `{POWER_DIALOG}` exists");
-            }
-        }
+        ShellEvent::CloseRequested => ask_how_to_end(cx),
         ShellEvent::QuitRequested | ShellEvent::SessionEnding => cx.quit(),
         _ => {}
     }
 }
 
+/// Answers Alt+F4 on the desktop: runs the action [`POWER_DIALOG`]
+/// where one exists, and otherwise opens the popup that holds the
+/// [`POWER_WIDGET`], as the launcher does by default.
+fn ask_how_to_end(cx: &mut gpui::App) {
+    let known =
+        { cx.try_global::<Actions>() }.is_some_and(|actions| actions.get(POWER_DIALOG).is_some());
+    if known {
+        Actions::run(POWER_DIALOG, None, cx);
+    } else if let Some(popup) = Popups::holding(POWER_WIDGET, cx) {
+        Shell::toggle_popup(&popup, cx);
+    } else {
+        report!(
+            "Alt+F4 on the desktop opens nothing: there is no action `{POWER_DIALOG}` and no popup holds the `{POWER_WIDGET}` widget"
+        );
+    }
+}
+
 /// What the shell does as it quits: starts Explorer as the shell where
-/// Tessera was it and the session goes on without a new Tessera, then
-/// tells the end of the session that it is done.
-fn quitting(cx: &mut gpui::App) {
-    let wanted =
-        { cx.try_global::<ShellSettings>() }.is_none_or(|settings| settings.0.quit_to_explorer);
-    let handed = HANDED.load(Ordering::SeqCst) || ShellHost::handed_to_explorer();
-    let goes_on = !ShellHost::session_ending() && !Taskbar::successor_started();
-    if shell_mode()
-        && wanted
-        && !handed
-        && goes_on
-        && let Err(error) = ExplorerShell::start_after_exit()
-    {
+/// it should, see [`leave_to_explorer`].
+fn quitting() {
+    if let Err(error) = leave_to_explorer() {
         report!("the session is left without a shell: {error:#}");
     }
-    ShellHost::session_restored();
+}
+
+/// Starts Explorer as the shell once this Tessera is gone, where Tessera
+/// is the shell, the configuration asks for it, nothing has handed the
+/// session over yet, and the session goes on without a new Tessera.
+fn leave_to_explorer() -> anyhow::Result<()> {
+    let goes_on = !ShellHost::session_ending() && !Taskbar::successor_started();
+    if shell_mode() && QUIT_TO_EXPLORER.load(Ordering::SeqCst) && goes_on {
+        ExplorerShell::hand_over()?;
+    }
+    Ok(())
+}
+
+/// Has a panic of the thread of GPUI, which ends Tessera without its
+/// callbacks of quitting, start Explorer as the shell all the same, after
+/// what the hook before did. Panics of other threads are caught where they
+/// happen, so they do not.
+fn leave_on_panic() {
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        before(info);
+        if thread::current().name() == Some("main") {
+            // Nothing can be reported from here: the report may be what
+            // panicked.
+            let _ = leave_to_explorer();
+        }
+    }));
 }
 
 /// Gives the session to Explorer now: Explorer starts as the shell once
@@ -342,15 +387,10 @@ fn hand_to_explorer(cx: &mut gpui::App) {
         report!("Explorer is the shell of this session already");
         return;
     }
-    if HANDED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    match ExplorerShell::start_after_exit() {
-        Ok(()) => cx.quit(),
-        Err(error) => {
-            HANDED.store(false, Ordering::SeqCst);
-            report!("the session was not handed to Explorer: {error:#}");
-        }
+    match ExplorerShell::hand_over() {
+        Ok(true) => cx.quit(),
+        Ok(false) => {}
+        Err(error) => report!("the session was not handed to Explorer: {error:#}"),
     }
 }
 
@@ -413,34 +453,6 @@ fn tell_of_fallback() {
             "Tessera started as the shell {CRASH_LIMIT} times within a minute, so it gave the session to Explorer and stopped being the shell; `tessera shell install` makes it the shell again"
         );
     }
-}
-
-/// Shows the windows the workspaces left hidden, as their record says,
-/// where each is still the window of the same process.
-fn show_hidden_windows() {
-    let Some(path) = config_dir().map(|directory| directory.join(HIDDEN_WINDOWS)) else {
-        return;
-    };
-    let Ok(record) = fs::read_to_string(&path) else {
-        return;
-    };
-    for (window, process) in hidden_windows(&record) {
-        let window = AppWindowId::from_raw(window);
-        if window.exists() && window.process() == process {
-            window.unhide();
-        }
-    }
-}
-
-/// The windows and their processes of the record of hidden windows.
-fn hidden_windows(record: &str) -> Vec<(isize, u32)> {
-    record
-        .lines()
-        .filter_map(|line| {
-            let (window, process) = line.trim().split_once(' ')?;
-            Some((window.parse().ok()?, process.parse().ok()?))
-        })
-        .collect()
 }
 
 /// Making Tessera the shell from the user interface. Widget: `shell`, in
@@ -764,12 +776,6 @@ mod tests {
         // A start written later than now, as after the clock was turned
         // back, does not count.
         assert!(recent_starts("500", 200).is_empty());
-    }
-
-    #[test]
-    fn the_record_of_hidden_windows_gives_windows_and_processes() {
-        let record = "1234 56\n  789 10 \nbroken\n12 x\n";
-        assert_eq!(hidden_windows(record), [(1234, 56), (789, 10)]);
     }
 
     #[test]

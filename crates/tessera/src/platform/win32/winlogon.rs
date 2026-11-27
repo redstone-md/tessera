@@ -32,6 +32,7 @@ use std::os::windows::io::IntoRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -277,12 +278,29 @@ pub fn attach_console() {
 /// Starting Explorer as the shell of the session.
 pub struct ExplorerShell;
 
+/// Whether this process has had Explorer started as the shell once it is
+/// gone.
+static HANDED: AtomicBool = AtomicBool::new(false);
+
 impl ExplorerShell {
+    /// Hands the session to Explorer, once per process: Explorer starts
+    /// as the shell once this Tessera is gone. Says whether this call did
+    /// it; `false` where an earlier one has. A failure is given back and
+    /// lets a later call try again.
+    pub fn hand_over() -> Result<bool> {
+        if HANDED.swap(true, Ordering::SeqCst) {
+            return Ok(false);
+        }
+        Self::start_after_exit()
+            .inspect_err(|_| HANDED.store(false, Ordering::SeqCst))
+            .map(|()| true)
+    }
+
     /// Starts a short process that waits for this one to be gone and then
     /// starts Explorer as the shell, for a Tessera that stops being the
     /// shell: its desktop window must be gone first, or Explorer finds a
     /// shell and stays a file manager.
-    pub fn start_after_exit() -> Result<()> {
+    fn start_after_exit() -> Result<()> {
         let program = std::env::current_exe().context("the Tessera program was not found")?;
         // SAFETY: the call takes no arguments and cannot fail.
         let own = unsafe { GetCurrentProcessId() };

@@ -76,7 +76,8 @@ fn main() {
     let shell = platform::shell_mode();
     let mut config = Config::load();
     session::adjust(&mut config);
-    // The desktop window exists before the wallpaper looks for it.
+    // As the shell, the desktop window is made (waiting at most two
+    // seconds) before the wallpaper looks for it.
     session::start_host(&config.shell);
     Application::new().run(move |cx: &mut App| {
         match (!shell).then(Taskbar::hide_until_exit) {
@@ -91,6 +92,9 @@ fn main() {
                 .detach(),
             Some(Err(error)) => report!("the Windows taskbar stays visible: {error:#}"),
         }
+        // Before the surfaces open, so that a start that fails also
+        // leaves the session to Explorer.
+        session::app_started(&config.shell, cx);
         if let Err(error) = Shell::start(config, cx) {
             report!("the shell does not start: {error:#}");
             cx.quit();

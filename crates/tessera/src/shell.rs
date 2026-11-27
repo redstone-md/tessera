@@ -80,7 +80,7 @@ impl Shell {
         if surfaces.is_empty() {
             bail!("the layout opened no surface");
         }
-        crate::session::surfaces_ready(&config.shell, cx);
+        crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);

@@ -75,6 +75,10 @@ use windows::Win32::System::Environment::{
     CreateEnvironmentBlock, DestroyEnvironmentBlock, SetEnvironmentVariableW,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::System::Memory::{
+    MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READWRITE, PAGE_GUARD, PAGE_READWRITE,
+    VirtualQuery,
+};
 use windows::Win32::System::RemoteDesktop::{
     NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
 };
@@ -87,19 +91,20 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     ARW_HIDE, CreateWindowExW, DefWindowProcW, DispatchMessageW, FAPPCOMMAND_MASK, FindWindowExW,
-    GetMessageW, GetShellWindow, GetSystemMetrics, HWND_BOTTOM, IDC_ARROW, LoadCursorW,
-    MINIMIZEDMETRICS, MINIMIZEDMETRICS_ARRANGE, MSG, MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS,
-    MoveWindow, MsgWaitForMultipleObjectsEx, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
-    PostMessageW, QS_SENDMESSAGE, RegisterClassW, RegisterShellHookWindow, RegisterWindowMessageW,
-    SC_CLOSE, SC_TASKLIST, SHELLHOOKINFO, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETMINIMIZEDMETRICS, SPI_SETDESKWALLPAPER,
-    SPI_SETMINIMIZEDMETRICS, SPI_SETWORKAREA, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetTimer, SetWindowPos, ShowWindow,
-    SystemParametersInfoW, TranslateMessage, WINDOW_EX_STYLE, WINDOWPOS, WM_APP, WM_CLOSE,
-    WM_COPYDATA, WM_DISPLAYCHANGE, WM_ENDSESSION, WM_ERASEBKGND, WM_HOTKEY, WM_NCDESTROY, WM_PAINT,
-    WM_QUERYENDSESSION, WM_SETTINGCHANGE, WM_SYSCOMMAND, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGING,
-    WM_WTSSESSION_CHANGE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    GetMessageW, GetShellWindow, GetSystemMetrics, HWND_BOTTOM, IDC_ARROW, InSendMessage,
+    LoadCursorW, MINIMIZEDMETRICS, MINIMIZEDMETRICS_ARRANGE, MSG,
+    MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS, MoveWindow, MsgWaitForMultipleObjectsEx, PM_NOREMOVE,
+    PM_QS_SENDMESSAGE, PeekMessageW, PostMessageW, QS_SENDMESSAGE, RegisterClassW,
+    RegisterShellHookWindow, RegisterWindowMessageW, SC_CLOSE, SC_TASKLIST, SHELLHOOKINFO,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SPI_GETMINIMIZEDMETRICS, SPI_SETDESKWALLPAPER, SPI_SETMINIMIZEDMETRICS, SPI_SETWORKAREA,
+    SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetTimer, SetWindowPos, ShowWindow, SystemParametersInfoW,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOWPOS, WM_APP, WM_CLOSE, WM_COPYDATA, WM_DISPLAYCHANGE,
+    WM_ENDSESSION, WM_ERASEBKGND, WM_HOTKEY, WM_NCDESTROY, WM_PAINT, WM_QUERYENDSESSION,
+    WM_SETTINGCHANGE, WM_SYSCOMMAND, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGING, WM_WTSSESSION_CHANGE,
+    WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_POPUP, WS_VISIBLE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, s, w};
 
@@ -159,6 +164,11 @@ const KEY_RESTART: i32 = 0x7E02;
 /// The level `SetProcessShutdownParameters` is given: the lowest that
 /// applications may have, so that the shell is asked to end after them.
 const SHUTDOWN_LEVEL: u32 = 0x100;
+
+/// How long the start waits, as the shell, for the host thread to have
+/// made the desktop window, which the wallpaper looks for right after.
+/// Making three windows takes no waiting, so this is only a bound.
+const DESKTOP_TIME: Duration = Duration::from_secs(2);
 
 /// How long the end of the session waits for Tessera to have shown the
 /// windows it hid and given back the space it held. Windows tells the
@@ -260,10 +270,11 @@ static EMERGENCY_KEYS: AtomicBool = AtomicBool::new(false);
 static MEDIA_KEYS: AtomicBool = AtomicBool::new(false);
 /// Whether the session ends.
 static ENDING: AtomicBool = AtomicBool::new(false);
-/// Whether a key of recovery has handed the session to Explorer.
-static HANDED: AtomicBool = AtomicBool::new(false);
 /// The event set once Tessera has restored what it changed, as a number.
 static RESTORED: AtomicIsize = AtomicIsize::new(0);
+/// What the host thread restores by itself when the session ends; see
+/// [`ShellHost::on_session_end`].
+static SESSION_END: OnceLock<fn()> = OnceLock::new();
 static SUBSCRIBERS: Mutex<Vec<Sender<ShellEvent>>> = Mutex::new(Vec::new());
 static WORK: Mutex<Vec<Work>> = Mutex::new(Vec::new());
 static HANDLERS: Mutex<Vec<(u64, Handler)>> = Mutex::new(Vec::new());
@@ -279,7 +290,9 @@ static REPLACING: AtomicIsize = AtomicIsize::new(0);
 pub struct ShellHost;
 
 impl ShellHost {
-    /// Starts the host thread, once, and returns at once.
+    /// Starts the host thread, once. As the shell, it returns once the
+    /// thread has made the desktop window (or failed to), at most after
+    /// [`DESKTOP_TIME`]; beside Explorer, at once.
     pub fn start(options: HostOptions) {
         static STARTED: AtomicBool = AtomicBool::new(false);
         if STARTED.swap(true, Ordering::SeqCst) {
@@ -301,11 +314,20 @@ impl ShellHost {
                 Err(error) => report!("the end of the session will not wait for Tessera: {error}"),
             }
         }
+        let (desktop_made, desktop) = mpsc::sync_channel(1);
         let started = thread::Builder::new()
             .name("shell host".to_owned())
-            .spawn(move || host(options.shell));
-        if let Err(error) = started {
-            report!("the thread of the shell does not start: {error}");
+            .spawn(move || host(options.shell, desktop_made));
+        match started {
+            Err(error) => report!("the thread of the shell does not start: {error}"),
+            Ok(_) if options.shell => {
+                if desktop.recv_timeout(DESKTOP_TIME).is_err() {
+                    report!(
+                        "the desktop window was not made in time; the wallpaper may not find it"
+                    );
+                }
+            }
+            Ok(_) => {}
         }
     }
 
@@ -419,15 +441,18 @@ impl ShellHost {
         }
     }
 
+    /// Has the host thread run `restore` itself when the session ends,
+    /// before it waits for GPUI: what must be put back even when the
+    /// thread of GPUI does not answer, such as the windows the
+    /// workspaces hid. It runs on the host thread, so it must not need
+    /// GPUI nor wait. Only the first call counts.
+    pub fn on_session_end(restore: fn()) {
+        let _ = SESSION_END.set(restore);
+    }
+
     /// Whether the session ends.
     pub fn session_ending() -> bool {
         ENDING.load(Ordering::SeqCst)
-    }
-
-    /// Whether a key of recovery has handed the session to Explorer
-    /// already.
-    pub fn handed_to_explorer() -> bool {
-        HANDED.load(Ordering::SeqCst)
     }
 
     /// Whether the host was started as the shell of the session.
@@ -466,8 +491,9 @@ fn publish(event: ShellEvent) {
     locked(&SUBSCRIBERS).retain(|subscriber| subscriber.try_send(event.clone()).is_ok());
 }
 
-/// The body of the host thread.
-fn host(shell: bool) {
+/// The body of the host thread; `desktop_made` is told once the desktop
+/// window has been made, or could not be.
+fn host(shell: bool, desktop_made: mpsc::SyncSender<()>) {
     let hook = match create_hook_window() {
         Ok(hook) => hook,
         Err(error) => {
@@ -494,6 +520,7 @@ fn host(shell: bool) {
             }
             Err(error) => report!("the desktop window of the shell was not made: {error:#}"),
         }
+        let _ = desktop_made.send(());
         become_task_manager(hook);
         hide_minimized_windows();
     }
@@ -840,6 +867,14 @@ fn session_message(message: u32, w: WPARAM) -> Option<LRESULT> {
         WM_ENDSESSION => {
             if w.0 != 0 && !ENDING.swap(true, Ordering::SeqCst) {
                 publish(ShellEvent::SessionEnding);
+                // What needs no GPUI is put back here and now, so that it
+                // is done even if GPUI does not answer; GPUI is then given
+                // the rest of the time for what only it can do.
+                if let Some(restore) = SESSION_END.get()
+                    && catch_unwind(*restore).is_err()
+                {
+                    report!("what Tessera hid was not all shown at the end of the session");
+                }
                 wait_for_restoring();
             }
             Some(LRESULT(0))
@@ -1216,20 +1251,29 @@ fn app_command(l: isize) -> u16 {
 /// Fills the `SHELLHOOKINFO` of `HSHELL_GETMINRECT` with where the dock
 /// shows its window, and says whether it knew.
 ///
+/// The number of the `SHELLHOOK` message is known to every program, so
+/// the message is checked before its `lParam` is used: Windows sends it
+/// and waits for the answer, so a posted one is not from Windows, and
+/// the structure must lie in memory of this process that can be written.
+///
 /// # Safety
-/// `info` must be the `lParam` of that code.
+/// `info` must be the `lParam` of a message of the shell hook with this
+/// code.
 unsafe fn answer_min_rect(info: LPARAM) -> bool {
     let info = info.0 as *mut SHELLHOOKINFO;
-    if info.is_null() {
+    // SAFETY: the call only reads the state of the message being handled.
+    let sent = unsafe { InSendMessage() }.as_bool();
+    if !sent || !is_writable(info.cast(), size_of::<SHELLHOOKINFO>()) {
         return false;
     }
-    // SAFETY: the caller passes the structure the shell hook gave.
+    // SAFETY: the structure lies in committed memory of this process that
+    // can be read and written, as checked above.
     let window = unsafe { (*info).hwnd.0 as isize };
     let rects = locked(&MIN_RECTS);
     let Some(rect) = rects.as_ref().and_then(|rects| rects.get(&window)) else {
         return false;
     };
-    // SAFETY: as above.
+    // SAFETY: as above; the memory can be written.
     unsafe {
         (*info).rc = RECT {
             left: rect.left,
@@ -1239,6 +1283,37 @@ unsafe fn answer_min_rect(info: LPARAM) -> bool {
         };
     }
     true
+}
+
+/// Whether the `size` bytes at `start` lie in one committed region of
+/// this process that can be read and written. A null `start` cannot.
+fn is_writable(start: *const c_void, size: usize) -> bool {
+    if start.is_null() {
+        return false;
+    }
+    let mut region = MEMORY_BASIC_INFORMATION::default();
+    // SAFETY: the call only describes the memory at `start` into `region`,
+    // which outlives it; it reads nothing at `start`.
+    let written = unsafe {
+        VirtualQuery(
+            Some(start),
+            &raw mut region,
+            size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    if written == 0 || region.State != MEM_COMMIT {
+        return false;
+    }
+    let protection = region.Protect;
+    let writable = protection & PAGE_GUARD != PAGE_GUARD
+        && [PAGE_READWRITE, PAGE_EXECUTE_READWRITE]
+            .into_iter()
+            .any(|kind| protection.0 & 0xFF == kind.0);
+    let end = region.BaseAddress as usize + region.RegionSize;
+    writable
+        && (start as usize)
+            .checked_add(size)
+            .is_some_and(|last| last <= end)
 }
 
 /// What a key of the volume or of media does, as the shell.
@@ -1314,8 +1389,9 @@ fn stepped(volume: f32, up: bool) -> f32 {
     (steps * VOLUME_STEP).clamp(0., 1.)
 }
 
-/// Asks `window` to close, and has Windows end it if it does not answer,
-/// on a thread of its own, as `EndTask` may wait.
+/// Asks `window` to close, and has Windows end it if it does not answer
+/// (`EndTask` with `fForce`, as Explorer does for `HSHELL_ENDTASK`), on a
+/// thread of its own, as `EndTask` may wait.
 fn end_task(window: isize) {
     type EndTask = unsafe extern "system" fn(HWND, BOOL, BOOL) -> BOOL;
     let Some(end) = user32(s!("EndTask")) else {
@@ -1327,7 +1403,7 @@ fn end_task(window: isize) {
         .name("end task".to_owned())
         .spawn(move || {
             // SAFETY: the call tolerates a window that has been destroyed.
-            let _ = unsafe { end(handle(window), false.into(), false.into()) };
+            let _ = unsafe { end(handle(window), false.into(), true.into()) };
         });
     if let Err(error) = started {
         report!("the window was not asked to close: {error}");
@@ -1339,15 +1415,10 @@ fn recover(key: i32) {
     match key {
         KEY_EXPLORER => {
             Launch::new("taskmgr.exe").start();
-            if HANDED.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            match super::ExplorerShell::start_after_exit() {
-                Ok(()) => request_quit(),
-                Err(error) => {
-                    HANDED.store(false, Ordering::SeqCst);
-                    report!("the session was not handed to Explorer: {error:#}");
-                }
+            match super::ExplorerShell::hand_over() {
+                Ok(true) => request_quit(),
+                Ok(false) => {}
+                Err(error) => report!("the session was not handed to Explorer: {error:#}"),
             }
         }
         KEY_RESTART => {

@@ -727,7 +727,7 @@ impl Workspaces {
 
     /// Shows the windows that are written down as hidden, if they are
     /// still the same windows and still hidden.
-    fn recover() {
+    pub(crate) fn recover() {
         let Some(path) = Self::record() else {
             return;
         };

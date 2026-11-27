@@ -352,6 +352,36 @@ impl Popups {
         }
     }
 
+    /// The name of a popup that holds the widget `widget`: of the
+    /// configured ones, else of those the modules bring, the first by
+    /// name.
+    pub fn holding(widget: &str, cx: &App) -> Option<String> {
+        let holds = |config: &PopupConfig| {
+            config
+                .content
+                .iter()
+                .chain(&config.side)
+                .any(|spec| spec.widget == widget)
+        };
+        let configured = { cx.try_global::<Self>() }
+            .and_then(|this| {
+                this.configs
+                    .values()
+                    .filter(|config| holds(config))
+                    .map(|config| &config.name)
+                    .min()
+            })
+            .cloned();
+        configured.or_else(|| {
+            let registry = cx.try_global::<WidgetRegistry>()?;
+            let mut names = registry.popup_names();
+            names.sort();
+            names
+                .into_iter()
+                .find(|name| registry.popup(name).is_some_and(holds))
+        })
+    }
+
     /// Whether a popup is open.
     pub fn is_open(cx: &App) -> bool {
         cx.global::<Self>().open.is_some()
