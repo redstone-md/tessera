@@ -140,6 +140,8 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#             eject    the drive whose letter arg names, as "E", as its
+#                      Eject button in the popup "devices" does
 #
 # [[key]]
 # press = "win+v"
@@ -162,6 +164,19 @@
 # [files]
 # own = true
 # view = "details"
+
+# The notices Tessera gives where Explorer would, as cards in the lower
+# right corner of the display the pointer is on. Without a key, each is
+# given only while Tessera is the shell of the session.
+#   drives   a drive plugged in, or a disc or a card put in, with buttons
+#            that open it and eject it
+#   battery  warnings at the low, reserve and critical battery levels of
+#            the power plan in use; the last two are urgent: they come
+#            while do not disturb is on and stay until they are put away
+#   seconds  how long a notice that is not urgent stays (8, 2 to 60)
+# [notices]
+# drives = true
+# battery = true
 
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"
@@ -349,6 +364,19 @@
 #               the height left in its popup and scrolls. Option show,
 #               "extensions" (default) or "themes" for the themes they
 #               offer; option columns, 1 (default) to 4
+#   "devices"   a USB icon, there only while a drive or a device can be
+#               taken out of the machine; a click opens the popup
+#               "devices"
+#   "devices-list"  the drives and devices to take out, for a popup: each
+#               drive with how much of it is free and buttons that open it
+#               and eject it, each other device with a button that ejects
+#               it, and why Windows refused where it did
+#   "privacy"   an icon for the microphone, the camera and the location
+#               while an application uses it, with a tip naming the
+#               applications; there only while one is in use. A click
+#               opens the popup "privacy"
+#   "privacy-list"  the applications that use each of them now, for a
+#               popup, with a button to that page of the Windows settings
 
 [[surface]]
 edge = "top"

@@ -54,5 +54,30 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `eject` | the letter of a drive, as `E` or `E:` | ejects that drive as its **Eject** button in the popup `devices` does: the device it is on, with every drive of it, or its medium where it is a disc or a card in a reader built in; a notice says how it went |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Notices, devices and privacy
+
+Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low. Tessera gives these as notices of its own, cards in the lower right corner of the display the pointer is on with buttons for what can be done about them. `[notices]` says which:
+
+```toml
+[notices]
+drives = true    # a drive plugged in, or a disc or a card put in, with Open and Eject
+battery = true   # warnings at the battery levels of the power plan in use
+seconds = 8      # how long a notice that is not urgent stays, 2 to 60
+```
+
+Without `drives` or `battery`, each is on only while Tessera is the shell of the session, since Explorer tells of them otherwise. What an ejection came to is always told. A refusal to eject and the warnings at the reserve and critical levels are urgent: they come through do not disturb (`quiet` in `[notifications]`) and stay until they are put away; the other notices are held back by it.
+
+The widgets that go with them are placed by no built-in layout:
+
+```toml
+[[surface]]
+edge = "top"
+thickness = 48
+end = ["devices", "privacy", "tray", "volume"]
+```
+
+`devices` is an icon that is there only while something can be taken out of the machine; a click opens the popup `devices` with `devices-list`, a row for each drive and device with **Open** and **Eject**. `privacy` shows an icon for the microphone, the camera and the location while an application uses it, with a tip that names the applications; a click opens the popup `privacy` with `privacy-list`. Both popups can be replaced by a `[[popup]]` of the same name, or the lists put into another one.
