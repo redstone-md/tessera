@@ -463,16 +463,29 @@ unsafe extern "system" fn happened(
 
 unsafe extern "system" fn happened_own(
     _hook: HWINEVENTHOOK,
-    _event: u32,
+    event: u32,
     hwnd: HWND,
     object: i32,
     child: i32,
     _thread: u32,
     _time: u32,
 ) {
-    if object == OBJID_WINDOW.0 && child == 0 && own_mark(hwnd).is_some() {
-        HAPPENED.fetch_add(1, Ordering::Relaxed);
+    if object != OBJID_WINDOW.0 || child != 0 {
+        return;
     }
+    // The events come only once the thread that made them is back in its
+    // message loop, when a window that was closed is gone already: the
+    // mark is looked for by its handle alone, and forgotten with it.
+    let mut marks = OWN_MARKS.lock().unwrap_or_else(PoisonError::into_inner);
+    let raw = hwnd.0 as isize;
+    if !marks.iter().any(|mark| mark.hwnd == raw) {
+        return;
+    }
+    if event == EVENT_OBJECT_DESTROY {
+        marks.retain(|mark| mark.hwnd != raw);
+    }
+    drop(marks);
+    HAPPENED.fetch_add(1, Ordering::Relaxed);
 }
 
 /// A window of Tessera that is listed among the application windows; see
@@ -488,12 +501,15 @@ struct OwnMark {
 /// The windows of Tessera that are listed.
 static OWN_MARKS: Mutex<Vec<OwnMark>> = Mutex::new(Vec::new());
 
-/// What `hwnd` was marked as, if it was; a window that is gone is
-/// forgotten.
+/// What `hwnd` was marked as, if it was and is still there. A mark is
+/// forgotten when the events of its window tell it is gone, in
+/// `happened_own`, which needs it until then, or when another is made.
 fn own_mark(hwnd: HWND) -> Option<OwnMark> {
-    let mut marks = OWN_MARKS.lock().unwrap_or_else(PoisonError::into_inner);
     // SAFETY: the call only reads whether a handle names a window.
-    marks.retain(|mark| unsafe { IsWindow(Some(HWND(mark.hwnd as *mut c_void))) }.as_bool());
+    if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+        return None;
+    }
+    let marks = OWN_MARKS.lock().unwrap_or_else(PoisonError::into_inner);
     marks
         .iter()
         .find(|mark| mark.hwnd == hwnd.0 as isize)
@@ -554,7 +570,9 @@ impl AppWindow {
             icon: icon.unwrap_or_default(),
         };
         let mut marks = OWN_MARKS.lock().unwrap_or_else(PoisonError::into_inner);
-        marks.retain(|other| other.hwnd != mark.hwnd);
+        // SAFETY: the call only reads whether a handle names a window.
+        let alive = |other: &OwnMark| unsafe { IsWindow(Some(HWND(other.hwnd as *mut c_void))) };
+        marks.retain(|other| other.hwnd != mark.hwnd && alive(other).as_bool());
         marks.push(mark);
         drop(marks);
         HAPPENED.fetch_add(1, Ordering::Relaxed);
