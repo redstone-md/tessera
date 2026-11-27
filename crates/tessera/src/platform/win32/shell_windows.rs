@@ -38,7 +38,6 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_channel::{Receiver, Sender};
-use gpui::Window;
 use windows::Win32::Foundation::{
     CLASS_E_NOAGGREGATION, DISP_E_MEMBERNOTFOUND, DISP_E_UNKNOWNNAME, E_INVALIDARG, E_NOINTERFACE,
     E_NOTIMPL, HWND, LPARAM, LRESULT, S_FALSE, SHANDLE_PTR, VARIANT_BOOL, VARIANT_FALSE,
@@ -67,7 +66,7 @@ use windows::core::{
     BOOL, BSTR, GUID, HRESULT, IUnknown, IUnknownImpl, Interface, PCWSTR, Ref, implement,
 };
 
-use super::{NativeSurface, ShellThread};
+use super::ShellThread;
 
 /// The names a program asked a window of Tessera Files to choose.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,13 +141,6 @@ impl ShellWindows {
         selections
     }
 
-    /// The number of the handle of `window`, by which the list knows it.
-    pub fn number_of(window: &Window) -> Option<isize> {
-        NativeSurface::of(window)
-            .ok()
-            .map(|surface| surface.hwnd.0 as isize)
-    }
-
     /// Puts the window `window` of Tessera Files, at `folder`, in the list.
     pub fn opened(window: isize, folder: Option<PathBuf>) {
         if !SERVING.load(Ordering::SeqCst) {
@@ -177,10 +169,6 @@ impl ShellWindows {
     }
 
     /// Notes that the window `window` of Tessera Files shows `folder` now.
-    #[allow(
-        dead_code,
-        reason = "for the file manager, once it tells of navigation"
-    )]
     pub fn navigated(window: isize, folder: Option<PathBuf>) {
         if !SERVING.load(Ordering::SeqCst) {
             return;

@@ -17,8 +17,7 @@ use crate::actions::Actions;
 use crate::i18n::Language;
 use crate::menu::MenuEntry;
 use crate::platform::{
-    AppWindow, AppWindowId, Launch, RunningProcess, Shortcut, app_id_of_program,
-    reveal_in_explorer, shell_mode,
+    AppWindow, AppWindowId, Launch, RunningProcess, Shortcut, app_id_of_program, reveal, shell_mode,
 };
 
 /// How long End task waits for a window to close before it ends its
@@ -214,7 +213,7 @@ pub(super) fn entries(item: &DockItem, cx: &mut App) -> Vec<MenuEntry> {
                 let file = file.clone();
                 cx.background_executor()
                     .spawn(async move {
-                        if let Err(error) = reveal_in_explorer(&file) {
+                        if let Err(error) = reveal(&file) {
                             report!(
                                 "`{}` was not shown in its folder: {error:#}",
                                 file.display()

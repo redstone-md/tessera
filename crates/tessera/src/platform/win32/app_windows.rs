@@ -561,7 +561,6 @@ impl AppWindow {
     /// without one; see [`Self::enumerate`]. Only for the windows of the
     /// file manager, with `app_id` `Tessera.Files`: never for a bar, a
     /// popup or a card. The mark goes with the window.
-    #[allow(dead_code, reason = "the file manager marks its windows")]
     pub fn mark_own(window: &gpui::Window, app_id: &str, icon: Option<&Path>) {
         let Ok(surface) = NativeSurface::of(window) else {
             return;

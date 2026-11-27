@@ -1059,3 +1059,8 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Tessera Files could not open the folder, and Explorer gave it back. Start Tessera and try again, or run `tessera files revert` to have Explorer open folders." = "Tessera Files konnte den Ordner nicht öffnen, und der Explorer hat ihn zurückgegeben. Starten Sie Tessera und versuchen Sie es erneut, oder führen Sie `tessera files revert` aus, damit der Explorer Ordner öffnet."
 "Tessera Files" = "Tessera Files"
 "The choice is kept for drives of this kind; Settings > AutoPlay changes it." = "Die Auswahl gilt für Laufwerke dieser Art; Einstellungen > Automatische Wiedergabe ändert sie."
+
+# Integration: the network entries of This PC in the file manager.
+"Map network drive" = "Netzlaufwerk verbinden"
+"Disconnect network drive" = "Netzlaufwerk trennen"
+"Add a network location" = "Netzwerkadresse hinzufügen"

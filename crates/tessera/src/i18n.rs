@@ -1955,6 +1955,10 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The choice is kept for drives of this kind; Settings > AutoPlay changes it.",
         "Выбор сохраняется для дисков этого типа; изменить его можно в Параметрах > Автозапуск.",
     ),
+    // Integration: the network entries of This PC in the file manager.
+    ("Map network drive", "Подключить сетевой диск"),
+    ("Disconnect network drive", "Отключить сетевой диск"),
+    ("Add a network location", "Добавить сетевое расположение"),
 ];
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ use super::session::{FolderView, FolderViews};
 use super::thumbs::{FileViewConfig, Picture, Thumbs, drop_pictures};
 use super::view::{DropPlaces, DropSpot};
 use super::{Files, FilesConfig};
+use crate::actions::Actions;
 use crate::field::TextField;
 use crate::i18n::Language;
 use crate::icons::{AppIcons, Icon, icon_of_pixels};
@@ -109,6 +110,7 @@ pub const ICON_PIN: &str = "\u{e718}";
 pub const ICON_UNPIN: &str = "\u{e77a}";
 const ICON_EXPLORER: &str = "\u{ec50}";
 const ICON_LINK: &str = "\u{e71b}";
+const ICON_SHARE: &str = "\u{e72d}";
 const ICON_SORT_UP: &str = "\u{e70e}";
 const ICON_SORT_DOWN: &str = "\u{e70d}";
 const ICON_CHECK: &str = "\u{e73e}";
@@ -821,9 +823,13 @@ impl FolderPane {
     /// Shows the folder the chosen result of a search is in, with it
     /// chosen.
     fn open_location(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.chosen().into_iter().next() else {
-            return;
-        };
+        if let Some(path) = self.chosen().into_iter().next() {
+            self.show_in_folder(path, window, cx);
+        }
+    }
+
+    /// Goes to the folder of `path` and chooses `path` there once read.
+    fn show_in_folder(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let Some(folder) = path.parent().map(Path::to_owned) else {
             return;
         };
@@ -1359,13 +1365,10 @@ impl FolderPane {
             return;
         }
         let location = Files::named(&field.read(cx).text());
-        match &location {
-            Location::Folder(path) if path.is_file() => {
-                if let Err(error) = reveal_in_explorer(path) {
-                    report!("{error:#}");
-                }
-            }
-            _ => self.go(location, window, cx),
+        match location {
+            // A file is shown chosen in its folder.
+            Location::Folder(path) if path.is_file() => self.show_in_folder(path, window, cx),
+            location => self.go(location, window, cx),
         }
     }
 
@@ -1896,6 +1899,21 @@ impl FolderPane {
                     }
                 }));
             }
+            // This PC maps and disconnects network drives, as Explorer's does.
+            if *self.history.current() == Location::Computer {
+                let network = [
+                    ("Map network drive", "map-drive"),
+                    ("Disconnect network drive", "disconnect-drive"),
+                    ("Add a network location", "add-network-location"),
+                ];
+                for (label, action) in network {
+                    entries.push(MenuEntry::new(
+                        ICON_NETWORK,
+                        language.say(label),
+                        move |cx| Actions::run(action, None, cx),
+                    ));
+                }
+            }
             entries.push(entry(ICON_SELECT_ALL, "Select all", |this, cx| {
                 this.choose_all(cx)
             }));
@@ -1967,6 +1985,9 @@ impl FolderPane {
         }));
         entries.push(entry(ICON_LINK, "Copy path", |this, cx| {
             this.copy_paths(false, cx)
+        }));
+        entries.push(entry(ICON_SHARE, "Share", |this, cx| {
+            Files::share(this.chosen(), cx)
         }));
         entries.push(entry(ICON_INVERT, "Invert selection", |this, cx| {
             this.invert_choice(cx)
@@ -2408,6 +2429,11 @@ impl FolderPane {
             .content_start()
             .gap(theme.spacing.medium)
             .overflow_y_scroll()
+            // Its menu maps and disconnects network drives.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event, window, cx| this.press_empty(event, window, cx)),
+            )
             .children(cards)
             .into_any_element()
     }

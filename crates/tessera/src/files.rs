@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 
 use async_channel::Sender;
 use gpui::{
-    AnyWindowHandle, App, AppContext, Bounds, Entity, Global, IntoElement, ParentElement, Render,
-    Styled, TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Global, IntoElement, ParentElement, Render, Styled, TitlebarOptions,
+    Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
 };
 use serde::Deserialize;
 
@@ -41,9 +41,10 @@ use crate::explorer_args::{Destination, ExplorerArgs, KnownPlace, Places, explor
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::modules::devices::{Drives, letter_of as drive_letter_of};
+use crate::modules::windows::FILES_APP;
 use crate::platform::Place;
 use crate::platform::{
-    DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, ShellWindows,
+    AppWindow, DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, ShellWindows,
     known_folder_path, reveal_with, shell_mode, start_explorer,
 };
 use crate::theme::Theme;
@@ -112,8 +113,6 @@ pub struct Files {
     reveals: Option<Sender<PathBuf>>,
     /// Whether the list of folder windows of the Shell is served.
     serving: bool,
-    /// The windows in that list, by the number of their handle.
-    listed: Vec<(isize, AnyWindowHandle)>,
 }
 
 impl Global for Files {}
@@ -282,18 +281,14 @@ impl Files {
             is_movable: true,
             is_resizable: true,
             is_minimizable: true,
-            app_id: Some("Tessera.Files".to_owned()),
+            app_id: Some(FILES_APP.to_owned()),
             window_min_size: Some(size(px(LEAST_SIZE.0), px(LEAST_SIZE.1))),
             ..Default::default()
         };
-        let folder = { opening.tabs.get(opening.active) }
-            .and_then(|tab| tab.panes.get(tab.active))
-            .and_then(Location::folder)
-            .map(Path::to_owned);
         let opened = cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| FilesView::new(opening, config, window, cx));
-            Self::list_window(&view, window, folder, cx);
-            view
+            // The dock and the switcher list the window as an application's.
+            AppWindow::mark_own(window, FILES_APP, None);
+            cx.new(|cx| FilesView::new(opening, config, window, cx))
         });
         match opened {
             Ok(opened) => Some(opened),
@@ -304,38 +299,12 @@ impl Files {
         }
     }
 
-    /// Puts the window of `view` in the list of folder windows of the
-    /// Shell, at the folder it opened with, and takes it out once the
-    /// window is closed. Its later folders are not told yet: that waits
-    /// for the windows to tell where they navigate.
-    fn list_window(
-        view: &Entity<FilesView>,
-        window: &Window,
-        folder: Option<PathBuf>,
-        cx: &mut App,
-    ) {
-        if !cx.default_global::<Self>().serving {
-            return;
-        }
-        let Some(number) = ShellWindows::number_of(window) else {
-            return;
-        };
-        ShellWindows::opened(number, folder);
-        let handle = window.window_handle();
-        cx.global_mut::<Self>().listed.push((number, handle));
-        cx.observe_release(view, move |_, cx| {
-            ShellWindows::closed(number);
-            cx.global_mut::<Self>()
-                .listed
-                .retain(|(listed, _)| *listed != number);
-        })
-        .detach();
-    }
-
     /// Serves the list of folder windows of the Shell, as the shell of the
-    /// session, once: a program that asks a window of the file manager to
-    /// choose files brings that window to the front. Choosing the files
-    /// themselves waits for the panes to choose items by name.
+    /// session, once. The windows of the file manager are listed at the
+    /// folder of their pane in front, which the list follows as they go
+    /// elsewhere, and leave it when they close; a program that asks one of
+    /// them to choose files brings it to the front with those files chosen
+    /// once its folder was read.
     fn serve_shell_windows(cx: &mut App) {
         let this = cx.default_global::<Self>();
         if this.serving || !shell_mode() {
@@ -343,14 +312,27 @@ impl Files {
         }
         this.serving = true;
         let selections = ShellWindows::serve();
+        for window in Self::windows(cx) {
+            ShellWindows::opened(window.hwnd, window.folder);
+        }
+        Self::observe_windows(cx, |change, _| match change {
+            WindowsChange::Opened(window) => {
+                ShellWindows::opened(window.hwnd, window.folder.clone())
+            }
+            WindowsChange::Navigated(window) => {
+                ShellWindows::navigated(window.hwnd, window.folder.clone());
+            }
+            WindowsChange::Closed(window) => ShellWindows::closed(window.hwnd),
+        });
         cx.spawn(async move |cx| {
             while let Ok(selection) = selections.recv().await {
                 let answered = cx.update(|cx| {
-                    let listed = { cx.global::<Self>().listed.iter() }
-                        .find(|(number, _)| *number == selection.window)
-                        .map(|(_, handle)| *handle);
-                    if let Some(handle) = listed {
-                        let _ = handle.update(cx, |_, window, _| window.activate_window());
+                    let window = { Self::windows(cx).into_iter() }
+                        .find(|window| window.hwnd == selection.window);
+                    if let Some(window) = window {
+                        let _ =
+                            { window.handle }.update(cx, |_, window, _| window.activate_window());
+                        (window.select)(selection.names, cx);
                     }
                 });
                 if answered.is_err() {
@@ -406,15 +388,16 @@ impl Files {
         .detach();
     }
 
-    /// Opens the folder around `path`, where `path` is to be chosen.
-    /// Choosing it waits for the panes to be able to choose an item by
-    /// name; until then the folder opens with nothing chosen.
+    /// Opens the folder around `path` with `path` chosen in it, once the
+    /// folder was read; a path with no folder around it, as the root of a
+    /// drive, opens itself.
     pub fn open_at_item(path: &Path, cx: &mut App) {
-        let folder = match path.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => parent,
-            _ => path,
-        };
-        Self::open(Location::Folder(folder.to_owned()), cx);
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+                Self::open_selecting(parent.to_owned(), vec![name.to_owned()], cx);
+            }
+            _ => Self::open(Location::Folder(path.to_owned()), cx),
+        }
     }
 
     /// Where a window opens that names no folder: the folder of the user.
@@ -626,7 +609,6 @@ type WindowsObserver = std::rc::Rc<dyn Fn(&WindowsChange, &mut App)>;
 
 /// A window of the file manager, as the windows of the Shell list it.
 #[derive(Clone)]
-#[allow(dead_code, reason = "for the windows of the Shell")]
 pub struct FilesWindow {
     pub handle: gpui::AnyWindowHandle,
     /// The native window, as a number.
@@ -640,7 +622,6 @@ pub struct FilesWindow {
 
 /// What changed among the windows of the file manager.
 #[derive(Clone)]
-#[allow(dead_code, reason = "for the windows of the Shell")]
 pub enum WindowsChange {
     Opened(FilesWindow),
     /// Its pane in front went to another place, or another pane came in
@@ -661,7 +642,6 @@ impl Global for OpenWindows {}
 
 impl Files {
     /// The windows of the file manager that are open, the oldest first.
-    #[allow(dead_code, reason = "for the windows of the Shell")]
     pub fn windows(cx: &App) -> Vec<FilesWindow> {
         let Some(open) = cx.try_global::<OpenWindows>() else {
             return Vec::new();
@@ -674,7 +654,6 @@ impl Files {
 
     /// Has `observer` told whenever a window of the file manager opens,
     /// goes somewhere else or closes.
-    #[allow(dead_code, reason = "for the windows of the Shell")]
     pub fn observe_windows(cx: &mut App, observer: impl Fn(&WindowsChange, &mut App) + 'static) {
         cx.default_global::<OpenWindows>()
             .observers
@@ -684,7 +663,6 @@ impl Files {
     /// Opens a window of the file manager at `folder` with the items
     /// called `names` in it chosen, once it was read, as `/select` and
     /// `SHOpenFolderAndSelectItems` ask.
-    #[allow(dead_code, reason = "for the command lines of Explorer")]
     pub fn open_selecting(folder: PathBuf, names: Vec<std::ffi::OsString>, cx: &mut App) {
         // Where no window opened, nothing is chosen.
         if let Some(opened) = Self::open_with(Opening::at(Location::Folder(folder)), cx) {

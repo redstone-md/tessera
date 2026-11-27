@@ -1060,3 +1060,8 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Tessera Files could not open the folder, and Explorer gave it back. Start Tessera and try again, or run `tessera files revert` to have Explorer open folders." = "Tessera Files не зміг відкрити папку, і Провідник повернув її. Запустіть Tessera і спробуйте ще раз або виконайте `tessera files revert`, щоб папки відкривав Провідник."
 "Tessera Files" = "Tessera Files"
 "The choice is kept for drives of this kind; Settings > AutoPlay changes it." = "Вибір зберігається для дисків цього типу; змінити його можна в Параметрах > Автозапуск."
+
+# Integration: the network entries of This PC in the file manager.
+"Map network drive" = "Підключити мережевий диск"
+"Disconnect network drive" = "Відключити мережевий диск"
+"Add a network location" = "Додати мережеве розташування"

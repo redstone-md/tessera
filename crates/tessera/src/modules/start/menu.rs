@@ -29,8 +29,7 @@ use crate::config::edit::ConfigFile;
 use crate::files::Files;
 use crate::i18n::Language;
 use crate::platform::{
-    Launch, Removal, ShellThread, Shortcut, app_id_in, app_settings, put_on_desktop,
-    reveal_in_explorer,
+    Launch, Removal, ShellThread, Shortcut, app_id_in, app_settings, put_on_desktop, reveal,
 };
 use crate::popup::Popups;
 use crate::shell::Shell;
@@ -215,16 +214,10 @@ fn set_on_dock(shortcut: Shortcut, target: Option<PathBuf>, pin: bool, cx: &mut 
 /// Opens the folder `path` lies in, with it chosen where Explorer opens
 /// it.
 fn open_location(path: &Path, cx: &mut App) {
-    let Some(folder) = path.parent() else {
-        return;
-    };
-    if Files::open_folder(folder, cx) {
-        return;
-    }
     let path = path.to_owned();
     cx.background_executor()
         .spawn(async move {
-            if let Err(error) = reveal_in_explorer(&path) {
+            if let Err(error) = reveal(&path) {
                 report!("{error:#}");
             }
         })
