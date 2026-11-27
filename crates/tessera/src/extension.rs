@@ -461,6 +461,7 @@ mod tests {
             include_str!("../../../extensions/air-quality/extension.toml"),
             include_str!("../../../extensions/dice/extension.toml"),
             include_str!("../../../extensions/breaks/extension.toml"),
+            include_str!("../../../extensions/system-monitor/extension.toml"),
         ] {
             Manifest::parse(manifest).unwrap();
         }

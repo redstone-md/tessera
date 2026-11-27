@@ -1,0 +1,45 @@
+# Layouts refer to the widgets below as "system-monitor.meters" and
+# "system-monitor.panel", and to the popup as "system-monitor.panel".
+#
+# Built on the extension interface 0.4: it reads the meters, the windows
+# and the media of the machine through Tessera, which asks Windows; it
+# sends nothing anywhere.
+id = "system-monitor"
+
+# The processor and the memory in use, for a bar. It is drawn again when
+# the meters change, about once a second. A click on it opens the popup
+# below, unless the layout names another popup for it.
+[[widget]]
+name = "meters"
+popup = "panel"
+watch = ["meters"]
+
+# The meters with the network, the battery, what is playing with buttons
+# that control it, and a list of the open windows that a field filters,
+# each with a button that brings it in front, for a popup.
+[[widget]]
+name = "panel"
+watch = ["meters", "media", "windows"]
+
+# Layouts refer to this popup as "system-monitor.panel".
+[[popup]]
+name = "panel"
+width = 360
+height = 520
+content = ["panel"]
+
+# Typed into the launcher, `sys` lists the meters, and `sys` with a word
+# the windows whose title has it.
+[runner]
+prefix = "sys"
+
+# Opens the popup. Bound to Win+Alt+M where Tessera takes the keys of
+# Windows; otherwise a `[[key]]` with `action = "system-monitor.panel"`
+# binds it.
+[[shortcut]]
+id = "panel"
+label = "Open the system monitor"
+keys = "win+alt+m"
+
+[permissions]
+system = ["meters", "media", "media-control", "windows", "window-control", "popups"]
