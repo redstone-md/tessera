@@ -255,6 +255,9 @@ type Handler = Arc<Mutex<dyn FnMut(u32, usize, isize) -> Option<isize> + Send>>;
 static HOOK: AtomicIsize = AtomicIsize::new(0);
 /// The desktop window, as a number; zero where there is none.
 static DESKTOP: AtomicIsize = AtomicIsize::new(0);
+/// Its child `SHELLDLL_DefView`, which the icons of the desktop are drawn
+/// in, as a number; zero where there is none.
+static DEF_VIEW: AtomicIsize = AtomicIsize::new(0);
 /// The number of the `SHELLHOOK` message.
 static SHELLHOOK: AtomicU32 = AtomicU32::new(0);
 static SHELL: AtomicBool = AtomicBool::new(false);
@@ -378,10 +381,17 @@ impl ShellHost {
 
     /// The desktop window Tessera made as the shell, `Progman`; `None`
     /// beside Explorer or before it is made.
-    #[allow(dead_code, reason = "for the icons of the desktop")]
     pub fn desktop_window() -> Option<AppWindowId> {
         let window = DESKTOP.load(Ordering::SeqCst);
         (window != 0).then(|| AppWindowId::from_raw(window))
+    }
+
+    /// The child `SHELLDLL_DefView` of [`Self::desktop_window`], which
+    /// draws nothing and holds the icons of the desktop; `None` beside
+    /// Explorer or before it is made.
+    pub fn def_view_window() -> Option<AppWindowId> {
+        let window = DEF_VIEW.load(Ordering::SeqCst);
+        (window != 0 && DESKTOP.load(Ordering::SeqCst) != 0).then(|| AppWindowId::from_raw(window))
     }
 
     /// Does `work` on the host thread, where the desktop window lives,
@@ -507,6 +517,7 @@ fn host(shell: bool, desktop_made: mpsc::SyncSender<()>) {
         match create_desktop() {
             Ok((desktop, icons)) => {
                 DESKTOP.store(desktop.0 as isize, Ordering::SeqCst);
+                DEF_VIEW.store(icons.0 as isize, Ordering::SeqCst);
                 // Its wallpaper window draws the wallpaper of Windows with
                 // `PaintDesktop`, so Tessera need not draw it again.
                 SystemWallpaper::set_painted_by_own_desktop(true);

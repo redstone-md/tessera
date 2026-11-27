@@ -782,8 +782,8 @@ pub struct Config {
     #[serde(default)]
     pub file_view: crate::files::FileViewConfig,
     // Wave 2, desktop-icons: the icons of the desktop.
-    // #[serde(default)]
-    // pub desktop: crate::desktop::DesktopConfig,
+    #[serde(default)]
+    pub desktop: crate::desktop::DesktopConfig,
     // Wave 2, system-settings: performance mode by power source and energy saver.
     // #[serde(default)]
     // pub performance: crate::performance::PerformanceConfig,

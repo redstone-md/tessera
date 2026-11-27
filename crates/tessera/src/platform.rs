@@ -10,6 +10,7 @@ pub use win32::BalloonKind;
 pub use win32::BinUsage;
 pub use win32::BrightnessLevel;
 pub use win32::DesktopClose;
+pub use win32::DesktopOptions;
 pub use win32::DisplayMode;
 pub use win32::FileSearch;
 pub use win32::InputName;
@@ -79,6 +80,10 @@ pub use win32::{DesktopSurvey, WindowMark};
     reason = "named by the views that keep the windows of a survey or a still picture"
 )]
 pub use win32::{DesktopWindow, Still};
+pub use win32::{
+    DesktopFolders, DesktopLayer, ExplorerIcons, FolderWatch, LayerKind, VirtualKind, layer_frame,
+    virtual_items,
+};
 pub use win32::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };

@@ -688,6 +688,31 @@ The widget `wallpaper` and the action `wallpaper` (`next`, the default, or `prev
 
 `theme = "wallpaper"`, or `seed = "wallpaper"` in a theme file, derives the colors from the wallpaper, as `accent` does from the accent color.
 
+## The icons of the desktop
+
+`[desktop]` sets how Tessera draws the icons of the desktop; the [features](FEATURES.md) tell what they do and what was tried.
+
+```toml
+[desktop]
+icons = true      # Tessera draws the icons; without the key only where it is the shell
+size = "medium"   # "small", "medium" or "large"; Ctrl+wheel and View > ... change it
+arrange = "grid"  # "grid", "free" or "auto"
+sort = "name"     # "name", "size", "type" or "date"
+show = true       # View > Show desktop icons
+layer = "child"   # or "window"
+```
+
+| Key | What it does |
+| --- | --- |
+| `icons` | Whether Tessera draws the icons. Without the key it does where it is the shell of the session, and beside Explorer it leaves them to Explorer. Where Tessera is the shell its windows of the icons cover the desktop of every display whatever `icons` says, so that a click and the menu of the desktop are always Tessera's; with `icons = false` they draw nothing. Beside Explorer, `icons = true` hides Explorer's icons while Tessera draws its own, and shows them again when Tessera stops drawing them, quits or ends in any other way. |
+| `size` | 32, 48 or 96 logical pixels; Ctrl+wheel, Ctrl+plus and Ctrl+minus step it, Ctrl+Shift+2, 3 and 4 choose large, medium and small as on Explorer's desktop. |
+| `arrange` | `grid` keeps the icons where they were put, in the cells of a grid; `free` keeps them anywhere; `auto` arranges them column after column from the top left of the primary display, in the order of `sort`, and they cannot be put elsewhere. |
+| `sort` | The order of `auto`, and of the icons Sort by arranges once in the other two: the items of the Shell first, then folders, then files, by name, by size (the largest first), by type (the extension) or by date (the newest first). |
+| `show` | Whether the icons are shown at all; the menu of the desktop still opens without them. |
+| `layer` | How the window of the icons of a display is part of the desktop: `child` makes it a child window of Tessera's own desktop where Tessera is the shell, and beside Explorer of a window Tessera keeps below the others; `window` keeps it a window of its own below the others. `window` is there for a Windows where a child window does not show what GPUI draws. |
+
+The menu of the desktop writes `size`, `arrange`, `sort` and `show` here. Where the icons stand is kept in `desktop-icons.toml` beside `config.toml`, as a column and a row (and a display, counted from the left) for each icon, for each arrangement of displays: a display that goes takes its icons to the primary one, and they are back where they were when it comes back.
+
 ## Notices, devices and privacy
 
 Explorer tells of a few things that nothing else tells of once Tessera is the shell: a drive that was plugged in, a device that may be pulled out, a battery running low, and the balloons applications show at their icons of the notification area (those are always given, as only Tessera serving the icons receives them). Tessera gives these as notices of its own, listed with the [notifications](#notifications) and shown as banners where banners are on, with buttons for what can be done about them. `[notices]` says which:

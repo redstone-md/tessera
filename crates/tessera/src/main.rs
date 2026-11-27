@@ -19,6 +19,7 @@ mod config;
 mod corners;
 mod desk;
 mod explorer_args;
+mod desktop;
 mod extension;
 mod field;
 mod files;

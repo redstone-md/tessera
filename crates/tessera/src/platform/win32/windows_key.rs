@@ -184,7 +184,7 @@ fn close_presses() -> &'static (Sender<()>, Receiver<()>) {
 
 /// The classes of the windows that are the desktop: that of Explorer and
 /// the one behind its icons, which a shell may make as well.
-const DESKTOP_CLASSES: [&str; 2] = ["Progman", "WorkerW"];
+const DESKTOP_CLASSES: [&str; 3] = ["Progman", "WorkerW", super::desktop_folder::LAYER_CLASS];
 
 /// Alt+F4 pressed while the desktop is in front: no window, the desktop
 /// window of Windows or of the shell, or one of [`DESKTOP_CLASSES`].
