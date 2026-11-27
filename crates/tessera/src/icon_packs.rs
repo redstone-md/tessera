@@ -213,9 +213,9 @@ impl PackIcon {
     }
 
     /// Whether it is drawn in a color of the theme, and so drawn again
-    /// when the theme changes.
+    /// when the theme changes. Looks for a mask on the disk.
     fn follows_theme(&self) -> bool {
-        self.monochrome || self.mask.is_some()
+        self.monochrome || self.mask_file().is_some()
     }
 }
 
@@ -289,6 +289,9 @@ type SvgDrawing = Box<dyn Fn(&[u8]) -> anyhow::Result<Arc<RenderImage>> + Send +
 
 static SVG: OnceLock<SvgDrawing> = OnceLock::new();
 
+/// A picture drawn of an icon: the icon, the size, and whether active.
+type DrawnKey = (PackIcon, u32, bool);
+
 /// The packs in use, the first one first, and the pictures drawn of
 /// their icons.
 pub struct IconPacks {
@@ -298,7 +301,8 @@ pub struct IconPacks {
     tints: Cell<Tints>,
     /// Pictures by icon, size and whether active; `None` for a picture
     /// that cannot be used, which was reported.
-    drawn: RefCell<HashMap<(PackIcon, u32, bool), Icon>>,
+    /// Each with whether it is in the colors of the theme.
+    drawn: RefCell<HashMap<DrawnKey, (Icon, bool)>>,
 }
 
 impl IconPacks {
@@ -388,18 +392,25 @@ impl IconPacks {
     /// the colors of the theme where it follows them, the active one if
     /// `active`.
     pub fn image(&self, icon: &PackIcon, size: u32, active: bool) -> Icon {
-        let active = active && icon.follows_theme();
         let key = (icon.clone(), size, active);
-        if let Some(found) = self.drawn.borrow().get(&key) {
+        if let Some((found, _)) = self.drawn.borrow().get(&key) {
             return found.clone();
         }
+        // An icon in its own colors is the same picture when active.
+        let resting = (icon.clone(), size, false);
+        let known = self.drawn.borrow().get(&resting).cloned();
+        if active && let Some((found, false)) = known {
+            self.drawn.borrow_mut().insert(key, (found.clone(), false));
+            return found;
+        }
+        let tinted = icon.follows_theme();
         let tints = self.tints.get();
         let tint = if active { tints.active } else { tints.rest };
         let drawn = draw(icon, size, tint)
             .inspect_err(|error| report!("the icon {} is not used: {error:#}", icon.file.display()))
             .ok()
             .flatten();
-        self.drawn.borrow_mut().insert(key, drawn.clone());
+        self.drawn.borrow_mut().insert(key, (drawn.clone(), tinted));
         drawn
     }
 
@@ -408,9 +419,7 @@ impl IconPacks {
     pub fn follow_theme(&self, theme: &Theme) {
         let tints = Tints::of(theme);
         if self.tints.replace(tints) != tints {
-            self.drawn
-                .borrow_mut()
-                .retain(|(icon, ..), _| !icon.follows_theme());
+            self.drawn.borrow_mut().retain(|_, (_, tinted)| !*tinted);
         }
     }
 
