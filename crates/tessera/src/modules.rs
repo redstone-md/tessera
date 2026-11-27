@@ -26,6 +26,7 @@ mod session;
 mod settings;
 mod sound;
 mod start;
+mod startup;
 mod system;
 mod tiling;
 mod trash;
@@ -66,6 +67,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(ShellModule),
         Box::new(settings::SettingsModule),
         Box::new(start::StartModule),
+        Box::new(startup::StartupModule),
         Box::new(sound::SoundModule),
         Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),

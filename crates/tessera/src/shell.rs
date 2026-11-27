@@ -26,6 +26,7 @@ use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
 use crate::preview::Previews;
+use crate::startup::Startup;
 use crate::surface::{EdgeSurface, EdgeSurfaceView};
 use crate::switcher::Switcher;
 use crate::theme::Theme;
@@ -86,6 +87,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        Startup::start(&config.startup, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -281,6 +283,7 @@ impl Shell {
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
+        Startup::configure(&config.startup, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

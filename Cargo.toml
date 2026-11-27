@@ -26,6 +26,8 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 raw-window-handle = "0.6"
+# Reads the manifests of packaged applications for their startup tasks.
+roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 toml = "0.9"
@@ -49,6 +51,7 @@ windows = { version = "0.61", features = [
     "Graphics_Capture",
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",
+    "Management_Deployment",
     "Media_Control",
     "Networking_Connectivity",
     "Networking_NetworkOperators",

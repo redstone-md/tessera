@@ -752,6 +752,7 @@ const WIDGET_LABELS: &[(&str, &str)] = &[
     ("problems", "Problems"),
     ("quit", "Quit"),
     ("settings", "Settings"),
+    ("startup", "Startup apps"),
     ("tiling", "Tiling"),
     ("trash", "Recycle Bin"),
     ("tray", "Tray"),
@@ -937,6 +938,8 @@ struct Settings {
     /// 1 while that list is open, 0 while it is closed.
     key_list: Spring,
     interactions: HashMap<Control, Interaction>,
+    /// The programs that start with the session, read when first shown.
+    startup: Option<AnyView>,
 }
 
 impl Settings {
@@ -970,6 +973,7 @@ impl Settings {
             picking: None,
             key_list: Spring::new(motion.spatial_fast, 0.),
             interactions: HashMap::new(),
+            startup: None,
         };
         match ConfigFile::open().and_then(|file| Ok((file.config()?, file.table()))) {
             Ok((config, table)) => (this.config, this.table) = (Some(config), table),
@@ -2418,6 +2422,7 @@ impl Settings {
             Section::General => {
                 shared.push(self.arrangements(config, window, cx));
                 shared.push(self.languages(window, cx));
+                shared.push(self.startup(&theme, language, cx));
             }
             Section::Bars => {
                 wide.push(self.arranging(window, cx));
@@ -2454,6 +2459,22 @@ impl Settings {
         (wide, shared)
     }
 }
+
+impl Settings {
+    /// The card of the programs that start with the session; the list
+    /// is made, and read, when the card is first shown. It is taken to
+    /// be as long as a dozen lines, as a list of ten programs is.
+    fn startup(&mut self, theme: &Theme, language: Language, cx: &mut Context<Self>) -> Card {
+        let list = { self.startup.clone() }.unwrap_or_else(|| super::startup::list(cx));
+        self.startup = Some(list.clone());
+        let card = card(theme, language.say("Startup apps")).child(list);
+        (STARTUP_LINES, card.into_any_element())
+    }
+}
+
+/// How many lines the card of the programs that start with the session
+/// is taken to need.
+const STARTUP_LINES: usize = 12;
 
 /// A card: a rounded field with the title of what it holds.
 fn card(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {

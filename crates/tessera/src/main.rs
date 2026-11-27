@@ -30,6 +30,7 @@ mod popup;
 mod preview;
 mod session;
 mod shell;
+mod startup;
 mod surface;
 mod switcher;
 mod theme;
