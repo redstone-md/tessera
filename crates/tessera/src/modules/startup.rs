@@ -6,7 +6,7 @@
 //! made for a popup or a card, and shown under **General** in the
 //! settings.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{
     AnyElement, AnyView, App, AppContext, AsyncApp, Context, FontWeight, InteractiveElement,
@@ -16,7 +16,7 @@ use gpui::{
 
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
-use crate::motion::{Interaction, Spring, staggered};
+use crate::motion::{Interaction, Spring, SpringSpec, staggered};
 use crate::platform::{StartupEntry, StartupSource, SwitchRefusal};
 use crate::startup::Startup;
 use crate::theme::Theme;
@@ -103,8 +103,8 @@ struct StartupApps {
     arrival: Spring,
     /// Why the last switch did not change.
     failure: Option<SharedString>,
-    /// Whether a switch is being written.
-    busy: bool,
+    /// The places of the entries whose switch is being written.
+    writing: HashSet<usize>,
 }
 
 impl StartupApps {
@@ -124,7 +124,7 @@ impl StartupApps {
             switches: Vec::new(),
             arrival: Spring::new(motion.spatial, 0.),
             failure: None,
-            busy: false,
+            writing: HashSet::new(),
         }
     }
 
@@ -137,11 +137,7 @@ impl StartupApps {
         }
         let motion = cx.global::<Theme>().motion;
         for entry in &entries {
-            let on = if entry.enabled { 1. } else { 0. };
-            self.travels
-                .entry(key_of(entry))
-                .or_insert_with(|| Spring::new(motion.spatial, on))
-                .animate_to(on);
+            self.follow(entry, motion.spatial);
         }
         self.switches
             .resize_with(entries.len(), || Interaction::new(&motion));
@@ -149,9 +145,10 @@ impl StartupApps {
         cx.notify();
     }
 
-    /// Switches the entry at `index` over, and reads the list again after.
+    /// Switches the entry at `index` over, and reads that entry again
+    /// after; the other switches stay usable meanwhile.
     fn flip(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.writing.contains(&index) {
             return;
         }
         let Some(entry) = self
@@ -167,26 +164,49 @@ impl StartupApps {
         if let Some(travel) = self.travels.get_mut(&key_of(entry)) {
             travel.animate_to(if on { 1. } else { 0. });
         }
-        self.busy = true;
+        self.writing.insert(index);
         self.failure = None;
         cx.notify();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let written = cx.background_executor().spawn(async move {
                 let switched = wanted.set_enabled(on);
-                (switched, StartupEntry::all())
+                (switched, wanted.refreshed())
             });
-            let (switched, entries) = written.await;
+            let (switched, entry) = written.await;
             this.update(cx, |this, cx| {
-                this.busy = false;
+                this.writing.remove(&index);
                 if let Err(refusal) = switched {
                     this.failure = Some(refusal_text(&refusal, Language::of(cx)));
                 }
-                this.take(entries, cx);
+                this.replace(index, entry, cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Puts `entry`, read again, in its place `index`, its switch
+    /// following what it now is.
+    fn replace(&mut self, index: usize, entry: StartupEntry, cx: &mut Context<Self>) {
+        let Some(place) = { self.entries.as_mut() }.and_then(|entries| entries.get_mut(index))
+        else {
+            return;
+        };
+        if key_of(place) != key_of(&entry) {
+            return;
+        }
+        *place = entry.clone();
+        self.follow(&entry, cx.global::<Theme>().motion.spatial);
+    }
+
+    /// Has the switch of `entry` travel to where it is on or off.
+    fn follow(&mut self, entry: &StartupEntry, spring: SpringSpec) {
+        let on = if entry.enabled { 1. } else { 0. };
+        self.travels
+            .entry(key_of(entry))
+            .or_insert_with(|| Spring::new(spring, on))
+            .animate_to(on);
     }
 
     /// The row of the entry at `index`, with its switch.
