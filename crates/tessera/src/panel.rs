@@ -148,6 +148,8 @@ struct Placed {
     /// widgets no module provides are counted as well.
     index: usize,
     popup: Option<String>,
+    /// Whether it is a spacer that takes the free room of its slot.
+    flexible: bool,
     interaction: Interaction,
     /// Where the widget is in its surface, once it has been drawn.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -291,6 +293,7 @@ impl Panel {
                         name: spec.widget.clone().into(),
                         index,
                         popup: cx.global::<WidgetRegistry>().popup_of(spec),
+                        flexible: is_flexible(spec),
                         interaction: Interaction::new(&motion),
                         bounds: Rc::default(),
                         field: Spring::new(motion.effects, 0.),
@@ -483,8 +486,7 @@ impl Panel {
             seen.set(Some(bounds));
         };
         if plain && placed.popup.is_none() {
-            // Drawn as it is, so that a spacer can take the free room.
-            return placed.view.clone().into_any_element();
+            return Self::plain(placed, measure, vertical);
         }
         let field = Self::field(placed, self.ground.as_ref(), theme, window);
         let element = Self::button(placed, field, measure, slot, index, theme, window, cx);
@@ -492,6 +494,29 @@ impl Panel {
             true => Self::cell(element, placed.bounds.get(), theme, window),
             false => element,
         }
+    }
+
+    /// The plain widget `placed`, with no field nor button: in a box that
+    /// grows as the widget does, so that a spacer still takes the free
+    /// room, and that `measure` learns where it is, for the menu of the
+    /// widget and for widgets dropped next to it.
+    fn plain(
+        placed: &Placed,
+        measure: impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + 'static,
+        vertical: bool,
+    ) -> AnyElement {
+        let room = div().relative().flex().items_center().justify_center();
+        let room = match vertical {
+            true => room.flex_col().w_full(),
+            false => room.h_full(),
+        };
+        let room = match placed.flexible {
+            true => room.flex_1(),
+            false => room.flex_none(),
+        };
+        room.child(placed.view.clone())
+            .child(canvas(measure, |_, (), _, _| {}).absolute().size_full())
+            .into_any_element()
     }
 
     /// The widget `placed`, at `index` of `slot`, over its `field` if it
