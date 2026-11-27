@@ -50,10 +50,13 @@ use gpui::{Bounds, Pixels, Point, Window, point, px};
 use windows::Win32::Foundation::{HWND, POINT, POINTL, S_OK};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
-use windows::Win32::System::Com::StructuredStorage::StgCreateDocfile;
+use windows::Win32::System::Com::StructuredStorage::{
+    CreateILockBytesOnHGlobal, StgCreateDocfileOnILockBytes,
+};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, CoCreateInstance, IDataObject, STGC_DEFAULT, STGM_CREATE, STGM_READWRITE,
-    STGM_SHARE_EXCLUSIVE, TYMED_HGLOBAL, TYMED_ISTORAGE, TYMED_ISTREAM,
+    CLSCTX_INPROC_SERVER, CoCreateInstance, IDataObject, STATFLAG_NONAME, STATSTG, STGC_DEFAULT,
+    STGM_CREATE, STGM_READWRITE, STGM_SHARE_EXCLUSIVE, TYMED_HGLOBAL, TYMED_ISTORAGE,
+    TYMED_ISTREAM,
 };
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
@@ -63,7 +66,7 @@ use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{
     CFSTR_FILECONTENTS, CFSTR_FILEDESCRIPTORW, CFSTR_SHELLIDLIST, CLSID_DragDropHelper,
-    FD_ATTRIBUTES, FILEDESCRIPTORW, IDataObjectAsyncCapability, IDropTargetHelper,
+    FD_ATTRIBUTES, FD_FILESIZE, FILEDESCRIPTORW, IDataObjectAsyncCapability, IDropTargetHelper,
 };
 use windows::core::{AgileReference, Interface, Ref, implement};
 
@@ -71,10 +74,10 @@ use super::NativeSurface;
 use super::ShellThread;
 use super::drag::{
     DropEffect, DropEffects, DropKeys, drop_effect, drop_into, dropped_paths, format, global_bytes,
-    read_global, request,
+    read_global, request, tell_performed,
 };
 use super::file_op::{
-    FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name,
+    FileDeed, FileOperation, LinkTarget, Made, Outcome, Running, UndoJournal, unique_name,
 };
 use super::shell_item::{ShellId, id_list_length};
 
@@ -228,12 +231,16 @@ impl Dragged {
             unsafe { data.QueryGetData(&raw const request) == S_OK }
         };
         let allowed = DropEffects::of_raw(allowed);
+        // Items of a zip folder, a phone or an FTP folder come as items of
+        // the Shell and as files without paths: they are copied out, as
+        // Explorer does, and only what has neither (This PC, an item of the
+        // Control Panel) gets shortcuts.
         let (payload, allowed) = if offered(CF_HDROP.0) {
             (Payload::Files, allowed)
-        } else if format(CFSTR_SHELLIDLIST).is_some_and(offered) {
-            (Payload::Items, allowed.and(DropEffects::LINK))
         } else if format(CFSTR_FILEDESCRIPTORW).is_some_and(offered) {
             (Payload::Virtual, allowed.and(DropEffects::COPY))
+        } else if format(CFSTR_SHELLIDLIST).is_some_and(offered) {
+            (Payload::Items, allowed.and(DropEffects::LINK))
         } else {
             return None;
         };
@@ -250,7 +257,10 @@ impl Dragged {
     }
 }
 
-#[implement(IDropTarget)]
+/// The drop target itself. It is not agile: OLE calls it on the thread
+/// that registered it, the thread of GPUI, which its cells and the zones
+/// of the view rely on; a call from another thread is marshalled there.
+#[implement(IDropTarget, Agile = false)]
 struct Target {
     window: HWND,
     zones: DropZones,
@@ -436,7 +446,9 @@ impl IDropTarget_Impl for Target_Impl {
         self.shown.set(None);
         let answer = match (drag, zone, chosen) {
             (Some(drag), Some((_, folder)), chosen) if chosen != DropEffect::None => {
-                self.perform(drag, folder, chosen)
+                let answer = self.perform(drag, folder, chosen);
+                tell_performed(data, answer, chosen);
+                answer
             }
             _ => {
                 self.events.try_send(DropEvent::Left).ok();
@@ -483,6 +495,8 @@ struct VirtualFile {
     /// Its name, which may hold folders: `Album\Photo.jpg`.
     name: String,
     folder: bool,
+    /// Its size, where the program tells it.
+    size: Option<u64>,
 }
 
 /// The files that `data` describes (`FileGroupDescriptorW`).
@@ -512,11 +526,14 @@ fn virtual_files(data: &IDataObject) -> Vec<VirtualFile> {
                 .iter()
                 .position(|&unit| unit == 0)
                 .unwrap_or(name.len());
-            let has_attributes = descriptor.dwFlags & FD_ATTRIBUTES.0 as u32 != 0;
+            let has = |flag: i32| descriptor.dwFlags & flag as u32 != 0;
             let attributes = descriptor.dwFileAttributes;
+            let size =
+                (u64::from(descriptor.nFileSizeHigh) << 32) | u64::from(descriptor.nFileSizeLow);
             Some(VirtualFile {
                 name: String::from_utf16_lossy(&name[..length]),
-                folder: has_attributes && attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
+                folder: has(FD_ATTRIBUTES.0) && attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
+                size: has(FD_FILESIZE.0).then_some(size),
             })
         })
         .collect()
@@ -578,15 +595,28 @@ fn plan_virtual(files: &[VirtualFile], taken: impl Fn(&str) -> bool) -> Vec<Opti
         .collect()
 }
 
+/// How much of the files of a drop is held in memory, together, where
+/// they have to be read while the drop lasts; what is more is written to
+/// the disk then.
+const HELD_AT_MOST: usize = 64 << 20;
+
 /// Saves the files of `data` that exist only in their program into
-/// `folder`, and has `done` told what was made: on a thread of its own
-/// where the source lets the drop finish later, else here, as the data
-/// can be read only while the drop lasts.
+/// `folder`, and has `done` told what was made. Where the source lets the
+/// drop finish later, all of it is done on a thread of its own; else the
+/// files are read here, while the drop lasts, into memory as far as
+/// [`HELD_AT_MOST`] allows, and written on a thread of their own.
 fn save_virtual_later(
     data: IDataObject,
     folder: PathBuf,
     done: impl FnOnce(Outcome) + Send + 'static,
 ) {
+    // Ctrl+Z waits until what is saved is in the journal.
+    let running = Running::start();
+    let finish = move |fetched: VirtualDrop| {
+        let outcome = fetched.save();
+        drop(running);
+        done(outcome);
+    };
     // SAFETY: the calls only ask the source whether it can hand the data
     // over later, and tell it that it is to.
     let later = unsafe {
@@ -596,107 +626,220 @@ fn save_virtual_later(
             .filter(|capable| capable.StartOperation(None).is_ok())
     };
     let Some(capable) = later else {
-        return done(save_virtual(&data, &folder));
+        let fetched = VirtualDrop::fetch(&data, &folder, HELD_AT_MOST);
+        return ShellThread::run_alone("drop", move || finish(fetched));
     };
-    let shared = match AgileReference::new(&data) {
-        Ok(shared) => shared,
-        Err(_) => {
-            let outcome = save_virtual(&data, &folder);
-            // SAFETY: the operation started above is ended once.
-            let _ = unsafe { capable.EndOperation(S_OK, None, DROPEFFECT_COPY.0) };
-            return done(outcome);
-        }
+    let Ok(shared) = AgileReference::new(&data) else {
+        let fetched = VirtualDrop::fetch(&data, &folder, HELD_AT_MOST);
+        // SAFETY: the operation started above is ended once.
+        let _ = unsafe { capable.EndOperation(S_OK, None, DROPEFFECT_COPY.0) };
+        return ShellThread::run_alone("drop", move || finish(fetched));
     };
     ShellThread::run_alone("drop", move || {
-        let outcome = match shared.resolve() {
+        let fetched = match shared.resolve() {
             Ok(data) => {
-                let outcome = save_virtual(&data, &folder);
+                let fetched = VirtualDrop::fetch(&data, &folder, 0);
                 if let Ok(capable) = data.cast::<IDataObjectAsyncCapability>() {
                     // SAFETY: the operation started on the drop is ended
                     // once, from here.
                     let _ = unsafe { capable.EndOperation(S_OK, None, DROPEFFECT_COPY.0) };
                 }
-                outcome
+                fetched
             }
-            Err(error) => Outcome {
+            Err(error) => VirtualDrop {
+                folder,
+                files: Vec::new(),
                 problems: vec![format!("the dropped files cannot be read: {error}")],
-                ..Outcome::default()
             },
         };
-        done(outcome);
+        finish(fetched);
     });
 }
 
-/// Saves the files of `data` that exist only in their program into
-/// `folder`, and writes down what was made in the journal.
-fn save_virtual(data: &IDataObject, folder: &Path) -> Outcome {
-    let files = virtual_files(data);
-    let plan = plan_virtual(&files, |name| folder.join(name).exists());
-    let mut outcome = Outcome::default();
-    let mut made_tops: HashSet<PathBuf> = HashSet::new();
-    for (index, (file, relative)) in files.iter().zip(plan).enumerate() {
-        let Some(relative) = relative else {
-            outcome
-                .problems
-                .push(format!("`{}` cannot be the name of a file", file.name));
-            continue;
-        };
-        let path = folder.join(&relative);
-        let saved = match file.folder {
-            true => std::fs::create_dir_all(&path)
-                .with_context(|| format!("{} cannot be made", path.display())),
-            false => save_contents(data, index, &path),
-        };
-        if let Err(error) = saved {
-            outcome.problems.push(format!("{error:#}"));
-            continue;
-        }
-        // Only what is made directly in the folder is written down: the
-        // rest goes and comes back with it.
-        let top = relative.components().next().map(|part| folder.join(part));
-        if let Some(top) = top
-            && made_tops.insert(top.clone())
-        {
-            let made = match top == path && !file.folder {
-                true => Made::File { template: None },
-                false => Made::Folder,
-            };
-            outcome.deeds.push(FileDeed::Created { path: top, made });
-        }
-    }
-    UndoJournal::note(outcome.deeds.clone());
-    outcome
+/// What became of one dragged file as it was read from its program.
+enum Fetched {
+    /// A folder, which is still to be made.
+    Folder,
+    /// The contents, held to be written.
+    Held(Vec<u8>),
+    /// The contents, written to their place already.
+    Written,
 }
 
-/// Saves the contents of the file numbered `index` in `data` at `path`.
-fn save_contents(data: &IDataObject, index: usize, path: &Path) -> Result<()> {
-    let Some(contents) = format(CFSTR_FILECONTENTS) else {
-        bail!("the contents of the dropped files cannot be asked for");
-    };
+/// The files of a drop that exist only in their program, read from it:
+/// where each goes below `folder`, and what was read of it.
+struct VirtualDrop {
+    folder: PathBuf,
+    files: Vec<(PathBuf, Result<Fetched>)>,
+    problems: Vec<String>,
+}
+
+impl VirtualDrop {
+    /// Reads the files of `data` to go into `folder`, holding up to
+    /// `budget` bytes of them in memory and writing the rest to the disk
+    /// at once.
+    fn fetch(data: &IDataObject, folder: &Path, mut budget: usize) -> Self {
+        let files = virtual_files(data);
+        let plan = plan_virtual(&files, |name| folder.join(name).exists());
+        let mut fetched = Self {
+            folder: folder.to_owned(),
+            files: Vec::new(),
+            problems: Vec::new(),
+        };
+        for (index, (file, relative)) in files.iter().zip(plan).enumerate() {
+            let Some(relative) = relative else {
+                let problem = format!("`{}` cannot be the name of a file", file.name);
+                fetched.problems.push(problem);
+                continue;
+            };
+            let contents = match file.folder {
+                true => Ok(Fetched::Folder),
+                false => {
+                    let path = folder.join(&relative);
+                    let spill = Spill::new(&path, &mut budget);
+                    fetch_contents(data, index, file.size, spill)
+                        .with_context(|| format!("{} cannot be saved", path.display()))
+                }
+            };
+            fetched.files.push((relative, contents));
+        }
+        fetched
+    }
+
+    /// Writes what was read and makes the folders, and writes down what
+    /// was made in the journal.
+    fn save(self) -> Outcome {
+        let mut outcome = Outcome {
+            problems: self.problems,
+            ..Outcome::default()
+        };
+        let mut made_tops: HashSet<PathBuf> = HashSet::new();
+        for (relative, contents) in self.files {
+            let path = self.folder.join(&relative);
+            let folder = matches!(contents, Ok(Fetched::Folder));
+            let saved = contents.and_then(|contents| match contents {
+                Fetched::Folder => std::fs::create_dir_all(&path)
+                    .with_context(|| format!("{} cannot be made", path.display())),
+                Fetched::Held(bytes) => make_parent(&path)
+                    .and_then(|()| Ok(std::fs::write(&path, bytes)?))
+                    .with_context(|| format!("{} cannot be saved", path.display())),
+                Fetched::Written => Ok(()),
+            });
+            if let Err(error) = saved {
+                outcome.problems.push(format!("{error:#}"));
+                continue;
+            }
+            // Only what is made directly in the folder is written down:
+            // the rest goes and comes back with it.
+            let Some(first) = relative.components().next() else {
+                continue;
+            };
+            let top = self.folder.join(first);
+            if made_tops.insert(top.clone()) {
+                let made = match top == path && !folder {
+                    true => Made::File { template: None },
+                    false => Made::Folder,
+                };
+                outcome.deeds.push(FileDeed::Created { path: top, made });
+            }
+        }
+        UndoJournal::note(outcome.deeds.clone());
+        outcome
+    }
+}
+
+/// Makes the folder `path` goes into, where it is missing.
+fn make_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("{} cannot be made", parent.display()))?;
     }
+    Ok(())
+}
+
+/// Where the contents of a dragged file go as they are read: into memory
+/// while the budget lasts, then into the file at `path`, with what was
+/// held before.
+struct Spill<'a> {
+    path: &'a Path,
+    budget: &'a mut usize,
+    held: Vec<u8>,
+    file: Option<std::fs::File>,
+}
+
+impl<'a> Spill<'a> {
+    fn new(path: &'a Path, budget: &'a mut usize) -> Self {
+        Self {
+            path,
+            budget,
+            held: Vec::new(),
+            file: None,
+        }
+    }
+
+    /// Takes the next `bytes` of the contents.
+    fn take(&mut self, bytes: &[u8]) -> Result<()> {
+        if self.file.is_none() {
+            if bytes.len() <= *self.budget {
+                *self.budget -= bytes.len();
+                self.held.extend_from_slice(bytes);
+                return Ok(());
+            }
+            make_parent(self.path)?;
+            let mut file = std::fs::File::create(self.path)?;
+            file.write_all(&self.held)?;
+            *self.budget += self.held.len();
+            self.held = Vec::new();
+            self.file = Some(file);
+        }
+        if let Some(file) = &mut self.file {
+            file.write_all(bytes)?;
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Fetched {
+        match self.file {
+            Some(_) => Fetched::Written,
+            None => Fetched::Held(self.held),
+        }
+    }
+}
+
+/// Reads the contents of the file numbered `index` in `data`, which is
+/// `size` bytes long where that is known, into `spill`.
+fn fetch_contents(
+    data: &IDataObject,
+    index: usize,
+    size: Option<u64>,
+    mut spill: Spill<'_>,
+) -> Result<Fetched> {
+    let Some(contents) = format(CFSTR_FILECONTENTS) else {
+        bail!("the contents of the dropped files cannot be asked for");
+    };
     let tymed = TYMED_HGLOBAL.0 | TYMED_ISTREAM.0 | TYMED_ISTORAGE.0;
     let request = request(contents, index as i32, tymed);
+    let mut buffer = vec![0u8; 64 * 1024];
     // SAFETY: the medium is read according to its kind while it is held,
-    // and released once after.
+    // and released once after; every read stays within `buffer`.
     unsafe {
         let mut medium = data
             .GetData(&raw const request)
-            .with_context(|| format!("the contents of {} cannot be read", path.display()))?;
-        let saved = (|| -> Result<()> {
+            .context("the contents cannot be read")?;
+        let read = (|| -> Result<()> {
             match medium.tymed as i32 {
                 kind if kind == TYMED_HGLOBAL.0 => {
                     let bytes = read_global(medium.u.hGlobal).context("the contents are empty")?;
-                    std::fs::write(path, bytes)?;
+                    // The memory may be larger than the file.
+                    let length = size.map_or(bytes.len(), |size| {
+                        usize::try_from(size).map_or(bytes.len(), |size| size.min(bytes.len()))
+                    });
+                    spill.take(&bytes[..length])?;
                 }
                 kind if kind == TYMED_ISTREAM.0 => {
                     let stream = (*medium.u.pstm)
                         .as_ref()
                         .context("the contents are empty")?;
-                    let mut file = std::fs::File::create(path)?;
-                    let mut buffer = vec![0u8; 64 * 1024];
                     loop {
                         let mut read = 0u32;
                         let result = stream.Read(
@@ -708,29 +851,51 @@ fn save_contents(data: &IDataObject, index: usize, path: &Path) -> Result<()> {
                         if read == 0 {
                             break;
                         }
-                        file.write_all(&buffer[..read as usize])?;
+                        spill.take(&buffer[..read as usize])?;
                     }
                 }
                 kind if kind == TYMED_ISTORAGE.0 => {
                     let storage = (*medium.u.pstg)
                         .as_ref()
                         .context("the contents are empty")?;
-                    let name = super::shell_item::wide(path.as_os_str());
-                    let copy = StgCreateDocfile(
-                        windows::core::PCWSTR(name.as_ptr()),
+                    // The storage is copied into a compound file in
+                    // memory, whose bytes are the file on the disk.
+                    let bytes = CreateILockBytesOnHGlobal(None, true)?;
+                    let copy = StgCreateDocfileOnILockBytes(
+                        &bytes,
                         STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
-                        None,
+                        0,
                     )?;
                     storage.CopyTo(None, None, &copy)?;
                     copy.Commit(STGC_DEFAULT.0 as u32)?;
+                    drop(copy);
+                    let mut stat = STATSTG::default();
+                    bytes.Stat(&raw mut stat, STATFLAG_NONAME.0 as u32)?;
+                    let mut at = 0u64;
+                    while at < stat.cbSize {
+                        let mut read = 0u32;
+                        let wanted = (stat.cbSize - at).min(buffer.len() as u64) as u32;
+                        bytes.ReadAt(
+                            at,
+                            buffer.as_mut_ptr().cast(),
+                            wanted,
+                            Some(&raw mut read),
+                        )?;
+                        if read == 0 {
+                            break;
+                        }
+                        spill.take(&buffer[..read as usize])?;
+                        at += u64::from(read);
+                    }
                 }
                 _ => bail!("the contents come in a form Tessera does not read"),
             }
             Ok(())
         })();
         ReleaseStgMedium(&raw mut medium);
-        saved.with_context(|| format!("{} cannot be saved", path.display()))
+        read?;
     }
+    Ok(spill.finish())
 }
 
 #[cfg(test)]
@@ -813,6 +978,7 @@ mod tests {
         let file = |name: &str, folder| VirtualFile {
             name: name.to_owned(),
             folder,
+            size: None,
         };
         let files = [
             file("Album", true),

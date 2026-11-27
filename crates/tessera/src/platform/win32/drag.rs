@@ -28,21 +28,25 @@ use std::path::{Component, Path, PathBuf, Prefix};
 
 use anyhow::{Context as _, Result};
 use gpui::{App, Task, Window};
-use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{GlobalFree, HGLOBAL, HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, CoCreateInstance, DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL,
+    CLSCTX_INPROC_SERVER, CoCreateInstance, DVASPECT_CONTENT, FORMATETC, IDataObject, STGMEDIUM,
+    STGMEDIUM_0, TYMED_HGLOBAL,
 };
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
-use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+};
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
     IDropSource, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::{
-    CFSTR_LOGICALPERFORMEDDROPEFFECT, CLSID_DragDropHelper, DSH_ALLOWDROPDESCRIPTIONTEXT,
-    DragQueryFileW, HDROP, IDragSourceHelper2, SHCreateDataObject, SHDoDragDrop,
+    CFSTR_LOGICALPERFORMEDDROPEFFECT, CFSTR_PERFORMEDDROPEFFECT, CLSID_DragDropHelper,
+    DSH_ALLOWDROPDESCRIPTIONTEXT, DragQueryFileW, HDROP, IDragSourceHelper2, SHCreateDataObject,
+    SHDoDragDrop,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, PostMessageW, WM_LBUTTONUP, WM_RBUTTONUP,
@@ -305,7 +309,8 @@ fn volume_of(path: &Path) -> Option<String> {
 pub enum DragButton {
     #[default]
     Left,
-    /// The drop then offers a menu of what to do, at the target.
+    /// The drop then offers a menu of what to do, at a target that has
+    /// one, such as Explorer; Tessera's own drop target does not.
     Right,
 }
 
@@ -469,6 +474,54 @@ pub(super) fn read_global(memory: HGLOBAL) -> Option<Vec<u8>> {
 fn dword(data: &IDataObject, format: u16) -> Option<u32> {
     let bytes = global_bytes(data, format, -1)?;
     Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+}
+
+/// Tells the source of `data` what its drop did, as the Shell's targets
+/// tell it: `performed` is what is left for the source to do (nothing,
+/// for a move the target does itself), `logical` what happened to the
+/// files. [`DragOut`] reads the latter back.
+pub(super) fn tell_performed(data: &IDataObject, performed: DROPEFFECT, logical: DropEffect) {
+    let told = [
+        (CFSTR_PERFORMEDDROPEFFECT, performed.0),
+        (CFSTR_LOGICALPERFORMEDDROPEFFECT, logical.raw().0),
+    ];
+    for (name, effect) in told {
+        if let Some(format) = format(name) {
+            set_dword(data, format, effect);
+        }
+    }
+}
+
+/// Gives `data` the number `value` in `format`, in global memory that it
+/// then owns.
+fn set_dword(data: &IDataObject, format: u16, value: u32) {
+    let request = request(format, -1, TYMED_HGLOBAL.0);
+    // SAFETY: the memory is written within its size while it is locked;
+    // the data object owns it once it takes it, and it is freed here
+    // where it does not.
+    unsafe {
+        let Ok(memory) = GlobalAlloc(GMEM_MOVEABLE, size_of::<u32>()) else {
+            return;
+        };
+        let start = GlobalLock(memory).cast::<u32>();
+        if start.is_null() {
+            let _ = GlobalFree(Some(memory));
+            return;
+        }
+        start.write_unaligned(value);
+        let _ = GlobalUnlock(memory);
+        let medium = STGMEDIUM {
+            tymed: TYMED_HGLOBAL.0 as u32,
+            u: STGMEDIUM_0 { hGlobal: memory },
+            pUnkForRelease: std::mem::ManuallyDrop::new(None),
+        };
+        if data
+            .SetData(&raw const request, &raw const medium, true)
+            .is_err()
+        {
+            let _ = GlobalFree(Some(memory));
+        }
+    }
 }
 
 /// The paths of the files `data` carries as `CF_HDROP`.
