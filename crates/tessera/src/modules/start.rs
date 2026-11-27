@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The parts of a Start menu besides the search: the pinned applications
-//! and the buttons that end the session. Widgets: `apps`, `power`.
+//! The parts of a Start menu besides the search: the pinned applications,
+//! what is recommended (start/recommended.rs) and the buttons that end
+//! the session. Widgets: `apps`, `recommended`, `power`.
 //!
 //! A right click on a pinned application opens its menu (start/menu.rs),
 //! the one the rows of the launcher have too.
 
 mod menu;
+mod recommended;
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -28,7 +30,7 @@ use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, state_layer};
 
-pub use menu::{AppMenu, ItemKind, MenuSlot};
+pub use menu::{AppMenu, ItemKind, MenuSlot, Remover};
 
 /// How many pinned applications a row holds unless the layout says.
 const DEFAULT_COLUMNS: usize = 5;
@@ -65,6 +67,9 @@ impl Module for StartModule {
             let pins = Pins::shared(cx);
             pins.update(cx, |pins, cx| pins.show(pinned, cx));
             cx.new(|cx| Apps::new(pins, columns, cx)).into()
+        })?;
+        widgets.register_panel("recommended", |context, cx| {
+            recommended::Recommended::view(context, cx).into()
         })?;
         widgets.register_panel("power", |context, cx| {
             let named = context.texts("actions");
