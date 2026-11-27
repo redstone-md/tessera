@@ -841,7 +841,7 @@ impl Flyouts {
             });
             let (names, codes, lit) = read.await;
             cx.update(|cx| {
-                let choices = layout_choices(codes, &names);
+                let choices = layout_choices(codes, names.clone());
                 cx.global_mut::<LayoutNames>().0 = names;
                 Self::show(Reading::Layouts { choices, lit }, cx);
             })
@@ -934,23 +934,28 @@ fn action_of(command: AppCommand) -> (&'static str, &'static str) {
     }
 }
 
-/// The layouts with their names, paired in the order both come in; where
-/// the two lists differ in length the names are left out.
-fn layout_choices(codes: Vec<String>, names: &[InputName]) -> Vec<LayoutChoice> {
-    let paired = codes.len() == names.len();
-    { codes.into_iter().enumerate() }
-        .map(|(index, code)| {
-            let name = names.get(index).filter(|_| paired).map(|name| {
-                match (name.language.is_empty(), name.layout.is_empty()) {
-                    (false, false) => format!("{} \u{00b7} {}", name.language, name.layout),
-                    (false, true) => name.language.clone(),
-                    (true, _) => name.layout.clone(),
-                }
-            });
-            LayoutChoice {
-                code,
-                name: name.unwrap_or_default(),
-            }
+/// Each of `layouts` with the names Windows gives it, paired in the order
+/// both come in, which is the order of Windows. Where the two lists differ
+/// in length, as when a layout was added in between, the names are left
+/// out, empty, and the letters of the language stand for them.
+pub fn with_names<T>(layouts: Vec<T>, names: Vec<InputName>) -> Vec<(T, InputName)> {
+    let paired = layouts.len() == names.len();
+    let mut names = names.into_iter().filter(|_| paired);
+    { layouts.into_iter() }
+        .map(|layout| (layout, names.next().unwrap_or_default()))
+        .collect()
+}
+
+/// The layouts with their names, as [`with_names`] pairs them.
+fn layout_choices(codes: Vec<String>, names: Vec<InputName>) -> Vec<LayoutChoice> {
+    { with_names(codes, names).into_iter() }
+        .map(|(code, name)| {
+            let name = match (name.language.is_empty(), name.layout.is_empty()) {
+                (false, false) => format!("{} \u{00b7} {}", name.language, name.layout),
+                (false, true) => name.language,
+                (true, _) => name.layout,
+            };
+            LayoutChoice { code, name }
         })
         .collect()
 }
@@ -1619,10 +1624,10 @@ mod tests {
         };
         let codes = vec!["EN".to_owned(), "RU".to_owned()];
         let names = [name("English", "US"), name("Russian", "")];
-        let choices = layout_choices(codes.clone(), &names);
+        let choices = layout_choices(codes.clone(), names.to_vec());
         assert_eq!(choices[0].name, "English \u{00b7} US");
         assert_eq!(choices[1].name, "Russian");
-        let unpaired = layout_choices(codes, &names[..1]);
+        let unpaired = layout_choices(codes, names[..1].to_vec());
         assert!(unpaired.iter().all(|choice| choice.name.is_empty()));
         let list = Reading::Layouts { choices, lit: 1 };
         assert_eq!(list.words(Language::English), "RU");

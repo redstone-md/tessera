@@ -36,7 +36,7 @@ use gpui::{
 
 use crate::actions::{Action, Actions};
 use crate::config::{PopupConfig, WidgetSpec};
-use crate::flyout::Flyouts;
+use crate::flyout::{Flyouts, with_names};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
@@ -398,19 +398,10 @@ struct Layout {
     name: InputName,
 }
 
-/// The layouts of Windows with their names, paired in the order both
-/// come in. Where the two lists differ in length, as when a layout was
-/// added in between, the names are left out and the letters of the
-/// language stand for them.
+/// The layouts of Windows with their names, as [`with_names`] pairs them.
 fn layouts(languages: Vec<InputLanguage>, names: Vec<InputName>) -> Vec<Layout> {
-    let paired = languages.len() == names.len();
-    let mut names = names.into_iter().filter(|_| paired);
-    languages
-        .into_iter()
-        .map(|language| Layout {
-            language,
-            name: names.next().unwrap_or_default(),
-        })
+    { with_names(languages, names).into_iter() }
+        .map(|(language, name)| Layout { language, name })
         .collect()
 }
 
