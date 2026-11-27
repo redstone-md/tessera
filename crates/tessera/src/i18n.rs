@@ -2122,6 +2122,90 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // files-namespace: the places of the Shell, Places, jobs and the settings of files.
+    ("Gallery", "Галерея"),
+    ("Libraries", "Библиотеки"),
+    ("All Control Panel Items", "Все элементы панели управления"),
+    ("Searches", "Поиски"),
+    ("Remote", "Удалённые"),
+    ("Add to Places", "Добавить в «Места»"),
+    ("Remove from Places", "Убрать из «Мест»"),
+    ("Group by month", "Группировать по месяцам"),
+    ("File name extensions", "Расширения имён файлов"),
+    ("Folder options…", "Параметры папок…"),
+    ("Manage library…", "Управление библиотекой…"),
+    ("Set save location", "Сделать местом сохранения"),
+    ("Show in navigation pane", "Показывать в области навигации"),
+    ("Hide from navigation pane", "Скрыть из области навигации"),
+    ("New library", "Новая библиотека"),
+    (
+        "No computer was found. Where network discovery is off, Windows finds none.",
+        "Компьютеры не найдены. Когда сетевое обнаружение выключено, Windows их не находит.",
+    ),
+    (
+        "Network discovery settings",
+        "Параметры сетевого обнаружения",
+    ),
+    ("Copying {} items to {}", "Копирование элементов ({}) в {}"),
+    ("Moving {} items to {}", "Перемещение элементов ({}) в {}"),
+    ("Deleting {} items", "Удаление элементов ({})"),
+    ("Renaming {} items", "Переименование элементов ({})"),
+    ("Making {} items in {}", "Создание элементов ({}) в {}"),
+    (
+        "Follow Explorer's folder options",
+        "Следовать параметрам папок Проводника",
+    ),
+    (
+        "Extensions of known types hidden, hidden and protected files shown as Explorer shows them, and the names a desktop.ini gives.",
+        "Расширения известных типов скрыты, скрытые и защищённые файлы показаны так, как их показывает Проводник, и имена из desktop.ini.",
+    ),
+    ("Folders before files", "Папки перед файлами"),
+    ("How folders are shown", "Как показываются папки"),
+    ("Groups", "Группы"),
+    (
+        "Each folder keeps its own look",
+        "Каждая папка хранит свой вид",
+    ),
+    (
+        "A new window opens with the tabs of the last one closed",
+        "Новое окно открывается с вкладками последнего закрытого",
+    ),
+    ("Archives", "Архивы"),
+    (
+        "ZIP files and the other archives Windows opens as folders (7z, rar, tar and gz on Windows 11 23H2 and later).",
+        "Файлы ZIP и другие архивы, которые Windows открывает как папки (7z, rar, tar и gz в Windows 11 23H2 и новее).",
+    ),
+    ("Browse as folders", "Открывать как папки"),
+    ("Open with their program", "Открывать их программой"),
+    (
+        "Tessera's Quick access and recent files",
+        "Быстрый доступ и последние файлы Tessera",
+    ),
+    ("Windows' own Home", "Собственная «Главная» Windows"),
+    (
+        "AutoPlay for drives that arrive",
+        "Автозапуск для подключённых дисков",
+    ),
+    ("Only as the shell", "Только как оболочка"),
+    ("Thumbnails and panes", "Эскизы и панели"),
+    ("Pictures of what files hold", "Картинки содержимого файлов"),
+    (
+        "Pictures of what folders hold",
+        "Картинки содержимого папок",
+    ),
+    ("Largest thumbnail", "Наибольший эскиз"),
+    (
+        "Overlays of programs over icons",
+        "Наложения программ поверх значков",
+    ),
+    (
+        "Previews by the handlers of programs",
+        "Просмотр обработчиками программ",
+    ),
+    (
+        "Seconds a preview handler is waited for",
+        "Сколько секунд ждать обработчик просмотра",
+    ),
 ];
 
 #[cfg(test)]
