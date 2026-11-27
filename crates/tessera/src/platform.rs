@@ -74,6 +74,7 @@ pub use win32::{
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
+pub use win32::{JumpItem, JumpList, JumpTarget, KnownCategory};
 pub use win32::{KeyLocks, window_in_front};
 #[allow(
     unused_imports,

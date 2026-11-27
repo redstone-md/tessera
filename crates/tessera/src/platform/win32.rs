@@ -128,6 +128,7 @@ pub use icon::IconPixels;
 pub use index::SearchIndex;
 pub use input_names::InputName;
 pub use input_names::OwnInput;
+pub use jump::{JumpItem, JumpList, JumpTarget, KnownCategory};
 pub use jump::{JumpTask, RecentDocument, app_id_of_program};
 pub use key_locks::{KeyLocks, window_in_front};
 pub use keyboard::{InputLanguage, Typing};
