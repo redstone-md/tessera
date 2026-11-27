@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use windows::Win32::Foundation::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
+use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CLASSES_ROOT, KEY_READ, REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE, RegCloseKey,
     RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
@@ -216,9 +216,10 @@ fn tell_explorer(path: &Path, folder: bool) {
 /// Runs the command line `command` of a kind for the new item at `path`,
 /// in `folder`.
 fn run(command: &str, path: &Path, folder: &Path) -> Result<()> {
-    let line = command_line(command, &path.to_string_lossy());
-    let line = expand_environment(OsStr::new(&line));
-    let line = line.to_string_lossy();
+    // The variables are put in before the path, so that a path with a
+    // `%NAME%` in it stays as it is.
+    let command = expand_environment(OsStr::new(command));
+    let line = command_line(&command.to_string_lossy(), &path.to_string_lossy());
     let (program, arguments) = split_program(&line);
     if program.is_empty() {
         bail!("the command of the new item is empty");
@@ -437,13 +438,13 @@ impl Key {
                     None,
                 )
             };
-            if read == ERROR_NO_MORE_ITEMS {
+            // The end of the keys, or a failure such as a key deleted
+            // meanwhile, which would fail again for every index after it.
+            if read != ERROR_SUCCESS {
                 break;
             }
-            if read == ERROR_SUCCESS {
-                let length = (length as usize).min(buffer.len());
-                names.push(String::from_utf16_lossy(&buffer[..length]));
-            }
+            let length = (length as usize).min(buffer.len());
+            names.push(String::from_utf16_lossy(&buffer[..length]));
         }
         names
     }
