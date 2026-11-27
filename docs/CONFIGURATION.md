@@ -56,3 +56,19 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Startup programs
+
+When Tessera is the shell of the session, it starts what Explorer would start at sign-in, once per session, a moment after the bars are up; beside Explorer it starts nothing, as Explorer does it. `[startup]` changes that:
+
+```toml
+[startup]
+run = true            # false: Tessera, as the shell, starts none of them
+delay = 2             # seconds after the bars opened
+active_setup = true   # false: the components of Active Setup do not run
+packaged = true       # false: the startup tasks of Store apps do not start
+```
+
+What starts, in this order: the components of Active Setup that the machine has in a newer version than the user (each waited for, a minute at most); `RunOnce` of the machine, each waited for, only where Tessera may delete its values (it usually may not, without running as an administrator; it then reports how many it left); `Policies\Explorer\Run` and `Run` of the machine, its 32-bit `Run`, then those of the user; the Startup folders of all users and of the user; `RunOnce` of the user; the startup tasks of Store apps. A value of `RunOnce` is deleted before its program runs, or after it when its name starts with `!`; in Safe Mode only those whose name starts with `*` run. A session counts as started once a volatile key named by the session and the logon is made under `HKCU\Software\Tessera\Startup`, so a Tessera that restarts in the same session starts nothing again; Windows deletes that key at sign-out.
+
+The widget `startup`, made for a popup or a card, lists the programs that start with every sign-in (not those of Active Setup and `RunOnce`) with a switch each, and **Startup apps** under **General** in the settings shows the same list. A switch writes what Task Manager writes, in `Explorer\StartupApproved` (`Run`, `Run32`, `StartupFolder`), which Explorer and Tessera both honour: for a program of all users, Windows lets only an administrator write the machine's choice, so Tessera writes the user's own, which Tessera honours as well (whether Explorer does was not checked), and says so where switching one back on needs an administrator. A program a policy starts has no switch. The switch of a Store app writes the state Windows keeps for its startup task.
