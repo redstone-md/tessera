@@ -68,6 +68,7 @@ use super::windows_key::MADE_HERE;
 
 /// The clipboard formats Windows numbers itself.
 const CF_DIB: u32 = 8;
+const CF_DIBV5: u32 = 17;
 const CF_UNICODETEXT: u32 = 13;
 const CF_HDROP: u32 = 15;
 
@@ -230,9 +231,10 @@ pub struct ClipboardWatch {
 impl ClipboardWatch {
     /// Starts watching the clipboard, keeping pictures if `images`, and
     /// returns at once; what is copied from then on arrives on the
-    /// receiver. A watch that cannot start is reported, and the receiver
-    /// closes.
-    pub fn start(images: bool) -> (Self, Receiver<Clip>) {
+    /// receiver. A thread that cannot be started is the error; a window
+    /// the thread cannot make is reported, and the receiver closes, as it
+    /// does whenever the watch ends.
+    pub fn start(images: bool) -> Result<(Self, Receiver<Clip>), String> {
         let shared = Arc::new(Shared {
             window: AtomicIsize::new(0),
             stop: AtomicBool::new(false),
@@ -242,13 +244,11 @@ impl ClipboardWatch {
         let (requests, waiting) = mpsc::channel();
         let (clips, copied) = async_channel::unbounded();
         let thread_shared = shared.clone();
-        let started = thread::Builder::new()
+        thread::Builder::new()
             .name("clipboard".to_owned())
-            .spawn(move || watch(thread_shared, waiting, clips));
-        if let Err(error) = started {
-            report!("the clipboard is not watched: {error}");
-        }
-        (Self { shared, requests }, copied)
+            .spawn(move || watch(thread_shared, waiting, clips))
+            .map_err(|error| error.to_string())?;
+        Ok((Self { shared, requests }, copied))
     }
 
     /// Keeps pictures from now on if `images`, or leaves them out.
@@ -774,8 +774,12 @@ fn read(window: HWND, images: bool) -> Option<Raw> {
         if let Some(png) = bytes(format_named(PNG), BYTE_LIMIT) {
             return png.map(Raw::Png);
         }
-        if let Some(dib) = bytes(CF_DIB, BYTE_LIMIT) {
-            return dib.map(Raw::Dib);
+        // The header of version 5 tells which bits are transparency, which
+        // `CF_DIB` loses where Windows makes it of a `CF_DIBV5`.
+        for format in [CF_DIBV5, CF_DIB] {
+            if let Some(dib) = bytes(format, BYTE_LIMIT) {
+                return dib.map(Raw::Dib);
+            }
         }
     }
     if let Some(html) = bytes(format_named(HTML), text_bytes) {
@@ -846,8 +850,8 @@ fn decode_png(bytes: &[u8]) -> Option<RgbaImage> {
     decode(decoder)
 }
 
-/// A picture of a device-independent bitmap as `CF_DIB` holds one: a
-/// bitmap file without its file header.
+/// A picture of a device-independent bitmap as `CF_DIBV5` or `CF_DIB`
+/// holds one: a bitmap file without its file header.
 fn decode_dib(bytes: &[u8]) -> Option<RgbaImage> {
     let decoder = BmpDecoder::new_without_file_header(Cursor::new(bytes)).ok()?;
     decode(decoder)

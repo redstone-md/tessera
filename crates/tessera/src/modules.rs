@@ -48,7 +48,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(clock::ClockModule),
         Box::new(bluetooth::BluetoothModule),
         Box::new(calendar::CalendarModule),
-        Box::new(clipboard::ClipboardModule),
+        Box::new(clipboard::ClipboardModule::of(&config.clipboard)),
         Box::new(command::CommandModule),
         Box::new(connections::ConnectionsModule),
         Box::new(FilesModule),

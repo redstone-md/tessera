@@ -5,7 +5,7 @@
 //! opens it in Windows. Widgets: `clipboard`, the list with its search,
 //! for a popup, and `clipboard-button`, a button of a bar that opens the
 //! popup `clipboard`. Action: `clipboard`, which opens that popup and
-//! takes Win+V from Windows.
+//! takes Win+V from Windows while the history is on.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use gpui::{
 };
 
 use crate::actions::{Action, Actions};
-use crate::clipboard::{ClipHistory, Content, Entry, file_name};
+use crate::clipboard::{ClipHistory, ClipboardConfig, Content, Entry, file_name};
 use crate::config::{PopupConfig, WidgetSpec};
 use crate::field::TextField;
 use crate::i18n::Language;
@@ -55,7 +55,21 @@ const BUTTON: Pixels = px(28.);
 /// The size of the caption under what a row shows.
 const CAPTION_SIZE: Pixels = px(11.);
 
-pub struct ClipboardModule;
+pub struct ClipboardModule {
+    /// Whether `[clipboard]` had the history on when Tessera started: only
+    /// then is Win+V taken from Windows by default, so that a history that
+    /// is off leaves the one of Windows.
+    enabled: bool,
+}
+
+impl ClipboardModule {
+    /// The module for `[clipboard]` as `config` says.
+    pub fn of(config: &ClipboardConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+        }
+    }
+}
 
 impl Module for ClipboardModule {
     fn name(&self) -> &'static str {
@@ -82,10 +96,13 @@ impl Module for ClipboardModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        // Windows keeps Win+V, which opens its own history, to itself.
-        let open = Action::new(|_, cx| open(cx))
-            .taking_reserved_keys()
-            .by_default("win+v", None);
+        // Windows keeps Win+V, which opens its own history, to itself. The
+        // actions are collected once, so the key by default follows
+        // `enabled` as it was at the start.
+        let mut open = Action::new(|_, cx| open(cx)).taking_reserved_keys();
+        if self.enabled {
+            open = open.by_default("win+v", None);
+        }
         actions.register("clipboard", open)
     }
 }

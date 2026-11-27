@@ -113,26 +113,12 @@ impl Content {
     }
 
     /// What a row shows of it: the beginning of a text as one line, or the
-    /// names of files, the first ones whole.
+    /// names of the first files, at most [`PREVIEW_CHARS`] characters
+    /// either way; the caption of a row tells how many files there are.
     fn preview(&self) -> String {
         match self {
-            Self::Text(text) => {
-                let mut preview = String::new();
-                for word in text.split_whitespace() {
-                    if preview.chars().count() >= PREVIEW_CHARS {
-                        break;
-                    }
-                    if !preview.is_empty() {
-                        preview.push(' ');
-                    }
-                    preview.push_str(word);
-                }
-                preview
-            }
-            Self::Files(files) => {
-                let names: Vec<String> = files.iter().map(|path| file_name(path)).collect();
-                names.join(", ")
-            }
+            Self::Text(text) => shortened(text.split_whitespace(), " "),
+            Self::Files(files) => shortened(files.iter().map(|path| file_name(path)), ", "),
             Self::Image(_) => String::new(),
         }
     }
@@ -157,6 +143,24 @@ impl Content {
             _ => None,
         }
     }
+}
+
+/// `parts` with `between` between them, cut after [`PREVIEW_CHARS`]
+/// characters; the parts after those are not looked at.
+fn shortened(parts: impl IntoIterator<Item = impl AsRef<str>>, between: &str) -> String {
+    let mut preview = String::new();
+    let mut left = PREVIEW_CHARS;
+    for (index, part) in parts.into_iter().enumerate() {
+        let before = if index == 0 { "" } else { between };
+        for character in before.chars().chain(part.as_ref().chars()) {
+            if left == 0 {
+                return preview;
+            }
+            preview.push(character);
+            left -= 1;
+        }
+    }
+    preview
 }
 
 /// The name a list of files shows of `path`: its last part, or all of it
@@ -522,20 +526,24 @@ fn write_pins(pins: &PinsFile, generation: u64) -> Result<(), String> {
 /// The pinned items of an earlier run, ready to be added, oldest first.
 /// The pictures in the directory of the pictures that were written before
 /// `started` and are not pinned are deleted: they are what an earlier run
-/// left. A pins file that cannot be read is reported and left alone.
-fn restore(started: SystemTime) -> Vec<(Kept, DateTime<Local>)> {
+/// left. A pins file that cannot be read is reported and left alone, with
+/// the pictures: `None` then says that it is not to be written while
+/// Tessera runs, so that the pins in it are there to be read again once
+/// it is mended.
+fn restore(started: SystemTime) -> Option<Vec<(Kept, DateTime<Local>)>> {
+    let not_kept = "pins made now are not kept until Tessera starts again";
     let pins = match pins_path().map(fs::read_to_string) {
-        None => return Vec::new(),
+        None => return None,
         Some(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => PinsFile::default(),
         Some(Err(error)) => {
-            report!("the pinned items of the clipboard are not read: {error}");
-            return Vec::new();
+            report!("the pinned items of the clipboard are not read, and {not_kept}: {error}");
+            return None;
         }
         Some(Ok(text)) => match toml::from_str::<PinsFile>(&text) {
             Ok(pins) => pins,
             Err(error) => {
-                report!("{PINS_FILE} is ignored: {error}");
-                return Vec::new();
+                report!("{PINS_FILE} is ignored and left as it is, and {not_kept}: {error}");
+                return None;
             }
         },
     };
@@ -576,7 +584,7 @@ fn restore(started: SystemTime) -> Vec<(Kept, DateTime<Local>)> {
     if let Some(pictures) = &pictures {
         delete_left_pictures(pictures, &kept_files, started);
     }
-    restored
+    Some(restored)
 }
 
 /// The pinned picture `name` of the directory `pictures`.
@@ -668,9 +676,13 @@ pub struct ClipHistory {
     /// The window that was in front when the history was asked for last,
     /// and when.
     aim: Option<(AppWindowId, Instant)>,
-    /// Whether the pinned items of an earlier run were read; before, the
-    /// pins file is not written, so that it does not lose them.
+    /// Whether the pinned items of an earlier run were read; before, and
+    /// for good when the pins file could not be read, it is not written,
+    /// so that it does not lose them.
     restored: bool,
+    /// Whether the pins changed before those of the earlier run were
+    /// read, so that the pins file is to be written once they are.
+    pins_dirty: bool,
     /// How many writes of the pins file were asked for.
     pin_writes: u64,
 }
@@ -695,6 +707,7 @@ impl ClipHistory {
                 taking: None,
                 aim: None,
                 restored: false,
+                pins_dirty: false,
                 pin_writes: 0,
             }
         });
@@ -761,10 +774,8 @@ impl ClipHistory {
         match (config.enabled, was_on) {
             (true, false) => self.watch_clipboard(cx),
             (false, true) => {
-                self.watch = None;
                 self.taking = None;
-                let dropped = self.history.clear();
-                forget(dropped, cx);
+                self.stop_watching(cx);
             }
             _ => {}
         }
@@ -776,9 +787,26 @@ impl ClipHistory {
         cx.notify();
     }
 
-    /// Starts the watch of the clipboard and takes in what it reads.
+    /// Ends the watch and forgets what is not pinned.
+    fn stop_watching(&mut self, cx: &mut Context<Self>) {
+        self.watch = None;
+        let dropped = self.history.clear();
+        forget(dropped, cx);
+    }
+
+    /// Starts the watch of the clipboard and takes in what it reads. A
+    /// watch that does not start, or ends by itself, leaves the history
+    /// off, as the popup then says, until the configuration turns it on
+    /// again.
     fn watch_clipboard(&mut self, cx: &mut Context<Self>) {
-        let (watch, copied) = ClipboardWatch::start(self.config.images);
+        let (watch, copied) = match ClipboardWatch::start(self.config.images) {
+            Ok(started) => started,
+            Err(error) => {
+                report!("the clipboard is not watched: {error}");
+                self.config.enabled = false;
+                return;
+            }
+        };
         self.watch = Some(watch);
         let pictures = pictures_path();
         let taking = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -796,9 +824,16 @@ impl ClipHistory {
                     }
                 };
                 if this.update(cx, |this, cx| this.take(kept, cx)).is_err() {
-                    break;
+                    return;
                 }
             }
+            // The thread of the watch ended, having reported why.
+            this.update(cx, |this, cx| {
+                this.config.enabled = false;
+                this.stop_watching(cx);
+                cx.notify();
+            })
+            .ok();
         });
         self.taking = Some(taking);
     }
@@ -832,11 +867,21 @@ impl ClipHistory {
                 .spawn(async move { restore(started) })
                 .await;
             this.update(cx, |this, cx| {
+                let Some(restored) = restored else {
+                    return;
+                };
+                // A pin given before, or one read that the history held
+                // already, whose picture file is let go, is to be written.
+                let mut changed = this.pins_dirty;
                 for (kept, copied) in restored {
                     let dropped = this.history.restore(kept.key, kept.content, copied);
+                    changed |= !dropped.is_empty();
                     forget(dropped, cx);
                 }
                 this.restored = true;
+                if changed {
+                    this.save_pins(cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -847,6 +892,7 @@ impl ClipHistory {
     /// Writes the pinned items, away from the user interface.
     fn save_pins(&mut self, cx: &mut Context<Self>) {
         if !self.restored {
+            self.pins_dirty = true;
             return;
         }
         self.pin_writes += 1;
@@ -905,12 +951,12 @@ impl ClipHistory {
         }
     }
 
-    /// Pins the item `id`, or unpins it.
+    /// Pins the item `id`, or unpins it. An item unpinned in a full
+    /// history stays in sight, so that a second click pins it again; it
+    /// falls out with the next copy.
     pub fn toggle_pin(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.history.toggle_pin(id).is_some() {
             self.save_pins(cx);
-            let dropped = self.history.trim(self.config.size);
-            forget(dropped, cx);
             cx.notify();
         }
     }
@@ -1058,9 +1104,21 @@ mod tests {
         let long = "word ".repeat(200);
         let preview = Content::Text(format!("  first\n\tsecond  {long}")).preview();
         assert!(preview.starts_with("first second word"));
-        assert!(preview.chars().count() < PREVIEW_CHARS + 10);
+        assert_eq!(preview.chars().count(), PREVIEW_CHARS);
         let files = Content::Files(vec![PathBuf::from("C:\\x\\a.txt"), PathBuf::from("D:\\")]);
         assert_eq!(files.preview(), "a.txt, D:\\");
+    }
+
+    #[test]
+    fn a_preview_of_one_long_word_or_many_files_is_cut() {
+        let word = "\u{e9}".repeat(10_000);
+        let preview = Content::Text(word).preview();
+        assert_eq!(preview.chars().count(), PREVIEW_CHARS);
+        let files = (0..5_000).map(|n| PathBuf::from(format!("C:\\f{n}.txt")));
+        let preview = Content::Files(files.collect()).preview();
+        assert!(preview.starts_with("f0.txt, f1.txt"));
+        assert_eq!(preview.chars().count(), PREVIEW_CHARS);
+        assert_eq!(shortened(["ab", "cd"], ", "), "ab, cd");
     }
 
     #[test]
