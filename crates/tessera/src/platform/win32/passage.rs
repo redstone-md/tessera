@@ -9,9 +9,12 @@
 //! moves is a still picture of it, taken before it is hidden and shown in
 //! a window of its own right over it. A smaller copy of the picture is
 //! kept while the window is hidden, and is what is seen coming back before
-//! the window itself is shown. Each motion has a thread of its own.
+//! the window itself is shown. Each motion has a thread of its own. The
+//! same copy is what [`Passage::still`] gives of a hidden window, for the
+//! views that show the windows of other workspaces: Windows has no live
+//! picture of a hidden window to give them.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -81,6 +84,17 @@ static KEPT: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
 /// The motion of windows that are hidden and shown.
 pub struct Passage;
 
+/// The picture kept of a hidden window: `width` by `height` pixels of
+/// four bytes, blue, green, red and alpha, from the top row down, the
+/// colors premultiplied by the alpha. The cut corners of a rounded window
+/// are transparent.
+#[derive(Clone, Debug)]
+pub struct Still {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Arc<[u8]>,
+}
+
 impl Passage {
     /// Hides `windows`, which are seen leaving to the left or, with
     /// `rightward`, to the right. A window no picture can be taken of,
@@ -123,6 +137,20 @@ impl Passage {
                 front.activate();
             }
         }
+    }
+
+    /// The picture kept of `window` while it is hidden, at half its width
+    /// and height: the one taken as it was seen leaving. There is none of
+    /// a window that is shown, that was hidden without the motion (as a
+    /// minimized one is), or whose picture made room for newer ones.
+    pub fn still(window: AppWindowId) -> Option<Still> {
+        let all = KEPT.lock().ok()?;
+        let kept = all.iter().find(|kept| kept.window == window)?;
+        Some(Still {
+            width: kept.width as u32,
+            height: kept.rows() as u32,
+            bgra: kept.pixels.clone(),
+        })
     }
 }
 
@@ -497,7 +525,7 @@ impl Picture {
         // the picture and has `rows` rows of `self.width` pixels.
         let pixels = unsafe { std::slice::from_raw_parts(self.bits, (self.width * rows) as usize) };
         let at = |x: i32, y: i32| pixels[((top + y) * self.width + left + x) as usize];
-        let mut halved = Vec::with_capacity((width * height) as usize);
+        let mut halved: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
         for y in 0..height {
             for x in 0..width {
                 let four = [
@@ -506,12 +534,12 @@ impl Picture {
                     at(x * 2, y * 2 + 1),
                     at(x * 2 + 1, y * 2 + 1),
                 ];
-                halved.push(mean(four));
+                halved.extend(mean(four).to_le_bytes());
             }
         }
         Some(Kept {
             window: self.source,
-            pixels: halved,
+            pixels: halved.into(),
             width,
             whole: self.whole,
             frame: self.frame,
@@ -576,8 +604,9 @@ impl Drop for Picture {
 /// was.
 struct Kept {
     window: AppWindowId,
-    /// The picture, `width` pixels in a row, from the top.
-    pixels: Vec<u32>,
+    /// The picture, `width` pixels of four bytes in a row, from the top;
+    /// shared with the stills given out of it.
+    pixels: Arc<[u8]>,
     width: i32,
     whole: ScreenRect,
     frame: ScreenRect,
@@ -585,6 +614,11 @@ struct Kept {
 }
 
 impl Kept {
+    /// How many rows of pixels the picture has.
+    fn rows(&self) -> i32 {
+        (self.pixels.len() / 4) as i32 / self.width.max(1)
+    }
+
     /// Keeps `kept` in place of what was kept of its window, and lets go
     /// of the oldest pictures and of those of windows that are gone until
     /// the rest is within what may be kept.
@@ -594,7 +628,7 @@ impl Kept {
         };
         all.retain(|other| other.window != kept.window && other.window.exists());
         all.push(kept);
-        let sizes: Vec<usize> = all.iter().map(|kept| kept.pixels.len()).collect();
+        let sizes: Vec<usize> = all.iter().map(|kept| kept.pixels.len() / 4).collect();
         all.drain(..droppable(&sizes, KEPT_PIXELS));
     }
 
@@ -632,7 +666,7 @@ impl Return {
     fn of(kept: &Kept, shift: i32) -> Option<Self> {
         let frame = kept.frame;
         let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
-        let rows = kept.pixels.len() as i32 / kept.width;
+        let rows = kept.rows();
         let window = overlay(frame)?;
         let back = Self { window, frame };
         let corners = match kept.rounded {

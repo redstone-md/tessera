@@ -79,7 +79,7 @@ impl Hdr {
 
 /// The name Windows gives the device of `display`, as UTF-16 up to its
 /// NUL.
-fn device_of(display: Option<DisplayKey>) -> Option<Vec<u16>> {
+pub(super) fn device_of(display: Option<DisplayKey>) -> Option<Vec<u16>> {
     let mut info = MONITORINFOEXW::default();
     info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
     // SAFETY: the structure says its own size and outlives the call, which

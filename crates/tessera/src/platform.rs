@@ -27,6 +27,11 @@ pub use win32::SessionKey;
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
 pub use win32::decode_with_wic;
+#[allow(
+    unused_imports,
+    reason = "for the dock and the rules, which ask of one window"
+)]
+pub use win32::desktop_of;
 pub use win32::display_at;
 pub use win32::on_resizing_border;
 pub use win32::rename_new;
@@ -53,6 +58,12 @@ pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
+pub use win32::{DesktopSurvey, WindowMark};
+#[allow(
+    unused_imports,
+    reason = "named by the views that keep the windows of a survey or a still picture"
+)]
+pub use win32::{DesktopWindow, Still};
 pub use win32::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
