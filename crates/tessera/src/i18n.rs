@@ -1384,6 +1384,18 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // desktop-icons: the menus of the desktop.
+    ("View", "Вид"),
+    ("Sort by", "Сортировка"),
+    ("Paste shortcut", "Вставить ярлык"),
+    ("Create shortcut", "Создать ярлык"),
+    ("Small icons", "Мелкие значки"),
+    ("Medium icons", "Обычные значки"),
+    ("Auto arrange icons", "Упорядочить значки автоматически"),
+    ("Align icons to grid", "Выровнять значки по сетке"),
+    ("Show desktop icons", "Отображать значки рабочего стола"),
+    ("Arrange cards", "Расставить карточки"),
+    ("Next wallpaper", "Следующие обои"),
 ];
 
 #[cfg(test)]

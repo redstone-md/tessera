@@ -735,3 +735,16 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Kill process" = "Terminar proceso"
 "Media" = "Multimedia"
 "Personalize" = "Personalizar"
+
+# desktop-icons: the menus of the desktop.
+"View" = "Ver"
+"Sort by" = "Ordenar por"
+"Paste shortcut" = "Pegar acceso directo"
+"Create shortcut" = "Crear acceso directo"
+"Small icons" = "Iconos pequeños"
+"Medium icons" = "Iconos medianos"
+"Auto arrange icons" = "Organizar iconos automáticamente"
+"Align icons to grid" = "Alinear iconos a la cuadrícula"
+"Show desktop icons" = "Mostrar iconos del escritorio"
+"Arrange cards" = "Organizar tarjetas"
+"Next wallpaper" = "Siguiente fondo de pantalla"

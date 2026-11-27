@@ -735,3 +735,16 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+
+# desktop-icons: the menus of the desktop.
+"View" = "Вигляд"
+"Sort by" = "Сортування"
+"Paste shortcut" = "Вставити ярлик"
+"Create shortcut" = "Створити ярлик"
+"Small icons" = "Дрібні значки"
+"Medium icons" = "Звичайні значки"
+"Auto arrange icons" = "Упорядковувати значки автоматично"
+"Align icons to grid" = "Вирівняти значки за сіткою"
+"Show desktop icons" = "Показувати значки робочого столу"
+"Arrange cards" = "Розставити картки"
+"Next wallpaper" = "Наступні шпалери"
