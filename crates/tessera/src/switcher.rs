@@ -19,10 +19,10 @@
 //! `switch`, and with `arg = "app-next"` through the windows of one
 //! application, as Alt+` does on other desktops.
 
-mod choice;
+pub mod choice;
 mod layout;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::{
@@ -39,15 +39,16 @@ use crate::icons::{AppIcons, Icon};
 use crate::motion::{Spring, mix, staggered};
 use crate::platform::{
     AppWindow, AppWindowId, ChoiceKey, DisplayKey, Modifiers, NativeSurface, ScreenEdge,
-    ScreenRect, TakenKeys, Thumbnail,
+    ScreenRect, TakenKeys, Thumbnail, display_at,
 };
 use crate::popup::{
     MARGIN, PopupAnchor, floating_panel, floating_travel, open_floating, retire_floating,
 };
+use crate::rules::Rules;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, release_hover};
-use crate::workspaces::Workspaces;
+use crate::workspaces::{Resident, Workspaces};
 
 use choice::{
     Minimized, Scope, Through, answers, choice_key, first_choice, notches, rechosen,
@@ -291,13 +292,12 @@ impl Switcher {
 /// then, where the scope is `all`, those of the other workspaces of
 /// Tessera's own, workspace by workspace.
 fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<Entry> {
-    let own = std::process::id();
     let on_display = |window: &AppWindow| {
         config.scope != Scope::Display || display.is_none_or(|display| window.display == display)
     };
     let mut found: Vec<Found> = AppWindow::enumerate()
         .into_iter()
-        .filter(|window| window.id.process() != own && on_display(window))
+        .filter(|window| on_display(window) && switchable(window, cx))
         .map(|window| Found {
             id: window.id,
             program: window.program(),
@@ -319,10 +319,7 @@ fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<
     let language = Language::of(cx);
     { found.into_iter().take(SHOWN) }
         .map(|(found, minimized)| {
-            let name = { found.program.as_deref() }
-                .and_then(|program| program.file_stem())
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
+            let name = program_name(found.program.as_deref());
             let place = found.workspace.map(|index| {
                 let label = Workspaces::label(index, cx);
                 match label.chars().all(|c| c.is_ascii_digit()) {
@@ -334,7 +331,7 @@ fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<
                 id: found.id,
                 title: found.id.title().into(),
                 icon: { found.program.as_deref() }.and_then(|program| icons.of_executable(program)),
-                name: name.into(),
+                name,
                 program: found.program,
                 workspace: found.workspace,
                 place,
@@ -363,6 +360,9 @@ fn elsewhere(found: &[Found], display: Option<DisplayKey>, cx: &App) -> Vec<Foun
             if found.iter().any(known) || elsewhere.iter().any(known) || !resident.id.exists() {
                 continue;
             }
+            if !resident_switchable(&resident, cx) {
+                continue;
+            }
             elsewhere.push(Found {
                 id: resident.id,
                 program: resident.program,
@@ -371,6 +371,34 @@ fn elsewhere(found: &[Found], display: Option<DisplayKey>, cx: &App) -> Vec<Foun
         }
     }
     elsewhere
+}
+
+/// Whether `window` is one the switcher and Task View offer: a window of
+/// another program than Tessera that no rule leaves out with
+/// `skip_switcher`. Without rules every window is offered.
+pub fn switchable(window: &AppWindow, cx: &App) -> bool {
+    window.id.process() != std::process::id() && Rules::of(window, cx).skip_switcher != Some(true)
+}
+
+/// The same for a window hidden on a workspace of Tessera's own, which
+/// is known by less than a window that is shown.
+pub fn resident_switchable(resident: &Resident, cx: &App) -> bool {
+    let frame = resident.id.frame().unwrap_or(NOWHERE);
+    let window = AppWindow {
+        id: resident.id,
+        display: display_at(frame),
+        executable: resident.program.clone(),
+        app_id: None,
+    };
+    switchable(&window, cx)
+}
+
+/// The name of the file of `program` without its extension, which typing
+/// finds as well as the title of a window.
+pub fn program_name(program: Option<&Path>) -> SharedString {
+    { program.and_then(Path::file_stem) }
+        .map(|stem| SharedString::from(stem.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// A window found for the switcher, before it is described.
