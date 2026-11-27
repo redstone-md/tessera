@@ -5,8 +5,11 @@
 
 mod win32;
 
+pub use win32::BinUsage;
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
+#[allow(unused_imports, reason = "for the view of the bin in the file manager")]
+pub use win32::RecycledItem;
 #[allow(
     unused_imports,
     reason = "for the packages that hand work to the Shell"

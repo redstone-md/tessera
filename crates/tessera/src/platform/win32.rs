@@ -58,6 +58,7 @@ pub use backdrop::{
     read_desktop_if_requested,
 };
 pub use bin::RecycleBin;
+pub use bin::{BinUsage, RecycledItem};
 pub use bluetooth::{Bluetooth, PairedDevice};
 pub use brightness::ScreenBrightness;
 pub use commands::Commands;
