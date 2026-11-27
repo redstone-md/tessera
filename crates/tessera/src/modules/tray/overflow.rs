@@ -20,9 +20,9 @@ use gpui::{
 
 use super::model::TrayModel;
 use super::{
-    IconHost, KeyDeed, Layout, Side, Slot, Strips, TIP_KIND, TrayDrag, TrayStrip, button_side,
-    contains, drop_at, icon_button, insertion, measure, own_menu_entries, press_with_keyboard,
-    screen_point, tip_line,
+    IconHost, KeyDeed, Layout, Side, Slot, Strips, SurfacePlace, TIP_KIND, TrayDrag, TrayStrip,
+    button_side, contains, drop_at, icon_button, insertion, measure, middle, own_menu_entries,
+    press_with_keyboard, screen_point, tip_line,
 };
 use crate::menu::Menus;
 use crate::motion::{Interaction, Spring};
@@ -170,7 +170,7 @@ impl TrayOverflow {
             return false;
         };
         let taken = window.update(cx, |view, window, cx| {
-            let local = view.local(point, window)?;
+            let local = SurfacePlace::of_window(window)?.local(point)?;
             view.put(id, local, window, cx);
             Some(())
         });
@@ -260,11 +260,8 @@ struct OverflowCell {
 
 /// The root view of the window of an overflow.
 pub struct OverflowView {
-    model: Entity<TrayModel>,
-    strip: WeakEntity<TrayStrip>,
-    bluetooth: bool,
-    limit: Option<usize>,
-    /// Where it opens from, for when the number of its icons changes.
+    /// Where it opens from, for when the number of its icons changes, and
+    /// for which strip.
     opening: Opening,
     /// The frame its window was placed at.
     frame: ScreenRect,
@@ -296,7 +293,7 @@ pub struct OverflowView {
 
 impl IconHost for OverflowView {
     fn model(&self) -> &Entity<TrayModel> {
-        &self.model
+        &self.opening.model
     }
 
     fn open_own_menu(
@@ -306,7 +303,7 @@ impl IconHost for OverflowView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let entries = own_menu_entries(&self.model, id, false, cx);
+        let entries = own_menu_entries(self.model(), id, false, cx);
         let middle = point(
             bounds.origin.x + bounds.size.width / 2.,
             bounds.origin.y + bounds.size.height,
@@ -349,10 +346,6 @@ impl OverflowView {
         window.focus(&focus);
         let keyboard = opening.keyboard;
         let mut view = Self {
-            model: opening.model.clone(),
-            strip: opening.strip.clone(),
-            bluetooth: opening.bluetooth,
-            limit: opening.limit,
             opening,
             frame,
             ids: Vec::new(),
@@ -376,7 +369,7 @@ impl OverflowView {
     /// Takes over the icons of the overflow from the model, and closes
     /// once there are none.
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let (_, ids) = self.model.read(cx).arranged(self.bluetooth, self.limit);
+        let (_, ids) = self.arranged(cx);
         if ids.is_empty() && !self.closing {
             self.close(cx);
         }
@@ -440,7 +433,7 @@ impl OverflowView {
         {
             let overflow = cx.global_mut::<TrayOverflow>();
             overflow.open = None;
-            overflow.closed = Some((self.strip.entity_id(), Instant::now()));
+            overflow.closed = Some((self.opening.strip.entity_id(), Instant::now()));
         }
         cx.notify();
     }
@@ -450,17 +443,16 @@ impl OverflowView {
         self.ids.len().clamp(1, COLUMNS)
     }
 
-    /// The point `point` of the screen in logical pixels of the window, if
-    /// it is on the window.
-    fn local(&self, point: (i32, i32), window: &Window) -> Option<(f32, f32)> {
-        let frame = NativeSurface::of(window).ok()?.frame().ok()?;
-        let scale = window.scale_factor();
-        contains(frame, point).then(|| {
-            (
-                (point.0 - frame.left) as f32 / scale,
-                (point.1 - frame.top) as f32 / scale,
-            )
-        })
+    /// The icons of the strip it opened for: those in the bar and those in
+    /// the overflow.
+    fn arranged(&self, cx: &App) -> (Vec<u64>, Vec<u64>) {
+        let Opening {
+            model,
+            bluetooth,
+            limit,
+            ..
+        } = &self.opening;
+        model.read(cx).arranged(*bluetooth, *limit)
     }
 
     /// Where among the icons an icon dropped at `point` of the window goes.
@@ -482,9 +474,12 @@ impl OverflowView {
         {
             index -= 1;
         }
-        let model = self.model.read(cx);
-        let arranged = model.arranged(self.bluetooth, self.limit);
-        if let Some(config) = model.put(id, Place::Overflow, index, arranged) {
+        let arranged = self.arranged(cx);
+        let put = self
+            .model()
+            .read(cx)
+            .put(id, Place::Overflow, index, arranged);
+        if let Some(config) = put {
             TraySettings::change(config, cx);
         }
     }
@@ -492,7 +487,7 @@ impl OverflowView {
     /// The pointer came onto the icon `id`, or left it.
     fn tip(&self, id: u64, hovered: bool, window: &Window, cx: &mut Context<Self>) {
         let key = (TIP_KIND, id);
-        let icon = self.model.read(cx).icon(id);
+        let icon = self.model().read(cx).icon(id);
         let target = icon
             .filter(|_| hovered)
             .and_then(|icon| Some((icon, self.drawn(id)?)));
@@ -501,13 +496,7 @@ impl OverflowView {
             Tray::hover(id, false);
             return;
         };
-        if let Some(frame) = self.screen_frame(drawn, window) {
-            let middle = (
-                i32::midpoint(frame.left, frame.right),
-                i32::midpoint(frame.top, frame.bottom),
-            );
-            Tray::locate(id, frame, middle);
-        }
+        Self::locate(id, drawn, window);
         Tray::hover(id, true);
         if icon.icon.draws_own_tip {
             return;
@@ -519,17 +508,14 @@ impl OverflowView {
         }
     }
 
-    /// Where `bounds` of the window are on the screen.
-    fn screen_frame(&self, bounds: Bounds<Pixels>, window: &Window) -> Option<ScreenRect> {
-        let frame = NativeSurface::of(window).ok()?.frame().ok()?;
-        let scale = window.scale_factor();
-        let physical = |length: Pixels| (length / px(1.) * scale).round() as i32;
-        Some(ScreenRect {
-            left: frame.left + physical(bounds.origin.x),
-            top: frame.top + physical(bounds.origin.y),
-            right: frame.left + physical(bounds.origin.x + bounds.size.width),
-            bottom: frame.top + physical(bounds.origin.y + bounds.size.height),
-        })
+    /// Tells the application of the icon `id`, drawn at `drawn` of the
+    /// window, where the icon is on the screen; what it opens for the icon
+    /// opens at its middle.
+    fn locate(id: u64, drawn: Bounds<Pixels>, window: &Window) {
+        if let Some(place) = SurfacePlace::of_window(window) {
+            let frame = place.frame_of(drawn);
+            Tray::locate(id, frame, middle(frame));
+        }
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -565,17 +551,11 @@ impl OverflowView {
                 };
                 // The location of the icon is told before the application
                 // opens anything there.
-                if let Some(frame) = self
-                    .drawn(id)
-                    .and_then(|drawn| self.screen_frame(drawn, window))
-                {
-                    let middle = (
-                        i32::midpoint(frame.left, frame.right),
-                        i32::midpoint(frame.top, frame.bottom),
-                    );
-                    Tray::locate(id, frame, middle);
+                if let Some(drawn) = self.drawn(id) {
+                    Self::locate(id, drawn, window);
                 }
-                press_with_keyboard(id, button, &self.model, self.strip.entity_id(), cx);
+                let strip = self.opening.strip.entity_id();
+                press_with_keyboard(id, button, self.model(), strip, cx);
             }
             deed => {
                 self.keyboard = Some(deed.moved(chosen, count, self.columns()));
@@ -586,7 +566,7 @@ impl OverflowView {
 
     /// Gives the keyboard back to the strip, on the button of the overflow.
     fn back_to_strip(&self, cx: &mut Context<Self>) {
-        let Some(strip) = self.strip.upgrade() else {
+        let Some(strip) = self.opening.strip.upgrade() else {
             return;
         };
         let shown = cx.default_global::<Strips>().shown.clone();
@@ -616,7 +596,7 @@ impl OverflowView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let image = self
-            .model
+            .model()
             .read(cx)
             .icon(id)
             .and_then(|icon| icon.image.clone());

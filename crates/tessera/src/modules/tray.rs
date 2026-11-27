@@ -273,11 +273,12 @@ impl SurfacePlace {
     /// middle, at the edge of the surface that faces the display.
     fn of(self, bounds: Bounds<Pixels>) -> (ScreenRect, (i32, i32)) {
         let frame = self.frame_of(bounds);
+        let (x, y) = middle(frame);
         let menu = match self.side {
-            Side::Top => (i32::midpoint(frame.left, frame.right), self.surface.bottom),
-            Side::Bottom => (i32::midpoint(frame.left, frame.right), self.surface.top),
-            Side::Left => (self.surface.right, i32::midpoint(frame.top, frame.bottom)),
-            Side::Right => (self.surface.left, i32::midpoint(frame.top, frame.bottom)),
+            Side::Top => (x, self.surface.bottom),
+            Side::Bottom => (x, self.surface.top),
+            Side::Left => (self.surface.right, y),
+            Side::Right => (self.surface.left, y),
         };
         (frame, menu)
     }
@@ -345,6 +346,14 @@ impl SurfacePlace {
             false => PopupAnchor::at(window, bounds.origin.x + bounds.size.width / 2., cx),
         }
     }
+}
+
+/// The middle of `frame`.
+fn middle(frame: ScreenRect) -> (i32, i32) {
+    (
+        i32::midpoint(frame.left, frame.right),
+        i32::midpoint(frame.top, frame.bottom),
+    )
 }
 
 /// Whether `point` is on `frame`.

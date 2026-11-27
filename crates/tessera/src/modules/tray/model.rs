@@ -66,6 +66,26 @@ pub struct TrayModel {
 
 impl EventEmitter<KeyboardBack> for TrayModel {}
 
+/// The choices made in the settings of Windows, `promotions`, as they are
+/// looked through for each icon.
+fn choices_of(promotions: &[TrayPromotion]) -> Vec<WindowsChoice<'_>> {
+    promotions
+        .iter()
+        .map(|choice| WindowsChoice {
+            guid: choice.guid,
+            executable: choice.executable.as_deref().map(|path| path.as_path()),
+            uid: choice.uid,
+            promoted: choice.promoted,
+        })
+        .collect()
+}
+
+/// What `choices` say of `icon`.
+fn choice_for(choices: &[WindowsChoice], icon: &TrayIcon) -> Option<bool> {
+    let executable = icon.executable.as_deref().map(|path| path.as_path());
+    windows_choice(choices, icon.guid, executable, icon.uid)
+}
+
 /// The one model, once it is made.
 struct Shared(Entity<TrayModel>);
 
@@ -139,6 +159,7 @@ impl TrayModel {
         }
         let (generation, icons) = Tray::icons();
         self.generation = Some(generation);
+        let choices = choices_of(&self.choices);
         let mut kept: Vec<ModelIcon> = Vec::with_capacity(icons.len());
         for icon in icons {
             let known = self.icons.iter().position(|known| known.icon.id == icon.id);
@@ -153,7 +174,7 @@ impl TrayModel {
                 icon.owner_class(),
                 icon.uid,
             );
-            let windows = self.windows_choice(&icon);
+            let windows = choice_for(&choices, &icon);
             kept.push(ModelIcon {
                 icon,
                 image,
@@ -194,29 +215,14 @@ impl TrayModel {
                     return;
                 }
                 this.choices = choices;
-                for index in 0..this.icons.len() {
-                    this.icons[index].windows = this.windows_choice(&this.icons[index].icon);
+                let choices = choices_of(&this.choices);
+                for icon in &mut this.icons {
+                    icon.windows = choice_for(&choices, &icon.icon);
                 }
                 cx.notify();
             });
         })
         .detach();
-    }
-
-    /// What the settings of Windows say of `icon`.
-    fn windows_choice(&self, icon: &TrayIcon) -> Option<bool> {
-        let choices: Vec<WindowsChoice> = self
-            .choices
-            .iter()
-            .map(|choice| WindowsChoice {
-                guid: choice.guid,
-                executable: choice.executable.as_deref().map(|path| path.as_path()),
-                uid: choice.uid,
-                promoted: choice.promoted,
-            })
-            .collect();
-        let executable = icon.executable.as_deref().map(|path| path.as_path());
-        windows_choice(&choices, icon.guid, executable, icon.uid)
     }
 
     /// The icon `id`, while its application keeps it.
