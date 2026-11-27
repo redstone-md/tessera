@@ -37,6 +37,7 @@ mod runner;
 mod session;
 mod settings;
 mod sound;
+mod spacer;
 mod start;
 mod startup;
 mod system;
@@ -92,6 +93,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(start::StartModule),
         Box::new(startup::StartupModule),
         Box::new(sound::SoundModule),
+        Box::new(spacer::SpacerModule),
         Box::new(brightness::BrightnessModule),
         Box::new(system::SystemModule),
         Box::new(tiling::TilingModule),

@@ -1218,3 +1218,199 @@ fit = "fill"
         assert!(file.config().unwrap().icon_packs.is_empty());
     }
 }
+
+// surfaces-edges: the changes the menu of a bar makes to its surface.
+impl ConfigFile {
+    /// How many surfaces the file has.
+    fn surface_count(&self) -> usize {
+        let surfaces = self.document.get("surface");
+        surfaces
+            .and_then(Item::as_array_of_tables)
+            .map_or(0, ArrayOfTables::len)
+    }
+
+    /// Moves a surface to another edge of its displays.
+    pub fn set_surface_edge(&mut self, surface: usize, edge: crate::platform::ScreenEdge) -> bool {
+        self.set_surface(surface, "edge", Some(Value::from(edge.name())))
+    }
+
+    /// Makes a surface `thickness` logical pixels thick.
+    pub fn set_surface_thickness(&mut self, surface: usize, thickness: f32) -> bool {
+        self.set_surface(surface, "thickness", Some(length_value(thickness)))
+    }
+
+    /// Has a surface go away as `hide` says, or never.
+    pub fn set_surface_hide(&mut self, surface: usize, hide: super::Hiding) -> bool {
+        let written = match hide {
+            super::Hiding::Never => None,
+            super::Hiding::Pointer => Some(Value::from(true)),
+            super::Hiding::Overlap => Some(Value::from("overlap")),
+        };
+        self.set_surface(surface, "hide", written)
+    }
+
+    /// Has a surface take `share` of the length of its edge; the whole
+    /// length takes `length` and `align` out of the file.
+    pub fn set_surface_length(&mut self, surface: usize, share: f32) -> bool {
+        if share >= 1. {
+            return self.set_surface(surface, "length", None)
+                && self.set_surface(surface, "align", None);
+        }
+        let share = (f64::from(share) * 100.).round() / 100.;
+        self.set_surface(surface, "length", Some(Value::from(share)))
+    }
+
+    /// Has a surface shorter than its edge stand at `align` of it.
+    pub fn set_surface_align(&mut self, surface: usize, align: super::SpanAlign) -> bool {
+        let written = (align != super::SpanAlign::default()).then(|| Value::from(align.name()));
+        self.set_surface(surface, "align", written)
+    }
+
+    /// Has a surface appear on `displays`.
+    pub fn set_surface_displays(&mut self, surface: usize, displays: &super::Displays) -> bool {
+        self.set_surface(surface, "displays", displays_value(displays))
+    }
+
+    /// Appends a surface at `edge` of `displays`, `thickness` logical
+    /// pixels thick, with a background, so that it is seen, and a clock in
+    /// its middle where it runs across the display.
+    pub fn add_surface(
+        &mut self,
+        edge: crate::platform::ScreenEdge,
+        thickness: f32,
+        displays: &super::Displays,
+    ) -> bool {
+        let item = self
+            .document
+            .entry("surface")
+            .or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        let Some(surfaces) = item.as_array_of_tables_mut() else {
+            return false;
+        };
+        let mut surface = Table::new();
+        surface.insert("edge", value(edge.name()));
+        surface.insert("thickness", Item::Value(length_value(thickness)));
+        if let Some(displays) = displays_value(displays) {
+            surface.insert("displays", Item::Value(displays));
+        }
+        surface.insert("opacity", value(0.8));
+        if !edge.is_vertical() {
+            let mut center = Array::new();
+            center.push("clock");
+            surface.insert("center", value(center));
+        }
+        surfaces.push(surface);
+        true
+    }
+
+    /// Takes a surface out of the file, unless it is the last one: the
+    /// shell needs one.
+    pub fn remove_surface(&mut self, surface: usize) -> bool {
+        if surface >= self.surface_count() || self.surface_count() < 2 {
+            return false;
+        }
+        let surfaces = self.document.get_mut("surface");
+        let Some(surfaces) = surfaces.and_then(Item::as_array_of_tables_mut) else {
+            return false;
+        };
+        surfaces.remove(surface);
+        true
+    }
+}
+
+/// A length as the file writes it: whole where it is whole.
+fn length_value(length: f32) -> Value {
+    if length.fract() == 0. && length.abs() < 1e9 {
+        Value::from(length as i64)
+    } else {
+        Value::from(f64::from(length))
+    }
+}
+
+/// `displays` as the file writes it; `None` for every display, which is
+/// what a surface that says nothing appears on.
+fn displays_value(displays: &super::Displays) -> Option<Value> {
+    use super::{DisplaySelector, Displays};
+    Some(match displays {
+        Displays::All => return None,
+        Displays::Primary => Value::from("primary"),
+        Displays::Others => Value::from("others"),
+        Displays::Chosen(selectors) => {
+            let mut list = Array::new();
+            for selector in selectors {
+                match selector {
+                    DisplaySelector::Position(position) => list.push(*position as i64),
+                    other => list.push(other.text()),
+                }
+            }
+            Value::Array(list)
+        }
+    })
+}
+
+#[cfg(test)]
+mod surfaces_edges_tests {
+    use super::*;
+    use crate::config::{DisplaySelector, Displays, Hiding, SpanAlign};
+    use crate::platform::ScreenEdge;
+
+    #[test]
+    fn the_menu_of_a_bar_changes_its_surface() {
+        let mut file = ConfigFile::parse(DEFAULT).unwrap();
+        assert!(file.set_surface_edge(0, ScreenEdge::Left));
+        assert!(file.set_surface_thickness(0, 52.));
+        assert!(file.set_surface_hide(0, Hiding::Overlap));
+        assert!(file.set_surface_length(0, 0.5));
+        assert!(file.set_surface_align(0, SpanAlign::End));
+        let chosen = Displays::Chosen(vec![
+            DisplaySelector::Position(2),
+            DisplaySelector::Name("LG*".into()),
+        ]);
+        assert!(file.set_surface_displays(0, &chosen));
+        let config = file.config().expect("it stays usable");
+        let bar = &config.surfaces[0];
+        assert_eq!(
+            (bar.edge, bar.thickness, bar.hide),
+            (ScreenEdge::Left, 52., Hiding::Overlap)
+        );
+        assert_eq!((bar.length, bar.align), (0.5, SpanAlign::End));
+        assert_eq!(bar.displays, chosen);
+        assert!(file.document.to_string().contains("thickness = 52\n"));
+
+        assert!(file.set_surface_length(0, 1.));
+        assert!(file.set_surface_hide(0, Hiding::Never));
+        assert!(file.set_surface_displays(0, &Displays::All));
+        let config = file.config().unwrap();
+        let bar = &config.surfaces[0];
+        assert_eq!(
+            (bar.length, bar.hide, &bar.displays),
+            (1., Hiding::Never, &Displays::All)
+        );
+        assert!(file.document["surface"][0].get("length").is_none());
+        assert!(file.document["surface"][0].get("align").is_none());
+        assert!(!file.set_surface_edge(9, ScreenEdge::Top));
+    }
+
+    #[test]
+    fn a_bar_is_added_and_removed_but_the_last_stays() {
+        let mut file = ConfigFile::parse(DEFAULT).unwrap();
+        let before = file.config().unwrap().surfaces.len();
+        assert!(file.add_surface(ScreenEdge::Right, 40., &Displays::Primary));
+        assert!(file.add_surface(ScreenEdge::Top, 40., &Displays::All));
+        let config = file.config().expect("it stays usable");
+        assert_eq!(config.surfaces.len(), before + 2);
+        let right = &config.surfaces[before];
+        assert_eq!(
+            (right.edge, &right.displays),
+            (ScreenEdge::Right, &Displays::Primary)
+        );
+        assert!(right.center.is_empty());
+        assert_eq!(right.opacity(), Some(0.8));
+        assert_eq!(config.surfaces[before + 1].center.len(), 1);
+        for _ in 0..before + 1 {
+            assert!(file.remove_surface(0));
+        }
+        assert!(!file.remove_surface(0));
+        assert_eq!(file.config().unwrap().surfaces.len(), 1);
+    }
+}

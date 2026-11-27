@@ -61,7 +61,9 @@ pub use win32::{
 pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
 };
+pub use win32::{DisplayName, display_device, display_names};
 pub use win32::{DragOut, DropEvent, DropTarget, DropZone, DropZones};
+pub use win32::{EdgeBand, EdgeSpan, HidingClaim};
 pub use win32::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held, started_as_shell,

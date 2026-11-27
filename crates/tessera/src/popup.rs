@@ -17,6 +17,7 @@ use crate::config::{PopupConfig, PopupPlace, WidgetSpec};
 use crate::module::WidgetRegistry;
 use crate::motion::Spring;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, ScreenRect, SmallBirth, Veil};
+use crate::surface::edge_of;
 use crate::theme::Theme;
 use crate::ui::release_hover;
 
@@ -36,14 +37,19 @@ const VEIL: f32 = 0.42;
 const RISE: f32 = 28.;
 
 /// Where a floating window should appear. Positions are in physical pixels.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PopupAnchor {
     /// The surface the popup belongs to.
     pub surface: ScreenRect,
-    /// The edge that surface is docked to; the popup opens away from it.
+    /// The edge that surface is docked to; the popup opens away from it,
+    /// below a surface at the top, to the right of one at the left.
     pub edge: ScreenEdge,
-    /// The horizontal screen position to center the popup on.
+    /// The horizontal screen position to center the popup on, beside a
+    /// surface at the top or the bottom.
     pub x: i32,
+    /// The vertical screen position to center the popup on, beside a
+    /// surface at the left or the right.
+    pub y: i32,
     /// The display to stay on.
     pub screen: ScreenRect,
     /// Physical pixels per logical one on that display.
@@ -53,25 +59,63 @@ pub struct PopupAnchor {
 }
 
 impl PopupAnchor {
+    /// The anchor at `x` of `surface`, which is docked to `edge` of the
+    /// display `screen`; beside a surface at the left or the right it is
+    /// at the middle of the surface's height, until `y` says otherwise.
+    pub fn new(
+        surface: ScreenRect,
+        edge: ScreenEdge,
+        x: i32,
+        screen: ScreenRect,
+        scale: f32,
+        display_id: Option<DisplayId>,
+        display: Option<DisplayKey>,
+    ) -> Self {
+        Self {
+            surface,
+            edge,
+            x,
+            y: surface.top + (surface.bottom - surface.top) / 2,
+            screen,
+            scale,
+            display_id,
+            display,
+        }
+    }
+
     /// The anchor at `x`, a horizontal position in `window`, which is a
-    /// surface docked to the edge of its display that it is nearer to.
+    /// surface docked to an edge of its display. Beside a surface at the
+    /// left or the right it is where the pointer is, along the surface.
     pub fn at(window: &Window, x: Pixels, cx: &App) -> anyhow::Result<Self> {
+        let pointer = window.mouse_position();
+        Self::at_point(window, gpui::point(x, pointer.y), cx)
+    }
+
+    /// The anchor at `position` of `window`, which is a surface docked to
+    /// an edge of its display: what opens there opens away from the
+    /// surface, centered on `position` along the surface.
+    pub fn at_point(
+        window: &Window,
+        position: gpui::Point<Pixels>,
+        cx: &App,
+    ) -> anyhow::Result<Self> {
         let native = NativeSurface::of(window)?;
         let (surface, screen) = (native.frame()?, native.display_frame()?);
         let scale = window.scale_factor();
-        let edge = if surface.top + surface.bottom < screen.top + screen.bottom {
-            ScreenEdge::Top
-        } else {
-            ScreenEdge::Bottom
-        };
-        Ok(Self {
+        let edge = edge_of(window, cx).unwrap_or_else(|| nearest_edge(surface, screen));
+        let physical = |length: Pixels| (length / px(1.) * scale).round() as i32;
+        let anchor = Self::new(
             surface,
             edge,
-            x: surface.left + (x / px(1.) * scale).round() as i32,
+            surface.left + physical(position.x),
             screen,
             scale,
-            display_id: window.display(cx).map(|display| display.id()),
-            display: Some(native.display()),
+            window.display(cx).map(|display| display.id()),
+            Some(native.display()),
+        );
+        Ok(Self {
+            y: surface.top + physical(position.y),
+            ..anchor
         })
     }
 
@@ -84,20 +128,22 @@ impl PopupAnchor {
         let scale = window.scale_factor();
         let x = frame.left + (position.x / px(1.) * scale).round() as i32;
         let y = frame.top + (position.y / px(1.) * scale).round() as i32;
-        Ok(Self {
-            surface: ScreenRect {
-                left: x,
-                top: y,
-                right: x,
-                bottom: y,
-            },
-            edge: ScreenEdge::Top,
+        let point = ScreenRect {
+            left: x,
+            top: y,
+            right: x,
+            bottom: y,
+        };
+        let display_id = window.display(cx).map(|display| display.id());
+        Ok(Self::new(
+            point,
+            ScreenEdge::Top,
             x,
             screen,
             scale,
-            display_id: window.display(cx).map(|display| display.id()),
-            display: Some(native.display()),
-        })
+            display_id,
+            Some(native.display()),
+        ))
     }
 
     /// The frame of a floating window whose panel is `width` by `height`
@@ -121,30 +167,71 @@ impl PopupAnchor {
     /// The frame of a floating window whose panel is `width` by `height`
     /// logical pixels and stands in the middle of the width of the
     /// display, a sixth of its height below its top.
+    ///
+    /// Beside a bar at the left or the right of the display it stands in
+    /// the middle of the width that bar leaves, as far as it fits there.
     pub fn near_top(&self, width: f32, height: f32) -> ScreenRect {
         let middle = self.middle(width, height);
         let screen = self.screen;
         let height = middle.bottom - middle.top;
         let top = (screen.top + (screen.bottom - screen.top) / 6).min(screen.bottom - height);
         let top = top.max(screen.top);
+        let wide = middle.right - middle.left;
+        let (from, to) = self.room_beside();
+        let left = match to - from >= wide {
+            true => from + (to - from - wide) / 2,
+            false => middle.left,
+        };
         ScreenRect {
+            left,
             top,
+            right: left + wide,
             bottom: top + height,
-            ..middle
+        }
+    }
+
+    /// The part of the width of the display a bar at its left or right
+    /// leaves, as left and right; all of it beside a bar at the top or
+    /// the bottom, or one that is a point.
+    fn room_beside(&self) -> (i32, i32) {
+        let (screen, surface) = (self.screen, self.surface);
+        let bar = surface.right > surface.left && surface.bottom > surface.top;
+        match self.edge {
+            ScreenEdge::Left if bar => (surface.right.min(screen.right), screen.right),
+            ScreenEdge::Right if bar => (screen.left, surface.left.max(screen.left)),
+            _ => (screen.left, screen.right),
         }
     }
 
     /// The frame of a floating window whose panel is `width` by `height`
     /// logical pixels: touching the surface, so the panel sits one margin
-    /// away from it, centered on the anchor and kept on the display.
+    /// away from it, centered on the anchor and kept on the display. Below
+    /// a surface at the top, above one at the bottom, and to the right or
+    /// the left of one at the left or the right.
     pub fn frame(&self, width: f32, height: f32) -> ScreenRect {
         let physical = |length: f32| ((length + MARGIN * 2.) * self.scale).round() as i32;
         let (width, height) = (physical(width), physical(height));
-        let rightmost = (self.screen.right - width).max(self.screen.left);
-        let left = (self.x - width / 2).clamp(self.screen.left, rightmost);
-        let top = match self.edge {
-            ScreenEdge::Top => self.surface.bottom,
-            ScreenEdge::Bottom => self.surface.top - height,
+        let screen = self.screen;
+        let centered = |middle: i32, length: i32, from: i32, to: i32| {
+            (middle - length / 2).clamp(from, (to - length).max(from))
+        };
+        let (left, top) = match self.edge {
+            ScreenEdge::Top => (
+                centered(self.x, width, screen.left, screen.right),
+                self.surface.bottom,
+            ),
+            ScreenEdge::Bottom => (
+                centered(self.x, width, screen.left, screen.right),
+                self.surface.top - height,
+            ),
+            ScreenEdge::Left => (
+                self.surface.right,
+                centered(self.y, height, screen.top, screen.bottom),
+            ),
+            ScreenEdge::Right => (
+                self.surface.left - width,
+                centered(self.y, height, screen.top, screen.bottom),
+            ),
         };
         ScreenRect {
             left,
@@ -152,6 +239,19 @@ impl PopupAnchor {
             right: left + width,
             bottom: top + height,
         }
+    }
+}
+
+/// The edge of `screen` the surface at `surface` is docked to, judged by
+/// its shape and where it lies: a strip taller than wide is at the left or
+/// the right, one wider than tall at the top or the bottom.
+fn nearest_edge(surface: ScreenRect, screen: ScreenRect) -> ScreenEdge {
+    let tall = surface.bottom - surface.top > surface.right - surface.left;
+    match tall {
+        true if surface.left + surface.right < screen.left + screen.right => ScreenEdge::Left,
+        true => ScreenEdge::Right,
+        false if surface.top + surface.bottom < screen.top + screen.bottom => ScreenEdge::Top,
+        false => ScreenEdge::Bottom,
     }
 }
 
@@ -245,14 +345,18 @@ pub fn retire_floating(window: &mut Window, cx: &mut App) {
     }
 }
 
-/// How far from its place the panel of a floating window is while it is
-/// `visibility` of the way open: it comes from the surface at `edge`.
+/// How far down from its place the panel of a floating window is while it
+/// is `visibility` of the way open: it comes from the surface at `edge`.
+/// Beside a surface at the left or the right it comes from the side, as
+/// [`floating_offset`] says, and is not moved down.
 pub fn floating_travel(edge: ScreenEdge, visibility: f32) -> Pixels {
-    let travel = px(MARGIN * (1. - visibility));
-    match edge {
-        ScreenEdge::Top => -travel,
-        ScreenEdge::Bottom => travel,
-    }
+    floating_offset(edge, visibility).y
+}
+
+/// Where the panel of a floating window is from its place while it is
+/// `visibility` of the way open: it comes from the surface at `edge`.
+pub fn floating_offset(edge: ScreenEdge, visibility: f32) -> gpui::Point<Pixels> {
+    edge.travel(px(MARGIN * (1. - visibility)))
 }
 
 /// The content of a floating window: a themed panel, which `fill` gives
@@ -263,10 +367,12 @@ pub fn floating_panel(
     visibility: f32,
     fill: impl FnOnce(Div) -> Div,
 ) -> Div {
+    let offset = floating_offset(edge, visibility);
     let panel = div()
         .size_full()
         .relative()
-        .top(floating_travel(edge, visibility))
+        .left(offset.x)
+        .top(offset.y)
         .p(theme.spacing.medium)
         .flex()
         .flex_col()
@@ -600,21 +706,102 @@ impl Render for PopupView {
 mod tests {
     use super::*;
 
+    const SCREEN: ScreenRect = ScreenRect {
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+    };
+
     fn anchor(edge: ScreenEdge, surface: ScreenRect, x: i32) -> PopupAnchor {
-        PopupAnchor {
-            surface,
-            edge,
-            x,
-            screen: ScreenRect {
-                left: 0,
-                top: 0,
-                right: 1000,
-                bottom: 800,
-            },
-            scale: 1.,
-            display_id: None,
-            display: None,
-        }
+        PopupAnchor::new(surface, edge, x, SCREEN, 1., None, None)
+    }
+
+    fn sides(rect: ScreenRect) -> (i32, i32, i32, i32) {
+        (rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+    /// `anchor` moved to `y` along a bar at the left or the right.
+    fn down(anchor: PopupAnchor, y: i32) -> PopupAnchor {
+        PopupAnchor { y, ..anchor }
+    }
+
+    #[test]
+    fn a_popup_opens_beside_a_bar_at_the_left_or_the_right() {
+        let left = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 48,
+            bottom: 800,
+        };
+        // To the right of a left bar, at the middle of the widget.
+        let beside = framed(&down(anchor(ScreenEdge::Left, left, 24), 300));
+        assert_eq!(sides(beside), (48, 250, 248, 350));
+        // Kept on the display at its ends.
+        let low = framed(&down(anchor(ScreenEdge::Left, left, 24), 790));
+        assert_eq!((low.top, low.bottom), (700, 800));
+        let high = framed(&down(anchor(ScreenEdge::Left, left, 24), 5));
+        assert_eq!(high.top, 0);
+        // To the left of a right bar.
+        let right = ScreenRect {
+            left: 952,
+            top: 0,
+            right: 1000,
+            bottom: 800,
+        };
+        let beside = framed(&down(anchor(ScreenEdge::Right, right, 976), 400));
+        assert_eq!(sides(beside), (752, 350, 952, 450));
+        // A new anchor stands at the middle of a vertical bar.
+        assert_eq!(anchor(ScreenEdge::Left, left, 24).y, 400);
+    }
+
+    #[test]
+    fn a_popup_near_the_top_keeps_clear_of_a_bar_at_the_side() {
+        let left = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 200,
+            bottom: 800,
+        };
+        let frame = anchor(ScreenEdge::Left, left, 100).near_top(500., 300.);
+        let margin = (MARGIN * 2.).round() as i32;
+        assert_eq!(frame.left + frame.right, 200 + 1000);
+        assert_eq!(frame.right - frame.left, 500 + margin);
+        // Where the room beside it is too narrow, it stands in the middle.
+        let wide = anchor(ScreenEdge::Left, left, 100).near_top(900., 300.);
+        assert_eq!(wide.left + wide.right, 1000);
+    }
+
+    #[test]
+    fn the_edge_of_a_surface_is_judged_by_its_shape() {
+        let strip = |left, top, right, bottom| ScreenRect {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        assert_eq!(nearest_edge(strip(0, 0, 1000, 40), SCREEN), ScreenEdge::Top);
+        assert_eq!(
+            nearest_edge(strip(0, 760, 1000, 800), SCREEN),
+            ScreenEdge::Bottom
+        );
+        assert_eq!(nearest_edge(strip(0, 0, 40, 800), SCREEN), ScreenEdge::Left);
+        assert_eq!(
+            nearest_edge(strip(960, 100, 1000, 700), SCREEN),
+            ScreenEdge::Right
+        );
+    }
+
+    #[test]
+    fn a_panel_comes_in_from_its_edge() {
+        let half = floating_offset(ScreenEdge::Left, 0.5);
+        assert_eq!(half, gpui::point(px(-MARGIN / 2.), px(0.)));
+        assert_eq!(floating_travel(ScreenEdge::Left, 0.5), px(0.));
+        assert_eq!(floating_travel(ScreenEdge::Top, 0.), px(-MARGIN));
+        assert_eq!(
+            floating_offset(ScreenEdge::Right, 1.),
+            gpui::point(px(0.), px(0.))
+        );
     }
 
     fn framed(anchor: &PopupAnchor) -> ScreenRect {
