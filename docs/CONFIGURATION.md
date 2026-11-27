@@ -70,6 +70,7 @@ style = "tiles"       # or "thumbnails", "list", "icons"
 previews = false      # pictures of the windows in the tiles of "tiles"
 scope = "workspace"   # or "display", "all"
 minimized = "keep"    # or "last", "hide"
+show_desktop = false  # a Show desktop entry after the windows
 
 [[key]]
 press = "alt+backquote"
@@ -85,6 +86,10 @@ Where the keys of Windows are in use (`windows_keys = true`, or Tessera being th
 | `scope` | `workspace` (default), `display`, `all` | `workspace`: the windows of the workspace that is shown, on every display; the windows of other virtual desktops of Windows are never offered. `display`: of those, the windows on the display the switcher opens on, the display the pointer is on. `all`: those of the workspace shown, then the windows of the other workspaces of Tessera's own (`[workspaces]` with `own`), workspace by workspace; where every display has workspaces of its own, those of the display the switcher opens on. Choosing such a window goes to its workspace |
 | `minimized` | `keep` (default), `last`, `hide` | `keep`: minimized windows stand where they were last used, like the others. `last`: after all the windows that are not minimized. `hide`: they are not offered |
 
+| `show_desktop` | `false` (default), `true` | `true` adds a **Show desktop** entry after the windows, which does what the action `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows and bringing them back on the next press |
+
+`style` also takes `cover` and `flip`, which stand the windows on a stage, with the title of the chosen one under it. `cover`: the chosen window large in the middle, its neighbours to both sides, each 0.8 the size of the one nearer to the middle, further out and fainter, as many as the stage has room for. `flip`: the chosen window in front at the bottom, the windows after it stacked upward and to the side behind it, each 0.8 the size of the one in front of it, higher and fainter; up goes to the window behind, down to the one before. Windows draws the picture of a window as an upright rectangle, so the styles move, scale and fade flat pictures and do not turn them in 3D; no two pictures overlap where the choice rests. Windows that a `[[rule]]` gives `skip_switcher = true` are not offered (nor by Task View).
+
 Rows that do not fit on the display scroll to the chosen window. While the switcher is open:
 
 - typing narrows the windows to those whose title, or the name of whose program, has every word typed, whatever the case; the line of what was typed stands above the windows, Backspace takes the last letter back, and Esc forgets all of it (a second Esc closes the switcher). While the keys of the switcher are held, as Alt is with Alt+Tab, a letter is taken as typed although Windows writes nothing for it;
@@ -94,6 +99,33 @@ Rows that do not fit on the display scroll to the chosen window. While the switc
 - an action `switcher` with `app-next` or `app-previous` narrows the open switcher to the windows of the application of the chosen window, and one with `next` or `previous` offers all of them again.
 
 The arrows, Enter, Esc, Delete and Backspace are taken with the keyboard hook whatever has the keyboard, so they reach no other program while the switcher is open. Letters, Tab, Ctrl+W and the wheel reach the switcher while its window has the keyboard: Tessera brings it in front when it opens, and asks Windows again in other ways where Windows refuses at first; where Windows still refuses, those go to the window in front. The settings show the style, the scope and the minimized windows on the **Window switcher** card of the **Windows** part.
+
+## Task View
+
+The action `taskview` opens Task View, or closes it: every display is dimmed and shows the windows that stand on it as live pictures, spread so that they are as large as the display gives room for, each keeping the shape of its window. Where the keys of Windows are in use (`windows_keys = true`, or Tessera being the shell) Win+Tab opens it unless a `[[key]]` presses those keys. `present-windows` does the same without the cards of the workspaces along the top and brings no key; hot corners and `[[key]]` entries can name either.
+
+```toml
+[[key]]
+press = "ctrl+alt+tab"
+action = "present-windows"
+arg = "app"            # the windows of the application in front
+```
+
+| `arg` | What it shows |
+| --- | --- |
+| `workspace` (or none) | the windows of the workspace each display shows |
+| `all` | the windows of every workspace of Tessera's own, grouped under the name of their workspace; with the virtual desktops of Windows, the windows of the desktop shown |
+| `app` | the windows of the application of the window in front |
+
+While it is open:
+
+- typing narrows the windows of every display to those whose title, or the name of whose program, has every word typed, in the line of what is typed on the display the pointer is on; Backspace takes the last letter back and Esc forgets all of it (a second Esc closes Task View). Where no window has what is typed, the runners of the launcher answer it under the line (not the runners of windows, processes and power), the arrows up and down choose an answer and Enter or a click does it;
+- the arrows go to the picture beside the chosen one, Tab and Shift+Tab to the next and the one before, and Enter or a click brings the window in front, going to its workspace first;
+- Delete, Ctrl+W, a click with the middle button or a click on the close button over a picture asks its window to close;
+- along the top, where `[workspaces]` has `own`, a card for each workspace shows its name and the icons of its windows: a click goes to that workspace, and a picture dragged onto a card has its window live there;
+- a click on no picture, Esc, or the keyboard going to another program closes Task View.
+
+A minimized window and one hidden on another workspace have no picture to give and show their icon on a card. Windows that a `[[rule]]` gives `skip_switcher = true` are left out.
 
 ## Actions
 
@@ -141,6 +173,8 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
 | `eject` | the letter of a drive, as `E` or `E:` | ejects that drive as its **Eject** button in the popup `devices` does: the device it is on, with every drive of it, or its medium where it is a disc or a card in a reader built in; a notice says how it went |
 | `switcher` | `next`, `previous`, `app-next`, `app-previous`, or none | opens the [window switcher](#the-window-switcher), or goes one window on (`next`, or none) or back (`previous`) in the open one; `app-next` and `app-previous` go through the windows of one application only. The choice is taken when the keys to hold of the `press` that did it are let go; for a `press` with none, the switcher stays open until a window is chosen. Done by `tessera do switcher`, it waits for the keys that are down as it is done, which are usually none. Its keys are taken from Windows, and it brings Alt+Tab (`next`), Alt+Shift+Tab (`previous`), Alt+` (`app-next`) and Alt+Shift+` (`app-previous`) where the keys of Windows are in use |
+| `taskview` | `workspace`, `all`, `app`, or none | opens [Task View](#task-view), or closes it: the windows of each display spread as live pictures, with the workspaces along the top; `all` shows those of every workspace, `app` those of the application in front. Its keys are taken from Windows, and it brings Win+Tab where the keys of Windows are in use |
+| `present-windows` | `workspace`, `all`, `app`, or none | the same without the workspaces along the top; it brings no key |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 

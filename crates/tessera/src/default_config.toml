@@ -250,6 +250,14 @@
 #                      alt+tab, alt+shift+tab, alt+backquote (app-next) and
 #                      alt+shift+backquote (app-previous) unless a [[key]]
 #                      presses them
+#             taskview Task View: the windows of each display spread as
+#                      live pictures, typing to narrow them (the runners
+#                      of the launcher answer where no window does), the
+#                      workspaces along the top; arg "workspace" (or
+#                      none), "all" for every workspace or "app" for the
+#                      application in front. Brings win+tab where the
+#                      keys of Windows are in use
+#             present-windows  the same without the workspaces; no key
 #
 # [[key]]
 # press = "win+v"
@@ -455,6 +463,7 @@
 #               of its windows, for a popup; a click on a card goes to
 #               that workspace, a click on an icon to that window, and
 #               an icon dragged onto another card moves its window there
+#               The windows of the workspace shown are live pictures.
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
 #   "volume-slider"  a mute button and a slider for the output volume
@@ -1004,6 +1013,12 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 #   minimized  "keep" (default) leaves minimized windows where they were
 #              used, "last" puts them after the others, "hide" leaves
 #              them out
+#   style "cover" has the chosen window large in the middle and its
+#              neighbours to both sides, smaller and fainter; "flip"
+#              stacks the windows after it upward behind it. Both move
+#              flat pictures: Windows cannot turn them in 3D
+#   show_desktop  true adds a Show desktop entry after the windows
+# Windows a [[rule]] gives skip_switcher = true are not offered.
 # While the switcher is open, typing narrows the windows to those whose
 # title or program has what was typed (Backspace takes a letter back, Esc
 # all of them), the wheel moves the choice, and Delete, Ctrl+W or a click
@@ -1017,6 +1032,7 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # style = "thumbnails"
 # scope = "display"
 # minimized = "last"
+# show_desktop = true
 
 # [flyout] with volume = true has Tessera show the volume of the default
 # audio output for a moment whenever it changes, whoever changed it: a pill

@@ -48,6 +48,7 @@ Starting Explorer as the shell works like this: while the values name Tessera, t
 - Once the bars are open, it signals the events Windows and programs wait for from a shell that is ready (`msgina: ShellReadyEvent`, `ShellDesktopSwitchEvent`).
 - Its workspaces are Tessera's own, four unless `[workspaces] own` says how many: the virtual desktops of Windows are part of Explorer.
 - It hides no taskbar of Explorer, as there is none.
+- Task View and Win+Tab work in shell mode through Tessera: the action `taskview`, which Win+Tab does where `windows_keys` is on, spreads the windows of each display as live pictures (see "Task View" in FEATURES.md), with the workspaces of Tessera's own along the top.
 
 In both modes, Tessera hears the shell hook of Windows (windows made, destroyed, activated, flashing), the locking of the session, and the end of the session: it asks Windows to be ended after the applications, and when the session ends its own thread shows the windows the workspaces hid (from the record they keep, so this works also when the user interface does not answer), then waits until the user interface has quit and given back the space the bars held before it lets Windows go on, at most four seconds in all. When the user changes the environment variables, programs Tessera starts afterwards get the new ones.
 
