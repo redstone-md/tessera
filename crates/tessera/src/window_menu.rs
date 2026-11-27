@@ -8,14 +8,18 @@
 //! of Tessera's own or to the next display, snaps it to the left or right
 //! half, maximizes or restores it, has it fill its display, takes its title
 //! bar away, moves or resizes it with the arrow keys, minimizes or closes
-//! it, ends its program once that is confirmed, and writes a `[[rule]]`
-//! for windows like it into the configuration.
+//! it, ends its program once that is confirmed, records a shortcut that
+//! brings it forward (a `[[key]]` of `activate-window`), and writes a
+//! `[[rule]]` for windows like it into the configuration, or, once the
+//! editor of the rules is there (`edit-window-rule`), opens it for the
+//! window.
 
 use gpui::App;
 
 use crate::actions::{Action, Actions};
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
+use crate::modules::record_for_window;
 use crate::platform::{AppWindow, AppWindowId, Display, Launch};
 use crate::rules::write_rule_for;
 use crate::shell::Shell;
@@ -44,6 +48,10 @@ const ICON_RESTORE: &str = "\u{e923}";
 const ICON_MINIMIZE: &str = "\u{e921}";
 const ICON_CLOSE: &str = "\u{e8bb}";
 const ICON_RULE: &str = "\u{e713}";
+const ICON_SHORTCUT: &str = "\u{e765}";
+
+/// The action of the editor of the rules, which opens it for a window.
+const EDIT_RULE: &str = "edit-window-rule";
 
 /// How opaque the menu can make a window, in percent.
 const OPACITIES: [u32; 4] = [100, 85, 70, 50];
@@ -148,10 +156,13 @@ pub fn open(id: AppWindowId, cx: &mut App) {
         // The menu closes first, so that the question takes the keyboard.
         cx.defer(move |cx| ask_to_kill(id, cx));
     }));
-    let label = say("Create a rule for this window");
-    entries.push(MenuEntry::new(ICON_RULE, label, move |cx| {
-        create_rule(id, cx)
-    }));
+    entries.push(MenuEntry::new(
+        ICON_SHORTCUT,
+        say("Shortcut for this window…"),
+        // The menu closes first, so that the keys pressed are recorded.
+        move |cx| cx.defer(move |cx| record_for_window(id, cx)),
+    ));
+    entries.push(rule_entry(id, cx));
     let point = match id.frame() {
         Some(frame) => (
             (frame.left + frame.right) / 2,
@@ -242,6 +253,28 @@ fn workspace_entries(id: AppWindowId, cx: &App) -> Vec<MenuEntry> {
             })
         });
     std::iter::once(everywhere).chain(moves).collect()
+}
+
+/// The entry for the rules of the window `id`: where the editor of the
+/// rules is there (the action `edit-window-rule`), it opens it for the
+/// window; otherwise a rule for windows like it is written into the file.
+fn rule_entry(id: AppWindowId, cx: &App) -> MenuEntry {
+    let say = |text: &'static str| Language::of(cx).say(text);
+    let editor =
+        { cx.try_global::<Actions>() }.is_some_and(|actions| actions.get(EDIT_RULE).is_some());
+    match editor {
+        true => MenuEntry::new(
+            ICON_RULE,
+            say("Configure special window settings…"),
+            move |cx| {
+                let raw = id.raw().to_string();
+                cx.defer(move |cx| Actions::run(EDIT_RULE, Some(&raw), cx));
+            },
+        ),
+        false => MenuEntry::new(ICON_RULE, say("Create a rule for this window"), move |cx| {
+            create_rule(id, cx)
+        }),
+    }
 }
 
 /// Writes a rule for windows like `id` and opens the configuration file
