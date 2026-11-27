@@ -1370,6 +1370,20 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Choose another app", "Выбрать другое приложение"),
     ("Send to", "Отправить"),
     ("Show more options", "Показать дополнительные параметры"),
+    // Shared by wave 2.
+    ("Run as administrator", "Запуск от имени администратора"),
+    ("Undo", "Отменить"),
+    ("Redo", "Повторить"),
+    ("Wallpaper settings", "Настройки обоев"),
+    ("Display settings", "Параметры экрана"),
+    ("Power settings", "Параметры питания"),
+    ("Add widget", "Добавить виджет"),
+    ("Add widgets", "Добавить виджеты"),
+    ("Share", "Поделиться"),
+    ("End task", "Снять задачу"),
+    ("Kill process", "Завершить процесс"),
+    ("Media", "Медиа"),
+    ("Personalize", "Персонализация"),
 ];
 
 #[cfg(test)]

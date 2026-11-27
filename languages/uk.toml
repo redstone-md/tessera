@@ -720,3 +720,18 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Choose another app" = "Вибрати іншу програму"
 "Send to" = "Надіслати"
 "Show more options" = "Показати додаткові параметри"
+
+# Shared by wave 2.
+"Run as administrator" = "Запуск від імені адміністратора"
+"Undo" = "Скасувати"
+"Redo" = "Повторити"
+"Wallpaper settings" = "Налаштування шпалер"
+"Display settings" = "Параметри екрана"
+"Power settings" = "Параметри живлення"
+"Add widget" = "Додати віджет"
+"Add widgets" = "Додати віджети"
+"Share" = "Поділитися"
+"End task" = "Зняти завдання"
+"Kill process" = "Завершити процес"
+"Media" = "Медіа"
+"Personalize" = "Персоналізація"

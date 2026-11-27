@@ -403,6 +403,36 @@ pub struct Config {
     /// pointer rests there.
     #[serde(default, rename = "corner")]
     pub corners: Vec<CornerConfig>,
+    // Wave 2, declared-settings: theme files stacked over `theme`, in order.
+    // #[serde(default)]
+    // pub theme_layers: Vec<String>,
+    // Wave 2, declared-settings: the values of declared theme settings, per theme name.
+    // #[serde(default)]
+    // pub theme_options: HashMap<String, toml::Table>,
+    // Wave 2, resources-icon-packs: the installed icon packs, the first that has an icon wins.
+    // #[serde(default)]
+    // pub icon_packs: Vec<String>,
+    // Wave 2, files-previews: thumbnails, preview and details panes of the file manager.
+    // #[serde(default)]
+    // pub file_view: crate::files::FileViewConfig,
+    // Wave 2, desktop-icons: the icons of the desktop.
+    // #[serde(default)]
+    // pub desktop: crate::desktop::DesktopConfig,
+    // Wave 2, system-settings: performance mode by power source and energy saver.
+    // #[serde(default)]
+    // pub performance: crate::performance::PerformanceConfig,
+    // Wave 2, system-settings: how often the system meters are read.
+    // #[serde(default)]
+    // pub system: crate::modules::system::SystemConfig,
+    // Wave 2, window-behaviour-rules: modifier+drag, title bar clicks, focus follows mouse.
+    // #[serde(default)]
+    // pub window_actions: crate::window_actions::WindowActionsConfig,
+    // Wave 2, window-behaviour-rules: bundled rule sets that are switched on.
+    // #[serde(default)]
+    // pub rule_templates: Vec<String>,
+    // Wave 2, tray-bluetooth: which notification icons are shown, hidden and in what order.
+    // #[serde(default)]
+    // pub tray: crate::tray_settings::TrayConfig,
 }
 
 impl Config {

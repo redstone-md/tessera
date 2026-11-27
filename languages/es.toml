@@ -720,3 +720,18 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Choose another app" = "Elegir otra aplicación"
 "Send to" = "Enviar a"
 "Show more options" = "Mostrar más opciones"
+
+# Shared by wave 2.
+"Run as administrator" = "Ejecutar como administrador"
+"Undo" = "Deshacer"
+"Redo" = "Rehacer"
+"Wallpaper settings" = "Configuración del fondo de pantalla"
+"Display settings" = "Configuración de pantalla"
+"Power settings" = "Configuración de energía"
+"Add widget" = "Añadir widget"
+"Add widgets" = "Añadir widgets"
+"Share" = "Compartir"
+"End task" = "Finalizar tarea"
+"Kill process" = "Terminar proceso"
+"Media" = "Multimedia"
+"Personalize" = "Personalizar"
