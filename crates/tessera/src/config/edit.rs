@@ -1773,3 +1773,179 @@ mod wallpaper_tests {
         assert_eq!(colored("[wallpaper]\nsource = \"color\"\n"), Source::Color);
     }
 }
+
+// tiling-stacks: the entries of `[[tiling.display]]` and
+// `[[tiling.workspace]]`, which the page of the settings for them adds,
+// changes, moves and removes.
+impl ConfigFile {
+    /// The entries of `kind` in `[tiling]`, made where there are none;
+    /// `None` where the file has something else under those names.
+    fn tiling_overrides(
+        &mut self,
+        kind: crate::tiling::OverrideKind,
+    ) -> Option<&mut ArrayOfTables> {
+        let tiling = self.document.entry("tiling");
+        let tiling = tiling.or_insert_with(|| Item::Table(Table::new()));
+        let tiling = tiling.as_table_mut()?;
+        let item = tiling.entry(kind.key());
+        let item = item.or_insert_with(|| Item::ArrayOfTables(ArrayOfTables::new()));
+        item.as_array_of_tables_mut()
+    }
+
+    /// Takes away the entries of `kind` and `[tiling]` where nothing is
+    /// left in them.
+    fn tidy_tiling(&mut self, kind: crate::tiling::OverrideKind) {
+        let tiling = self.document.get_mut("tiling");
+        let Some(tiling) = tiling.and_then(Item::as_table_mut) else {
+            return;
+        };
+        let empty = { tiling.get(kind.key()) }
+            .and_then(Item::as_array_of_tables)
+            .is_some_and(ArrayOfTables::is_empty);
+        if empty {
+            tiling.remove(kind.key());
+        }
+        if tiling.is_empty() {
+            self.document.remove("tiling");
+        }
+    }
+
+    /// Appends an entry of `kind` for the first display or workspace,
+    /// which says nothing other yet; where it is among the entries is
+    /// returned.
+    pub fn add_tiling_override(&mut self, kind: crate::tiling::OverrideKind) -> Option<usize> {
+        let mut entry = Table::new();
+        for (key, value) in kind.new_entry() {
+            entry.insert(&key, Item::Value(edit_value(&value)?));
+        }
+        let entries = self.tiling_overrides(kind)?;
+        entries.push(entry);
+        Some(entries.len() - 1)
+    }
+
+    /// Has the entry of `kind` at `index` say what `entry` says, once it
+    /// is checked to be one the tiling can use: the keys it lacks are
+    /// taken away, and those it has are set where they are, keeping
+    /// their comments.
+    pub fn set_tiling_override(
+        &mut self,
+        kind: crate::tiling::OverrideKind,
+        index: usize,
+        entry: &toml::Table,
+    ) -> Result<(), String> {
+        kind.check(entry)?;
+        let mut values = Vec::with_capacity(entry.len());
+        for (key, value) in entry {
+            let value = edit_value(value).ok_or_else(|| format!("`{key}` cannot be written"))?;
+            values.push((key.clone(), value));
+        }
+        let Some(entries) = self.tiling_overrides(kind) else {
+            return Err("`tiling` is not a table in the file".to_owned());
+        };
+        let Some(table) = entries.get_mut(index) else {
+            self.tidy_tiling(kind);
+            return Err("the entries of the tiling have changed in the meantime".to_owned());
+        };
+        let gone: Vec<String> = { table.iter() }
+            .map(|(key, _)| key.to_owned())
+            .filter(|key| !entry.contains_key(key))
+            .collect();
+        for key in gone {
+            table.remove(&key);
+        }
+        for (key, value) in values {
+            match table.get_mut(&key).and_then(Item::as_value_mut) {
+                Some(old) => {
+                    let decor = old.decor().clone();
+                    *old = value;
+                    *old.decor_mut() = decor;
+                }
+                None => {
+                    table.insert(&key, Item::Value(value));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Takes away the entry of `kind` at `index`. Whether there was one
+    /// is returned.
+    pub fn remove_tiling_override(
+        &mut self,
+        kind: crate::tiling::OverrideKind,
+        index: usize,
+    ) -> bool {
+        let Some(entries) = self.tiling_overrides(kind) else {
+            return false;
+        };
+        let there = index < entries.len();
+        if there {
+            entries.remove(index);
+        }
+        self.tidy_tiling(kind);
+        there
+    }
+}
+
+/// `value` as a value of the file, as TOML writes it.
+fn edit_value(value: &toml::Value) -> Option<Value> {
+    value.to_string().parse().ok()
+}
+
+#[cfg(test)]
+mod tiling_override_tests {
+    use super::*;
+    use crate::tiling::OverrideKind;
+
+    fn file(text: &str) -> ConfigFile {
+        ConfigFile::parse(text).unwrap()
+    }
+
+    fn table(text: &str) -> toml::Table {
+        toml::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn entries_of_displays_and_workspaces_are_added_changed_and_removed() {
+        let mut edited = file("# Mine.\n[tiling]\nenabled = true\n");
+        assert_eq!(edited.add_tiling_override(OverrideKind::Display), Some(0));
+        assert_eq!(edited.add_tiling_override(OverrideKind::Workspace), Some(0));
+        assert_eq!(edited.add_tiling_override(OverrideKind::Workspace), Some(1));
+        let text = edited.document.to_string();
+        assert!(text.contains("[[tiling.display]]\nmatch = \"1\""), "{text}");
+        assert!(text.contains("[[tiling.workspace]]\nnumber = 1"), "{text}");
+        edited.config().expect("it stays usable");
+
+        let changed = table("number = 2\nlayout = \"rows\"\npadding = { top = 4, left = 2 }");
+        let workspace = OverrideKind::Workspace;
+        assert_eq!(edited.set_tiling_override(workspace, 1, &changed), Ok(()));
+        let text = edited.document.to_string();
+        assert!(text.contains("number = 2\nlayout = \"rows\""), "{text}");
+        // What the tiling could not use is not written.
+        let wrong = table("number = 0\nlayout = \"rows\"");
+        assert!(edited.set_tiling_override(workspace, 1, &wrong).is_err());
+        assert!(edited.set_tiling_override(workspace, 7, &changed).is_err());
+        // A key the entry no longer has is taken away.
+        let fewer = table("number = 2");
+        assert_eq!(edited.set_tiling_override(workspace, 1, &fewer), Ok(()));
+        assert!(!edited.document.to_string().contains("rows"));
+
+        assert!(edited.remove_tiling_override(OverrideKind::Display, 0));
+        assert!(!edited.remove_tiling_override(OverrideKind::Display, 0));
+        let text = edited.document.to_string();
+        assert!(!text.contains("tiling.display"), "{text}");
+        assert!(
+            text.starts_with("# Mine.\n[tiling]\nenabled = true"),
+            "{text}"
+        );
+        assert!(edited.remove_tiling_override(workspace, 0));
+        assert!(edited.remove_tiling_override(workspace, 0));
+        assert!(edited.document.to_string().contains("enabled = true"));
+        edited.config().expect("it stays usable");
+
+        let mut bare = file("");
+        bare.add_tiling_override(OverrideKind::Display);
+        assert!(bare.remove_tiling_override(OverrideKind::Display, 0));
+        assert!(!bare.document.to_string().contains("tiling"));
+    }
+}
