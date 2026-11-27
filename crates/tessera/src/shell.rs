@@ -476,7 +476,10 @@ impl Shell {
         let cards = old.cards != config.cards;
         // An open popup stays while it is still what the configuration
         // describes, so that the settings do not close at every change.
-        if reloaded || icons || (old.popups != config.popups && !written_here) {
+        // New icons written here, as by the icon packs of the settings or
+        // the marketplace, keep it too, as `icons_changed` does; it shows
+        // them the next time it opens, as every popup is made anew then.
+        if reloaded || (!written_here && (icons || old.popups != config.popups)) {
             Popups::close(cx);
             cx.set_global(Popups::new(&config.popups));
         } else {
