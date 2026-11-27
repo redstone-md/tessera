@@ -167,16 +167,18 @@ impl Tiles {
                 self.remove_at(index, growth.is_some());
             }
         }
-        for &id in present {
-            if !self.windows.contains(&id) && !fresh.contains(&id) {
-                fresh.push(id);
-            }
-        }
+        // The windows new to the place, apart from those that only come
+        // again for another layout: a reserve is for a window that opens.
+        let mut came: Vec<AppWindowId> = { present.iter().copied() }
+            .filter(|id| !self.windows.contains(id) && !fresh.contains(id))
+            .collect();
         let mut floated = Vec::new();
-        if self.reserve == Some(Reserve::Float) && !fresh.is_empty() {
+        if self.reserve == Some(Reserve::Float) && !came.is_empty() {
             self.reserve = None;
-            floated.push(fresh.remove(0));
+            floated.push(came.remove(0));
         }
+        let first_came = came.first().copied();
+        fresh.extend(came);
         // Windows that come to an empty place of a lasting tree take the
         // tree that was kept, as far as they fill it.
         if growth.is_some()
@@ -196,7 +198,9 @@ impl Tiles {
             self.tree = Some(tree);
         }
         for id in fresh {
-            let reserve = self.reserve.take();
+            let reserve = { Some(id) == first_came }
+                .then(|| self.reserve.take())
+                .flatten();
             self.add(id, reserve, front, layout, area, gap);
         }
         if growth.is_none() {
@@ -570,6 +574,21 @@ mod tests {
         let floated = columns.fit(&ids(&[1, 2, 3, 4]), layout, None, AREA, 0);
         assert_eq!(floated, ids(&[4]));
         assert_eq!(columns.windows(), ids(&[1, 3, 2]));
+    }
+
+    #[test]
+    fn a_reserve_waits_for_a_new_window_across_a_change_of_layout() {
+        let mut tiles = Tiles::default();
+        tiles.fit(&ids(&[1, 2]), MASTER, None, AREA, 0);
+        tiles.reserve = Some(Reserve::Float);
+        let grid = Layout::Builtin(TileLayout::Grid);
+        assert!(tiles.fit(&ids(&[1, 2]), grid, None, AREA, 0).is_empty());
+        assert_eq!(tiles.windows(), ids(&[1, 2]));
+        assert_eq!(tiles.reserve, Some(Reserve::Float));
+        let floated = tiles.fit(&ids(&[1, 2, 3]), MASTER, None, AREA, 0);
+        assert_eq!(floated, ids(&[3]));
+        assert_eq!(tiles.windows(), ids(&[1, 2]));
+        assert_eq!(tiles.reserve, None);
     }
 
     #[test]
