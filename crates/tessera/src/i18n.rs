@@ -1385,6 +1385,14 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
     // Wave 2, resources-icon-packs.
+    (
+        "Allow, install and add to the bar",
+        "Разрешить, установить и добавить на панель",
+    ),
+    (
+        "Allow, install and add to the dock",
+        "Разрешить, установить и добавить в док",
+    ),
     ("Icon packs", "Наборы значков"),
     ("Wallpapers", "Обои"),
     ("Tiling layouts", "Раскладки тайлинга"),
@@ -1418,13 +1426,6 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Use", "Использовать"),
     ("Stop using", "Не использовать"),
     ("Apply", "Применить"),
-    ("Add to the bar", "Добавить на панель"),
-    ("Add to the dock", "Добавить в док"),
-    ("Not now", "Не сейчас"),
-    (
-        "Its registry suggests a place for its widget.",
-        "Реестр предлагает место для его виджета.",
-    ),
     ("Its name for the tiling:", "Имя для тайлинга:"),
     ("Check for updates", "Проверить обновления"),
     ("Update all", "Обновить все"),

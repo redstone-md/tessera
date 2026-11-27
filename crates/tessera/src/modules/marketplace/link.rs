@@ -15,7 +15,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, div,
 };
 
-use super::{Placing, apply_wallpaper, asks, directory, kind_question, place_widget, use_pack};
+use super::{Placing, asks, directory, kind_question, place_widget, placing_label, suggested};
 use crate::actions::Action;
 use crate::extension::registry::{Catalog, Kind, Location, Offer, Package};
 use crate::i18n::Language;
@@ -175,7 +175,7 @@ pub struct InstallPrompt {
     /// Whether the configuration names the registry of the link.
     configured: bool,
     step: Step,
-    buttons: [Interaction; 2],
+    buttons: [Interaction; 3],
 }
 
 impl InstallPrompt {
@@ -195,7 +195,7 @@ impl InstallPrompt {
             link: None,
             configured: false,
             step: Step::Reading,
-            buttons: [Interaction::new(&motion); 2],
+            buttons: [Interaction::new(&motion); 3],
         };
         this.read(cx);
         this
@@ -247,7 +247,7 @@ impl InstallPrompt {
                     Ok(found) => Step::Asking(Box::new(found)),
                     Err(error) => Step::Failed(error.into()),
                 };
-                this.buttons = [Interaction::new(&cx.global::<Theme>().motion); 2];
+                this.buttons = [Interaction::new(&cx.global::<Theme>().motion); 3];
                 cx.notify();
             })
             .ok();
@@ -257,6 +257,16 @@ impl InstallPrompt {
     }
 
     fn install(&mut self, cx: &mut Context<Self>) {
+        self.install_placing(false, cx);
+    }
+
+    /// Installs, and puts the widget of an extension where its registry
+    /// suggests.
+    fn install_and_place(&mut self, cx: &mut Context<Self>) {
+        self.install_placing(true, cx);
+    }
+
+    fn install_placing(&mut self, place: bool, cx: &mut Context<Self>) {
         let Step::Asking(found) = std::mem::replace(&mut self.step, Step::Installing) else {
             return;
         };
@@ -270,16 +280,25 @@ impl InstallPrompt {
                     .map_err(|error| format!("{error:#}"))
             });
         self.step = match installed {
-            Ok(place) => {
+            Ok(installed) => {
+                cx.defer(Updates::check);
                 if kind == Kind::Extension {
+                    // The extensions are loaded again before the layout
+                    // is, so that the widget is known when it is placed.
                     cx.defer(Shell::extensions_changed);
                 }
-                cx.defer(Updates::check);
-                Step::Done(Placing::after(kind, &offer.id, &place, &package))
+                let placed = { suggested(&package) }
+                    .filter(|_| place)
+                    .map(|(widget, place)| place_widget(&widget, &place, cx))
+                    .unwrap_or(Ok(()));
+                match placed {
+                    Ok(()) => Step::Done(Placing::after(kind, &offer.id, &installed)),
+                    Err(error) => Step::Failed(error.into()),
+                }
             }
             Err(error) => Step::Failed(error.into()),
         };
-        self.buttons = [Interaction::new(&cx.global::<Theme>().motion); 2];
+        self.buttons = [Interaction::new(&cx.global::<Theme>().motion); 3];
         cx.notify();
     }
 
@@ -289,12 +308,7 @@ impl InstallPrompt {
         let Step::Done(Some(placing)) = std::mem::replace(&mut self.step, Step::Done(None)) else {
             return;
         };
-        let done = match placing {
-            Placing::Pack(id) => use_pack(&id, true, cx),
-            Placing::Wallpaper(file) => apply_wallpaper(&file, cx),
-            Placing::Widget { widget, place } => place_widget(&widget, &place, cx),
-        };
-        match done {
+        match placing.take(cx) {
             Ok(()) => Popups::close(cx),
             Err(error) => {
                 self.step = Step::Failed(error.into());
@@ -400,8 +414,19 @@ impl Render for InstallPrompt {
                     Kind::Extension => "Allow and install",
                     _ => "Install",
                 };
-                buttons.push(button(1, "Cancel", false, close));
-                buttons.push(button(0, accept, true, Self::install));
+                buttons.push(button(2, "Cancel", false, close));
+                match package.suggested_widget() {
+                    Some((_, place)) => {
+                        buttons.push(button(1, accept, false, Self::install));
+                        buttons.push(button(
+                            0,
+                            placing_label(place),
+                            true,
+                            Self::install_and_place,
+                        ));
+                    }
+                    None => buttons.push(button(0, accept, true, Self::install)),
+                }
             }
             Step::Done(next) => {
                 body.push(caption(say("Installed").into()).into_any_element());

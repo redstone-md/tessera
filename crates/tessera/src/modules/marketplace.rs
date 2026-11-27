@@ -229,24 +229,15 @@ enum Placing {
     Pack(String),
     /// Show the wallpaper.
     Wallpaper(PathBuf),
-    /// Put the widget its registry suggests where it suggests.
-    Widget { widget: String, place: Placement },
 }
 
 impl Placing {
-    /// The step after installing `package`, offered as `id`, to `place`.
-    fn after(kind: Kind, id: &str, place: &Path, package: &Package) -> Option<Self> {
+    /// The step after installing an offer of `kind` as `id` to `place`.
+    fn after(kind: Kind, id: &str, place: &Path) -> Option<Self> {
         match kind {
             Kind::IconPack => Some(Self::Pack(id.to_owned())),
             Kind::Wallpaper => Some(Self::Wallpaper(place.to_owned())),
-            Kind::Extension => {
-                let (widget, place) = package.suggested_widget()?;
-                Some(Self::Widget {
-                    widget: widget.to_owned(),
-                    place: place.clone(),
-                })
-            }
-            Kind::Theme | Kind::TilingLayout => None,
+            Kind::Extension | Kind::Theme | Kind::TilingLayout => None,
         }
     }
 
@@ -254,10 +245,32 @@ impl Placing {
         match self {
             Self::Pack(_) => "Use",
             Self::Wallpaper(_) => "Apply",
-            Self::Widget { place, .. } if place.in_dock() => "Add to the dock",
-            Self::Widget { .. } => "Add to the bar",
         }
     }
+
+    /// Takes the step.
+    fn take(self, cx: &mut App) -> Result<(), String> {
+        match self {
+            Self::Pack(id) => use_pack(&id, true, cx),
+            Self::Wallpaper(file) => apply_wallpaper(&file, cx),
+        }
+    }
+}
+
+/// What the button that installs an extension and puts its widget where
+/// its registry suggests says.
+fn placing_label(place: &Placement) -> &'static str {
+    match place.in_dock() {
+        true => "Allow, install and add to the dock",
+        false => "Allow, install and add to the bar",
+    }
+}
+
+/// The widget `package` suggests placing, and where, to place once it is
+/// installed.
+fn suggested(package: &Package) -> Option<(String, Placement)> {
+    let (widget, place) = package.suggested_widget()?;
+    Some((widget.to_owned(), place.clone()))
 }
 
 /// Told to who watches a marketplace when something was installed or
@@ -288,9 +301,6 @@ struct Row {
     buttons: [Interaction; 3],
     /// The picture the registry shows of the offer, once it is here.
     picture: Icon,
-    /// Where the registry suggests the widget of the extension just
-    /// installed goes, until it is put there or declined.
-    suggestion: Option<Placing>,
 }
 
 impl Row {
@@ -448,7 +458,6 @@ impl Marketplace {
                 question: Spring::new(motion.spatial, 0.),
                 buttons: [Interaction::new(&motion); 3],
                 picture: None,
-                suggestion: None,
             }
         });
         self.rows = rows.collect();
@@ -708,11 +717,7 @@ impl Marketplace {
             Stage::Offered(package) => directory(kind)
                 .context("the configuration directory is unknown")
                 .and_then(|directory| package.install(&directory))
-                .map(|place| {
-                    let next = Placing::after(kind, &row.offer.id, &place, &package);
-                    row.suggestion = next.filter(|next| matches!(next, Placing::Widget { .. }));
-                }),
-
+                .map(|_| ()),
             Stage::Leaving => {
                 let removed = row.installed.as_ref().map_or(Ok(()), Installed::remove);
                 // An icon pack that is gone is no longer used.
@@ -734,9 +739,7 @@ impl Marketplace {
         let Some(row) = self.rows.get_mut(index) else {
             return;
         };
-        // The suggestion of a place, if any, is the next question.
-        row.question
-            .animate_to(if row.suggestion.is_some() { 1. } else { 0. });
+        row.question.animate_to(0.);
         row.failure = done.err().map(|error| format!("{error:#}").into());
         row.refresh();
         if kind == Kind::Extension {
@@ -746,17 +749,41 @@ impl Marketplace {
         cx.notify();
     }
 
-    fn cancel(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(row) = self.rows.get_mut(index) {
-            row.turn(Stage::Idle, cx);
-            row.question.animate_to(0.);
-            row.suggestion = None;
+    /// Installs the extension of the row, as [`Self::confirm`] does, and
+    /// then puts its widget where its registry suggests. The extensions
+    /// are loaded again before the layout is, so that the widget is known
+    /// when the bar is built.
+    fn confirm_placing(&mut self, index: usize, cx: &mut Context<Self>) {
+        let placing = match self.rows.get(index).map(|row| &row.stage) {
+            Some(Stage::Offered(package)) => suggested(package),
+            _ => None,
+        };
+        self.confirm(index, cx);
+        let Some((widget, place)) = placing else {
+            return;
+        };
+        let installed = self
+            .rows
+            .get(index)
+            .is_some_and(|row| row.failure.is_none());
+        if installed && let Err(error) = place_widget(&widget, &place, cx) {
+            if let Some(row) = self.rows.get_mut(index) {
+                row.failure = Some(error.into());
+            }
             cx.notify();
         }
     }
 
-    /// Does what [`Placing`] the row holds, or with an icon pack in use
-    /// takes it out of use.
+    fn cancel(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(row) = self.rows.get_mut(index) {
+            row.turn(Stage::Idle, cx);
+            row.question.animate_to(0.);
+            cx.notify();
+        }
+    }
+
+    /// Uses the icon pack of the row, or takes it out of use, or applies
+    /// its wallpaper.
     fn take_step(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(row) = self.rows.get_mut(index) else {
             return;
@@ -764,16 +791,10 @@ impl Marketplace {
         let id = row.offer.id.clone();
         let in_use = cx.global::<AppIcons>().packs().ids().contains(&id);
         let place = row.installed.as_ref().map(|known| known.place().to_owned());
-        let step = match (row.suggestion.take(), row.offer.kind(), place) {
-            (Some(step), ..) => step,
-            (None, Kind::IconPack, _) => Placing::Pack(id.clone()),
-            (None, Kind::Wallpaper, Some(place)) => Placing::Wallpaper(place),
+        let done = match (row.offer.kind(), place) {
+            (Kind::IconPack, _) => use_pack(&id, !in_use, cx),
+            (Kind::Wallpaper, Some(place)) => apply_wallpaper(&place, cx),
             _ => return,
-        };
-        let done = match step {
-            Placing::Pack(id) => use_pack(&id, !in_use, cx),
-            Placing::Wallpaper(file) => apply_wallpaper(&file, cx),
-            Placing::Widget { widget, place } => place_widget(&widget, &place, cx),
         };
         if let Some(row) = self.rows.get_mut(index) {
             row.turn(Stage::Idle, cx);
@@ -883,7 +904,7 @@ impl Marketplace {
 
         let mut actions: Vec<AnyElement> = Vec::new();
         match &row.stage {
-            Stage::Idle if row.suggestion.is_none() => {
+            Stage::Idle => {
                 for (slot, choice) in choices {
                     actions.push(button(slot, choice));
                 }
@@ -891,7 +912,7 @@ impl Marketplace {
             Stage::Downloading => {
                 actions.push(caption(language.say("Downloading…").into()).into_any_element());
             }
-            Stage::Idle | Stage::Offered(_) | Stage::Leaving => {}
+            Stage::Offered(_) | Stage::Leaving => {}
         }
         let letter = row.offer.name.chars().next().unwrap_or('?');
         let picture = row.picture.clone();
@@ -982,33 +1003,41 @@ impl Marketplace {
                 .children(actions)
         });
 
-        let asked = match (&row.stage, kind, &row.suggestion) {
-            (Stage::Offered(package), Kind::Extension, _) => {
-                Some((asks(package, language), "Allow and install"))
+        let asked = match (&row.stage, kind) {
+            (Stage::Offered(package), Kind::Extension) => {
+                let mut choices = vec![
+                    (2, Choice::other("Cancel", Self::cancel)),
+                    (1, Choice::suggested("Allow and install", Self::confirm)),
+                ];
+                if let Some((_, place)) = package.suggested_widget() {
+                    choices[1].1.prominent = false;
+                    choices.push((
+                        0,
+                        Choice::suggested(placing_label(place), Self::confirm_placing),
+                    ));
+                }
+                Some((asks(package, language), choices))
             }
-            (Stage::Offered(_), kind, _) => {
-                Some((language.say(kind_question(kind)).to_owned(), "Install"))
-            }
-            (Stage::Leaving, kind, _) => {
-                Some((language.say(leave_question(kind)).to_owned(), "Remove"))
-            }
-            (Stage::Idle, _, Some(next)) => Some((
-                language
-                    .say("Its registry suggests a place for its widget.")
-                    .to_owned(),
-                next.label(),
+            (Stage::Offered(_), kind) => Some((
+                language.say(kind_question(kind)).to_owned(),
+                vec![
+                    (1, Choice::other("Cancel", Self::cancel)),
+                    (0, Choice::suggested("Install", Self::confirm)),
+                ],
             )),
-            (Stage::Idle | Stage::Downloading, ..) => None,
+            (Stage::Leaving, kind) => Some((
+                language.say(leave_question(kind)).to_owned(),
+                vec![
+                    (1, Choice::other("Cancel", Self::cancel)),
+                    (0, Choice::suggested("Remove", Self::confirm)),
+                ],
+            )),
+            (Stage::Idle | Stage::Downloading, _) => None,
         };
-        let accept: Action = match row.suggestion {
-            Some(_) => Self::take_step,
-            None => Self::confirm,
-        };
-        let decline = match row.suggestion {
-            Some(_) => "Not now",
-            None => "Cancel",
-        };
-        let asked = asked.map(|(text, accept_label)| {
+        let asked = asked.map(|(text, choices)| {
+            let buttons: Vec<AnyElement> = { choices.into_iter() }
+                .map(|(slot, choice)| button(slot, choice))
+                .collect();
             div()
                 .pt(theme.spacing.small)
                 .flex()
@@ -1018,10 +1047,10 @@ impl Marketplace {
                 .child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .justify_end()
                         .gap(theme.spacing.small)
-                        .child(button(1, Choice::other(decline, Self::cancel)))
-                        .child(button(0, Choice::suggested(accept_label, accept))),
+                        .children(buttons),
                 )
         });
         // The question unfolds and folds; while it folds it is already empty.
