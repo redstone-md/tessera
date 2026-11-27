@@ -2140,6 +2140,38 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Этот виджет не объявляет параметров; то, что он читает, пишется в config.toml.",
     ),
     ("The other displays", "Другие дисплеи"),
+    ("Which night light", "Какой ночной свет"),
+    (
+        "The one the tile and the action switch: that of Windows, or Tessera's own, which tints every display.",
+        "Тот, что переключают плитка и действие: ночной свет Windows или собственный ночной свет Tessera, который тонирует каждый дисплей.",
+    ),
+    ("Tessera's own", "Собственный Tessera"),
+    ("Warmth", "Теплота"),
+    (
+        "How warm Tessera's own is when Tessera starts, in kelvins: 1200 is the warmest, 6500 no tint.",
+        "Насколько тёплый собственный ночной свет Tessera при запуске, в кельвинах: 1200 — самый тёплый, 6500 — без оттенка.",
+    ),
+    ("Comes on", "Включается"),
+    (
+        "When Tessera's own comes on by itself; a click on the tile holds until the schedule next changes.",
+        "Когда собственный ночной свет Tessera включается сам; щелчок по плитке действует до следующей смены расписания.",
+    ),
+    ("From sunset to sunrise", "От заката до рассвета"),
+    ("At set hours", "В заданные часы"),
+    ("From", "С"),
+    ("When it comes on.", "Когда он включается."),
+    ("To", "До"),
+    ("When it goes off.", "Когда он выключается."),
+    ("Latitude", "Широта"),
+    (
+        "Of the place whose sunset and sunrise it follows, in degrees, north positive.",
+        "Места, по закату и рассвету которого он идёт, в градусах, север положителен.",
+    ),
+    ("Longitude", "Долгота"),
+    (
+        "Of the same place, in degrees, east positive.",
+        "Того же места, в градусах, восток положителен.",
+    ),
 ];
 
 #[cfg(test)]

@@ -359,3 +359,84 @@ search = ["Displays"]
 section = "Displays and power"
 title = "Power settings"
 page = "power-settings"
+
+# Night light: which one the tile and the action switch, and when
+# Tessera's own comes on (modules/night.rs).
+
+[[card]]
+section = "Displays and power"
+title = "Night light"
+table = "night_light"
+
+[[card.row]]
+key = "source"
+kind = "choice"
+label = "Which night light"
+description = "The one the tile and the action switch: that of Windows, or Tessera's own, which tints every display."
+default = "auto"
+choices = [
+    { value = "auto", label = "Automatic" },
+    { value = "windows", label = "Windows" },
+    { value = "tessera", label = "Tessera's own" },
+]
+
+[[card.row]]
+key = "kelvins"
+kind = "number"
+label = "Warmth"
+description = "How warm Tessera's own is when Tessera starts, in kelvins: 1200 is the warmest, 6500 no tint."
+min = 1200
+max = 6500
+step = 100
+default = 3400
+unit = "K"
+
+[[card.row]]
+key = "schedule"
+kind = "choice"
+label = "Comes on"
+description = "When Tessera's own comes on by itself; a click on the tile holds until the schedule next changes."
+default = "off"
+choices = [
+    { value = "off", label = "Off" },
+    { value = "sun", label = "From sunset to sunrise" },
+    { value = "hours", label = "At set hours" },
+]
+
+[[card.row]]
+key = "from"
+kind = "time"
+label = "From"
+description = "When it comes on."
+default = "21:00"
+visible_if = { key = "schedule", equals = "hours" }
+
+[[card.row]]
+key = "to"
+kind = "time"
+label = "To"
+description = "When it goes off."
+default = "07:00"
+visible_if = { key = "schedule", equals = "hours" }
+
+[[card.row]]
+key = "latitude"
+kind = "number"
+label = "Latitude"
+description = "Of the place whose sunset and sunrise it follows, in degrees, north positive."
+min = -90
+max = 90
+step = 0.01
+optional = true
+visible_if = { key = "schedule", equals = "sun" }
+
+[[card.row]]
+key = "longitude"
+kind = "number"
+label = "Longitude"
+description = "Of the same place, in degrees, east positive."
+min = -180
+max = 180
+step = 0.01
+optional = true
+visible_if = { key = "schedule", equals = "sun" }
