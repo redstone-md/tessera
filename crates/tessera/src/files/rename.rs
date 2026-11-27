@@ -9,7 +9,7 @@
 //! meet.
 
 use std::collections::HashSet;
-use std::fs;
+
 use std::path::{Path, PathBuf};
 
 use gpui::{
@@ -21,6 +21,7 @@ use gpui::{
 use super::model::is_valid_name;
 use crate::field::TextField;
 use crate::i18n::Language;
+use crate::platform::rename_new;
 use crate::theme::Theme;
 use crate::ui::one_line;
 
@@ -96,15 +97,15 @@ fn numbered(pattern: &str, number: usize, alone: bool) -> String {
 /// The new names of the files at `paths`, numbered in their order, as
 /// `(old, new)` for each that changes: the stem is `pattern` numbered
 /// where it is given, then `find` is replaced by `replace` in it, and the
-/// extension stays. `taken` holds, in small letters, the names in the
-/// folders that are not renamed. `folders` tells which paths are folders.
+/// extension stays. `taken` holds the names in the folders that are not
+/// renamed, each by its folder, as `parent_key` gives them. `folders` tells which paths are folders.
 pub fn plan(
     paths: &[PathBuf],
     folders: &HashSet<PathBuf>,
     pattern: &str,
     find: &str,
     replace: &str,
-    taken: &HashSet<String>,
+    taken: &HashSet<(PathBuf, String)>,
 ) -> Result<Vec<(PathBuf, PathBuf)>, Conflict> {
     let pattern = pattern.trim();
     let mut given = HashSet::new();
@@ -128,10 +129,11 @@ pub fn plan(
             return Err(Conflict::Invalid(new));
         }
         let key = parent_key(path, &new);
+        let taken = taken.contains(&key) && !new.eq_ignore_ascii_case(&name);
         if !given.insert(key) {
             return Err(Conflict::Twice(new));
         }
-        if taken.contains(&new.to_lowercase()) && !new.eq_ignore_ascii_case(&name) {
+        if taken {
             return Err(Conflict::Taken(new));
         }
         if new != name {
@@ -142,7 +144,7 @@ pub fn plan(
 }
 
 /// What tells a name in a folder from the others there, in any case.
-fn parent_key(path: &Path, name: &str) -> (PathBuf, String) {
+pub fn parent_key(path: &Path, name: &str) -> (PathBuf, String) {
     let parent = path.parent().map(Path::to_owned).unwrap_or_default();
     (parent, name.to_lowercase())
 }
@@ -167,7 +169,9 @@ fn same_but_case(a: &Path, b: &Path) -> bool {
 
 /// Renames the files of `plan`, through names of their own first where
 /// new names swap. Nothing is put over a file that is there: such a
-/// file, and each rename that fails, is told in what is given back.
+/// file, and each rename that fails, is told in what is given back. A
+/// file whose rename fails gets its old name back where that is free, or
+/// else is told with the name it was left at.
 /// Blocks on the disk; it is done away from the user interface.
 pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Vec<String> {
     let mut problems = Vec::new();
@@ -179,26 +183,30 @@ pub fn apply(plan: &[(PathBuf, PathBuf)]) -> Vec<String> {
             true => from.with_file_name(format!("{PASSING}-{}-{index}", std::process::id())),
             false => from.clone(),
         };
-        if passing && let Err(error) = fs::rename(from, &via) {
+        if passing && let Err(error) = rename_new(from, &via) {
             problems.push(format!("{}: {error}", from.display()));
             continue;
         }
         steps.push((from, via, to));
     }
     for (from, via, to) in steps {
-        let back = |problems: &mut Vec<String>, problem: String| {
-            problems.push(problem);
-            if &via != from {
-                fs::rename(&via, from).ok();
-            }
-        };
-        // Windows would put the file over one of that name.
-        if to.exists() && !same_but_case(from, to) {
-            back(&mut problems, format!("{} is there already", to.display()));
+        let Err(error) = rename_new(&via, to) else {
             continue;
-        }
-        if let Err(error) = fs::rename(&via, to) {
-            back(&mut problems, format!("{}: {error}", from.display()));
+        };
+        problems.push(match to.exists() && !same_but_case(from, to) {
+            true => format!("{} is there already", to.display()),
+            false => format!("{}: {error}", from.display()),
+        });
+        // Another file of the plan, or of another program, may have
+        // taken the old name meanwhile; it is not put over.
+        if &via != from
+            && let Err(error) = rename_new(&via, from)
+        {
+            problems.push(format!(
+                "{} was left as {}: {error}",
+                from.display(),
+                via.display()
+            ));
         }
     }
     problems
@@ -216,7 +224,7 @@ pub enum RenameEvent {
 pub struct BatchRename {
     paths: Vec<PathBuf>,
     folders: HashSet<PathBuf>,
-    taken: HashSet<String>,
+    taken: HashSet<(PathBuf, String)>,
     pattern: Entity<TextField>,
     find: Entity<TextField>,
     replace: Entity<TextField>,
@@ -231,7 +239,7 @@ impl BatchRename {
     pub fn new(
         paths: Vec<PathBuf>,
         folders: HashSet<PathBuf>,
-        taken: HashSet<String>,
+        taken: HashSet<(PathBuf, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -494,7 +502,7 @@ mod tests {
         HashSet::new()
     }
 
-    fn nothing_taken() -> HashSet<String> {
+    fn nothing_taken() -> HashSet<(PathBuf, String)> {
         HashSet::new()
     }
 
@@ -541,9 +549,13 @@ mod tests {
         assert_eq!(twice, Err(Conflict::Twice("b.txt".to_owned())));
         let invalid = plan(&paths, &no_folders(), "x:#", "", "", &nothing_taken());
         assert_eq!(invalid, Err(Conflict::Invalid("x:1.txt".to_owned())));
-        let taken = HashSet::from(["photo 1.txt".to_owned()]);
+        let taken = HashSet::from([parent_key(&paths[0], "Photo 1.txt")]);
         let met = plan(&paths, &no_folders(), "Photo #", "", "", &taken);
         assert_eq!(met, Err(Conflict::Taken("Photo 1.txt".to_owned())));
+        // A name taken in another folder, as among the results of a
+        // search, is no matter.
+        let elsewhere = HashSet::from([parent_key(Path::new("D:\\other\\x"), "Photo 1.txt")]);
+        assert!(plan(&paths, &no_folders(), "Photo #", "", "", &elsewhere).is_ok());
     }
 
     #[test]

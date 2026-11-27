@@ -26,7 +26,7 @@ use super::model::{
     Order, Selection, Shape, Shown, crumbs, free_name, is_valid_name, read_folder, size_text,
     stamp_of,
 };
-use super::rename::{BatchRename, RenameEvent, apply};
+use super::rename::{BatchRename, RenameEvent, apply, parent_key};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
 use super::session::{FolderView, FolderViews};
 use super::{Files, FilesConfig};
@@ -869,7 +869,7 @@ impl FolderPane {
         let entries = self.listing.entries();
         let taken = { entries.iter() }
             .filter(|entry| !renamed.contains(&entry.path))
-            .map(|entry| entry.name.to_lowercase())
+            .map(|entry| parent_key(&entry.path, &entry.name))
             .collect();
         let folders = { entries.iter() }
             .filter(|entry| entry.folder && renamed.contains(&entry.path))
