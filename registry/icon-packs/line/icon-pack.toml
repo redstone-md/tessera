@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 Tessera contributors.
+#
+# The sample icon pack of the registry: line icons drawn in the colors of
+# the theme. See docs/ICON-PACKS.md for the format.
+id = "line"
+name = "Line"
+author = "Tessera contributors"
+version = "1.0.0"
+description = "Thin line icons in the colors of the theme for common programs and kinds of files."
+
+[apps]
+"notepad.exe" = { icon = "apps/notepad.svg", monochrome = true }
+"explorer.exe" = { icon = "apps/explorer.svg", monochrome = true }
+"cmd.exe" = { icon = "apps/terminal.svg", monochrome = true }
+"powershell.exe" = { icon = "apps/terminal.svg", monochrome = true }
+"pwsh.exe" = { icon = "apps/terminal.svg", monochrome = true }
+"windowsterminal.exe" = { icon = "apps/terminal.svg", monochrome = true }
+"Microsoft.WindowsTerminal_8wekyb3d8bbwe!App" = { icon = "apps/terminal.svg", monochrome = true }
+"msedge.exe" = { icon = "apps/browser.svg", monochrome = true }
+"firefox.exe" = { icon = "apps/browser.svg", monochrome = true }
+"chrome.exe" = { icon = "apps/browser.svg", monochrome = true }
+"code.exe" = { icon = "apps/code.svg", monochrome = true }
+"Visual Studio Code" = { icon = "apps/code.svg", monochrome = true }
+"Microsoft.WindowsCalculator_8wekyb3d8bbwe!App" = { icon = "apps/calculator.svg", monochrome = true }
+"windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel" = { icon = "apps/settings.svg", monochrome = true }
+
+[files]
+# A picture in its own colors whose front the theme paints: the mask is
+# found next to it as folder-mask.png.
+folder = "files/folder.png"
+drive = { icon = "files/drive.svg", monochrome = true }
+recycle-bin-empty = { icon = "files/bin-empty.svg", monochrome = true }
+recycle-bin-full = { icon = "files/bin-full.svg", monochrome = true }
+txt = { icon = "files/text.svg", monochrome = true }
+log = { icon = "files/text.svg", monochrome = true }
+md = { icon = "files/text.svg", monochrome = true }
+toml = { icon = "files/text.svg", monochrome = true }
+pdf = { icon = "files/document.svg", monochrome = true }
+docx = { icon = "files/document.svg", monochrome = true }
+odt = { icon = "files/document.svg", monochrome = true }
+png = { icon = "files/picture.svg", monochrome = true }
+jpg = { icon = "files/picture.svg", monochrome = true }
+jpeg = { icon = "files/picture.svg", monochrome = true }
+gif = { icon = "files/picture.svg", monochrome = true }
+webp = { icon = "files/picture.svg", monochrome = true }
+svg = { icon = "files/picture.svg", monochrome = true }
+zip = { icon = "files/archive.svg", monochrome = true }
+7z = { icon = "files/archive.svg", monochrome = true }
+rar = { icon = "files/archive.svg", monochrome = true }
+mp3 = { icon = "files/music.svg", monochrome = true }
+flac = { icon = "files/music.svg", monochrome = true }
+mp4 = { icon = "files/video.svg", monochrome = true }
+mkv = { icon = "files/video.svg", monochrome = true }

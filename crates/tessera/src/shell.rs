@@ -20,12 +20,14 @@ use crate::extension::ExtensionsModule;
 use crate::extension::installed_stamp;
 use crate::files::Files;
 use crate::flyout::Flyouts;
+use crate::icon_packs::IconPacks;
 use crate::icons::AppIcons;
 use crate::keys::Shortcuts;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::modules::DesktopClosing;
+use crate::modules::Updates;
 use crate::modules::night::Night;
 use crate::notices::Notices;
 use crate::notifications_store::NotificationStore;
@@ -85,7 +87,8 @@ impl Shell {
         cx.set_global(Previews::default());
         cx.set_global(Tips::default());
         cx.set_global(Menus::default());
-        cx.set_global(AppIcons::new(&config.icons));
+        cx.set_global(AppIcons::from_config(&config));
+        IconPacks::start(cx);
         // Without Explorer the surfaces reserve their edges through the tray.
         crate::platform::Tray::start_before_surfaces();
         Night::start(&config.night_light, cx);
@@ -95,6 +98,7 @@ impl Shell {
         }
         crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
+        Updates::start(config.registries(), cx);
         Banners::configure(&config.notifications, cx);
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
@@ -307,6 +311,7 @@ impl Shell {
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
         DesktopClosing::configure(config.windows_keys);
         Wallpaper::configure(&config.wallpaper, cx);
+        Updates::configure(config.registries(), cx);
         Banners::configure(&config.notifications, cx);
         NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
@@ -324,7 +329,7 @@ impl Shell {
         // the settings themselves write them.
         let (reloaded, extensions) = Self::extensions_reloaded(&config, cx);
         let old = &cx.global::<Self>().config;
-        let icons = old.icons != config.icons;
+        let icons = old.icons != config.icons || old.icon_packs != config.icon_packs;
         let surfaces = old.surfaces != config.surfaces;
         let cards = old.cards != config.cards;
         // An open popup stays while it is still what the configuration
@@ -343,7 +348,7 @@ impl Shell {
             cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         }
         if icons {
-            cx.set_global(AppIcons::new(&config.icons));
+            cx.set_global(AppIcons::from_config(&config));
         }
         if (extensions || icons || surfaces) && !Self::arrange(&config, cx) {
             config.surfaces = cx.global::<Self>().config.surfaces.clone();
@@ -402,6 +407,15 @@ impl Shell {
         cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
         Self::arrange(&config, cx);
         Self::show_cards(cx);
+        cx.refresh_windows();
+    }
+
+    /// Builds the surfaces again after the pictures of the icons changed,
+    /// as a reload does when `icons` changes, without loading the
+    /// extensions again or closing the open popup.
+    pub fn icons_changed(cx: &mut App) {
+        let config = cx.global::<Self>().config.clone();
+        Self::arrange(&config, cx);
         cx.refresh_windows();
     }
 

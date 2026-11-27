@@ -422,8 +422,8 @@ pub struct Config {
     #[serde(default)]
     pub theme_options: HashMap<String, toml::Table>,
     // Wave 2, resources-icon-packs: the installed icon packs, the first that has an icon wins.
-    // #[serde(default)]
-    // pub icon_packs: Vec<String>,
+    #[serde(default)]
+    pub icon_packs: Vec<String>,
     // Wave 2, files-previews: thumbnails, preview and details panes of the file manager.
     // #[serde(default)]
     // pub file_view: crate::files::FileViewConfig,

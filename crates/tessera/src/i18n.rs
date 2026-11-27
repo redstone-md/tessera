@@ -1497,6 +1497,78 @@ const RUSSIAN: &[(&str, &str)] = &[
     ),
     ("post notices", "публиковать уведомления"),
     ("do the actions", "выполнять действия"),
+    // Wave 2, resources-icon-packs.
+    (
+        "Allow, install and add to the bar",
+        "Разрешить, установить и добавить на панель",
+    ),
+    (
+        "Allow, install and add to the dock",
+        "Разрешить, установить и добавить в док",
+    ),
+    ("Icon packs", "Наборы значков"),
+    ("Wallpapers", "Обои"),
+    ("Tiling layouts", "Раскладки тайлинга"),
+    (
+        "The registries offer no icon packs",
+        "Реестры не предлагают наборов значков",
+    ),
+    (
+        "The registries offer no wallpapers",
+        "Реестры не предлагают обоев",
+    ),
+    (
+        "The registries offer no tiling layouts",
+        "Реестры не предлагают раскладок тайлинга",
+    ),
+    (
+        "An icon pack changes the pictures of icons and nothing else.",
+        "Набор значков меняет только изображения значков.",
+    ),
+    (
+        "A wallpaper is a picture and changes nothing else.",
+        "Обои — это картинка, и больше они ничего не меняют.",
+    ),
+    (
+        "A tiling layout says where windows go and nothing else.",
+        "Раскладка тайлинга задаёт только расположение окон.",
+    ),
+    ("Deletes the icon pack.", "Удаляет набор значков."),
+    ("Deletes the picture.", "Удаляет картинку."),
+    ("Deletes the layout file.", "Удаляет файл раскладки."),
+    ("Use", "Использовать"),
+    ("Stop using", "Не использовать"),
+    ("Apply", "Применить"),
+    ("Its name for the tiling:", "Имя для тайлинга:"),
+    ("Check for updates", "Проверить обновления"),
+    ("Update all", "Обновить все"),
+    ("Updates:", "Обновления:"),
+    (
+        "Register tessera:// links",
+        "Зарегистрировать ссылки tessera://",
+    ),
+    (
+        "Unregister tessera:// links",
+        "Отменить регистрацию ссылок tessera://",
+    ),
+    (
+        "tessera:// links open here.",
+        "Ссылки tessera:// открываются здесь.",
+    ),
+    (
+        "tessera:// links of registries can open here.",
+        "Ссылки tessera:// из реестров могут открываться здесь.",
+    ),
+    ("Install from a link", "Установка по ссылке"),
+    ("From the registry", "Из реестра"),
+    (
+        "This registry is not among those of the configuration. Install only what you trust.",
+        "Этого реестра нет в конфигурации. Устанавливайте только то, чему доверяете.",
+    ),
+    ("No link was followed", "Ни одна ссылка не открыта"),
+    ("Close", "Закрыть"),
+    ("Installing…", "Установка…"),
+    ("Removing…", "Удаление…"),
 ];
 
 #[cfg(test)]

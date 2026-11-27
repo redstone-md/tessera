@@ -680,6 +680,51 @@ impl ConfigFile {
     }
 }
 
+// Wave 2, resources-icon-packs: what the marketplace writes.
+impl ConfigFile {
+    /// Names the icon packs in use, the first one first; none takes the
+    /// key away.
+    pub fn set_icon_packs(&mut self, packs: &[String]) {
+        self.set_key("icon_packs", list(packs));
+    }
+
+    /// Shows the picture at `picture` as the wallpaper: it becomes the
+    /// only one listed, and the source is the listed files. Videos and
+    /// the pictures for light and dark Windows, which would be shown in
+    /// its place, are taken out.
+    pub fn apply_wallpaper(&mut self, picture: &std::path::Path) -> bool {
+        let Some(picture) = picture.to_str() else {
+            return false;
+        };
+        let images = Value::Array(Array::from_iter([picture]));
+        let mut done = self.set_in("wallpaper", "source", Some("files".into()));
+        done &= self.set_in("wallpaper", "images", Some(images));
+        for key in ["video", "videos", "images_light", "images_dark"] {
+            done &= self.set_in("wallpaper", key, None);
+        }
+        done
+    }
+
+    /// Adds `widget` to `slot` of the first surface along the top of a
+    /// display, or along the bottom with `in_dock`; of the first surface
+    /// where there is none such. Whether there was a surface is returned.
+    pub fn place_widget(&mut self, in_dock: bool, slot: Slot, widget: &str) -> bool {
+        let Ok(config) = self.config() else {
+            return false;
+        };
+        let wanted = if in_dock {
+            crate::platform::ScreenEdge::Bottom
+        } else {
+            crate::platform::ScreenEdge::Top
+        };
+        let surfaces = &config.surfaces;
+        let surface = { surfaces.iter() }
+            .position(|surface| surface.edge == wanted)
+            .or((!surfaces.is_empty()).then_some(0));
+        surface.is_some_and(|surface| self.add(surface, slot, widget))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1128,5 +1173,48 @@ mod declared_settings_tests {
         assert_eq!(file.document.to_string(), MINE);
         let mut odd = ConfigFile::parse("theme_options = 3\n").unwrap();
         assert!(!odd.set_theme_option("ocean", "corners", Some(1.into())));
+    }
+}
+
+#[cfg(test)]
+mod icon_pack_tests {
+    use super::*;
+
+    const LAYOUT: &str = r#"
+[[surface]]
+edge = "bottom"
+thickness = 64
+center = ["windows"]
+
+[[surface]]
+edge = "top"
+thickness = 48
+end = ["clock"]
+
+[wallpaper]
+video = "C:/a.mp4"
+fit = "fill"
+"#;
+
+    #[test]
+    fn the_marketplace_writes_packs_wallpapers_and_widgets() {
+        let mut file = ConfigFile::parse(LAYOUT).unwrap();
+        file.set_icon_packs(&["line".to_owned(), "other".to_owned()]);
+        assert!(file.apply_wallpaper(std::path::Path::new("C:/w/hills.jpg")));
+        assert!(file.place_widget(false, Slot::End, "lights.button"));
+        assert!(file.place_widget(true, Slot::Start, "lights.button"));
+        let config = file.config().unwrap();
+        assert_eq!(config.icon_packs, ["line", "other"]);
+        assert_eq!(config.surfaces[1].end.len(), 2);
+        assert_eq!(config.surfaces[1].end[1].widget, "lights.button");
+        assert_eq!(config.surfaces[0].start[0].widget, "lights.button");
+        let table = file.table().unwrap();
+        let wallpaper = table["wallpaper"].as_table().unwrap();
+        assert_eq!(wallpaper["source"].as_str(), Some("files"));
+        assert_eq!(wallpaper["images"][0].as_str(), Some("C:/w/hills.jpg"));
+        assert_eq!(wallpaper["fit"].as_str(), Some("fill"));
+        assert!(!wallpaper.contains_key("video"));
+        file.set_icon_packs(&[]);
+        assert!(file.config().unwrap().icon_packs.is_empty());
     }
 }

@@ -46,6 +46,11 @@
 # repository; an empty list reads none.
 # registries = ["https://example.org/registry.toml"]
 
+# The icon packs in use, by the names of their directories in
+# %APPDATA%\tessera\icon-packs; for each icon the first pack that has one
+# gives it, below [icons]. See docs/ICON-PACKS.md. The marketplace writes it.
+# icon_packs = ["line"]
+
 # The [[popup]] the Windows key opens and closes when it is pressed by itself,
 # instead of the Start menu of Windows. Combinations with the key stay as
 # they are. Without the key in this file, the Windows key is left to Windows.
@@ -207,6 +212,9 @@
 #                      counted on as Windows counts (win+printscreen)
 #             dock     what dock above does with the number arg names,
 #                      1 to 9; it brings no key
+#             install-resource  follows the tessera:// link arg names:
+#                      an install link opens the popup install-resource,
+#                      which installs only with a click; it brings no key
 #           The keys in brackets are bound to the actions where
 #           windows_keys is on (see above), unless a [[key]] presses the
 #           same keys, and they are taken from Windows. win+l,
@@ -644,6 +652,11 @@
 #               the height left in its popup and scrolls. Option show,
 #               "extensions" (default) or "themes" for the themes they
 #               offer; option columns, 1 (default) to 4
+#               It offers icon packs, wallpapers and tiling layouts too:
+#               show also takes "icon-packs", "wallpapers", "tiling-layouts"
+#               or a list of kinds, and without it every kind is shown, with
+#               a tab each. The registries are read at the start, daily and
+#               with Check for updates. Its foot registers tessera:// links
 #
 # Widgets of the quick settings:
 #   "tiles"     tiles in a grid, as the quick settings of Windows 11 show
@@ -720,6 +733,11 @@ center = [{ widget = "windows", start = "launcher" }]
 # quick-settings (360 by 420: connections, the radio-switch of wifi and of
 # bluetooth, volume-slider and brightness-slider). A
 # [[popup]] of the same name here is used instead.
+# The marketplace brings install-resource (in the middle, 420 by 320),
+# holding the widget of the same name, which shows a tessera:// link.
+# It also brings marketplace (in the middle, 720 by 560), holding the
+# marketplace widget with every kind and its updates; `tessera do popup
+# marketplace` opens it.
 
 [[popup]]
 name = "launcher"
