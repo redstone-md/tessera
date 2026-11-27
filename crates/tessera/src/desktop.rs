@@ -40,7 +40,8 @@ use crate::actions::Actions;
 use crate::field::TextField;
 use crate::files::Files;
 use crate::i18n::Language;
-use crate::icons::{Icon, icon_of_pixels};
+use crate::icon_packs;
+use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::panel::rewrite;
 use crate::platform::{
     DesktopFolders, DesktopLayer, DesktopOptions, ExplorerIcons, FileClipboard, FileDeed,
@@ -405,6 +406,9 @@ pub fn icon_of(item: &DesktopItem, size: u32, cx: &App) -> Icon {
     if icons.size != size {
         return None;
     }
+    if let Some(icon) = pack_icon_of(item, size, icons.bin_full, cx) {
+        return Some(icon);
+    }
     if item.virtual_kind() == Some(VirtualKind::RecycleBin) {
         return icons.bin[usize::from(icons.bin_full)].clone();
     }
@@ -413,6 +417,29 @@ pub fn icon_of(item: &DesktopItem, size: u32, cx: &App) -> Icon {
         .get(&item.key)
         .filter(|(modified, _)| *modified == item.modified)
         .and_then(|(_, icon)| icon.clone())
+}
+
+/// The icon an icon pack in use gives for `item`, `size` pixels wide,
+/// where one does: the Recycle Bin full or empty, a folder, or a file by
+/// its extension. Shortcuts, programs and the other items of the Shell
+/// keep their own, as their icons say which they are.
+fn pack_icon_of(item: &DesktopItem, size: u32, bin_full: bool, cx: &App) -> Icon {
+    let packs = cx.try_global::<AppIcons>()?.packs();
+    let kind = match item.virtual_kind() {
+        Some(VirtualKind::RecycleBin) if bin_full => icon_packs::RECYCLE_BIN_FULL.to_owned(),
+        Some(VirtualKind::RecycleBin) => icon_packs::RECYCLE_BIN_EMPTY.to_owned(),
+        Some(_) => return None,
+        None if item.is_folder() => icon_packs::FOLDER.to_owned(),
+        None if item.is_link() => return None,
+        None => {
+            let extension = item.path()?.extension()?.to_str()?.to_lowercase();
+            if extension == "exe" {
+                return None;
+            }
+            extension
+        }
+    };
+    packs.file_icon(&kind, size)
 }
 
 /// The icons fetched for the desktop, at one size.

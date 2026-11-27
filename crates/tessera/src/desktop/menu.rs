@@ -41,6 +41,7 @@ const ICON_CUT: &str = "\u{e8c6}";
 const ICON_COPY: &str = "\u{e8c8}";
 const ICON_PASTE: &str = "\u{e77f}";
 const ICON_LINK: &str = "\u{e71b}";
+const ICON_SHARE: &str = "\u{e72d}";
 const ICON_RENAME: &str = "\u{e8ac}";
 const ICON_DELETE: &str = "\u{e74d}";
 const ICON_PROPERTIES: &str = "\u{e946}";
@@ -187,6 +188,9 @@ fn item_entries(
         }));
         entries.push(entry(ICON_COPY, "Copy", |model, _| {
             model.put_on_clipboard(false)
+        }));
+        entries.push(entry(ICON_SHARE, "Share", |model, cx| {
+            crate::files::Files::share(model.chosen_paths(), cx)
         }));
     }
     entries.push(entry(ICON_LINK, "Create shortcut", |model, cx| {
@@ -449,18 +453,14 @@ fn background_entries(
             }));
         }
     }
-    // Plain "Undo" and "Redo": the journal does not tell what it would
-    // take back.
-    for (glyph, label, again, can) in [
-        (ICON_UNDO, "Undo", false, UndoJournal::can_undo()),
-        (ICON_REDO, "Redo", true, UndoJournal::can_redo()),
-    ] {
-        if can {
-            let model = weak.clone();
-            entries.push(MenuEntry::new(glyph, language.say(label), move |cx| {
-                model.update(cx, |model, cx| model.undo(again, cx)).ok();
-            }));
-        }
+    // Undo and redo say what they take back, as Explorer's do.
+    let undo = UndoJournal::next_undo().map(|label| (ICON_UNDO, label, false));
+    let redo = UndoJournal::next_redo().map(|label| (ICON_REDO, label, true));
+    for (glyph, label, again) in undo.into_iter().chain(redo) {
+        let model = weak.clone();
+        entries.push(MenuEntry::new(glyph, language.say(label), move |cx| {
+            model.update(cx, |model, cx| model.undo(again, cx)).ok();
+        }));
     }
     if folder.is_some() {
         entries.push(new_entries(weak.clone(), at, window, anchor, language));

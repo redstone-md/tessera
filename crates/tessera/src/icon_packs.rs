@@ -45,9 +45,7 @@ const PACKS_DIRECTORY: &str = "icon-packs";
 /// The kinds of things `[files]` names besides extensions of files.
 pub const FOLDER: &str = "folder";
 pub const DRIVE: &str = "drive";
-#[allow(dead_code, reason = "for the icons of the desktop")]
 pub const RECYCLE_BIN_FULL: &str = "recycle-bin-full";
-#[allow(dead_code, reason = "for the icons of the desktop")]
 pub const RECYCLE_BIN_EMPTY: &str = "recycle-bin-empty";
 
 /// What a mask is called that lies next to its icon without being named:

@@ -52,7 +52,7 @@ A key of the manifest that is not listed here makes the whole manifest unusable,
 
 Names are compared without regard to case. For a shortcut the program it opens is asked for first, then its name. A packaged application is only known by its identifier.
 
-`[files]` names a kind of file by its extension, with or without the dot, or one of the kinds `folder`, `drive` (the root of a drive), `recycle-bin-full` and `recycle-bin-empty`. Tessera's own file manager and launcher ask for the extensions and for `folder` and `drive`; the two recycle bin kinds are there for the icons of the desktop, which ask for them once they are drawn by Tessera.
+`[files]` names a kind of file by its extension, with or without the dot, or one of the kinds `folder`, `drive` (the root of a drive), `recycle-bin-full` and `recycle-bin-empty`. Tessera's own file manager and launcher ask for the extensions and for `folder` and `drive`; the icons of the desktop, where Tessera draws them, ask for the folders, the extensions of their files and the two recycle bin kinds; shortcuts and programs on the desktop keep their own icons.
 
 Each value is the path of a picture within the pack, with `/` between directories and without `..`: a PNG, ICO, SVG or JPEG file of at most 4 MiB. It is fitted into a square of 64 pixels, which is large enough at 200% scaling. An SVG is drawn by the renderer GPUI already brings (resvg), at that size, so it stays sharp. A picture that cannot be read is reported once, and the icon the application or the file brings is shown instead.
 
@@ -74,6 +74,6 @@ A registry offers a pack as an `[[icon_pack]]` entry with the manifest and every
 ## What is not done
 
 - No pack has been tried on a running shell: the lookup, the masks and the drawing of SVG files were tried in tests only, and the sample pack's SVG files with resvg outside Tessera.
-- The dock does not ask for the active color yet, and the icons of the desktop do not ask the packs yet, as that part comes separately. Where the file manager shows a thumbnail of a file (a picture, a video, a document with a preview), the thumbnail is shown in place of the icon of a pack; folders, the details pane and files without a thumbnail take the icon of the pack.
+- The dock does not ask for the active color yet. Where the file manager shows a thumbnail of a file (a picture, a video, a document with a preview), the thumbnail is shown in place of the icon of a pack; folders, the details pane and files without a thumbnail take the icon of the pack.
 - Icons of the shell itself (`[shell]`), of the notification area, of notifications and of extensions are not replaced.
 - Light and dark variants of a picture are not chosen between; a pack that wants to fit both uses `monochrome` or a mask.

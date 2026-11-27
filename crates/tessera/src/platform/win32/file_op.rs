@@ -1203,17 +1203,6 @@ impl UndoJournal {
         Self::shared(|journal| journal.record(deeds));
     }
 
-    /// Whether there is work to take back, and to do again.
-    #[allow(dead_code, reason = "for the menus that offer to undo")]
-    pub fn can_undo() -> bool {
-        Self::shared(|journal| !journal.done.is_empty())
-    }
-
-    #[allow(dead_code, reason = "for the menus that offer to redo")]
-    pub fn can_redo() -> bool {
-        Self::shared(|journal| !journal.undone.is_empty())
-    }
-
     /// Takes back the last work that can be, with the Shell's dialogs, and
     /// returns at once; the receiver yields what was done for it. `None`
     /// where there is nothing to take back, or while other work on files
