@@ -21,6 +21,8 @@ const SHELL_NAMES_ASKED: usize = 512;
 /// Where a window of the file manager is.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Location {
+    /// Home: the folders of Quick access and the files used lately.
+    Home,
     /// The drives of the computer.
     Computer,
     Folder(PathBuf),
@@ -31,7 +33,7 @@ impl Location {
     /// computer around the root of a drive. The computer has none.
     pub fn up(&self) -> Option<Self> {
         match self {
-            Self::Computer => None,
+            Self::Home | Self::Computer => None,
             Self::Folder(path) => Some(match path.parent() {
                 Some(parent) if parent != path && !parent.as_os_str().is_empty() => {
                     Self::Folder(parent.to_owned())
@@ -43,15 +45,16 @@ impl Location {
 
     pub fn folder(&self) -> Option<&Path> {
         match self {
-            Self::Computer => None,
+            Self::Home | Self::Computer => None,
             Self::Folder(path) => Some(path),
         }
     }
 
     /// The location as a command names it, which `Files::named` reads
-    /// back: `computer`, or the path of the folder.
+    /// back: `home`, `computer`, or the path of the folder.
     pub fn name(&self) -> String {
         match self {
+            Self::Home => "home".to_owned(),
             Self::Computer => "computer".to_owned(),
             Self::Folder(path) => path.display().to_string(),
         }
@@ -550,6 +553,25 @@ pub fn crumbs(path: &Path) -> Vec<(String, PathBuf)> {
     crumbs
 }
 
+/// The share of another computer `path` lies in, as `\\server\share`;
+/// `None` for a path on a drive of this one.
+pub fn share_root(path: &Path) -> Option<PathBuf> {
+    use std::path::Prefix;
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return None;
+    };
+    match prefix.kind() {
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+            let mut root = std::ffi::OsString::from("\\\\");
+            root.push(server);
+            root.push("\\");
+            root.push(share);
+            Some(PathBuf::from(root))
+        }
+        _ => None,
+    }
+}
+
 /// A number of bytes as people read it.
 pub fn size_text(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -703,6 +725,13 @@ mod tests {
         assert_eq!(names, ["C:", "Users", "me"]);
         assert_eq!(crumbs[0].1, PathBuf::from("C:\\"));
         assert_eq!(crumbs[2].1, PathBuf::from("C:\\Users\\me"));
+    }
+
+    #[test]
+    fn a_share_of_another_computer_has_a_root() {
+        let inner = Path::new(r"\\server\share\folder\file.txt");
+        assert_eq!(share_root(inner), Some(PathBuf::from(r"\\server\share")));
+        assert_eq!(share_root(Path::new(r"C:\Users")), None);
     }
 
     #[test]

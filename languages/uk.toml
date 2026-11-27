@@ -327,3 +327,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Copy to the other pane" = "Копіювати в іншу панель"
 "Move to the other pane" = "Перемістити в іншу панель"
 "tabs" = "вкладок"
+"Quick access" = "Швидкий доступ"
+"Pin to Quick access" = "Закріпити на панелі швидкого доступу"
+"Unpin from Quick access" = "Відкріпити від панелі швидкого доступу"

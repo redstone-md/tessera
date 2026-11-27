@@ -326,3 +326,6 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Copy to the other pane" = "In den anderen Bereich kopieren"
 "Move to the other pane" = "In den anderen Bereich verschieben"
 "tabs" = "Tabs"
+"Quick access" = "Schnellzugriff"
+"Pin to Quick access" = "An Schnellzugriff anheften"
+"Unpin from Quick access" = "Vom Schnellzugriff lösen"

@@ -21,14 +21,14 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, RRF_RT_ANY, RRF_RT_REG_DWORD,
-    RRF_RT_REG_SZ, RegCloseKey, RegGetValueW, RegOpenKeyExW,
+    RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
 };
 use windows::Win32::UI::Shell::{
     IShellItem, SHCreateItemFromParsingName, SHGSI_ICON, SHGSI_SMALLICON, SHGetStockIconInfo,
     SHSTOCKICONINFO, SIGDN_NORMALDISPLAY, SIID_LINK,
 };
 use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
-use windows::core::{HSTRING, PCWSTR};
+use windows::core::{HSTRING, PCWSTR, PWSTR};
 
 use super::IconPixels;
 
@@ -360,6 +360,39 @@ fn has_key(root: HKEY, key: &HSTRING) -> bool {
         let _ = RegCloseKey(opened);
     }
     true
+}
+
+/// The names of the keys right under the key `key` of `root`.
+pub(super) fn subkeys(root: HKEY, key: &HSTRING) -> Vec<String> {
+    let mut opened = HKEY::default();
+    let mut names = Vec::new();
+    // SAFETY: the name is NUL-terminated; each name is read into a buffer
+    // whose length is given; the key opened is closed.
+    unsafe {
+        if RegOpenKeyExW(root, key, None, KEY_READ, &raw mut opened) != ERROR_SUCCESS {
+            return names;
+        }
+        for index in 0.. {
+            let mut name = [0_u16; 256];
+            let mut length = name.len() as u32;
+            let status = RegEnumKeyExW(
+                opened,
+                index,
+                Some(PWSTR(name.as_mut_ptr())),
+                &raw mut length,
+                None,
+                None,
+                None,
+                None,
+            );
+            if status != ERROR_SUCCESS {
+                break;
+            }
+            names.push(String::from_utf16_lossy(&name[..length as usize]));
+        }
+        let _ = RegCloseKey(opened);
+    }
+    names
 }
 
 #[cfg(test)]

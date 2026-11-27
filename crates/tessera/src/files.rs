@@ -181,13 +181,15 @@ impl Files {
     }
 
     /// The location a command or a key names: nothing or `~` for the
-    /// folder of the user, `computer` for the drives, or a path, with a
-    /// leading `~` standing for the folder of the user.
+    /// folder of the user, `home` for Home (Quick access and the files
+    /// used lately), `computer` for the drives, or a path, with a leading
+    /// `~` standing for the folder of the user.
     pub fn named(name: &str) -> Location {
         let name = name.trim();
         match name {
             "" | "~" => Self::home(),
             "computer" => Location::Computer,
+            "home" => Location::Home,
             _ => match name.strip_prefix("~\\").or(name.strip_prefix("~/")) {
                 Some(rest) => match Place::Home.path() {
                     Some(home) => Location::Folder(home.join(rest)),

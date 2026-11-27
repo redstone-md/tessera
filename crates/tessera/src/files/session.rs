@@ -99,6 +99,8 @@ struct SavedTab {
 pub struct Session {
     tabs: Vec<SavedTab>,
     active: usize,
+    /// The shares of other computers visited, as `\\server\share`.
+    pub network: Vec<PathBuf>,
 }
 
 impl Session {
@@ -131,6 +133,16 @@ impl Session {
             })
             .collect();
         self.active = opening.active;
+    }
+
+    /// Remembers the share `root` of another computer, once; says
+    /// whether it was new.
+    pub fn visited(&mut self, root: PathBuf) -> bool {
+        if self.network.contains(&root) {
+            return false;
+        }
+        self.network.push(root);
+        true
     }
 
     /// The tabs to open again, each location read with `named`; `None`

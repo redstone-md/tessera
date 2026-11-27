@@ -327,3 +327,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Copy to the other pane" = "Copiar al otro panel"
 "Move to the other pane" = "Mover al otro panel"
 "tabs" = "pestañas"
+"Quick access" = "Acceso rápido"
+"Pin to Quick access" = "Anclar a Acceso rápido"
+"Unpin from Quick access" = "Desanclar de Acceso rápido"

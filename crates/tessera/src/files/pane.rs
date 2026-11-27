@@ -32,11 +32,13 @@ use crate::icons::{AppIcons, Icon, icon_of_pixels};
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
     Drive, DriveKind, ExplorerSettings, FileClipboard, FileWork, IconPixels, Launch, NameRules,
-    open_terminal, reveal_in_explorer, show_properties,
+    QuickAccess, open_terminal, recent_files, reveal_in_explorer, show_properties,
 };
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
+
+use super::sidebar::ICON_HOME;
 
 /// Measures of a pane, in logical pixels.
 pub const ROW_HEIGHT: f32 = 32.;
@@ -52,6 +54,9 @@ const SIZE_WIDTH: f32 = 90.;
 /// How often the folder shown is looked at for changes, while the window
 /// is in front and the pane in sight.
 const WATCH_INTERVAL: Duration = Duration::from_millis(1500);
+
+/// How many of the files used lately Home shows.
+const RECENT_SHOWN: usize = 20;
 
 /// How many icons of files are looked up for one frame; the rest come on
 /// the frames after, so that a folder of new kinds opens at once.
@@ -78,6 +83,8 @@ const ICON_TERMINAL: &str = "\u{e756}";
 pub const ICON_NEW_WINDOW: &str = "\u{e78b}";
 pub const ICON_NEW_TAB: &str = "\u{e8a7}";
 const ICON_TO_OTHER: &str = "\u{e8ab}";
+pub const ICON_PIN: &str = "\u{e718}";
+pub const ICON_UNPIN: &str = "\u{e77a}";
 const ICON_EXPLORER: &str = "\u{ec50}";
 const ICON_LINK: &str = "\u{e71b}";
 const ICON_SORT_UP: &str = "\u{e70e}";
@@ -95,6 +102,8 @@ pub enum PaneEvent {
     /// The user asked to copy, or with `cut` to move, what is chosen in
     /// the pane into the folder of the pane beside it.
     ToOtherPane { cut: bool },
+    /// A folder was pinned to Quick access or unpinned.
+    PinsChanged,
 }
 
 /// The arrow Windows draws over the icon of a shortcut, looked up once.
@@ -115,6 +124,8 @@ pub struct FolderPane {
     listing: Listing,
     selection: Selection,
     order: Order,
+    /// The order of Home, the latest first.
+    home_order: Order,
     config: FilesConfig,
     /// Whether hidden files are shown, where the user switched it; else
     /// the configuration and the folder options of Explorer say.
@@ -209,6 +220,11 @@ impl FolderPane {
                 folders_first: config.folders_first,
                 ..Order::default()
             },
+            home_order: Order {
+                column: Column::Modified,
+                descending: true,
+                folders_first: true,
+            },
             config,
             hidden: None,
             explorer: ExplorerSettings::default(),
@@ -244,6 +260,7 @@ impl FolderPane {
     /// What the title of the window and of the tab say of the pane.
     pub fn title(&self, cx: &gpui::App) -> String {
         match self.history.current() {
+            Location::Home => Language::of(cx).say("Quick access").to_owned(),
             Location::Computer => Language::of(cx).say("This PC").to_owned(),
             Location::Folder(path) => title_of(path),
         }
@@ -279,12 +296,16 @@ impl FolderPane {
 
     /// Reads the location shown anew, keeping what was chosen.
     pub fn load(&mut self, cx: &mut Context<Self>) {
-        let Location::Folder(path) = self.history.current().clone() else {
-            self.listing = Listing::default();
-            self.problem = None;
-            self.read_drives(cx);
-            cx.notify();
-            return;
+        let path = match self.history.current().clone() {
+            Location::Folder(path) => path,
+            Location::Home => return self.load_home(cx),
+            Location::Computer => {
+                self.listing = Listing::default();
+                self.problem = None;
+                self.read_drives(cx);
+                cx.notify();
+                return;
+            }
         };
         let follow = self.config.explorer;
         self.reading = Some(
@@ -320,6 +341,61 @@ impl FolderPane {
         );
     }
 
+    /// Reads Home: the folders of Quick access, as Explorer keeps them,
+    /// and the files used lately, which follow them.
+    fn load_home(&mut self, cx: &mut Context<Self>) {
+        let follow = self.config.explorer;
+        self.reading = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let folders = QuickAccess::folders().await;
+                let files = recent_files(RECENT_SHOWN).await;
+                let read = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let explorer = ExplorerSettings::read();
+                        let mut rules = NameRules::new(explorer, follow);
+                        let (folders, problem) = match folders {
+                            Ok(folders) => (folders, None),
+                            Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+                        };
+                        let entries: Vec<Entry> = { folders.into_iter().chain(files) }
+                            .filter_map(|place| {
+                                let metadata = std::fs::metadata(&place.path).ok()?;
+                                let mut entry = Entry::of(place.path, &metadata, &mut rules);
+                                if entry.folder {
+                                    entry.display = place.name;
+                                }
+                                Some(entry)
+                            })
+                            .collect();
+                        (entries, problem, explorer)
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    let (entries, problem, explorer) = read;
+                    if let Some(problem) = problem {
+                        report!("Quick access cannot be read: {problem}");
+                    }
+                    this.reading = None;
+                    this.problem = None;
+                    this.explorer = explorer;
+                    this.listing = Listing::new(entries);
+                    this.arrange(cx);
+                })
+                .ok();
+            }),
+        );
+    }
+
+    /// The order the list is in: Home has its own, as the files used
+    /// lately are ordered by when they were.
+    fn order(&self) -> Order {
+        match self.history.current() {
+            Location::Home => self.home_order,
+            _ => self.order,
+        }
+    }
+
     /// Orders and filters the list again, keeping the choice and the
     /// cursor on what they were on.
     fn arrange(&mut self, cx: &mut Context<Self>) {
@@ -327,7 +403,7 @@ impl FolderPane {
             .and_then(|position| self.listing.get(position))
             .map(|entry| entry.path.clone());
         let filter = self.filter.read(cx).text();
-        self.listing.arrange(&self.order, &filter, self.shown());
+        self.listing.arrange(&self.order(), &filter, self.shown());
         self.selection.follow(cursor, &self.listing);
         cx.notify();
     }
@@ -743,8 +819,28 @@ impl FolderPane {
     }
 
     fn sort_by(&mut self, column: Column, cx: &mut Context<Self>) {
-        self.order = self.order.toggled(column);
+        match self.history.current() {
+            Location::Home => self.home_order = self.home_order.toggled(column),
+            _ => self.order = self.order.toggled(column),
+        }
         self.arrange(cx);
+    }
+
+    /// Pins the folder at `path` to Quick access, or unpins it, and tells
+    /// the window once Explorer has.
+    fn set_pinned(&mut self, path: PathBuf, pinned: bool, cx: &mut Context<Self>) {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let done = match pinned {
+                true => QuickAccess::pin(path).await,
+                false => QuickAccess::unpin(path).await,
+            };
+            if let Err(error) = done {
+                report!("Quick access did not change: {error:#}");
+            }
+            this.update(cx, |_, cx| cx.emit(PaneEvent::PinsChanged))
+                .ok();
+        })
+        .detach();
     }
 
     fn properties(&self) {
@@ -873,6 +969,17 @@ impl FolderPane {
             entries.push(entry(ICON_NEW_TAB, "Open in new tab", |this, cx| {
                 for path in this.chosen() {
                     cx.emit(PaneEvent::OpenInNewTab(Location::Folder(path)));
+                }
+            }));
+            let home = *self.history.current() == Location::Home;
+            let (glyph, label) = match home {
+                true => (ICON_UNPIN, "Unpin from Quick access"),
+                false => (ICON_PIN, "Pin to Quick access"),
+            };
+            entries.push(entry(glyph, label, |this, cx| {
+                let pinned = *this.history.current() != Location::Home;
+                if let Some(path) = this.chosen().into_iter().next() {
+                    this.set_pinned(path, pinned, cx);
                 }
             }));
             entries.push(entry(ICON_NEW_WINDOW, "Open in new window", |this, cx| {
@@ -1039,7 +1146,18 @@ impl FolderPane {
                 cx.stop_propagation();
                 this.go(Location::Computer, window, cx)
             }));
-        steps.push(root.into_any_element());
+        if *self.history.current() == Location::Home {
+            let home = div()
+                .flex()
+                .items_center()
+                .gap(theme.spacing.tiny)
+                .px(theme.spacing.small)
+                .child(icon(theme, ICON_HOME))
+                .child(language.say("Quick access"));
+            steps.push(home.into_any_element());
+        } else {
+            steps.push(root.into_any_element());
+        }
         if let Location::Folder(path) = self.history.current() {
             for (index, (name, target)) in crumbs(path).into_iter().enumerate() {
                 steps.push(
@@ -1095,7 +1213,7 @@ impl FolderPane {
 
     fn render_header(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let language = Language::of(cx);
-        let order = self.order;
+        let order = self.order();
         let heading = |column: Column| {
             let arrow = (order.column == column).then(|| {
                 let glyph = if order.descending {

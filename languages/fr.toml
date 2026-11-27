@@ -327,3 +327,6 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "Copy to the other pane" = "Copier dans l'autre volet"
 "Move to the other pane" = "Déplacer dans l'autre volet"
 "tabs" = "onglets"
+"Quick access" = "Accès rapide"
+"Pin to Quick access" = "Épingler à Accès rapide"
+"Unpin from Quick access" = "Désépingler d'Accès rapide"

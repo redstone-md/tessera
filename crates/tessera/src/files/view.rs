@@ -7,6 +7,7 @@
 //! bar.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use gpui::{
     AppContext, Context, DragMoveEvent, Entity, EntityId, Hsla, InteractiveElement, IntoElement,
@@ -14,7 +15,7 @@ use gpui::{
     Styled, Subscription, Window, WindowControlArea, div, prelude::FluentBuilder, px, relative,
 };
 
-use super::model::Location;
+use super::model::{Location, share_root};
 use super::pane::{FolderPane, ICON_HIDDEN, ICON_NEW_FOLDER, PaneEvent};
 use super::session::{OpenTab, Opening, Session};
 use super::sidebar::{Sidebar, SidebarEvent};
@@ -228,6 +229,21 @@ impl FilesView {
                 if pane == self.pane() {
                     self.retitle(window, cx);
                 }
+                let share = pane.read(cx).folder().as_deref().and_then(share_root);
+                if let Some(root) = share {
+                    self.visited(root, cx);
+                }
+            }
+            PaneEvent::PinsChanged => {
+                self.sidebar
+                    .update(cx, |sidebar, cx| sidebar.read_quick_access(cx));
+                for tab in self.tabs.all() {
+                    for pane in tab.panes() {
+                        if *pane.read(cx).location() == Location::Home {
+                            pane.update(cx, |pane, cx| pane.load(cx));
+                        }
+                    }
+                }
             }
             PaneEvent::Focused => {
                 let tab = self.tabs.active_mut();
@@ -258,7 +274,26 @@ impl FilesView {
                 self.pane()
                     .update(cx, |pane, cx| pane.go(location, window, cx));
             }
+            SidebarEvent::OpenInNewTab(location) => {
+                self.open_tab(location.clone(), true, window, cx);
+            }
         }
+    }
+
+    /// Puts the share of another computer `root` under Network at the
+    /// side, and keeps it there for the next windows.
+    fn visited(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.add_network(std::slice::from_ref(&root), cx)
+        });
+        cx.background_executor()
+            .spawn(async move {
+                let mut session = Session::load();
+                if session.visited(root) {
+                    session.save();
+                }
+            })
+            .detach();
     }
 
     /// Opens a tab at `location`, in front unless `behind`.

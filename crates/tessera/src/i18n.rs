@@ -711,6 +711,15 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Copy to the other pane", "Копировать в другую панель"),
     ("Move to the other pane", "Переместить в другую панель"),
     ("tabs", "вкладок"),
+    ("Quick access", "Быстрый доступ"),
+    (
+        "Pin to Quick access",
+        "Закрепить на панели быстрого доступа",
+    ),
+    (
+        "Unpin from Quick access",
+        "Открепить от панели быстрого доступа",
+    ),
 ];
 
 #[cfg(test)]
