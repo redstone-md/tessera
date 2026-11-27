@@ -13,7 +13,7 @@
 //! answer within [`SHELL_WAIT`], as with a shell extension that hangs,
 //! the menu opens without what it would have added.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -82,10 +82,13 @@ pub(super) struct ShellChoices {
 
 impl ShellChoices {
     /// Asks the Shell, away from the user interface, what it offers for
-    /// `chosen`, or for the background of `folder` where nothing is
-    /// chosen; `extended` asks for the verbs shown with Shift held.
+    /// `chosen`, with the programs that open `open_with` where they are
+    /// all files of its kind, or for the background of `folder` where
+    /// nothing is chosen; `extended` asks for the verbs shown with Shift
+    /// held.
     pub(super) async fn read(
         chosen: Vec<PathBuf>,
+        open_with: Option<PathBuf>,
         folder: Option<PathBuf>,
         extended: bool,
         cx: &AsyncApp,
@@ -104,7 +107,7 @@ impl ShellChoices {
             return choices;
         }
         let built = ShellMenu::for_items(chosen.clone(), extended);
-        let handlers = one_kind(&chosen).map(OpenWithHandler::of);
+        let handlers = open_with.as_deref().map(OpenWithHandler::of);
         let send_to = SendToTarget::all();
         choices.menu = within(built, until, cx).await.and_then(shell_menu);
         if let Some(handlers) = handlers {
@@ -153,18 +156,19 @@ async fn within<T: Send + 'static>(
     taken.recv().await.ok().flatten()
 }
 
-/// The first of `paths` where all are files of one kind, by extension,
-/// which "Open with" is offered for.
-fn one_kind(paths: &[PathBuf]) -> Option<&Path> {
-    let first = paths.first()?;
-    let kind = |path: &Path| {
+/// The first of `items`, each a path and whether it is a folder, where
+/// all are files of one kind, by extension, which "Open with" is offered
+/// for.
+pub(super) fn one_kind(items: &[(PathBuf, bool)]) -> Option<PathBuf> {
+    let kind = |(path, folder): &(PathBuf, bool)| {
         let extension = path.extension()?.to_string_lossy().to_lowercase();
-        (!path.is_dir()).then_some(extension)
+        (!folder).then_some(extension)
     };
+    let first = items.first()?;
     let wanted = kind(first)?;
-    { paths.iter() }
-        .all(|path| kind(path).as_ref() == Some(&wanted))
-        .then_some(first.as_path())
+    { items.iter() }
+        .all(|item| kind(item).as_ref() == Some(&wanted))
+        .then(|| first.0.clone())
 }
 
 /// Whether `verb` of the menu of the Shell is shown in Tessera's menu:
@@ -494,16 +498,16 @@ mod tests {
 
     #[test]
     fn open_with_is_offered_for_files_of_one_kind() {
-        let paths = |names: &[&str]| -> Vec<PathBuf> {
-            names
-                .iter()
-                .map(|name| PathBuf::from(format!(r"C:\missing\{name}")))
+        let items = |names: &[(&str, bool)]| -> Vec<(PathBuf, bool)> {
+            { names.iter() }
+                .map(|&(name, folder)| (PathBuf::from(format!(r"C:\missing\{name}")), folder))
                 .collect()
         };
-        let same = paths(&["a.txt", "b.TXT"]);
-        assert_eq!(one_kind(&same), Some(same[0].as_path()));
-        assert_eq!(one_kind(&paths(&["a.txt", "b.md"])), None);
-        assert_eq!(one_kind(&paths(&["README"])), None);
+        let same = items(&[("a.txt", false), ("b.TXT", false)]);
+        assert_eq!(one_kind(&same), Some(same[0].0.clone()));
+        assert_eq!(one_kind(&items(&[("a.txt", false), ("b.md", false)])), None);
+        assert_eq!(one_kind(&items(&[("a.txt", false), ("c.txt", true)])), None);
+        assert_eq!(one_kind(&items(&[("README", false)])), None);
         assert_eq!(one_kind(&[]), None);
     }
 }

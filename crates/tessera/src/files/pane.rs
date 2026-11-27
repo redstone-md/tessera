@@ -1449,8 +1449,12 @@ impl FolderPane {
         };
         let entries = self.menu_entries(cx);
         let (chosen, folder) = (self.chosen(), self.folder());
+        let kinds: Vec<(PathBuf, bool)> = { self.chosen_entries().into_iter() }
+            .map(|entry| (entry.path, entry.folder))
+            .collect();
+        let open_with = verbs::one_kind(&kinds);
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let choices = ShellChoices::read(chosen, folder, extended, cx).await;
+            let choices = ShellChoices::read(chosen, open_with, folder, extended, cx).await;
             this.update(cx, |this, cx| {
                 let mut entries = entries;
                 entries.extend(this.shell_entries(choices, anchor, cx));
