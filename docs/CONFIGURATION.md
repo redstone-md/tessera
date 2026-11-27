@@ -124,6 +124,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `snap` | `left`, `right`, `up`, `down`, `left-half`, `right-half`, `top-left`, `top-right`, `bottom-left`, `bottom-right`, `maximize`, `restore` or `minimize` | snaps the window in front, as [snapping](#snapping-window-rules-and-hot-corners) describes; its keys (Win and the arrows) are taken from Windows and bound by default where the keys of Windows are |
 | `snap-display` | `next`, `previous`, or none | sends the window in front to the next display from the left (round to the first), or the one before; its keys (Win+Shift+Right, Win+Shift+Left) are taken from Windows and bound by default |
 | `snap-layouts` | none | opens the snap layouts for the window in front; Win+Z is taken from Windows and bound by default |
+| `tiling` | the words of a `tiling` key, as `reserve left` or `width more` | does what a `[[key]]` with those words as `tiling` does, as [tiling](#tiling) describes; brings Win+Shift+J, L, I and K (`reserve left`, `right`, `up`, `down`) and Win+Alt+0 (`reset`) where the keys of Windows are bound |
 | `window-menu` | none | opens the window menu of the window in front; Alt+F3 is bound by default where the keys of Windows are |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys are taken from Windows, and it brings Win+E where `windows_keys` is on |
 | `shell` | `install`, `revert` or `explorer` | `install` makes Tessera the shell of the user's next sessions and `revert` gives that back to what the machine names, as `tessera shell install` and `tessera shell revert` do; `explorer` hands this session to Explorer now, when Tessera is its shell: Explorer starts as the shell once Tessera has quit |
@@ -256,6 +257,68 @@ arg = "sound"         # the popup Win+A opens instead of `quick-settings`
 ```
 
 Win+L locks the session through Windows itself, and Ctrl+Shift+Esc, Alt+Shift and Ctrl+Shift are answered by Windows too, so they keep working in shell mode and Tessera does not take them. While `windows_key` takes over the Windows key, Ctrl+Esc opens the same popup, as it opens the Start menu in Windows, through `start` above, unless a `[[key]]` holds it or gives `start` another popup as `arg`. Without `windows_key` the Windows key by itself opens nothing, in shell mode as well; set `windows_key = "launcher"` for it to open the launcher. Win+E belongs to the file manager (`files`), Win+R to the Run dialog, Win+V to the clipboard history and Win+1 to Win+9, Win+T and Win+B to the dock, which bring their own keys. Not answered by Tessera: Win+period (the emoji panel of Windows; whether Windows still opens it without Explorer is not known), Win+comma (the peek at the desktop), Win+Tab, Win+Ctrl+D and the other keys of the virtual desktops of Windows, which need Explorer.
+## Tiling
+
+`[tiling]` with `enabled = true` puts the windows of each display side by side in the space the bars leave. Each workspace of each display has tiles of its own: a layout, and the sizes given to its tiles, which `%APPDATA%\tessera\tiling-state.toml` keeps over restarts (Tessera writes it two seconds after the last change; it is not meant to be edited).
+
+```toml
+[tiling]
+enabled = true
+layout = "master"      # or columns, rows, grid, monocle, bsp, dwindle, ultrawide, centered, or a layout file
+gap = 8                # between tiles, 0 to 200
+padding = 8            # around the tiles; the gap without it; or { top = 4, right = 8, bottom = 8, left = 8 }
+margin = { top = 0 }   # room left free at the sides of what the bars leave, 0 to 1000
+resize_step = 0.05     # share of its room a tile gains or gives per step, 0.01 to 0.5
+drag = "swap"          # a tile dropped on another trades places with it; "sort" takes its place in the order
+float = { width = 0.6, height = 0.7 }   # a floated window goes to the middle at this share of the space
+border = { width = 3, offset = 0, color = "#7aa2f7" }   # drawn by Tessera; border = true has Windows color its own
+
+[[tiling.display]]
+match = "2"            # the second display from the left
+layout = "ultrawide"
+gap = 12
+
+[[tiling.workspace]]
+number = 3             # counted from 1
+display = "1"          # without it, on every display
+layout = "monocle"
+```
+
+The layouts: `master` (the first window on the left half, the others stacked on the right), `columns`, `rows`, `grid` and `monocle` (every window takes the whole space) as before; `bsp`, where each new window divides the tile of the window in front in two along its longer side; `dwindle`, where it divides the last tile, across and down in turn, so that the tiles wind inward; `ultrawide`, the first window in the middle, twice as wide as each side, the next ones stacked on its right and, once there are three, on its left; and `centered`, one column of windows in the middle, as wide as a display of 16 by 9 as high as the space, with room on both sides only where that leaves more than a tenth.
+
+What decides the layout of a workspace: the layout chosen there while Tessera ran, then the last `[[tiling.workspace]]` entry that names it, then the last `[[tiling.display]]` entry that names its display, then `layout`; `gap`, `padding` and `margin` are taken the same way. `match` and `display` name a display by its place from the left, counted from 1, by its device name (`\\.\DISPLAY2`) or by the name of its monitor (a pattern with `*` and `?`, or a regular expression after `re:`); the names of monitors and the device names are not read yet, so for now only the place names a display (of the patterns, `*` matches every display, the others none). When the configuration is read again and says something else of the layouts, the layouts chosen while Tessera ran give way to it.
+
+A `[[key]]` with `tiling`, `tessera tiling <words>` and the action `tiling` (with its words as `arg`) take: `next` (the next layout on the workspace of the display in front, through the layouts of Tessera and then the layout files, then no tiling; after no tiling, tiling again with the layout each workspace had), `off`, a layout (a layout file is looked for when it is chosen, and a name without one is reported then), `float` (the window in front out of the tiles and back in), `wider` and `narrower` (the first window of `master` gets more of the width, or less; in `rows` the window in front more of the height; in the others the window in front more of the width), `width more`, `width less`, `height more` and `height less` (the window in front gets `resize_step` more or less of the nearest room around it that is divided that way, keeping at least a twentieth of it), `reset` (every tile of the workspace alike again), `reserve left`, `right`, `up`, `down` (the next window opens on that side of the window in front) or `reserve float` (the next window is not tiled), and `split horizontal` or `split vertical` (the next window divides the tile of the window in front across or down). In `bsp` and `dwindle` the reserved window divides the tile; in the other layouts, which are made again for each number of windows, left and up put it before the window in front in the order, right, down and `split` after it. The display in front is that of the tiled window in front, or else the one the pointer is on. Where the keys of Windows are bound (`windows_keys`), the action brings Win+Shift+J, L, I and K for reserving the left, right, upper and lower side and Win+Alt+0 for `reset`, while tiling is on; while it is off they are left to other programs.
+
+Dragging a border between two tiles with the mouse, or a program resizing the window in front, moves that border in every layout; a window that is moved without being resized and let go with its middle on another tile trades places with that window, or takes its place with `drag = "sort"`, and one let go on another display goes to the tiles there.
+
+### Layout files
+
+A layout file is a `.toml` file in `%APPDATA%\tessera\tiling-layouts`, chosen by its name without `.toml` (`layout = "my-layout"`); `tall`, `wide` and `three-columns` come with Tessera ([crates/tessera/src/tiling/layouts](../crates/tessera/src/tiling/layouts)), and a file of the same name takes their place. A file is a tree of containers under `[structure]`:
+
+```toml
+name = "Three columns"     # what the widget shows; the name of the file without it
+
+[structure]
+kind = "horizontal"        # its parts side by side; "vertical" one above the other
+
+[[structure.children]]
+kind = "leaf"              # one window
+priority = 2               # the parts take windows from the lowest priority on (in the order of the file)
+condition = { windows_at_least = 3 }   # or windows_at_most; the part is there only then
+
+[[structure.children]]
+kind = "leaf"
+grow = 2                   # what it weighs against the other parts of its container (1)
+priority = 1
+
+[[structure.children]]
+kind = "vertical"          # a container without parts takes `max` windows, or all that are left
+priority = 3
+```
+
+A part that gets no window is left out. A file needs a container without `max` and without `condition` (in containers without one either), which takes the windows the others do not. Files are read when Tessera starts, with the configuration, and, while windows are tiled, within two seconds of a change; a file that cannot be used, one named as a layout of Tessera's own and one larger than 64 KB are reported in the problems and left out, and where a layout names a file that is not there, `master` is used.
+
 ## Snapping, window rules and hot corners
 
 `[snap]` snaps windows that are dragged to an edge of a display: the left or right edge gives that half, the part of an edge within `corner` pixels (96) of a corner gives the quarter there, and the top edge the whole display; the pointer is to be within `edge` pixels (8) of the edge. A translucent shape in the primary color shows where the window goes before it is let go, and moves from place to place. A snapped window that is dragged away takes its size from before it was snapped once it is let go, with the pointer at the same share of its width; Windows itself gives it back while it is dragged, which a program outside the window cannot. A window dragged by its border is being resized and does not snap; Tessera asks the window whether the drag began on its border (`WM_NCHITTEST`), so a window whose size changes as it is dragged onto a display of another scale still snaps. With Shift held, the `[[snap.zone]]` entries of the display under the pointer are the places instead. `gap` leaves that many pixels between snapped windows and around them (0).

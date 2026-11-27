@@ -20,7 +20,7 @@ use crate::modules::windows::Docks;
 use crate::platform::{Commands, Hotkey, Hotkeys, Modifiers, TakenKeys, shell_mode};
 use crate::shell::Shell;
 use crate::switcher::Switcher;
-use crate::tiling::{TileLayout, Tiler, TilingMode, Toward};
+use crate::tiling::{Tiler, TilingCommand, Toward, parse_command};
 use crate::workspaces::Workspaces;
 
 /// The keys a combination ends with, as the configuration names them;
@@ -241,7 +241,7 @@ impl Asked {
             ["quit"] => return Ok(Self::Quit),
             ["restart"] => return Ok(Self::Restart),
             ["popup", name] => key.popup = said(name),
-            ["tiling", name] => key.tiling = said(name),
+            ["tiling", ref words @ ..] if !words.is_empty() => key.tiling = Some(words.join(" ")),
             ["focus", side] => key.focus = said(side),
             ["move", side] => key.carry = said(side),
             // A word that is no number is one no application has.
@@ -267,13 +267,9 @@ impl Asked {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Deed {
     Popup(String),
-    /// The tiling mode to take; `None` for the one after the mode in use.
-    Tiling(Option<TilingMode>),
-    /// Take the window in front out of the tiles, or put it in again.
-    Float,
-    /// Gives the first window of the `master` layout more of the width,
-    /// or less.
-    Resize(bool),
+    /// What is asked of the tiling: a layout, none, the next one, floating
+    /// the window in front, a size or where the next window goes.
+    Tiling(TilingCommand),
     Run(Vec<String>),
     Focus(Toward),
     Carry(Toward),
@@ -377,22 +373,10 @@ impl Deed {
         }
     }
 
-    fn tiling(name: &str) -> Result<Self, String> {
-        let mode = |enabled, layout| Self::Tiling(Some(TilingMode { enabled, layout }));
-        // A layout is named in the configuration without its capital.
-        let named = |layout: &&TileLayout| layout.name().eq_ignore_ascii_case(name);
-        let layout = TileLayout::ALL.iter().find(named);
-        match (name, layout) {
-            ("next", _) => Ok(Self::Tiling(None)),
-            ("off", _) => Ok(mode(false, TileLayout::ALL[0])),
-            ("float", _) => Ok(Self::Float),
-            ("wider", _) => Ok(Self::Resize(true)),
-            ("narrower", _) => Ok(Self::Resize(false)),
-            (_, Some(&layout)) => Ok(mode(true, layout)),
-            _ => Err(format!(
-                "`tiling` is `next`, `off`, `float`, `wider`, `narrower` or a layout, not `{name}`"
-            )),
-        }
+    /// What the words of a `tiling` entry ask of the tiling.
+    fn tiling(words: &str) -> Result<Self, String> {
+        let words: Vec<&str> = words.split_whitespace().collect();
+        parse_command(&words).map(Self::Tiling)
     }
 
     fn switch(name: &str, press: &str) -> Result<Self, String> {
@@ -412,12 +396,7 @@ impl Deed {
         match self {
             Self::Switch { back, held } => Switcher::step(*back, *held, cx),
             Self::Popup(name) => Shell::toggle_popup(name, cx),
-            Self::Tiling(mode) => {
-                let mode = mode.unwrap_or_else(|| cx.global::<TilingMode>().next());
-                Tiler::set_mode(mode, cx);
-            }
-            Self::Float => Tiler::float(cx),
-            Self::Resize(wider) => Tiler::resize(*wider, cx),
+            Self::Tiling(command) => Tiler::command(command.clone(), cx),
             Self::Focus(toward) => Tiler::focus(*toward, cx),
             Self::Carry(toward) => Tiler::carry(*toward, cx),
             Self::Dock(number) => Docks::press(*number, cx),
@@ -449,6 +428,8 @@ pub(crate) fn start_program(command: &[String]) {
 /// The `[[key]]` entries in use.
 #[derive(Default)]
 pub struct Shortcuts {
+    /// The entries of the user and `windows_keys`, as last configured.
+    asked: (Vec<KeyConfig>, Option<bool>),
     config: Vec<KeyConfig>,
     /// What each entry does; `None` for one that cannot be used.
     deeds: Vec<Option<Deed>>,
@@ -516,8 +497,10 @@ impl Shortcuts {
     /// Tessera is the shell).
     pub fn configure(keys: &[KeyConfig], windows_keys: Option<bool>, cx: &mut App) {
         let defaults = windows_keys.unwrap_or_else(shell_mode);
+        let asked = (keys.to_vec(), windows_keys);
         let keys = Self::in_use(keys, defaults, Self::actions(cx));
         let this = cx.global_mut::<Self>();
+        this.asked = asked;
         if this.config == keys {
             return;
         }
@@ -554,6 +537,17 @@ impl Shortcuts {
             report!("the keys Windows keeps to itself stay with it: {error:#}");
         }
         cx.global_mut::<Self>().deeds = deeds;
+    }
+
+    /// Configures the entries last configured again, after an action
+    /// began or stopped resting its keys by default. Nothing is done
+    /// before the entries are first configured.
+    pub fn again(cx: &mut App) {
+        let Some(this) = cx.try_global::<Self>() else {
+            return;
+        };
+        let (keys, windows_keys) = this.asked.clone();
+        Self::configure(&keys, windows_keys, cx);
     }
 
     /// The entries of the user, and after them, where `defaults`, the
@@ -668,7 +662,16 @@ mod tests {
             asked("popup\nlauncher"),
             Ok(Asked::Deed(Deed::Popup("launcher".to_owned())))
         );
-        assert_eq!(asked("tiling\nfloat"), Ok(Asked::Deed(Deed::Float)));
+        assert_eq!(
+            asked("tiling\nfloat"),
+            Ok(Asked::Deed(Deed::Tiling(TilingCommand::Float)))
+        );
+        let reserve = parse_command(&["reserve", "left"]).unwrap();
+        assert_eq!(
+            asked("tiling\nreserve\nleft"),
+            Ok(Asked::Deed(Deed::Tiling(reserve)))
+        );
+        assert!(asked("tiling").is_err());
         assert_eq!(asked("dock\n3"), Ok(Asked::Deed(Deed::Dock(3))));
         assert!(asked("dock\n10").is_err());
         assert!(asked("dock\nfirst").is_err());
@@ -804,26 +807,34 @@ mod tests {
             deed(&key(Some("launcher"), None, None)),
             Ok(Deed::Popup("launcher".to_owned()))
         );
-        assert_eq!(deed(&key(None, Some("next"), None)), Ok(Deed::Tiling(None)));
-        let grid = TilingMode {
-            enabled: true,
-            layout: TileLayout::Grid,
-        };
+        let tiling = |command| Ok(Deed::Tiling(command));
         assert_eq!(
-            deed(&key(None, Some("grid"), None)),
-            Ok(Deed::Tiling(Some(grid)))
+            deed(&key(None, Some("next"), None)),
+            tiling(TilingCommand::Next)
         );
-        assert_eq!(deed(&key(None, Some("float"), None)), Ok(Deed::Float));
+        let grid = parse_command(&["grid"]).unwrap();
+        assert!(matches!(grid, TilingCommand::Layout(_)));
+        assert_eq!(deed(&key(None, Some("grid"), None)), tiling(grid));
+        assert_eq!(
+            deed(&key(None, Some("float"), None)),
+            tiling(TilingCommand::Float)
+        );
         assert_eq!(
             deed(&key(None, Some("wider"), None)),
-            Ok(Deed::Resize(true))
+            tiling(TilingCommand::Wider(true))
         );
         assert_eq!(
             deed(&key(None, Some("narrower"), None)),
-            Ok(Deed::Resize(false))
+            tiling(TilingCommand::Wider(false))
         );
-        let off = deed(&key(None, Some("off"), None));
-        assert!(matches!(off, Ok(Deed::Tiling(Some(mode))) if !mode.enabled));
+        assert_eq!(
+            deed(&key(None, Some("off"), None)),
+            tiling(TilingCommand::Off)
+        );
+        assert_eq!(
+            deed(&key(None, Some("height more"), None)),
+            tiling(TilingCommand::Height(true))
+        );
         assert_eq!(
             deed(&key(None, None, Some(&["wt.exe", "-d", "."]))),
             Ok(Deed::Run(vec!["wt.exe".into(), "-d".into(), ".".into()]))
@@ -835,7 +846,7 @@ mod tests {
         assert!(deed(&key(None, None, None)).is_err());
         assert!(deed(&key(Some("launcher"), Some("next"), None)).is_err());
         assert!(deed(&key(None, None, Some(&[]))).is_err());
-        assert!(deed(&key(None, Some("spiral"), None)).is_err());
+        assert!(deed(&key(None, Some("grid now"), None)).is_err());
         let mut both = key(Some("launcher"), None, None);
         both.focus = Some("left".to_owned());
         assert!(deed(&both).is_err());

@@ -1,0 +1,15 @@
+# A tiling layout that comes with Tessera: the first window across the top,
+# taller than the others, which lie side by side under it.
+name = "Wide"
+
+[structure]
+kind = "vertical"
+
+[[structure.children]]
+kind = "leaf"
+grow = 1.5
+priority = 1
+
+[[structure.children]]
+kind = "horizontal"
+priority = 2

@@ -852,3 +852,12 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # Wave 2, workspaces-dynamic.
 "Send window here" = "Enviar la ventana aquí"
 "No icon" = "Sin icono"
+# tiling-layouts: the layouts and the tiling widget.
+"Floating" = "Libre"
+"BSP" = "Partición binaria"
+"Dwindle" = "Espiral"
+"Ultrawide" = "Ultrapanorámico"
+"Centered" = "Centrado"
+"Tall" = "Alto"
+"Wide" = "Ancho"
+"Three columns" = "Tres columnas"

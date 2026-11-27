@@ -7,9 +7,10 @@
 //! Windows reports both through the message queue of the thread that asked
 //! for them. That thread is one of its own here, which does nothing else,
 //! so that nothing the shell draws holds the reports up and no other part
-//! of the platform code has to be changed for them.
+//! of the platform code has to be changed for them. Every part of Tessera
+//! that subscribes gets every report.
 
-use std::sync::{Once, OnceLock};
+use std::sync::{Mutex, Once, PoisonError};
 use std::thread;
 
 use async_channel::{Receiver, Sender};
@@ -32,17 +33,42 @@ pub enum MoveEvent {
 /// Reports the windows of other programs that the user moves or resizes.
 pub struct MoveWatch;
 
-fn channel() -> &'static (Sender<MoveEvent>, Receiver<MoveEvent>) {
-    static CHANNEL: OnceLock<(Sender<MoveEvent>, Receiver<MoveEvent>)> = OnceLock::new();
-    CHANNEL.get_or_init(async_channel::unbounded)
+/// Hands each report to every receiver there still is.
+struct Fanout<T> {
+    subscribers: Mutex<Vec<Sender<T>>>,
 }
 
+impl<T: Clone> Fanout<T> {
+    const fn new() -> Self {
+        Self {
+            subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// A receiver of every report from now on.
+    fn subscribe(&self) -> Receiver<T> {
+        let (sender, receiver) = async_channel::unbounded();
+        { self.subscribers.lock() }
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(sender);
+        receiver
+    }
+
+    /// Gives `event` to every receiver; one that was dropped is forgotten.
+    fn publish(&self, event: T) {
+        { self.subscribers.lock() }
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|subscriber| subscriber.try_send(event.clone()).is_ok());
+    }
+}
+
+static SUBSCRIBERS: Fanout<MoveEvent> = Fanout::new();
+
 impl MoveWatch {
-    /// Where the beginnings and ends arrive, in the order they happen. The
-    /// thread that watches is started the first time this is asked for.
-    /// Every event goes to one receiver, so there is to be one that takes
-    /// them.
-    pub fn events() -> Receiver<MoveEvent> {
+    /// A receiver of every beginning and end from now on, in the order
+    /// they happen; each caller gets its own. The thread that watches is
+    /// started the first time one is asked for.
+    pub fn subscribe() -> Receiver<MoveEvent> {
         static STARTED: Once = Once::new();
         STARTED.call_once(|| {
             let started = thread::Builder::new()
@@ -52,7 +78,12 @@ impl MoveWatch {
                 report!("windows that are moved are not seen: {error}");
             }
         });
-        channel().1.clone()
+        SUBSCRIBERS.subscribe()
+    }
+
+    /// The same as [`MoveWatch::subscribe`].
+    pub fn events() -> Receiver<MoveEvent> {
+        Self::subscribe()
     }
 }
 
@@ -74,7 +105,9 @@ fn watch() {
         )
     };
     if hook.is_invalid() {
-        report!("Windows does not report windows that are moved, so they are not snapped");
+        report!(
+            "Windows does not report windows that are moved, so they are neither snapped nor sized as tiles"
+        );
         return;
     }
     let mut message = MSG::default();
@@ -106,6 +139,29 @@ unsafe extern "system" fn moved(
         EVENT_SYSTEM_MOVESIZEEND => MoveEvent::End(id),
         _ => return,
     };
-    // The channel has no bound, and nobody listening is no error.
-    let _ = channel().0.try_send(happened);
+    SUBSCRIBERS.publish(happened);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_subscriber_gets_every_report() {
+        let fanout = Fanout::new();
+        let (first, second) = (fanout.subscribe(), fanout.subscribe());
+        let window = AppWindowId::from_raw(7);
+        fanout.publish(MoveEvent::Start(window));
+        fanout.publish(MoveEvent::End(window));
+        for receiver in [&first, &second] {
+            assert_eq!(receiver.try_recv(), Ok(MoveEvent::Start(window)));
+            assert_eq!(receiver.try_recv(), Ok(MoveEvent::End(window)));
+            assert!(receiver.try_recv().is_err());
+        }
+        // A receiver that is gone is forgotten; the other still hears.
+        drop(first);
+        fanout.publish(MoveEvent::Start(window));
+        assert_eq!(second.try_recv(), Ok(MoveEvent::Start(window)));
+        assert_eq!(fanout.subscribers.lock().unwrap().len(), 1);
+    }
 }

@@ -1598,6 +1598,15 @@ const RUSSIAN: &[(&str, &str)] = &[
     // Wave 2, workspaces-dynamic.
     ("Send window here", "Отправить окно сюда"),
     ("No icon", "Без значка"),
+    // tiling-layouts: the layouts and the tiling widget.
+    ("Floating", "Свободно"),
+    ("BSP", "Двоичное деление"),
+    ("Dwindle", "Спираль"),
+    ("Ultrawide", "Сверхширокий"),
+    ("Centered", "По центру"),
+    ("Tall", "Высокая"),
+    ("Wide", "Широкая"),
+    ("Three columns", "Три столбца"),
 ];
 
 #[cfg(test)]

@@ -82,6 +82,13 @@
 #           against the others likewise, and with another window of
 #           those two layouts in front it is that window that grows and
 #           shrinks against the others after the first
+#           (as said under [tiling], those sizes are kept over restarts
+#           now, and every layout resizes); "width more" or "less" and
+#           "height more" or "less" give the window in front a step more or
+#           less, "reset" makes every tile alike again, "reserve left",
+#           "right", "up", "down" or "float" says where the next window
+#           opens and "split horizontal" or "vertical" how it divides the
+#           tile of the window in front
 #   run     a program to start and its arguments, a list
 #   focus   "left", "right", "up" or "down": the window on that side of the
 #           window in front comes in front, among the windows [tiling]
@@ -865,6 +872,43 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # except = ["taskmgr.exe"]
 # except_titles = ["Picture-in-picture"]
 # except_classes = ["#32770"]
+#
+# Each workspace of each display has tiles of its own, whose layout and
+# sizes Tessera keeps in tiling-state.toml over restarts. Besides those
+# above, layout may be "bsp" (a new window divides the tile in front),
+# "dwindle" (a new window divides the last tile, across and down in turn),
+# "ultrawide" (the first window in the middle between two stacks),
+# "centered" (one column in the middle of very wide displays) or the name
+# of a layout file in %APPDATA%\tessera\tiling-layouts, where "tall",
+# "wide" and "three-columns" come with Tessera. padding is the room around
+# the tiles (the gap without it), margin the room left free at the sides
+# of a display; both take a number or { top, right, bottom, left }.
+# resize_step is the share a step of "width more" or "height less" gives
+# or takes (0.05). drag = "sort" has a dropped tile take the place of the
+# other in the order instead of trading places. float gives a floated
+# window that share of the space in the middle of its display. A table as
+# border has Tessera draw a border of its own, width and offset pixels,
+# in color (#rrggbb or #rrggbbaa, the primary color of the theme
+# without). [[tiling.display]] and [[tiling.workspace]] entries give
+# other layouts, gaps, padding and margin: match and display name a
+# display by its place from the left, counted from 1 (the names of
+# monitors are not read yet), and number a workspace, counted from 1.
+#
+# [tiling]
+# layout = "bsp"
+# padding = { top = 4, right = 8, bottom = 8, left = 8 }
+# resize_step = 0.05
+# drag = "sort"
+# float = { width = 0.6, height = 0.7 }
+# border = { width = 3, offset = 0 }
+#
+# [[tiling.display]]
+# match = "2"
+# layout = "ultrawide"
+#
+# [[tiling.workspace]]
+# number = 3
+# layout = "monocle"
 
 # [snap] snaps windows that are dragged to an edge of a display: the left
 # or right edge gives that half, the part of an edge near a corner the

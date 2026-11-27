@@ -1,0 +1,21 @@
+# A tiling layout that comes with Tessera: the first window on the left,
+# wider than the others, which are stacked on the right. Copy it to
+# %APPDATA%\tessera\tiling-layouts\ under another name to make your own,
+# and choose it with layout = "<file name>" under [tiling].
+name = "Tall"
+
+[structure]
+kind = "horizontal"
+
+# The first window. A leaf holds one window, and grow is what a part
+# weighs against the others of its container.
+[[structure.children]]
+kind = "leaf"
+grow = 1.5
+priority = 1
+
+# Every other window, one above the other. A container without max takes
+# all the windows that are left.
+[[structure.children]]
+kind = "vertical"
+priority = 2

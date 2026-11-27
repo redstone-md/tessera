@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The `tiling` widget: says whether and how windows are tiled, and goes
-//! through the layouts when clicked.
+//! The `tiling` widget: says whether windows are tiled and in which layout
+//! on the workspace its display shows, and goes through the layouts there
+//! when clicked.
 
 use gpui::{
     AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render,
@@ -11,6 +12,7 @@ use gpui::{
 
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
+use crate::platform::{DisplayKey, NativeSurface};
 use crate::theme::Theme;
 use crate::tiling::{Tiler, TilingMode};
 use crate::ui::{icon, pill, state_layer};
@@ -42,18 +44,24 @@ impl Module for TilingModule {
     }
 }
 
-/// Shows the mode of tiling; a click goes on to the next one.
+/// Shows the mode of tiling of its display; a click goes on to the next
+/// one there.
 struct TilingButton {
     interaction: Interaction,
     /// 1 while windows are tiled.
     tiled: Spring,
 }
 
+/// The display the window of the widget is on.
+fn display_of(window: &Window) -> Option<DisplayKey> {
+    NativeSurface::of(window).ok().map(NativeSurface::display)
+}
+
 impl Render for TilingButton {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.global::<Theme>();
-        let mode = *cx.global::<TilingMode>();
-        self.tiled.animate_to(if mode.enabled { 1. } else { 0. });
+        let enabled = cx.global::<TilingMode>().enabled;
+        self.tiled.animate_to(if enabled { 1. } else { 0. });
         let tiled = self.tiled.value(window).clamp(0., 1.);
         let state = self.interaction.state(window);
         let colors = theme.colors;
@@ -62,18 +70,13 @@ impl Render for TilingButton {
             colors.secondary_container,
             tiled,
         );
-        let (glyph, label) = match mode.enabled {
-            true => (ICON_TILES, mode.layout.name()),
-            false => (ICON_FLOATING, "Floating"),
-        };
+        let glyph = if enabled { ICON_TILES } else { ICON_FLOATING };
+        let label = Tiler::label_on(display_of(window), cx);
         let button = pill(&theme)
             .id("tiling")
             .bg(state_layer(&theme, ground, state))
             .text_color(mix(colors.on_surface_variant, colors.on_surface, tiled))
-            .on_click(|_, _, cx| {
-                let next = cx.global::<TilingMode>().next();
-                Tiler::set_mode(next, cx);
-            })
+            .on_click(|_, window, cx| Tiler::next_on(display_of(window), cx))
             .child(icon(&theme, glyph))
             .child(label);
         Interaction::track(button, cx, |this: &mut Self| Some(&mut this.interaction))

@@ -27,7 +27,7 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use anyhow::bail;
@@ -124,6 +124,9 @@ impl Action {
 #[derive(Default)]
 pub struct Actions {
     actions: HashMap<String, Action>,
+    /// The actions whose keys by default are not bound for now, as those
+    /// of tiling while it is off; see [`Actions::rest`].
+    resting: HashSet<String>,
 }
 
 impl Global for Actions {}
@@ -213,11 +216,27 @@ impl Actions {
         }
     }
 
+    /// Has the keys the action `name` binds by default left to other
+    /// programs while `resting`, and bound again once it is not; whether
+    /// that changed anything. The keys in use are to be configured again
+    /// after a change.
+    pub fn rest(&mut self, name: &str, resting: bool) -> bool {
+        if resting {
+            self.resting.insert(name.to_owned())
+        } else {
+            self.resting.remove(name)
+        }
+    }
+
     /// The `[[key]]` entries the actions bind by default, by the name of
-    /// the action and then in the order they were given.
+    /// the action and then in the order they were given; those of a
+    /// resting action are left out.
     pub fn default_keys(&self) -> Vec<KeyConfig> {
         let mut keys = Vec::new();
         for name in self.names() {
+            if self.resting.contains(&name) {
+                continue;
+            }
             for (press, arg) in &self.actions[&name].default_keys {
                 keys.push(KeyConfig {
                     press: press.clone(),
@@ -311,6 +330,11 @@ mod tests {
                 ("win+home", Some("fold"), None)
             ]
         );
+        assert!(actions.rest("fold", true));
+        assert!(!actions.rest("fold", true));
+        assert!(actions.default_keys().is_empty());
+        assert!(actions.rest("fold", false));
+        assert_eq!(actions.default_keys().len(), 2);
     }
 
     #[test]

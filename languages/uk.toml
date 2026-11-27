@@ -852,3 +852,12 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Wave 2, workspaces-dynamic.
 "Send window here" = "Надіслати вікно сюди"
 "No icon" = "Без піктограми"
+# tiling-layouts: the layouts and the tiling widget.
+"Floating" = "Вільно"
+"BSP" = "Двійковий поділ"
+"Dwindle" = "Спіраль"
+"Ultrawide" = "Надширокий"
+"Centered" = "По центру"
+"Tall" = "Висока"
+"Wide" = "Широка"
+"Three columns" = "Три стовпці"
