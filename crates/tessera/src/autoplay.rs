@@ -70,7 +70,7 @@ struct Asked {
     offer: AutoPlayOffer,
 }
 
-/// The drive asked about last, which the popup shows.
+/// The drive the popup shows: the one whose notice was answered last.
 #[derive(Default)]
 struct Asking(Option<Asked>);
 
@@ -124,8 +124,11 @@ fn take(asked: Asked, notice: Option<Notice>, cx: &mut App) {
         return;
     }
     let language = Language::of(cx);
-    let choose = NoticeAction::new(language.say("Choose what to do"), |cx| {
-        Shell::toggle_popup(POPUP, cx);
+    // Each notice asks about its own drive, even where another arrived
+    // after it.
+    let pending = asked.clone();
+    let choose = NoticeAction::new(language.say("Choose what to do"), move |cx| {
+        choose_for(&pending, cx);
     });
     let notice = match notice {
         Some(mut notice) => {
@@ -143,8 +146,21 @@ fn take(asked: Asked, notice: Option<Notice>, cx: &mut App) {
             ..Notice::default()
         },
     };
-    cx.set_global(Asking(Some(asked)));
     Banners::post(notice, cx);
+}
+
+/// Has the popup show the handlers for `asked`: it opens, or, where it is
+/// open for another drive, shows this one instead; where it is open for
+/// this drive already, it closes, as a popup does when asked again.
+fn choose_for(asked: &Asked, cx: &mut App) {
+    let same = { cx.try_global::<Asking>() }
+        .and_then(|asking| asking.0.as_ref())
+        .is_some_and(|shown| shown.root == asked.root);
+    let showing = Popups::is_showing(POPUP, cx);
+    cx.set_global(Asking(Some(asked.clone())));
+    if !showing || same {
+        Shell::toggle_popup(POPUP, cx);
+    }
 }
 
 /// Runs `handler` for `event` with the drive at `root`: the folder opens
@@ -162,7 +178,7 @@ fn run(handler: &AutoPlayHandler, event: &str, root: &Path, cx: &mut App) {
     }
 }
 
-/// The handlers to choose from for the drive asked about last: the
+/// The handlers to choose from for the drive the popup shows: the
 /// widget `autoplay`, in the popup of the same name.
 pub struct AutoPlayList {
     chooser: Chooser,
