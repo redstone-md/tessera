@@ -212,11 +212,15 @@ pub fn occurrences(
             let Some(local) = to_local(&written) else {
                 continue;
             };
+            // An end past the last time there is is no occurrence.
+            let Some(end) = local.checked_add_signed(length) else {
+                continue;
+            };
             let occurrence = Occurrence {
                 summary: event.summary.clone(),
                 location: event.location.clone(),
                 start: local,
-                end: local + length,
+                end,
                 all_day,
             };
             let ends = occurrence.end.max(occurrence.start + Duration::seconds(1));
@@ -317,10 +321,13 @@ fn expand(
         None => steps_before(start.at.date(), after.date() - Days::new(2), rule),
     };
     for step in skipped..skipped.saturating_add(MOST_STEPS as u32) {
+        // A step past what a count can hold is past every window.
+        let Some(periods) = step.checked_mul(interval) else {
+            break;
+        };
         let days: Vec<NaiveDate> = match rule.frequency {
             Frequency::Daily => {
-                let Some(day) = first.checked_add_days(Days::new(u64::from(step * interval)))
-                else {
+                let Some(day) = first.checked_add_days(Days::new(u64::from(periods))) else {
                     break;
                 };
                 vec![day]
@@ -330,8 +337,7 @@ fn expand(
             }
             Frequency::Weekly => {
                 let monday = first - Days::new(u64::from(first.weekday().num_days_from_monday()));
-                let Some(week) = monday.checked_add_days(Days::new(u64::from(step * interval) * 7))
-                else {
+                let Some(week) = monday.checked_add_days(Days::new(u64::from(periods) * 7)) else {
                     break;
                 };
                 let weekdays: Vec<Weekday> = match rule.by_day.is_empty() {
@@ -339,15 +345,16 @@ fn expand(
                     false => rule.by_day.iter().map(|(_, day)| *day).collect(),
                 };
                 let mut days: Vec<NaiveDate> = { weekdays.into_iter() }
-                    .map(|weekday| week + Days::new(u64::from(weekday.num_days_from_monday())))
+                    .filter_map(|weekday| {
+                        week.checked_add_days(Days::new(u64::from(weekday.num_days_from_monday())))
+                    })
                     .filter(|day| rule.by_month.is_empty() || rule.by_month.contains(&day.month()))
                     .collect();
                 days.sort();
                 days
             }
             Frequency::Monthly => {
-                let Some(month) =
-                    month_start(first).checked_add_months(Months::new(step * interval))
+                let Some(month) = month_start(first).checked_add_months(Months::new(periods))
                 else {
                     break;
                 };
@@ -358,7 +365,10 @@ fn expand(
                 }
             }
             Frequency::Yearly => {
-                let Some(year) = first.year().checked_add((step * interval) as i32) else {
+                let Some(year) = i32::try_from(periods)
+                    .ok()
+                    .and_then(|periods| first.year().checked_add(periods))
+                else {
                     break;
                 };
                 let months: Vec<u32> = match rule.by_month.is_empty() {
@@ -387,16 +397,15 @@ fn expand(
         }
         // Past the window, or done: nothing later comes.
         let passed = match rule.frequency {
-            Frequency::Daily => first + Days::new(u64::from(step * interval)),
-            Frequency::Weekly => first + Days::new(u64::from(step * interval) * 7),
-            Frequency::Monthly => month_start(first)
-                .checked_add_months(Months::new(step * interval))
-                .unwrap_or(NaiveDate::MAX),
-            Frequency::Yearly => {
-                NaiveDate::from_ymd_opt(first.year() + (step * interval) as i32, 1, 1)
-                    .unwrap_or(NaiveDate::MAX)
-            }
-        };
+            Frequency::Daily => first.checked_add_days(Days::new(u64::from(periods))),
+            Frequency::Weekly => first.checked_add_days(Days::new(u64::from(periods) * 7)),
+            Frequency::Monthly => month_start(first).checked_add_months(Months::new(periods)),
+            Frequency::Yearly => i32::try_from(periods)
+                .ok()
+                .and_then(|periods| first.year().checked_add(periods))
+                .and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1)),
+        }
+        .unwrap_or(NaiveDate::MAX);
         if !going || passed.and_time(time) >= before {
             break;
         }
@@ -663,14 +672,16 @@ fn duration_of(value: &str) -> Option<Duration> {
             unit => {
                 let count: i64 = number.parse().ok()?;
                 number.clear();
-                total += match (unit, timed) {
-                    ('W', _) => Duration::weeks(count),
-                    ('D', _) => Duration::days(count),
-                    ('H', true) => Duration::hours(count),
-                    ('M', true) => Duration::minutes(count),
-                    ('S', true) => Duration::seconds(count),
+                // A length past what a time can hold is no length.
+                let part = match (unit, timed) {
+                    ('W', _) => Duration::try_weeks(count),
+                    ('D', _) => Duration::try_days(count),
+                    ('H', true) => Duration::try_hours(count),
+                    ('M', true) => Duration::try_minutes(count),
+                    ('S', true) => Duration::try_seconds(count),
                     _ => return None,
-                };
+                }?;
+                total = total.checked_add(&part)?;
             }
         }
     }
@@ -744,7 +755,10 @@ fn rule_of(value: &str) -> Option<Rule> {
             "BYDAY" => {
                 for day in list() {
                     let split = day.len().checked_sub(2)?;
-                    let (place, name) = day.split_at(split);
+                    // Letters of more than a byte are no weekday.
+                    let (Some(place), Some(name)) = (day.get(..split), day.get(split..)) else {
+                        return None;
+                    };
                     let place = match place.trim() {
                         "" => None,
                         place => Some(place.trim_start_matches('+').parse::<i32>().ok()?),
@@ -815,7 +829,7 @@ impl Draft {
         let start = self.start?;
         let end = self.end.or_else(|| {
             Some(EventTime {
-                at: start.at + self.duration?,
+                at: start.at.checked_add_signed(self.duration?)?,
                 stamp: start.stamp.clone(),
             })
         });
@@ -1078,5 +1092,34 @@ mod tests {
             .map(|occurrence| occurrence.summary.as_str())
             .collect();
         assert_eq!(names, ["Day", "Early", "Late"]);
+    }
+
+    #[test]
+    fn lengths_and_rules_past_what_a_time_holds_are_left_out() {
+        assert_eq!(duration_of("P9999999999999D"), None);
+        assert_eq!(duration_of("P99999999999999999999W"), None);
+        assert_eq!(duration_of("P9999999999999W9999999999999W"), None);
+        for length in ["P99999999W", "P9999999999999D"] {
+            let text = calendar(&format!(
+                "BEGIN:VEVENT\r\nUID:l\r\nDTSTART:20261127T080000\r\nDURATION:{length}\r\n\
+                 END:VEVENT\r\n"
+            ));
+            let events = parse(&text);
+            assert!(events.iter().all(|event| event.end.is_none()));
+            occurrences(&events, day(2026, 11, 1), day(2026, 12, 31), &same);
+        }
+        let found = starts(
+            "BEGIN:VEVENT\r\nUID:i\r\nDTSTART:20261102T090000\r\n\
+             RRULE:FREQ=DAILY;INTERVAL=4294967295\r\nEND:VEVENT\r\n",
+            day(2026, 11, 1),
+            day(2026, 12, 31),
+        );
+        assert_eq!(found, [at(2026, 11, 2, 9, 0)]);
+    }
+
+    #[test]
+    fn a_weekday_in_other_letters_is_no_rule() {
+        assert!(rule_of("FREQ=WEEKLY;BYDAY=\u{d6}M").is_none());
+        assert!(rule_of("FREQ=WEEKLY;BYDAY=1\u{d6}").is_none());
     }
 }
