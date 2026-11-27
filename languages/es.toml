@@ -321,3 +321,19 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # Settings: keys that name an action.
 "Action" = "Acción"
 "The action is written in the file by hand." = "La acción se escribe a mano en el archivo."
+
+# Startup applications (startup-apps).
+"Registry, all users" = "Registro, todos los usuarios"
+"Registry, all users, 32-bit" = "Registro, todos los usuarios, 32 bits"
+"Policy, all users" = "Directiva, todos los usuarios"
+"Registry, this user" = "Registro, este usuario"
+"Policy, this user" = "Directiva, este usuario"
+"Startup folder, all users" = "Carpeta de inicio, todos los usuarios"
+"Startup folder, this user" = "Carpeta de inicio, este usuario"
+"Store app" = "Aplicación de Store"
+"Set by policy" = "Establecido por directiva"
+"Changing this for all users needs Tessera to run as administrator." = "Para cambiar esto para todos los usuarios, Tessera debe ejecutarse como administrador."
+"No program starts with Windows." = "Ningún programa se inicia con Windows."
+"Tessera starts the programs that are on when you sign in." = "Tessera inicia los programas activados al iniciar sesión."
+"Tessera starts none of them, as [startup] says run = false." = "Tessera no inicia ninguno, porque [startup] indica run = false."
+"Explorer starts these programs when you sign in; Tessera starts them only as the shell." = "El Explorador inicia estos programas al iniciar sesión; Tessera solo los inicia como shell."

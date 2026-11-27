@@ -706,6 +706,45 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The action is written in the file by hand.",
         "Действие записывается в файл вручную.",
     ),
+    // Startup applications (startup-apps).
+    ("Registry, all users", "Реестр, все пользователи"),
+    (
+        "Registry, all users, 32-bit",
+        "Реестр, все пользователи, 32 бита",
+    ),
+    ("Policy, all users", "Политика, все пользователи"),
+    ("Registry, this user", "Реестр, этот пользователь"),
+    ("Policy, this user", "Политика, этот пользователь"),
+    (
+        "Startup folder, all users",
+        "Папка автозагрузки, все пользователи",
+    ),
+    (
+        "Startup folder, this user",
+        "Папка автозагрузки, этот пользователь",
+    ),
+    ("Store app", "Приложение из Store"),
+    ("Set by policy", "Задано политикой"),
+    (
+        "Changing this for all users needs Tessera to run as administrator.",
+        "Чтобы изменить это для всех пользователей, Tessera нужно запустить от имени администратора.",
+    ),
+    (
+        "No program starts with Windows.",
+        "Ни одна программа не запускается вместе с Windows.",
+    ),
+    (
+        "Tessera starts the programs that are on when you sign in.",
+        "Tessera запускает включённые программы при входе в систему.",
+    ),
+    (
+        "Tessera starts none of them, as [startup] says run = false.",
+        "Tessera не запускает ни одну из них: в [startup] указано run = false.",
+    ),
+    (
+        "Explorer starts these programs when you sign in; Tessera starts them only as the shell.",
+        "Эти программы при входе в систему запускает Проводник; Tessera запускает их, только когда она — оболочка.",
+    ),
 ];
 
 #[cfg(test)]
