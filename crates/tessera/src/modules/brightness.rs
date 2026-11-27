@@ -3,6 +3,8 @@
 
 //! How bright the display of a surface is. Widgets: `brightness`, a
 //! compact readout, and `brightness-slider`, the control to change it.
+//! Action: `brightness`, which makes the display under the pointer a step
+//! brighter or darker.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,6 +14,8 @@ use gpui::{
     Render, Styled, Subscription, WeakEntity, Window, div,
 };
 
+use crate::actions::{Action, Actions};
+use crate::flyout::{Flyouts, Reading};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::platform::{BrightnessLevel, DisplayKey, ScreenBrightness};
@@ -27,6 +31,10 @@ const PANEL_INTERVAL: Duration = Duration::from_secs(1);
 /// How often a monitor is asked, over DDC/CI, which is slow and which many
 /// monitors take badly when asked often.
 const MONITOR_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How much one step of the action changes the brightness, as the keys of
+/// a laptop do.
+const STEP: f32 = 0.1;
 
 pub struct BrightnessModule;
 
@@ -50,10 +58,55 @@ impl Module for BrightnessModule {
         })
     }
 
+    fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
+        let brightness =
+            Action::new(|arg, cx| step(arg == Some("up"), cx)).checking(|arg| match arg {
+                Some("up" | "down") => Ok(()),
+                _ => Err("`brightness` takes `up` or `down`".to_owned()),
+            });
+        actions.register("brightness", brightness)
+    }
 }
 
 fn percent(share: f32) -> String {
     format!("{:.0}%", share * 100.)
+}
+
+/// The share one step from `share`, on the steps of a tenth.
+fn stepped(share: f32, up: bool) -> f32 {
+    let steps = (share / STEP).round() + if up { 1. } else { -1. };
+    (steps * STEP).clamp(0., 1.)
+}
+
+/// Makes the display under the pointer a step brighter or darker, and
+/// shows what it is set to.
+fn step(up: bool, cx: &mut App) {
+    let display = DisplayKey::under_pointer();
+    let set = cx.background_executor().spawn(async move {
+        let level = ScreenBrightness::read(display)
+            .ok_or_else(|| anyhow::anyhow!("the display does not let its brightness be set"))?;
+        let share = stepped(level.share, up);
+        ScreenBrightness::set(display, share).map(|()| share)
+    });
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let share = match set.await {
+            Ok(share) => share,
+            Err(error) => {
+                report!("{error:#}");
+                return;
+            }
+        };
+        cx.update(|cx| {
+            let shared = cx.try_global::<SharedBrightness>();
+            let known = shared.and_then(|shared| shared.0.get(&display)?.upgrade());
+            if let Some(brightness) = known {
+                brightness.update(cx, |brightness, cx| brightness.show(share, cx));
+            }
+            Flyouts::show(Reading::Brightness(share), cx);
+        })
+        .ok();
+    })
+    .detach();
 }
 
 /// The brightness of one display, shared by the widgets on it.
@@ -156,6 +209,14 @@ impl Brightness {
         let share = level.map(|level| level.share);
         if self.share != share {
             self.share = share;
+            cx.notify();
+        }
+    }
+
+    /// Shows `share`, which the display was set to elsewhere.
+    fn show(&mut self, share: f32, cx: &mut Context<Self>) {
+        if self.share != Some(share) {
+            self.share = Some(share);
             cx.notify();
         }
     }
@@ -304,4 +365,14 @@ mod tests {
         assert_eq!(percent(1.), "100%");
     }
 
+    #[test]
+    fn a_step_goes_to_the_next_tenth() {
+        let near = |one: f32, other: f32| (one - other).abs() < 1e-6;
+        assert!(near(stepped(0.5, true), 0.6));
+        assert!(near(stepped(0.5, false), 0.4));
+        // From between two steps to the next one beyond the nearest.
+        assert!(near(stepped(0.43, true), 0.5));
+        assert!(near(stepped(0.97, true), 1.));
+        assert!(near(stepped(0.02, false), 0.));
+    }
 }
