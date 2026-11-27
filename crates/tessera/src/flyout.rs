@@ -238,7 +238,6 @@ enum Travel {
 
 impl FlyoutPlace {
     /// Every place, in the order a choice offers them.
-    #[allow(dead_code, reason = "for the rows of [flyout] in the settings")]
     pub const ALL: [Self; 9] = [
         Self::Bottom,
         Self::Top,
@@ -251,9 +250,23 @@ impl FlyoutPlace {
         Self::Center,
     ];
 
+    /// What the settings call it, in English.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Bottom => "Bottom",
+            Self::Top => "Top",
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+            Self::Left => "Left side",
+            Self::Right => "Right side",
+            Self::Center => "Center",
+        }
+    }
+
     /// What the configuration calls it.
-    #[allow(dead_code, reason = "for the rows of [flyout] in the settings")]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Bottom => "bottom",
             Self::Top => "top",

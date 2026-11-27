@@ -22,6 +22,7 @@ use gpui::{
 use crate::config::edit::{CardLength, ConfigFile, DEEDS, LAYOUTS, Place, Slot};
 use crate::config::{Config, Displays, Hiding, KeyConfig, SurfaceConfig, WidgetSpec, config_dir};
 use crate::desk::{CardConfig, Corner};
+use crate::flyout::FlyoutPlace;
 use crate::i18n::Language;
 use crate::icons::AppIcons;
 use crate::keys::{HELD, KEYS, Press, key_label};
@@ -271,6 +272,23 @@ struct Setting {
 
 const STYLES: Kind = Kind::Choice(&[("Wave", Answer::Unset), ("Text", Answer::Text("text"))]);
 
+/// Where a flyout may hang, each with what its chip says; the first is
+/// the place without the key.
+const FLYOUT_PLACES: [(&str, Answer); FlyoutPlace::ALL.len()] = {
+    let mut places = [("", Answer::Unset); FlyoutPlace::ALL.len()];
+    let mut at = 0;
+    while at < places.len() {
+        let place = FlyoutPlace::ALL[at];
+        let answer = match at {
+            0 => Answer::Unset,
+            _ => Answer::Text(place.name()),
+        };
+        places[at] = (place.title(), answer);
+        at += 1;
+    }
+    places
+};
+
 const SETTINGS: &[Setting] = &[
     Setting {
         section: Section::General,
@@ -334,6 +352,13 @@ const SETTINGS: &[Setting] = &[
             on: Answer::Flag(true),
             off: Answer::Unset,
         },
+    },
+    Setting {
+        section: Section::General,
+        card: "Notifications",
+        title: "Where flyouts appear",
+        target: Target::Table("flyout", "place"),
+        kind: Kind::Choice(&FLYOUT_PLACES),
     },
     Setting {
         section: Section::General,

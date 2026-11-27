@@ -932,3 +932,10 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # flyouts-input-clock.
 "All day" = "Весь день"
 "No events" = "Немає подій"
+
+# integration of wave 2: where flyouts appear, in the settings.
+"Where flyouts appear" = "Де з'являються індикатори"
+"Top" = "Згори"
+"Bottom" = "Знизу"
+"Left side" = "Ліворуч"
+"Right side" = "Праворуч"

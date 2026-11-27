@@ -1723,6 +1723,12 @@ const RUSSIAN: &[(&str, &str)] = &[
     // flyouts-input-clock.
     ("All day", "Весь день"),
     ("No events", "Нет событий"),
+    // integration of wave 2: where flyouts appear, in the settings.
+    ("Where flyouts appear", "Где появляются индикаторы"),
+    ("Top", "Сверху"),
+    ("Bottom", "Снизу"),
+    ("Left side", "Слева"),
+    ("Right side", "Справа"),
 ];
 
 #[cfg(test)]

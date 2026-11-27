@@ -932,3 +932,10 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # flyouts-input-clock.
 "All day" = "Toute la journée"
 "No events" = "Aucun événement"
+
+# integration of wave 2: where flyouts appear, in the settings.
+"Where flyouts appear" = "Où apparaissent les indicateurs"
+"Top" = "En haut"
+"Bottom" = "En bas"
+"Left side" = "Côté gauche"
+"Right side" = "Côté droit"
