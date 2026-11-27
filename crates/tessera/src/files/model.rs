@@ -16,7 +16,10 @@ use std::time::SystemTime;
 use chrono::{DateTime, Datelike, Local, Months, NaiveDate};
 use serde::{Deserialize, Serialize};
 
-use crate::platform::{Attributes, NameRules, is_hidden, localized_candidates, shell_names};
+use super::FilesConfig;
+use crate::platform::{
+    Attributes, ExplorerSettings, NameRules, is_hidden, localized_candidates, shell_names,
+};
 
 /// How many names of a folder are asked of the Shell at most, as each
 /// takes it a moment.
@@ -163,7 +166,8 @@ pub struct Entry {
     /// In bytes; 0 for a folder.
     pub size: u64,
     pub modified: Option<SystemTime>,
-    /// Whether it is hidden or of the system.
+    /// Whether it is hidden: as Explorer has it, with the hidden attribute,
+    /// or where Explorer is not followed, hidden or of the system.
     pub hidden: bool,
     /// Whether it is a protected file of the system, hidden and of the
     /// system both, which Explorer hides even where hidden files show.
@@ -192,7 +196,12 @@ impl Entry {
             folder,
             size: if folder { 0 } else { metadata.len() },
             modified: metadata.modified().ok(),
-            hidden: is_hidden(metadata),
+            // Explorer hides only what is marked hidden; a folder of the
+            // system alone, as Fonts is, shows.
+            hidden: match rules.follows() {
+                true => attributes.hidden,
+                false => is_hidden(metadata),
+            },
             protected: attributes.protected(),
             link,
         }
@@ -593,6 +602,19 @@ impl Shown {
         hidden: true,
         protected: true,
     };
+
+    /// What the file manager shows as `config` and the folder options
+    /// `explorer` of Explorer say, with hidden files shown or not as
+    /// `switched` says where the user switched them. Protected files of
+    /// the system show with the others only where Explorer shows them, or
+    /// where Explorer is not followed.
+    pub fn of(config: &FilesConfig, explorer: ExplorerSettings, switched: Option<bool>) -> Self {
+        let follow = config.explorer;
+        Self {
+            hidden: switched.unwrap_or(config.hidden || (follow && explorer.show_hidden)),
+            protected: !follow || explorer.show_protected,
+        }
+    }
 
     pub fn shows(self, entry: &Entry) -> bool {
         match (entry.hidden, entry.protected) {

@@ -14,17 +14,18 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
+use windows::Win32::Storage::EnhancedStorage::PKEY_Home_IsPinned;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
-use windows::Win32::System::SystemServices::{SFGAO_FILESYSTEM, SFGAO_FOLDER};
+use windows::Win32::System::SystemServices::{SFGAO_FILESYSTEM, SFGAO_FOLDER, SFGAO_STREAM};
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, BHID_SFUIObject, CMF_NORMAL, CMINVOKECOMMANDINFO, FOLDERID_Recent,
-    FOLDERID_SkyDrive, IContextMenu, IEnumShellItems, IShellItem, KF_FLAG_DEFAULT,
+    FOLDERID_SkyDrive, IContextMenu, IEnumShellItems, IShellItem, IShellItem2, KF_FLAG_DEFAULT,
     SHCreateItemFromParsingName, SHGetKnownFolderPath, SIGDN, SIGDN_FILESYSPATH,
     SIGDN_NORMALDISPLAY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{CreatePopupMenu, DestroyMenu, SW_SHOWNORMAL};
-use windows::core::{GUID, HSTRING, PCSTR, PWSTR};
+use windows::core::{GUID, HSTRING, Interface, PCSTR, PWSTR};
 
 use super::explorer_view::{subkeys, text};
 use super::{ShellThread, Shortcut};
@@ -49,19 +50,29 @@ pub struct ShellPlace {
     pub path: PathBuf,
 }
 
+/// A folder of Quick access, and whether the user pinned it there or it
+/// is there as one used often.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuickFolder {
+    pub place: ShellPlace,
+    pub pinned: bool,
+}
+
 /// Quick access, as Explorer keeps it.
 pub struct QuickAccess;
 
 impl QuickAccess {
     /// The folders of Quick access, in Explorer's order: those pinned,
     /// then those used often. Only folders of the file system are given;
-    /// a library or a virtual folder pinned there is left out. Runs on
-    /// the shell thread, as the folder is a Shell folder.
-    pub async fn folders() -> Result<Vec<ShellPlace>> {
-        ShellThread::call(read_quick_access)
+    /// a library, a virtual folder or an archive is left out. Runs on a
+    /// thread of the Shell of its own, as the folder is a Shell folder and
+    /// a folder of another computer there may keep it waiting on the
+    /// network.
+    pub async fn folders() -> Result<Vec<QuickFolder>> {
+        ShellThread::call_alone("tessera-quick-access", read_quick_access)
             .recv()
             .await
-            .context("the shell thread is gone")?
+            .context("the thread of Quick access is gone")?
     }
 
     /// Pins the folder at `path` to Quick access, as "Pin to Quick
@@ -96,10 +107,12 @@ impl QuickAccess {
 
 /// The files the user opened lately, the latest first, at most `most`,
 /// as the Recent folder of Windows records them; a shortcut there whose
-/// file is gone, or which is a folder, is left out. Runs on the shell
-/// thread, as shortcuts are read through the Shell.
+/// file is gone, or which is a folder, is left out. Runs on a thread of
+/// the Shell of its own, as shortcuts are read through the Shell and a
+/// file of another computer may keep the check that it is there waiting
+/// on the network.
 pub async fn recent_files(most: usize) -> Vec<ShellPlace> {
-    ShellThread::call(move || read_recent(most))
+    ShellThread::call_alone("tessera-recent", move || read_recent(most))
         .recv()
         .await
         .unwrap_or_default()
@@ -162,7 +175,9 @@ unsafe fn name_of(item: &IShellItem, kind: SIGDN) -> Option<String> {
 }
 
 /// The items of Quick access that are folders of the file system, each
-/// with its name and path.
+/// with its name and path. Quick access lists the files used lately too,
+/// and an archive is a folder of the Shell that is a file as well, which
+/// is left out.
 fn quick_access_items() -> Result<Vec<(IShellItem, ShellPlace)>> {
     let mut found = Vec::new();
     // SAFETY: this runs on the shell thread, which has COM initialized;
@@ -182,7 +197,7 @@ fn quick_access_items() -> Result<Vec<(IShellItem, ShellPlace)>> {
                 break;
             };
             let wanted = SFGAO_FOLDER | SFGAO_FILESYSTEM;
-            if item.GetAttributes(wanted).ok() != Some(wanted) {
+            if item.GetAttributes(wanted | SFGAO_STREAM).ok() != Some(wanted) {
                 continue;
             }
             let path = name_of(&item, SIGDN_FILESYSPATH);
@@ -199,10 +214,27 @@ fn quick_access_items() -> Result<Vec<(IShellItem, ShellPlace)>> {
     Ok(found)
 }
 
-fn read_quick_access() -> Result<Vec<ShellPlace>> {
+fn read_quick_access() -> Result<Vec<QuickFolder>> {
     Ok({ quick_access_items()?.into_iter() }
-        .map(|(_, place)| place)
+        .map(|(item, place)| QuickFolder {
+            pinned: is_pinned(&item),
+            place,
+        })
         .collect())
+}
+
+/// Whether the user pinned the item of Quick access `item` there, as the
+/// property `System.Home.IsPinned` of Windows 11 says. Where it cannot be
+/// read, the item is taken as pinned, so that "Unpin" is offered and says
+/// so where it fails.
+fn is_pinned(item: &IShellItem) -> bool {
+    // SAFETY: this runs on a thread with COM initialized; the key is a
+    // constant that outlives the call.
+    unsafe {
+        { item.cast::<IShellItem2>() }
+            .and_then(|item| item.GetBool(&PKEY_Home_IsPinned))
+            .map_or(true, |pinned| pinned.as_bool())
+    }
 }
 
 /// Has the Shell do the verb `verb` of the menu of `item`, as a click on

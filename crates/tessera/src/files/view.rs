@@ -14,6 +14,7 @@ use gpui::{
     KeyDownEvent, MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement,
     Styled, Subscription, Window, WindowControlArea, div, prelude::FluentBuilder, px, relative,
 };
+use gpui::{AsyncApp, WeakEntity};
 
 use super::model::size_text;
 use super::model::{Location, share_root};
@@ -25,6 +26,7 @@ use super::{Files, FilesConfig, Look};
 use crate::i18n::Language;
 use crate::menu::Menus;
 use crate::platform::FileWork;
+use crate::platform::QuickAccess;
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, logo, one_line};
@@ -124,7 +126,7 @@ impl FilesView {
         });
         tabs.select(opening.active);
         let current = tabs.active().active().read(cx).location().clone();
-        let sidebar = cx.new(|cx| Sidebar::new(current, cx));
+        let sidebar = cx.new(|cx| Sidebar::new(current, config, cx));
         let listened = cx.subscribe_in(&sidebar, window, Self::sidebar_event);
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -244,17 +246,7 @@ impl FilesView {
                         .update(cx, |sidebar, cx| sidebar.read_drives(cx));
                 }
             }
-            PaneEvent::PinsChanged => {
-                self.sidebar
-                    .update(cx, |sidebar, cx| sidebar.read_quick_access(cx));
-                for tab in self.tabs.all() {
-                    for pane in tab.panes() {
-                        if *pane.read(cx).location() == Location::Home {
-                            pane.update(cx, |pane, cx| pane.load(cx));
-                        }
-                    }
-                }
-            }
+            PaneEvent::SetPinned { path, pinned } => self.set_pinned(path.clone(), *pinned, cx),
             PaneEvent::Focused => {
                 let tab = self.tabs.active_mut();
                 if let Some(place) = tab.panes().iter().position(|each| each == pane)
@@ -287,7 +279,36 @@ impl FilesView {
             SidebarEvent::OpenInNewTab(location) => {
                 self.open_tab(location.clone(), true, window, cx);
             }
+            SidebarEvent::SetPinned { path, pinned } => self.set_pinned(path.clone(), *pinned, cx),
         }
+    }
+
+    /// Pins the folder at `path` to Quick access, or unpins it, as a pane
+    /// or the side asks, and once Explorer has, reads Quick access again
+    /// at the side and in every pane at Home.
+    fn set_pinned(&mut self, path: PathBuf, pinned: bool, cx: &mut Context<Self>) {
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let done = match pinned {
+                true => QuickAccess::pin(path).await,
+                false => QuickAccess::unpin(path).await,
+            };
+            if let Err(error) = done {
+                report!("Quick access did not change: {error:#}");
+            }
+            this.update(cx, |this, cx| {
+                this.sidebar
+                    .update(cx, |sidebar, cx| sidebar.read_quick_access(cx));
+                for tab in this.tabs.all() {
+                    for pane in tab.panes() {
+                        if *pane.read(cx).location() == Location::Home {
+                            pane.update(cx, |pane, cx| pane.load(cx));
+                        }
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Puts the share of another computer `root` under Network at the
@@ -297,12 +318,7 @@ impl FilesView {
             sidebar.add_network(std::slice::from_ref(&root), cx)
         });
         cx.background_executor()
-            .spawn(async move {
-                let mut session = Session::load();
-                if session.visited(root) {
-                    session.save();
-                }
-            })
+            .spawn(async move { Session::change(|session| session.visited(root)) })
             .detach();
     }
 
@@ -399,17 +415,7 @@ impl FilesView {
             true => FileWork::Move { from, to },
             false => FileWork::Copy { from, to },
         };
-        let (done, finished) = async_channel::bounded::<()>(1);
-        work.start(move || {
-            done.try_send(()).ok();
-        });
-        cx.spawn(async move |_, cx| {
-            finished.recv().await.ok();
-            for pane in [front, other] {
-                pane.update(cx, |pane, cx| pane.load(cx)).ok();
-            }
-        })
-        .detach();
+        FolderPane::work_for([front.downgrade(), other.downgrade()], work, cx);
     }
 
     /// The tabs as they are, to open again.
@@ -438,9 +444,10 @@ impl FilesView {
         let opening = self.opening(cx);
         cx.background_executor()
             .spawn(async move {
-                let mut session = Session::load();
-                session.set_tabs(&opening);
-                session.save();
+                Session::change(|session| {
+                    session.set_tabs(&opening);
+                    true
+                })
             })
             .detach();
     }

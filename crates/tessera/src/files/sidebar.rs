@@ -18,7 +18,8 @@ use gpui::{
     div, prelude::FluentBuilder, px, uniform_list,
 };
 
-use super::model::{Location, natural, read_folder};
+use super::FilesConfig;
+use super::model::{Location, Shown, natural, read_folder};
 use super::pane::{
     ICON_BIN, ICON_COMPUTER, ICON_FOLDER, ICON_NETWORK, ICON_NEW_TAB, ICON_NEW_WINDOW, ICON_PIN,
     ICON_UNPIN, drive_glyph,
@@ -27,8 +28,8 @@ use super::session::Session;
 use crate::i18n::Language;
 use crate::menu::{MenuEntry, Menus};
 use crate::platform::{
-    Drive, ExplorerSettings, NameRules, Place, QuickAccess, RecycleBin, ShellPlace, onedrive,
-    wsl_distributions,
+    Drive, ExplorerSettings, NameRules, Place, QuickAccess, QuickFolder, RecycleBin, ShellPlace,
+    onedrive, wsl_distributions,
 };
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
@@ -55,6 +56,9 @@ pub enum SidebarEvent {
     Go(Location),
     /// To show `Location` in a new tab, behind the one in front.
     OpenInNewTab(Location),
+    /// To pin the folder `path` to Quick access, or with `pinned` false to
+    /// unpin it.
+    SetPinned { path: PathBuf, pinned: bool },
 }
 
 /// What a row of the tree does when it is clicked.
@@ -77,7 +81,7 @@ struct Node {
     expanded: bool,
     /// The folders it holds, in order; `None` until they were asked for.
     children: Option<Vec<Node>>,
-    /// Whether it is a folder of Quick access, pinned there or used often.
+    /// Whether it is a folder the user pinned to Quick access.
     pinned: bool,
 }
 
@@ -145,12 +149,14 @@ pub struct Sidebar {
     /// Where the pane in front is, which is lit.
     current: Location,
     scroll: UniformListScrollHandle,
+    /// Which folders the tree shows and how it names them.
+    config: FilesConfig,
 }
 
 impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
-    pub fn new(current: Location, cx: &mut Context<Self>) -> Self {
+    pub fn new(current: Location, config: FilesConfig, cx: &mut Context<Self>) -> Self {
         let language = Language::of(cx);
         let say = |text: &'static str| language.say(text).to_owned();
         let mut computer = Node::leaf(
@@ -192,6 +198,7 @@ impl Sidebar {
             rows: Vec::new(),
             current,
             scroll: UniformListScrollHandle::new(),
+            config,
         };
         sidebar.read_places(cx);
         sidebar.read_quick_access(cx);
@@ -292,14 +299,15 @@ impl Sidebar {
                 let quick = &mut this.groups[HOME].nodes[0];
                 let old = quick.children.take().unwrap_or_default();
                 let folders: Vec<Node> = { folders.into_iter() }
-                    .map(|ShellPlace { name, path }| {
+                    .map(|QuickFolder { place, pinned }| {
+                        let ShellPlace { name, path } = place;
                         // A folder that was open stays open.
                         let kept = old.iter().find(|node| node.path() == Some(&path));
                         let mut node = match kept {
                             Some(kept) => kept.clone(),
                             None => Node::folder(path, name.clone(), ICON_FOLDER),
                         };
-                        (node.label, node.pinned) = (name, true);
+                        (node.label, node.pinned) = (name, pinned);
                         node
                     })
                     .collect();
@@ -350,6 +358,27 @@ impl Sidebar {
             node = node.children.as_ref()?.get(index)?;
         }
         Some(node)
+    }
+
+    /// The place showing the folder `path` that waits for what it holds:
+    /// the one at `address`, where the tree was not built anew since, or
+    /// else the first open one of that folder not read yet.
+    fn waiting(&mut self, address: &[usize], path: &Path) -> Option<&mut Node> {
+        fn find<'a>(nodes: &'a mut [Node], path: &Path) -> Option<&'a mut Node> {
+            for node in nodes {
+                if node.expanded && node.children.is_none() && node.path() == Some(path) {
+                    return Some(node);
+                }
+                if let Some(found) = node.children.as_mut().and_then(|nodes| find(nodes, path)) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        if self.node(address).and_then(Node::path) == Some(path) {
+            return self.node_mut(address);
+        }
+        { self.groups.iter_mut() }.find_map(|group| find(&mut group.nodes, path))
     }
 
     fn node_mut(&mut self, address: &[usize]) -> Option<&mut Node> {
@@ -412,16 +441,19 @@ impl Sidebar {
     /// Reads the folders in `path`, the place at `address`, named and
     /// hidden as the file manager shows them.
     fn read_children(&mut self, address: Address, path: PathBuf, cx: &mut Context<Self>) {
+        let config = self.config;
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let read = path.clone();
             let folders = cx
                 .background_executor()
                 .spawn(async move {
                     let explorer = ExplorerSettings::read();
-                    let mut rules = NameRules::new(explorer, true);
-                    let mut folders: Vec<(String, PathBuf)> = read_folder(&path, &mut rules)
+                    let mut rules = NameRules::new(explorer, config.explorer);
+                    let shown = Shown::of(&config, explorer, None);
+                    let mut folders: Vec<(String, PathBuf)> = read_folder(&read, &mut rules)
                         .unwrap_or_default()
                         .into_iter()
-                        .filter(|entry| entry.folder && (explorer.show_hidden || !entry.hidden))
+                        .filter(|entry| entry.folder && shown.shows(entry))
                         .map(|entry| (entry.display, entry.path))
                         .collect();
                     folders.sort_by(|a, b| natural(&a.0, &b.0));
@@ -429,7 +461,9 @@ impl Sidebar {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let Some(node) = this.node_mut(&address) {
+                // The tree may have been built anew while the folder was
+                // read, which moves the place.
+                if let Some(node) = this.waiting(&address, &path) {
                     let children: Vec<Node> = { folders.into_iter() }
                         .map(|(label, path)| Node::folder(path, label, ICON_FOLDER))
                         .collect();
@@ -518,27 +552,17 @@ impl Sidebar {
             };
             let pinned = node.pinned;
             entries.push(MenuEntry::new(glyph, language.say(label), move |cx| {
-                this.update(cx, |this, cx| this.set_pinned(path.clone(), !pinned, cx))
-                    .ok();
+                let path = path.clone();
+                this.update(cx, |_, cx| {
+                    cx.emit(SidebarEvent::SetPinned {
+                        path,
+                        pinned: !pinned,
+                    })
+                })
+                .ok();
             }));
         }
         Menus::open(entries, anchor, cx);
-    }
-
-    /// Pins the folder at `path` to Quick access, or unpins it, and reads
-    /// Quick access again once Explorer has.
-    pub fn set_pinned(&mut self, path: PathBuf, pinned: bool, cx: &mut Context<Self>) {
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let done = match pinned {
-                true => QuickAccess::pin(path).await,
-                false => QuickAccess::unpin(path).await,
-            };
-            if let Err(error) = done {
-                report!("Quick access did not change: {error:#}");
-            }
-            this.update(cx, |this, cx| this.read_quick_access(cx)).ok();
-        })
-        .detach();
     }
 
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {

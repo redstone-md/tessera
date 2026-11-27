@@ -7,6 +7,7 @@ mod win32;
 
 #[allow(unused_imports, reason = "for the starts that wait for a program")]
 pub use win32::Process;
+pub use win32::QuickFolder;
 #[allow(
     unused_imports,
     reason = "for the packages that hand work to the Shell"

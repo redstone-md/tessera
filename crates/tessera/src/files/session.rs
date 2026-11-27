@@ -11,6 +11,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use gpui::{App, Global, Task};
@@ -39,20 +41,33 @@ pub fn state_dir() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("tessera"))
 }
 
+/// Counts the files written beside the kept ones, so that two writes at
+/// once never share one.
+static FRESH: AtomicU64 = AtomicU64::new(0);
+
+/// Held while the session file is read, changed and written again, so
+/// that two windows changing it at once do not lose a change.
+static SESSION_LOCK: Mutex<()> = Mutex::new(());
+
 /// Writes `text` to the file `name` of the local data directory, through
-/// a file beside it, so that a crash leaves the old file whole. Blocks;
-/// it is done away from the user interface.
+/// a file beside it of its own, so that a crash leaves the old file whole
+/// and two writes at once do not mix. Blocks; it is done away from the
+/// user interface.
 pub fn write_state(name: &str, text: &str) {
     let Some(directory) = state_dir() else {
         return;
     };
+    let fresh = directory.join(format!(
+        "{name}.{}.{}.new",
+        std::process::id(),
+        FRESH.fetch_add(1, Ordering::Relaxed)
+    ));
     let written = fs::create_dir_all(&directory).and_then(|()| {
-        let path = directory.join(name);
-        let fresh = path.with_extension("toml.new");
         fs::write(&fresh, text)?;
-        fs::rename(&fresh, &path)
+        fs::rename(&fresh, directory.join(name))
     });
     if let Err(error) = written {
+        fs::remove_file(&fresh).ok();
         report!("the file manager cannot keep {name}: {error}");
     }
 }
@@ -131,8 +146,20 @@ impl Session {
         })
     }
 
+    /// Reads the session kept, lets `change` change it, and keeps it again
+    /// where `change` says it changed, one window at a time. Blocks.
+    pub fn change(change: impl FnOnce(&mut Self) -> bool) {
+        let _held = SESSION_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut session = Self::load();
+        if change(&mut session) {
+            session.save();
+        }
+    }
+
     /// Keeps the session. Blocks.
-    pub fn save(&self) {
+    fn save(&self) {
         match toml::to_string(self) {
             Ok(text) => write_state(SESSION_FILE, &text),
             Err(error) => report!("the file manager cannot write its session: {error}"),
@@ -221,8 +248,9 @@ pub struct FolderViews {
     views: HashMap<String, (FolderView, u64)>,
     /// The count of uses, which tells the latest.
     clock: u64,
-    /// Whether the file was asked for.
+    /// Whether the file was asked for, and whether it was read.
     asked: bool,
+    loaded: bool,
     writing: Option<Task<()>>,
 }
 
@@ -253,14 +281,22 @@ impl FolderViews {
                 .await;
             cx.update(|cx| {
                 let views = cx.default_global::<Self>();
+                views.loaded = true;
                 for saved in saved.views {
                     views.clock = views.clock.max(saved.used);
-                    views.views.insert(saved.path, (saved.view, saved.used));
+                    // A look changed while the file was read is newer.
+                    { views.views.entry(saved.path) }.or_insert((saved.view, saved.used));
                 }
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Whether the file of looks was read, so that folders have the looks
+    /// kept.
+    pub fn loaded(cx: &App) -> bool {
+        cx.try_global::<Self>().is_some_and(|views| views.loaded)
     }
 
     /// How the folder at `path` was last shown, if it is kept.

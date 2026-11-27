@@ -7,6 +7,7 @@
 //! A window holds one pane per tab, or two side by side.
 
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
@@ -115,8 +116,9 @@ pub enum PaneEvent {
     /// The user asked to copy, or with `cut` to move, what is chosen in
     /// the pane into the folder of the pane beside it.
     ToOtherPane { cut: bool },
-    /// A folder was pinned to Quick access or unpinned.
-    PinsChanged,
+    /// The user asked to pin the folder `path` to Quick access, or with
+    /// `pinned` false to unpin it.
+    SetPinned { path: PathBuf, pinned: bool },
 }
 
 /// The arrow Windows draws over the icon of a shortcut, looked up once.
@@ -148,6 +150,9 @@ pub struct FolderPane {
     look: Look,
     /// The drives, as the computer shows them.
     drives: Vec<Drive>,
+    /// The folders of Home the user pinned there, which are unpinned; the
+    /// others there are used often.
+    pins: HashSet<PathBuf>,
     /// What the filter field narrows the list to.
     filter: Entity<TextField>,
     /// The path being written in place of the steps, when it is.
@@ -198,6 +203,9 @@ pub struct FolderPane {
     window: AnyWindowHandle,
     /// The dialog that renames many files at once, while it is open.
     batch: Option<(Entity<BatchRename>, gpui::Subscription)>,
+    /// Waits for the looks of folders to be read, where looks are kept per
+    /// folder and they were not read yet.
+    _views: Option<gpui::Subscription>,
     _watch: Task<()>,
 }
 
@@ -215,9 +223,17 @@ impl FolderPane {
             cx.new(|cx| TextField::new(language.say("Filter").into(), cx).with_glyph(ICON_SEARCH));
         cx.observe(&filter, |this, _, cx| this.arrange(cx)).detach();
         let focus = cx.focus_handle();
-        if config.per_folder {
+        let views = (config.per_folder && !FolderViews::loaded(cx)).then(|| {
             FolderViews::load(cx);
-        }
+            cx.observe_global::<FolderViews>(|this: &mut Self, cx| {
+                if FolderViews::loaded(cx) {
+                    this._views = None;
+                    this.take_view(cx);
+                    this.arrange(cx);
+                    this.relayout(true);
+                }
+            })
+        });
         if !cx.has_global::<LinkArrow>() {
             let arrow = IconPixels::link_arrow().and_then(|pixels| icon_of_pixels(&pixels));
             cx.set_global(LinkArrow(arrow));
@@ -278,6 +294,7 @@ impl FolderPane {
             searched: None,
             pending: None,
             drives: Vec::new(),
+            pins: HashSet::new(),
             filter,
             address: None,
             rename: None,
@@ -293,6 +310,7 @@ impl FolderPane {
             lit: false,
             window: window.window_handle(),
             batch: None,
+            _views: views,
             _watch: watch,
         };
         pane.take_view(cx);
@@ -349,6 +367,9 @@ impl FolderPane {
 
     /// Reads the location shown anew, keeping what was chosen.
     pub fn load(&mut self, cx: &mut Context<Self>) {
+        // A read still running is of the place left: dropping it stops it
+        // from filling the place now shown.
+        self.reading = None;
         self.search = None;
         self.searched = None;
         let path = match self.history.current().clone() {
@@ -476,7 +497,12 @@ impl FolderPane {
                             Ok(folders) => (folders, None),
                             Err(error) => (Vec::new(), Some(format!("{error:#}"))),
                         };
-                        let entries: Vec<Entry> = { folders.into_iter().chain(files) }
+                        let pins: HashSet<PathBuf> = { folders.iter() }
+                            .filter(|folder| folder.pinned)
+                            .map(|folder| folder.place.path.clone())
+                            .collect();
+                        let folders = folders.into_iter().map(|folder| folder.place);
+                        let entries: Vec<Entry> = { folders.chain(files) }
                             .filter_map(|place| {
                                 let metadata = std::fs::metadata(&place.path).ok()?;
                                 let mut entry = Entry::of(place.path, &metadata, &mut rules);
@@ -486,11 +512,11 @@ impl FolderPane {
                                 Some(entry)
                             })
                             .collect();
-                        (entries, problem, explorer)
+                        (entries, pins, problem, explorer)
                     })
                     .await;
                 this.update(cx, |this, cx| {
-                    let (entries, problem, explorer) = read;
+                    let (entries, pins, problem, explorer) = read;
                     if let Some(problem) = problem {
                         report!("Quick access cannot be read: {problem}");
                     }
@@ -498,6 +524,7 @@ impl FolderPane {
                     this.problem = None;
                     this.space = None;
                     this.explorer = explorer;
+                    this.pins = pins;
                     this.listing = Listing::new(entries);
                     this.arrange(cx);
                 })
@@ -737,13 +764,25 @@ impl FolderPane {
 
     /// Has the Shell do `work`, and reads the folder when it is done.
     pub fn work(&mut self, work: FileWork, cx: &mut Context<Self>) {
+        Self::work_for([cx.weak_entity()], work, cx);
+    }
+
+    /// Has the Shell do `work`, and reads the folders of `panes` again
+    /// when it is done.
+    pub fn work_for(
+        panes: impl IntoIterator<Item = WeakEntity<Self>> + 'static,
+        work: FileWork,
+        cx: &mut gpui::App,
+    ) {
         let (done, finished) = async_channel::bounded::<()>(1);
         work.start(move || {
             done.try_send(()).ok();
         });
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        cx.spawn(async move |cx: &mut AsyncApp| {
             finished.recv().await.ok();
-            this.update(cx, |this, cx| this.load(cx)).ok();
+            for pane in panes {
+                pane.update(cx, |pane, cx| pane.load(cx)).ok();
+            }
         })
         .detach();
     }
@@ -1118,18 +1157,12 @@ impl FolderPane {
     /// where the configuration or the folder options of Explorer show
     /// them.
     pub fn hidden(&self) -> bool {
-        let explorer = self.config.explorer && self.explorer.show_hidden;
-        self.hidden.unwrap_or(self.config.hidden || explorer)
+        self.shown().hidden
     }
 
-    /// Which hidden files are shown. Protected files of the system show
-    /// with the others only where Explorer shows them, or where Explorer
-    /// is not followed.
+    /// Which hidden files are shown.
     fn shown(&self) -> Shown {
-        Shown {
-            hidden: self.hidden(),
-            protected: !self.config.explorer || self.explorer.show_protected,
-        }
+        Shown::of(&self.config, self.explorer, self.hidden)
     }
 
     pub fn look(&self) -> Look {
@@ -1223,23 +1256,6 @@ impl FolderPane {
             },
         ));
         entries
-    }
-
-    /// Pins the folder at `path` to Quick access, or unpins it, and tells
-    /// the window once Explorer has.
-    fn set_pinned(&mut self, path: PathBuf, pinned: bool, cx: &mut Context<Self>) {
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let done = match pinned {
-                true => QuickAccess::pin(path).await,
-                false => QuickAccess::unpin(path).await,
-            };
-            if let Err(error) = done {
-                report!("Quick access did not change: {error:#}");
-            }
-            this.update(cx, |_, cx| cx.emit(PaneEvent::PinsChanged))
-                .ok();
-        })
-        .detach();
     }
 
     fn properties(&self) {
@@ -1384,16 +1400,25 @@ impl FolderPane {
                     cx.emit(PaneEvent::OpenInNewTab(Location::Folder(path)));
                 }
             }));
-            let home = *self.history.current() == Location::Home;
-            let (glyph, label) = match home {
+            // Only a folder pinned to Home unpins; one used often there
+            // pins, as elsewhere.
+            let pinned = *self.history.current() == Location::Home
+                && chosen.first().is_some_and(|path| self.pins.contains(path));
+            let (glyph, label) = match pinned {
                 true => (ICON_UNPIN, "Unpin from Quick access"),
                 false => (ICON_PIN, "Pin to Quick access"),
             };
-            entries.push(entry(glyph, label, |this, cx| {
-                let pinned = *this.history.current() != Location::Home;
-                if let Some(path) = this.chosen().into_iter().next() {
-                    this.set_pinned(path, pinned, cx);
-                }
+            let pane = view.clone();
+            entries.push(MenuEntry::new(glyph, language.say(label), move |cx| {
+                pane.update(cx, |this, cx| {
+                    if let Some(path) = this.chosen().into_iter().next() {
+                        cx.emit(PaneEvent::SetPinned {
+                            path,
+                            pinned: !pinned,
+                        });
+                    }
+                })
+                .ok();
             }));
             entries.push(entry(ICON_NEW_WINDOW, "Open in new window", |this, cx| {
                 for path in this.chosen() {

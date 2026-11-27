@@ -84,6 +84,7 @@ pub use packaged::{app_id_in, app_path};
 pub use passage::Passage;
 pub use plans::PowerPlan;
 pub use power::PowerAction;
+pub use quick_access::QuickFolder;
 pub use quick_access::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use shell_mode::{explorer_running, shell_mode};
 pub use shell_thread::ShellThread;
