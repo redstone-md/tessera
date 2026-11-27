@@ -410,11 +410,6 @@ impl Popups {
         open.map(|(name, _)| name.as_str())
     }
 
-    /// Whether the popup `name` is the one open.
-    pub fn shows(name: &str, cx: &App) -> bool {
-        Self::open_name(cx) == Some(name)
-    }
-
     /// Closes the open popup, if there is one.
     pub fn close(cx: &mut App) {
         if let Some((_, window)) = cx.global_mut::<Self>().open.take() {

@@ -59,6 +59,7 @@ use crate::module::Module;
 use crate::session::ShellModule;
 pub use marketplace::Updates;
 pub use power_dialog::DesktopClosing;
+pub use settings::Settings;
 
 /// Every module the shell starts with; the last one loads extensions.
 pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {

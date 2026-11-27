@@ -21,6 +21,7 @@ use super::{Placing, asks, directory, kind_question, place_widget, placing_label
 use crate::actions::Action;
 use crate::extension::registry::{Catalog, Kind, Location, Offer, Package};
 use crate::i18n::Language;
+use crate::modules::Settings;
 use crate::motion::Interaction;
 use crate::popup::Popups;
 use crate::shell::Shell;
@@ -31,9 +32,6 @@ use super::updates::Updates;
 
 /// The name of the action, of the popup and of its widget.
 pub const NAME: &str = "install-resource";
-
-/// The popup the settings are in until they can be opened at a part.
-const SETTINGS_POPUP: &str = "settings";
 
 /// What a `tessera://` link asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,13 +136,9 @@ fn follow(arg: Option<&str>, cx: &mut App) {
         }
     };
     match link {
-        // The settings cannot be opened at a part yet. A link opens them
-        // and never closes them.
-        Link::Open { .. } => {
-            if !Popups::shows(SETTINGS_POPUP, cx) {
-                Shell::toggle_popup(SETTINGS_POPUP, cx);
-            }
-        }
+        // A link opens the settings, or takes those shown there, and never
+        // closes them.
+        Link::Open { section, item } => Settings::open_at(&section, item.as_deref(), cx),
         Link::Install { .. } => {
             let shown = cx.default_global::<Requested>().shown;
             cx.global_mut::<Requested>().link = Some(link);

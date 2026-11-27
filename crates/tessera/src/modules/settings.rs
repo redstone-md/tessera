@@ -955,7 +955,7 @@ fn theme_title(name: &str, language: Language) -> SharedString {
 }
 
 /// Shows the configuration and changes its file.
-struct Settings {
+pub struct Settings {
     /// What the file held when it was last read; `None` if it is unusable.
     config: Option<Config>,
     /// The same as a table, for the keys looked up one by one.
