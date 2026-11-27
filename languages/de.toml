@@ -734,3 +734,8 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Kill process" = "Prozess beenden"
 "Media" = "Medien"
 "Personalize" = "Anpassen"
+
+# Wave 2, jumplists-peek: the sections of a jump list.
+"Frequent" = "Häufig"
+"Recent" = "Zuletzt verwendet"
+"Tasks" = "Aufgaben"

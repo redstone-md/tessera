@@ -21,6 +21,7 @@ mod files;
 mod flyout;
 mod i18n;
 mod icons;
+mod jump_menu;
 mod keys;
 mod menu;
 mod module;

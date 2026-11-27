@@ -1384,6 +1384,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Kill process", "Завершить процесс"),
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
+    // Wave 2, jumplists-peek: the sections of a jump list.
+    ("Frequent", "Часто используемые"),
+    ("Recent", "Последние"),
+    ("Tasks", "Задачи"),
 ];
 
 #[cfg(test)]

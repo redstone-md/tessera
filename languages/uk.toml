@@ -735,3 +735,8 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Kill process" = "Завершити процес"
 "Media" = "Медіа"
 "Personalize" = "Персоналізація"
+
+# Wave 2, jumplists-peek: the sections of a jump list.
+"Frequent" = "Часто використовувані"
+"Recent" = "Останні"
+"Tasks" = "Завдання"

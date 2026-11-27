@@ -735,3 +735,8 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Kill process" = "Terminar proceso"
 "Media" = "Multimedia"
 "Personalize" = "Personalizar"
+
+# Wave 2, jumplists-peek: the sections of a jump list.
+"Frequent" = "Frecuentes"
+"Recent" = "Recientes"
+"Tasks" = "Tareas"
