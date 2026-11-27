@@ -227,6 +227,8 @@
 #                      (see [clipboard] below); win+v is taken from Windows
 #                      and is its key where windows_keys binds such keys
 #                      and [clipboard] has the history on at the start
+#             night-light  night light on with arg "on", off with "off",
+#                      switched over with "toggle" or without arg
 #
 # [[key]]
 # press = "win+v"
@@ -241,6 +243,13 @@
 # press = "win+shift+delete"
 # action = "trash"
 # arg = "empty"
+# press = "win+a"
+# action = "popup"
+# arg = "quick-settings"
+#
+# [[key]]
+# press = "ctrl+alt+n"
+# action = "night-light"
 
 # The file manager of Tessera, which `tessera files [folder]`, the widget
 # `files` and the key above open. It reads folders without Explorer, opens
@@ -567,6 +576,39 @@
 #               the height left in its popup and scrolls. Option show,
 #               "extensions" (default) or "themes" for the themes they
 #               offer; option columns, 1 (default) to 4
+#
+# Widgets of the quick settings:
+#   "tiles"     tiles in a grid, as the quick settings of Windows 11 show
+#               them: option tiles, the widgets to show as tiles, each its
+#               name or a table; option columns, how many stand in a row (2,
+#               at most 4). A tile with details has a narrow button beside it
+#               that unfolds them under its row: those that go with it, or
+#               the widget its option detail names (a name or a table; ""
+#               for none)
+#   "radio-tile"  a tile that switches Wi-Fi or Bluetooth (option radio,
+#               "wifi" or "bluetooth"); it unfolds "wifi" or "bluetooth"
+#   "airplane"  a tile that switches every radio off, and back on those
+#               that were on; lit while every radio is off. The airplane
+#               mode of Windows itself is not set. It unfolds "radios"
+#   "radios"    every radio of the machine with a switch of its own
+#   "hotspot"   a tile that starts and stops the mobile hotspot, which
+#               shares the internet connection over Wi-Fi; it unfolds
+#               "hotspot-details"
+#   "hotspot-details"  the name of the network of the hotspot, its
+#               password (shown on a click), the devices on it, the band
+#               to send it on and a QR code a phone joins it with, which
+#               holds the password and so is drawn only while the password
+#               is shown; option qr, false to leave the code out. The name
+#               and the password are changed in the Windows settings it
+#               leads to
+#   "power-mode"  a tile with the power mode of Windows (best power
+#               efficiency, balanced, best performance); a click puts the
+#               next in use. Windows offers them only with the Balanced
+#               plan. It unfolds "power-modes", the three to choose from
+#   "night-light"  a tile that switches night light, that of Windows or
+#               Tessera's own as [night_light] says; it unfolds
+#               "night-light-slider", how warm the light is and when it
+#               comes on
 
 [[surface]]
 edge = "top"
@@ -641,6 +683,16 @@ name = "sound"
 width = 360
 height = 600
 content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"]
+
+# The quick settings, as Windows 11 has them, in place of the plainer popup
+# of that name the keys of Windows bring: win+a opens it where those keys
+# are bound, as can a [[key]] such as the one above, or a widget given
+# popup = "quick-settings".
+[[popup]]
+name = "quick-settings"
+width = 380
+height = 720
+content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", radio = "wifi" }, { widget = "radio-tile", radio = "bluetooth" }, "airplane", "hotspot", "power-mode", "night-light"] }, "volume-slider", "brightness-slider"]
 
 # [tiling] puts the windows of each display side by side in the space the
 # bars leave. layout is "master" (one window on the left half, the others
@@ -884,6 +936,31 @@ content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"
 #
 # [flyout]
 # volume = true
+
+# [night_light] chooses which night light the "night-light" tile and action
+# switch, and when Tessera's own comes on by itself.
+#   source     "windows" for that of Windows, which Windows switches by the
+#              schedule of its own settings; "tessera" for Tessera's own,
+#              which tints the colors of every display (Windows may refuse
+#              a warm tint unless the DWORD GdiIcmGammaRange = 256 is set
+#              under HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM);
+#              "auto" (default) for that of Windows, or Tessera's own when
+#              Tessera is the shell or Windows keeps no state of it
+#   kelvins    how warm Tessera's own is, 1200 (warmest) to 6500 (3400),
+#              when Tessera starts; the warmth set on "night-light-slider"
+#              is forgotten when Tessera quits
+#   schedule   when Tessera's own comes on: "off" (default), "sun" from
+#              sunset to sunrise at latitude and longitude (degrees, north
+#              and east positive), or "hours" from from to to. A click on
+#              the tile holds until the schedule next changes
+#   from, to   times of day for "hours" ("21:00", "07:00")
+#
+# [night_light]
+# source = "auto"
+# kelvins = 3400
+# schedule = "sun"
+# latitude = 55.75
+# longitude = 37.62
 
 # [wallpaper] has Tessera draw pictures behind the icons of the desktop, on
 # every display, each scaled to cover it. images lists picture files (.jpg,

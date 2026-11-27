@@ -47,6 +47,7 @@ pub use win32::{Attributes, ExplorerSettings, NameRules, localized_candidates, s
     reason = "for the notifications that show the balloons of the tray"
 )]
 pub use win32::{Balloon, BalloonEvent, BalloonKind};
+pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
 pub use win32::{
     Display, MaximizeHover, MoveEvent, MoveWatch, WindowArranging, front_fills, shift_held,
@@ -71,6 +72,7 @@ pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
 pub use win32::{HostOptions, ShellEvent, ShellHost};
+pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 #[allow(
     unused_imports,
     reason = "for the menus New, Open with and Send to of the file manager and the desktop"
@@ -86,7 +88,9 @@ pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+pub use win32::{PowerMode, PowerModeState};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
+pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{expand_variables, find_program, recent_folder};

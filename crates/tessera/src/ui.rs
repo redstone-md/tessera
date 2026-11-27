@@ -5,7 +5,9 @@
 
 mod choice;
 mod list;
+pub mod qr;
 mod slider;
+mod tile;
 
 use std::f32::consts::TAU;
 
@@ -24,6 +26,7 @@ use crate::theme::Theme;
 pub use choice::{Chooser, Pick, choice_button, choice_row, choice_row_of};
 pub use list::{LIST_MIN_HEIGHT, ROW_HEIGHT, list_row, list_title, switch};
 pub use slider::Slider;
+pub use tile::{TileFace, tile, tile_more};
 
 /// Ends the hover of what the pointer was on when it left `window`. GPUI
 /// learns that the pointer left but goes on taking it to be where it was

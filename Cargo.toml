@@ -25,6 +25,7 @@ image = { version = "0.25", default-features = false, features = [
     "tiff",
     "webp",
 ] }
+qrcodegen = "1.8"
 raw-window-handle = "0.6"
 regex = "1"
 # Reads the manifests of packaged applications for their startup tasks.

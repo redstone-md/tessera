@@ -3,6 +3,7 @@
 
 //! The modules the shell is assembled from.
 
+mod airplane;
 mod bluetooth;
 mod brightness;
 mod calendar;
@@ -13,6 +14,7 @@ mod connections;
 mod display_mode;
 mod focused;
 mod hdr;
+mod hotspot;
 mod keyboard;
 mod label;
 mod launcher;
@@ -20,11 +22,14 @@ mod look;
 mod marketplace;
 mod media;
 mod network;
+pub mod night;
 mod notifications;
 mod overview;
 mod plan;
 mod power_dialog;
+mod power_mode;
 mod problems;
+mod quick;
 mod run;
 mod runner;
 mod session;
@@ -99,6 +104,11 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
         Box::new(crate::snap::SnapModule),
+        Box::new(quick::QuickModule),
+        Box::new(airplane::AirplaneModule),
+        Box::new(hotspot::HotspotModule),
+        Box::new(power_mode::PowerModeModule),
+        Box::new(night::NightModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),

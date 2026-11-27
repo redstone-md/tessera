@@ -1160,6 +1160,117 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Clipboard history is off", "Журнал буфера обмена выключен"),
     ("Picture", "Изображение"),
     ("Pinned", "Закреплено"),
+    // The quick settings: radios, hotspot, power mode and night light.
+    ("On", "Вкл."),
+    ("Unavailable", "Недоступно"),
+    ("Bluetooth", "Bluetooth"),
+    ("Airplane mode", "Режим «в самолёте»"),
+    ("Mobile network", "Мобильная сеть"),
+    ("FM radio", "FM-радио"),
+    ("Radio", "Радиомодуль"),
+    (
+        "The radios cannot be read",
+        "Не удаётся прочитать радиомодули",
+    ),
+    ("This machine has no radio", "В компьютере нет радиомодулей"),
+    (
+        "Switched off on the machine itself",
+        "Выключен на самом компьютере",
+    ),
+    ("Mobile hotspot", "Мобильный хот-спот"),
+    ("Devices", "Устройства"),
+    ("Switching…", "Переключение…"),
+    ("Any band", "Любой диапазон"),
+    ("Network name", "Имя сети"),
+    ("Devices on it", "Подключено устройств"),
+    (
+        "Scan with a phone to join",
+        "Отсканируйте телефоном, чтобы подключиться",
+    ),
+    ("Mobile hotspot settings", "Параметры мобильного хот-спота"),
+    (
+        "There is no internet connection to share",
+        "Нет подключения к интернету, которым можно поделиться",
+    ),
+    (
+        "Windows does not say what the hotspot is",
+        "Windows не сообщает состояние хот-спота",
+    ),
+    (
+        "A group policy forbids the hotspot",
+        "Групповая политика запрещает хот-спот",
+    ),
+    (
+        "The Wi-Fi adapter cannot be a hotspot",
+        "Адаптер Wi-Fi не может быть хот-спотом",
+    ),
+    (
+        "The mobile operator forbids the hotspot",
+        "Мобильный оператор запрещает хот-спот",
+    ),
+    (
+        "This edition of Windows has no hotspot",
+        "В этом выпуске Windows нет хот-спота",
+    ),
+    (
+        "The application of the mobile operator is missing",
+        "Не установлено приложение мобильного оператора",
+    ),
+    (
+        "Windows does not allow the hotspot",
+        "Windows не разрешает хот-спот",
+    ),
+    ("The hotspot is not available", "Хот-спот недоступен"),
+    ("Power mode", "Режим питания"),
+    ("Best power efficiency", "Максимальная экономия энергии"),
+    ("Balanced", "Сбалансированный"),
+    ("Best performance", "Максимальная производительность"),
+    ("Efficiency", "Экономия"),
+    ("Performance", "Производительность"),
+    ("Set by the power plan", "Задаётся схемой питания"),
+    (
+        "This version of Windows has no power modes",
+        "В этой версии Windows нет режимов питания",
+    ),
+    (
+        "The power plan in use is not Balanced, so Windows offers no power mode",
+        "Используется не сбалансированная схема питания, поэтому Windows не предлагает режимов",
+    ),
+    ("Battery saver is on", "Экономия заряда включена"),
+    ("until", "до"),
+    ("Night light settings", "Параметры ночного света"),
+    (
+        "Windows switches it by the schedule of its settings",
+        "Windows включает его по расписанию из своих параметров",
+    ),
+    (
+        "Tessera's own; no schedule",
+        "Собственный ночной свет Tessera; без расписания",
+    ),
+    (
+        "Tessera's own, from sunset to sunrise",
+        "Собственный ночной свет Tessera, от заката до рассвета",
+    ),
+    (
+        "Tessera's own; the schedule needs the place",
+        "Собственный ночной свет Tessera; для расписания нужно указать место",
+    ),
+    (
+        "Tessera's own, by the hours",
+        "Собственный ночной свет Tessera, по часам",
+    ),
+    (
+        "Windows holds no warmth of night light yet; set it once in its settings",
+        "Windows ещё не хранит теплоту ночного света; задайте её один раз в параметрах",
+    ),
+    (
+        "Windows keeps no state of night light yet; open it once in the settings",
+        "Windows ещё не хранит состояние ночного света; откройте его один раз в параметрах",
+    ),
+    (
+        "Windows keeps the state of night light in a way Tessera does not know",
+        "Windows хранит состояние ночного света в незнакомом Tessera виде",
+    ),
 ];
 
 #[cfg(test)]

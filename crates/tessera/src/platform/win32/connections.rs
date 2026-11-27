@@ -4,7 +4,6 @@
 //! What the machine is connected through: its established connections, the
 //! VPN connections Windows keeps, and the radios it can switch.
 
-use windows::Devices::Radios::{Radio, RadioAccessStatus, RadioKind, RadioState};
 use windows::Networking::Connectivity::{
     ConnectionProfile, NetworkConnectivityLevel, NetworkInformation,
 };
@@ -14,6 +13,8 @@ use windows::Networking::Vpn::{
     VpnNativeProfile, VpnPlugInProfile,
 };
 use windows::core::{GUID, HSTRING, Interface, Result as WindowsResult};
+
+use super::radios::{RadioType, Radios};
 
 /// The interface types of the IANA that are told apart.
 const IANA_ETHERNET: u32 = 6;
@@ -204,42 +205,23 @@ pub enum Wireless {
 }
 
 impl Wireless {
-    fn kind(self) -> RadioKind {
+    fn kind(self) -> RadioType {
         match self {
-            Self::Wifi => RadioKind::WiFi,
-            Self::Bluetooth => RadioKind::Bluetooth,
+            Self::Wifi => RadioType::Wifi,
+            Self::Bluetooth => RadioType::Bluetooth,
         }
-    }
-
-    fn radio(self) -> WindowsResult<Option<Radio>> {
-        let radios = Radio::GetRadiosAsync()?.get()?;
-        Ok(radios
-            .into_iter()
-            .find(|radio| radio.Kind().is_ok_and(|kind| kind == self.kind())))
     }
 
     /// Whether the radio is on; `None` on a machine without it.
     pub fn is_on(self) -> Option<bool> {
-        let radio = self.radio().ok()??;
-        Some(radio.State().ok()? == RadioState::On)
+        let radios = Radios::all().ok()?;
+        let radio = radios.iter().find(|radio| radio.kind == self.kind())?;
+        Some(radio.on)
     }
 
-    /// Switches the radio on or off.
+    /// Switches the radios of its kind on or off.
     pub fn switch(self, on: bool) -> Result<(), String> {
-        let state = if on { RadioState::On } else { RadioState::Off };
-        let switch = || -> WindowsResult<Option<RadioAccessStatus>> {
-            let Some(radio) = self.radio()? else {
-                return Ok(None);
-            };
-            Radio::RequestAccessAsync()?.get()?;
-            radio.SetStateAsync(state)?.get().map(Some)
-        };
-        match switch() {
-            Ok(Some(RadioAccessStatus::Allowed)) => Ok(()),
-            Ok(Some(_)) => Err("Windows does not let the radio be switched".to_owned()),
-            Ok(None) => Err("the machine has no such radio".to_owned()),
-            Err(error) => Err(format!("the radio could not be switched: {error}")),
-        }
+        Radios::switch(self.kind(), None, on)
     }
 }
 

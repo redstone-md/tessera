@@ -25,6 +25,7 @@ use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
 use crate::modules::DesktopClosing;
+use crate::modules::night::Night;
 use crate::notifications_store::NotificationStore;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
@@ -85,6 +86,7 @@ impl Shell {
         cx.set_global(AppIcons::new(&config.icons));
         // Without Explorer the surfaces reserve their edges through the tray.
         crate::platform::Tray::start_before_surfaces();
+        Night::start(&config.night_light, cx);
         let surfaces = Self::open_surfaces(&config, &mut Vec::new(), cx);
         if surfaces.is_empty() {
             bail!("the layout opened no surface");
@@ -312,6 +314,7 @@ impl Shell {
         Rules::configure(&config.rules, cx);
         Corners::configure(&config.corners, cx);
         ClipHistory::configure(&config.clipboard, cx);
+        Night::configure(&config.night_light, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =
