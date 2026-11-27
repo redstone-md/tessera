@@ -9,9 +9,12 @@
 //! button of the pointer is held, as while a window is dragged, or while
 //! the window in front fills the display, as a game does.
 //!
-//! The pointer is looked at from a thread of its own: ten times a second
-//! while it is far from every corner in use, and more often near one, so
-//! that the wait is kept to; there is no such thread while no corner is
+//! The pointer is looked at from a thread of its own: four times a second
+//! while it is far from the edges of the displays that have a corner in
+//! use, fifty times a second only while it is within a few pixels of one,
+//! so that the wait is kept to without the thread waking all the time;
+//! while the window in front fills the display the pointer is on, it stays
+//! at the slow pace. There is no such thread while no corner is
 //! configured.
 
 use std::sync::Arc;
@@ -28,12 +31,12 @@ use crate::platform::{Display, ScreenRect, front_fills, pointer_at, pointer_held
 
 /// How often the pointer is looked at when it is far from every corner
 /// in use, and when it is near one.
-const FAR_LOOK: Duration = Duration::from_millis(100);
+const FAR_LOOK: Duration = Duration::from_millis(250);
 const NEAR_LOOK: Duration = Duration::from_millis(20);
 
 /// How near a corner or an edge in use the pointer is to be looked at
 /// more often, in physical pixels.
-const NEAR: i32 = 48;
+const NEAR: i32 = 8;
 
 /// How far the pointer is to be from the corners and edges of a display
 /// to be in one, in physical pixels: a corner is a small square, an edge
@@ -47,8 +50,8 @@ const REARM: i32 = 40;
 
 /// How long the pointer rests in a corner when the configuration says
 /// nothing, and the longest it may say, in milliseconds.
-const DEFAULT_DELAY: u32 = 150;
-const LONGEST_DELAY: u32 = 5000;
+pub const DEFAULT_DELAY: u32 = 150;
+pub const LONGEST_DELAY: u32 = 5000;
 
 /// How often the arrangement of the displays is read again.
 const DISPLAYS_LOOK: Duration = Duration::from_secs(2);
@@ -68,6 +71,47 @@ pub enum Spot {
 }
 
 impl Spot {
+    /// Every corner and edge, the corners first, as the editor of the
+    /// screen edges shows them.
+    pub const ALL: [Self; 8] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+        Self::Top,
+        Self::Bottom,
+        Self::Left,
+        Self::Right,
+    ];
+
+    /// The spot as `at` writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::TopLeft => "top-left",
+            Self::TopRight => "top-right",
+            Self::BottomLeft => "bottom-left",
+            Self::BottomRight => "bottom-right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    /// What the settings call the spot, in English.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::TopLeft => "Top left corner",
+            Self::TopRight => "Top right corner",
+            Self::BottomLeft => "Bottom left corner",
+            Self::BottomRight => "Bottom right corner",
+            Self::Top => "Top edge",
+            Self::Bottom => "Bottom edge",
+            Self::Left => "Left edge",
+            Self::Right => "Right edge",
+        }
+    }
+
     /// Whether a corner in use at this spot is used with the pointer at
     /// `hit`: a corner at that corner, an edge anywhere along it.
     fn covers(self, hit: Self) -> bool {
@@ -155,22 +199,72 @@ fn nearby(frame: ScreenRect, spot: Spot, (x, y): (i32, i32)) -> bool {
 #[serde(deny_unknown_fields)]
 pub struct CornerConfig {
     /// The corner or the edge.
-    at: Spot,
+    pub at: Spot,
     /// The display, counted from 1 from the left; every display without.
-    display: Option<usize>,
+    pub display: Option<usize>,
     /// How long the pointer rests there first, in milliseconds.
-    delay: Option<u32>,
+    pub delay: Option<u32>,
+    /// How long after it was used the corner waits before it can be used
+    /// again, in milliseconds, besides the pointer going away; Plasma's
+    /// reactivation delay.
+    pub cooldown: Option<u32>,
     /// The name of an action, as a `[[key]]` names one.
-    action: Option<String>,
+    pub action: Option<String>,
     /// What the action is done with.
-    arg: Option<String>,
+    pub arg: Option<String>,
     /// A popup to open, or to close when it is open.
-    popup: Option<String>,
+    pub popup: Option<String>,
     /// A program to start, and its arguments.
-    run: Option<Vec<String>>,
+    pub run: Option<Vec<String>>,
 }
 
 impl CornerConfig {
+    /// A corner at `at` of the display numbered `display` from 1, or of
+    /// every display, that does the action `action` with `arg`.
+    pub fn new(at: Spot, display: Option<usize>, action: &str, arg: Option<String>) -> Self {
+        Self {
+            at,
+            display,
+            delay: None,
+            cooldown: None,
+            action: Some(action.to_owned()),
+            arg,
+            popup: None,
+            run: None,
+        }
+    }
+
+    /// The corner as a `[[corner]]` writes it.
+    pub fn to_table(&self) -> toml::Table {
+        let mut table = toml::Table::new();
+        let number = |value: u32| toml::Value::Integer(i64::from(value));
+        table.insert("at".to_owned(), self.at.name().into());
+        if let Some(display) = self.display {
+            let display = i64::try_from(display).unwrap_or(i64::MAX);
+            table.insert("display".to_owned(), display.into());
+        }
+        if let Some(delay) = self.delay {
+            table.insert("delay".to_owned(), number(delay));
+        }
+        if let Some(cooldown) = self.cooldown {
+            table.insert("cooldown".to_owned(), number(cooldown));
+        }
+        if let Some(action) = &self.action {
+            table.insert("action".to_owned(), action.as_str().into());
+        }
+        if let Some(arg) = &self.arg {
+            table.insert("arg".to_owned(), arg.as_str().into());
+        }
+        if let Some(popup) = &self.popup {
+            table.insert("popup".to_owned(), popup.as_str().into());
+        }
+        if let Some(run) = &self.run {
+            let words = run.iter().map(|word| word.as_str().into()).collect();
+            table.insert("run".to_owned(), toml::Value::Array(words));
+        }
+        table
+    }
+
     /// What the corner does, or why it does nothing; `actions` are those it
     /// can name.
     fn deed(&self, actions: &Actions) -> Result<Deed, String> {
@@ -199,6 +293,60 @@ impl CornerConfig {
         };
         Duration::from_millis(u64::from(delay))
     }
+
+    /// How long the corner waits after it was used.
+    fn cooldown(&self) -> Duration {
+        let cooldown = match self.cooldown {
+            Some(cooldown) if cooldown > LONGEST_DELAY => {
+                report!(
+                    "a `[[corner]]` waits {cooldown} ms after it was used, more than {LONGEST_DELAY}, so it does not wait"
+                );
+                0
+            }
+            cooldown => cooldown.unwrap_or(0),
+        };
+        Duration::from_millis(u64::from(cooldown))
+    }
+}
+
+/// The words of the command line `line`: apart by spaces, a part in
+/// double quotes being one word with its spaces.
+pub fn words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for character in line.chars() {
+        match character {
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            ' ' | '\t' if !quoted => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            other => {
+                word.push(other);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// The command line of `words`, a word with spaces in double quotes, as
+/// [`words`] reads it back.
+pub fn command_line(words: &[String]) -> String {
+    let quoted = { words.iter() }.map(|word| match word.contains([' ', '\t']) || word.is_empty() {
+        true => format!("\"{word}\""),
+        false => word.clone(),
+    });
+    quoted.collect::<Vec<_>>().join(" ")
 }
 
 /// A corner in use, as the thread that looks at the pointer knows it.
@@ -208,6 +356,7 @@ struct Spotted {
     /// The display, counted from 0 from the left.
     display: Option<usize>,
     delay: Duration,
+    cooldown: Duration,
 }
 
 /// Which of `corners` is used with the pointer at `spot` of the display at
@@ -229,17 +378,28 @@ struct Trigger {
     /// Where the pointer was when a corner was used last, while it has
     /// not gone far enough away.
     used_at: Option<(i32, i32)>,
+    /// Until when no corner is used, after one was.
+    calm_until: Option<Instant>,
+}
+
+/// How long a corner in use waits before the pointer counts as resting
+/// there, and how long after it was used before it can be used again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Waits {
+    delay: Duration,
+    cooldown: Duration,
 }
 
 impl Trigger {
     /// Takes in that the pointer is at `point`, in the corner at `corner`
     /// of those in use if it is in one, at `now`. The corner to use now
-    /// is returned, if the pointer has rested there for `delay`.
+    /// is returned, if the pointer has rested there for its delay and its
+    /// cooldown since the last use is over.
     fn see(
         &mut self,
         point: (i32, i32),
         corner: Option<usize>,
-        delay: impl Fn(usize) -> Duration,
+        waits: impl Fn(usize) -> Waits,
         now: Instant,
     ) -> Option<usize> {
         if let Some((x, y)) = self.used_at {
@@ -248,6 +408,11 @@ impl Trigger {
             }
             self.used_at = None;
         }
+        if self.calm_until.is_some_and(|until| now < until) {
+            self.resting = None;
+            return None;
+        }
+        self.calm_until = None;
         let Some(corner) = corner else {
             self.resting = None;
             return None;
@@ -259,11 +424,13 @@ impl Trigger {
                 now
             }
         };
-        if now.duration_since(since) < delay(corner) {
+        let waits = waits(corner);
+        if now.duration_since(since) < waits.delay {
             return None;
         }
         self.resting = None;
         self.used_at = Some(point);
+        self.calm_until = (!waits.cooldown.is_zero()).then(|| now + waits.cooldown);
         Some(corner)
     }
 
@@ -309,6 +476,7 @@ impl Corners {
                         at: config.at,
                         display: config.display.map(|number| number.saturating_sub(1)),
                         delay: config.delay(),
+                        cooldown: config.cooldown(),
                     });
                 }
                 Err(why) => report!("a `[[corner]]` does nothing: {why}"),
@@ -346,6 +514,28 @@ impl Corners {
     }
 }
 
+/// Whether the pointer at `point` is near enough a corner or an edge in
+/// use of the displays `frames` to be looked at often.
+fn near_any(corners: &[Spotted], frames: &[ScreenRect], point: (i32, i32)) -> bool {
+    corners.iter().any(|corner| {
+        let displays = frames.iter().enumerate();
+        { displays }
+            .filter(|&(index, _)| corner.display.is_none_or(|only| only == index))
+            .any(|(_, &frame)| nearby(frame, corner.at, point))
+    })
+}
+
+/// How long the thread that looks at the pointer waits before it looks
+/// again: briefly only while the pointer is near a corner or an edge in
+/// use, no button is held and the window in front does not fill the
+/// display.
+fn pace(near: bool, held: bool, filled: bool) -> Duration {
+    match near && !held && !filled {
+        true => NEAR_LOOK,
+        false => FAR_LOOK,
+    }
+}
+
 /// Looks at the pointer until another thread is started in place of this
 /// one, the `looker`th, and sends the place of each of `corners` that is
 /// used.
@@ -364,27 +554,33 @@ fn look(looker: u64, corners: &[Spotted], send: &async_channel::Sender<usize>) {
             read = Some(Instant::now());
         }
         let Some(point) = pointer_at() else {
+            pause = FAR_LOOK;
             continue;
         };
-        let near = corners.iter().any(|corner| {
-            let displays = frames.iter().enumerate();
-            { displays }
-                .filter(|&(index, _)| corner.display.is_none_or(|only| only == index))
-                .any(|(_, &frame)| nearby(frame, corner.at, point))
-        });
-        pause = if near { NEAR_LOOK } else { FAR_LOOK };
-        if !near || pointer_held() {
+        let near = near_any(corners, &frames, point);
+        // Windows is asked about the window in front only near an edge.
+        let found = hit(point, &frames);
+        let (held, filled) = match near {
+            true => (
+                pointer_held(),
+                found.is_some_and(|(display, _)| front_fills(frames[display])),
+            ),
+            false => (false, false),
+        };
+        pause = pace(near, held, filled);
+        if pause == FAR_LOOK {
             trigger.reset();
             continue;
         }
-        let found = hit(point, &frames);
         let corner = found.and_then(|(display, spot)| chosen(corners, display, spot));
-        let delay = |corner: usize| corners[corner].delay;
-        let Some(used) = trigger.see(point, corner, delay, Instant::now()) else {
+        let waits = |corner: usize| Waits {
+            delay: corners[corner].delay,
+            cooldown: corners[corner].cooldown,
+        };
+        let Some(used) = trigger.see(point, corner, waits, Instant::now()) else {
             continue;
         };
-        let filled = found.is_some_and(|(display, _)| front_fills(frames[display]));
-        if !filled && send.try_send(used).is_err() && send.is_closed() {
+        if send.try_send(used).is_err() && send.is_closed() {
             return;
         }
     }
@@ -427,6 +623,7 @@ mod tests {
             at,
             display,
             delay: Duration::ZERO,
+            cooldown: Duration::ZERO,
         };
         let corners = [
             corner(Spot::Top, None),
@@ -446,7 +643,10 @@ mod tests {
     fn a_corner_waits_and_is_used_again_once_the_pointer_went_away() {
         let mut trigger = Trigger::default();
         let start = Instant::now();
-        let delay = |_| Duration::from_millis(150);
+        let delay = |_| Waits {
+            delay: Duration::from_millis(150),
+            cooldown: Duration::ZERO,
+        };
         let at = |millis| start + Duration::from_millis(millis);
         assert_eq!(trigger.see((0, 0), Some(0), delay, at(0)), None);
         assert_eq!(trigger.see((0, 0), Some(0), delay, at(100)), None);
@@ -494,10 +694,89 @@ mod tests {
 
     #[test]
     fn the_pointer_is_watched_closely_only_near_a_corner_in_use() {
-        assert!(nearby(SCREEN, Spot::TopLeft, (10, 20)));
-        assert!(!nearby(SCREEN, Spot::TopLeft, (10, 500)));
-        assert!(nearby(SCREEN, Spot::Bottom, (900, 1060)));
-        assert!(!nearby(SCREEN, Spot::Bottom, (900, 500)));
+        assert!(nearby(SCREEN, Spot::TopLeft, (3, 5)));
+        assert!(!nearby(SCREEN, Spot::TopLeft, (10, 20)));
+        assert!(!nearby(SCREEN, Spot::TopLeft, (3, 500)));
+        assert!(nearby(SCREEN, Spot::Bottom, (900, 1075)));
+        assert!(!nearby(SCREEN, Spot::Bottom, (900, 1060)));
         assert!(!nearby(SCREEN, Spot::Right, (5000, 500)));
+        let right = ScreenRect {
+            left: 1920,
+            right: 3840,
+            ..SCREEN
+        };
+        let only_second = [Spotted {
+            at: Spot::Left,
+            display: Some(1),
+            delay: Duration::ZERO,
+            cooldown: Duration::ZERO,
+        }];
+        let frames = [SCREEN, right];
+        assert!(near_any(&only_second, &frames, (1922, 500)));
+        // The left edge of the first display has no corner in use.
+        assert!(!near_any(&only_second, &frames, (2, 500)));
+        assert!(!near_any(&only_second, &frames, (2500, 500)));
+    }
+
+    #[test]
+    fn the_pointer_is_looked_at_often_only_where_a_corner_can_be_used() {
+        assert_eq!(pace(true, false, false), NEAR_LOOK);
+        assert_eq!(pace(false, false, false), FAR_LOOK);
+        assert_eq!(pace(true, true, false), FAR_LOOK);
+        assert_eq!(pace(true, false, true), FAR_LOOK);
+    }
+
+    #[test]
+    fn a_corner_rests_for_its_cooldown_after_it_was_used() {
+        let mut trigger = Trigger::default();
+        let start = Instant::now();
+        let waits = |_| Waits {
+            delay: Duration::ZERO,
+            cooldown: Duration::from_millis(500),
+        };
+        let at = |millis| start + Duration::from_millis(millis);
+        assert_eq!(trigger.see((0, 0), Some(0), waits, at(0)), Some(0));
+        // Gone far away and back, but still within the cooldown.
+        assert_eq!(trigger.see((300, 300), None, waits, at(100)), None);
+        assert_eq!(trigger.see((0, 0), Some(0), waits, at(200)), None);
+        assert_eq!(trigger.see((300, 300), None, waits, at(450)), None);
+        assert_eq!(trigger.see((0, 0), Some(0), waits, at(600)), Some(0));
+        let corner =
+            toml::from_str::<CornerConfig>("at = \"top\"\npopup = \"a\"\ncooldown = 9000").unwrap();
+        assert_eq!(corner.cooldown(), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_corner_is_written_as_it_is_read() {
+        let text = "at = \"bottom-left\"\ndisplay = 2\ndelay = 300\ncooldown = 500\nrun = [\"wt.exe\", \"-d\", \"C:\\\\My Files\"]\n";
+        let corner: CornerConfig = toml::from_str(text).unwrap();
+        let written = toml::to_string(&corner.to_table()).unwrap();
+        assert_eq!(toml::from_str::<CornerConfig>(&written).unwrap(), corner);
+        let new = CornerConfig::new(Spot::Top, None, "popup", Some("launcher".to_owned()));
+        let table = new.to_table();
+        assert_eq!(table.len(), 3);
+        assert_eq!(table["at"].as_str(), Some("top"));
+        assert_eq!(table["arg"].as_str(), Some("launcher"));
+    }
+
+    #[test]
+    fn a_command_line_is_cut_into_words_and_put_back() {
+        assert_eq!(
+            words("wt.exe  -d \"C:\\My Files\""),
+            ["wt.exe", "-d", "C:\\My Files"]
+        );
+        assert_eq!(words("  "), Vec::<String>::new());
+        assert_eq!(words("a \"\" b"), ["a", "", "b"]);
+        let line = command_line(&words("notepad.exe \"a b.txt\""));
+        assert_eq!(line, "notepad.exe \"a b.txt\"");
+        assert_eq!(words(&line), ["notepad.exe", "a b.txt"]);
+    }
+
+    #[test]
+    fn every_spot_has_the_name_it_is_written_by() {
+        for spot in Spot::ALL {
+            let text = format!("at = \"{}\"\npopup = \"a\"", spot.name());
+            assert_eq!(toml::from_str::<CornerConfig>(&text).unwrap().at, spot);
+        }
     }
 }
