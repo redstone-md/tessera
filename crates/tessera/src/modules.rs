@@ -23,6 +23,7 @@ mod network;
 mod notifications;
 mod overview;
 mod plan;
+mod power_mode;
 mod problems;
 mod quick;
 mod session;
@@ -85,6 +86,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(quick::QuickModule),
         Box::new(airplane::AirplaneModule),
         Box::new(hotspot::HotspotModule),
+        Box::new(power_mode::PowerModeModule),
         Box::new(ExtensionsModule {
             settings: config.extensions.clone(),
         }),
