@@ -44,6 +44,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, IsWow64Process, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -211,7 +212,10 @@ impl TaskbarList {
                 }
                 while let Ok(event) = events.recv_blocking() {
                     match event {
-                        ShellEvent::Created(id) => announce(id.hwnd(), created),
+                        // Tessera's own windows have no button to tell of.
+                        ShellEvent::Created(id) if id.process() != std::process::id() => {
+                            announce(id.hwnd(), created);
+                        }
                         ShellEvent::Destroyed(id) if !id.exists() => forget(id),
                         _ => {}
                     }
@@ -298,8 +302,10 @@ fn make_band() {
             RegisterWindowMessageW(w!("TaskbarCreated")),
             Ordering::Relaxed,
         );
+        let module = GetModuleHandleW(None).unwrap_or_default();
         let class = WNDCLASSW {
             lpfnWndProc: Some(respond),
+            hInstance: module.into(),
             lpszClassName: CLASS,
             ..Default::default()
         };
@@ -317,7 +323,7 @@ fn make_band() {
             0,
             None,
             None,
-            None,
+            Some(module.into()),
             None,
         );
         let band = match band {
