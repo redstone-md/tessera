@@ -59,6 +59,7 @@ use crate::platform::{
 };
 use crate::shell::KnownDisplays;
 use crate::theme::Theme;
+use crate::ui::spread::{between, center, holds, reach};
 use crate::workspaces::Workspaces;
 
 /// How often it is checked whether something happened to the windows.
@@ -96,14 +97,6 @@ const DEFAULT_KEYS: [(&str, &str); 5] = [
     ("win+alt+0", "reset"),
 ];
 
-fn center(rect: ScreenRect) -> (i32, i32) {
-    ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)
-}
-
-fn holds(rect: ScreenRect, (x, y): (i32, i32)) -> bool {
-    (rect.left..rect.right).contains(&x) && (rect.top..rect.bottom).contains(&y)
-}
-
 /// A side of a window, as a key combination names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Toward {
@@ -128,36 +121,11 @@ impl Toward {
     /// Of `others`, the one that lies on this side of `from`: the nearest
     /// one, where a step aside counts twice as far as one ahead.
     fn of<T: Copy>(self, from: ScreenRect, others: &[(T, ScreenRect)]) -> Option<T> {
-        let (x, y) = center(from);
-        let far = |&(_, other): &(T, ScreenRect)| {
-            let (other_x, other_y) = center(other);
-            let (ahead, aside) = match self {
-                Self::Left => (x - other_x, other_y - y),
-                Self::Right => (other_x - x, other_y - y),
-                Self::Up => (y - other_y, other_x - x),
-                Self::Down => (other_y - y, other_x - x),
-            };
-            (ahead > 0).then(|| ahead + 2 * aside.abs())
-        };
         let nearest = others
             .iter()
-            .filter_map(|other| Some((far(other)?, other.0)))
+            .filter_map(|&(key, other)| Some((reach(from, other, self)?, key)))
             .min_by_key(|&(far, _)| far)?;
         Some(nearest.1)
-    }
-}
-
-/// The rectangle `amount` of the way from `from` to `to`; an amount above
-/// 1 lies beyond `to`.
-fn between(from: ScreenRect, to: ScreenRect, amount: f32) -> ScreenRect {
-    let mix = |from: i32, to: i32| from + ((to - from) as f32 * amount).round() as i32;
-    let (left, top) = (mix(from.left, to.left), mix(from.top, to.top));
-    ScreenRect {
-        left,
-        top,
-        // A window keeps a size it can be drawn at.
-        right: mix(from.right, to.right).max(left + 1),
-        bottom: mix(from.bottom, to.bottom).max(top + 1),
     }
 }
 

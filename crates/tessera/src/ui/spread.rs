@@ -155,26 +155,31 @@ impl Splits {
 /// one whose middle is on that side, a step aside counting twice as far
 /// as a step ahead. `None` where none lies that way.
 pub fn nearest(from: usize, rects: &[ScreenRect], toward: Toward) -> Option<usize> {
-    let (x, y) = center(*rects.get(from)?);
-    let far = |other: ScreenRect| {
-        let (other_x, other_y) = center(other);
-        let (ahead, aside) = match toward {
-            Toward::Left => (x - other_x, other_y - y),
-            Toward::Right => (other_x - x, other_y - y),
-            Toward::Up => (y - other_y, other_x - x),
-            Toward::Down => (other_y - y, other_x - x),
-        };
-        (ahead > 0).then(|| ahead + 2 * aside.abs())
-    };
+    let start = *rects.get(from)?;
     { rects.iter().enumerate() }
         .filter(|&(index, _)| index != from)
-        .filter_map(|(index, &other)| Some((far(other)?, index)))
+        .filter_map(|(index, &other)| Some((reach(start, other, toward)?, index)))
         .min()
         .map(|(_, index)| index)
 }
 
+/// How far `other` lies `toward` from `from`, by their middles, a step
+/// aside counting twice as far as a step ahead; `None` where its middle
+/// is not on that side.
+pub fn reach(from: ScreenRect, other: ScreenRect, toward: Toward) -> Option<i32> {
+    let ((x, y), (other_x, other_y)) = (center(from), center(other));
+    let (ahead, aside) = match toward {
+        Toward::Left => (x - other_x, other_y - y),
+        Toward::Right => (other_x - x, other_y - y),
+        Toward::Up => (y - other_y, other_x - x),
+        Toward::Down => (other_y - y, other_x - x),
+    };
+    (ahead > 0).then(|| ahead + 2 * aside.abs())
+}
+
 /// The rectangle `amount` of the way from `from` to `to`, kept at least
-/// one pixel wide and high.
+/// one pixel wide and high, as a window can be drawn; an amount above 1
+/// lies beyond `to`.
 pub fn between(from: ScreenRect, to: ScreenRect, amount: f32) -> ScreenRect {
     let mix = |from: i32, to: i32| from + ((to - from) as f32 * amount).round() as i32;
     let (left, top) = (mix(from.left, to.left), mix(from.top, to.top));
