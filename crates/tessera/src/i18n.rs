@@ -1720,6 +1720,9 @@ const RUSSIAN: &[(&str, &str)] = &[
         "The name of a network has 1 to 32 Latin characters",
         "Имя сети содержит от 1 до 32 латинских символов",
     ),
+    // flyouts-input-clock.
+    ("All day", "Весь день"),
+    ("No events", "Нет событий"),
 ];
 
 #[cfg(test)]

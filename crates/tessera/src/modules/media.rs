@@ -7,6 +7,10 @@
 //! the player lets them, the position, and a choice between the players
 //! while several have something. Action: `media`, which passes a command to
 //! the player chosen there, or to the one Windows considers current.
+//!
+//! The wheel over `media` turns the default output up or down by `step`
+//! percent, as the media module of Seelen UI does; with Shift held it goes
+//! to the next piece, or back to the one before.
 
 use std::cell::Cell;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -16,11 +20,12 @@ use std::time::Duration;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Bounds, Context, CursorStyle, Entity, FontWeight,
     Global, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ObjectFit, ParentElement,
-    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage, Subscription,
-    WeakEntity, Window, canvas, div, img, px,
+    Pixels, Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    StyledImage, Subscription, WeakEntity, Window, canvas, div, img, px,
 };
 
 use crate::actions::{Action, Actions};
+use crate::flyout::media_app_name;
 use crate::i18n::Language;
 use crate::icons::{Icon, image_of_bytes};
 use crate::module::{Module, WidgetRegistry};
@@ -28,6 +33,8 @@ use crate::motion::{Interaction, Spring, mix};
 use crate::platform::{Media, MediaCommand, NowPlaying, Position, Repeat, SessionInfo, SessionKey};
 use crate::theme::Theme;
 use crate::ui::{icon, one_line, pill, state_layer, wave_bar};
+
+use super::sound::{VolumeChange, WHEEL_STEP, Wheel, wheel_step};
 
 /// How often it is read what is playing.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -80,7 +87,8 @@ impl Module for MediaModule {
             let width = context
                 .number("width")
                 .map_or(READOUT_WIDTH, |width| width as f32);
-            cx.new(|cx| Readout::new(player, px(width.max(0.)), cx))
+            let step = wheel_step(context, WHEEL_STEP);
+            cx.new(|cx| Readout::new(player, px(width.max(0.)), step, cx))
                 .into()
         })?;
         widgets.register_panel("media-controls", |_, cx| {
@@ -141,25 +149,7 @@ fn send_to_chosen(command: MediaCommand, cx: &mut App) {
 /// or what it plays where the application is known only by a number, as
 /// some browsers are.
 fn chip_label(session: &SessionInfo) -> String {
-    let app = session.key.app.as_str();
-    let name = match app.split_once('!') {
-        // A packaged application: the name of its package, without the
-        // publisher before it and the hash after it.
-        Some((family, _)) => {
-            let package = family.split('_').next().unwrap_or(family);
-            package.rsplit('.').next().unwrap_or(package)
-        }
-        None => {
-            let file = app.rsplit(['\\', '/']).next().unwrap_or(app);
-            // An application names itself as it likes, in any letters: the
-            // end is looked at only where it lies between two of them.
-            let stem = file.len().saturating_sub(4);
-            match file.get(stem..) {
-                Some(end) if end.eq_ignore_ascii_case(".exe") => &file[..stem],
-                _ => file,
-            }
-        }
-    };
+    let name = media_app_name(&session.key.app);
     let number = name.len() >= 12 && name.chars().all(|letter| letter.is_ascii_hexdigit());
     if (number || name.is_empty()) && !session.title.is_empty() {
         return session.title.clone();
@@ -468,11 +458,14 @@ struct Readout {
     /// 0 while absent, 1 when fully shown.
     presence: Spring,
     width: Pixels,
+    wheel: Wheel,
+    /// How many percent a notch of the wheel turns the volume.
+    step: i32,
     _changes: Subscription,
 }
 
 impl Readout {
-    fn new(player: Entity<Player>, width: Pixels, cx: &mut Context<Self>) -> Self {
+    fn new(player: Entity<Player>, width: Pixels, step: i32, cx: &mut Context<Self>) -> Self {
         let motion = cx.global::<Theme>().motion;
         let mut this = Self {
             _changes: cx.observe(&player, |this: &mut Self, _, cx| this.follow(cx)),
@@ -480,9 +473,29 @@ impl Readout {
             shown: None,
             presence: Spring::new(motion.spatial, 0.),
             width,
+            wheel: Wheel::default(),
+            step,
         };
         this.follow(cx);
         this
+    }
+
+    /// Turns the volume with the wheel, or skips with Shift held.
+    fn wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let notches = self.wheel.notches(event);
+        if notches == 0 {
+            return;
+        }
+        if !event.modifiers.shift {
+            VolumeChange::By(notches * self.step).apply(cx);
+            return;
+        }
+        let command = match notches > 0 {
+            true => MediaCommand::Previous,
+            false => MediaCommand::Next,
+        };
+        self.player
+            .update(cx, |player, cx| player.send(command, cx));
     }
 
     fn follow(&mut self, cx: &mut Context<Self>) {
@@ -531,6 +544,9 @@ impl Render for Readout {
             .overflow_hidden()
             .max_w(self.width * presence.max(0.))
             .opacity(presence.clamp(0., 1.))
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                this.wheel(event, cx);
+            }))
             .child(
                 // The room is kept by the element around: a pill with a
                 // limit of its own does not pass it on to its text.

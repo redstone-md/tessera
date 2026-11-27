@@ -33,6 +33,7 @@ mod hdr;
 mod hotkeys;
 mod hotspot;
 mod icon;
+mod ime;
 mod index;
 mod input_names;
 mod jump;
@@ -83,15 +84,18 @@ mod taskbar_list;
 mod terminal;
 mod thumbnail;
 mod tile_border;
+mod touch_keyboard;
 mod tray;
 mod uri_scheme;
 mod veil;
 mod video;
+mod wheel_lines;
 mod wic;
 mod wifi;
 mod window_ops;
 mod windows_key;
 mod winlogon;
+mod zones;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
@@ -137,6 +141,7 @@ pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
 pub use hotspot::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use icon::IconPixels;
+pub use ime::{ImeMode, ImeState};
 pub use index::SearchIndex;
 pub use input_names::InputName;
 pub use input_names::OwnInput;
@@ -196,6 +201,7 @@ pub use taskbar_list::{
 pub use terminal::{terminal, windows_terminal};
 pub use thumbnail::Thumbnail;
 pub use tile_border::TileBorder;
+pub use touch_keyboard::TouchKeyboard;
 pub use tray::BalloonKind;
 pub use tray::TrayPromotion;
 pub use tray::{Balloon, BalloonEvent};
@@ -203,6 +209,7 @@ pub use tray::{Tray, TrayButton, TrayIcon};
 pub use uri_scheme::UriScheme;
 pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};
+pub use wheel_lines::wheel_lines;
 pub use wic::decode_with_wic;
 pub use wifi::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
 pub use windows_key::DesktopClose;
@@ -211,6 +218,7 @@ pub use winlogon::{
     ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
     own_program_name, recovery_keys_held,
 };
+pub use zones::SystemZone;
 
 use std::ffi::c_void;
 use std::mem::size_of;

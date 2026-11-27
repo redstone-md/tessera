@@ -9,6 +9,11 @@
 //! whether the output renders spatial sound; and `sound-settings`, the way
 //! to the sound settings of Windows. Action: `volume`, which turns the
 //! default output up or down or mutes it, as the volume keys do.
+//!
+//! The wheel over `volume` turns the default output up or down by `step`
+//! percent (2 without the option) and shows the volume flyout, as the
+//! volume of Plasma does; [`Wheel`] counts the notches for the media and
+//! brightness widgets too.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -16,8 +21,8 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FontWeight, Global, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, div, px,
+    IntoElement, ParentElement, Pixels, Render, ScrollDelta, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
 
 use crate::actions::{Action, Actions};
@@ -25,7 +30,7 @@ use crate::flyout::{Flyouts, Reading, volume_icon};
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, staggered};
-use crate::platform::{AppSound, AudioDevice, AudioOutput, Shortcut, spatial_sound};
+use crate::platform::{AppSound, AudioDevice, AudioOutput, Shortcut, spatial_sound, wheel_lines};
 use crate::theme::Theme;
 use crate::ui::{
     LIST_MIN_HEIGHT, ROW_HEIGHT, Slider, icon, list_row, list_title, one_line, pill, state_layer,
@@ -62,6 +67,56 @@ const NAME_SIZE: f32 = 11.;
 /// How high a row is that leads to the settings.
 const SLIM_ROW: f32 = 40.;
 
+/// How many percent a notch of the wheel over `volume` turns the volume
+/// unless `step` says otherwise, as the volume keys do for most outputs.
+pub(super) const WHEEL_STEP: i32 = 2;
+
+/// How many logical pixels of a touchpad make a notch of the wheel.
+const PIXELS_PER_NOTCH: f32 = 40.;
+
+/// The notches of the wheel over a widget: the lines GPUI makes of a turn
+/// are divided by the lines Windows scrolls for a notch, and the parts of
+/// a notch a precision touchpad or a fine wheel sends are added up until
+/// they make one, as the pixels of a touchpad are. The wheel turned with
+/// Shift held, which Windows turns sideways, counts the same.
+#[derive(Default)]
+pub(super) struct Wheel {
+    /// The part of a notch turned so far.
+    rest: f32,
+}
+
+impl Wheel {
+    /// How many notches `event` turns the wheel, up above 0.
+    pub(super) fn notches(&mut self, event: &ScrollWheelEvent) -> i32 {
+        let sideways = matches!(event.delta, ScrollDelta::Lines(lines) if lines.y == 0.);
+        notches_of(event.delta, wheel_lines(sideways), &mut self.rest)
+    }
+}
+
+/// How many notches `delta` turns the wheel, up above 0, with
+/// `lines_per_notch` the lines Windows makes of a notch and `rest` the
+/// part of a notch turned before.
+fn notches_of(delta: ScrollDelta, lines_per_notch: f32, rest: &mut f32) -> i32 {
+    let along = |x: f32, y: f32| if y != 0. { y } else { x };
+    *rest += match delta {
+        ScrollDelta::Lines(lines) => along(lines.x, lines.y) / lines_per_notch,
+        ScrollDelta::Pixels(pixels) => {
+            along(f32::from(pixels.x), f32::from(pixels.y)) / PIXELS_PER_NOTCH
+        }
+    };
+    let whole = rest.trunc();
+    *rest -= whole;
+    whole as i32
+}
+
+/// The `step` option of a widget the wheel turns, in percent from 1 to 25.
+pub(super) fn wheel_step(context: &crate::module::WidgetContext, default: i32) -> i32 {
+    let step = context
+        .number("step")
+        .map_or(default, |step| step.round() as i32);
+    step.clamp(1, 25)
+}
+
 pub struct SoundModule;
 
 impl Module for SoundModule {
@@ -70,11 +125,14 @@ impl Module for SoundModule {
     }
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
-        widgets.register("volume", |_, cx| {
+        widgets.register("volume", |context, cx| {
             let sound = Sound::shared(cx);
+            let step = wheel_step(context, WHEEL_STEP);
             cx.new(|cx| VolumeReadout {
                 _changes: cx.observe(&sound, |_, _, cx| cx.notify()),
                 sound,
+                wheel: Wheel::default(),
+                step,
             })
             .into()
         })?;
@@ -164,6 +222,9 @@ pub enum VolumeChange {
     Mute,
     /// Mutes the default microphone, or lifts its mute.
     MuteMicrophone,
+    /// Turns the output up by this many percent, or down below 0; up
+    /// lifts the mute.
+    By(i32),
 }
 
 impl VolumeChange {
@@ -194,6 +255,13 @@ impl VolumeChange {
                 output.set_muted(false)?;
             }
             Self::Down => output.step(false)?,
+            Self::By(points) => {
+                let volume = output.volume()? + points as f32 / 100.;
+                output.set_volume(volume.clamp(0., 1.))?;
+                if points > 0 {
+                    output.set_muted(false)?;
+                }
+            }
             _ => output.set_muted(!output.is_muted()?)?,
         }
         Ok(Reading::Volume {
@@ -569,9 +637,13 @@ impl Channel {
     }
 }
 
-/// Shows the volume as an icon and a percentage.
+/// Shows the volume as an icon and a percentage; the wheel over it turns
+/// the volume.
 struct VolumeReadout {
     sound: Entity<Sound>,
+    wheel: Wheel,
+    /// How many percent a notch turns the volume.
+    step: i32,
     _changes: Subscription,
 }
 
@@ -582,7 +654,14 @@ impl Render for VolumeReadout {
         if !sound.known {
             return div().into_any_element();
         }
-        let readout = pill(&theme).font_weight(FontWeight::MEDIUM);
+        let readout = pill(&theme)
+            .font_weight(FontWeight::MEDIUM)
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                let notches = this.wheel.notches(event);
+                if notches != 0 {
+                    VolumeChange::By(notches * this.step).apply(cx);
+                }
+            }));
         let readout = match sound.level {
             Some(level) => readout
                 .child(icon(&theme, level.icon()))
@@ -1255,5 +1334,29 @@ mod tests {
     #[test]
     fn a_list_shows_two_rows_and_a_half() {
         assert_eq!(seen_height(px(56.), px(8.)), px(156.));
+    }
+
+    #[test]
+    fn a_turn_of_the_wheel_is_a_notch_and_parts_add_up() {
+        use gpui::{point, px};
+        let lines = |x: f32, y: f32| ScrollDelta::Lines(point(x, y));
+        let mut rest = 0.;
+        // Windows makes three lines of a notch, sideways with Shift held.
+        assert_eq!(notches_of(lines(0., 3.), 3., &mut rest), 1);
+        assert_eq!(notches_of(lines(0., -3.), 3., &mut rest), -1);
+        assert_eq!(notches_of(lines(3., 0.), 3., &mut rest), 1);
+        assert_eq!(notches_of(lines(0., 0.), 3., &mut rest), 0);
+        // A line is a third of a notch; three of them make one.
+        assert_eq!(notches_of(lines(0., 1.), 3., &mut rest), 0);
+        assert_eq!(notches_of(lines(0., 1.), 3., &mut rest), 0);
+        assert_eq!(notches_of(lines(0., 1.), 3., &mut rest), 1);
+        // A page a notch is one notch all the same.
+        let page = u32::MAX as f32;
+        assert_eq!(notches_of(lines(0., page), page, &mut rest), 1);
+        let pixels = |y: f32| ScrollDelta::Pixels(point(px(0.), px(y)));
+        let mut rest = 0.;
+        assert_eq!(notches_of(pixels(25.), 3., &mut rest), 0);
+        assert_eq!(notches_of(pixels(25.), 3., &mut rest), 1);
+        assert_eq!(notches_of(pixels(-100.), 3., &mut rest), -2);
     }
 }

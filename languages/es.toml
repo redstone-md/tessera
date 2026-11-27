@@ -929,3 +929,6 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "Wi-Fi settings" = "Configuración de Wi-Fi"
 "WPA-Enterprise and WEP networks are joined in the Wi-Fi settings of Windows" = "Las redes WPA-Enterprise y WEP se conectan en la configuración de Wi-Fi de Windows"
 "The name of a network has 1 to 32 Latin characters" = "El nombre de una red tiene de 1 a 32 caracteres latinos"
+# flyouts-input-clock.
+"All day" = "Todo el día"
+"No events" = "No hay eventos"

@@ -929,3 +929,6 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Wi-Fi settings" = "Параметри Wi-Fi"
 "WPA-Enterprise and WEP networks are joined in the Wi-Fi settings of Windows" = "До мереж WPA-Enterprise і WEP під’єднуються в параметрах Wi-Fi Windows"
 "The name of a network has 1 to 32 Latin characters" = "Ім’я мережі має від 1 до 32 латинських символів"
+# flyouts-input-clock.
+"All day" = "Весь день"
+"No events" = "Немає подій"

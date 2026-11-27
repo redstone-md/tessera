@@ -464,6 +464,8 @@ history = 200         # notifications kept after they left Windows, at most 1000
 quiet = false         # do not disturb until switched off
 quiet_when = ["fullscreen", "game", "presenting", "duplicating"]  # the default
 schedule = { from = "22:00", to = "07:00", days = ["fri", "sat"] }
+# Without `banners`, banners are off beside Explorer and on while Tessera is the shell,
+# where Windows draws none; `banners = false` switches them off there too.
 
 [[notification_rule]]
 app = "Microsoft Teams*"  # the name or the identifier, with * and ?
@@ -570,6 +572,18 @@ brightness = true
 locks = true
 layout = true
 place = "top-right"
+```
+
+`media = true` shows another piece being played by the session Windows considers current, read once a second: a card with its picture, its title and its artist with the application that plays it (the piece that plays when Tessera starts is not shown, nor a piece without a title). `workspace = true` shows going to another workspace on the display the pointer is on, Tessera's own or the virtual desktops of Windows: its name, or its number, and a dot for each workspace, the one shown long and lit. With `layout = true` the action `input-language` (Win+Space where the keys of Windows are bound) also lists the installed layouts with the names Windows gives them, the one switched to lit, for as long as the Windows key is held and `seconds` after, as the switcher of Explorer does. `seconds` is how long a flyout stays after the last change, from 1 to 10 (1.6 without the key), and `margin` how far it hangs from the sides of the space, in logical pixels (24 without the key, at most 400). `place` also takes `left` and `right`, the middle of a side, from which the flyout slides in, and `center`.
+
+```toml
+[flyout]
+media = true
+workspace = true
+layout = true
+seconds = 3
+margin = 40
+place = "right"
 ```
 
 ## The wallpaper
@@ -725,3 +739,35 @@ An icon is named by the global identifier its application gave it, written as `{
 Tessera writes these lists itself: dragging an icon writes `order`, and where it goes from the bar to the overflow or back, its exact name into `shown` or `hidden`; so does Tessera's own menu of an icon, opened with Shift and the right button or with the middle button, with **Move to overflow** and **Show in bar**. Entries of `order` for icons that are not there now keep their place after the icon they followed. The `limit` option of a `tray` widget caps how many icons stand in its bar; those over it wait in the overflow before the hidden ones. The `bluetooth` option of the widget still leaves the Bluetooth icon of Windows out unless it is `true`.
 
 The action `tray-focus` puts the keyboard on the strip of the display the pointer is on; where the keys of Windows are in use (`windows_keys`), Win+B is bound to it unless a `[[key]]` uses those keys. The arrows, Tab, Home and End move through the icons and the button of the overflow, Enter or Space chooses, Shift+F10 or the menu key asks for the menu of an icon, and Esc gives the keyboard back.
+## The clock and the calendar
+
+```toml
+[[surface]]
+edge = "top"
+thickness = 48
+center = [{ widget = "clock", popup = "calendar", format = "%a %-d %b  %H:%M", zones = ["Europe/Berlin", "Tokyo", "Eastern Standard Time"] }]
+```
+
+`zones` names time zones in any of three ways, in small or capital letters: an identifier of the IANA database (`Europe/Berlin`, `America/New_York`, old ones such as `Asia/Calcutta` and `US/Eastern` too), a zone as Windows names it (`W. Europe Standard Time`, as in the time zone settings of Windows) or a city (`Berlin`, `New York`, `São Paulo`, the cities that name zones and some large ones that do not, such as `Munich` or `Mumbai`). While the pointer rests on the clock, its tip gives the date and, for each zone, its city, the time there and how far it is from universal time, as `Tokyo 22:05 UTC+09:00`; the calendar lists the same under the month. Windows is asked for the time in a zone, with the rules of daylight saving time it keeps for every year, so a zone Windows does not have tells no time. A name that names no zone is reported in the log and left out.
+
+```toml
+[[popup]]
+name = "calendar"
+width = 620
+height = 520
+content = [{ widget = "calendar", week_start = "monday", week_numbers = true, calendars = ["C:/Users/me/Documents/family.ics", "webcal://example.org/holidays.ics"] }]
+side = ["notifications"]
+```
+
+`week_numbers = true` puts the week of the year before each row, counted as ISO 8601 does: the week of its Thursday. `calendars` names iCalendar files (`.ics`) by their path, and feeds by an `https://` or `webcal://` address (a `webcal:` feed is read over HTTPS); they are read when a calendar first names them and every half hour after, on a thread that may wait, up to 16 MB each. Their events put a dot under each day they take place on; a click on a day lists its events under the month, those of all day first, then by their start, each with its place. Times in universal time and in a zone named by `TZID` (an IANA identifier or a zone of Windows, as Outlook writes them) are shown in local time; a `TZID` Tessera does not know is read as local time. Recurring events follow `RRULE` with `FREQ=DAILY`, `WEEKLY`, `MONTHLY` or `YEARLY` and `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY` (such as `MO,WE`, `-1FR` or `4TH`), `BYMONTHDAY` and `BYMONTH`; `EXDATE` takes times out, an event with `RECURRENCE-ID` moves one, and `STATUS:CANCELLED` takes one away. A rule with parts Tessera does not follow, such as `BYSETPOS` or `FREQ=HOURLY`, shows the event at its first time only. Tessera has no holidays of its own: a public feed of the holidays of a country, which many calendar services offer as an `.ics` address, is named here like any other.
+
+## Typing and the wheel
+
+The widget `keyboard` shows, after the letters of the layout of the window in front, the mode of its input method where that layout has one, as the input indicator of Explorer: `A` while it types letters as they are, `あ` (hiragana), `カ` (katakana) or `Ａ` (letters of full width) for Japanese, `가` for Korean, `中` or `英` for Chinese. It is read through the window in front (`WM_IME_CONTROL`) every 0.4 seconds while the widget is shown, on a thread that may wait; a click on the mode switches a Japanese input method on or off and a Korean or Chinese one that is on between its own letters and Latin ones (가 and A, 中 and 英), and where the input method does not answer, as that of a window of an administrator, no mode is shown; a click on the letters goes on to the next layout as before. With `layout = true` in `[flyout]`, the layout flyout gives the mode too. `touch-keyboard` is a button that shows and hides the touch keyboard of Windows, as the button of the taskbar of Explorer does; it starts the touch keyboard (TabTip.exe) where it does not run yet.
+
+```toml
+end = ["touch-keyboard", "keyboard", { widget = "volume", step = 5 }, { widget = "brightness", step = 10 }]
+```
+
+The wheel over `volume` turns the default output up or down by `step` percent (2 without the option, from 1 to 25) and over `brightness` makes its display brighter or darker by `step` percent (5 without it), each with its flyout where `[flyout]` wants it. Over `media` the wheel turns the volume as over `volume`, and with Shift held goes to the next piece (down) or back to the one before (up). A mouse wheel turns one step a notch, counted as the lines Windows scrolls for a notch (3 when that is set to 0), so the small turns of a precision touchpad add up to a step; a touchpad that scrolls by pixels makes one step for every 40 pixels.
+

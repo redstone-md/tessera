@@ -27,6 +27,7 @@ pub use win32::SessionKey;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::SystemZone;
 pub use win32::TileBorder;
 pub use win32::TrayPromotion;
 pub use win32::UriScheme;
@@ -43,6 +44,7 @@ pub use win32::paint_desktop;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::spatial_sound;
+pub use win32::wheel_lines;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,
@@ -96,6 +98,7 @@ pub use win32::{
 pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
+pub use win32::{ImeMode, ImeState, TouchKeyboard};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use win32::{JumpItem, JumpList, JumpTarget, KnownCategory};
 pub use win32::{KeyLocks, window_in_front};

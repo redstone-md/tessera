@@ -499,7 +499,16 @@
 #
 # Built-in widgets:
 #   "clock"     date and time; option format, a strftime pattern
+#               and option zones, time zones its tip and the calendar
+#               give with their time and offset, as ["Europe/Berlin",
+#               "Tokyo", "Eastern Standard Time"]: an IANA identifier, a
+#               zone of Windows or a city
 #   "calendar"  a month to page through; option week_start, "monday" or "sunday"
+#               option week_numbers = true, the week of the year (ISO 8601)
+#               before each row; option calendars, iCalendar files and feeds
+#               (paths, https:// or webcal:// addresses) read every half
+#               hour, whose events put a dot under their days and are listed
+#               for the day clicked; holidays come from any such feed
 #   "notifications"  the notifications Tessera keeps: those of the Windows
 #               notification center and the history of those that left it,
 #               grouped by application, each with a button that dismisses
@@ -537,6 +546,8 @@
 #               width, the most it takes, in pixels
 #   "media"     what is playing, on one line; absent while no application
 #               offers anything; option width, the most it takes, in pixels
+#               (the wheel over it turns the volume by step percent, 2, and
+#               with Shift held goes to the next piece or back)
 #   "media-controls"  what is playing, with its picture and buttons to skip and pause
 #               and to shuffle and repeat where the player lets them;
 #               while several applications play, a chip for each chooses
@@ -568,6 +579,8 @@
 #   "bluetooth-button"  the Bluetooth icon, shown only on a machine that
 #               has Bluetooth
 #   "volume"    the output volume, as an icon and a percentage
+#               (the wheel over it turns the volume by step percent, 2,
+#               from 1 to 25, and shows the volume flyout)
 #   "workspaces"  a numbered button for each virtual desktop of Windows,
 #               or for each workspace of [workspaces], the shown one
 #               standing out; a click goes there;
@@ -583,6 +596,12 @@
 #               The windows of the workspace shown are live pictures.
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
+#               (for a Japanese, Korean or Chinese layout the mode of its
+#               input method follows (A, あ, カ, 가, 中, 英); a click on it switches
+#               a Japanese one on or off, a Korean or Chinese one between
+#               its own letters and Latin ones)
+#   "touch-keyboard"  a button that shows and hides the touch keyboard of
+#               Windows, as the one of the taskbar of Explorer
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "microphone-slider"  the same for the default microphone
 #   "volume-mixer"  a mute button and a slider for each program that
@@ -599,6 +618,8 @@
 #   "sound-settings"  a row that opens the sound settings of Windows
 #   "brightness"  how bright the display of the surface is, as an icon and
 #               a percentage; nothing on a display that does not say
+#               (the wheel over it changes it by step percent, 5, from 1
+#               to 25)
 #   "brightness-slider"  a slider for the brightness of the display it is
 #               shown on
 #   "tray"      the notification icons of applications; option tips, true
@@ -1245,6 +1266,9 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # two seconds, so a banner may come that much late, and Windows shows a
 # banner of its own as well unless its settings tell it not to. Windows does
 # not tell what the buttons of a notification do, so a banner has none.
+# Without the key banners are off beside Explorer and on while Tessera is the
+# shell, where Windows draws no banners; banners = false switches them off
+# there too.
 #
 # [notifications]
 # banners = true
@@ -1332,6 +1356,16 @@ content = [{ widget = "tiles", columns = 2, tiles = [{ widget = "radio-tile", ra
 # layout = true       the window in front switched to another keyboard layout
 # place = "bottom"    or "top", "top-left", "top-right", "bottom-left",
 #                     "bottom-right"
+#                     or "left", "right" (the middle of a side), "center"
+# media = true        another piece being played: its picture, title, artist
+#                     and application, read once a second
+# workspace = true    another workspace shown: its name and a dot for each
+# seconds = 2         how long a flyout stays after the last change, 1 to 10
+#                     (1.6 without the key)
+# margin = 24         how far from the sides of the display it hangs, in
+#                     logical pixels
+# With layout = true, Win+Space (the action input-language) also lists the
+# installed layouts, the one switched to lit, while the Windows key is held.
 #
 # In shell mode Windows shows no indicator of its own.
 

@@ -696,7 +696,7 @@ impl Render for NotificationList {
         let clear = Interaction::track(clear, cx, |this: &mut Self| Some(&mut this.clear));
         // Do not disturb is switched here while banners are shown, which
         // is all it holds back.
-        let banners = Banners::config(cx).is_some_and(|config| config.banners);
+        let banners = Banners::config(cx).is_some_and(|config| config.banners());
         let hush = Banners::hush(cx);
         self.quietness
             .animate_to(if hush.is_some() { 1. } else { 0. });
@@ -807,7 +807,7 @@ impl Bell {
 
     fn state(cx: &gpui::App) -> (usize, bool) {
         let unseen = { cx.try_global::<NotificationStore>() }.map_or(0, NotificationStore::unseen);
-        let banners = Banners::config(cx).is_some_and(|config| config.banners);
+        let banners = Banners::config(cx).is_some_and(|config| config.banners());
         (unseen, banners && Banners::hush(cx).is_some())
     }
 
@@ -902,7 +902,7 @@ impl Render for Focus {
             None => language.say("Off").to_owned(),
         };
         // Without banners there is nothing for do not disturb to hold back.
-        let banners = Banners::config(cx).is_some_and(|config| config.banners);
+        let banners = Banners::config(cx).is_some_and(|config| config.banners());
         let note = if banners {
             note
         } else {
