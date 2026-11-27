@@ -42,7 +42,7 @@ use serde::Deserialize;
 
 use crate::actions::{Action, Actions};
 use crate::config::{Config, PopupConfig, WidgetSpec};
-use crate::explorer_args::{Destination, ExplorerArgs, explorer_command_line};
+use crate::explorer_args::{Destination, ExplorerArgs, absolute_words, explorer_command_line};
 use crate::files::SystemPlaces;
 use crate::flyout::Flyouts;
 use crate::i18n::Language;
@@ -57,6 +57,7 @@ use crate::platform::{
     Taskbar, attach_console, is_safe_mode, own_program_name, recovery_keys_held, shell_mode,
     started_as_shell,
 };
+use crate::platform::{FilesStart, start_detached};
 use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
@@ -220,8 +221,9 @@ pub fn run_command_if_requested(arguments: impl Iterator<Item = String>) -> Opti
 /// it names: one that is busy, or one it started itself.
 const HAND_OVER_TIME: Duration = Duration::from_secs(15);
 
-/// How long it waits for another Tessera that runs but does not listen
-/// yet, as one that is starting, before it starts one itself.
+/// How long the start that may start a Tessera ([`FilesStart`]) waits
+/// for another Tessera that runs but does not listen yet, as one that is
+/// starting, before it starts one itself.
 const STARTING_TIME: Duration = Duration::from_secs(3);
 
 /// How often it tries again meanwhile.
@@ -289,9 +291,22 @@ impl FilesCommand {
 /// where none runs, this program starts Tessera and hands them over once
 /// it listens; only where that fails does Explorer get them, marked so
 /// that it cannot hand them back. Whatever is no folder of the file
-/// system goes to Explorer at once, with the same words.
+/// system goes to Explorer at once, with the same words. Relative paths
+/// are made absolute first, as the running Tessera works in another
+/// folder than this process.
 fn open_files(words: &[String]) -> i32 {
+    let words = absolute_words(words, &|path| std::path::absolute(path).ok());
+    let text: Vec<&str> = std::iter::once("files")
+        .chain(words.iter().map(String::as_str))
+        .collect();
+    let text = text.join("\n");
     if started_by_files_fallback() {
+        // Explorer gave back a folder it was just handed. A Tessera that
+        // listens by now still gets it, but none is started and nothing
+        // goes to Explorer again, so the two cannot hand it to and fro.
+        if matches!(Handed::by_sending(&text), Handed::Done) {
+            return 0;
+        }
         let language = Config::load().language;
         tell_problem(
             "Tessera Files",
@@ -299,14 +314,18 @@ fn open_files(words: &[String]) -> i32 {
         );
         return 1;
     }
-    let line = explorer_command_line(words);
-    if ExplorerArgs::parse(words).destination(&SystemPlaces) == Destination::Explorer {
+    let line = explorer_command_line(&words);
+    if ExplorerArgs::parse(&words).destination(&SystemPlaces) == Destination::Explorer {
         return to_explorer(&line, false);
     }
-    let text: Vec<&str> = std::iter::once("files")
-        .chain(words.iter().map(String::as_str))
-        .collect();
-    match hand_to_files(&text.join("\n")) {
+    if text.len() > Commands::LONGEST {
+        report!(
+            "the words of the folder are longer than Tessera takes ({} bytes), so Explorer opens it",
+            Commands::LONGEST
+        );
+        return to_explorer(&line, true);
+    }
+    match hand_to_files(&text) {
         true => 0,
         false => to_explorer(&line, true),
     }
@@ -342,11 +361,15 @@ impl Handed {
 }
 
 /// Hands `text` to the running Tessera, starting one where none listens,
-/// and says whether it got there within [`HAND_OVER_TIME`]. Another
-/// Tessera that runs but does not listen yet is given [`STARTING_TIME`]
-/// first, so that a Tessera that is starting is not started twice.
+/// and says whether it got there within [`HAND_OVER_TIME`]. Only the
+/// start of `tessera files` that holds [`FilesStart`] starts a Tessera,
+/// so that the starts made together for several folders start one
+/// between them; the others wait for it to listen. Another Tessera that
+/// runs but does not listen yet is given [`STARTING_TIME`] first, so that
+/// a Tessera that is starting is not started twice.
 fn hand_to_files(text: &str) -> bool {
     let began = Instant::now();
+    let mut starting: Option<(FilesStart, Instant)> = None;
     let mut started: Option<std::process::Child> = None;
     loop {
         match (Handed::by_sending(text), &mut started) {
@@ -359,10 +382,14 @@ fn hand_to_files(text: &str) -> bool {
                 }
             }
             (Handed::Nobody, None) => {
-                let program = own_program_name();
-                let other = { RunningProcess::all().into_iter() }
-                    .any(|process| process.name.eq_ignore_ascii_case(&program));
-                if !other || began.elapsed() >= STARTING_TIME {
+                if starting.is_none() {
+                    starting = FilesStart::take().map(|start| (start, Instant::now()));
+                }
+                // Without it, another start of `tessera files` starts the
+                // Tessera, and this one waits for it to listen.
+                if let Some((_, taken)) = &starting
+                    && (taken.elapsed() >= STARTING_TIME || !another_tessera_runs())
+                {
                     match start_tessera() {
                         Ok(child) => started = Some(child),
                         Err(error) => {
@@ -380,16 +407,18 @@ fn hand_to_files(text: &str) -> bool {
     }
 }
 
+/// Whether another process of this program runs, as a Tessera that is
+/// starting does; the other starts of `tessera files` count too, which
+/// only makes the one that starts Tessera wait for [`STARTING_TIME`].
+fn another_tessera_runs() -> bool {
+    let program = own_program_name();
+    { RunningProcess::all().into_iter() }.any(|process| process.name.eq_ignore_ascii_case(&program))
+}
+
 /// Starts this program without arguments, as a Tessera of its own that
-/// outlives this process.
+/// outlives this process and whatever started it.
 fn start_tessera() -> anyhow::Result<std::process::Child> {
-    let program = std::env::current_exe()?;
-    let child = std::process::Command::new(program)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
-    Ok(child)
+    start_detached(&std::env::current_exe()?)
 }
 
 /// Is the short process that starts Explorer as the shell once Tessera

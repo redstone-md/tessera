@@ -9,7 +9,7 @@
 //! and it takes nothing from another machine.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Error, ErrorKind, Write};
 use std::thread;
 
 use anyhow::{Context, bail};
@@ -25,8 +25,9 @@ use windows::core::w;
 /// Where the pipe is, for the one who writes.
 const PATH: &str = r"\\.\pipe\tessera-commands";
 
-/// The most bytes one message may have.
-const LONGEST: usize = 1024;
+/// The most bytes one message may have: enough for the longest command
+/// line of Windows (32 767 UTF-16 units) in UTF-8, nearly.
+const LONGEST: usize = 64 * 1024;
 
 /// How many messages may wait to be answered.
 const WAITING: usize = 8;
@@ -49,7 +50,7 @@ impl Pipe {
     /// The next message someone writes, once they did; nothing if the
     /// message was not text or reading failed.
     fn next(&self) -> anyhow::Result<Option<String>> {
-        let mut bytes = [0u8; LONGEST];
+        let mut bytes = vec![0u8; LONGEST];
         let mut read = 0u32;
         // SAFETY: the buffer and `read` outlive the calls, which are made
         // on the open handle of this pipe by its only thread.
@@ -59,7 +60,12 @@ impl Pipe {
             {
                 bail!("no one can reach the pipe: {error}");
             }
-            let taken = ReadFile(self.0, Some(&mut bytes), Some(&raw mut read), None);
+            let taken = ReadFile(
+                self.0,
+                Some(bytes.as_mut_slice()),
+                Some(&raw mut read),
+                None,
+            );
             DisconnectNamedPipe(self.0).ok();
             taken
         };
@@ -74,6 +80,9 @@ impl Pipe {
 pub struct Commands;
 
 impl Commands {
+    /// The most bytes [`Self::send`] hands over at once.
+    pub const LONGEST: usize = LONGEST;
+
     /// Listens for words from now on; each message arrives as it was
     /// written.
     pub fn listen() -> anyhow::Result<Receiver<String>> {
@@ -119,8 +128,16 @@ impl Commands {
         Ok(receiver)
     }
 
-    /// Hands `text` to the Tessera that listens, which fails if none does.
+    /// Hands `text` to the Tessera that listens, which fails if none does,
+    /// and refuses a text longer than [`Self::LONGEST`] bytes, which the
+    /// listener could not read whole.
     pub fn send(text: &str) -> std::io::Result<()> {
+        if text.len() > LONGEST {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("the words are longer than {LONGEST} bytes"),
+            ));
+        }
         let mut pipe = OpenOptions::new().write(true).open(PATH)?;
         pipe.write_all(text.as_bytes())
     }

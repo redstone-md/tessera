@@ -333,7 +333,7 @@ fn target_of(value: &str) -> Target {
         let share = rest.starts_with("//") && !rest.starts_with("///");
         let path = rest.trim_start_matches('/');
         let start = value.len() - path.len();
-        let path = percent_decoded(&value[start..]).replace('/', "\\");
+        let path = percent_decoded(&value[start..], false).replace('/', "\\");
         return Target::Named(match share {
             true => format!("\\\\{path}"),
             false => path,
@@ -394,12 +394,12 @@ fn search_of(text: &str) -> Target {
             continue;
         };
         match key.to_ascii_lowercase().as_str() {
-            "query" => words.push(percent_decoded(value)),
-            "location" => location = location.or(Some(percent_decoded(value))),
+            "query" => words.push(percent_decoded(value, true)),
+            "location" => location = location.or(Some(percent_decoded(value, true))),
             "crumb" => {
                 // A crumb may end with how it counts, as `,include`; a
                 // comma of its own value is escaped.
-                let crumb = percent_decoded(value.split(',').next().unwrap_or_default());
+                let crumb = percent_decoded(value.split(',').next().unwrap_or_default(), true);
                 let Some((name, said)) = crumb.split_once(':') else {
                     continue;
                 };
@@ -426,9 +426,11 @@ fn search_of(text: &str) -> Target {
     }
 }
 
-/// `text` with its `%xx` escapes, and `+` for a space, turned back into
-/// what they stand for; an escape that is no byte stays as written.
-fn percent_decoded(text: &str) -> String {
+/// `text` with its `%xx` escapes turned back into what they stand for,
+/// and `+` into a space where `plus_is_space`, as in the parameters of a
+/// `search-ms:` address; in a `file:` address `+` is itself. An escape
+/// that is no byte stays as written.
+fn percent_decoded(text: &str, plus_is_space: bool) -> String {
     let bytes = text.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -443,7 +445,7 @@ fn percent_decoded(text: &str) -> String {
                 decoded.push(value);
                 index += 3;
             }
-            (b'+', None) => {
+            (b'+', None) if plus_is_space => {
                 decoded.push(b' ');
                 index += 1;
             }
@@ -454,6 +456,60 @@ fn percent_decoded(text: &str) -> String {
         }
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// The names `Files::named` reads as places, not as paths.
+const PLACE_NAMES: [&str; 3] = ["~", "home", "computer"];
+
+/// `words` as the same switches and values, one word each, with every
+/// value that names a relative path of the file system made absolute by
+/// `absolute`, so that a Tessera with another working directory reads
+/// them as this process does. Switches, `shell:`, `::{CLSID}`,
+/// `search-ms:` and `file:` values, the names of places (`~`, `home`,
+/// `computer`) and the value of a switch Tessera has no use for are kept
+/// as they are.
+pub fn absolute_words(
+    words: &[String],
+    absolute: &dyn Fn(&Path) -> Option<PathBuf>,
+) -> Vec<String> {
+    let mut made = Vec::new();
+    let mut tokens = tokens(words).into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            Token::Switch(switch, name) => {
+                made.push(format!("/{name}"));
+                if switch.takes_value()
+                    && matches!(tokens.peek(), Some(Token::Value(_)))
+                    && let Some(Token::Value(value)) = tokens.next()
+                {
+                    made.push(match switch {
+                        Switch::Other => value,
+                        _ => made_absolute(value, absolute),
+                    });
+                }
+            }
+            Token::Value(value) => made.push(made_absolute(value, absolute)),
+        }
+    }
+    made
+}
+
+/// `value` made absolute by `absolute` where it is a relative path of the
+/// file system, and as it is otherwise.
+fn made_absolute(value: String, absolute: &dyn Fn(&Path) -> Option<PathBuf>) -> String {
+    let lower = value.to_ascii_lowercase();
+    let path = matches!(target_of(&value), Target::Named(_))
+        && !lower.starts_with("file:")
+        && !PLACE_NAMES.contains(&lower.as_str())
+        && !value.starts_with("~\\")
+        && !value.starts_with("~/")
+        && Path::new(&value).is_relative();
+    if !path {
+        return value;
+    }
+    { absolute(Path::new(&value)) }
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .unwrap_or(value)
 }
 
 /// The command line that gives `words` to Explorer as it reads them: a
@@ -738,7 +794,59 @@ mod tests {
 
     #[test]
     fn escapes_are_decoded() {
-        assert_eq!(percent_decoded("a%20b+c%zz%41"), "a b c%zzA");
-        assert_eq!(percent_decoded("%D0%AF"), "Я");
+        assert_eq!(percent_decoded("a%20b+c%zz%41", true), "a b c%zzA");
+        assert_eq!(percent_decoded("a+b", false), "a+b");
+        assert_eq!(percent_decoded("%D0%AF", false), "Я");
+    }
+
+    #[test]
+    fn a_plus_in_a_file_address_is_itself() {
+        assert_eq!(parse(&["file:///C:/C++/src"]).target, named(r"C:\C++\src"));
+        assert_eq!(
+            parse(&["search-ms:query=a+b&location=C:%5Cx"]).target,
+            Some(Target::Search {
+                location: Some(r"C:\x".to_owned()),
+                query: "a b".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn relative_paths_are_made_absolute_and_nothing_else() {
+        let absolute = |path: &Path| Some(Path::new(r"C:\here").join(path));
+        let made = absolute_words(
+            &words(&[r"/select,.\a b.txt", "/e,/root,sub", "/idlist,:1:2"]),
+            &absolute,
+        );
+        assert_eq!(
+            made,
+            words(&[
+                "/select",
+                r"C:\here\.\a b.txt",
+                "/e",
+                "/root",
+                r"C:\here\sub",
+                "/idlist",
+                ":1:2",
+            ])
+        );
+        let kept = [
+            r"C:\x",
+            "shell:Downloads",
+            "::{20d04fe0-3aea-1069-a2d8-08002b30309d}",
+            "search-ms:query=x",
+            "file:///C:/x",
+            "~",
+            r"~\Music",
+            "home",
+            "computer",
+        ];
+        for word in kept {
+            assert_eq!(absolute_words(&words(&[word]), &absolute), words(&[word]));
+        }
+        // The words made read as the words they were made of.
+        let line = words(&[r"/select,C:\x\a,b.txt", "/n"]);
+        let made = absolute_words(&line, &absolute);
+        assert_eq!(ExplorerArgs::parse(&made), ExplorerArgs::parse(&line));
     }
 }

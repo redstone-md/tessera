@@ -21,30 +21,40 @@
 //! Options or `explorer.exe` itself.
 //!
 //! [`known_folder_path`] reads the folder a `shell:` name stands for,
-//! [`start_explorer`] gives a command line to Explorer as it is, and
-//! [`tell_problem`] says in a box of Windows what went wrong where no
-//! window of Tessera can.
+//! [`start_explorer`] gives a command line to Explorer as it is,
+//! [`start_detached`] starts a Tessera that outlives the `tessera files`
+//! that started it, [`FilesStart`] lets one `tessera files` at a time
+//! start it, and [`tell_problem`] says in a box of Windows what went
+//! wrong where no window of Tessera can.
 #![allow(unsafe_code)]
 
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, bail};
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, WAIT_ABANDONED,
+    WAIT_OBJECT_0, WIN32_ERROR,
+};
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
     CoInitializeEx, CoTaskMemFree, CoUninitialize,
 };
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_SAM_FLAGS, RegCopyTreeW,
-    RegDeleteKeyW, RegDeleteTreeW,
+    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_CREATE_SUB_KEY,
+    REG_SAM_FLAGS, RegCopyTreeW, RegDeleteKeyW, RegDeleteTreeW,
+};
+use windows::Win32::System::Threading::{
+    CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CreateMutexW, DETACHED_PROCESS,
+    ReleaseMutex, WaitForSingleObject,
 };
 use windows::Win32::UI::Shell::{
     IKnownFolderManager, KnownFolderManager, SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify,
 };
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW};
-use windows::core::{HSTRING, PCWSTR};
+use windows::core::{HSTRING, PCWSTR, w};
 
 use super::registry::{Key, has_key, registry_text};
 use super::winlogon::explorer_program;
@@ -80,9 +90,16 @@ const EXISTED: &str = "Existed";
 const SAVED: &str = "Saved";
 
 /// The environment variable a Tessera sets when it hands a folder to
-/// Explorer because no Tessera answered; a Tessera started with it hands
+/// Explorer because no Tessera answered, to the second since 1970 it did;
+/// a Tessera started with it within [`FALLBACK_FRESH`] of that hands
 /// nothing on again.
 pub const FILES_FALLBACK: &str = "TESSERA_FILES_FALLBACK";
+
+/// How long after a folder was handed to Explorer a `tessera files` that
+/// carries [`FILES_FALLBACK`] counts as one Explorer handed it back. The
+/// Explorer that was handed it may live on as a file manager, and what is
+/// started from it later carries the variable too: that is no hand-back.
+const FALLBACK_FRESH: Duration = Duration::from_secs(30);
 
 /// How long a command line value is read, in UTF-16 units.
 const VALUE_LENGTH: usize = 2048;
@@ -348,9 +365,10 @@ fn remove_if_empty(path: &str) -> Result<()> {
     checked(status, "an empty key of the registry was not removed")
 }
 
-/// Opens `path` under `root` to write it, making it where it is missing.
+/// Opens `path` under `root` to write it, making it where it is missing;
+/// keys may be made under it too, as copying a tree into it does.
 fn create(root: HKEY, path: &str) -> Result<(Key, bool)> {
-    Key::create(root, path, REG_SAM_FLAGS(0), false)
+    Key::create(root, path, KEY_CREATE_SUB_KEY, false)
         .map_err(|failure| failure.into_error(&format!("the key {path} was not made")))
 }
 
@@ -416,23 +434,106 @@ pub fn known_folder_path(name: &str) -> Option<PathBuf> {
 
 /// Starts Explorer with `line` as its command line, as it reads one; with
 /// `fallback`, marked with [`FILES_FALLBACK`], so that a Tessera it starts
-/// for a folder hands nothing back.
+/// for a folder at once hands nothing back. It works in the folder of
+/// Windows, so that it holds no drive it was not asked to.
 pub fn start_explorer(line: &str, fallback: bool) -> Result<()> {
-    let mut command = Command::new(explorer_program());
+    let program = explorer_program();
+    let mut command = Command::new(&program);
     if !line.is_empty() {
         command.raw_arg(line);
     }
+    if let Some(folder) = program.parent() {
+        command.current_dir(folder);
+    }
     if fallback {
-        command.env(FILES_FALLBACK, "1");
+        command.env(FILES_FALLBACK, seconds_now().to_string());
     }
     command.spawn().context("Explorer did not start")?;
     Ok(())
 }
 
 /// Whether this Tessera was started by an Explorer that a Tessera handed a
-/// folder to.
+/// folder to just now, within [`FALLBACK_FRESH`].
 pub fn started_by_files_fallback() -> bool {
-    std::env::var_os(FILES_FALLBACK).is_some_and(|value| value == "1")
+    let Some(handed) =
+        { std::env::var(FILES_FALLBACK).ok() }.and_then(|value| value.trim().parse::<u64>().ok())
+    else {
+        return false;
+    };
+    is_fresh(handed, seconds_now())
+}
+
+/// Whether a folder handed to Explorer at the second `handed` was handed
+/// within [`FALLBACK_FRESH`] of the second `now`.
+fn is_fresh(handed: u64, now: u64) -> bool {
+    handed <= now && now - handed <= FALLBACK_FRESH.as_secs()
+}
+
+/// The seconds since 1970.
+fn seconds_now() -> u64 {
+    { SystemTime::now().duration_since(UNIX_EPOCH) }.map_or(0, |since| since.as_secs())
+}
+
+/// Starts `program` without arguments as a process of its own: without a
+/// console, in a group of its own, out of the job of the process that
+/// starts it where the job lets it go (a job that ends its processes with
+/// the program that made it would end it too), and in the folder of the
+/// program, so that it holds no drive or share it was started from.
+pub fn start_detached(program: &Path) -> Result<Child> {
+    let start = |flags: u32| {
+        let mut command = Command::new(program);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(flags);
+        if let Some(folder) = program.parent() {
+            command.current_dir(folder);
+        }
+        command.spawn()
+    };
+    let own = DETACHED_PROCESS.0 | CREATE_NEW_PROCESS_GROUP.0;
+    match start(own | CREATE_BREAKAWAY_FROM_JOB.0) {
+        // A job that does not let its processes go refuses the flag.
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED.0 as i32) => start(own),
+        started => started,
+    }
+    .with_context(|| format!("{} did not start", program.display()))
+}
+
+/// The right to start a Tessera for folders, which one process of the
+/// session holds at a time, so that the `tessera files` started together
+/// for several folders start one Tessera between them. It is given up
+/// when dropped, and also when its process ends.
+pub struct FilesStart(HANDLE);
+
+impl FilesStart {
+    /// Takes the right where no other process holds it, without waiting.
+    pub fn take() -> Option<Self> {
+        // SAFETY: the name is a constant; the handle is closed here where
+        // the mutex is not taken, and owned by the value otherwise.
+        unsafe {
+            let mutex = CreateMutexW(None, false, w!(r"Local\tessera-files-start")).ok()?;
+            let waited = WaitForSingleObject(mutex, 0);
+            // A mutex whose holder ended without giving it up is taken too.
+            if waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED {
+                return Some(Self(mutex));
+            }
+            let _ = CloseHandle(mutex);
+            None
+        }
+    }
+}
+
+impl Drop for FilesStart {
+    fn drop(&mut self) {
+        // SAFETY: the mutex is held by this thread, which took it, and the
+        // handle is the open one of this value, closed once.
+        unsafe {
+            let _ = ReleaseMutex(self.0);
+            let _ = CloseHandle(self.0);
+        }
+    }
 }
 
 /// Says `text` under `title` in a box of Windows, for a process that has
@@ -490,6 +591,14 @@ mod tests {
         );
         assert!(!verb(Some(r"%SystemRoot%\Explorer.exe"), None).is_tessera("tessera.exe"));
         assert!(!verb(None, None).is_tessera("tessera.exe"));
+    }
+
+    #[test]
+    fn only_a_folder_handed_over_just_now_counts_as_handed_back() {
+        assert!(is_fresh(1_000, 1_000));
+        assert!(is_fresh(1_000, 1_030));
+        assert!(!is_fresh(1_000, 1_031));
+        assert!(!is_fresh(1_010, 1_000));
     }
 
     #[test]

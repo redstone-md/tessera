@@ -128,6 +128,7 @@ pub use files::{
     show_properties,
 };
 pub use files::{reveal, reveal_with};
+pub use folder_handler::{FilesStart, start_detached};
 pub use folder_handler::{
     FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
 };

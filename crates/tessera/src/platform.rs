@@ -78,6 +78,7 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
+pub use win32::{FilesStart, start_detached};
 pub use win32::{
     FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
 };
