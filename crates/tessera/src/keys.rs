@@ -263,9 +263,9 @@ impl Asked {
     }
 }
 
-/// What a `[[key]]` does.
+/// What a `[[key]]` does; a `[[corner]]` does one of the same deeds.
 #[derive(Clone, Debug, PartialEq)]
-enum Deed {
+pub(crate) enum Deed {
     Popup(String),
     /// The tiling mode to take; `None` for the one after the mode in use.
     Tiling(Option<TilingMode>),
@@ -307,10 +307,7 @@ impl Deed {
                 .as_ref()
                 .map(|popup| Ok(Self::Popup(popup.clone()))),
             key.tiling.as_deref().map(Self::tiling),
-            key.run.as_ref().map(|run| match run.is_empty() {
-                true => Err("`run` names no program".to_owned()),
-                false => Ok(Self::Run(run.clone())),
-            }),
+            key.run.as_deref().map(Self::program),
             key.focus.as_ref().map(|name| side(name).map(Self::Focus)),
             key.carry.as_ref().map(|name| side(name).map(Self::Carry)),
             key.switch
@@ -327,20 +324,41 @@ impl Deed {
                 .as_deref()
                 .map(|name| Self::action(name, key.arg.as_deref(), actions)),
         ];
-        if key.arg.is_some() && key.action.is_none() {
+        Self::one_of(
+            deeds,
+            key.arg.is_some() && key.action.is_none(),
+            "`popup`, `tiling`, `run`, `focus`, `move`, `switch`, `dock`, `files` and `action`",
+        )
+    }
+
+    /// The one deed that is given among `deeds`, or why there is not
+    /// exactly one; `names` lists the entries that give one. With
+    /// `stray_arg`, an `arg` was given without an `action`, which is
+    /// refused.
+    pub(crate) fn one_of(
+        deeds: impl IntoIterator<Item = Option<Result<Self, String>>>,
+        stray_arg: bool,
+        names: &str,
+    ) -> Result<Self, String> {
+        if stray_arg {
             return Err("`arg` is what an `action` is done with, and there is none".to_owned());
         }
         let mut deeds = deeds.into_iter().flatten();
         match (deeds.next(), deeds.next()) {
             (Some(deed), None) => deed,
-            _ => Err(
-                "it needs one of `popup`, `tiling`, `run`, `focus`, `move`, `switch`, `dock`, `files` and `action`"
-                    .to_owned(),
-            ),
+            _ => Err(format!("it needs one of {names}")),
         }
     }
 
-    fn action(name: &str, arg: Option<&str>, actions: &Actions) -> Result<Self, String> {
+    /// Starting the program `run` names, with the arguments after it.
+    pub(crate) fn program(run: &[String]) -> Result<Self, String> {
+        match run.is_empty() {
+            true => Err("`run` names no program".to_owned()),
+            false => Ok(Self::Run(run.to_vec())),
+        }
+    }
+
+    pub(crate) fn action(name: &str, arg: Option<&str>, actions: &Actions) -> Result<Self, String> {
         actions.check(name, arg)?;
         Ok(Self::Action {
             name: name.to_owned(),
@@ -390,7 +408,7 @@ impl Deed {
         })
     }
 
-    fn done(&self, cx: &mut App) {
+    pub(crate) fn done(&self, cx: &mut App) {
         match self {
             Self::Switch { back, held } => Switcher::step(*back, *held, cx),
             Self::Popup(name) => Shell::toggle_popup(name, cx),

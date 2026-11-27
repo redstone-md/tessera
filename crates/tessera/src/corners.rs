@@ -23,9 +23,8 @@ use gpui::{App, AsyncApp, Global};
 use serde::Deserialize;
 
 use crate::actions::Actions;
-use crate::keys::start_program;
+use crate::keys::Deed;
 use crate::platform::{Display, ScreenRect, front_fills, pointer_at, pointer_held};
-use crate::shell::Shell;
 
 /// How often the pointer is looked at when it is far from every corner
 /// in use, and when it is near one.
@@ -151,24 +150,6 @@ fn nearby(frame: ScreenRect, spot: Spot, (x, y): (i32, i32)) -> bool {
         }
 }
 
-/// What a corner does.
-#[derive(Clone, Debug, PartialEq)]
-enum Deed {
-    Action { name: String, arg: Option<String> },
-    Popup(String),
-    Run(Vec<String>),
-}
-
-impl Deed {
-    fn done(&self, cx: &mut App) {
-        match self {
-            Self::Action { name, arg } => Actions::run(name, arg.as_deref(), cx),
-            Self::Popup(name) => Shell::toggle_popup(name, cx),
-            Self::Run(command) => start_program(command),
-        }
-    }
-}
-
 /// A `[[corner]]`.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -194,27 +175,15 @@ impl CornerConfig {
     /// can name.
     fn deed(&self, actions: &Actions) -> Result<Deed, String> {
         let deeds = [
-            self.action.as_ref().map(|name| {
-                actions.check(name, self.arg.as_deref())?;
-                Ok(Deed::Action {
-                    name: name.clone(),
-                    arg: self.arg.clone(),
-                })
-            }),
+            { self.action.as_deref() }.map(|name| Deed::action(name, self.arg.as_deref(), actions)),
             self.popup.clone().map(|popup| Ok(Deed::Popup(popup))),
-            self.run.as_ref().map(|run| match run.is_empty() {
-                true => Err("`run` names no program".to_owned()),
-                false => Ok(Deed::Run(run.clone())),
-            }),
+            self.run.as_deref().map(Deed::program),
         ];
-        if self.arg.is_some() && self.action.is_none() {
-            return Err("`arg` is what an `action` is done with, and there is none".to_owned());
-        }
-        let mut deeds = deeds.into_iter().flatten();
-        match (deeds.next(), deeds.next()) {
-            (Some(deed), None) => deed,
-            _ => Err("it needs one of `action`, `popup` and `run`".to_owned()),
-        }
+        Deed::one_of(
+            deeds,
+            self.arg.is_some() && self.action.is_none(),
+            "`action`, `popup` and `run`",
+        )
     }
 
     /// How long the pointer rests there first.
