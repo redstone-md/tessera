@@ -26,6 +26,7 @@ mod view;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{
@@ -466,6 +467,8 @@ pub struct DesktopModel {
     reading: Option<Task<()>>,
     /// Whether the icons are fetched anew once the desktop is read.
     refetch: bool,
+    /// How many times the places were written.
+    writes: u64,
     _watch: Option<(FolderWatch, Task<()>)>,
 }
 
@@ -493,6 +496,7 @@ impl DesktopModel {
             scale: 1.,
             reading: None,
             refetch: false,
+            writes: 0,
             _watch: None,
         };
         model.read_positions(cx);
@@ -646,9 +650,18 @@ impl DesktopModel {
         let Some(path) = positions_path() else {
             return;
         };
-        let positions = self.positions.clone();
+        // Writings may overtake one another away from the user interface;
+        // one older than what was written already is left out.
+        static WRITTEN: Mutex<u64> = Mutex::new(0);
+        self.writes += 1;
+        let (positions, write) = (self.positions.clone(), self.writes);
         { cx.background_executor() }
             .spawn(async move {
+                let mut written = WRITTEN.lock().unwrap_or_else(PoisonError::into_inner);
+                if *written > write {
+                    return;
+                }
+                *written = write;
                 if let Err(error) = positions.save(&path) {
                     report!("the places of the icons are not written: {error}");
                 }
