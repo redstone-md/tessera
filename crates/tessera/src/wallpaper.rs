@@ -772,62 +772,58 @@ impl Wallpaper {
             groups.iter().any(same)
         };
         let nothing = |index: usize| matches!(plans.get(index), Some(Plan::Nothing));
-        let (going, fading) = cx
-            .update(|cx| {
-                let this = cx.global_mut::<Self>();
-                if this.task != task {
-                    return None;
+        // What goes is taken out of the slots and the videos before it
+        // fades, so that a configuration read again meanwhile finds it
+        // gone and shows anew what it wants there, instead of leaving it
+        // half faded.
+        let taken = cx.update(|cx| {
+            let this = cx.global_mut::<Self>();
+            if this.task != task {
+                return None;
+            }
+            // Videos that something else was faded in over go at once.
+            let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut this.videos)
+                .into_iter()
+                .partition(|playing| {
+                    !wanted(playing) && !playing.displays.iter().copied().all(nothing)
+                });
+            drop(gone);
+            let (fading, kept): (Vec<_>, Vec<_>) =
+                kept.into_iter().partition(|playing| !wanted(playing));
+            this.videos = kept;
+            for playing in &fading {
+                for &index in &playing.displays {
+                    this.slots[index].plan = Plan::Nothing;
                 }
-                // Videos that something else was faded in over go at once.
-                let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut this.videos)
-                    .into_iter()
-                    .partition(|playing| {
-                        !wanted(playing) && !playing.displays.iter().copied().all(nothing)
-                    });
-                drop(gone);
-                this.videos = kept;
-                let going: Vec<usize> = (0..this.slots.len())
-                    .filter(|&index| nothing(index) && this.slots[index].plan != Plan::Nothing)
-                    .collect();
-                let fading = this.videos.iter().enumerate();
-                let fading = fading.filter(|(_, playing)| !wanted(playing));
-                Some((going, fading.map(|(at, _)| at).collect::<Vec<_>>()))
-            })?
-            .unwrap_or_default();
+            }
+            let going: Vec<DesktopBackdrop> = (0..this.slots.len())
+                .filter(|&index| nothing(index))
+                .filter_map(|index| {
+                    let slot = &mut this.slots[index];
+                    slot.plan = Plan::Nothing;
+                    slot.under = None;
+                    slot.backdrop.take()
+                })
+                .collect();
+            Some((going, fading))
+        })?;
+        let Some((going, fading)) = taken else {
+            return Ok(false);
+        };
         if going.is_empty() && fading.is_empty() {
             return cx.update(|cx| cx.global::<Self>().task == task);
         }
-        let faded = Self::fade(task, fade, cx, |this, _, to| {
-            for &index in &going {
-                if let Some(backdrop) = &this.slots[index].backdrop {
-                    backdrop.recede(to);
-                }
+        // The windows and videos go once they faded out, or at once where
+        // the fade is cut short.
+        Self::fade(task, fade, cx, |_, _, to| {
+            for backdrop in &going {
+                backdrop.recede(to);
             }
-            for &at in &fading {
-                if let Some(playing) = this.videos.get(at) {
-                    playing.video.advance(1. - to);
-                }
+            for playing in &fading {
+                playing.video.advance(1. - to);
             }
         })
-        .await?;
-        if faded {
-            cx.update(|cx| {
-                let this = cx.global_mut::<Self>();
-                for &index in &going {
-                    let slot = &mut this.slots[index];
-                    slot.backdrop = None;
-                    slot.under = None;
-                    slot.plan = Plan::Nothing;
-                }
-                for &at in fading.iter().rev() {
-                    let playing = this.videos.remove(at);
-                    for index in &playing.displays {
-                        this.slots[*index].plan = Plan::Nothing;
-                    }
-                }
-            })?;
-        }
-        Ok(faded)
+        .await
     }
 
     /// Moves `step` from 0 to 1 with the spring `fade`, a frame at a
