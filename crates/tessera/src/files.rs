@@ -30,6 +30,7 @@ use serde::Deserialize;
 
 use model::RECYCLE_BIN;
 pub use model::{Grouping, Location, Look, size_text};
+use model::{KnownShellPlace, goes_through_archive, is_bare_server, is_shell_name};
 use session::{Opening, Session};
 pub use thumbs::FileViewConfig;
 use view::FilesView;
@@ -44,6 +45,7 @@ use crate::module::{Module, WidgetRegistry};
 use crate::modules::devices::{Drives, letter_of as drive_letter_of};
 use crate::modules::windows::FILES_APP;
 use crate::platform::Place;
+use crate::platform::ShellPath;
 use crate::platform::{
     AppWindow, DriveDialog, FolderHandler, NetworkDrives, RecycleBin, SharePackage, ShellThread,
     ShellWindows, known_folder_path, reveal_with, shell_mode, start_explorer,
@@ -92,6 +94,34 @@ pub struct FilesConfig {
     /// ended open again at its next start, each with its tabs. Read by the
     /// part of files-terminal that restores windows.
     pub restore_windows: bool,
+    /// Whether a ZIP file and the other archives the Shell opens as
+    /// folders are browsed as folders, or opened by their program.
+    pub archives: Archives,
+    /// Which Home the file manager shows: Tessera's own (Quick access and
+    /// the files used lately, read by Tessera) or Windows' own.
+    pub home: HomeKind,
+}
+
+/// What opening an archive does, `[files] archives`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Archives {
+    /// It is browsed as a folder, as Explorer does with a ZIP file.
+    #[default]
+    Browse,
+    /// It is opened by the program its kind is opened with.
+    Open,
+}
+
+/// Which Home is shown, `[files] home`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HomeKind {
+    /// Tessera's own: Quick access and the files used lately.
+    #[default]
+    Tessera,
+    /// Windows' own Home, with its favourites and recommendations.
+    Windows,
 }
 
 impl Default for FilesConfig {
@@ -107,6 +137,8 @@ impl Default for FilesConfig {
             explorer: true,
             autoplay: AutoPlayWhen::Shell,
             restore_windows: false,
+            archives: Archives::Browse,
+            home: HomeKind::Tessera,
         }
     }
 }
@@ -119,6 +151,9 @@ pub struct Files {
     reveals: Option<Sender<PathBuf>>,
     /// Whether the list of folder windows of the Shell is served.
     serving: bool,
+    /// The parsing names `open_shell` opened windows at, in small letters,
+    /// which are handed to Explorer where they cannot be shown.
+    fallbacks: Vec<String>,
 }
 
 impl Global for Files {}
@@ -376,14 +411,51 @@ impl Files {
     /// place turns out not to be one it can show. False means the name is
     /// none it takes at all (or the file manager is not Tessera's), and the
     /// caller hands it to Explorer.
-    #[allow(dead_code, reason = "implemented by files-namespace")]
-    pub fn open_shell(_parsing: &str, _cx: &mut App) -> bool {
-        false
+    #[allow(dead_code, reason = "called by explorer-shim and shortcuts-editor")]
+    pub fn open_shell(parsing: &str, cx: &mut App) -> bool {
+        let parsing = parsing.trim();
+        if !Self::opens_folders(cx) || !is_shell_name(parsing) {
+            return false;
+        }
+        let title = match KnownShellPlace::of_parsing(parsing) {
+            Some(place) => Language::of(cx).say(place.title).to_owned(),
+            None => parsing.to_owned(),
+        };
+        let place = ShellPath::named(parsing, &title);
+        cx.default_global::<Self>()
+            .fallbacks
+            .push(parsing.to_lowercase());
+        Self::open(Location::Shell(place), cx);
+        true
+    }
+
+    /// Whether the place `parsing` was opened by `open_shell` and not read
+    /// yet; it is forgotten as it is asked, so that only the first reading
+    /// of the window that opened it hands it to Explorer.
+    fn take_fallback(parsing: &str, cx: &mut App) -> bool {
+        let Some(files) = cx.try_global::<Self>() else {
+            return false;
+        };
+        let wanted = parsing.to_lowercase();
+        let Some(index) = files.fallbacks.iter().position(|name| *name == wanted) else {
+            return false;
+        };
+        cx.global_mut::<Self>().fallbacks.remove(index);
+        true
+    }
+
+    /// Hands the place `parsing` to Explorer, as Tessera Files cannot show
+    /// it.
+    fn hand_to_explorer(parsing: &str) {
+        let line = format!("\"{}\"", parsing.trim_matches('"'));
+        if let Err(error) = start_explorer(&line, false) {
+            report!("{error:#}");
+        }
     }
 
     /// Sends the window `hwnd` of the file manager to the place named
     /// `parsing`; false where no such window is open or the name is none
-    /// it can show (files-namespace adds the places of the Shell).
+    /// it can show: a folder, or a place of the Shell.
     #[allow(dead_code, reason = "for the windows of the Shell of shell-services")]
     pub fn navigate(hwnd: isize, parsing: &str, cx: &mut App) -> bool {
         let Some(window) = Self::windows(cx).into_iter().find(|each| each.hwnd == hwnd) else {
@@ -464,10 +536,24 @@ impl Files {
     /// The location a command or a key names: nothing or `~` for the
     /// folder of the user, `home` for Home (Quick access and the files
     /// used lately), `computer` for the drives, `recycle-bin` for the
-    /// Recycle Bin, or a path, with a leading
+    /// Recycle Bin, `control-panel`, `libraries`, `network`, `gallery`
+    /// and the other words of [`model::SHELL_PLACES`] for those places of
+    /// the Shell, a parsing name of the Shell (`::{...}`, `shell:...`, a
+    /// bare `\\server`, a path into a ZIP file), or a path, with a leading
     /// `~` standing for the folder of the user.
     pub fn named(name: &str) -> Location {
         let name = name.trim();
+        if let Some(place) = KnownShellPlace::of_word(name) {
+            return place.location();
+        }
+        // A share of a server is a folder of the file system; the server
+        // alone lists its shares as a place of the Shell.
+        let share = name.starts_with("\\\\") && !is_bare_server(name);
+        let shell = (is_shell_name(name) && !share) || goes_through_archive(Path::new(name));
+        if shell {
+            let title = { KnownShellPlace::of_parsing(name) }.map_or(name, |place| place.title);
+            return Location::Shell(ShellPath::named(name, title));
+        }
         match name {
             "" | "~" => Self::home(),
             "computer" => Location::Computer,
@@ -781,5 +867,35 @@ mod tests {
         assert_eq!(Files::named("computer"), Location::Computer);
         assert_eq!(Files::named(" recycle-bin "), Location::RecycleBin);
         assert_eq!(Files::named("home"), Location::Home);
+    }
+
+    #[test]
+    fn the_places_of_the_shell_have_names() {
+        for (word, parsing) in [
+            ("control-panel", "::{26EE0668-A00A-44D7-9371-BEB064C98683}"),
+            ("libraries", "::{031E4825-7B94-4DC3-B131-E946B44C8DD5}"),
+            ("network", "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"),
+            ("gallery", "::{E88865EA-0E1C-4E20-9AA6-EDCD0212C87C}"),
+        ] {
+            let location = Files::named(word);
+            assert_eq!(location.parsing_name().as_deref(), Some(parsing), "{word}");
+            assert_eq!(Files::named(parsing), location);
+        }
+        assert!(matches!(Files::named(r"\\nas"), Location::Shell(_)));
+        assert!(matches!(Files::named(r"C:\a.zip\b"), Location::Shell(_)));
+        assert_eq!(
+            Files::named(r"\\nas\music"),
+            Location::Folder(PathBuf::from(r"\\nas\music"))
+        );
+    }
+
+    #[test]
+    fn the_new_keys_of_files_are_read() {
+        let config: FilesConfig = toml::from_str("archives = \"open\"\nhome = \"windows\"\n")
+            .expect("the table can be read");
+        assert_eq!(config.archives, Archives::Open);
+        assert_eq!(config.home, HomeKind::Windows);
+        assert_eq!(FilesConfig::default().archives, Archives::Browse);
+        assert!(toml::from_str::<FilesConfig>("archives = \"unpack\"").is_err());
     }
 }

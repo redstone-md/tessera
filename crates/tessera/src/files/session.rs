@@ -290,6 +290,7 @@ pub fn columns_key(location: &Location) -> String {
         Location::Computer => "::computer".to_owned(),
         Location::Search { .. } => "::search".to_owned(),
         Location::RecycleBin => "::recycle-bin".to_owned(),
+        Location::Shell(place) => place.parsing().to_lowercase(),
     }
 }
 

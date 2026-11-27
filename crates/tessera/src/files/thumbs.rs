@@ -113,6 +113,8 @@ impl FileViewConfig {
 /// anew.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
+    /// The path of the file, or the parsing name of an item of the Shell
+    /// without one.
     path: PathBuf,
     size: u32,
     modified: Option<SystemTime>,
@@ -194,6 +196,29 @@ impl Thumbs {
         self.picture_of(entry, side, scale, 0, ThumbnailKind::PictureOrIcon, cx)
     }
 
+    /// The picture of `entry`, an item of the Shell without a path (an
+    /// applet of Control Panel, a phone, a file inside an archive), as the
+    /// Shell draws it at that size: its thumbnail, or else its own icon,
+    /// which no kind of file gives. It is asked at every size, and kept by
+    /// the parsing name the entry has for its path.
+    pub fn shell_picture(
+        &mut self,
+        entry: &Entry,
+        side: f32,
+        scale: f32,
+        priority: u32,
+        cx: &mut Context<Self>,
+    ) -> Picture {
+        let largest = FileViewConfig::of(cx).largest();
+        let key = Key {
+            path: entry.path.clone(),
+            size: size_for(side * scale, largest),
+            modified: entry.modified,
+            kind: ThumbnailKind::PictureOrIcon,
+        };
+        self.ask(key, priority, cx)
+    }
+
     fn picture_of(
         &mut self,
         entry: &Entry,
@@ -214,6 +239,13 @@ impl Thumbs {
             modified: entry.modified,
             kind,
         };
+        self.ask(key, priority, cx)
+    }
+
+    /// The thumbnail kept under `key`, or none yet, asked of the Shell
+    /// where it was not.
+    fn ask(&mut self, key: Key, priority: u32, cx: &mut Context<Self>) -> Picture {
+        let kind = key.kind;
         self.clock += 1;
         if let Some(kept) = self.kept.get_mut(&key) {
             kept.used = self.clock;

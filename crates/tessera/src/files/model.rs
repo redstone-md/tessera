@@ -21,6 +21,7 @@ use crate::platform::{
     Attributes, ExplorerSettings, NameRules, is_hidden, localized_candidates, shell_names,
 };
 use crate::platform::{CloudState, FileProperty};
+use crate::platform::{ShellChild, ShellPath};
 
 /// How many names of a folder are asked of the Shell at most, as each
 /// takes it a moment.
@@ -41,6 +42,9 @@ pub enum Location {
     },
     /// What lies in the Recycle Bin, of every drive.
     RecycleBin,
+    /// A place of the Shell that is no folder of the file system: Control
+    /// Panel, a library, Network, a phone, the inside of a ZIP file.
+    Shell(ShellPath),
 }
 
 /// What the files of the file manager call the Recycle Bin.
@@ -60,13 +64,49 @@ impl Location {
                 _ => Self::Computer,
             }),
             Self::Search { root, .. } => Some(Self::Folder(root.clone())),
+            Self::Shell(place) => place.parent().map(Self::of_shell),
+        }
+    }
+
+    /// The location of the place of the Shell `place`: This PC, the
+    /// Recycle Bin and the folders of the file system are shown as such,
+    /// so that everything the file manager does with them works.
+    pub fn of_shell(place: ShellPath) -> Self {
+        let last = &place.steps()[place.steps().len() - 1];
+        if let Some(path) = &last.path {
+            return Self::Folder(path.clone());
+        }
+        match place.parsing() {
+            parsing if parsing.eq_ignore_ascii_case(COMPUTER_PARSING) => Self::Computer,
+            parsing if parsing.eq_ignore_ascii_case(RECYCLE_BIN_PARSING) => Self::RecycleBin,
+            _ => Self::Shell(place),
+        }
+    }
+
+    /// The place of the Shell shown, where it is one.
+    pub fn shell(&self) -> Option<&ShellPath> {
+        match self {
+            Self::Shell(place) => Some(place),
+            _ => None,
         }
     }
 
     pub fn folder(&self) -> Option<&Path> {
         match self {
             Self::Home | Self::Computer | Self::Search { .. } | Self::RecycleBin => None,
+            Self::Shell(_) => None,
             Self::Folder(path) => Some(path),
+        }
+    }
+
+    /// Where what is dropped, copied or pasted into the location goes: its
+    /// folder, or the place of the Shell by its parsing name, which the
+    /// operations of the Shell take as they take paths.
+    pub fn target(&self) -> Option<PathBuf> {
+        match self {
+            Self::Folder(path) => Some(path.clone()),
+            Self::Shell(place) => Some(PathBuf::from(place.parsing())),
+            _ => None,
         }
     }
 
@@ -87,6 +127,7 @@ impl Location {
             Self::Computer => "computer".to_owned(),
             Self::RecycleBin => RECYCLE_BIN.to_owned(),
             Self::Folder(path) | Self::Search { root: path, .. } => path.display().to_string(),
+            Self::Shell(place) => place.parsing().to_owned(),
         }
     }
 
@@ -98,6 +139,7 @@ impl Location {
             Self::Folder(path) => Some(path.display().to_string()),
             Self::RecycleBin => Some(RECYCLE_BIN_PARSING.to_owned()),
             Self::Computer => Some(COMPUTER_PARSING.to_owned()),
+            Self::Shell(place) => Some(place.parsing().to_owned()),
             Self::Home | Self::Search { .. } => None,
         }
     }
@@ -113,13 +155,145 @@ impl Location {
             return Some(Self::Computer);
         }
         let path = Path::new(name);
-        (path.is_absolute() && path.is_dir()).then(|| Self::Folder(path.to_owned()))
+        if path.is_absolute() && !goes_through_archive(path) && path.is_dir() {
+            return Some(Self::Folder(path.to_owned()));
+        }
+        is_shell_name(name).then(|| Self::Shell(ShellPath::named(name, name)))
     }
 }
 
 /// The parsing names of the Recycle Bin and of This PC.
 const RECYCLE_BIN_PARSING: &str = "::{645FF040-5081-101B-9F08-00AA002F954E}";
-const COMPUTER_PARSING: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+pub const COMPUTER_PARSING: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+
+/// A place of the Shell the file manager knows by a word of its own, as
+/// commands and Places name it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KnownShellPlace {
+    /// The word: `control-panel`, `libraries`...
+    pub word: &'static str,
+    pub parsing: &'static str,
+    /// Its English title, a text of the RUSSIAN table, shown until the
+    /// Shell gives its own.
+    pub title: &'static str,
+}
+
+impl KnownShellPlace {
+    /// The place, to be resolved when it is read.
+    pub fn place(self) -> ShellPath {
+        ShellPath::named(self.parsing, self.title)
+    }
+
+    pub fn location(self) -> Location {
+        Location::Shell(self.place())
+    }
+
+    /// The place known by `word`.
+    pub fn of_word(word: &str) -> Option<Self> {
+        SHELL_PLACES.into_iter().find(|place| place.word == word)
+    }
+
+    /// The place `parsing` names, where it is one of these.
+    pub fn of_parsing(parsing: &str) -> Option<Self> {
+        { SHELL_PLACES.into_iter() }.find(|place| place.parsing.eq_ignore_ascii_case(parsing))
+    }
+}
+
+/// The places of the Shell the file manager knows by words.
+pub const SHELL_PLACES: [KnownShellPlace; 7] = [
+    KnownShellPlace {
+        word: "control-panel",
+        parsing: "::{26EE0668-A00A-44D7-9371-BEB064C98683}",
+        title: "Control Panel",
+    },
+    KnownShellPlace {
+        word: "all-control-panel-items",
+        parsing: "::{21EC2020-3AEA-1069-A2DD-08002B30309D}",
+        title: "All Control Panel Items",
+    },
+    KnownShellPlace {
+        word: "libraries",
+        parsing: "::{031E4825-7B94-4DC3-B131-E946B44C8DD5}",
+        title: "Libraries",
+    },
+    KnownShellPlace {
+        word: "network",
+        parsing: "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}",
+        title: "Network",
+    },
+    KnownShellPlace {
+        word: "gallery",
+        parsing: "::{E88865EA-0E1C-4E20-9AA6-EDCD0212C87C}",
+        title: "Gallery",
+    },
+    KnownShellPlace {
+        word: "windows-home",
+        parsing: "::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}",
+        title: "Home",
+    },
+    KnownShellPlace {
+        word: "saved-searches",
+        parsing: "shell:Searches",
+        title: "Searches",
+    },
+];
+
+/// Where the Gallery is missing, as before Windows 11 23H2, the library of
+/// pictures stands in its place.
+pub const PICTURES_LIBRARY: &str = "shell:PicturesLibrary";
+
+/// The extensions of the archives the Shell opens as folders: ZIP and
+/// cabinets always, the others on Windows 11 23H2 and later.
+const ARCHIVES: [&str; 13] = [
+    "zip", "cab", "7z", "rar", "tar", "tgz", "gz", "bz2", "tbz2", "xz", "txz", "zst", "tzst",
+];
+
+/// Whether `path` is an archive the Shell opens as a folder, by its
+/// extension.
+pub fn is_archive(path: &Path) -> bool {
+    { path.extension() }.is_some_and(|extension| {
+        let extension = extension.to_string_lossy();
+        { ARCHIVES.iter() }.any(|archive| extension.eq_ignore_ascii_case(archive))
+    })
+}
+
+/// Whether `path` names an archive or lies inside one, as
+/// `C:\a.zip\docs\b.txt` does, by how it is written alone.
+pub fn goes_through_archive(path: &Path) -> bool {
+    let mut reached = PathBuf::new();
+    for component in path.components() {
+        reached.push(component.as_os_str());
+        if matches!(component, Component::Normal(_)) && is_archive(&reached) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `name` is written as a place of the Shell that is no folder of
+/// the file system, as `Files::open_shell` takes them: a class
+/// (`::{...}`), a `shell:` name, a computer of the network (`\\server`),
+/// a search, an FTP site, a library or a saved search, or a path into an
+/// archive. It looks only at how the name is written.
+pub fn is_shell_name(name: &str) -> bool {
+    let name = name.trim();
+    let lower = name.to_ascii_lowercase();
+    let prefixed = ["::{", "shell:", "\\\\", "search-ms:", "ftp://"]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix));
+    let suffixed = [".library-ms", ".search-ms"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix));
+    prefixed || suffixed || goes_through_archive(Path::new(name))
+}
+
+/// Whether `name` is a computer of the network alone, `\\server`, which
+/// lists its shares, rather than a path in one of them.
+pub fn is_bare_server(name: &str) -> bool {
+    let rest = name.trim().trim_end_matches('\\');
+    rest.strip_prefix("\\\\")
+        .is_some_and(|server| !server.is_empty() && !server.contains('\\'))
+}
 
 /// The locations a window went through, to go back and forth among them
 /// as a browser does.
@@ -185,6 +359,33 @@ impl History {
         true
     }
 
+    /// Puts `location` in place of the one the history is at, without
+    /// going anywhere: a place of the Shell once it was resolved, or the
+    /// folder of the file system it turned out to be.
+    pub fn refine(&mut self, location: Location) {
+        self.current = location;
+    }
+
+    /// The locations to go back to, the latest first, at most `count`.
+    pub fn behind(&self, count: usize) -> Vec<Location> {
+        self.back.iter().rev().take(count).cloned().collect()
+    }
+
+    /// The locations to go forward to, the next first, at most `count`.
+    pub fn ahead(&self, count: usize) -> Vec<Location> {
+        self.forward.iter().rev().take(count).cloned().collect()
+    }
+
+    /// Goes back `steps` locations at once; says whether it went.
+    pub fn back_by(&mut self, steps: usize) -> bool {
+        (0..steps).fold(false, |went, _| self.back() || went)
+    }
+
+    /// Goes forward `steps` locations at once; says whether it went.
+    pub fn forward_by(&mut self, steps: usize) -> bool {
+        (0..steps).fold(false, |went, _| self.forward() || went)
+    }
+
     /// Goes one level up, which counts as going somewhere.
     pub fn up(&mut self) -> bool {
         self.current.up().is_some_and(|up| self.go(up))
@@ -214,6 +415,10 @@ pub struct Entry {
     pub link: bool,
     /// Where it lies in a cloud folder, its state there.
     pub cloud: Option<CloudState>,
+    /// The item of the Shell it is, where it was read from a place of the
+    /// Shell; its `path` is then its path in the file system, or else its
+    /// parsing name.
+    pub shell: Option<ShellChild>,
 }
 
 impl Entry {
@@ -245,12 +450,52 @@ impl Entry {
             protected: attributes.protected(),
             link,
             cloud: CloudState::of(metadata),
+            shell: None,
         }
     }
 
-    /// What kind of file it is, as a column says it: `Folder`, or the
-    /// extension of its name in capitals.
+    /// The entry of the item `child` of a place of the Shell, named as
+    /// the Shell names it.
+    pub fn of_shell(child: ShellChild) -> Self {
+        let attributes = child.attributes;
+        let path = { child.path.clone() }.unwrap_or_else(|| PathBuf::from(&child.parsing));
+        let name = match &child.path {
+            Some(path) => { path.file_name() }.map_or_else(
+                || child.name.clone(),
+                |name| name.to_string_lossy().into_owned(),
+            ),
+            None => child.name.clone(),
+        };
+        Self {
+            display: child.name.clone(),
+            name,
+            path,
+            folder: attributes.folder && !attributes.stream,
+            size: child.size.unwrap_or(0),
+            modified: child.modified,
+            hidden: attributes.hidden,
+            protected: false,
+            link: attributes.link,
+            cloud: None,
+            shell: Some(child),
+        }
+    }
+
+    /// Whether it is an item of the Shell with no path of the file system,
+    /// which only the Shell acts on.
+    pub fn is_virtual(&self) -> bool {
+        self.shell
+            .as_ref()
+            .is_some_and(|child| child.path.is_none())
+    }
+
+    /// What kind of file it is, as a column says it: what the Shell says
+    /// of an item of a place of the Shell, else `Folder`, or the extension
+    /// of its name in capitals.
     pub fn kind(&self) -> String {
+        if let Some(kind) = self.shell.as_ref().and_then(|child| child.kind.clone()) {
+            return kind;
+        }
         if self.folder {
             return "Folder".to_owned();
         }
@@ -560,6 +805,10 @@ pub enum Grouping {
     /// Quick access, then the files used lately, as Home is.
     #[serde(skip)]
     Home,
+    /// By the month a picture was taken, or else changed, the latest
+    /// first, as the Gallery groups.
+    #[serde(skip)]
+    Month,
 }
 
 impl Grouping {
@@ -572,6 +821,7 @@ impl Grouping {
             Self::Kind => "Group by type",
             Self::Modified => "Group by date",
             Self::Home => "Quick access",
+            Self::Month => "Group by month",
         }
     }
 }
@@ -582,6 +832,9 @@ impl Grouping {
 pub enum GroupLabel {
     Said(&'static str),
     Text(String),
+    /// A month, as how many months before this one it is, then its year
+    /// and its number from 1; it is named in the language of the user.
+    Month(u32, i32, u32),
 }
 
 /// Where a group stands among the others, and what it is called.
@@ -640,7 +893,24 @@ pub fn group_of(entry: &Entry, grouping: Grouping, today: NaiveDate) -> GroupKey
             true => (0, GroupLabel::Said("Quick access")),
             false => (1, GroupLabel::Said("Recent files")),
         },
+        Grouping::Month => {
+            let taken = entry.shell.as_ref().and_then(|child| child.taken);
+            match taken.or(entry.modified) {
+                Some(time) => {
+                    let day = DateTime::<Local>::from(time).date_naive();
+                    (0, month_label(day, today))
+                }
+                None => (1, GroupLabel::Said("Unknown date")),
+            }
+        }
     }
+}
+
+/// The group of the month of `day`, `today` being the day it is.
+pub fn month_label(day: NaiveDate, today: NaiveDate) -> GroupLabel {
+    let count = |day: NaiveDate| day.year() * 12 + day.month0() as i32;
+    let ago = (count(today) - count(day)).max(0) as u32;
+    GroupLabel::Month(ago, day.year(), day.month())
 }
 
 /// A line of the list as it is drawn: the heading of a group, or the
@@ -1489,6 +1759,15 @@ mod tests {
         history.back();
         history.go(folder("d"));
         assert!(!history.can_go_forward());
+        assert_eq!(history.behind(5), [folder("b"), folder("a")]);
+        assert!(history.back_by(2));
+        assert_eq!(history.current(), &folder("a"));
+        assert_eq!(history.ahead(1), [folder("b")]);
+        assert!(history.forward_by(2));
+        assert_eq!(history.current(), &folder("d"));
+        history.refine(folder("D"));
+        assert_eq!(history.current(), &folder("D"));
+        assert!(history.can_go_back());
     }
 
     #[test]
@@ -1543,6 +1822,100 @@ mod tests {
         assert!(!is_valid_name("a:b"));
         assert!(!is_valid_name("trailing."));
         assert!(!is_valid_name("  "));
+    }
+
+    #[test]
+    fn places_of_the_shell_are_told_by_how_they_are_written() {
+        for name in [
+            "::{26EE0668-A00A-44D7-9371-BEB064C98683}",
+            "shell:Libraries",
+            "SHELL:::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}",
+            r"\\server",
+            "search-ms:query=notes",
+            "ftp://example.org/pub",
+            r"C:\Users\me\Documents.library-ms",
+            r"C:\Users\me\Searches\Notes.search-ms",
+            r"C:\Downloads\photos.zip",
+            r"C:\Downloads\photos.ZIP\2024\a.jpg",
+            r"D:\backup.tar.gz",
+        ] {
+            assert!(is_shell_name(name), "{name}");
+        }
+        for name in [r"C:\Users", "notes.txt", "", r"C:\zip\file"] {
+            assert!(!is_shell_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_bare_server_is_no_share() {
+        assert!(is_bare_server(r"\\nas"));
+        assert!(is_bare_server(r"\\nas\"));
+        assert!(!is_bare_server(r"\\nas\music"));
+        assert!(!is_bare_server(r"\\"));
+        assert!(!is_bare_server(r"C:\nas"));
+    }
+
+    #[test]
+    fn a_path_goes_through_an_archive_where_a_step_is_one() {
+        assert!(goes_through_archive(Path::new(r"C:\a.zip")));
+        assert!(goes_through_archive(Path::new(r"C:\a.7z\b\c.txt")));
+        assert!(!goes_through_archive(Path::new(r"C:\zip\a.txt")));
+        assert!(is_archive(Path::new("pack.CAB")));
+        assert!(!is_archive(Path::new("pack.zipx")));
+    }
+
+    #[test]
+    fn a_parsing_name_of_the_shell_is_a_place_of_the_shell() {
+        let panel = "::{26EE0668-A00A-44D7-9371-BEB064C98683}";
+        let location = Location::from_parsing(panel).expect("a place of the Shell");
+        assert_eq!(location.parsing_name().as_deref(), Some(panel));
+        assert_eq!(location.name(), panel);
+        assert_eq!(location.folder(), None);
+        assert_eq!(location.target(), Some(PathBuf::from(panel)));
+        assert_eq!(Location::from_parsing("notes"), None);
+        assert_eq!(
+            Location::from_parsing(COMPUTER_PARSING),
+            Some(Location::Computer)
+        );
+    }
+
+    #[test]
+    fn this_pc_of_the_shell_is_the_computer() {
+        let computer = ShellPath::named(COMPUTER_PARSING, "This PC");
+        assert_eq!(Location::of_shell(computer), Location::Computer);
+        let network = KnownShellPlace::of_word("network").expect("a known place");
+        assert_eq!(Location::of_shell(network.place()), network.location());
+        assert_eq!(network.location().up(), None);
+    }
+
+    #[test]
+    fn the_known_places_have_words_and_names() {
+        for word in ["control-panel", "libraries", "network", "gallery"] {
+            let place = KnownShellPlace::of_word(word).expect("a known place");
+            assert_eq!(KnownShellPlace::of_parsing(place.parsing), Some(place));
+            assert!(is_shell_name(place.parsing));
+        }
+        assert_eq!(KnownShellPlace::of_word("nowhere"), None);
+    }
+
+    #[test]
+    fn pictures_are_grouped_by_their_month_the_latest_first() {
+        let today = today();
+        let day = |year, month, day| NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        assert_eq!(
+            month_label(day(2026, 11, 2), today),
+            GroupLabel::Month(0, 2026, 11)
+        );
+        assert_eq!(
+            month_label(day(2025, 12, 31), today),
+            GroupLabel::Month(11, 2025, 12)
+        );
+        assert!(month_label(day(2026, 10, 1), today) < month_label(day(2026, 1, 1), today));
+        let undated = entry("a.jpg", false, 0);
+        assert_eq!(
+            group_of(&undated, Grouping::Month, today),
+            (1, GroupLabel::Said("Unknown date"))
+        );
     }
 
     #[test]
