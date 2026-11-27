@@ -385,7 +385,6 @@ impl SystemWallpaper {
     /// window, the `Progman` of shell mode, draws the wallpaper of Windows
     /// with `PaintDesktop`. That window is to say so once it does; until
     /// then Tessera takes it that it does not.
-    #[allow(dead_code, reason = "for the desktop window of shell mode")]
     pub fn set_painted_by_own_desktop(painted: bool) {
         OWN_DESKTOP_PAINTS.store(painted, Ordering::Relaxed);
     }

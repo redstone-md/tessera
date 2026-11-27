@@ -26,12 +26,12 @@ pub use win32::SessionKey;
 )]
 pub use win32::ShellThread;
 pub use win32::ShowDesktop;
+pub use win32::decode_with_wic;
+pub use win32::display_at;
 pub use win32::on_resizing_border;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
 pub use win32::spatial_sound;
-pub use win32::decode_with_wic;
-pub use win32::display_at;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,
@@ -101,8 +101,8 @@ pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 pub use win32::{Repeat, SessionInfo};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
-pub use win32::{expand_variables, find_program, recent_folder};
 pub use win32::{SystemWallpaper, WallpaperPosition, user_locale};
+pub use win32::{expand_variables, find_program, recent_folder};
 #[allow(
     unused_imports,
     reason = "for the features that ask Explorer while it runs"

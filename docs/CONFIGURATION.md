@@ -104,6 +104,7 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `volume` | `up`, `down`, `mute` or `mute-microphone` | turns the default output a step up (and lifts its mute) or down, as Windows counts steps for it (2 of 100 for most), mutes it or lifts its mute, or mutes the default microphone or lifts its mute; the flyout shows what came of it where `[flyout]` wants it. |
 | `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
 | `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
+| `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -381,9 +382,6 @@ locks = true
 layout = true
 place = "top-right"
 ```
-| `wallpaper` | `next`, `previous`, or none | has every display show the next picture of its list (without `arg` too), or the one before, at once; the interval begins anew |
-
-The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
 ## The wallpaper
 

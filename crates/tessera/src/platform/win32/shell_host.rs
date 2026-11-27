@@ -108,7 +108,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, s, w};
 
-use super::{AppCommand, AppWindowId, Launch, ScreenRect, Taskbar};
+use super::{AppCommand, AppWindowId, Launch, ScreenRect, SystemWallpaper, Taskbar};
 
 /// The codes of the shell hook, as `wParam` of the `SHELLHOOK` message.
 const HSHELL_WINDOWCREATED: u32 = 1;
@@ -508,6 +508,9 @@ fn host(shell: bool, desktop_made: mpsc::SyncSender<()>) {
         match create_desktop() {
             Ok((desktop, icons)) => {
                 DESKTOP.store(desktop.0 as isize, Ordering::SeqCst);
+                // Its wallpaper window draws the wallpaper of Windows with
+                // `PaintDesktop`, so Tessera need not draw it again.
+                SystemWallpaper::set_painted_by_own_desktop(true);
                 become_desktop(desktop, icons);
             }
             Err(error) => report!("the desktop window of the shell was not made: {error:#}"),
