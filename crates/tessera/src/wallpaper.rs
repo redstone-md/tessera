@@ -285,19 +285,18 @@ fn video_groups(plans: &[Plan]) -> Vec<(VideoPlan, Vec<usize>)> {
 
 /// How the platform is to play `plan`.
 fn video_look(plan: &VideoPlan) -> VideoLook {
-    let adjust = plan.adjust;
-    let overlay = adjust.overlay.map(|overlay| {
-        let darken = overlay.blend == Blend::Darken;
-        if !matches!(overlay.blend, Blend::Normal | Blend::Darken) {
-            report!(
-                "the overlay of a video is laid on as `normal`: the compositor has no `{}`",
-                overlay.blend.name()
-            );
-        }
-        VideoOverlay {
-            color: overlay.color,
-            darken,
-        }
+    if let Some(overlay) = plan.adjust.overlay
+        && !matches!(overlay.blend, Blend::Normal | Blend::Darken)
+    {
+        report!(
+            "the overlay of a video is laid on as `normal`: the compositor has no `{}`",
+            overlay.blend.name()
+        );
+    }
+    let adjust = plan.adjust.as_video_shows();
+    let overlay = adjust.overlay.map(|overlay| VideoOverlay {
+        color: overlay.color,
+        darken: overlay.blend == Blend::Darken,
     });
     VideoLook {
         speed: plan.sound.speed,
@@ -316,7 +315,8 @@ fn render_image(pixels: image::RgbaImage) -> Arc<RenderImage> {
 }
 
 /// A still of what the display at `frame` shows of a video whose frame
-/// is `poster`, mirrored, placed and overlaid as `adjust` says.
+/// is `poster`, mirrored, placed and overlaid as `adjust` says and as
+/// the video itself is.
 fn poster_still(
     poster: &Poster,
     frame: ScreenRect,
@@ -342,7 +342,7 @@ fn poster_still(
         shown,
         shown,
         (Fit::Cover, Ground::default()),
-        adjust,
+        &adjust.as_video_shows(),
     );
     Some(render_image(still(&fitted, STILL_LONGEST)))
 }

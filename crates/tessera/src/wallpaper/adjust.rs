@@ -343,11 +343,15 @@ impl AdjustKeys {
 /// green, blue and alpha.
 pub fn parse_rgba(text: &str) -> anyhow::Result<[u8; 4]> {
     let trimmed = text.trim();
+    let wrong = || anyhow::anyhow!("`{text}` is not a color of the form #rrggbbaa");
+    // Split by bytes only where every one is a character.
+    if !trimmed.is_ascii() {
+        return Err(wrong());
+    }
     let (color, alpha) = match trimmed.len() {
         9 => trimmed.split_at(7),
         _ => (trimmed, "ff"),
     };
-    let wrong = || anyhow::anyhow!("`{text}` is not a color of the form #rrggbbaa");
     let [red, green, blue] = parse_rgb(color).map_err(|_| wrong())?;
     if !alpha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(wrong());
@@ -411,6 +415,19 @@ impl Adjustments {
             anchor: self.anchor,
             ..Self::default()
         }
+    }
+
+    /// These as a video shows them: the compositor lays a color over a
+    /// video only as `normal` or `darken`, so another blend is `normal`.
+    pub fn as_video_shows(&self) -> Self {
+        let overlay = self.overlay.map(|overlay| Overlay {
+            blend: match overlay.blend {
+                Blend::Darken => Blend::Darken,
+                _ => Blend::Normal,
+            },
+            ..overlay
+        });
+        Self { overlay, ..*self }
     }
 
     /// Does all of it to `picture`: brightness and contrast, then the
@@ -679,9 +696,32 @@ mod tests {
     fn colors_with_an_alpha_are_read() {
         assert_eq!(parse_rgba("#10203040").unwrap(), [0x10, 0x20, 0x30, 0x40]);
         assert_eq!(parse_rgba("#102030").unwrap(), [0x10, 0x20, 0x30, 0xff]);
-        for wrong in ["#1020304", "102030", "#10203g40", "#102030+1", ""] {
+        for wrong in [
+            "#1020304",
+            "102030",
+            "#10203g40",
+            "#102030+1",
+            "",
+            "#abcde\u{e9}f",
+        ] {
             assert!(parse_rgba(wrong).is_err(), "{wrong:?} was taken");
         }
+    }
+
+    #[test]
+    fn a_video_lays_a_color_on_as_normal_or_darken() {
+        let laid = |blend| Adjustments {
+            blur: 3.,
+            overlay: Some(Overlay {
+                color: [1, 2, 3, 4],
+                blend,
+            }),
+            ..Adjustments::default()
+        };
+        let blend_of = |adjust: Adjustments| adjust.as_video_shows().overlay.map(|o| o.blend);
+        assert_eq!(blend_of(laid(Blend::Screen)), Some(Blend::Normal));
+        assert_eq!(blend_of(laid(Blend::Darken)), Some(Blend::Darken));
+        assert_eq!(laid(Blend::Multiply).as_video_shows().blur, 3.);
     }
 
     #[test]
