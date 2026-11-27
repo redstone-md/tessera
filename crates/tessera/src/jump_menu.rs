@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use gpui::{App, AsyncApp, Global};
 
+use crate::files::Files;
 use crate::i18n::Language;
 use crate::icons::{Icon, icon_of_pixels};
 use crate::menu::MenuEntry;
@@ -172,7 +173,11 @@ pub fn entries(app_id: &str, program: Option<&Path>, cx: &mut App) -> Vec<MenuEn
             let open = {
                 let item = item.clone();
                 let program = program.map(Path::to_path_buf);
-                move |_: &mut App| item.open(program.as_deref())
+                move |cx: &mut App| {
+                    if !path_of(&item).is_some_and(|path| Files::open_folder(path, cx)) {
+                        item.open(program.as_deref());
+                    }
+                }
             };
             let entry =
                 MenuEntry::new(section.glyph, item.name.clone(), open).with_picture(picture);
@@ -186,6 +191,15 @@ pub fn entries(app_id: &str, program: Option<&Path>, cx: &mut App) -> Vec<MenuEn
         }
     }
     entries
+}
+
+/// The path of `item` where it names something for an application to
+/// open, which the file manager opens where it is a folder.
+fn path_of(item: &JumpItem) -> Option<&Path> {
+    match &item.target {
+        JumpTarget::Item(path) => Some(path),
+        JumpTarget::Command { .. } => None,
+    }
 }
 
 /// Takes `item` off the jump list of `app_id`: at once from what is kept

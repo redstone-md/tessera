@@ -173,6 +173,7 @@ pub use index::FileSearch;
 pub use index::SearchIndex;
 pub use input_names::InputName;
 pub use input_names::OwnInput;
+pub use jump::EXPLORER_APP_ID;
 pub use jump::app_id_of_program;
 pub use jump::{JumpItem, JumpList, JumpTarget, KnownCategory};
 pub use key_locks::{KeyLocks, window_in_front};

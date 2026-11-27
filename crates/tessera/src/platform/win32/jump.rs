@@ -985,8 +985,8 @@ fn execute(program: &Path, arguments: &str, name: &str) {
         .start();
 }
 
-/// The identifier Explorer goes by.
-const EXPLORER: &str = "Microsoft.Windows.Explorer";
+/// The identifier Explorer goes by, and its jump list with it.
+pub const EXPLORER_APP_ID: &str = "Microsoft.Windows.Explorer";
 
 impl AppWindowId {
     /// The identifier the application gave this window or its process to
@@ -1012,7 +1012,7 @@ pub fn app_id_of_program(executable: &Path) -> String {
     let explorer = env::var_os("SystemRoot").map(|root| PathBuf::from(root).join("explorer.exe"));
     let whole = executable.as_os_str();
     if explorer.is_some_and(|explorer| explorer.as_os_str().eq_ignore_ascii_case(whole)) {
-        return EXPLORER.to_owned();
+        return EXPLORER_APP_ID.to_owned();
     }
     let folders = KNOWN_FOLDERS.iter().filter_map(|&(variable, below, id)| {
         let folder = PathBuf::from(env::var_os(variable)?).join(below);

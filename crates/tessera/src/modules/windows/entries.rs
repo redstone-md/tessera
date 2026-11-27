@@ -17,7 +17,8 @@ use crate::actions::Actions;
 use crate::i18n::Language;
 use crate::menu::MenuEntry;
 use crate::platform::{
-    AppWindow, AppWindowId, Launch, RunningProcess, Shortcut, app_id_of_program, reveal, shell_mode,
+    AppWindow, AppWindowId, EXPLORER_APP_ID, Launch, RunningProcess, Shortcut, app_id_of_program,
+    reveal, shell_mode,
 };
 
 /// How long End task waits for a window to close before it ends its
@@ -39,8 +40,13 @@ const ICON_KILL: &str = "\u{e7ba}";
 /// The identifier of the application of `item` that Windows keeps its
 /// jump list by, and the program a document of the list opens with: the
 /// packaged application, else the identifier its window states, else the
-/// one Windows makes of its program file. `None` where nothing is known.
+/// one Windows makes of its program file. The file manager of Tessera,
+/// which takes Explorer's place, shows Explorer's list: Quick access and
+/// the folders used lately. `None` where nothing is known.
 pub(super) fn jump_app(item: &DockItem) -> Option<(String, Option<PathBuf>)> {
+    if item.is_files() {
+        return Some((EXPLORER_APP_ID.to_owned(), None));
+    }
     let window = item.front();
     let pin = item.pin.as_ref();
     let packaged = window
