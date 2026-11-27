@@ -209,7 +209,7 @@ impl Files {
                 };
                 Banners::post(
                     Notice {
-                        app: language.say("Files").to_owned(),
+                        app: language.say("File manager").to_owned(),
                         title: title.to_owned(),
                         body,
                         glyph: Some(ICON_FOLDER),

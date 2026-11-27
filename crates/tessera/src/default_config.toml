@@ -140,6 +140,18 @@
 #             files    the file manager, at the folder arg names as files
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
+#                      arg may also be a command line of Explorer, as
+#                      "/select,C:\x\a.txt" or "shell:Downloads"
+#             files-default  arg "on" has other programs open folders and
+#                      drives in Tessera Files, "off" gives that back
+#             share    the share window of Windows for the files arg names,
+#                      separated by "|"
+#             map-drive, disconnect-drive  the dialogs of Windows that map
+#                      a network drive or disconnect one (arg: its letter,
+#                      or none for the list)
+#             add-network-location  arg "\\server\share" or an address,
+#                      with "|name" after it, makes a network location
+#                      under This PC; without arg, Windows' wizard
 #             trash    has Explorer open the Recycle Bin, as the widget
 #                      trash does; arg "restore" brings every item back
 #                      once the user said yes, "empty" empties it once
@@ -295,6 +307,13 @@
 #   explorer       whether the folder options of Explorer are followed:
 #                  hidden extensions, hidden and protected files, and the
 #                  names a desktop.ini gives (true)
+#   autoplay       when AutoPlay is done for drives that arrive: "shell"
+#                  (default; only as the shell, as Explorer does it
+#                  otherwise), "always" or "off"
+# `tessera files install` has other programs open folders and drives here
+# (`tessera files revert` undoes it, `tessera files status` shows it; see
+# docs/SHELL.md); `tessera files` also takes Explorer's command lines, as
+# `tessera files /select,C:\x\a.txt`.
 # [files]
 # own = true
 # view = "details"
@@ -302,6 +321,7 @@
 # per_folder = false
 # restore = false
 # explorer = true
+# autoplay = "shell"
 
 # [shell] says what Tessera does as the shell of the session, in the place of
 # Explorer (`tessera shell install` makes it that at the next sign-in,
