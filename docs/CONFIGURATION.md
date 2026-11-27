@@ -346,3 +346,40 @@ to = "07:00"
 ```
 
 The night light of Windows is read from and written to the records Windows keeps for it in the CloudStore of the account, whose layout Windows does not document; Windows switches it by the schedule of its own settings, and `schedule` here does not apply to it. Tessera's own multiplies the gamma ramp of every display with the color of a light of that temperature and gives the displays their own ramps back when Tessera quits; while they are tinted, their own ramps are kept in the file `night-light-ramps` of the configuration directory, so that a Tessera stopped without giving them back gives them back when it starts again. `kelvins` is how warm it is when Tessera starts: the warmth set on `night-light-slider` for Tessera's own is not written down and is forgotten when Tessera quits or `kelvins` is changed. Windows refuses ramps far from the straight line unless the DWORD `GdiIcmGammaRange` = 256 is set under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ICM`; a refused ramp is reported once per display. With a schedule, a click on the tile holds until the schedule next changes its mind, as with Windows.
+| `volume` | `up`, `down`, `mute` or `mute-microphone` | turns the default output a step up (and lifts its mute) or down, as Windows counts steps for it (2 of 100 for most), mutes it or lifts its mute, or mutes the default microphone or lifts its mute; the flyout shows what came of it where `[flyout]` wants it. |
+| `brightness` | `up` or `down` | makes the display under the pointer a tenth brighter or darker, a monitor over DDC/CI or the panel of a laptop, and shows it in the flyout where `[flyout]` has `brightness = true` |
+| `media` | `toggle`, `play`, `pause`, `stop`, `next` or `previous` | passes the command to the player chosen in `media-controls`, or to the one Windows considers current. |
+
+The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## Quick settings: power plans, sound, media and flyouts
+
+The `plan` widget shows the power plan in use, and a click on it opens the popup `plan`, which the module brings along: the widget `plan-list`, every plan Windows lists, where a click on one that is not in use puts it in use. A popup of the same name in `config.toml` is used instead. `cycle = true` gives the widget the click it had before the list: the next plan, the first after the last; add `popup = ""` so that the popup does not open as well.
+
+```toml
+start = [{ widget = "plan", name = false }]            # opens the list
+end = [{ widget = "plan", cycle = true, popup = "" }]  # goes on to the next plan
+```
+
+The sound popup holds, besides `volume-slider`, `microphone-slider`, `audio-outputs` and `volume-mixer`, the widget `audio-inputs`: the microphones, where a click on one makes it the default, each with its own mute button and slider (`volumes = false` leaves those out). `audio-outputs` takes `volumes = true` for a slider under each output too. `spatial-sound` is a row that says whether the default output renders spatial sound, and nothing where it cannot; Windows lets no program choose the format, so its click opens the sound settings, as the row `sound-settings` does. The built-in popup is this one:
+
+```toml
+[[popup]]
+name = "sound"
+width = 360
+height = 680
+content = ["volume-slider", "microphone-slider", "audio-outputs", "audio-inputs", "spatial-sound", "volume-mixer", "sound-settings"]
+```
+
+`media-controls` shows a chip for each media session while there are several (a browser has one for each tab that plays), and shuffle and repeat buttons where the player tells them; it needs no option.
+
+`[flyout]` says which changes a flyout shows, each `false` unless set: `volume`, `brightness` (the built-in panel of a laptop, whose keys change it), `microphone` (muted or not), `locks` (Caps Lock and Num Lock) and `layout` (the window in front switched to another keyboard layout). `place` is where it hangs in what the bars leave of the display the pointer is on: `bottom` (the default), `top`, `top-left`, `top-right`, `bottom-left` or `bottom-right`. In shell mode Windows shows no indicator of its own, so these are the only ones.
+
+```toml
+[flyout]
+volume = true
+brightness = true
+locks = true
+layout = true
+place = "top-right"
+```

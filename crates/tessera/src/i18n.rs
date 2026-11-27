@@ -1271,6 +1271,24 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows keeps the state of night light in a way Tessera does not know",
         "Windows хранит состояние ночного света в незнакомом Tessera виде",
     ),
+    // Quick settings: the power plans.
+    (
+        "Windows tells of no power plan",
+        "Windows не сообщает ни одной схемы питания",
+    ),
+    // Quick settings: microphones, media sessions and flyouts.
+    ("Input", "Ввод"),
+    ("Sound settings", "Параметры звука"),
+    ("Spatial sound", "Пространственный звук"),
+    ("On", "Вкл."),
+    ("Microphone off", "Микрофон выключен"),
+    ("Microphone on", "Микрофон включён"),
+    ("Caps Lock on", "Caps Lock включён"),
+    ("Caps Lock off", "Caps Lock выключен"),
+    ("Num Lock on", "Num Lock включён"),
+    ("Num Lock off", "Num Lock выключен"),
+    ("Nothing is playing", "Ничего не воспроизводится"),
+    ("Unnamed", "Без названия"),
 ];
 
 #[cfg(test)]

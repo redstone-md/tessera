@@ -55,5 +55,5 @@ content = [{ widget = "radio-switch", radio = "bluetooth" }, "bluetooth"]
 [[popup]]
 name = "sound"
 width = 360
-height = 600
-content = ["volume-slider", "microphone-slider", "audio-outputs", "volume-mixer"]
+height = 680
+content = ["volume-slider", "microphone-slider", "audio-outputs", "audio-inputs", "spatial-sound", "volume-mixer", "sound-settings"]

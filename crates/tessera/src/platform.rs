@@ -17,6 +17,11 @@ pub use win32::Process;
 pub use win32::QuickFolder;
 #[allow(unused_imports, reason = "for the view of the bin in the file manager")]
 pub use win32::RecycledItem;
+pub use win32::AppCommand;
+pub use win32::BrightnessLevel;
+#[allow(unused_imports, reason = "for the starts that wait for a program")]
+pub use win32::Process;
+pub use win32::SessionKey;
 #[allow(
     unused_imports,
     reason = "for the packages that hand work to the Shell"
@@ -26,6 +31,7 @@ pub use win32::ShowDesktop;
 pub use win32::on_resizing_border;
 pub use win32::rename_new;
 pub use win32::save_screenshot;
+pub use win32::spatial_sound;
 pub use win32::{
     Account, AppSound, AppWindow, AppWindowId, AudioDevice, AudioOutput, BackdropPicture, Battery,
     Bluetooth, Carrier, ChoiceKey, Commands, Connection, DesktopBackdrop, DesktopVideo, DisplayKey,
@@ -83,6 +89,7 @@ pub use win32::{IconPlace, NewTemplate, OpenWithHandler, SendToKind, SendToTarge
     reason = "for the file manager and the desktop, which show the menus of the Shell"
 )]
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
+pub use win32::{KeyLocks, window_in_front};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"
@@ -94,6 +101,7 @@ pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 pub use win32::{RunHistory, RunningProcess};
 pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{expand_variables, find_program, recent_folder};
+pub use win32::{Repeat, SessionInfo};
 #[allow(
     unused_imports,
     reason = "for the features that ask Explorer while it runs"

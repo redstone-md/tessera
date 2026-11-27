@@ -30,14 +30,50 @@ const PANEL_FULL: u8 = 100;
 /// The brightness of a display, from 0 to 1.
 pub struct ScreenBrightness;
 
+/// How bright a display said it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrightnessLevel {
+    /// From 0 to 1.
+    pub share: f32,
+    /// Whether it was asked over DDC/CI, which takes a part of a second
+    /// each time and is not to be asked more often than every few seconds;
+    /// the built-in panel of a laptop answers at once.
+    pub slow: bool,
+}
+
 impl ScreenBrightness {
     /// How bright `display` is, or the primary one without a display.
     /// `None` when nothing there says: many monitors have DDC/CI switched
-    /// off in their own menu. Asking a monitor takes a part of a second.
-    pub fn read(display: Option<DisplayKey>) -> Option<f32> {
-        let monitors = Monitors::of(display);
-        let asked = monitors.ranges().next().map(|(_, range)| range.share());
-        asked.or_else(|| Panel::open().ok()?.read())
+    /// off in their own menu. A monitor is asked first, over DDC/CI, and
+    /// the built-in panel of a laptop after it; `panel_first` asks the
+    /// panel first, for a display that was the panel when last asked,
+    /// which then is not asked over DDC/CI in vain each time.
+    pub fn read(display: Option<DisplayKey>, panel_first: bool) -> Option<BrightnessLevel> {
+        let panel = || {
+            Some(BrightnessLevel {
+                share: Self::panel()?,
+                slow: false,
+            })
+        };
+        let monitor = || {
+            let monitors = Monitors::of(display);
+            monitors.ranges().next().map(|(_, range)| BrightnessLevel {
+                share: range.share(),
+                slow: true,
+            })
+        };
+        if panel_first {
+            panel().or_else(monitor)
+        } else {
+            monitor().or_else(panel)
+        }
+    }
+
+    /// How bright the built-in panel of a laptop is; `None` on a machine
+    /// without one. It answers at once, and its keys change it without
+    /// telling anyone, so it is the one to watch for them.
+    pub fn panel() -> Option<f32> {
+        Panel::open().ok()?.read()
     }
 
     /// Makes `display` as bright as `share` says, or the primary one
@@ -55,6 +91,15 @@ impl ScreenBrightness {
         Panel::open()
             .and_then(|panel| panel.set(share))
             .context("the display does not let its brightness be set")
+    }
+}
+
+impl DisplayKey {
+    /// The primary display, the one at the origin of the screen.
+    pub fn primary() -> Option<Self> {
+        // SAFETY: the call only reads the arrangement of the displays.
+        let display = unsafe { MonitorFromPoint(POINT::default(), MONITOR_DEFAULTTOPRIMARY) };
+        (!display.is_invalid()).then_some(Self(display.0 as isize))
     }
 }
 
@@ -251,11 +296,11 @@ mod tests {
     #[test]
     #[ignore = "talks to the monitors of the machine"]
     fn the_primary_display_takes_the_brightness_it_has() {
-        let share = ScreenBrightness::read(None);
-        println!("the primary display says {share:?}");
-        if let Some(share) = share {
-            ScreenBrightness::set(None, share).unwrap();
-            assert_eq!(ScreenBrightness::read(None), Some(share));
+        let level = ScreenBrightness::read(None, false);
+        println!("the primary display says {level:?}");
+        if let Some(level) = level {
+            ScreenBrightness::set(None, level.share).unwrap();
+            assert_eq!(ScreenBrightness::read(None, !level.slow), Some(level));
         }
     }
 }

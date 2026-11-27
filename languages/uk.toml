@@ -652,3 +652,19 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "Windows holds no warmth of night light yet; set it once in its settings" = "Windows ще не зберігає теплоту нічного світла; задайте її один раз у параметрах"
 "Windows keeps no state of night light yet; open it once in the settings" = "Windows ще не зберігає стан нічного світла; відкрийте його один раз у параметрах"
 "Windows keeps the state of night light in a way Tessera does not know" = "Windows зберігає стан нічного світла в невідомому для Tessera вигляді"
+# Quick settings: the power plans.
+"Windows tells of no power plan" = "Windows не повідомляє жодної схеми живлення"
+
+# Quick settings: microphones, media sessions and flyouts.
+"Input" = "Введення"
+"Sound settings" = "Параметри звуку"
+"Spatial sound" = "Просторовий звук"
+"On" = "Увімкнено"
+"Microphone off" = "Мікрофон вимкнено"
+"Microphone on" = "Мікрофон увімкнено"
+"Caps Lock on" = "Caps Lock увімкнено"
+"Caps Lock off" = "Caps Lock вимкнено"
+"Num Lock on" = "Num Lock увімкнено"
+"Num Lock off" = "Num Lock вимкнено"
+"Nothing is playing" = "Нічого не відтворюється"
+"Unnamed" = "Без назви"

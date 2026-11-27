@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! The volume of the default audio output and input, the outputs there
-//! are to choose from, and the volume of each application that plays.
+//! The volume of the default audio output and input, the outputs and
+//! microphones there are to choose from, the volume of each of them and of
+//! each application that plays, and whether spatial sound is on.
 
 use std::ptr;
 use std::sync::Once;
@@ -15,6 +16,7 @@ use windows::Win32::Media::Audio::{
     IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator,
     eCapture, eCommunications, eConsole, eMultimedia, eRender,
 };
+use windows::Win32::Media::Audio::{ISpatialAudioClient, ISpatialAudioObjectRenderStream};
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, STGM_READ,
 };
@@ -82,27 +84,40 @@ fn id_of(device: &IMMDevice) -> Option<String> {
     take(unsafe { device.GetId() }.ok()?)
 }
 
-/// An audio output there is to play through.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An audio output there is to play through, or a microphone there is to
+/// record from.
+#[derive(Clone, Debug, PartialEq)]
 pub struct AudioDevice {
     /// What Windows knows the device by.
     pub id: String,
     pub name: String,
-    /// Whether ordinary sound goes through it now.
+    /// Whether ordinary sound goes through it now, or is recorded from it.
     pub in_use: bool,
+    /// The volume of the device itself, from 0 to 1, as its own slider in
+    /// the sound settings shows it; `None` for a device without one.
+    pub volume: Option<f32>,
+    pub muted: bool,
 }
 
 impl AudioDevice {
     /// The outputs that are plugged in and enabled, the one in use first.
     pub fn outputs() -> Result<Vec<Self>> {
+        Self::all(eRender).context("the audio outputs cannot be listed")
+    }
+
+    /// The microphones and other inputs that are plugged in and enabled,
+    /// the one in use first.
+    pub fn inputs() -> Result<Vec<Self>> {
+        Self::all(eCapture).context("the audio inputs cannot be listed")
+    }
+
+    fn all(flow: EDataFlow) -> Result<Vec<Self>> {
         let devices = enumerator()?;
-        let in_use = default_endpoint(eRender).ok().as_ref().and_then(id_of);
+        let in_use = default_endpoint(flow).ok().as_ref().and_then(id_of);
         // SAFETY: plain COM calls; each value read is owned here.
         unsafe {
-            let found = devices
-                .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
-                .context("the audio outputs cannot be listed")?;
-            let mut outputs = Vec::new();
+            let found = devices.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)?;
+            let mut listed = Vec::new();
             for index in 0..found.GetCount().unwrap_or(0) {
                 let Ok(device) = found.Item(index) else {
                     continue;
@@ -115,30 +130,37 @@ impl AudioDevice {
                     .and_then(|store| store.GetValue(&FRIENDLY_NAME))
                     .map(|name| name.to_string())
                     .unwrap_or_default();
-                outputs.push(Self {
+                let level = AudioOutput::on(&device).ok();
+                let volume = level.as_ref().and_then(|level| level.volume().ok());
+                let muted = level.is_some_and(|level| level.is_muted().unwrap_or(false));
+                listed.push(Self {
                     in_use: in_use.as_deref() == Some(id.as_str()),
                     name,
                     id,
+                    volume,
+                    muted,
                 });
             }
-            outputs.sort_by_key(|output| !output.in_use);
-            Ok(outputs)
+            listed.sort_by_key(|device| !device.in_use);
+            Ok(listed)
         }
     }
 
-    /// Has every kind of sound go through this output from now on.
+    /// Has every kind of sound go through this output, or be recorded from
+    /// this input, from now on: for games and media, for the rest, and for
+    /// calls, as the sound settings of Windows do.
     pub fn choose(&self) -> Result<()> {
         use_com();
         let id = HSTRING::from(self.id.as_str());
         // SAFETY: `id` outlives the calls that read it.
         unsafe {
             let policy: IPolicyConfig = CoCreateInstance(&POLICY_CONFIG, None, CLSCTX_ALL)
-                .context("the default audio output cannot be changed here")?;
+                .context("the default audio device cannot be changed here")?;
             for role in [eConsole, eMultimedia, eCommunications] {
                 policy
                     .set_default_endpoint(PCWSTR(id.as_ptr()), role)
                     .ok()
-                    .context("the audio output was not taken as the default")?;
+                    .context("the audio device was not taken as the default")?;
             }
         }
         Ok(())
@@ -265,11 +287,24 @@ impl AudioOutput {
         Self::of(eCapture)
     }
 
+    /// The output or input Windows knows by `id`, as [`AudioDevice::id`]
+    /// gives it. Fails when it is gone.
+    pub fn device(id: &str) -> Result<Self> {
+        let id = HSTRING::from(id);
+        // SAFETY: `id` outlives the call that reads it.
+        let device = unsafe { enumerator()?.GetDevice(&id) }.context("the audio device is gone")?;
+        Self::on(&device)
+    }
+
     fn of(flow: EDataFlow) -> Result<Self> {
+        Self::on(&default_endpoint(flow)?)
+    }
+
+    fn on(device: &IMMDevice) -> Result<Self> {
         // SAFETY: a COM call on an interface that stays alive for as long
         // as its wrapper does.
         let endpoint = unsafe {
-            default_endpoint(flow)?
+            device
                 .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
                 .context("the audio device has no volume control")?
         };
@@ -291,6 +326,20 @@ impl AudioOutput {
         .context("the volume cannot be changed")
     }
 
+    /// Turns the volume one step up or down, as the volume keys do: by
+    /// the steps the device counts, 2 of 100 for most.
+    pub fn step(&self, up: bool) -> Result<()> {
+        // SAFETY: the event context may be null.
+        unsafe {
+            if up {
+                self.endpoint.VolumeStepUp(ptr::null())
+            } else {
+                self.endpoint.VolumeStepDown(ptr::null())
+            }
+        }
+        .context("the volume cannot be changed")
+    }
+
     pub fn is_muted(&self) -> Result<bool> {
         // SAFETY: a COM call without pointer arguments.
         let muted = unsafe { self.endpoint.GetMute() }.context("the mute state cannot be read")?;
@@ -301,5 +350,30 @@ impl AudioOutput {
         // SAFETY: the event context may be null.
         unsafe { self.endpoint.SetMute(muted, ptr::null()) }
             .context("the mute state cannot be changed")
+    }
+}
+
+/// Whether the default output renders spatial sound: a format such as
+/// Windows Sonic for Headphones or Dolby Atmos is chosen for it in the sound
+/// settings. `None` where Windows gives no spatial sound for the output.
+///
+/// Windows has no public way for another program to choose the format, so
+/// this only reads it; the sound settings switch it.
+pub fn spatial_sound() -> Option<bool> {
+    // SAFETY: COM calls on interfaces owned here; the identifier of the
+    // stream and the count outlive the calls that read and fill them.
+    unsafe {
+        let spatial = default_endpoint(eRender)
+            .ok()?
+            .Activate::<ISpatialAudioClient>(CLSCTX_ALL, None)
+            .ok()?;
+        // With no format chosen Windows answers that the stream is not
+        // available, and offers no objects to place in space.
+        let stream = ISpatialAudioObjectRenderStream::IID;
+        let available = spatial
+            .IsSpatialAudioStreamAvailable(&raw const stream, None)
+            .is_ok();
+        let objects = spatial.GetMaxDynamicObjectCount().unwrap_or(0);
+        Some(available && objects > 0)
     }
 }

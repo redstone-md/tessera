@@ -7,6 +7,7 @@
 
 mod accent;
 mod account;
+mod app_commands;
 mod app_windows;
 mod appbar;
 mod audio;
@@ -32,6 +33,7 @@ mod icon;
 mod index;
 mod input_names;
 mod jump;
+mod key_locks;
 mod keyboard;
 mod media;
 mod move_watch;
@@ -78,7 +80,9 @@ mod winlogon;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
+pub use app_commands::AppCommand;
 pub use app_windows::{AppWindow, AppWindowId, WindowEvents, pointer_at, pointer_held};
+pub use audio::spatial_sound;
 pub use audio::{AppSound, AudioDevice, AudioOutput};
 pub use backdrop::{
     BackdropPicture, DesktopBackdrop, desktop_look, desktop_pixels, display_frames,
@@ -87,6 +91,7 @@ pub use backdrop::{
 pub use bin::RecycleBin;
 pub use bin::{BinUsage, RecycledItem};
 pub use bluetooth::{Bluetooth, PairedDevice};
+pub use brightness::BrightnessLevel;
 pub use brightness::ScreenBrightness;
 pub use clipboard_watch::{Clip, ClipboardWatch, Offer, paste_into};
 pub use commands::Commands;
@@ -113,9 +118,12 @@ pub use index::SearchIndex;
 pub use input_names::InputName;
 pub use input_names::OwnInput;
 pub use jump::{JumpTask, RecentDocument, app_id_of_program};
+pub use key_locks::{KeyLocks, window_in_front};
 pub use keyboard::{InputLanguage, Typing};
+pub use media::SessionKey;
 pub use media::{Media, MediaCommand, NowPlaying, Position};
 pub use move_watch::{MoveEvent, MoveWatch};
+pub use media::{Repeat, SessionInfo};
 pub use network::{Link, Network};
 pub use night_light::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use notifications::Occupation;

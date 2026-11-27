@@ -651,3 +651,19 @@ short-weekdays = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
 "Windows holds no warmth of night light yet; set it once in its settings" = "Windows speichert noch keine Stärke des Nachtmodus; legen Sie sie einmal in den Einstellungen fest"
 "Windows keeps no state of night light yet; open it once in the settings" = "Windows speichert noch keinen Zustand des Nachtmodus; öffnen Sie ihn einmal in den Einstellungen"
 "Windows keeps the state of night light in a way Tessera does not know" = "Windows speichert den Zustand des Nachtmodus auf eine Art, die Tessera nicht kennt"
+# Quick settings: the power plans.
+"Windows tells of no power plan" = "Windows nennt keinen Energiesparplan"
+
+# Quick settings: microphones, media sessions and flyouts.
+"Input" = "Eingabe"
+"Sound settings" = "Toneinstellungen"
+"Spatial sound" = "Räumlicher Klang"
+"On" = "Ein"
+"Microphone off" = "Mikrofon aus"
+"Microphone on" = "Mikrofon an"
+"Caps Lock on" = "Feststelltaste an"
+"Caps Lock off" = "Feststelltaste aus"
+"Num Lock on" = "Num-Taste an"
+"Num Lock off" = "Num-Taste aus"
+"Nothing is playing" = "Es wird nichts abgespielt"
+"Unnamed" = "Unbenannt"
