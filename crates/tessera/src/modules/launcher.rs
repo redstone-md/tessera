@@ -291,7 +291,9 @@ fn files_for(text: &str) -> anyhow::Result<Vec<PathBuf>> {
     if !named.is_empty() || text.chars().count() < LETTERS_FOR_CONTENT {
         return Ok(named);
     }
-    SearchIndex::files_matching(&search.loosely(), FILES_SHOWN)
+    // The index was just asked, so a loose question it turns down, as one
+    // of only words it ignores, finds nothing rather than turning it off.
+    Ok(SearchIndex::files_matching(&search.loosely(), FILES_SHOWN).unwrap_or(named))
 }
 
 /// What the row of a file says beside its name: the folder it lies in.
