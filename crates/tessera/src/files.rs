@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 
 use async_channel::Sender;
 use gpui::{
-    App, AppContext, Bounds, Global, IntoElement, ParentElement, Render, Styled, TitlebarOptions,
-    Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+    AnyWindowHandle, App, AppContext, Bounds, Entity, Global, IntoElement, ParentElement, Render,
+    Styled, TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
 };
 use serde::Deserialize;
 
@@ -37,8 +37,8 @@ use crate::module::{Module, WidgetRegistry};
 use crate::modules::devices::{Drives, letter_of as drive_letter_of};
 use crate::platform::Place;
 use crate::platform::{
-    DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, known_folder_path,
-    reveal_with, shell_mode, start_explorer,
+    DriveDialog, FolderHandler, NetworkDrives, SharePackage, ShellThread, ShellWindows,
+    known_folder_path, reveal_with, shell_mode, start_explorer,
 };
 use crate::theme::Theme;
 use crate::ui::{icon, pill};
@@ -104,6 +104,10 @@ pub struct Files {
     config: FilesConfig,
     /// Where `platform::reveal` hands its paths, once they are taken.
     reveals: Option<Sender<PathBuf>>,
+    /// Whether the list of folder windows of the Shell is served.
+    serving: bool,
+    /// The windows in that list, by the number of their handle.
+    listed: Vec<(isize, AnyWindowHandle)>,
 }
 
 impl Global for Files {}
@@ -113,6 +117,7 @@ impl Files {
         cx.default_global::<Self>().config = *config;
         Self::take_reveals(config.own, cx);
         Drives::play_arrivals(config.autoplay.active(shell_mode()), cx);
+        Self::serve_shell_windows(cx);
     }
 
     /// Whether the folders the surfaces of Tessera open open here.
@@ -274,12 +279,75 @@ impl Files {
             window_min_size: Some(size(px(LEAST_SIZE.0), px(LEAST_SIZE.1))),
             ..Default::default()
         };
+        let folder = { opening.tabs.get(opening.active) }
+            .and_then(|tab| tab.panes.get(tab.active))
+            .and_then(Location::folder)
+            .map(Path::to_owned);
         let opened = cx.open_window(options, |window, cx| {
-            cx.new(|cx| FilesView::new(opening, config, window, cx))
+            let view = cx.new(|cx| FilesView::new(opening, config, window, cx));
+            Self::list_window(&view, window, folder, cx);
+            view
         });
         if let Err(error) = opened {
             report!("the file manager did not open: {error:#}");
         }
+    }
+
+    /// Puts the window of `view` in the list of folder windows of the
+    /// Shell, at the folder it opened with, and takes it out once the
+    /// window is closed. Its later folders are not told yet: that waits
+    /// for the windows to tell where they navigate.
+    fn list_window(
+        view: &Entity<FilesView>,
+        window: &Window,
+        folder: Option<PathBuf>,
+        cx: &mut App,
+    ) {
+        if !cx.default_global::<Self>().serving {
+            return;
+        }
+        let Some(number) = ShellWindows::number_of(window) else {
+            return;
+        };
+        ShellWindows::opened(number, folder);
+        let handle = window.window_handle();
+        cx.global_mut::<Self>().listed.push((number, handle));
+        cx.observe_release(view, move |_, cx| {
+            ShellWindows::closed(number);
+            cx.global_mut::<Self>()
+                .listed
+                .retain(|(listed, _)| *listed != number);
+        })
+        .detach();
+    }
+
+    /// Serves the list of folder windows of the Shell, as the shell of the
+    /// session, once: a program that asks a window of the file manager to
+    /// choose files brings that window to the front. Choosing the files
+    /// themselves waits for the panes to choose items by name.
+    fn serve_shell_windows(cx: &mut App) {
+        let this = cx.default_global::<Self>();
+        if this.serving || !shell_mode() {
+            return;
+        }
+        this.serving = true;
+        let selections = ShellWindows::serve();
+        cx.spawn(async move |cx| {
+            while let Ok(selection) = selections.recv().await {
+                let answered = cx.update(|cx| {
+                    let listed = { cx.global::<Self>().listed.iter() }
+                        .find(|(number, _)| *number == selection.window)
+                        .map(|(_, handle)| *handle);
+                    if let Some(handle) = listed {
+                        let _ = handle.update(cx, |_, window, _| window.activate_window());
+                    }
+                });
+                if answered.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Opens the folder `path` in the file manager when the configuration

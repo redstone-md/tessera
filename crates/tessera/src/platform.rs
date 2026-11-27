@@ -25,6 +25,7 @@ pub use win32::SessionKey;
     reason = "for the packages that hand work to the Shell"
 )]
 pub use win32::ShellThread;
+pub use win32::ShellWindows;
 pub use win32::ShowDesktop;
 pub use win32::decode_with_wic;
 pub use win32::display_at;
