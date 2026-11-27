@@ -2122,6 +2122,375 @@ const RUSSIAN: &[(&str, &str)] = &[
         "Windows has no setting for a battery charge limit; where the battery has one, the maker's own app sets it.",
         "В Windows нет настройки предела заряда батареи; где он есть, его задаёт приложение производителя.",
     ),
+    // widget-options: the options of the widgets, the Search page and the popups.
+    (
+        "The date and time as a strftime pattern, such as %H:%M.",
+        "Дата и время в виде шаблона strftime, например %H:%M.",
+    ),
+    (
+        "Zones whose time the tip and the calendar give, by IANA name, Windows name or city.",
+        "Пояса, время которых показывают подсказка и календарь: по имени IANA, имени Windows или городу.",
+    ),
+    ("The first day of each row.", "Первый день каждой строки."),
+    ("Week numbers", "Номера недель"),
+    (
+        "Puts the week of the year, counted as ISO 8601 does, before each row.",
+        "Ставит перед каждой строкой номер недели года по ISO 8601.",
+    ),
+    ("Calendars", "Календари"),
+    (
+        "iCalendar files by their path, and feeds by an https:// or webcal:// address.",
+        "Файлы iCalendar по пути и ленты по адресу https:// или webcal://.",
+    ),
+    (
+        "A character of the icon font, shown before the text.",
+        "Символ шрифта значков, показанный перед текстом.",
+    ),
+    ("What the label says.", "Что написано на метке."),
+    (
+        "The program to run and its arguments; the first line it prints is shown.",
+        "Программа для запуска и её аргументы; показывается первая выведенная строка.",
+    ),
+    ("Interval", "Интервал"),
+    (
+        "How many seconds pass between two runs.",
+        "Сколько секунд проходит между двумя запусками.",
+    ),
+    (
+        "The title of the window in front, or the name of its program.",
+        "Заголовок активного окна или имя его программы.",
+    ),
+    (
+        "The most room the text takes.",
+        "Наибольшее место, которое занимает текст.",
+    ),
+    ("Flexible", "Гибкий"),
+    (
+        "Takes the room its slot leaves instead of a size of its own.",
+        "Занимает всё место, оставшееся в его части, а не свой размер.",
+    ),
+    ("The room it keeps.", "Место, которое он оставляет."),
+    (
+        "The folder a click opens; the start of the file manager without it.",
+        "Папка, которую открывает щелчок; без неё — начало файлового менеджера.",
+    ),
+    (
+        "The name of the connection beside its icon, or the icon alone.",
+        "Имя подключения рядом со значком или только значок.",
+    ),
+    (
+        "The radio it switches.",
+        "Радиомодуль, который он переключает.",
+    ),
+    ("QR code", "QR-код"),
+    (
+        "A code a phone camera joins the network with, while the password is shown.",
+        "Код, по которому камера телефона подключается к сети, пока пароль показан.",
+    ),
+    (
+        "The tiles, by widget name; a tile with options of its own is written in the file.",
+        "Плитки по имени виджета; плитка со своими параметрами пишется в файле.",
+    ),
+    ("How many stand in a row.", "Сколько стоит в одном ряду."),
+    (
+        "The widget its narrow button unfolds; empty for none.",
+        "Виджет, который раскрывает его узкая кнопка; пусто — никакой.",
+    ),
+    (
+        "The name of the plan beside its icon.",
+        "Название схемы рядом со значком.",
+    ),
+    ("Cycle", "По кругу"),
+    (
+        "A click puts the next plan in use, as well as opening the list.",
+        "Щелчок включает следующую схему, а также открывает список.",
+    ),
+    ("Wheel step", "Шаг колеса"),
+    (
+        "How far a notch of the wheel turns the volume.",
+        "Насколько одно деление колеса меняет громкость.",
+    ),
+    (
+        "How far a notch of the wheel changes the brightness.",
+        "Насколько одно деление колеса меняет яркость.",
+    ),
+    ("Volumes", "Громкости"),
+    (
+        "A slider of the volume under each device.",
+        "Ползунок громкости под каждым устройством.",
+    ),
+    (
+        "Shows the description of an icon while the pointer rests on it.",
+        "Показывает описание значка, пока на нём указатель.",
+    ),
+    (
+        "How many icons stand on the bar; the others wait in the overflow.",
+        "Сколько значков стоит на панели; остальные ждут в переполнении.",
+    ),
+    (
+        "Keeps the Bluetooth icon of Windows among the icons.",
+        "Оставляет значок Bluetooth Windows среди значков.",
+    ),
+    (
+        "The applications pinned to Start, by name or path.",
+        "Приложения, закреплённые в меню «Пуск», по имени или пути.",
+    ),
+    ("Entries shown", "Показано записей"),
+    (
+        "The most entries listed.",
+        "Наибольшее число записей в списке.",
+    ),
+    ("Days", "Дни"),
+    (
+        "For how many days an application counts as new after its shortcut was made.",
+        "Сколько дней приложение считается новым после создания его ярлыка.",
+    ),
+    (
+        "Lists the files opened lately.",
+        "Показывает недавно открытые файлы.",
+    ),
+    ("New applications", "Новые приложения"),
+    (
+        "Lists the applications installed lately.",
+        "Показывает недавно установленные приложения.",
+    ),
+    ("Buttons", "Кнопки"),
+    (
+        "What the buttons do, in order.",
+        "Что делают кнопки, по порядку.",
+    ),
+    ("Lock", "Заблокировать"),
+    (
+        "Adds installing the updates beside restarting and shutting down while updates wait.",
+        "Добавляет установку обновлений рядом с перезагрузкой и завершением работы, пока обновления ждут.",
+    ),
+    (
+        "The name of the account beside its picture.",
+        "Имя учётной записи рядом с её изображением.",
+    ),
+    (
+        "The folders listed, in order.",
+        "Папки в списке, по порядку.",
+    ),
+    ("Placeholder", "Подсказка в поле"),
+    ("What the empty field says.", "Что написано в пустом поле."),
+    ("Folders", "Папки"),
+    (
+        "Folders searched for files by name, instead of the index of Windows Search.",
+        "Папки, в которых файлы ищутся по имени вместо индекса поиска Windows.",
+    ),
+    (
+        "What is shown before anything is typed.",
+        "Что показано, пока ничего не введено.",
+    ),
+    ("Tabs", "Вкладки"),
+    (
+        "A row of tabs above the list; there for the favorites and the categories unless switched off.",
+        "Ряд вкладок над списком; есть для избранного и категорий, если не выключен.",
+    ),
+    ("Runners", "Обработчики"),
+    (
+        "The runners asked, by name; all of them without the option.",
+        "Опрашиваемые обработчики по имени; без параметра — все.",
+    ),
+    ("Search engine", "Поисковая система"),
+    (
+        "The keyword of the web search the last row searches with.",
+        "Ключевое слово веб-поиска, которым ищет последняя строка.",
+    ),
+    ("Exchange rates", "Курсы валют"),
+    (
+        "Fetches the rates of the European Central Bank for conversions between currencies.",
+        "Загружает курсы Европейского центрального банка для перевода валют.",
+    ),
+    (
+        "Lists the documents opened lately while nothing is typed.",
+        "Показывает недавно открытые документы, пока ничего не введено.",
+    ),
+    (
+        "Offers the pages of the Settings app and the Control Panel.",
+        "Предлагает страницы приложения «Параметры» и панели управления.",
+    ),
+    (
+        "A wave that fills up to the level, or the level as text.",
+        "Волна, заполняющаяся до уровня, или уровень текстом.",
+    ),
+    (
+        "How many seconds pass between two readings; those of [system] where it is not set.",
+        "Сколько секунд между двумя замерами; если не задано — как в [system].",
+    ),
+    (
+        "The share of the memory in use, or how much is in use.",
+        "Доля занятой памяти или сколько её занято.",
+    ),
+    ("Drive", "Диск"),
+    (
+        "The drive measured, as C:\\.",
+        "Измеряемый диск, например C:\\.",
+    ),
+    (
+        "The share of the drive in use, or the space that is free.",
+        "Доля занятого места на диске или свободное место.",
+    ),
+    ("Free space", "Свободное место"),
+    (
+        "How busy the graphics processor is, or how much of its memory is in use.",
+        "Загрузка графического процессора или сколько его памяти занято.",
+    ),
+    ("Full speed", "Полная скорость"),
+    (
+        "The speed, in megabits a second, at which the meter is full.",
+        "Скорость в мегабитах в секунду, при которой индикатор полон.",
+    ),
+    ("Repository", "Репозиторий"),
+    (
+        "The address on GitHub whose releases are looked for; Tessera's own without it.",
+        "Адрес на GitHub, выпуски которого ищутся; без него — собственный Tessera.",
+    ),
+    ("Check every", "Проверять каждые"),
+    (
+        "How many hours pass between two checks.",
+        "Сколько часов проходит между двумя проверками.",
+    ),
+    ("Previews", "Предварительные версии"),
+    (
+        "A release marked as a preview counts too.",
+        "Выпуск, помеченный как предварительный, тоже учитывается.",
+    ),
+    ("Install on click", "Устанавливать по щелчку"),
+    (
+        "A click installs the release instead of opening its page.",
+        "Щелчок устанавливает выпуск вместо открытия его страницы.",
+    ),
+    (
+        "The kinds offered; every kind without the option.",
+        "Предлагаемые виды; без параметра — все виды.",
+    ),
+    (
+        "Applications that keep a button whether they run or not, by name or path.",
+        "Приложения, у которых есть кнопка, запущены они или нет, по имени или пути.",
+    ),
+    ("Start button", "Кнопка «Пуск»"),
+    (
+        "The popup the button at the start of the dock opens; no button without it.",
+        "Попап, который открывает кнопка в начале панели задач; без него кнопки нет.",
+    ),
+    ("Start button icon", "Значок кнопки «Пуск»"),
+    (
+        "A character of the icon font on the Start button instead of the mark of Tessera.",
+        "Символ шрифта значков на кнопке «Пуск» вместо знака Tessera.",
+    ),
+    ("Grouping", "Группировка"),
+    (
+        "Whether the windows of one application share a button.",
+        "Делят ли окна одного приложения одну кнопку.",
+    ),
+    ("Titles on the buttons", "Заголовки на кнопках"),
+    (
+        "Each button shows the title of its window beside the icon.",
+        "Каждая кнопка показывает заголовок своего окна рядом со значком.",
+    ),
+    ("Count the windows", "Считать окна"),
+    (
+        "The number of windows beside the dot instead of more dots.",
+        "Число окон рядом с точкой вместо дополнительных точек.",
+    ),
+    ("Which windows get buttons.", "Какие окна получают кнопки."),
+    (
+        "Lists the windows of every display, as showing those of all displays does.",
+        "Показывает окна всех экранов, как это делает показ окон всех экранов.",
+    ),
+    ("Middle click", "Средняя кнопка"),
+    (
+        "What a click with the middle button on a button does.",
+        "Что делает щелчок средней кнопкой по кнопке.",
+    ),
+    ("Wheel through windows", "Колесо по окнам"),
+    (
+        "The wheel over a button brings its windows forward one after the other.",
+        "Колесо над кнопкой выводит её окна вперёд одно за другим.",
+    ),
+    ("Shown for attention", "Показ при внимании"),
+    (
+        "When a dock that hides comes out for a window that asks for attention.",
+        "Когда скрываемая панель задач появляется ради окна, требующего внимания.",
+    ),
+    ("While it flashes", "Пока мигает"),
+    ("Until it is activated", "Пока не активировано"),
+    ("Badges", "Значки уведомлений"),
+    (
+        "The buttons count the notifications that wait.",
+        "Кнопки показывают число ожидающих уведомлений.",
+    ),
+    ("Clear history", "Очистить историю"),
+    ("Popups", "Попапы"),
+    ("Add popup", "Добавить попап"),
+    ("Second column", "Второй столбец"),
+    (
+        "A keyword is one word without a colon.",
+        "Ключевое слово — одно слово без двоеточия.",
+    ),
+    (
+        "A keyword of your own takes the place of a built-in one of the same name.",
+        "Своё ключевое слово заменяет встроенное с тем же именем.",
+    ),
+    ("Address with {}", "Адрес с {}"),
+    ("Built in: {}", "Встроенные: {}"),
+    ("Change", "Изменить"),
+    ("Fetch exchange rates", "Загружать курсы валют"),
+    ("History", "История"),
+    ("In the middle", "Посередине"),
+    (
+        "It holds the settings, which no other popup holds, so it stays.",
+        "В нём настройки, которых нет ни в одном другом попапе, поэтому он остаётся.",
+    ),
+    ("Keyword", "Ключевое слово"),
+    (
+        "List the documents opened lately while nothing is typed",
+        "Показывать недавние документы, пока ничего не введено",
+    ),
+    ("Name of a new popup", "Имя нового попапа"),
+    ("Near the top", "Ближе к верху"),
+    ("New name", "Новое имя"),
+    ("Next to the bar", "Рядом с панелью"),
+    ("Opens {}", "Открывает {}"),
+    (
+        "Popups that come with Tessera",
+        "Попапы, входящие в Tessera",
+    ),
+    ("Remove popup", "Удалить попап"),
+    ("Remove this popup?", "Удалить этот попап?"),
+    (
+        "The address needs {} where what is searched goes.",
+        "В адресе нужно {} там, где стоит искомое.",
+    ),
+    ("The history is cleared.", "История очищена."),
+    (
+        "There is a popup named {} already.",
+        "Попап с именем {} уже есть.",
+    ),
+    (
+        "What is chosen in the launchers, the runner and the Run dialog ranks higher the next time; it is kept in launcher-history.toml.",
+        "Выбранное в средствах запуска, строке запуска и окне «Выполнить» в следующий раз стоит выше; это хранится в launcher-history.toml.",
+    ),
+    ("{} options", "Параметров: {}"),
+    ("{} widgets", "Виджетов: {}"),
+    (
+        "A runner switched off is not asked. Answers are ranked by how sure each runner is; the order is kept in the file.",
+        "Выключенный обработчик не опрашивается. Ответы упорядочены по уверенности каждого обработчика; порядок сохраняется в файле.",
+    ),
+    (
+        "These are the runners of every launcher. One launcher alone is set on its card:",
+        "Это обработчики всех средств запуска. Одно средство запуска настраивается на его карточке:",
+    ),
+    (
+        "The daily rates of the European Central Bank, fetched again when a conversion is asked and they are older than 12 hours; rates kept from before are still used.",
+        "Ежедневные курсы Европейского центрального банка, загружаемые заново при запросе перевода, если они старше 12 часов; сохранённые ранее курсы по-прежнему используются.",
+    ),
+    (
+        "They are used as they are until they are copied into the file to be changed.",
+        "Они используются как есть, пока их не скопируют в файл, чтобы изменить.",
+    ),
 ];
 
 #[cfg(test)]
