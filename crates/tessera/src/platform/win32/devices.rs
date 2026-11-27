@@ -39,15 +39,19 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_DevNode_Registry_PropertyW, CM_Get_DevNode_Status, CM_Get_Device_ID_List_SizeW,
     CM_Get_Device_ID_ListW, CM_Get_Device_IDW, CM_Get_Device_Interface_List_SizeW,
     CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_PropertyW, CM_Get_Parent,
-    CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_PROB, CM_Request_Device_EjectW, CR_SUCCESS,
-    DN_STARTED, PNP_VETO_TYPE, PNP_VetoAlreadyRemoved, PNP_VetoInsufficientRights,
-    PNP_VetoOutstandingOpen, PNP_VetoPendingClose, PNP_VetoWindowsApp, PNP_VetoWindowsService,
+    CM_LOCATE_DEVNODE_NORMAL, CM_Locate_DevNodeW, CM_PROB, CM_Request_Device_EjectW, CONFIGRET,
+    CR_BUFFER_SMALL, CR_SUCCESS, DN_STARTED, PNP_VETO_TYPE, PNP_VetoAlreadyRemoved,
+    PNP_VetoInsufficientRights, PNP_VetoOutstandingOpen, PNP_VetoPendingClose, PNP_VetoWindowsApp,
+    PNP_VetoWindowsService,
 };
 use windows::Win32::Devices::Properties::{DEVPKEY_Device_InstanceId, DEVPROPTYPE};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDriveTypeW,
     GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+};
+use windows::Win32::System::Diagnostics::Debug::{
+    SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX, SetThreadErrorMode, THREAD_ERROR_MODE,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -81,6 +85,10 @@ const EJECT_PAUSE: Duration = Duration::from_millis(500);
 /// and how long is waited in between.
 const LOCK_TRIES: u32 = 10;
 const LOCK_PAUSE: Duration = Duration::from_millis(200);
+
+/// How often a list of devices is asked for again where it grew between
+/// asking for its size and reading it, as it does while devices change.
+const LIST_TRIES: u32 = 5;
 
 /// How many devices up the device tree are looked at, at the most.
 const TREE_DEPTH: usize = 32;
@@ -149,6 +157,7 @@ impl Removables {
     /// for its volume, which can wait for a disc to spin up, so it is
     /// done away from the user interface.
     pub fn read() -> Self {
+        let _quiet = QuietErrors::new();
         let disks = Disks::read();
         // The device Windows runs from is never offered, though a disk on a
         // port that can take disks while it runs counts as removable.
@@ -198,6 +207,44 @@ impl Removables {
     /// Whether there is nothing to take out.
     pub fn is_empty(&self) -> bool {
         self.drives.is_empty() && self.devices.is_empty()
+    }
+
+    /// Reads how full each drive is again, without looking for drives and
+    /// devices anew, which takes far longer.
+    pub fn read_space(&mut self) {
+        let _quiet = QuietErrors::new();
+        for drive in &mut self.drives {
+            let space = disk_space(&drive.drive.root);
+            drive.drive.total = space.map(|(total, _)| total);
+            drive.drive.free = space.map(|(_, free)| free);
+        }
+    }
+}
+
+/// Keeps Windows from asking the user to put a disk in while a drive
+/// without a medium is looked at, on this thread and until it is dropped.
+struct QuietErrors(Option<THREAD_ERROR_MODE>);
+
+impl QuietErrors {
+    fn new() -> Self {
+        let mut old = THREAD_ERROR_MODE::default();
+        // SAFETY: `old` outlives the call; the mode is a thread's own.
+        let set = unsafe {
+            SetThreadErrorMode(
+                SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX,
+                Some(&mut old),
+            )
+        };
+        Self(set.is_ok().then_some(old))
+    }
+}
+
+impl Drop for QuietErrors {
+    fn drop(&mut self) {
+        if let Some(old) = self.0 {
+            // SAFETY: the mode is the one the thread had before.
+            unsafe { SetThreadErrorMode(old, None) }.ok();
+        }
     }
 }
 
@@ -385,33 +432,49 @@ impl Disks {
 
 /// The paths of the device interfaces of `class` that are present.
 fn interfaces_of(class: &GUID) -> Vec<String> {
-    let mut length = 0u32;
-    // SAFETY: `length` outlives the call; no device is named.
-    let sized = unsafe {
-        CM_Get_Device_Interface_List_SizeW(
-            &mut length,
-            class,
-            PCWSTR::null(),
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        )
-    };
-    if sized != CR_SUCCESS || length <= 1 {
-        return Vec::new();
+    read_list(
+        // SAFETY: `length` outlives the call; no device is named.
+        |length| unsafe {
+            CM_Get_Device_Interface_List_SizeW(
+                length,
+                class,
+                PCWSTR::null(),
+                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+            )
+        },
+        // SAFETY: the buffer carries its length; no device is named.
+        |list| unsafe {
+            CM_Get_Device_Interface_ListW(
+                class,
+                PCWSTR::null(),
+                list,
+                CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+            )
+        },
+    )
+}
+
+/// A list of texts that Windows gives by its `size` first and then into a
+/// buffer of that size with `list`; asked for again while it grew in
+/// between, and empty where Windows does not give it.
+fn read_list(
+    size: impl Fn(&mut u32) -> CONFIGRET,
+    list: impl Fn(&mut [u16]) -> CONFIGRET,
+) -> Vec<String> {
+    for _ in 0..LIST_TRIES {
+        let mut length = 0u32;
+        if size(&mut length) != CR_SUCCESS || length <= 1 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0u16; length as usize];
+        match list(&mut buffer) {
+            CR_SUCCESS => return texts_in(&buffer),
+            CR_BUFFER_SMALL => {}
+            _ => return Vec::new(),
+        }
     }
-    let mut list = vec![0u16; length as usize];
-    // SAFETY: the buffer carries its length; no device is named.
-    let listed = unsafe {
-        CM_Get_Device_Interface_ListW(
-            class,
-            PCWSTR::null(),
-            &mut list,
-            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
-        )
-    };
-    if listed != CR_SUCCESS {
-        return Vec::new();
-    }
-    texts_in(&list)
+    report!("the devices are not listed: the list kept growing");
+    Vec::new()
 }
 
 /// The instance identifier of the device the interface `path` is of.
@@ -437,22 +500,14 @@ fn interface_instance(path: &str) -> Option<String> {
 
 /// The instance identifiers of the devices that are present.
 fn present_devices() -> Vec<String> {
-    let mut length = 0u32;
-    // SAFETY: `length` outlives the call; no filter is named.
-    let sized = unsafe {
-        CM_Get_Device_ID_List_SizeW(&mut length, PCWSTR::null(), CM_GETIDLIST_FILTER_PRESENT)
-    };
-    if sized != CR_SUCCESS || length <= 1 {
-        return Vec::new();
-    }
-    let mut list = vec![0u16; length as usize];
-    // SAFETY: the buffer carries its length; no filter is named.
-    let listed =
-        unsafe { CM_Get_Device_ID_ListW(PCWSTR::null(), &mut list, CM_GETIDLIST_FILTER_PRESENT) };
-    if listed != CR_SUCCESS {
-        return Vec::new();
-    }
-    texts_in(&list)
+    read_list(
+        // SAFETY: `length` outlives the call; no filter is named.
+        |length| unsafe {
+            CM_Get_Device_ID_List_SizeW(length, PCWSTR::null(), CM_GETIDLIST_FILTER_PRESENT)
+        },
+        // SAFETY: the buffer carries its length; no filter is named.
+        |list| unsafe { CM_Get_Device_ID_ListW(PCWSTR::null(), list, CM_GETIDLIST_FILTER_PRESENT) },
+    )
 }
 
 /// A device of the device tree, by the number Windows gives it while it is
@@ -709,25 +764,44 @@ fn eject_device(instance: &str) -> Result<(), EjectRefusal> {
 
 fn eject_medium(letter: char) -> Result<(), EjectRefusal> {
     let path = volume_path(letter);
-    let opened = Opened::open(&path, GENERIC_READ.0 | GENERIC_WRITE.0)
+    let written = Opened::open(&path, GENERIC_READ.0 | GENERIC_WRITE.0);
+    let read_only = written.is_none();
+    let opened = written
         .or_else(|| Opened::open(&path, GENERIC_READ.0))
         .ok_or(EjectRefusal::NotAllowed)?;
+    // Only a disc may come out without its volume being locked: nothing
+    // on it waits to be written.
+    let disc = drive_kind(letter) == Some(DriveKind::Optical);
+    let mut locked = false;
     for attempt in 0..LOCK_TRIES {
         if attempt > 0 {
             thread::sleep(LOCK_PAUSE);
         }
         match opened.ask::<(), ()>(FSCTL_LOCK_VOLUME, None, None) {
-            Ok(()) => break,
-            // A disc opened only to be read cannot be locked; it is
-            // ejected without, as Explorer does.
-            Err(error) if error.code() == ERROR_ACCESS_DENIED.to_hresult() => break,
+            Ok(()) => {
+                locked = true;
+                break;
+            }
+            // A volume opened only to be read cannot be locked: a disc is
+            // ejected without, as Explorer does, and a card is not.
+            Err(error) if read_only && error.code() == ERROR_ACCESS_DENIED.to_hresult() => {
+                if disc {
+                    break;
+                }
+                return Err(EjectRefusal::NotAllowed);
+            }
+            // Otherwise files on it are open, which a file system tells
+            // as access denied too.
             Err(_) if attempt + 1 == LOCK_TRIES => return Err(EjectRefusal::InUse(None)),
             Err(_) => {}
         }
     }
-    // A volume that is locked has no open files: dismounting it writes
-    // what waits to be written and lets go of it.
-    opened.control::<(), ()>(FSCTL_DISMOUNT_VOLUME, None, None);
+    if locked {
+        // A volume that is locked has no open files: dismounting it writes
+        // what waits to be written and lets go of it. One that is not is
+        // never dismounted, which would cut off the files open on it.
+        opened.control::<(), ()>(FSCTL_DISMOUNT_VOLUME, None, None);
+    }
     let allow = PREVENT_MEDIA_REMOVAL {
         PreventMediaRemoval: false,
     };

@@ -22,7 +22,7 @@ use std::time::Duration;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Div, Entity, Global, InteractiveElement,
     IntoElement, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, div, px,
+    Subscription, Task, WeakEntity, Window, div, px,
 };
 
 use crate::actions::{Action, Actions};
@@ -127,12 +127,26 @@ struct DeviceState {
     asked: HashMap<Ejection, Asked>,
 }
 
+impl DeviceState {
+    /// Whether something is being ejected. The list is not read then: a
+    /// reading opens every drive, which would keep its volume from being
+    /// locked and have Windows refuse the ejection because of Tessera.
+    fn ejecting(&self) -> bool {
+        self.asked.values().any(|asked| *asked == Asked::Ejecting)
+    }
+}
+
 /// The one list, made when the first widget or the notices ask for it, and
 /// whether drives that arrive are told of.
 #[derive(Default)]
 pub struct Drives {
     state: Option<Entity<DeviceState>>,
     tell: bool,
+    /// The number of the last reading started and of the last one taken:
+    /// readings take their time, and one that ends after a later one is
+    /// not taken.
+    started: u64,
+    taken: u64,
 }
 
 impl Global for Drives {}
@@ -172,17 +186,87 @@ impl Drives {
         state
     }
 
-    /// Reads the list again, away from the user interface.
+    /// Whether something is being ejected, while which nothing is read.
+    fn ejecting(cx: &mut App) -> bool {
+        Self::state(cx).read(cx).ejecting()
+    }
+
+    /// Reads the list again, away from the user interface, unless
+    /// something is being ejected; the end of the ejection reads it.
     fn refresh(cx: &mut App) {
-        let read = cx.background_executor().spawn(async { Removables::read() });
+        if Self::ejecting(cx) {
+            return;
+        }
+        let (number, read) = Self::read(cx);
         cx.spawn(async move |cx: &mut AsyncApp| {
             let read = read.await;
-            cx.update(|cx| Self::take(read, cx)).ok();
+            cx.update(|cx| Self::take(number, read, cx)).ok();
         })
         .detach();
     }
 
-    fn take(read: Removables, cx: &mut App) {
+    /// Starts a reading of the list, with its number.
+    fn read(cx: &mut App) -> (u64, Task<Removables>) {
+        let this = cx.default_global::<Self>();
+        this.started += 1;
+        let number = this.started;
+        let read = cx.background_executor().spawn(async { Removables::read() });
+        (number, read)
+    }
+
+    /// Reads again how full the drives in the list are, which is far
+    /// quicker than reading the list, unless something is being ejected.
+    fn refresh_space(cx: &mut App) {
+        let state = Self::state(cx);
+        let state = state.read(cx);
+        let Some(mut removables) = state.removables.clone().filter(|_| !state.ejecting()) else {
+            return;
+        };
+        let read = cx.background_executor().spawn(async move {
+            removables.read_space();
+            removables
+        });
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let read = read.await;
+            cx.update(|cx| Self::take_space(read, cx)).ok();
+        })
+        .detach();
+    }
+
+    /// Takes how full the drives of `read` are into the list, for those
+    /// drives that are still in it.
+    fn take_space(read: Removables, cx: &mut App) {
+        Self::state(cx).update(cx, |state, cx| {
+            let Some(removables) = &mut state.removables else {
+                return;
+            };
+            let mut changed = false;
+            for drive in &mut removables.drives {
+                let same = |known: &&RemovableDrive| {
+                    known.drive.root == drive.drive.root && known.device == drive.device
+                };
+                let Some(known) = read.drives.iter().find(same) else {
+                    continue;
+                };
+                let space = (known.drive.total, known.drive.free);
+                if (drive.drive.total, drive.drive.free) != space {
+                    (drive.drive.total, drive.drive.free) = space;
+                    changed = true;
+                }
+            }
+            if changed {
+                cx.notify();
+            }
+        });
+    }
+
+    /// Takes the reading with `number`, unless a later one was taken.
+    fn take(number: u64, read: Removables, cx: &mut App) {
+        let this = cx.default_global::<Self>();
+        if number < this.taken {
+            return;
+        }
+        this.taken = number;
         let state = Self::state(cx);
         let arrived = state.update(cx, |state, cx| {
             let arrived: Vec<RemovableDrive> = arrived(state.removables.as_ref(), &read)
@@ -269,26 +353,38 @@ impl Drives {
         Self::refresh(cx);
     }
 
-    /// Ejects the drive with `letter`, as the action `eject` does.
+    /// Ejects the drive with `letter`, as the action `eject` does. The
+    /// list is read first, as it may not be followed yet, but not while
+    /// something else is being ejected.
     fn eject_letter(letter: char, cx: &mut App) {
-        let read = cx.background_executor().spawn(async { Removables::read() });
+        if Self::ejecting(cx) {
+            let state = Self::state(cx);
+            let known = state.read(cx).removables.clone().unwrap_or_default();
+            Self::eject_found(letter, &known, cx);
+            return;
+        }
+        let (number, read) = Self::read(cx);
         cx.spawn(async move |cx: &mut AsyncApp| {
             let read = read.await;
-            let found = read
-                .drives
-                .iter()
-                .find(|drive| drive.letter() == letter)
-                .cloned();
             cx.update(|cx| {
-                Self::take(read, cx);
-                match found {
-                    Some(drive) => Self::eject(drive.ejection(), drive.drive.title(), cx),
-                    None => report!("there is no drive {letter}: to eject"),
-                }
+                Self::eject_found(letter, &read, cx);
+                Self::take(number, read, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Ejects the drive with `letter` among `removables`.
+    fn eject_found(letter: char, removables: &Removables, cx: &mut App) {
+        let found = removables
+            .drives
+            .iter()
+            .find(|drive| drive.letter() == letter);
+        match found {
+            Some(drive) => Self::eject(drive.ejection(), drive.drive.title(), cx),
+            None => report!("there is no drive {letter}: to eject"),
+        }
     }
 }
 
@@ -486,11 +582,14 @@ impl List {
     fn new(cx: &mut Context<Self>) -> Self {
         let state = Drives::state(cx);
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            if cx.update(Drives::refresh).is_err() {
+                return;
+            }
             loop {
-                if this.upgrade().is_none() || cx.update(Drives::refresh).is_err() {
+                cx.background_executor().timer(SHOWN_INTERVAL).await;
+                if this.upgrade().is_none() || cx.update(Drives::refresh_space).is_err() {
                     break;
                 }
-                cx.background_executor().timer(SHOWN_INTERVAL).await;
             }
         })
         .detach();

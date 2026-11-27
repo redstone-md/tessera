@@ -24,6 +24,11 @@ use crate::platform::{Battery, BatteryChanges, BatteryLevels, CriticalAction, La
 /// How often the charge is read where Windows does not tell of changes.
 const READ_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How many points above the level of the warning given the charge must
+/// rise for that warning to be given again once it falls: a gauge often
+/// goes back and forth by one around a level.
+const RISE: u8 = 3;
+
 /// The page of the Windows settings about power and the battery.
 const POWER_SETTINGS: &str = "ms-settings:powersleep";
 
@@ -53,6 +58,15 @@ impl Warning {
             None
         }
     }
+
+    /// The charge at and below which this warning is given under `levels`.
+    fn level(self, levels: &BatteryLevels) -> u8 {
+        match self {
+            Self::Low => levels.low.unwrap_or(levels.reserve),
+            Self::Reserve => levels.reserve,
+            Self::Critical => levels.critical,
+        }
+    }
 }
 
 /// Which warning was given since the machine was last plugged in.
@@ -74,10 +88,15 @@ impl Given {
             self.warning = now;
             return now;
         }
-        // A charge that rose without the machine being plugged in, as
-        // after the battery was measured anew, is warned of again once it
-        // falls.
-        self.warning = now;
+        // A charge that rose well above the level of the warning given
+        // without the machine being plugged in, as after the battery was
+        // measured anew, is warned of again once it falls.
+        let rose = self
+            .warning
+            .is_some_and(|given| battery.percent >= given.level(levels).saturating_add(RISE));
+        if rose {
+            self.warning = now;
+        }
         None
     }
 }
@@ -249,6 +268,20 @@ mod tests {
         assert_eq!(given.next(on_battery(9), &levels), Some(Warning::Reserve));
         assert_eq!(given.next(on_battery(25), &levels), None);
         assert_eq!(given.next(on_battery(20), &levels), Some(Warning::Low));
+    }
+
+    #[test]
+    fn a_charge_that_goes_back_and_forth_at_a_level_is_warned_of_once() {
+        let levels = levels(CriticalAction::Hibernate);
+        let mut given = Given::default();
+        assert_eq!(given.next(on_battery(10), &levels), Some(Warning::Reserve));
+        assert_eq!(given.next(on_battery(11), &levels), None);
+        assert_eq!(given.next(on_battery(10), &levels), None);
+        assert_eq!(given.next(on_battery(12), &levels), None);
+        assert_eq!(given.next(on_battery(10), &levels), None);
+        // Three points above the level, it counts as risen.
+        assert_eq!(given.next(on_battery(13), &levels), None);
+        assert_eq!(given.next(on_battery(10), &levels), Some(Warning::Reserve));
     }
 
     #[test]
