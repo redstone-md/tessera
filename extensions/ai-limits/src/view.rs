@@ -299,7 +299,7 @@ mod tests {
                 NodeKind::Text(text) | NodeKind::Caption(text) => Some(text.clone()),
                 NodeKind::Button(button) => Some(format!("[{}]", button.label)),
                 NodeKind::Progress(share) => Some(format!("<{share:.2}>")),
-                NodeKind::Row | NodeKind::Column => None,
+                _ => None,
             })
             .collect()
     }
