@@ -40,6 +40,7 @@ use windows::core::{HSTRING, PCWSTR, PWSTR, w};
 
 use super::ScreenRect;
 use super::app_windows::executable_of;
+use super::explorer_running;
 
 /// Where Windows keeps the picture of the desktop and its style.
 const DESKTOP: PCWSTR = w!("Control Panel\\Desktop");
@@ -342,10 +343,18 @@ pub fn user_locale() -> Option<String> {
     Some(String::from_utf16_lossy(&name[..length])).filter(|name| !name.is_empty())
 }
 
-/// The wallpaper object of Explorer, which exists only while it runs.
+/// The wallpaper object of Explorer, while Explorer runs: without it the
+/// object may still be made, but has no displays to tell of.
 fn explorer_wallpaper() -> Option<IDesktopWallpaper> {
+    if !explorer_running() {
+        return None;
+    }
     // SAFETY: the call makes a COM object on this thread, which has COM.
-    unsafe { CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL) }.ok()
+    let wallpaper: IDesktopWallpaper =
+        unsafe { CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL) }.ok()?;
+    // SAFETY: the call only reads a number of the object.
+    let displays = unsafe { wallpaper.GetMonitorDevicePathCount() }.unwrap_or(0);
+    (displays > 0).then_some(wallpaper)
 }
 
 /// The copy Windows keeps of the picture it shows.
