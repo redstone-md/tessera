@@ -190,7 +190,7 @@ impl IconPixels {
 
     /// The pixels of `bitmap`, which holds colors already multiplied by
     /// their opacity.
-    fn of_bitmap(bitmap: HBITMAP) -> Option<Self> {
+    pub(super) fn of_bitmap(bitmap: HBITMAP) -> Option<Self> {
         // SAFETY: every structure passed is correctly sized and the pixel
         // buffer matches the dimensions given to GetDIBits.
         let (width, height, mut bgra) = unsafe {

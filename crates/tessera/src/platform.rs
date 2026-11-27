@@ -53,6 +53,7 @@ pub use win32::{BatteryChanges, BatteryLevels, CriticalAction};
 pub use win32::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use win32::{Capability, CapabilityUse, PrivacyWatch};
 pub use win32::{Clip, ClipboardWatch, Offer, paste_into};
+pub use win32::{CloudState, OverlayMarks, Overlays};
 pub use win32::{
     DeviceChanges, EjectRefusal, Ejection, RemovableDevice, RemovableDrive, Removables,
 };
@@ -71,10 +72,12 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
+pub use win32::{FileProperty, Properties, PropertyEdit, PropertyValue};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 pub use win32::{KeyLocks, window_in_front};
+pub use win32::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"
@@ -82,6 +85,7 @@ pub use win32::{KeyLocks, window_in_front};
 pub use win32::{Launch, Show};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{PowerMode, PowerModeState};
+pub use win32::{PreviewColors, PreviewHost, PreviewShown};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
 pub use win32::{RadioId, RadioInfo, RadioType, Radios, airplane_mode};
 pub use win32::{Repeat, SessionInfo};
