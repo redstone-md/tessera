@@ -478,11 +478,12 @@ impl Tiler {
                 kept.chosen = None;
             }
         }
-        if this.knobs.marking != config.knobs().marking {
+        let knobs = config.knobs();
+        if this.knobs.marking != knobs.marking {
             this.unmark();
         }
         this.config = config.clone();
-        this.knobs = config.knobs();
+        this.knobs = knobs;
         config.check();
         this.check_layouts();
         this.nudged = true;
