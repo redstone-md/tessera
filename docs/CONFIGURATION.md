@@ -67,6 +67,14 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `shell` | `install`, `revert` or `explorer` | `install` makes Tessera the shell of the user's next sessions and `revert` gives that back to what the machine names, as `tessera shell install` and `tessera shell revert` do; `explorer` hands this session to Explorer now, when Tessera is its shell: Explorer starts as the shell once Tessera has quit |
 | `run` | none | opens the Run dialog, the popup `run`, or closes it; its keys (Win+R) are taken from Windows, and Win+R is bound to it by default where the keys of Windows are in use |
 | `runner` | none | opens the compact runner, the popup `runner`, or closes it; it brings no key |
+| `winx` | none | opens the menu of Win+X, or closes it: at the widget `winx` where a bar has one, else at the Start button (the button that opens `launcher`), else at the left end of a bar. Brings Win+X |
+| `power-dialog` | none | opens the dialog that asks what the computer is to do (switch user, sign out, sleep, hibernate, shut down, restart, and while updates wait update and shut down or update and restart); nothing is done before OK or Enter. Brings no key: where `windows_keys` is on, Alt+F4 opens it while the desktop is in front (no window, or the desktop window), and Alt+F4 elsewhere still closes the window in front |
+| `display-mode` | `pc-screen-only`, `duplicate`, `extend`, `second-screen-only`, or none | without `arg` opens the popup `display-mode`, the choice of Win+P; with one switches the displays to that mode at once. Brings Win+P |
+| `input-language` | `next`, `previous`, `list`, or none | asks the window in front for the next keyboard layout, or the one before with `previous`; where a window of Tessera is in front, Tessera takes on that layout itself. `list` opens the popup `keyboard-list`, whose choice is for the window that was in front before it. Brings Win+Space and Win+Shift+Space (`previous`) |
+| `open` | a file, a program, a folder or an address | opens it through the Shell, as a double click does. Brings Win+I (`ms-settings:`), Win+U (`ms-settings:easeofaccess`), Win+K (`ms-settings-connectabledevices:devicediscovery`), Win+G (`ms-gamebar:`), Win+Shift+S (`ms-screenclip:`) and Win+Pause (`ms-settings:about`) |
+| `start`, `search`, `quick-settings`, `notification-center` | the name of a popup, or none | opens that popup, or closes it; without `arg`, `launcher` for `start` (Ctrl+Esc) and `search` (Win+S, Win+Q), `quick-settings` (Win+A; the module brings this popup with the connections, the switches of Wi-Fi and Bluetooth, the volume and the brightness) and `calendar` (Win+N) |
+| `screenshot` | none | saves a picture of all displays as `Screenshot (N).png` in the Screenshots folder of Pictures, N counted on from where Windows counts. Brings Win+PrtScn |
+| `dock` | 1 to 9 | does what `dock = n` does: what a click on the button of that number in the dock does. Brings no key |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
@@ -154,16 +162,6 @@ action = "runner"
 ```
 
 The Run dialog reads and writes the history of the Run dialog of Explorer (`HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`), so both offer the same commands.
-| `winx` | none | opens the menu of Win+X, or closes it: at the widget `winx` where a bar has one, else at the Start button (the button that opens `launcher`), else at the left end of a bar. Brings Win+X |
-| `power-dialog` | none | opens the dialog that asks what the computer is to do (switch user, sign out, sleep, hibernate, shut down, restart, and while updates wait update and shut down or update and restart); nothing is done before OK or Enter. Brings no key: where `windows_keys` is on, Alt+F4 opens it while the desktop is in front (no window, or the desktop window), and Alt+F4 elsewhere still closes the window in front |
-| `display-mode` | `pc-screen-only`, `duplicate`, `extend`, `second-screen-only`, or none | without `arg` opens the popup `display-mode`, the choice of Win+P; with one switches the displays to that mode at once. Brings Win+P |
-| `input-language` | `next`, `previous`, `list`, or none | asks the window in front for the next keyboard layout, or the one before with `previous`; where a window of Tessera is in front, Tessera takes on that layout itself. `list` opens the popup `keyboard-list`, whose choice is for the window that was in front before it. Brings Win+Space and Win+Shift+Space (`previous`) |
-| `open` | a file, a program, a folder or an address | opens it through the Shell, as a double click does. Brings Win+I (`ms-settings:`), Win+U (`ms-settings:easeofaccess`), Win+K (`ms-settings-connectabledevices:devicediscovery`), Win+G (`ms-gamebar:`), Win+Shift+S (`ms-screenclip:`) and Win+Pause (`ms-settings:about`) |
-| `start`, `search`, `quick-settings`, `notification-center` | the name of a popup, or none | opens that popup, or closes it; without `arg`, `launcher` for `start` (Ctrl+Esc) and `search` (Win+S, Win+Q), `quick-settings` (Win+A; the module brings this popup with the connections, the switches of Wi-Fi and Bluetooth, the volume and the brightness) and `calendar` (Win+N) |
-| `screenshot` | none | saves a picture of all displays as `Screenshot (N).png` in the Screenshots folder of Pictures, N counted on from where Windows counts. Brings Win+PrtScn |
-| `dock` | 1 to 9 | does what `dock = n` does: what a click on the button of that number in the dock does. Brings no key |
-
-The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
 
 ## The keys of Windows without Explorer
 
