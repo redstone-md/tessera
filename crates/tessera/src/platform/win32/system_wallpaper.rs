@@ -222,22 +222,81 @@ impl SystemWallpaper {
     }
 
     /// Makes this the wallpaper of Windows: through Explorer where it
-    /// runs, each display with its own picture, and otherwise the picture
-    /// of the first display for all, the way programs set it without
-    /// Explorer. For a thread with COM; see the module.
+    /// runs, each display with its own picture and a display without one
+    /// left as it is, and otherwise the picture of the primary display for
+    /// all, the way programs set it without Explorer. Programs are told
+    /// with [`Self::announce`]. For a thread with COM; see the module.
     pub fn write(&self) -> Result<()> {
+        self.write_shown(false)
+    }
+
+    /// Makes this the wallpaper of Windows again, as it was read: as
+    /// [`Self::write`] does, but a display without a picture is given
+    /// none, so that it shows the color.
+    pub fn put_back(&self) -> Result<()> {
+        self.write_shown(true)
+    }
+
+    fn write_shown(&self, clear: bool) -> Result<()> {
         if let Some(wallpaper) = explorer_wallpaper() {
-            return self.write_to_explorer(&wallpaper);
+            return self.write_to_explorer(&wallpaper, clear);
         }
         self.write_to_registry()
     }
 
-    fn write_to_explorer(&self, wallpaper: &IDesktopWallpaper) -> Result<()> {
+    /// Tells the programs that run that the wallpaper changed, where
+    /// Explorer does not, after [`Self::write`] or [`Self::put_back`].
+    /// Each window gets a moment, so this can take a while; where nobody
+    /// waits for it, it is best done last.
+    pub fn announce() {
+        if explorer_running() {
+            return;
+        }
+        // SAFETY: the name of the section is a constant that outlives the
+        // call; a program that hangs is not waited for.
+        unsafe {
+            let _ = SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                WPARAM(SPI_SETDESKWALLPAPER.0 as usize),
+                LPARAM(DESKTOP.as_ptr() as isize),
+                SMTO_ABORTIFHUNG,
+                TOLD_WITHIN_MS,
+                None,
+            );
+        }
+    }
+
+    /// Whether Windows writes over the file `path` when the wallpaper
+    /// changes: it is one of the copies Windows keeps of the pictures it
+    /// shows (`TranscodedWallpaper` and the others in its `Themes`).
+    pub fn overwritten_by_windows(path: &Path) -> bool {
+        let Some(themes) = transcoded().as_deref().and_then(Path::parent).map(text_of) else {
+            return false;
+        };
+        let path = text_of(path);
+        path.len() > themes.len()
+            && path.starts_with(&themes)
+            && path[themes.len()..].starts_with('\\')
+    }
+
+    fn write_to_explorer(&self, wallpaper: &IDesktopWallpaper, clear: bool) -> Result<()> {
+        let none = self.pictures.iter().all(|(_, picture)| picture.is_none());
         // SAFETY: as in `from_explorer`; the strings given are kept alive
         // across the calls.
         unsafe {
             wallpaper.SetPosition(self.position.to_explorer())?;
             wallpaper.SetBackgroundColor(colorref(self.color))?;
+            if clear && none {
+                // No picture anywhere: the color alone.
+                return wallpaper
+                    .Enable(false)
+                    .context("Explorer did not leave the pictures out");
+            }
+            if !none {
+                // A wallpaper turned off before has its pictures shown.
+                let _ = wallpaper.Enable(true);
+            }
             let count = wallpaper.GetMonitorDevicePathCount()?;
             for index in 0..count {
                 let Ok(id) = wallpaper.GetMonitorDevicePathAt(index) else {
@@ -251,13 +310,18 @@ impl SystemWallpaper {
                     right: 0,
                     bottom: 0,
                 });
-                let Some(picture) = self.picture_of(frame) else {
+                let picture = self.picture_of(frame);
+                if picture.is_none() && !clear {
                     continue;
-                };
-                let path = HSTRING::from(picture.as_os_str());
+                }
+                // An empty name leaves the display to the color.
+                let path = picture.map_or_else(HSTRING::new, |picture| picture.as_os_str().into());
                 wallpaper
                     .SetWallpaper(monitor.as_pcwstr(), &path)
-                    .with_context(|| format!("Explorer did not take {}", picture.display()))?;
+                    .with_context(|| match picture {
+                        Some(picture) => format!("Explorer did not take {}", picture.display()),
+                        None => "Explorer did not leave a picture out".to_owned(),
+                    })?;
             }
         }
         Ok(())
@@ -275,19 +339,24 @@ impl SystemWallpaper {
             let color = [colorref(self.color)];
             let _ = SetSysColors(1, index.as_ptr(), color.as_ptr());
         }
-        let first = self
+        // The picture of the primary display, whose corner is where the
+        // desktop begins; of the first where none is.
+        let at_origin =
+            |(frame, _): &&(ScreenRect, Option<PathBuf>)| frame.left == 0 && frame.top == 0;
+        let primary = self
             .pictures
             .iter()
-            .find_map(|(_, picture)| picture.clone());
-        let mut path: Vec<u16> = first
-            .as_deref()
+            .find(at_origin)
+            .or(self.pictures.first());
+        let mut path: Vec<u16> = primary
+            .and_then(|(_, picture)| picture.as_deref())
             .map(|path| path.as_os_str().to_string_lossy().encode_utf16().collect())
             .unwrap_or_default();
         path.push(0);
         // SAFETY: the name is NUL-terminated and outlives the call. The
         // change is written without the broadcast `SPIF_SENDCHANGE` makes,
-        // which can wait for a program that hangs; it is told below with a
-        // limit instead.
+        // which can wait for a program that hangs; `announce` tells it
+        // with a limit instead.
         unsafe {
             SystemParametersInfoW(
                 SPI_SETDESKWALLPAPER,
@@ -296,15 +365,6 @@ impl SystemWallpaper {
                 SPIF_UPDATEINIFILE,
             )
             .context("Windows did not take the wallpaper")?;
-            let _ = SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                WPARAM(SPI_SETDESKWALLPAPER.0 as usize),
-                LPARAM(DESKTOP.as_ptr() as isize),
-                SMTO_ABORTIFHUNG,
-                TOLD_WITHIN_MS,
-                None,
-            );
         }
         Ok(())
     }
@@ -355,6 +415,12 @@ fn explorer_wallpaper() -> Option<IDesktopWallpaper> {
     // SAFETY: the call only reads a number of the object.
     let displays = unsafe { wallpaper.GetMonitorDevicePathCount() }.unwrap_or(0);
     (displays > 0).then_some(wallpaper)
+}
+
+/// `path` as text to compare as Windows does names of files, ignoring
+/// case.
+fn text_of(path: &Path) -> String {
+    path.to_string_lossy().to_lowercase()
 }
 
 /// The copy Windows keeps of the picture it shows.

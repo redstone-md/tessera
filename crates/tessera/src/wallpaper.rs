@@ -33,8 +33,8 @@ use std::collections::HashSet;
 use std::future::Future as _;
 use std::path::{Path, PathBuf};
 use std::pin::{Pin, pin};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -90,6 +90,13 @@ const DAILY_RETRY: Duration = Duration::from_secs(30 * 60);
 /// How long Tessera waits as it exits for the wallpaper of Windows to be
 /// put back.
 const RESTORE_PATIENCE: Duration = Duration::from_secs(2);
+
+/// Has the work of `mirror` done one at a time.
+static MIRRORING: Mutex<()> = Mutex::new(());
+
+/// Counts the work asked of `mirror`; work that finds a later one asked
+/// for is left undone.
+static MIRROR_ASKED: AtomicU64 = AtomicU64::new(0);
 
 /// When the wallpaper was first asked for, which is as Tessera starts.
 static STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -1087,7 +1094,7 @@ impl Wallpaper {
             changed
         })?;
         if changed {
-            ShellThread::run_alone("wallpaper", move || {
+            Mirror::queue(move || {
                 if let Err(error) = Mirror::set(&wanted) {
                     report!("the wallpaper of Windows was not changed: {error:#}");
                 }
@@ -1157,24 +1164,87 @@ impl Mirror {
         }
     }
 
+    /// Does `work` on a thread of its own with COM, after the work of
+    /// `mirror` asked for before has ended, and only where no other was
+    /// asked for since: what was asked for last is what Windows is left
+    /// with, and a wallpaper is never read as the one before while
+    /// another is being written.
+    fn queue(work: impl FnOnce() + Send + 'static) {
+        let asked = MIRROR_ASKED.fetch_add(1, Ordering::SeqCst) + 1;
+        ShellThread::run_alone("wallpaper", move || {
+            let _alone = MIRRORING.lock().unwrap_or_else(PoisonError::into_inner);
+            if MIRROR_ASKED.load(Ordering::SeqCst) == asked {
+                work();
+            }
+        });
+    }
+
     /// Makes `wanted` the wallpaper of Windows, after keeping the one
-    /// there is where none is kept yet. For a thread with COM.
+    /// there is where none is kept yet. For [`Self::queue`].
     fn set(wanted: &SystemWallpaper) -> anyhow::Result<()> {
         let file = Self::file().context("there is no directory for local data")?;
         if !file.exists() {
             let frames: Vec<ScreenRect> = wanted.pictures.iter().map(|(frame, _)| *frame).collect();
-            let before = Self::of(&SystemWallpaper::read(&frames));
+            let mut before = SystemWallpaper::read(&frames);
             if let Some(directory) = file.parent() {
                 std::fs::create_dir_all(directory)?;
+                Self::keep_copies(&mut before, directory)?;
             }
-            std::fs::write(&file, toml::to_string(&before)?)
+            std::fs::write(&file, toml::to_string(&Self::of(&before))?)
                 .with_context(|| format!("{} cannot be written", file.display()))?;
         }
-        wanted.write()
+        wanted.write()?;
+        SystemWallpaper::announce();
+        Ok(())
+    }
+
+    /// Copies each picture of `wallpaper` that Windows writes over as the
+    /// wallpaper changes into `directory`, and names the copy in its
+    /// place, so that the picture there was before can be put back. The
+    /// copies stay after that, since Windows then names them as the
+    /// files of its wallpaper.
+    fn keep_copies(wallpaper: &mut SystemWallpaper, directory: &Path) -> anyhow::Result<()> {
+        let mut taken: Vec<PathBuf> = wallpaper
+            .pictures
+            .iter()
+            .filter_map(|(_, picture)| picture.clone())
+            .collect();
+        let mut number = 0;
+        for (_, picture) in &mut wallpaper.pictures {
+            let Some(original) = picture.as_ref().filter(|picture| {
+                SystemWallpaper::overwritten_by_windows(picture) && picture.is_file()
+            }) else {
+                continue;
+            };
+            // Named by what it is, which the copies of Windows are not.
+            let kind = ImageReader::open(original)
+                .and_then(ImageReader::with_guessed_format)
+                .ok()
+                .and_then(|reader| reader.format())
+                .and_then(|format| format.extensions_str().first().copied())
+                .unwrap_or("jpg");
+            let copy = loop {
+                let copy = directory.join(format!("wallpaper-before-{number}.{kind}"));
+                number += 1;
+                if !taken.contains(&copy) {
+                    break copy;
+                }
+            };
+            std::fs::copy(original, &copy).with_context(|| {
+                format!(
+                    "{} cannot be kept in {}",
+                    original.display(),
+                    copy.display()
+                )
+            })?;
+            taken.push(copy.clone());
+            *picture = Some(copy);
+        }
+        Ok(())
     }
 
     /// Puts back the wallpaper that was kept, if one is, and forgets it.
-    /// For a thread with COM.
+    /// Programs are yet to be told. For [`Self::queue`].
     fn restore() -> anyhow::Result<()> {
         let Some(file) = Self::file().filter(|file| file.exists()) else {
             return Ok(());
@@ -1182,31 +1252,38 @@ impl Mirror {
         let text = std::fs::read_to_string(&file)?;
         let before: Self = toml::from_str(&text)
             .with_context(|| format!("{} is not a wallpaper", file.display()))?;
-        before.to_wallpaper().write()?;
+        before.to_wallpaper().put_back()?;
         std::fs::remove_file(&file)?;
         Ok(())
     }
 
-    /// Puts back the wallpaper that was kept, if one is, on a thread of
-    /// its own.
+    /// Puts back the wallpaper that was kept, if one is, after the work
+    /// of `mirror` asked for before.
     fn restore_later() {
-        ShellThread::run_alone("wallpaper", || {
+        Self::queue(|| {
             if let Err(error) = Self::restore() {
                 report!("the wallpaper of Windows was not put back: {error:#}");
             }
+            SystemWallpaper::announce();
         });
     }
 
     /// Puts back the wallpaper that was kept, waiting for it a moment,
-    /// as Tessera exits.
+    /// as Tessera exits. Programs are told after that, without waiting:
+    /// the windows of Tessera are among them, and do not answer while
+    /// this waits.
     fn restore_before_exit() {
         if Self::file().is_none_or(|file| !file.exists()) {
             return;
         }
-        let answer = ShellThread::call_alone("wallpaper", Self::restore);
+        let (answer, answered) = async_channel::bounded(1);
+        Self::queue(move || {
+            answer.try_send(Self::restore()).ok();
+            SystemWallpaper::announce();
+        });
         let until = Instant::now() + RESTORE_PATIENCE;
         while Instant::now() < until {
-            match answer.try_recv() {
+            match answered.try_recv() {
                 Ok(Ok(())) => return,
                 Ok(Err(error)) => {
                     report!("the wallpaper of Windows was not put back: {error:#}");
