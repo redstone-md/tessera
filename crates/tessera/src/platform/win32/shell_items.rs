@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 Tessera contributors.
 
-//! What the verbs of the Shell that act on files share: files as the
-//! Shell names them (item identifier lists), a data object that carries
-//! them to a handler, the window that owns the dialogs of a handler, and
+//! What the verbs of the Shell that act on files share, beside the items
+//! of [`shell_item`](super::shell_item): a data object that carries files
+//! to a handler, the window that owns the dialogs of a handler, and
 //! the texts and folders the Shell hands out.
 //!
 //! Everything here is to be used on a thread with COM initialized
@@ -19,103 +19,15 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CoTaskMemFree, IDataObject};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-use windows::Win32::UI::Shell::{
-    ILFree, ILGetSize, KF_FLAG_DEFAULT, SHCreateDataObject, SHGetKnownFolderPath,
-    SHParseDisplayName,
-};
+use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHCreateDataObject, SHGetKnownFolderPath};
 use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, WS_EX_TOOLWINDOW,
 };
-use windows::core::{GUID, HSTRING, PWSTR};
+use windows::core::{GUID, PWSTR};
 
 use super::execute::expand_environment;
+use super::shell_item::IdList;
 use super::{IconPixels, ShellThread};
-
-/// An absolute item identifier list, the name the Shell gives a file, a
-/// folder or a place without a path; freed when dropped.
-pub(super) struct ItemId(*mut ITEMIDLIST);
-
-impl ItemId {
-    /// The item at `path`, which must exist. A path written with forward
-    /// slashes is taken as well.
-    pub(super) fn of_path(path: &Path) -> Result<Self> {
-        let name = HSTRING::from(windows_path(path));
-        let mut id = std::ptr::null_mut();
-        // SAFETY: the name is NUL-terminated and outlives the call, which
-        // gives a list allocated for the caller, freed by `Drop`.
-        unsafe { SHParseDisplayName(&name, None, &raw mut id, 0, None) }
-            .with_context(|| format!("the Shell does not know {}", path.display()))?;
-        if id.is_null() {
-            bail!("the Shell does not know {}", path.display());
-        }
-        Ok(Self(id))
-    }
-
-    /// Takes over a list the Shell allocated for the caller.
-    ///
-    /// # Safety
-    ///
-    /// `id` must be a list allocated with the allocator of COM that nothing
-    /// else frees.
-    pub(super) unsafe fn adopt(id: *mut ITEMIDLIST) -> Option<Self> {
-        (!id.is_null()).then_some(Self(id))
-    }
-
-    pub(super) fn as_ptr(&self) -> *const ITEMIDLIST {
-        self.0
-    }
-
-    /// The bytes of the list, its terminating zero included, to keep and
-    /// name the item by later; see [`id_bytes`].
-    #[allow(dead_code, reason = "for the items that are kept by their bytes")]
-    pub(super) fn bytes(&self) -> Vec<u8> {
-        // SAFETY: the list is valid while `self` lives.
-        unsafe { id_bytes(self.0) }
-    }
-}
-
-impl Drop for ItemId {
-    fn drop(&mut self) {
-        // SAFETY: the list was allocated for this value and is freed once.
-        unsafe { ILFree(Some(self.0)) };
-    }
-}
-
-/// The bytes of the item identifier list `id`, its terminating zero
-/// included. A list made of them again is read where it lies; an item
-/// identifier may lie at any address, as the Shell packs them.
-///
-/// # Safety
-///
-/// `id` must point to a valid item identifier list.
-pub(super) unsafe fn id_bytes(id: *const ITEMIDLIST) -> Vec<u8> {
-    // SAFETY: as the caller promises; the size counts the terminator.
-    unsafe {
-        let size = ILGetSize(Some(id)) as usize;
-        std::slice::from_raw_parts(id.cast::<u8>(), size).to_vec()
-    }
-}
-
-/// Whether `bytes` are a whole item identifier list: identifiers that
-/// each say their size and fit, then a terminating zero of two bytes.
-/// Bytes that are not are never handed to the Shell.
-pub(super) fn is_item_id_list(bytes: &[u8]) -> bool {
-    let mut rest = bytes;
-    loop {
-        let Some(size) = rest
-            .first_chunk::<2>()
-            .map(|size| u16::from_le_bytes(*size))
-        else {
-            return false;
-        };
-        match size as usize {
-            0 => return rest.len() == 2,
-            // An identifier carries its size and at least one byte.
-            size if size > 2 && size <= rest.len() => rest = &rest[size..],
-            _ => return false,
-        }
-    }
-}
 
 /// A data object of the Shell that carries the files at `paths`, as a
 /// selection in Explorer does: the formats of the Shell (`Shell IDList
@@ -126,9 +38,9 @@ pub(super) fn data_object(paths: &[PathBuf]) -> Result<IDataObject> {
         bail!("no file was given");
     }
     let ids = { paths.iter() }
-        .map(|path| ItemId::of_path(path))
+        .map(|path| IdList::of_path(Path::new(&windows_path(path))))
         .collect::<Result<Vec<_>>>()?;
-    let pointers: Vec<*const ITEMIDLIST> = ids.iter().map(ItemId::as_ptr).collect();
+    let pointers: Vec<*const ITEMIDLIST> = ids.iter().map(IdList::as_ptr).collect();
     // SAFETY: without a folder the lists are taken as absolute, which they
     // are; the data object copies them, and they outlive the call.
     unsafe { SHCreateDataObject(None, Some(&pointers), None) }
@@ -284,19 +196,6 @@ pub(super) fn windows_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_list_is_whole_when_its_identifiers_fit_and_it_ends_in_zero() {
-        assert!(is_item_id_list(&[0, 0]));
-        assert!(is_item_id_list(&[4, 0, 7, 9, 0, 0]));
-        assert!(is_item_id_list(&[3, 0, 1, 5, 0, 2, 3, 4, 0, 0]));
-        // No terminator, one too long, one too short, bytes after the end.
-        assert!(!is_item_id_list(&[]));
-        assert!(!is_item_id_list(&[4, 0, 7, 9]));
-        assert!(!is_item_id_list(&[9, 0, 7, 9, 0, 0]));
-        assert!(!is_item_id_list(&[2, 0, 0, 0]));
-        assert!(!is_item_id_list(&[0, 0, 1]));
-    }
 
     #[test]
     fn an_icon_location_names_a_file_and_an_index() {

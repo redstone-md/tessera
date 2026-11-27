@@ -86,10 +86,11 @@ const LAST: u32 = 0x7FFF;
 
 /// Flags of `CMINVOKECOMMANDINFOEX` that the bindings do not name: the
 /// texts are UTF-16, the verb may finish after the call returns, or it
-/// may not.
+/// may not, and it shows no dialog.
 const CMIC_MASK_UNICODE: u32 = 0x4000;
 const CMIC_MASK_ASYNCOK: u32 = 0x10_0000;
 const CMIC_MASK_NOASYNC: u32 = 0x100;
+const CMIC_MASK_FLAG_NO_UI: u32 = 0x400;
 
 /// How deep submenus are listed.
 const MENU_DEPTH: usize = 4;
@@ -598,17 +599,21 @@ impl Drop for Built {
 }
 
 /// Does the verb `verb` of the items `lists` on this thread, which has
-/// COM initialized apartment-threaded, and waits for it to finish. This is
-/// for the platform layer itself, such as "undelete" to restore an item
-/// of the Recycle Bin.
-pub(super) fn invoke_verb_here(lists: Vec<IdList>, verb: &str, owner: HWND) -> Result<()> {
+/// COM initialized apartment-threaded, and waits for it to finish; without
+/// `dialogs` the Shell asks the user nothing. This is for the platform
+/// layer itself, such as "undelete" to restore an item of the Recycle Bin.
+pub(super) fn invoke_verb_here(
+    lists: Vec<IdList>,
+    verb: &str,
+    owner: HWND,
+    dialogs: bool,
+) -> Result<()> {
     let built = Built::of_lists(lists, owner, CMF_OPTIMIZEFORINVOKE)?;
-    built.invoke_as(
-        &Command::Verb(verb.to_owned()),
-        None,
-        owner,
-        CMIC_MASK_NOASYNC,
-    )
+    let mut mask = CMIC_MASK_NOASYNC;
+    if !dialogs {
+        mask |= CMIC_MASK_FLAG_NO_UI;
+    }
+    built.invoke_as(&Command::Verb(verb.to_owned()), None, owner, mask)
 }
 
 /// The context menu of the items of `group`: the one their folder gives,

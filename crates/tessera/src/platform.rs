@@ -61,14 +61,14 @@ pub use win32::{
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 #[allow(
     unused_imports,
-    reason = "for the file manager and the desktop, which show the menus of the Shell"
-)]
-pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
-#[allow(
-    unused_imports,
     reason = "for the menus New, Open with and Send to of the file manager and the desktop"
 )]
 pub use win32::{IconPlace, NewTemplate, OpenWithHandler, SendToKind, SendToTarget, choose_app};
+#[allow(
+    unused_imports,
+    reason = "for the file manager and the desktop, which show the menus of the Shell"
+)]
+pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"

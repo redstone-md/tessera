@@ -815,13 +815,14 @@ fn restore(step: &Step, owner: HWND, outcome: &mut Outcome) -> Result<()> {
         return Ok(());
     };
     let gone = || format!("{} is no longer in the Recycle Bin", to.display());
-    let undeleted = shell_menu::invoke_verb_here(vec![IdList::of_id(item)?], "undelete", owner);
+    let undeleted =
+        shell_menu::invoke_verb_here(vec![IdList::of_id(item)?], "undelete", owner, true);
     if undeleted.is_err() {
         let file = { IdList::of_id(item)?.item().ok() }
             .and_then(|item| path_of_item(&item))
             .filter(|file| file.exists())
             .with_context(gone)?;
-        let record = bin_record_of(&file).with_context(gone)?;
+        let record = super::bin::info_path(&file).with_context(gone)?;
         let back = Step::moving(&file, to);
         let mut moved = Outcome::default();
         shell_pass(std::slice::from_ref(&back), true, owner, &mut moved)?;
@@ -841,14 +842,6 @@ fn restore(step: &Step, owner: HWND, outcome: &mut Outcome) -> Result<()> {
         false => outcome.aborted = true,
     }
     Ok(())
-}
-
-/// The record (`$I…`) that the Recycle Bin keeps beside the file `file`
-/// (`$R…`) it holds; `None` for a file that is not one of the bin's.
-fn bin_record_of(file: &Path) -> Option<PathBuf> {
-    let name = file.file_name()?.to_str()?;
-    let rest = name.strip_prefix("$R")?;
-    Some(file.with_file_name(format!("$I{rest}")))
 }
 
 /// The window in front, as a number, where it is Tessera's.
@@ -1551,15 +1544,6 @@ mod tests {
         assert_eq!(unique_name("a.txt", is_taken), "a (3).txt");
         assert_eq!(unique_name("folder", is_taken), "folder (2)");
         assert_eq!(unique_name(".hidden", is_taken), ".hidden (2)");
-    }
-
-    #[test]
-    fn the_record_of_a_file_in_the_bin_is_beside_it() {
-        assert_eq!(
-            bin_record_of(Path::new(r"C:\$Recycle.Bin\S-1\$RAB12CD.txt")),
-            Some(path(r"C:\$Recycle.Bin\S-1\$IAB12CD.txt"))
-        );
-        assert_eq!(bin_record_of(Path::new(r"C:\a\x.txt")), None);
     }
 
     #[test]

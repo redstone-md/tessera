@@ -27,7 +27,7 @@
 //! ```
 #![allow(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use async_channel::Receiver;
@@ -36,13 +36,16 @@ use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
 use windows::Win32::System::Ole::{DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, IDropTarget};
 use windows::Win32::System::SystemServices::{MK_LBUTTON, SFGAO_HIDDEN};
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOLDERID_SendTo, IEnumShellItems, IShellFolder, IShellItem, SHBindToParent,
-    SHCreateItemFromParsingName, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
+    BHID_EnumItems, FOLDERID_SendTo, IEnumShellItems, IShellItem, SHCreateItemFromParsingName,
+    SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
 use windows::core::{HSTRING, PCWSTR};
 
 use super::ShellThread;
-use super::shell_items::{ItemId, data_object, dialog_owner, known_folder, take_path, take_text};
+use super::shell_item::IdList;
+use super::shell_items::{
+    data_object, dialog_owner, known_folder, take_path, take_text, windows_path,
+};
 
 /// What `GetDriveTypeW` answers for a removable drive.
 const DRIVE_REMOVABLE: u32 = 2;
@@ -118,19 +121,17 @@ impl SendToTarget {
     /// button lets them go: copied or linked, as the place chooses.
     fn drop_here(&self, paths: &[PathBuf]) -> Result<()> {
         let data = data_object(paths)?;
-        let id = ItemId::of_path(&self.path)?;
+        let id = IdList::of_path(Path::new(&windows_path(&self.path)))?;
         let allowed = DROPEFFECT_COPY | DROPEFFECT_LINK;
         let keys = MK_LBUTTON;
         let at = POINTL::default();
+        let (parent, child) = id.bind_to_parent().context("the place is not reachable")?;
         // SAFETY: the item identifier lists outlive the calls; the child
         // is a part of `id`, which the parent folder does not keep. COM
         // is initialized on this thread.
         unsafe {
-            let mut child = std::ptr::null_mut();
-            let parent: IShellFolder = SHBindToParent(id.as_ptr(), Some(&raw mut child))
-                .context("the place is not reachable")?;
             let target: IDropTarget = parent
-                .GetUIObjectOf(dialog_owner(), &[child.cast_const()], None)
+                .GetUIObjectOf(dialog_owner(), &[child], None)
                 .with_context(|| format!("{} takes no files", self.name))?;
             let mut effect = allowed;
             target.DragEnter(&data, keys, at, &raw mut effect)?;

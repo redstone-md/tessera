@@ -27,7 +27,7 @@
 //! ```
 #![allow(unsafe_code)]
 
-use std::ffi::{CString, OsString};
+use std::ffi::OsString;
 use std::io;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
@@ -38,22 +38,20 @@ use anyhow::{Context as _, Result};
 use async_channel::Receiver;
 use windows::Win32::Foundation::{E_ABORT, E_UNEXPECTED, ERROR_CANCELLED, FILETIME, PROPERTYKEY};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Size;
-use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, BHID_SFObject, CMF_OPTIMIZEFORINVOKE, CMINVOKECOMMANDINFO,
-    CMINVOKECOMMANDINFOEX, FOLDERID_RecycleBinFolder, IContextMenu, IEnumShellItems, ILFindLastID,
-    IShellFolder, IShellItem, IShellItem2, KF_FLAG_DEFAULT, SHEmptyRecycleBinW,
-    SHGetIDListFromObject, SHGetKnownFolderItem, SHQUERYRBINFO, SHQueryRecycleBinW,
+    BHID_EnumItems, FOLDERID_RecycleBinFolder, IEnumShellItems, IShellItem, IShellItem2,
+    KF_FLAG_DEFAULT, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHQUERYRBINFO, SHQueryRecycleBinW,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_SETFOREGROUND,
-    MB_YESNO, MessageBoxW, SW_SHOWNORMAL,
+    IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MessageBoxW,
 };
-use windows::core::{GUID, HRESULT, HSTRING, Interface as _, PCSTR, PCWSTR};
+use windows::core::{GUID, HRESULT, HSTRING, Interface as _, PCWSTR};
 
 use super::ShellThread;
-use super::shell_items::{ItemId, dialog_owner, id_bytes, is_item_id_list, take_path, take_text};
+use super::shell_item::{IdList, ShellId};
+use super::shell_items::{dialog_owner, take_path, take_text};
+use super::shell_menu;
 
 /// The properties of a deleted item (`System.Recycle.DeletedFrom` and
 /// `System.Recycle.DateDeleted`), in the property set of displaced items.
@@ -66,13 +64,6 @@ const PKEY_DATE_DELETED: PROPERTYKEY = PROPERTYKEY {
     fmtid: DISPLACED,
     pid: 3,
 };
-
-/// The flags of `InvokeCommand` for a verb given as text in both kinds of
-/// text, for a verb that is done before the call returns, and for no
-/// dialog.
-const CMIC_MASK_UNICODE: u32 = 0x4000;
-const CMIC_MASK_NOASYNC: u32 = 0x100;
-const CMIC_MASK_FLAG_NO_UI: u32 = 0x400;
 
 /// The verbs of the bin for its items.
 const VERB_RESTORE: &str = "undelete";
@@ -108,8 +99,8 @@ pub struct RecycledItem {
     /// Where it lies now, as `C:\$Recycle.Bin\<user>\$R1A2B3C.txt`, where
     /// the bin is a folder of a drive.
     pub stored: Option<PathBuf>,
-    /// Its item identifier within the bin, with the terminating zero.
-    id: Vec<u8>,
+    /// Its item identifier list, from the desktop through the bin.
+    id: ShellId,
 }
 
 impl RecycleBin {
@@ -297,13 +288,10 @@ fn list() -> Result<Vec<RecycledItem>> {
 /// An item of the bin as it is shown; `None` for one the Shell does not
 /// describe.
 fn read_item(item: &IShellItem) -> Option<RecycledItem> {
-    // SAFETY: COM is initialized on this thread; the texts and the item
-    // identifier list the calls give are the caller's to free, which
-    // `take_text`, `take_path` and `ItemId` do.
+    let id = IdList::of_object(item).ok()?.to_id();
+    // SAFETY: COM is initialized on this thread; the texts the calls give
+    // are the caller's to free, which `take_text` and `take_path` do.
     unsafe {
-        let id = ItemId::adopt(SHGetIDListFromObject(item).ok()?)?;
-        let last: *const ITEMIDLIST = ILFindLastID(id.as_ptr());
-        let id = id_bytes(last);
         let name = take_text(item.GetDisplayName(SIGDN_NORMALDISPLAY).ok()?)?;
         let stored =
             { item.GetDisplayName(SIGDN_FILESYSPATH).ok() }.and_then(|path| take_path(path));
@@ -341,50 +329,20 @@ fn read_item(item: &IShellItem) -> Option<RecycledItem> {
 /// Does `verb` of the bin's context menu to `items`; without `dialogs`
 /// the Shell asks the user nothing.
 fn invoke(items: &[RecycledItem], verb: &str, dialogs: bool) -> Result<()> {
-    let children: Vec<*const ITEMIDLIST> = { items.iter() }
-        .filter(|item| is_item_id_list(&item.id))
-        .map(|item| item.id.as_ptr().cast::<ITEMIDLIST>())
-        .collect();
-    if children.is_empty() {
+    let lists = { items.iter() }
+        .map(|item| IdList::of_id(&item.id))
+        .collect::<Result<Vec<_>>>()?;
+    if lists.is_empty() {
         return Ok(());
     }
-    let owner = dialog_owner();
-    let ascii = CString::new(verb).context("a verb has no NUL")?;
-    let wide: Vec<u16> = verb.encode_utf16().chain([0]).collect();
-    let mut mask = CMIC_MASK_UNICODE | CMIC_MASK_NOASYNC;
-    if !dialogs {
-        mask |= CMIC_MASK_FLAG_NO_UI;
-    }
-    let info = CMINVOKECOMMANDINFOEX {
-        cbSize: size_of::<CMINVOKECOMMANDINFOEX>() as u32,
-        fMask: mask,
-        hwnd: owner,
-        lpVerb: PCSTR(ascii.as_ptr().cast()),
-        lpVerbW: PCWSTR(wide.as_ptr()),
-        nShow: SW_SHOWNORMAL.0,
-        ..Default::default()
-    };
-    // SAFETY: COM is initialized on this thread. The item identifiers were
-    // read from the bin and checked to be whole lists, and they outlive the
-    // calls, as do the verbs `info` points to; the menu is destroyed once
-    // the command is done.
-    unsafe {
-        let folder: IShellFolder = { bin()?.BindToHandler(None, &BHID_SFObject) }
-            .context("the Recycle Bin could not be opened")?;
-        let menu: IContextMenu = folder
-            .GetUIObjectOf(owner, &children, None)
-            .context("the items are no longer in the Recycle Bin")?;
-        // Many menus answer a verb only once they have filled a menu.
-        let popup = CreatePopupMenu().context("no menu could be made")?;
-        let invoked = menu
-            .QueryContextMenu(popup, 0, 1, 0x7fff, CMF_OPTIMIZEFORINVOKE)
-            .ok()
-            .and_then(|()| menu.InvokeCommand((&raw const info).cast::<CMINVOKECOMMANDINFO>()));
-        let _ = DestroyMenu(popup);
-        match invoked {
-            Err(error) if is_cancel(error.code()) => Ok(()),
-            invoked => invoked.with_context(|| format!("the Recycle Bin did not {verb} them")),
+    match shell_menu::invoke_verb_here(lists, verb, dialog_owner(), dialogs) {
+        Err(error)
+            if { error.downcast_ref::<windows::core::Error>() }
+                .is_some_and(|error| is_cancel(error.code())) =>
+        {
+            Ok(())
         }
+        invoked => invoked.with_context(|| format!("the Recycle Bin did not {verb} them")),
     }
 }
 
@@ -399,7 +357,7 @@ struct Recorded {
 
 /// The `$I` file that records the item stored at `stored` (`$R1A2B3C.txt`
 /// next to `$I1A2B3C.txt`).
-fn info_path(stored: &Path) -> Option<PathBuf> {
+pub(super) fn info_path(stored: &Path) -> Option<PathBuf> {
     let name = stored.file_name()?.to_str()?;
     let rest = name.strip_prefix("$R")?;
     Some(stored.with_file_name(format!("$I{rest}")))
