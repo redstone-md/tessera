@@ -614,6 +614,9 @@ struct LevelControl {
     _changes: Vec<Subscription>,
 }
 
+/// A change to a channel that is kept to be made later.
+type Change = Box<dyn FnOnce(&Channel) -> anyhow::Result<()> + Send>;
+
 impl LevelControl {
     fn new(channel: Channel, cx: &mut Context<Self>) -> Self {
         let theme = *cx.global::<Theme>();
@@ -663,7 +666,13 @@ impl LevelControl {
             this.update(cx, |this, cx| {
                 this.busy = false;
                 match this.wanted.take() {
-                    Some(volume) => this.change(move |channel| channel.set_volume(volume), cx),
+                    Some(volume) => {
+                        // Boxed, for the change made here is of a type
+                        // that names the one before it: each would have
+                        // a `change` of its own built, without end.
+                        let set: Change = Box::new(move |channel| channel.set_volume(volume));
+                        this.change(set, cx)
+                    }
                     None => {
                         this.sound.update(cx, Sound::refresh);
                         if let Some(mixer) = &this.mixer {
