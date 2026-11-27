@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (C) 2026 Tessera contributors.
 #
-# Builds the example extensions and writes the registry that offers them
-# and the themes of themes/: registry.toml and the files it lists, with
-# the pictures preview.py drew. Run preview.py first, then this, after
-# changing an example or a theme; a changed theme needs a new version here
-# to be offered as an update.
+# Builds the example extensions and writes the registry that offers them,
+# the themes of themes/, the icon packs of icon-packs/, some pictures of
+# wallpapers/ and the tiling layouts that come with Tessera:
+# registry.toml and the files it lists, with the pictures preview.py
+# drew. Run preview.py first, then this, after changing an example, a
+# theme, an icon pack or a layout; a changed theme, icon pack or wallpaper
+# needs a new version here to be offered as an update.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -60,10 +62,77 @@ END
     preview "previews/$id.jpg"
 }
 
+# An icon pack of registry/icon-packs/<id>/: its manifest and every
+# other file in its directory, each with its checksum.
+offer_icon_pack() {
+    id=$1 name=$2 version=$3 description=$4
+    pack=registry/icon-packs/$id
+    cat <<END
+
+[[icon_pack]]
+id = "$id"
+name = "$name"
+description = "$description"
+version = "$version"
+manifest = "icon-packs/$id/icon-pack.toml"
+manifest_sha256 = "$(sha256sum "$pack/icon-pack.toml" | cut -d ' ' -f 1)"
+files = [
+END
+    (cd "$pack" && find . -type f ! -name icon-pack.toml | sed 's|^\./||' | LC_ALL=C sort) |
+        while read -r file; do
+            printf '    { path = "%s", sha256 = "%s" },\n' "$file" \
+                "$(sha256sum "$pack/$file" | cut -d ' ' -f 1)"
+        done
+    echo "]"
+    preview "icon-packs/$id.png"
+}
+
+# A picture of registry/wallpapers/, shown as its own picture.
+offer_wallpaper() {
+    id=$1 name=$2 version=$3 description=$4
+    cat <<END
+
+[[wallpaper]]
+id = "$id"
+name = "$name"
+description = "$description"
+version = "$version"
+file = "wallpapers/$id.jpg"
+sha256 = "$(sha256sum "registry/wallpapers/$id.jpg" | cut -d ' ' -f 1)"
+END
+    preview "wallpapers/$id.jpg"
+}
+
+# Every tiling layout that comes with Tessera, copied to
+# registry/tiling-layouts/, by its file name, with the `name` and
+# `description` it gives itself, if any; none while there are none.
+offer_layouts() {
+    version=$1
+    for source in crates/tessera/src/tiling/layouts/*.toml; do
+        [ -f "$source" ] || continue
+        id=$(basename "$source" .toml)
+        mkdir -p registry/tiling-layouts
+        tr -d '\r' < "$source" > "registry/tiling-layouts/$id.toml"
+        name=$(sed -n 's/^name = "\(.*\)"/\1/p' "$source" | head -n 1)
+        description=$(sed -n 's/^description = "\(.*\)"/\1/p' "$source" | head -n 1)
+        cat <<END
+
+[[tiling_layout]]
+id = "$id"
+name = "${name:-$id}"
+description = "${description:-A tiling layout that comes with Tessera.}"
+version = "$version"
+file = "tiling-layouts/$id.toml"
+sha256 = "$(sha256sum "registry/tiling-layouts/$id.toml" | cut -d ' ' -f 1)"
+END
+    done
+}
+
 {
     cat <<END
-# The extensions and themes Tessera offers to install unless its
-# configuration names other registries. Written by update.sh; see the README for the format.
+# The extensions, themes, icon packs, wallpapers and tiling layouts
+# Tessera offers to install unless its configuration names other
+# registries. Written by update.sh; see the README for the format.
 name = "Tessera"
 END
     offer counter "Counter" \
@@ -138,5 +207,20 @@ END
         "Black and signal yellow at the highest contrast, for clear reading."
     theme arcade "Arcade" 1.0.0 \
         "Square pixels, red neon and teal: an evening at the arcade."
+    offer_icon_pack line "Line" 1.0.0 \
+        "Thin line icons in the colors of the theme for common programs and kinds of files."
+    offer_wallpaper aurora "Aurora" 1.0.0 \
+        "Northern lights over a frozen fjord."
+    offer_wallpaper forest "Forest" 1.0.0 \
+        "Misty light in an old-growth wood."
+    offer_wallpaper ocean "Ocean" 1.0.0 \
+        "Light from beneath the waves."
+    offer_wallpaper sunset "Sunset" 1.0.0 \
+        "Dusk over the dunes."
+    offer_wallpaper glacier "Glacier" 1.0.0 \
+        "Ice blues on a clear day."
+    offer_wallpaper nebula "Nebula" 1.0.0 \
+        "Clouds of a distant nebula."
+    offer_layouts 1.0.0
 } > registry/registry.toml.new
 mv registry/registry.toml.new registry/registry.toml
