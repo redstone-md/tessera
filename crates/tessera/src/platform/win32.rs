@@ -27,6 +27,7 @@ mod execute;
 mod explorer_view;
 mod file_op;
 mod files;
+mod folder_handler;
 mod hdr;
 mod hotkeys;
 mod hotspot;
@@ -120,6 +121,9 @@ pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJourna
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
     show_properties,
+};
+pub use folder_handler::{
+    FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
 };
 pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};

@@ -71,6 +71,9 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
+pub use win32::{
+    FolderHandler, known_folder_path, start_explorer, started_by_files_fallback, tell_problem,
+};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
