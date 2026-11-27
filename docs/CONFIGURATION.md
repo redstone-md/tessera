@@ -127,10 +127,10 @@ While it is open:
 - typing narrows the windows of every display to those whose title, or the name of whose program, has every word typed, in the line of what is typed on the display the pointer is on; Backspace takes the last letter back and Esc forgets all of it (a second Esc closes Task View). Where no window has what is typed, the runners of the launcher answer it under the line (not the runners of windows, processes and power), the arrows up and down choose an answer and Enter or a click does it;
 - the arrows go to the picture beside the chosen one, Tab and Shift+Tab to the next and the one before, and Enter or a click brings the window in front, going to its workspace first;
 - Delete, Ctrl+W, a click with the middle button or a click on the close button over a picture asks its window to close;
-- along the top, where `[workspaces]` has `own`, a card for each workspace shows its name and the icons of its windows: a click goes to that workspace, and a picture dragged onto a card has its window live there;
+- along the top a card for each workspace, Tessera's own or a virtual desktop of Windows, shows its name and the icons of its windows: a click goes to that workspace, a picture dragged onto a card of Tessera's own workspaces has its window live there, the card with a plus after the others makes a workspace (as `workspace` with `add`), and the cross on the corner of a card under the pointer removes its workspace (as `workspace` with `remove`);
 - a click on no picture, Esc, or the keyboard going to another program closes Task View.
 
-A minimized window and one hidden on another workspace have no picture to give and show their icon on a card. Windows that a `[[rule]]` gives `skip_switcher = true` are left out.
+A minimized window has no picture to give and shows its icon on a card; one hidden on another workspace of Tessera's own shows the still picture taken as it was hidden. Windows that a `[[rule]]` gives `skip_switcher = true` are left out.
 
 ## Actions
 

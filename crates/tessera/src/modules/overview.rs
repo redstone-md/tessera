@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Bounds, Context, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, RenderImage, SharedString,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, canvas, div, img, px,
+    IntoElement, ObjectFit, ParentElement, Pixels, Render, RenderImage, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage, WeakEntity, Window, canvas, div, img, px,
 };
 
 use crate::i18n::Language;
@@ -295,7 +295,7 @@ impl Overview {
 
     /// The window `resident`, the one at `place` of the card at `card`,
     /// at `rect`, in logical pixels of the room of the windows of the
-    /// card: its live picture, or its icon.
+    /// card: its live picture, its still picture, or its icon.
     #[allow(clippy::too_many_arguments, reason = "the parts of one card")]
     fn render_window(
         &mut self,
@@ -324,9 +324,15 @@ impl Overview {
             .min(width as f32 - 4.)
             .min(height as f32 - 4.)
             .max(1.);
-        let content = match (picture, icon) {
+        // A window hidden on another workspace shows the still picture
+        // taken as it left, where there is one.
+        let still = match (&picture, card == self.seen.current) {
+            (None, false) => Kept::still(id, cx),
+            _ => None,
+        };
+        let content = match (picture, still, icon) {
             // Windows draws the picture over the room it is placed in.
-            (Some(picture), _) => canvas(
+            (Some(picture), _, _) => canvas(
                 |_, _, _| {},
                 move |bounds, (), window, _| {
                     picture.place(bounds, window);
@@ -334,8 +340,12 @@ impl Overview {
             )
             .size_full()
             .into_any_element(),
-            (None, Some(icon)) => img(icon).size(px(side)).into_any_element(),
-            (None, None) => div()
+            (None, Some(still), _) => img(still)
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            (None, None, Some(icon)) => img(icon).size(px(side)).into_any_element(),
+            (None, None, None) => div()
                 .size(px(side))
                 .rounded(theme.shape.small)
                 .bg(theme.colors.outline)

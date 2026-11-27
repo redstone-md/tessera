@@ -34,13 +34,14 @@
 
 use std::cmp::Reverse;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AsyncApp, Context, FocusHandle, FontWeight, Global, InteractiveElement,
     IntoElement, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task,
-    WeakEntity, Window, WindowHandle, div, img, px,
+    MouseUpEvent, ObjectFit, ParentElement, Pixels, Render, RenderImage, SharedString, Styled,
+    StyledImage, Subscription, Task, WeakEntity, Window, WindowHandle, div, img, px,
 };
 
 use crate::actions::{Action, Actions};
@@ -142,6 +143,7 @@ const HOVERED: InteractionState = InteractionState {
 
 const GLYPH_SEARCH: &str = "\u{e721}";
 const GLYPH_CLOSE: &str = "\u{e8bb}";
+const GLYPH_ADD: &str = "\u{e710}";
 
 /// Which windows Task View shows, as the `arg` of its actions says.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -297,6 +299,26 @@ impl TaskView {
         }
     }
 
+    /// Shows on every display what is there now, after a workspace was
+    /// made or removed.
+    fn refresh(cx: &mut App) {
+        let screens = cx.default_global::<Self>().screens.clone();
+        let mode = |screen: &mut Screen, _: &mut Window, _: &mut Context<Screen>| screen.mode;
+        let Some(mode) = screens
+            .first()
+            .and_then(|screen| screen.update(cx, mode).ok())
+        else {
+            return;
+        };
+        let windows = gather(mode, cx);
+        let total = windows.len();
+        for screen in &screens {
+            let windows = windows.clone();
+            { screen.update(cx, |screen, _, cx| screen.refill(windows, total, cx)) }.ok();
+        }
+        Self::give_choice(cx);
+    }
+
     /// Closes Task View, bringing no window in front.
     pub fn close(cx: &mut App) {
         Self::finish(None, cx);
@@ -394,8 +416,8 @@ struct Seen {
     /// Where it stands on the screen, in physical pixels, where it is
     /// seen there: neither minimized nor hidden.
     frame: Option<ScreenRect>,
-    /// The workspace of Tessera's own it lives on, where Tessera keeps
-    /// them.
+    /// The workspace it lives on: one of Tessera's own, or a virtual
+    /// desktop of Windows.
     workspace: Option<usize>,
     /// Whether it is hidden on a workspace that is not shown.
     away: bool,
@@ -436,8 +458,7 @@ fn gather(mode: Mode, cx: &App) -> Vec<Seen> {
     let visible: Vec<AppWindow> = { AppWindow::enumerate().into_iter() }
         .filter(|window| switchable(window, cx))
         .collect();
-    let own = Workspaces::residents(None, cx).is_some();
-    let current = |display: DisplayKey| own.then(|| Workspaces::now(Some(display), cx).current);
+    let current = |display: DisplayKey| Some(Workspaces::now(Some(display), cx).current);
     let shown = |window: &AppWindow| {
         let workspace = current(window.display);
         Seen::of(
@@ -470,11 +491,11 @@ fn gather(mode: Mode, cx: &App) -> Vec<Seen> {
         }
         Mode::All => {
             let mut seen: Vec<Seen> = visible.iter().map(shown).collect();
+            // The virtual desktops of Windows answer too, once they were
+            // looked at; their windows on other desktops are not listed.
             for frame in display_frames() {
                 let display = display_at(frame);
-                let Some(residents) = Workspaces::residents(Some(display), cx) else {
-                    continue;
-                };
+                let residents = Workspaces::windows_by_workspace(Some(display), cx);
                 let now = Workspaces::now(Some(display), cx).current;
                 for (index, windows) in residents.into_iter().enumerate() {
                     for resident in windows {
@@ -520,6 +541,8 @@ struct Card {
     icons: Vec<Icon>,
     /// Whether this is the workspace the display shows.
     current: bool,
+    /// Whether it may be removed now, with the button on its corner.
+    removable: bool,
 }
 
 /// A window on a display of Task View, its picture and where it goes.
@@ -527,6 +550,9 @@ struct Tile {
     seen: Seen,
     /// The picture of the window, with the physical size of the window.
     picture: Option<(Thumbnail, (i32, i32))>,
+    /// The still picture of a window hidden on another workspace, taken
+    /// as it left, where it has no live one.
+    still: Option<Arc<RenderImage>>,
     /// Where its picture goes, in physical pixels of the window of Task
     /// View, and where it comes from.
     place: ScreenRect,
@@ -580,14 +606,64 @@ impl Tile {
     }
 
     /// The shape it is spread by: that of its picture where it stands,
-    /// or for one without a picture a card of the shape of a screen.
+    /// that of its still picture, or for one without a picture a card of
+    /// the shape of a screen.
     fn shape(&self, size: (i32, i32)) -> ScreenRect {
-        self.real().unwrap_or(ScreenRect {
-            left: size.0 / 3,
-            top: size.1 / 3,
-            right: size.0 * 2 / 3,
-            bottom: size.1 / 3 + size.0 / 3 * 10 / 16,
-        })
+        if let Some(real) = self.real() {
+            return real;
+        }
+        let (width, height) = match &self.still {
+            Some(still) => {
+                let side = still.size(0);
+                (side.width.0.max(1), side.height.0.max(1))
+            }
+            None => (size.0 / 3, size.0 / 3 * 10 / 16),
+        };
+        let (left, top) = (size.0 / 3, size.1 / 3);
+        ScreenRect {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+        }
+    }
+
+    /// The tiles of the `windows` that stand on `display`, with a live
+    /// picture drawn in `native` for each that Windows can picture, and
+    /// the still picture of each hidden on another workspace.
+    fn all_of(
+        windows: Vec<Seen>,
+        display: DisplayKey,
+        native: NativeSurface,
+        cx: &mut App,
+    ) -> Vec<Self> {
+        let motion = cx.global::<Theme>().motion;
+        { windows.into_iter() }
+            .filter(|seen| seen.display == display)
+            .map(|seen| {
+                let picture = { seen.may_be_pictured() }
+                    .then(|| Thumbnail::of(seen.id, native).ok())
+                    .flatten()
+                    .and_then(|thumbnail| {
+                        let source = thumbnail.source_size()?;
+                        Some((thumbnail, source))
+                    });
+                let still = match seen.away {
+                    true => Workspaces::still(seen.id, cx),
+                    false => None,
+                };
+                Self {
+                    seen,
+                    picture,
+                    still,
+                    place: NOWHERE,
+                    from: NOWHERE,
+                    glide: Spring::new(motion.spatial, 1.),
+                    shown: true,
+                    closing: false,
+                }
+            })
+            .collect()
     }
 }
 
@@ -600,6 +676,11 @@ enum Hit {
     Tile(usize),
     /// The card of the workspace at that place of the cards.
     Card(usize),
+    /// The button on the corner of that card, which removes its
+    /// workspace.
+    Remove(usize),
+    /// The card after the others, which makes a workspace.
+    Add,
     /// The answer of the runners at that place.
     Answer(usize),
     Nothing,
@@ -645,6 +726,8 @@ pub struct Screen {
     names: Vec<SharedString>,
     strip: bool,
     cards: Vec<Card>,
+    /// Whether a card after the others makes a workspace.
+    adding: bool,
     card_places: Vec<ScreenRect>,
     plan: Plan,
     /// The tile chosen with the keyboard.
@@ -709,27 +792,7 @@ impl Screen {
         if main {
             native.bring_forward();
         }
-        let tiles: Vec<Tile> = { opening.windows.into_iter() }
-            .filter(|seen| seen.display == display)
-            .map(|seen| {
-                let picture = { seen.may_be_pictured() }
-                    .then(|| Thumbnail::of(seen.id, native).ok())
-                    .flatten()
-                    .and_then(|thumbnail| {
-                        let source = thumbnail.source_size()?;
-                        Some((thumbnail, source))
-                    });
-                Tile {
-                    seen,
-                    picture,
-                    place: NOWHERE,
-                    from: NOWHERE,
-                    glide: Spring::new(motion.spatial, 1.),
-                    shown: true,
-                    closing: false,
-                }
-            })
-            .collect();
+        let tiles = Tile::all_of(opening.windows, display, native, cx);
         let mut this = Self::blank(opening.mode, opening.runners, window, cx);
         this.main = main;
         this.total = opening.total;
@@ -790,6 +853,7 @@ impl Screen {
             names: Vec::new(),
             strip: false,
             cards: Vec::new(),
+            adding: false,
             card_places: Vec::new(),
             plan: Plan::default(),
             chosen: None,
@@ -813,14 +877,12 @@ impl Screen {
         }
     }
 
-    /// Reads the names of the workspaces of `display`, where Tessera
-    /// keeps workspaces of its own, and with `cards` their cards.
+    /// Reads the names of the workspaces of `display`, Tessera's own or
+    /// the virtual desktops of Windows, and with `cards` their cards.
     fn read_workspaces(&mut self, display: DisplayKey, cards: bool, cx: &App) {
         self.cards.clear();
-        let Some(residents) = Workspaces::residents(Some(display), cx) else {
-            self.names.clear();
-            return;
-        };
+        self.adding = false;
+        let residents = Workspaces::windows_by_workspace(Some(display), cx);
         let language = Language::of(cx);
         self.names = { 0..residents.len() }
             .map(|index| workspace_label(index, language, cx))
@@ -842,8 +904,10 @@ impl Screen {
                     })
                     .collect(),
                 current: index == current,
+                removable: Workspaces::can_remove(index, Some(display), cx),
             })
             .collect();
+        self.adding = !self.cards.is_empty() && Workspaces::can_add(Some(display), cx);
     }
 
     /// The size of the display in physical pixels.
@@ -873,7 +937,8 @@ impl Screen {
         }
         let size = self.size();
         self.plan = Plan::of(size, self.scale, !self.cards.is_empty(), self.main);
-        self.card_places = card_places(self.plan.strip, self.cards.len(), self.scale);
+        let cards = self.cards.len() + usize::from(self.adding);
+        self.card_places = card_places(self.plan.strip, cards, self.scale);
         for tile in &mut self.tiles {
             tile.shown = answers(&tile.seen.title, &tile.seen.name, &self.typed);
         }
@@ -1120,7 +1185,9 @@ impl Screen {
             return;
         };
         let (id, workspace, current) = (tile.seen.id, card.index, card.current);
-        if tile.seen.workspace == Some(workspace) {
+        // The virtual desktops of Windows take no window of another
+        // program.
+        if tile.seen.workspace == Some(workspace) || !Workspaces::own(cx) {
             return;
         }
         Workspaces::move_window(id, workspace, cx);
@@ -1134,12 +1201,14 @@ impl Screen {
                 tile.hide_picture();
                 tile.picture = None;
                 tile.seen.frame = None;
+                tile.still = Workspaces::still(id, cx);
             } else if tile.picture.is_none()
                 && let Some(native) = self.native
             {
                 // A window brought to the workspace shown has a picture
                 // again, from where it stands.
                 tile.seen.frame = id.frame();
+                tile.still = None;
                 tile.picture = { tile.seen.frame }
                     .and_then(|_| Thumbnail::of(id, native).ok())
                     .and_then(|thumbnail| {
@@ -1152,6 +1221,56 @@ impl Screen {
         } else {
             self.forget(id, cx);
         }
+    }
+
+    /// Makes a workspace at the end of the row of the display, and has
+    /// the window of the tile at `dragged` live there where one was
+    /// dropped on the card that makes it. Every display then shows what
+    /// changed.
+    fn add_workspace(&mut self, dragged: Option<usize>, cx: &mut Context<Self>) {
+        let display = display_at(self.frame);
+        let made = Workspaces::add(Some(display), cx);
+        if let (Some(made), Some(tile)) = (made, dragged.and_then(|at| self.tiles.get(at))) {
+            Workspaces::move_window(tile.seen.id, made, cx);
+        }
+        cx.defer(TaskView::refresh);
+    }
+
+    /// Removes the workspace of the card at `card`; its windows go to the
+    /// one beside it, as the action `workspace` with `remove` has them.
+    fn remove_workspace(&mut self, card: usize, cx: &mut Context<Self>) {
+        let Some(card) = self.cards.get(card) else {
+            return;
+        };
+        let display = display_at(self.frame);
+        if Workspaces::remove(card.index, Some(display), cx) {
+            cx.defer(TaskView::refresh);
+        }
+    }
+
+    /// Shows `windows` in place of the tiles it shows, at once and
+    /// without gliding, with the cards of the workspaces read again and
+    /// what is typed still narrowing them.
+    fn refill(&mut self, windows: Vec<Seen>, total: usize, cx: &mut Context<Self>) {
+        let Some(native) = self.native.filter(|_| !self.closing) else {
+            return;
+        };
+        for tile in &self.tiles {
+            tile.hide_picture();
+        }
+        let display = display_at(self.frame);
+        self.tiles = Tile::all_of(windows, display, native, cx);
+        self.total = total;
+        self.chosen = None;
+        self.press = None;
+        self.hovered = Hit::Nothing;
+        self.read_workspaces(display, self.strip, cx);
+        self.arrange();
+        for tile in &mut self.tiles {
+            tile.from = tile.place;
+            tile.glide.jump_to(1.);
+        }
+        cx.notify();
     }
 
     /// Starts closing: the pictures glide back to their windows and the
@@ -1188,6 +1307,13 @@ impl Screen {
             }
         }
         if let Some(card) = self.card_places.iter().position(|card| holds(*card, at)) {
+            if card == self.cards.len() {
+                return Hit::Add;
+            }
+            let removable = self.cards.get(card).is_some_and(|card| card.removable);
+            if removable && holds(self.remove_button(self.card_places[card]), at) {
+                return Hit::Remove(card);
+            }
             return Hit::Card(card);
         }
         if self.answering() {
@@ -1224,6 +1350,19 @@ impl Screen {
             top: row.top + inset,
             right: row.right - inset,
             bottom: row.top + inset + side,
+        }
+    }
+
+    /// The button on the upper right corner of the card at `card`, which
+    /// removes its workspace.
+    fn remove_button(&self, card: ScreenRect) -> ScreenRect {
+        let side = self.physical(CLOSE);
+        let inset = self.physical(6.);
+        ScreenRect {
+            left: card.right - side - inset,
+            top: card.top + inset,
+            right: card.right - inset,
+            bottom: card.top + inset + side,
         }
     }
 
@@ -1303,8 +1442,14 @@ impl Screen {
         let on = self.hit(at);
         cx.notify();
         if press.dragging {
-            if let (Hit::Tile(index), Hit::Card(card)) = (press.on, on) {
-                self.send(index, card, cx);
+            match (press.on, on) {
+                (Hit::Tile(index), Hit::Card(card) | Hit::Remove(card)) => {
+                    self.send(index, card, cx);
+                }
+                (Hit::Tile(index), Hit::Add) if Workspaces::own(cx) => {
+                    self.add_workspace(Some(index), cx);
+                }
+                _ => {}
             }
             return;
         }
@@ -1321,6 +1466,8 @@ impl Screen {
                 }
                 cx.defer(TaskView::close);
             }
+            Hit::Remove(card) => self.remove_workspace(card, cx),
+            Hit::Add => self.add_workspace(None, cx),
             Hit::Answer(answer) => self.run_answer(answer, cx),
             Hit::Nothing => cx.defer(TaskView::close),
         }
@@ -1628,13 +1775,18 @@ impl Render for Screen {
                 _ => None,
             });
         let drop_card = match (dragged, self.hovered) {
-            (Some(_), Hit::Card(card)) => Some(card),
+            (Some(_), Hit::Card(card) | Hit::Remove(card)) => Some(card),
+            (Some(_), Hit::Add) => Some(self.cards.len()),
             _ => None,
         };
-        // The cards of the workspaces.
+        // The cards of the workspaces, and the one that makes another.
         for at in 0..self.cards.len().min(self.card_places.len()) {
             let target = drop_card == Some(at);
-            children.push(self.card(at, target, &theme, language, labels));
+            children.push(self.card(at, target, dragged.is_none(), &theme, language, labels));
+        }
+        if let Some(&place) = self.card_places.get(self.cards.len()) {
+            let target = drop_card == Some(self.cards.len());
+            children.push(self.add_card(place, target, &theme, labels));
         }
         // The line of what is typed.
         if let Some(field) = self.plan.field {
@@ -1790,17 +1942,21 @@ impl Screen {
     }
 
     /// The card of the workspace at `at` of the cards, marked as where
-    /// the picture dragged goes where it is the `target`.
+    /// the picture dragged goes where it is the `target`, and with the
+    /// button that removes its workspace while the pointer is on it,
+    /// where `buttons` and the workspace may be removed.
     fn card(
         &self,
         at: usize,
         target: bool,
+        buttons: bool,
         theme: &Theme,
         language: Language,
         opacity: f32,
     ) -> AnyElement {
         let (card, place) = (&self.cards[at], self.card_places[at]);
-        let hovered = target || self.hovered == Hit::Card(at);
+        let on_button = self.hovered == Hit::Remove(at);
+        let hovered = target || on_button || self.hovered == Hit::Card(at);
         let colors = theme.colors;
         let ground = match card.current {
             true => colors.secondary_container,
@@ -1823,7 +1979,8 @@ impl Screen {
                 .gap(theme.spacing.tiny)
                 .children(icons),
         };
-        self.place(place)
+        let element = self
+            .place(place)
             .p(theme.spacing.medium)
             .flex()
             .flex_col()
@@ -1843,7 +2000,46 @@ impl Screen {
                     .min_w_0()
                     .child(one_line(card.label.clone())),
             )
-            .child(body)
+            .child(body);
+        // The button stands where the hit test finds it, on the card.
+        let removing = (buttons && hovered && card.removable).then(|| {
+            let button = shifted(self.remove_button(place), -place.left, -place.top);
+            self.place(button)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(theme.shape.full)
+                .bg(match on_button {
+                    true => colors.surface_container_highest,
+                    false => colors.surface_container,
+                })
+                .child(icon(theme, GLYPH_CLOSE).text_size(theme.typography.label_size))
+        });
+        element.children(removing).into_any_element()
+    }
+
+    /// The card after the others, which makes a workspace, marked as
+    /// where the picture dragged goes where it is the `target`.
+    fn add_card(&self, place: ScreenRect, target: bool, theme: &Theme, opacity: f32) -> AnyElement {
+        let colors = theme.colors;
+        let hovered = target || self.hovered == Hit::Add;
+        let ground = match hovered {
+            true => state_layer(theme, colors.surface_container, HOVERED),
+            false => colors.surface_container,
+        };
+        self.place(place)
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.shape.large)
+            .bg(ground)
+            .border_2()
+            .border_color(match target {
+                true => colors.primary,
+                false => colors.primary.opacity(0.),
+            })
+            .opacity(opacity)
+            .child(icon(theme, GLYPH_ADD).text_color(colors.on_surface_variant))
             .into_any_element()
     }
 
@@ -1956,18 +2152,31 @@ impl Screen {
             .into_any_element()
     }
 
-    /// The card of a window that has no picture: its icon on a plain
-    /// ground, where the picture would be.
+    /// The card of a window that has no live picture: its still picture
+    /// where its workspace kept one, or else its icon on a plain ground,
+    /// where the picture would be.
     fn icon_card(&self, tile: &Tile, rect: ScreenRect, theme: &Theme, opacity: f32) -> AnyElement {
-        self.place(rect)
+        let card = self
+            .place(rect)
             .flex()
             .items_center()
             .justify_center()
+            .overflow_hidden()
             .rounded(theme.shape.medium)
             .bg(theme.colors.surface_container_highest)
-            .opacity(opacity)
-            .child(small_icon(theme, tile.seen.icon.clone(), CARD_ICON_SIDE))
-            .into_any_element()
+            .opacity(opacity);
+        match &tile.still {
+            Some(still) => card
+                .child(
+                    img(still.clone())
+                        .size_full()
+                        .object_fit(ObjectFit::Contain),
+                )
+                .into_any_element(),
+            None => card
+                .child(small_icon(theme, tile.seen.icon.clone(), CARD_ICON_SIDE))
+                .into_any_element(),
+        }
     }
 
     /// The row above the picture at `rect`: the icon and the title of the

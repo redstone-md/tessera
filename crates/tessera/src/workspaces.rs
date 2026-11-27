@@ -1114,10 +1114,6 @@ impl Workspaces {
     /// workspace, taken as it was seen leaving; `None` for a window that is
     /// shown, and for one hidden without a picture, as a minimized window
     /// is, which the caller shows by its icon.
-    #[allow(
-        dead_code,
-        reason = "for the task view, the overview and the switcher, which show hidden windows"
-    )]
     pub fn still(id: AppWindowId, cx: &mut App) -> Option<Arc<RenderImage>> {
         // The images let go of here are dropped from what GPUI drew by the
         // next look at the windows, when no window of GPUI is being drawn.
@@ -1370,10 +1366,6 @@ impl Workspaces {
     /// the first time, and where Windows does not tell, the lists are
     /// empty. Moving a window between the desktops of Windows is not
     /// possible ([`Self::own`] says whether it is).
-    #[allow(
-        dead_code,
-        reason = "for the task view, the overview, the switcher and the dock, which list the windows of every desktop"
-    )]
     pub fn windows_by_workspace(display: Option<DisplayKey>, cx: &App) -> Vec<Vec<Resident>> {
         let this = cx.global::<Self>();
         if this.owned() {

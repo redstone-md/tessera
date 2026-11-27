@@ -24,13 +24,14 @@ mod layout;
 mod stage;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
     AnyElement, App, AsyncApp, Bounds, Context, CursorStyle, Div, FocusHandle, FontWeight,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, ScrollDelta,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
-    Window, WindowHandle, div, img, point, px, size,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ObjectFit, ParentElement, Render,
+    RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    StyledImage, Subscription, WeakEntity, Window, WindowHandle, div, img, point, px, size,
 };
 use serde::Deserialize;
 
@@ -222,6 +223,11 @@ impl Switcher {
             ),
             size: size(px(width), px(height)),
         };
+        if layout.picture.is_some() {
+            for entry in entries.iter_mut().filter(|entry| entry.workspace.is_some()) {
+                entry.still = Workspaces::still(entry.id, cx);
+            }
+        }
         let held = (held != Modifiers::default()).then_some(held);
         let opened = open_floating(rough, anchor.display_id, true, cx, |window, cx| {
             let native = NativeSurface::of(window);
@@ -348,6 +354,7 @@ fn gather(config: SwitcherConfig, display: Option<DisplayKey>, cx: &App) -> Vec<
                 minimized,
                 closing: false,
                 picture: None,
+                still: None,
                 desktop: false,
             }
         })
@@ -445,6 +452,9 @@ struct Entry {
     /// The picture of the window and the physical size of the window,
     /// where the cells show pictures and Windows gives one.
     picture: Option<(Thumbnail, (i32, i32))>,
+    /// The still picture of a window hidden on another workspace, taken
+    /// as it left, where the cells show pictures.
+    still: Option<Arc<RenderImage>>,
     /// Whether this is no window but the entry that shows the desktop.
     desktop: bool,
 }
@@ -463,6 +473,7 @@ impl Entry {
             minimized: false,
             closing: false,
             picture: None,
+            still: None,
             desktop: true,
         }
     }
@@ -997,6 +1008,19 @@ struct Drawing {
 impl Drawing {
     /// The icon of `entry`, `side` long, or a blank square where it has
     /// none.
+    /// What stands where a picture of `entry` would be when Windows gives
+    /// none: the still picture of a window hidden on another workspace,
+    /// or else its icon `side` logical pixels large.
+    fn stand_in(&self, entry: &Entry, side: f32) -> AnyElement {
+        match entry.still.clone() {
+            Some(still) => img(still)
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .into_any_element(),
+            None => self.icon(entry, side),
+        }
+    }
+
     fn icon(&self, entry: &Entry, side: f32) -> AnyElement {
         if entry.desktop {
             return div()
@@ -1275,7 +1299,7 @@ impl SwitcherView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .children((!pictured).then(|| drawing.icon(entry, ROOM_ICON)));
+                    .children((!pictured).then(|| drawing.stand_in(entry, ROOM_ICON)));
                 let name = div()
                     .max_w_full()
                     .h(px(NAME_HEIGHT))
@@ -1379,7 +1403,8 @@ impl SwitcherView {
                 false => face
                     .bg(theme.colors.surface_container_highest)
                     .opacity(opacity)
-                    .child(drawing.icon(entry, ROOM_ICON.min(placed.height * 0.6))),
+                    .overflow_hidden()
+                    .child(drawing.stand_in(entry, ROOM_ICON.min(placed.height * 0.6))),
             };
             elements.push(face.into_any_element());
         }
