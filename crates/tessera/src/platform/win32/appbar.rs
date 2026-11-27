@@ -36,12 +36,12 @@ use windows::Win32::UI::Shell::{
     ABE_BOTTOM, ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_ACTIVATE, ABM_GETAUTOHIDEBAR,
     ABM_GETAUTOHIDEBAREX, ABM_GETSTATE, ABM_GETTASKBARPOS, ABM_NEW, ABM_QUERYPOS, ABM_REMOVE,
     ABM_SETAUTOHIDEBAR, ABM_SETAUTOHIDEBAREX, ABM_SETPOS, ABM_SETSTATE, ABM_WINDOWPOSCHANGED,
-    ABN_FULLSCREENAPP, ABN_POSCHANGED, ABN_STATECHANGE, ABS_ALWAYSONTOP, ABS_AUTOHIDE,
-    SHLockShared, SHUnlockShared,
+    ABN_FULLSCREENAPP, ABN_POSCHANGED, ABS_ALWAYSONTOP, SHLockShared, SHUnlockShared,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowThreadProcessId, IsWindow, MONITORINFOF_PRIMARY, PostMessageW, SPI_SETWORKAREA,
-    SPIF_SENDCHANGE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_APP,
+    GetWindowThreadProcessId, HWND_TOPMOST, IsWindow, MONITORINFOF_PRIMARY, PostMessageW,
+    SPI_SETWORKAREA, SPIF_SENDCHANGE, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPos, SystemParametersInfoW, WM_APP,
 };
 use windows::core::BOOL;
 
@@ -204,6 +204,9 @@ pub(super) struct Answer {
     notes: Vec<Note>,
     /// Whether the room the displays leave to windows may have changed.
     rearranged: bool,
+    /// A bar that hides, to be put above the other bars as it became
+    /// active or moved.
+    raised: Option<u32>,
 }
 
 /// A registered edge bar.
@@ -236,8 +239,6 @@ pub(super) struct AppBarServer {
     hiders: Vec<Hider>,
     /// The frames of the displays an application fills, as bars were told.
     filled: Vec<ScreenRect>,
-    /// The state bars were last told of; `None` before any was asked.
-    told: Option<u32>,
 }
 
 /// `to - from`, which cannot overflow: the rectangles of bars come from
@@ -370,7 +371,9 @@ impl AppBarServer {
                 answer.place = Some(place);
                 answer.result = 1;
             }
-            ABM_GETSTATE => answer.result = self.state() as isize,
+            // Tessera's surfaces that hide do so without registering as
+            // bars that hide, so the taskbar is never said to hide.
+            ABM_GETSTATE => answer.result = ABS_ALWAYSONTOP as isize,
             ABM_GETTASKBARPOS => {
                 answer.place = self.taskbar(monitors);
                 answer.result = answer.place.is_some().into();
@@ -407,12 +410,17 @@ impl AppBarServer {
                     answer.rearranged = true;
                 }
             }
+            // A bar that hides stays above the other bars when it becomes
+            // active or moves.
+            ABM_ACTIVATE | ABM_WINDOWPOSCHANGED => {
+                answer.raised = self.hides(window).then_some(window);
+                answer.result = 1;
+            }
             // The taskbar of Tessera hides as its layout says, so a request
             // to have it hide or stay changes nothing.
-            ABM_SETSTATE | ABM_ACTIVATE | ABM_WINDOWPOSCHANGED => answer.result = 1,
+            ABM_SETSTATE => answer.result = 1,
             _ => {}
         }
-        answer.notes.extend(self.state_told());
         answer
     }
 
@@ -520,23 +528,6 @@ impl AppBarServer {
             .or_else(|| ours().next())
     }
 
-    /// The state of the taskbar: always above other windows, and hiding
-    /// while a surface of Tessera hides at an edge.
-    fn state(&self) -> u32 {
-        let hiding = self.hiders.iter().any(|hider| hider.ours);
-        ABS_ALWAYSONTOP | if hiding { ABS_AUTOHIDE } else { 0 }
-    }
-
-    /// What tells every bar that the state changed, if it did since they
-    /// were last told.
-    fn state_told(&mut self) -> Vec<Note> {
-        let state = self.state();
-        match self.told.replace(state) {
-            Some(told) if told != state => self.tell_all(ABN_STATECHANGE, 0, |_| true),
-            _ => Vec::new(),
-        }
-    }
-
     /// What tells every bar but `window` that the bars moved.
     fn moved_except(&self, window: u32) -> Vec<Note> {
         self.tell_all(ABN_POSCHANGED, 0, |other| other != window)
@@ -582,7 +573,6 @@ impl AppBarServer {
             answer.notes = self.tell_all(ABN_POSCHANGED, 0, |_| true);
         }
         answer.rearranged = placed || before.1 != self.hiders.len();
-        answer.notes.extend(self.state_told());
         answer
     }
 
@@ -741,10 +731,20 @@ fn rearrange_later(window: HWND) {
     }
 }
 
-/// What follows from an answer: its notes are posted, and the work areas
-/// are set later if they may have changed.
+/// What follows from an answer: its notes are posted, a bar that hides is
+/// put above the others, and the work areas are set later if they may have
+/// changed.
 fn follow(window: HWND, answer: &Answer) {
     post(&answer.notes);
+    if let Some(bar) = answer.raised {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+        // SAFETY: the call passes no pointers, fails harmlessly for a
+        // window that is gone, and only posts the change to the thread of
+        // the bar, which may be the one waiting for this answer.
+        unsafe {
+            let _ = SetWindowPos(handle(bar), Some(HWND_TOPMOST), 0, 0, 0, 0, flags);
+        }
+    }
     if answer.rearranged {
         rearrange_later(window);
     }
@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn the_taskbar_is_a_surface_of_tessera_and_its_state_is_told() {
+    fn the_taskbar_is_a_surface_of_tessera_that_never_hides() {
         let primary = rect(0, 0, 1920, 1080);
         let monitors = monitors();
         let mut server = AppBarServer::default();
@@ -1195,19 +1195,15 @@ mod tests {
         let asked = server.answer(&position, false, &monitors);
         assert_eq!((asked.result, asked.place), (1, Some((ABE_BOTTOM, bottom))));
 
-        // A surface of Tessera that hides makes the taskbar one that
-        // hides, and every bar hears of it.
-        let hides = request(ABM_SETAUTOHIDEBAR, 2, ABE_BOTTOM, primary, 1);
-        let answer = server.answer(&hides, true, &monitors);
-        let changed: Vec<u32> = answer
-            .notes
-            .iter()
-            .filter(|note| note.code == ABN_STATECHANGE)
-            .map(|note| note.window)
-            .collect();
-        assert_eq!(changed, vec![1, 2]);
+        // A bar that hides is put above the others when it becomes
+        // active; one that does not is left where it is.
+        let activate = request(ABM_ACTIVATE, 1, 0, primary, 1);
+        assert_eq!(server.answer(&activate, false, &monitors).raised, None);
+        let hides = request(ABM_SETAUTOHIDEBAR, 1, ABE_TOP, primary, 1);
+        assert_eq!(server.answer(&hides, false, &monitors).result, 1);
+        assert_eq!(server.answer(&activate, false, &monitors).raised, Some(1));
         let asked = server.answer(&state, false, &monitors);
-        assert_eq!(asked.result, (ABS_ALWAYSONTOP | ABS_AUTOHIDE) as isize);
+        assert_eq!(asked.result, ABS_ALWAYSONTOP as isize);
     }
 
     #[test]
