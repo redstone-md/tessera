@@ -62,7 +62,8 @@ impl Module for TrashModule {
 enum BinDeed {
     /// Has Explorer show it.
     Open,
-    /// Brings every item back to where it was deleted from.
+    /// Brings every item back to where it was deleted from, once the user
+    /// said yes in a question of Windows.
     Restore,
     /// Erases every item, once the user said yes in the dialog of Windows.
     Empty,
@@ -90,7 +91,11 @@ impl BinDeed {
                 }
             }
             Self::Restore => {
-                let restored = RecycleBin::restore_all();
+                let language = Language::of(cx);
+                let title = language.say("Restore all items").to_owned();
+                let restored = RecycleBin::restore_all(title, move |items, bytes| {
+                    restore_question(language, items, bytes)
+                });
                 cx.spawn(async move |cx| {
                     if let Ok(Err(error)) = restored.recv().await {
                         report!("the items of the Recycle Bin were not brought back: {error}");
@@ -111,6 +116,15 @@ impl BinDeed {
             }
         }
     }
+}
+
+/// What the user is asked before every item in the bin is brought back:
+/// what will happen, and how many items and bytes it moves.
+fn restore_question(language: Language, items: usize, bytes: u64) -> String {
+    let question =
+        language.say("Move every item in the Recycle Bin back to the folder it was deleted from?");
+    let items_word = language.say("items");
+    format!("{question}\n\n{items} {items_word} ({})", size_text(bytes))
 }
 
 /// Has `widget`, where there is one, count the bin again at once.

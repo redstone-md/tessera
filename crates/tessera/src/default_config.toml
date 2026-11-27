@@ -141,8 +141,9 @@
 #                      above does (the folder of the user without one);
 #                      win+e is taken from Windows
 #             trash    has Explorer open the Recycle Bin, as the widget
-#                      trash does; arg "restore" brings every item back,
-#                      "empty" empties it once Windows has asked
+#                      trash does; arg "restore" brings every item back
+#                      once the user said yes, "empty" empties it once
+#                      Windows has asked
 #
 # [[key]]
 # press = "win+v"

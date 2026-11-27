@@ -325,3 +325,4 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # files-verbs-extras: the menu of the Recycle Bin.
 "Restore all items" = "Restaurar todos los elementos"
 "Empty the Recycle Bin" = "Vaciar la Papelera de reciclaje"
+"Move every item in the Recycle Bin back to the folder it was deleted from?" = "¿Devolver todos los elementos de la Papelera de reciclaje a la carpeta de la que se eliminaron?"

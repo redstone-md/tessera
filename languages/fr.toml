@@ -325,3 +325,4 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # files-verbs-extras: the menu of the Recycle Bin.
 "Restore all items" = "Restaurer tous les éléments"
 "Empty the Recycle Bin" = "Vider la Corbeille"
+"Move every item in the Recycle Bin back to the folder it was deleted from?" = "Remettre tous les éléments de la Corbeille dans le dossier d’où ils ont été supprimés ?"

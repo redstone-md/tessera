@@ -14,9 +14,9 @@
 //! it also tells the name with its extension. Bringing items back and
 //! erasing them are the verbs `undelete` and `delete` of the bin, as its
 //! context menu in Explorer does them, with the dialogs of the Shell for
-//! a name that is taken and for the confirmation. The work runs on the
-//! [`ShellThread`]; emptying the bin, which may take long, on a thread of
-//! its own.
+//! a name that is taken and for the confirmation. Reading the bin runs on
+//! the [`ShellThread`]; restoring, erasing and emptying, which may take
+//! long and wait for the user, each on a thread of its own.
 //!
 //! ```ignore
 //! let items = RecycleBin::list();
@@ -36,18 +36,21 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{Context as _, Result};
 use async_channel::Receiver;
-use windows::Win32::Foundation::{E_ABORT, ERROR_CANCELLED, FILETIME, PROPERTYKEY};
+use windows::Win32::Foundation::{E_ABORT, E_UNEXPECTED, ERROR_CANCELLED, FILETIME, PROPERTYKEY};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Size;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, BHID_SFObject, CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX,
-    FOLDERID_RecycleBinFolder, IContextMenu, IEnumShellItems, ILFindLastID, IShellFolder,
-    IShellItem, IShellItem2, KF_FLAG_DEFAULT, SHEmptyRecycleBinW, SHGetIDListFromObject,
-    SHGetKnownFolderItem, SHQUERYRBINFO, SHQueryRecycleBinW, SIGDN_FILESYSPATH,
-    SIGDN_NORMALDISPLAY,
+    BHID_EnumItems, BHID_SFObject, CMF_OPTIMIZEFORINVOKE, CMINVOKECOMMANDINFO,
+    CMINVOKECOMMANDINFOEX, FOLDERID_RecycleBinFolder, IContextMenu, IEnumShellItems, ILFindLastID,
+    IShellFolder, IShellItem, IShellItem2, KF_FLAG_DEFAULT, SHEmptyRecycleBinW,
+    SHGetIDListFromObject, SHGetKnownFolderItem, SHQUERYRBINFO, SHQueryRecycleBinW,
+    SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY,
 };
-use windows::Win32::UI::WindowsAndMessaging::{CreatePopupMenu, DestroyMenu, SW_SHOWNORMAL};
-use windows::core::{GUID, HRESULT, Interface as _, PCSTR, PCWSTR};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreatePopupMenu, DestroyMenu, IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_SETFOREGROUND,
+    MB_YESNO, MessageBoxW, SW_SHOWNORMAL,
+};
+use windows::core::{GUID, HRESULT, HSTRING, Interface as _, PCSTR, PCWSTR};
 
 use super::ShellThread;
 use super::shell_items::{ItemId, dialog_owner, id_bytes, is_item_id_list, take_path, take_text};
@@ -65,8 +68,10 @@ const PKEY_DATE_DELETED: PROPERTYKEY = PROPERTYKEY {
 };
 
 /// The flags of `InvokeCommand` for a verb given as text in both kinds of
-/// text, and for no dialog.
+/// text, for a verb that is done before the call returns, and for no
+/// dialog.
 const CMIC_MASK_UNICODE: u32 = 0x4000;
+const CMIC_MASK_NOASYNC: u32 = 0x100;
 const CMIC_MASK_FLAG_NO_UI: u32 = 0x400;
 
 /// The verbs of the bin for its items.
@@ -143,20 +148,36 @@ impl RecycleBin {
     }
 
     /// Brings `items` back to where they were deleted from; the Shell asks
-    /// what to do where a name there is taken. The receiver yields once.
+    /// what to do where a name there is taken. It runs on a thread of its
+    /// own. The receiver yields once.
     #[allow(dead_code, reason = "for the view of the bin in the file manager")]
     pub fn restore(items: Vec<RecycledItem>) -> Receiver<Result<(), String>> {
-        ShellThread::call(move || {
+        ShellThread::call_alone("restore from the bin", move || {
             invoke(&items, VERB_RESTORE, true).map_err(|error| format!("{error:#}"))
         })
     }
 
-    /// Brings back every item in the bin, and tells how many there were.
-    pub fn restore_all() -> Receiver<Result<usize, String>> {
-        ShellThread::call(|| {
+    /// Brings back every item in the bin once the user said yes to a
+    /// question of Windows titled `title`, whose text `question` writes
+    /// for the number of items and the bytes they take. It runs on a
+    /// thread of its own. The receiver yields once: how many items were
+    /// brought back, or `None` where the bin was empty or the user said
+    /// no.
+    pub fn restore_all(
+        title: String,
+        question: impl FnOnce(usize, u64) -> String + Send + 'static,
+    ) -> Receiver<Result<Option<usize>, String>> {
+        ShellThread::call_alone("restore the bin", move || {
             let restored = list().and_then(|items| {
+                if items.is_empty() {
+                    return Ok(None);
+                }
+                let bytes = items.iter().filter_map(|item| item.size).sum();
+                if !ask(&title, &question(items.len(), bytes)) {
+                    return Ok(None);
+                }
                 invoke(&items, VERB_RESTORE, true)?;
-                Ok(items.len())
+                Ok(Some(items.len()))
             });
             restored.map_err(|error| format!("{error:#}"))
         })
@@ -168,7 +189,7 @@ impl RecycleBin {
     /// how a deletion is undone.
     #[allow(dead_code, reason = "for undoing a deletion in the file manager")]
     pub fn restore_stored(stored: Vec<PathBuf>) -> Receiver<Result<usize, String>> {
-        ShellThread::call(move || {
+        ShellThread::call_alone("restore from the bin", move || {
             let restored = list().and_then(|items| {
                 let found: Vec<RecycledItem> = { items.into_iter() }
                     .filter(|item| {
@@ -187,10 +208,11 @@ impl RecycleBin {
     }
 
     /// Erases `items` for good; with `confirm` the Shell asks the user
-    /// first, as Explorer does. The receiver yields once.
+    /// first, as Explorer does. It runs on a thread of its own. The
+    /// receiver yields once.
     #[allow(dead_code, reason = "for the view of the bin in the file manager")]
     pub fn erase(items: Vec<RecycledItem>, confirm: bool) -> Receiver<Result<(), String>> {
-        ShellThread::call(move || {
+        ShellThread::call_alone("erase from the bin", move || {
             invoke(&items, VERB_ERASE, confirm).map_err(|error| format!("{error:#}"))
         })
     }
@@ -198,15 +220,20 @@ impl RecycleBin {
     /// Empties the bins of all drives; the Shell asks the user first, then
     /// shows its progress and plays the sound of emptying. It runs on a
     /// thread of its own. The receiver yields once: whether the bin was
-    /// emptied, which it was not where the user said no.
+    /// emptied, which it was not where it was empty already or the user
+    /// said no.
     pub fn empty() -> Receiver<Result<bool, String>> {
         ShellThread::call_alone("empty the bin", || {
+            if Self::usage().is_some_and(|usage| usage.items == 0) {
+                return Ok(false);
+            }
             // SAFETY: no path asks for the bins of all drives; the owner
             // is a window that outlives the dialog or none.
             let emptied = unsafe { SHEmptyRecycleBinW(Some(dialog_owner()), PCWSTR::null(), 0) };
             match emptied {
                 Ok(()) => Ok(true),
-                Err(error) if is_cancel(error.code()) => Ok(false),
+                // What Windows answers for bins that were emptied meanwhile.
+                Err(error) if is_cancel(error.code()) || error.code() == E_UNEXPECTED => Ok(false),
                 Err(error) => Err(format!("the Recycle Bin was not emptied: {error}")),
             }
         })
@@ -216,6 +243,16 @@ impl RecycleBin {
 /// Whether `code` says that the user called off what the Shell asked.
 fn is_cancel(code: HRESULT) -> bool {
     code == E_ABORT || code == HRESULT::from_win32(ERROR_CANCELLED.0)
+}
+
+/// Asks the user `question` in a box of Windows titled `title`, with the
+/// answers yes and no, no by default; whether they said yes.
+fn ask(title: &str, question: &str) -> bool {
+    let (title, question) = (HSTRING::from(title), HSTRING::from(question));
+    let style = MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND;
+    // SAFETY: the texts are NUL-terminated and outlive the call; the owner
+    // is a window that outlives the box or none.
+    unsafe { MessageBoxW(Some(dialog_owner()), &question, &title, style) == IDYES }
 }
 
 /// Whether `place` is one of `stored`, as Windows compares paths.
@@ -314,7 +351,7 @@ fn invoke(items: &[RecycledItem], verb: &str, dialogs: bool) -> Result<()> {
     let owner = dialog_owner();
     let ascii = CString::new(verb).context("a verb has no NUL")?;
     let wide: Vec<u16> = verb.encode_utf16().chain([0]).collect();
-    let mut mask = CMIC_MASK_UNICODE;
+    let mut mask = CMIC_MASK_UNICODE | CMIC_MASK_NOASYNC;
     if !dialogs {
         mask |= CMIC_MASK_FLAG_NO_UI;
     }
@@ -340,7 +377,7 @@ fn invoke(items: &[RecycledItem], verb: &str, dialogs: bool) -> Result<()> {
         // Many menus answer a verb only once they have filled a menu.
         let popup = CreatePopupMenu().context("no menu could be made")?;
         let invoked = menu
-            .QueryContextMenu(popup, 0, 1, 0x7fff, CMF_NORMAL)
+            .QueryContextMenu(popup, 0, 1, 0x7fff, CMF_OPTIMIZEFORINVOKE)
             .ok()
             .and_then(|()| menu.InvokeCommand((&raw const info).cast::<CMINVOKECOMMANDINFO>()));
         let _ = DestroyMenu(popup);
