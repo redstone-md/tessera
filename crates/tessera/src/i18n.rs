@@ -1399,6 +1399,10 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("Media", "Медиа"),
     ("Personalize", "Персонализация"),
     // declared-settings: settings of extensions and themes, layers of themes.
+    (
+        "A changed setting reaches the running extension when Tessera starts again.",
+        "Изменённая настройка дойдёт до работающего расширения после перезапуска Tessera.",
+    ),
     ("Accent color", "Акцентный цвет"),
     ("Accent variant", "Вариант акцента"),
     ("Add a layer", "Добавить слой"),

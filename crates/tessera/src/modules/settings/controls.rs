@@ -641,15 +641,17 @@ impl Settings {
                 names.collect::<Vec<_>>()
             };
             self.seek(&extension.id, first + cards.len());
-            let lacking = extension.settings.is_empty().then_some(
-                "This extension declares no settings; what it reads is written in config.toml.",
-            );
+            let remark = if extension.settings.is_empty() {
+                "This extension declares no settings; what it reads is written in config.toml."
+            } else {
+                "A changed setting reaches the running extension when Tessera starts again."
+            };
             cards.push(self.declared_card(
                 owner,
                 extension.id.clone().into(),
                 &extension.settings,
                 &[],
-                lacking,
+                Some(remark),
                 &affects,
                 config,
                 window,
@@ -778,9 +780,9 @@ impl Settings {
 
     /// A card of the settings `set` declares for `owner`: each row with
     /// its control, what it affects as `affects` names it, and Reset where
-    /// the file sets it; Reset all over them. `lacking` is said where
-    /// there is nothing to set, and `problems` are the declarations left
-    /// out.
+    /// the file sets it; Reset all over them. `remark` is said under the
+    /// settings, such as that there is nothing to set, and `problems` are
+    /// the declarations left out.
     #[allow(clippy::too_many_arguments, reason = "the parts of one card")]
     fn declared_card(
         &mut self,
@@ -788,7 +790,7 @@ impl Settings {
         title: SharedString,
         set: &OptionSet,
         problems: &[String],
-        lacking: Option<&'static str>,
+        remark: Option<&'static str>,
         affects: &dyn Fn(&OptionDecl) -> Vec<String>,
         config: &Config,
         window: &mut Window,
@@ -844,7 +846,7 @@ impl Settings {
             );
             body = body.child(line);
         }
-        body = body.children(lacking.map(|lacking| note(&theme, language.say(lacking))));
+        body = body.children(remark.map(|remark| note(&theme, language.say(remark))));
         if !problems.is_empty() {
             let left_out = language.say("Some settings are declared wrongly and are left out:");
             body = body.child(note(&theme, left_out));

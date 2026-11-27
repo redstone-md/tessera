@@ -225,22 +225,26 @@ impl ExtensionsModule {
     }
 
     /// Takes the settings `table` of the extension `id` over, as the
-    /// configuration holds them now. Whether the extension running has
-    /// them: it does where what it reads did not change, as when a value
-    /// is set to its default. Otherwise the answer is `false`, and the
-    /// widgets of the extension are to be made again: an extension that
-    /// runs is not told of new settings yet.
-    pub fn settings_changed(id: &str, table: Option<&toml::Table>, _cx: &mut App) -> bool {
-        let started = STARTED
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some((declared, settings)) = started.as_ref().and_then(|started| started.get(id))
-        else {
-            // No extension of that name runs, so none is to be told.
-            return true;
-        };
-        snapshot(id, declared, table) == *settings
+    /// configuration holds them now: they are kept as what it reads. An
+    /// extension that runs is not told of new settings yet, so it reads
+    /// them once it is loaded again, as when Tessera starts.
+    pub fn settings_changed(id: &str, table: Option<&toml::Table>, _cx: &mut App) {
+        keep_settings(id, table);
     }
+}
+
+/// Keeps the settings `table` as what the extension `id` that was loaded
+/// reads; the settings it was started with where none of that name was.
+fn keep_settings(id: &str, table: Option<&toml::Table>) {
+    let mut started = STARTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some((declared, settings)) = started.as_mut().and_then(|started| started.get_mut(id))
+    else {
+        // No extension of that name runs, so none is to be told.
+        return;
+    };
+    *settings = snapshot(id, declared, table);
 }
 
 /// The settings each extension that was loaded was started with, and
@@ -499,6 +503,23 @@ mod tests {
         let listed: toml::Table = toml::from_str("coins = [\"a\", \"b\"]\n").unwrap();
         let declared = manifest.declared();
         assert_eq!(snapshot("probe", &declared, Some(&listed))["coins"], "a, b");
+    }
+
+    #[test]
+    fn new_settings_are_kept_for_the_extension_that_was_loaded() {
+        let manifest = Manifest::parse(&DECLARING.replace("\"probe\"", "\"kept\"")).unwrap();
+        let module = ExtensionsModule {
+            settings: HashMap::new(),
+        };
+        assert_eq!(module.settings_of(&manifest)["minutes"], "20");
+        let table: toml::Table = toml::from_str("minutes = 30\n").unwrap();
+        keep_settings("kept", Some(&table));
+        keep_settings("not-loaded", Some(&table));
+        let started = STARTED.lock().unwrap();
+        let started = started.as_ref().unwrap();
+        assert_eq!(started["kept"].1["minutes"], "30");
+        assert_eq!(started["kept"].1["unit"], "celsius");
+        assert!(!started.contains_key("not-loaded"));
     }
 
     #[test]

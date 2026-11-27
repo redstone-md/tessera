@@ -320,8 +320,8 @@ impl Shell {
         Night::configure(&config.night_light, cx);
         Notices::configure(&config.notices, cx);
 
-        // New settings of extensions alone keep the popups open: the
-        // settings themselves write them.
+        // New settings of extensions alone keep the popups and the widgets:
+        // the settings themselves write them.
         let (reloaded, extensions) = Self::extensions_reloaded(&config, cx);
         let old = &cx.global::<Self>().config;
         let icons = old.icons != config.icons;
@@ -336,8 +336,8 @@ impl Shell {
             // The widget that wrote the file already shows what it wrote.
             Popups::reconfigure(&config.popups, cx);
         }
-        // Widgets keep what they were built with, so new settings of
-        // extensions, new registries and new icons need new widgets as well.
+        // Widgets keep what they were built with, so new registries and new
+        // icons need new widgets as well.
         if extensions {
             cx.global_mut::<Self>().extensions = installed_stamp();
             cx.set_global(WidgetRegistry::from_modules(&modules::builtin(&config)));
@@ -358,15 +358,15 @@ impl Shell {
     }
 
     /// What changed of the extensions in `config`: whether they are to be
-    /// loaded again, which closes the popups, as new registries or new
-    /// files of extensions need; and whether their widgets are to be made
-    /// again. New settings alone are taken over by the extensions that
-    /// run where they can be, and otherwise only their widgets are made
-    /// again.
+    /// loaded again, which closes the popups, as new registries need; and
+    /// whether their widgets are to be made again. New settings alone keep
+    /// the extensions and their widgets as they are: each extension whose
+    /// settings changed is told by [`ExtensionsModule::settings_changed`].
+    /// Extensions put into or taken out of the directory are noticed by
+    /// [`Self::watch`] once their files have settled.
     fn extensions_reloaded(config: &Config, cx: &mut App) -> (bool, bool) {
-        let this = cx.global::<Self>();
-        let old = &this.config;
-        if old.registries() != config.registries() || this.extensions != installed_stamp() {
+        let old = &cx.global::<Self>().config;
+        if old.registries() != config.registries() {
             return (true, true);
         }
         if old.extensions == config.extensions {
@@ -379,11 +379,10 @@ impl Shell {
             .collect();
         ids.sort();
         ids.dedup();
-        let mut taken = true;
         for id in ids {
-            taken &= ExtensionsModule::settings_changed(&id, config.extensions.get(&id), cx);
+            ExtensionsModule::settings_changed(&id, config.extensions.get(&id), cx);
         }
-        (false, !taken)
+        (false, false)
     }
 
     /// Takes over the configuration file right after Tessera wrote it,

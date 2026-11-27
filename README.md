@@ -171,7 +171,7 @@ To leave, use **Quit** at the bottom of the settings or run `tessera quit`. Requ
 
 ## Configure
 
-Tessera reads `%APPDATA%\tessera\config.toml` and applies every change within about two seconds, without a restart.
+Tessera reads `%APPDATA%\tessera\config.toml` and applies every change within about two seconds, without a restart; only a running extension keeps the settings it was started with until Tessera starts again.
 
 ```toml
 theme = "aurora"
