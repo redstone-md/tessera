@@ -10,6 +10,9 @@
 //! a key nothing listens to pressed inside it, which is what keeps Windows
 //! from opening its menu.
 //!
+//! While the key is taken over, Ctrl+Esc, which Windows answers with the
+//! same menu, is answered as the key pressed by itself.
+//!
 //! The same hook takes the key combinations Windows keeps to itself, such
 //! as Alt+Tab, which it gives to no program that asks for them: the key
 //! that completes one is not passed on, and the combination is reported.
@@ -30,7 +33,8 @@ use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
-    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN,
+    VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PostThreadMessageW,
@@ -271,6 +275,34 @@ fn taken_key(key: VIRTUAL_KEY, down: bool) -> bool {
     true
 }
 
+/// Whether `held` and the key `key` going down make Ctrl+Esc, which
+/// Windows answers with its Start menu as it answers the Windows key by
+/// itself.
+fn is_start_combination(key: u16, held: Modifiers) -> bool {
+    let control = Modifiers {
+        control: true,
+        ..Modifiers::default()
+    };
+    key == VK_ESCAPE.0 && held == control
+}
+
+/// Whether the key that went down or up is the Esc of Ctrl+Esc while the
+/// Windows key is taken over, which is then answered as the key pressed
+/// by itself and not passed on. A taken combination of Ctrl+Esc was
+/// answered before this is asked.
+fn start_key(key: VIRTUAL_KEY, down: bool) -> bool {
+    if !down || !WINDOWS_KEY.load(Ordering::Relaxed) {
+        return false;
+    }
+    if !is_start_combination(key.0, Modifiers::down_now()) {
+        return false;
+    }
+    SWALLOWED.store(u32::from(key.0), Ordering::Relaxed);
+    // A press that is still waiting to be answered is enough.
+    pressed().0.try_send(()).ok();
+    true
+}
+
 /// Sets the hook, tells `ready` which thread this is or why there is no
 /// hook, and handles what Windows sends that thread until it is told to
 /// quit, when the hook is removed.
@@ -335,7 +367,7 @@ unsafe extern "system" fn key_event(code: i32, wparam: WPARAM, lparam: LPARAM) -
             let key = VIRTUAL_KEY(event.vkCode as u16);
             let windows = key == VK_LWIN || key == VK_RWIN;
             let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
-            if taken_key(key, down) {
+            if taken_key(key, down) || start_key(key, down) {
                 return LRESULT(1);
             }
             let modified = windows && down && modifier_held();
@@ -377,6 +409,15 @@ mod tests {
         assert_eq!(ChoiceKey::of(0x1B), Some(ChoiceKey::Escape));
         assert_eq!(ChoiceKey::of(0x28), Some(ChoiceKey::Down));
         assert_eq!(ChoiceKey::of(0x09), None);
+    }
+
+    #[test]
+    fn ctrl_and_esc_alone_stand_for_the_windows_key() {
+        let held = |text| Modifiers::parse(text).unwrap();
+        assert!(is_start_combination(0x1b, held("ctrl")));
+        assert!(!is_start_combination(0x1b, held("ctrl+shift")));
+        assert!(!is_start_combination(0x1b, Modifiers::default()));
+        assert!(!is_start_combination(0x0d, held("ctrl")));
     }
 
     #[test]

@@ -6,7 +6,9 @@
 //! `desktop`: a click shows the desktop or brings the windows back, as the
 //! action `desktop` does without an `arg`; with one it minimizes all
 //! windows (`minimize`), brings them back (`restore`) or minimizes all but
-//! the one in front (`others`).
+//! the one in front (`others`). Where the keys of Windows are in use
+//! (`windows_keys`), Win+D, Win+M, Win+Shift+M and Win+Home are bound to
+//! these, as in Windows.
 
 use std::time::Duration;
 
@@ -53,6 +55,10 @@ impl Module for LookModule {
         // Explorer runs.
         let desktop = Action::new(|arg, _| desktop(arg))
             .taking_reserved_keys()
+            .by_default("win+d", None)
+            .by_default("win+m", Some("minimize"))
+            .by_default("win+shift+m", Some("restore"))
+            .by_default("win+home", Some("others"))
             .checking(|arg| match arg {
                 None | Some("toggle" | "minimize" | "restore" | "others") => Ok(()),
                 Some(_) => Err(
@@ -234,6 +240,14 @@ mod tests {
         }
         assert!(actions.check("desktop", Some("away")).is_err());
         assert!(actions.takes_reserved_keys("desktop"));
+        let keys: Vec<(String, Option<String>)> = { actions.default_keys().into_iter() }
+            .map(|key| (key.press, key.arg))
+            .collect();
+        for (press, arg) in &keys {
+            assert_eq!(actions.check("desktop", arg.as_deref()), Ok(()), "{press}");
+        }
+        let presses: Vec<&str> = keys.iter().map(|(press, _)| press.as_str()).collect();
+        assert_eq!(presses, ["win+d", "win+m", "win+shift+m", "win+home"]);
     }
 
     #[test]

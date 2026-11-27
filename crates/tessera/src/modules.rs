@@ -36,6 +36,7 @@ mod update;
 mod user;
 mod wifi;
 pub mod windows;
+mod windows_keys;
 mod workspaces;
 
 use crate::config::Config;
@@ -81,6 +82,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(user::UserModule),
         Box::new(wifi::WifiModule),
         Box::new(windows::WindowsModule),
+        Box::new(windows_keys::WindowsKeysModule),
         Box::new(workspaces::WorkspacesModule),
         Box::new(overview::OverviewModule),
         Box::new(ExtensionsModule {
