@@ -598,3 +598,9 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 "While a display is duplicated" = "Mientras se duplica una pantalla"
 "Unknown application" = "Aplicación desconocida"
 "Banners are switched off" = "Los banners están desactivados"
+# The history of the clipboard.
+"Search the clipboard" = "Buscar en el portapapeles"
+"Nothing was copied yet" = "Aún no se ha copiado nada"
+"Clipboard history is off" = "El historial del portapapeles está desactivado"
+"Picture" = "Imagen"
+"Pinned" = "Anclado"

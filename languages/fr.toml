@@ -598,3 +598,9 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 "While a display is duplicated" = "Tant qu’un écran est dupliqué"
 "Unknown application" = "Application inconnue"
 "Banners are switched off" = "Les bannières sont désactivées"
+# The history of the clipboard.
+"Search the clipboard" = "Rechercher dans le presse-papiers"
+"Nothing was copied yet" = "Rien n’a encore été copié"
+"Clipboard history is off" = "L’historique du presse-papiers est désactivé"
+"Picture" = "Image"
+"Pinned" = "Épinglé"

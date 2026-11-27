@@ -12,6 +12,7 @@ use gpui::{App, AsyncApp, DisplayId, Global, WindowHandle, px};
 
 use crate::actions::Actions;
 use crate::banners::Banners;
+use crate::clipboard::ClipHistory;
 use crate::config::{Config, Displays};
 use crate::corners::Corners;
 use crate::desk::Cards;
@@ -99,6 +100,7 @@ impl Shell {
         Snapper::start(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::start(&config.rules, cx);
         Corners::start(&config.corners, cx);
+        ClipHistory::start(&config.clipboard, cx);
         // The keys come last: what a `[[key]]` names is checked against
         // the actions, which every part started above has added by now.
         Shortcuts::start(&config.keys, config.windows_keys, cx);
@@ -309,6 +311,7 @@ impl Shell {
         Snapper::configure(&config.snap, config.windows_keys, &config.keys, cx);
         Rules::configure(&config.rules, cx);
         Corners::configure(&config.corners, cx);
+        ClipHistory::configure(&config.clipboard, cx);
 
         let old = &cx.global::<Self>().config;
         let extensions =

@@ -598,3 +598,9 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 "While a display is duplicated" = "Поки екран дублюється"
 "Unknown application" = "Невідомий застосунок"
 "Banners are switched off" = "Банери вимкнено"
+# The history of the clipboard.
+"Search the clipboard" = "Пошук у буфері обміну"
+"Nothing was copied yet" = "Ще нічого не скопійовано"
+"Clipboard history is off" = "Журнал буфера обміну вимкнено"
+"Picture" = "Зображення"
+"Pinned" = "Закріплено"

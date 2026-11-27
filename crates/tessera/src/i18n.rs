@@ -1154,6 +1154,12 @@ const RUSSIAN: &[(&str, &str)] = &[
     ("While a display is duplicated", "Пока экран дублируется"),
     ("Unknown application", "Неизвестное приложение"),
     ("Banners are switched off", "Баннеры выключены"),
+    // The history of the clipboard.
+    ("Search the clipboard", "Поиск в буфере обмена"),
+    ("Nothing was copied yet", "Ещё ничего не скопировано"),
+    ("Clipboard history is off", "Журнал буфера обмена выключен"),
+    ("Picture", "Изображение"),
+    ("Pinned", "Закреплено"),
 ];
 
 #[cfg(test)]
