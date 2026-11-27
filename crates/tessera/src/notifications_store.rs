@@ -761,8 +761,9 @@ impl NotificationStore {
         Badges::count(cx);
     }
 
-    /// Takes every notification away, here and from the notification
-    /// center of Windows.
+    /// Takes every notification listed here away, here and from the
+    /// notification center of Windows. What a rule keeps out of the list,
+    /// and what arrived since the list was last read, stays there.
     pub fn clear(cx: &mut App) {
         let this = cx.default_global::<Self>();
         let ids: Vec<u32> = { this.entries.iter() }
@@ -770,16 +771,7 @@ impl NotificationStore {
             .filter_map(|entry| entry.id)
             .collect();
         this.entries.clear();
-        cx.default_global::<Watch>().dismissed.extend(ids);
-        let cleared = cx
-            .background_executor()
-            .spawn(async { Notifications::clear() });
-        cx.spawn(async move |_: &mut AsyncApp| {
-            if let Err(error) = cleared.await {
-                report!("{error}");
-            }
-        })
-        .detach();
+        Self::forget_in_windows(ids, cx);
         Self::save_later(cx);
         Badges::count(cx);
     }
