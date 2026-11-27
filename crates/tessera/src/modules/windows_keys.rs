@@ -11,10 +11,11 @@
 //!   Win+Pause the page About;
 //! - `start` (Ctrl+Esc), `search` (Win+S, Win+Q), `quick-settings`
 //!   (Win+A) and `notification-center` (Win+N) open the popup their
-//!   `arg` names, or without one `launcher`, `quick-settings` and
-//!   `calendar`; the module brings the popup `quick-settings`, made of
-//!   the widgets of the connections, the radios, the volume and the
-//!   brightness;
+//!   `arg` names, or without one, for `start`, the popup of the Windows
+//!   key (`windows_key`, or else the launcher, as the Windows key opens
+//!   it), and `launcher`, `quick-settings` and `calendar`; the module
+//!   brings the popup `quick-settings`, made of the widgets of the
+//!   connections, the radios, the volume and the brightness;
 //! - `screenshot` (Win+PrtScn) saves a picture of all displays in the
 //!   Screenshots folder;
 //! - `dock` does what a click on the button of that number in the dock
@@ -44,12 +45,13 @@ const OPENED: [(&str, &str); 6] = [
 ];
 
 /// The actions that open a popup: the name of each, the popup it opens
-/// without an `arg` and the keys it brings.
-const POPUPS: [(&str, &str, &[&str]); 4] = [
-    ("start", "launcher", &["ctrl+escape"]),
-    ("search", "launcher", &["win+s", "win+q"]),
-    ("quick-settings", QUICK_SETTINGS, &["win+a"]),
-    ("notification-center", "calendar", &["win+n"]),
+/// without an `arg` (for `start`, `None`: that of the Windows key) and
+/// the keys it brings.
+const POPUPS: [(&str, Option<&str>, &[&str]); 4] = [
+    ("start", None, &["ctrl+escape"]),
+    ("search", Some("launcher"), &["win+s", "win+q"]),
+    ("quick-settings", Some(QUICK_SETTINGS), &["win+a"]),
+    ("notification-center", Some("calendar"), &["win+n"]),
 ];
 
 /// The popup of Win+A and the widgets it holds, from the top, each with
@@ -124,14 +126,18 @@ impl WindowsKeysModule {
         }
         let mut all = vec![("open", open)];
         for (name, popup, presses) in POPUPS {
-            let mut action = Action::new(move |arg, cx| toggle(arg.unwrap_or(popup), cx))
-                .taking_reserved_keys()
-                .checking(|arg| match arg {
-                    Some(name) if name.trim().is_empty() => {
-                        Err("the name of a popup is not empty".to_owned())
-                    }
-                    _ => Ok(()),
-                });
+            let mut action = Action::new(move |arg, cx| match arg.or(popup) {
+                Some(name) => toggle(name, cx),
+                // Ctrl+Esc opens what the Windows key opens.
+                None => Shell::start_requested(cx),
+            })
+            .taking_reserved_keys()
+            .checking(|arg| match arg {
+                Some(name) if name.trim().is_empty() => {
+                    Err("the name of a popup is not empty".to_owned())
+                }
+                _ => Ok(()),
+            });
             for press in presses {
                 action = action.by_default(press, None);
             }
