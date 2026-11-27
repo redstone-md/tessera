@@ -184,7 +184,8 @@ pub const ABOUT: [About; 19] = [
     },
     About {
         id: "extensions",
-        aliases: &["ext"],
+        // Not `ext`, which is a filter of the search for files.
+        aliases: &[],
         name: "Extensions",
         what: "What the installed extensions answer",
         example: None,
@@ -340,6 +341,8 @@ mod tests {
         assert_eq!(scope(r"C:\Windows", &chosen, &[]), None);
         assert_eq!(scope("ms-settings:display", &chosen, &[]), None);
         assert_eq!(scope("https://example.org", &chosen, &[]), None);
+        // A filter of the search for files is no name of a runner.
+        assert_eq!(scope("ext:pdf", &crate::runners::ALL, &[]), None);
     }
 
     #[test]
