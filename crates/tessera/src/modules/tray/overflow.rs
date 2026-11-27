@@ -27,7 +27,7 @@ use super::{
 use crate::menu::Menus;
 use crate::motion::{Interaction, Spring};
 use crate::platform::{
-    NativeSurface, ScreenEdge, ScreenRect, Tray, TrayButton, pointer_at, pointer_held,
+    AppWindowId, NativeSurface, ScreenEdge, ScreenRect, Tray, TrayButton, pointer_at, pointer_held,
 };
 use crate::popup::{
     MARGIN, PopupAnchor, REOPEN_GUARD, floating_panel, open_floating, retire_floating,
@@ -58,6 +58,9 @@ pub struct Opening {
     pub display_id: Option<DisplayId>,
     /// Whether it takes the keyboard on its first icon.
     pub keyboard: bool,
+    /// The window that had the keyboard before the strip took it, for the
+    /// keyboard to go back to from the strip once it leaves the overflow.
+    pub previous: Option<AppWindowId>,
 }
 
 /// The open overflow, if one is.
@@ -593,11 +596,12 @@ impl OverflowView {
         else {
             return;
         };
+        let previous = self.opening.previous;
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
                 strip.update(cx, |strip, cx| {
                     let button = strip.places().saturating_sub(1);
-                    strip.take_keyboard(button, window, cx);
+                    strip.take_keyboard(button, previous, window, cx);
                 });
             });
         });

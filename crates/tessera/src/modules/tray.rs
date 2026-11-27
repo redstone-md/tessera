@@ -102,7 +102,10 @@ impl Module for TrayModule {
     }
 
     fn actions(&self, actions: &mut Actions) -> anyhow::Result<()> {
-        let focus = Action::new(|_, cx| TrayStrip::focus_one(cx)).by_default("win+b", None);
+        // Explorer keeps Win+B to itself while it runs.
+        let focus = Action::new(|_, cx| TrayStrip::focus_one(cx))
+            .taking_reserved_keys()
+            .by_default("win+b", None);
         actions.register(FOCUS_ACTION, focus)
     }
 }
@@ -792,7 +795,7 @@ impl TrayStrip {
                 |this, _, event: &KeyboardBack, window, cx| {
                     if event.strip == cx.entity_id() {
                         let index = this.staying().position(|item| item.id == event.id);
-                        this.take_keyboard(index.unwrap_or(0), window, cx);
+                        this.take_keyboard(index.unwrap_or(0), None, window, cx);
                     }
                 },
             );
@@ -822,20 +825,33 @@ impl TrayStrip {
             return;
         };
         let _ = window.update(cx, |_, window, cx| {
-            strip.update(cx, |strip, cx| strip.take_keyboard(0, window, cx));
+            strip.update(cx, |strip, cx| strip.take_keyboard(0, None, window, cx));
         });
     }
 
-    /// Takes the keyboard, on the place `index`.
-    fn take_keyboard(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// Takes the keyboard, on the place `index`. `previous` is the window
+    /// that had the keyboard before the strip, where that is known, as when
+    /// it comes back from the overflow; otherwise it is the window in front
+    /// now. Windows may keep the keyboard with the window in front, and
+    /// then the strip does not take it.
+    fn take_keyboard(
+        &mut self,
+        index: usize,
+        previous: Option<AppWindowId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.places() == 0 {
             return;
         }
         if !window.is_window_active() {
-            self.previous = AppWindowId::foreground();
-            if let Ok(native) = NativeSurface::of(window) {
-                native.activate();
+            let front = AppWindowId::foreground();
+            if !NativeSurface::of(window).is_ok_and(|native| native.take_keyboard()) {
+                return;
             }
+            self.previous = previous.or(front);
+        } else if previous.is_some() {
+            self.previous = previous;
         }
         window.focus(&self.focus);
         self.keyboard = Some(index.min(self.places() - 1));
@@ -941,6 +957,7 @@ impl TrayStrip {
             scale: place.scale,
             display_id: window.display(cx).map(|display| display.id()),
             keyboard,
+            previous: self.previous.filter(|_| keyboard),
         };
         TrayOverflow::open(opening, cx);
         cx.notify();
@@ -1460,5 +1477,13 @@ Speakers"
         assert_eq!(KeyDeed::Row(1).moved(1, 10, 5), 6);
         assert_eq!(KeyDeed::Last.moved(1, 4, 2), 3);
         assert_eq!(KeyDeed::Take.moved(1, 4, 2), 1);
+    }
+
+    #[test]
+    fn win_b_is_taken_from_explorer() {
+        let mut actions = Actions::default();
+        TrayModule.actions(&mut actions).unwrap();
+        assert!(actions.takes_reserved_keys(FOCUS_ACTION));
+        assert_eq!(actions.default_keys()[0].press, "win+b");
     }
 }
