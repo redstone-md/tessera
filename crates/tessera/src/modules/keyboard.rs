@@ -16,6 +16,15 @@
 //! layout flyout lists the layouts with the one switched to lit, where
 //! `[flyout]` wants layouts shown. Ctrl+Shift and Alt+Shift are switched
 //! by Windows itself and stay with it.
+//!
+//! Where the window in front is typed in a Japanese, Korean or Chinese
+//! layout, the widget shows the mode of its input method beside the
+//! letters, as the input indicator of Explorer does (A, あ, カ, 가, 中, 英),
+//! read on the background executor while the widget is shown; a click on
+//! the mode switches the input method on or off.
+//!
+//! The widget `touch-keyboard` is the button of the taskbar of Explorer
+//! that shows and hides the touch keyboard of Windows.
 
 use std::time::{Duration, Instant};
 
@@ -31,13 +40,14 @@ use crate::flyout::Flyouts;
 use crate::i18n::Language;
 use crate::module::{Module, WidgetRegistry};
 use crate::motion::{Interaction, Spring, mix};
-use crate::platform::{InputLanguage, InputName, OwnInput, Typing};
+use crate::platform::{ImeState, InputLanguage, InputName, OwnInput, TouchKeyboard, Typing};
 use crate::popup::Popups;
 use crate::shell::Shell;
 use crate::theme::Theme;
 use crate::ui::{Chooser, Pick, choice_row_of, icon, one_line, pill, state_layer};
 
 const ICON_KEYBOARD: &str = "\u{e765}";
+const ICON_TOUCH_KEYBOARD: &str = "\u{e92e}";
 const ICON_CHECK: &str = "\u{e73e}";
 
 /// The name of the popup of the layouts and of its widget.
@@ -67,6 +77,10 @@ impl Module for KeyboardModule {
 
     fn register(&self, widgets: &mut WidgetRegistry) -> anyhow::Result<()> {
         widgets.register("keyboard", |_, cx| cx.new(Keyboard::new).into())?;
+        widgets.register("touch-keyboard", |_, cx| {
+            let interaction = Interaction::new(&cx.global::<Theme>().motion);
+            cx.new(|_| TouchKeyboardButton { interaction }).into()
+        })?;
         widgets.register_panel(LIST, |_, cx| {
             let typing = TypedInto::window(cx);
             cx.new(|cx| LayoutList::new(typing, cx)).into()
@@ -212,10 +226,15 @@ fn input_language(arg: Option<&str>, cx: &mut App) {
     }
 }
 
-/// Shows the language of the window that was last seen in front.
+/// Shows the language of the window that was last seen in front, and the
+/// mode of its input method.
 struct Keyboard {
     typing: Option<Typing>,
+    /// The input method of that window, as last read.
+    ime: Option<ImeState>,
     interaction: Interaction,
+    /// Pointer feedback of the mode of the input method.
+    ime_interaction: Interaction,
     /// 1 at the moment the language changes, then back to 0.
     changed: Spring,
 }
@@ -226,7 +245,17 @@ impl Keyboard {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(CHECK_INTERVAL).await;
-                if this.update(cx, Self::look).is_err() {
+                // The input method is asked through the window in front,
+                // which may take a moment to answer.
+                let ime = cx
+                    .background_executor()
+                    .spawn(async { ImeState::in_front() });
+                let ime = ime.await;
+                let looked = this.update(cx, |this, cx| {
+                    this.look(cx);
+                    this.take_ime(ime, cx);
+                });
+                if looked.is_err() {
                     break;
                 }
             }
@@ -234,9 +263,43 @@ impl Keyboard {
         .detach();
         Self {
             typing: Typing::in_front(),
+            ime: None,
             interaction: Interaction::new(&motion),
+            ime_interaction: Interaction::new(&motion),
             changed: Spring::new(motion.effects, 0.),
         }
+    }
+
+    /// Takes in the input method read; a window of Tessera in front, which
+    /// tells none, changes nothing.
+    fn take_ime(&mut self, ime: Option<ImeState>, cx: &mut Context<Self>) {
+        if ime.is_some() && ime != self.ime {
+            self.ime = ime;
+            cx.notify();
+        }
+    }
+
+    /// Switches the input method of the window on or off, and reads it
+    /// again once that is done.
+    fn toggle_ime(&mut self, cx: &mut Context<Self>) {
+        let Some(ime) = self.ime else {
+            return;
+        };
+        // The click shows at once; the next reading tells what came of it.
+        self.ime = Some(ime.switched());
+        cx.notify();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let toggled = cx.background_executor().spawn(async move {
+                let toggled = ime.toggle();
+                (toggled, ImeState::in_front())
+            });
+            let (toggled, read) = toggled.await;
+            if let Err(error) = toggled {
+                report!("the input method was not switched: {error:#}");
+            }
+            this.update(cx, |this, cx| this.take_ime(read, cx)).ok();
+        })
+        .detach();
     }
 
     /// Takes in the window in front. A window of Tessera itself in front
@@ -281,12 +344,49 @@ impl Render for Keyboard {
         let code = self
             .typing
             .map_or_else(|| "--".to_owned(), |typing| typing.language.code());
+        let mode = self.ime.and_then(|ime| ime.mode());
+        let ime_state = self.ime_interaction.state(window);
+        let mode = mode.map(|mode| {
+            let glyph = div()
+                .id("keyboard-ime")
+                .px(theme.spacing.tiny)
+                .rounded(theme.shape.small)
+                .bg(state_layer(&theme, ground, ime_state))
+                .font_weight(FontWeight::MEDIUM)
+                .child(mode.glyph())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // The click is the input method's, not the layout's.
+                    cx.stop_propagation();
+                    this.toggle_ime(cx);
+                }));
+            Interaction::track(glyph, cx, |this: &mut Self| Some(&mut this.ime_interaction))
+        });
         let button = pill(&theme)
             .id("keyboard")
             .bg(state_layer(&theme, ground, state))
             .on_click(cx.listener(|this, _, _, cx| this.switch(cx)))
             .child(icon(&theme, ICON_KEYBOARD))
-            .child(div().font_weight(FontWeight::MEDIUM).child(code));
+            .child(div().font_weight(FontWeight::MEDIUM).child(code))
+            .children(mode);
+        Interaction::track(button, cx, |this: &mut Self| Some(&mut this.interaction))
+    }
+}
+
+/// The button that shows and hides the touch keyboard of Windows.
+struct TouchKeyboardButton {
+    interaction: Interaction,
+}
+
+impl Render for TouchKeyboardButton {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.global::<Theme>();
+        let state = self.interaction.state(window);
+        let ground = theme.on_bar(theme.colors.surface_container);
+        let button = pill(&theme)
+            .id("touch-keyboard")
+            .bg(state_layer(&theme, ground, state))
+            .on_click(|_, _, _| TouchKeyboard::toggle())
+            .child(icon(&theme, ICON_TOUCH_KEYBOARD));
         Interaction::track(button, cx, |this: &mut Self| Some(&mut this.interaction))
     }
 }

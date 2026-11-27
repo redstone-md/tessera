@@ -466,6 +466,11 @@
 #               an icon dragged onto another card moves its window there
 #   "keyboard"  the language the window in front is typed in, as two
 #               letters; a click asks that window for the next language
+#               (for a Japanese, Korean or Chinese layout the mode of its
+#               input method follows (A, あ, カ, 가, 中, 英); a click on it switches
+#               the input method on or off)
+#   "touch-keyboard"  a button that shows and hides the touch keyboard of
+#               Windows, as the one of the taskbar of Explorer
 #   "volume-slider"  a mute button and a slider for the output volume
 #   "microphone-slider"  the same for the default microphone
 #   "volume-mixer"  a mute button and a slider for each program that

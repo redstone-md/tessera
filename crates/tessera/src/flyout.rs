@@ -36,8 +36,9 @@ use crate::i18n::Language;
 use crate::icons::image_of_bytes;
 use crate::motion::Spring;
 use crate::platform::{
-    AppCommand, AudioOutput, DisplayKey, InputLanguage, InputName, KeyLocks, Media, Modifiers,
-    NativeSurface, ScreenBrightness, ScreenRect, Typing, VirtualDesktops, window_in_front,
+    AppCommand, AudioOutput, DisplayKey, ImeMode, ImeState, InputLanguage, InputName, KeyLocks,
+    Media, Modifiers, NativeSurface, ScreenBrightness, ScreenRect, Typing, VirtualDesktops,
+    window_in_front,
 };
 use crate::popup::{MARGIN, Popups, open_floating, retire_floating};
 use crate::shell::Shell;
@@ -573,7 +574,20 @@ impl Gauge for LayoutGauge {
         let window = window_in_front();
         let now = Typing::in_front().map(|typing| (window, typing.language));
         let before = std::mem::replace(&mut self.0, now);
-        layout_switched(before, now).map(|layout| Reading::Layout(layout.code()))
+        let layout = layout_switched(before, now)?;
+        // The mode of the input method of a Japanese, Korean or Chinese
+        // layout comes after its letters.
+        let mode = ImeState::in_front().and_then(|ime| ime.mode());
+        Some(Reading::Layout(layout_words(layout.code(), mode)))
+    }
+}
+
+/// What the layout flyout says: the letters of the language, and the mode
+/// of its input method where it has one.
+fn layout_words(code: String, mode: Option<ImeMode>) -> String {
+    match mode {
+        Some(mode) => format!("{code}  {}", mode.glyph()),
+        None => code,
     }
 }
 
@@ -1596,6 +1610,15 @@ mod tests {
         assert_eq!(list.words(Language::English), "RU");
         assert_eq!(list.kind(), Kind::Layout);
         assert_eq!(list.size(), (WIDTH, 2. * LAYOUT_ROW + 2. * LIST_PADDING));
+    }
+
+    #[test]
+    fn the_layout_flyout_gives_the_mode_of_the_input_method() {
+        assert_eq!(
+            layout_words("JA".to_owned(), Some(ImeMode::Hiragana)),
+            "JA  \u{3042}"
+        );
+        assert_eq!(layout_words("EN".to_owned(), None), "EN");
     }
 
     #[test]
