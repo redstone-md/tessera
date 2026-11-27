@@ -14,7 +14,7 @@
 //! it on [`DismissEvent`]. The arrows move the choice, Enter takes it and
 //! Escape leaves; uninstalling asks for a second Enter or click.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::{
@@ -29,7 +29,8 @@ use crate::config::edit::ConfigFile;
 use crate::files::Files;
 use crate::i18n::Language;
 use crate::platform::{
-    Launch, Removal, Shortcut, app_id_in, app_settings, put_on_desktop, reveal_in_explorer,
+    Launch, Removal, ShellThread, Shortcut, app_id_in, app_settings, put_on_desktop,
+    reveal_in_explorer,
 };
 use crate::popup::Popups;
 use crate::shell::Shell;
@@ -162,20 +163,26 @@ pub fn deeds(kind: ItemKind, standing: Standing) -> Vec<Deed> {
 }
 
 /// Whether one of `pins` of the dock stands for `shortcut`: its name, as
-/// the Start menu shows it, or its path.
-fn docked(pins: &[String], shortcut: &Shortcut) -> bool {
-    let path = shortcut.path.to_string_lossy().replace('\\', "/");
+/// the Start menu shows it, its path, or the path of `target`, the
+/// program it starts, which the dock pins a window by.
+fn docked(pins: &[String], shortcut: &Shortcut, target: Option<&Path>) -> bool {
+    let slashed = |path: &Path| path.to_string_lossy().replace('\\', "/");
+    let paths: Vec<String> = { [Some(shortcut.path.as_path()), target].into_iter() }
+        .flatten()
+        .map(slashed)
+        .collect();
     { pins.iter() }.any(|pin| {
-        pin.eq_ignore_ascii_case(&shortcut.name)
-            || pin.replace('\\', "/").eq_ignore_ascii_case(&path)
+        let pin_path = pin.replace('\\', "/");
+        pin.eq_ignore_ascii_case(&shortcut.name) || { paths.iter() }
+            .any(|path| pin_path.eq_ignore_ascii_case(path))
     })
 }
 
 /// `pins` with `shortcut` pinned by its name, or unpinned in every way it
-/// is pinned.
-fn repinned(pins: &[String], shortcut: &Shortcut, pin: bool) -> Vec<String> {
+/// is pinned, `target` being the program it starts.
+fn repinned(pins: &[String], shortcut: &Shortcut, target: Option<&Path>, pin: bool) -> Vec<String> {
     let mut pins: Vec<String> = { pins.iter() }
-        .filter(|pin| !docked(std::slice::from_ref(pin), shortcut))
+        .filter(|pin| !docked(std::slice::from_ref(pin), shortcut, target))
         .cloned()
         .collect();
     if pin {
@@ -190,20 +197,19 @@ fn dock_pins() -> Option<Vec<String>> {
     ConfigFile::open().ok()?.config().ok()?.pinned()
 }
 
-/// Pins `shortcut` to the dock or unpins it, in the configuration file.
-fn set_on_dock(shortcut: &Shortcut, pin: bool, cx: &mut App) {
-    let changed = ConfigFile::open().and_then(|mut file| {
-        let pins = file.config()?.pinned();
-        let pins = pins.ok_or("the layout has no `windows` widget to pin to")?;
-        if !file.set_pinned(&repinned(&pins, shortcut, pin)) {
-            return Err("the layout has no `windows` widget to pin to".to_owned());
-        }
-        file.save()
+/// Pins `shortcut`, which starts `target`, to the dock or unpins it, in
+/// the configuration file, on a thread of the background.
+fn set_on_dock(shortcut: Shortcut, target: Option<PathBuf>, pin: bool, cx: &mut App) {
+    let changed = cx.background_executor().spawn(async move {
+        ConfigFile::change_pinned(|pins| repinned(pins, &shortcut, target.as_deref(), pin))
     });
-    match changed {
-        Ok(()) => cx.defer(Shell::config_changed),
+    cx.spawn(async move |cx: &mut AsyncApp| match changed.await {
+        Ok(()) => {
+            cx.update(Shell::config_changed).ok();
+        }
         Err(error) => report!("{error}"),
-    }
+    })
+    .detach();
 }
 
 /// Opens the folder `path` lies in, with it chosen where Explorer opens
@@ -248,6 +254,8 @@ pub struct AppMenu {
     shortcut: Shortcut,
     kind: ItemKind,
     standing: Standing,
+    /// The program the shortcut starts, once it is read.
+    target: Option<PathBuf>,
     pins: Entity<Pins>,
     /// What takes the entry out of the list it stands in, where it can be.
     remove: Option<Remover>,
@@ -287,11 +295,22 @@ impl AppMenu {
             program: !packaged && (kind == ItemKind::App || runs),
         };
         if kind == ItemKind::App {
-            // Whether it is on the dock is in the configuration file.
+            // Whether it is on the dock is in the configuration file, by
+            // the shortcut or by the program it starts, which the Shell
+            // reads from it.
+            let link = ShellThread::call({
+                let shortcut = shortcut.clone();
+                move || shortcut.link().target
+            });
             cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-                let pins = cx.background_executor().spawn(async { dock_pins() }).await;
+                let pins = cx.background_executor().spawn(async { dock_pins() });
+                let target = link.recv().await.ok().flatten();
+                let pins = pins.await;
                 this.update(cx, |this, cx| {
-                    this.standing.on_dock = pins.map(|pins| docked(&pins, &this.shortcut));
+                    let docked =
+                        |pins: Vec<String>| docked(&pins, &this.shortcut, target.as_deref());
+                    this.standing.on_dock = pins.map(docked);
+                    this.target = target;
                     cx.notify();
                 })
                 .ok();
@@ -302,6 +321,7 @@ impl AppMenu {
             shortcut,
             kind,
             standing,
+            target: None,
             pins,
             remove,
             chooser: Chooser::new(cx),
@@ -359,7 +379,8 @@ impl AppMenu {
                 false
             }
             Deed::PinToDock | Deed::UnpinFromDock => {
-                set_on_dock(&shortcut, deed == Deed::PinToDock, cx);
+                let target = self.target.clone();
+                set_on_dock(shortcut, target, deed == Deed::PinToDock, cx);
                 false
             }
             Deed::AddToDesktop => {
@@ -605,12 +626,18 @@ mod tests {
             "C:/Start/Paint.lnk".to_owned(),
             "paint".to_owned(),
         ];
-        assert!(docked(&pins, &shortcut));
-        assert_eq!(repinned(&pins, &shortcut, false), ["Notepad"]);
+        assert!(docked(&pins, &shortcut, None));
+        assert_eq!(repinned(&pins, &shortcut, None, false), ["Notepad"]);
         assert_eq!(
-            repinned(&["Notepad".to_owned()], &shortcut, true),
+            repinned(&["Notepad".to_owned()], &shortcut, None, true),
             ["Notepad", "Paint"]
         );
-        assert!(!docked(&["Notepad".to_owned()], &shortcut));
+        assert!(!docked(&["Notepad".to_owned()], &shortcut, None));
+        // The dock pins a window by the path of its program.
+        let program = Path::new(r"C:\Windows\System32\mspaint.exe");
+        let by_program = ["c:/windows/system32/MSPAINT.exe".to_owned()];
+        assert!(docked(&by_program, &shortcut, Some(program)));
+        assert!(!docked(&by_program, &shortcut, None));
+        assert!(repinned(&by_program, &shortcut, Some(program), false).is_empty());
     }
 }

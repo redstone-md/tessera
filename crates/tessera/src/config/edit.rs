@@ -680,6 +680,24 @@ impl ConfigFile {
     }
 }
 
+// launcher-kickoff: the pins of the dock, changed from the menu of an
+// application as the dock changes them.
+impl ConfigFile {
+    /// Makes `change` of the applications pinned to the dock in the
+    /// configuration file and saves it. Fails where the layout has no
+    /// `windows` widget or the file cannot be read or written; it reads
+    /// and writes the disk, so it is called away from the thread of GPUI.
+    pub fn change_pinned(change: impl FnOnce(&[String]) -> Vec<String>) -> Result<(), String> {
+        const NO_DOCK: &str = "the layout has no `windows` widget to pin to";
+        let mut file = Self::open()?;
+        let pins = file.config()?.pinned().ok_or(NO_DOCK)?;
+        if !file.set_pinned(&change(&pins)) {
+            return Err(NO_DOCK.to_owned());
+        }
+        file.save()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
