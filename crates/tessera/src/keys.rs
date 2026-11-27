@@ -405,18 +405,26 @@ impl Deed {
             Self::Dock(number) => Docks::press(*number, cx),
             Self::Files(folder) => Files::open(Files::named(folder), cx),
             Self::Action { name, arg } => Actions::run(name, arg.as_deref(), cx),
-            Self::Run(command) => {
-                let started = Command::new(&command[0])
-                    .args(&command[1..])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-                if let Err(error) = started {
-                    report!("`{}` did not start: {error}", command[0]);
-                }
-            }
+            Self::Run(command) => start_program(command),
         }
+    }
+}
+
+/// Starts the program `command` names, with the arguments after it, as
+/// `run` of a `[[key]]` or a `[[corner]]` asks; it gets no console of its
+/// own to read from or write to.
+pub(crate) fn start_program(command: &[String]) {
+    let Some((program, arguments)) = command.split_first() else {
+        return;
+    };
+    let started = Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Err(error) = started {
+        report!("`{program}` did not start: {error}");
     }
 }
 

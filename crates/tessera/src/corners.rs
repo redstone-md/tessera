@@ -14,7 +14,6 @@
 //! that the wait is kept to; there is no such thread while no corner is
 //! configured.
 
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
@@ -24,6 +23,7 @@ use gpui::{App, AsyncApp, Global};
 use serde::Deserialize;
 
 use crate::actions::Actions;
+use crate::keys::start_program;
 use crate::platform::{Display, ScreenRect, front_fills, pointer_at, pointer_held};
 use crate::shell::Shell;
 
@@ -164,17 +164,7 @@ impl Deed {
         match self {
             Self::Action { name, arg } => Actions::run(name, arg.as_deref(), cx),
             Self::Popup(name) => Shell::toggle_popup(name, cx),
-            Self::Run(command) => {
-                let started = Command::new(&command[0])
-                    .args(&command[1..])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-                if let Err(error) = started {
-                    report!("`{}` did not start: {error}", command[0]);
-                }
-            }
+            Self::Run(command) => start_program(command),
         }
     }
 }
@@ -322,7 +312,6 @@ static LOOKER: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 pub struct Corners {
     configs: Vec<CornerConfig>,
-    deeds: Vec<Deed>,
 }
 
 impl Global for Corners {}
@@ -356,9 +345,7 @@ impl Corners {
                 Err(why) => report!("a `[[corner]]` does nothing: {why}"),
             }
         }
-        let this = cx.global_mut::<Self>();
-        this.configs = configs.to_vec();
-        this.deeds = deeds;
+        cx.global_mut::<Self>().configs = configs.to_vec();
         let looker = LOOKER.fetch_add(1, Ordering::Relaxed) + 1;
         if spotted.is_empty() {
             return;
@@ -372,11 +359,12 @@ impl Corners {
             report!("the hot corners are not used: {error}");
             return;
         }
+        // The deeds go with the thread they were made for: one that still
+        // sends while it is being replaced names a corner of its own.
         cx.spawn(async move |cx: &mut AsyncApp| {
             while let Ok(corner) = used.recv().await {
                 let done = cx.update(|cx| {
-                    let deed = cx.global::<Self>().deeds.get(corner).cloned();
-                    if let Some(deed) = deed {
+                    if let Some(deed) = deeds.get(corner) {
                         deed.done(cx);
                     }
                 });
