@@ -101,10 +101,10 @@ impl Spot {
     /// What the settings call the spot, in English.
     pub fn title(self) -> &'static str {
         match self {
-            Self::TopLeft => "Top left corner",
-            Self::TopRight => "Top right corner",
-            Self::BottomLeft => "Bottom left corner",
-            Self::BottomRight => "Bottom right corner",
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
             Self::Top => "Top edge",
             Self::Bottom => "Bottom edge",
             Self::Left => "Left edge",

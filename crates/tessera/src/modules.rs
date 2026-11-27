@@ -14,6 +14,7 @@ mod connections;
 pub mod devices;
 mod display_mode;
 mod display_settings;
+mod edges_editor;
 mod focused;
 mod hdr;
 mod hotspot;
@@ -56,6 +57,7 @@ pub mod windows;
 mod windows_keys;
 mod winx;
 mod workspaces;
+mod zones_editor;
 
 use crate::config::Config;
 use crate::extension::ExtensionsModule;
@@ -79,6 +81,8 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(connections::ConnectionsModule),
         Box::new(display_mode::DisplayModeModule),
         Box::new(display_settings::DisplaySettingsModule),
+        Box::new(edges_editor::EdgesEditorModule),
+        Box::new(zones_editor::ZonesEditorModule),
         Box::new(devices::DevicesModule),
         Box::new(FilesModule),
         Box::new(focused::FocusedModule),
