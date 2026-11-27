@@ -126,6 +126,7 @@ pub use hdr::Hdr;
 pub use hotkeys::{Hotkey, Hotkeys, Modifiers};
 pub use hotspot::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use icon::IconPixels;
+pub use index::FileSearch;
 pub use index::SearchIndex;
 pub use input_names::InputName;
 pub use input_names::OwnInput;

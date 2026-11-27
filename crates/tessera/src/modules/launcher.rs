@@ -39,7 +39,7 @@ use crate::icons::AppIcons;
 use crate::module::{Module, WidgetContext, WidgetRegistry};
 use crate::modules::start::Pins;
 use crate::motion::Spring;
-use crate::platform::{Launch, SearchIndex, Shortcut};
+use crate::platform::{FileSearch, Launch, SearchIndex, Shortcut};
 use crate::popup::Popups;
 use crate::runners::{
     Answer, AnswerAction, History, Query, RunnerOptions, Runners, STRONG, app_key,
@@ -77,6 +77,10 @@ const ROWS_BEFORE_LAYOUT: usize = 16;
 /// and how many files it shows at most.
 const LETTERS_FOR_FILES: usize = 2;
 const FILES_SHOWN: usize = 30;
+
+/// How many letters a search needs before Windows Search is asked what
+/// files hold where no name has what is written.
+const LETTERS_FOR_CONTENT: usize = 4;
 
 /// How deep under a folder files are looked for, the folder itself being
 /// the first level, and how many are remembered at most.
@@ -260,6 +264,20 @@ fn files_under(folders: &[PathBuf]) -> Vec<Shortcut> {
     found
 }
 
+/// The files Windows Search gives for `text`: those its filters ask for,
+/// or those whose names have its words, or else those that hold them.
+fn files_for(text: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let search = FileSearch::parse(text);
+    if search.has_filters() {
+        return SearchIndex::files_matching(&search, FILES_SHOWN);
+    }
+    let named = SearchIndex::files_named(text, FILES_SHOWN)?;
+    if !named.is_empty() || text.chars().count() < LETTERS_FOR_CONTENT {
+        return Ok(named);
+    }
+    SearchIndex::files_matching(&search.loosely(), FILES_SHOWN)
+}
+
 /// What the row of a file says beside its name: the folder it lies in.
 fn folder_of(path: &Path) -> Option<String> {
     let folder = path.parent()?.file_name()?;
@@ -432,9 +450,12 @@ impl Launcher {
     }
 
     /// Asks Windows Search for the files named like what is written, once
-    /// enough letters are. Until it answers the files of the answer before
-    /// stay, those of them that still match. Where it cannot be asked the
-    /// folders of the user are read instead, from then on.
+    /// enough letters are, or for those it holds the words of where none
+    /// is named so; a search with filters (`kind:`, `ext:`, `modified:`,
+    /// `size:`, `in:`, `content:`) asks for what they say. Until it
+    /// answers the files of the answer before stay, those of them that
+    /// still match. Where it cannot be asked the folders of the user are
+    /// read instead, from then on.
     fn ask(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx).trim().to_owned();
         if !self.indexed || text.chars().count() < LETTERS_FOR_FILES {
@@ -444,7 +465,7 @@ impl Launcher {
         let asked = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let found = cx.background_executor().spawn({
                 let text = text.clone();
-                async move { SearchIndex::files_named(&text, FILES_SHOWN) }
+                async move { files_for(&text) }
             });
             let found = found.await;
             this.update(cx, |this, cx| match found {
