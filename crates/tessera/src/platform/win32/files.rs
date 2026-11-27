@@ -157,6 +157,11 @@ pub(super) fn text_in(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..length])
 }
 
+/// `text` as a NUL-terminated wide string.
+pub(super) fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
+
 /// A list of paths as the Shell takes it: each NUL-terminated, and the
 /// list ended by one NUL more.
 fn path_list<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Vec<u16> {

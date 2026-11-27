@@ -20,9 +20,7 @@ use windows::Win32::Security::{
 use windows::Win32::System::Power::{
     GetPwrCapabilities, SYSTEM_POWER_CAPABILITIES, SetSuspendState,
 };
-use windows::Win32::System::Registry::{
-    HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_DWORD, RegCloseKey, RegGetValueW, RegOpenKeyExW,
-};
+use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows::Win32::System::RemoteDesktop::{
     WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSDisconnectSession,
 };
@@ -33,6 +31,8 @@ use windows::Win32::System::Shutdown::{
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::PCWSTR;
+
+use super::registry::{has_key, registry_dword};
 
 /// Keeps a console program from opening a console window.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -115,51 +115,13 @@ impl PowerChoices {
 pub fn updates_pending() -> bool {
     REBOOT_PENDING
         .iter()
-        .any(|key| key_exists(HKEY_LOCAL_MACHINE, key))
-}
-
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
-}
-
-/// Whether the key `path` exists under `root` and can be read.
-fn key_exists(root: HKEY, path: &str) -> bool {
-    let path = wide(path);
-    let mut key = HKEY::default();
-    // SAFETY: the name is NUL-terminated and outlives the call; `key`
-    // receives a handle that is closed below.
-    let status =
-        unsafe { RegOpenKeyExW(root, PCWSTR(path.as_ptr()), None, KEY_READ, &raw mut key) };
-    if status != ERROR_SUCCESS {
-        return false;
-    }
-    // SAFETY: the handle was opened above and is closed once.
-    unsafe {
-        let _ = RegCloseKey(key);
-    }
-    true
+        .any(|key| has_key(HKEY_LOCAL_MACHINE, key))
 }
 
 /// The yes-or-no `name` of the power menu settings of the machine; `None`
 /// where it is not written.
 fn flyout_option(name: &str) -> Option<bool> {
-    let (path, name) = (wide(FLYOUT_MENU), wide(name));
-    let mut value = 0_u32;
-    let mut size = size_of::<u32>() as u32;
-    // SAFETY: the names are NUL-terminated, and `value` and `size`, the
-    // size of `value` in bytes, outlive the call.
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            PCWSTR(path.as_ptr()),
-            PCWSTR(name.as_ptr()),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut value).cast()),
-            Some(&raw mut size),
-        )
-    };
-    (status == ERROR_SUCCESS).then_some(value != 0)
+    registry_dword(HKEY_LOCAL_MACHINE, FLYOUT_MENU, name).map(|value| value != 0)
 }
 
 impl PowerAction {

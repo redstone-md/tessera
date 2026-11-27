@@ -27,9 +27,7 @@ use windows::Win32::Foundation::{COLORREF, LPARAM, WPARAM};
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 use windows::Win32::Graphics::Gdi::{COLOR_DESKTOP, GetSysColor, SetSysColors};
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, CoTaskMemFree};
-use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegGetValueW, RegSetKeyValueW,
-};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyValueW};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Shell::{
     DESKTOP_WALLPAPER_POSITION, DWPOS_CENTER, DWPOS_FILL, DWPOS_FIT, DWPOS_SPAN, DWPOS_STRETCH,
@@ -45,12 +43,13 @@ use windows::core::{HSTRING, PCWSTR, PWSTR, w};
 use super::ScreenRect;
 use super::app_windows::executable_of;
 use super::explorer_running;
+use super::registry::registry_text;
 
 /// Where Windows keeps the picture of the desktop and its style.
-const DESKTOP: PCWSTR = w!("Control Panel\\Desktop");
+const DESKTOP: &str = r"Control Panel\Desktop";
 
 /// Where Windows keeps the color of the desktop, as "red green blue".
-const COLORS: PCWSTR = w!("Control Panel\\Colors");
+const COLORS: &str = r"Control Panel\Colors";
 
 /// How long a program gets to take in that the wallpaper changed.
 const TOLD_WITHIN_MS: u32 = 200;
@@ -210,7 +209,7 @@ impl SystemWallpaper {
         // What Windows shows now, which a program may have set without
         // writing it to the registry; the registry where it does not tell.
         let picture = live_wallpaper()
-            .or_else(|| registry_text(DESKTOP, w!("WallPaper")))
+            .or_else(|| user_text("WallPaper"))
             .filter(|path| !path.trim().is_empty())
             .map(PathBuf::from)
             .map(|path| {
@@ -221,8 +220,8 @@ impl SystemWallpaper {
                 }
                 transcoded().filter(|copy| copy.is_file()).unwrap_or(path)
             });
-        let style = registry_text(DESKTOP, w!("WallpaperStyle")).unwrap_or_default();
-        let tile = registry_text(DESKTOP, w!("TileWallpaper")).unwrap_or_default();
+        let style = user_text("WallpaperStyle").unwrap_or_default();
+        let tile = user_text("TileWallpaper").unwrap_or_default();
         Self {
             pictures: frames
                 .iter()
@@ -264,14 +263,15 @@ impl SystemWallpaper {
         if explorer_running() {
             return;
         }
-        // SAFETY: the name of the section is a constant that outlives the
-        // call; a program that hangs is not waited for.
+        let section = HSTRING::from(DESKTOP);
+        // SAFETY: the name of the section is NUL-terminated and outlives
+        // the call; a program that hangs is not waited for.
         unsafe {
             let _ = SendMessageTimeoutW(
                 HWND_BROADCAST,
                 WM_SETTINGCHANGE,
                 WPARAM(SPI_SETDESKWALLPAPER.0 as usize),
-                LPARAM(DESKTOP.as_ptr() as isize),
+                LPARAM(section.as_ptr() as isize),
                 SMTO_ABORTIFHUNG,
                 TOLD_WITHIN_MS,
                 None,
@@ -341,10 +341,10 @@ impl SystemWallpaper {
 
     fn write_to_registry(&self) -> Result<()> {
         let (style, tile) = self.position.style();
-        set_registry_text(DESKTOP, w!("WallpaperStyle"), style)?;
-        set_registry_text(DESKTOP, w!("TileWallpaper"), tile)?;
+        set_registry_text(DESKTOP, "WallpaperStyle", style)?;
+        set_registry_text(DESKTOP, "TileWallpaper", tile)?;
         let [red, green, blue] = self.color;
-        set_registry_text(COLORS, w!("Background"), &format!("{red} {green} {blue}"))?;
+        set_registry_text(COLORS, "Background", &format!("{red} {green} {blue}"))?;
         // SAFETY: the arrays are of one element each and outlive the call.
         unsafe {
             let index = [COLOR_DESKTOP.0];
@@ -483,37 +483,21 @@ fn colorref([red, green, blue]: [u8; 3]) -> COLORREF {
     COLORREF(u32::from_le_bytes([red, green, blue, 0]))
 }
 
-/// A text value under `key` of the user's part of the registry.
-fn registry_text(key: PCWSTR, name: PCWSTR) -> Option<String> {
-    let mut text = [0_u16; 1024];
-    let mut size = size_of_val(&text) as u32;
-    // SAFETY: `size` is the size in bytes of the buffer `text`, both
-    // outlive the call, and the names are NUL-terminated.
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            key,
-            name,
-            RRF_RT_REG_SZ,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    status.ok().ok()?;
-    let length = text.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&text[..length]))
+/// A text value of the desktop in the user's part of the registry.
+fn user_text(name: &str) -> Option<String> {
+    registry_text(HKEY_CURRENT_USER, DESKTOP, Some(name), 1024)
 }
 
-fn set_registry_text(key: PCWSTR, name: PCWSTR, value: &str) -> Result<()> {
+fn set_registry_text(key: &str, name: &str, value: &str) -> Result<()> {
+    let (key, name) = (HSTRING::from(key), HSTRING::from(name));
     let text: Vec<u16> = value.encode_utf16().chain([0]).collect();
     // SAFETY: the data is the NUL-terminated text, of the size in bytes
     // given, and outlives the call.
     unsafe {
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
-            key,
-            name,
+            &key,
+            &name,
             REG_SZ.0,
             Some(text.as_ptr().cast()),
             (text.len() * 2) as u32,

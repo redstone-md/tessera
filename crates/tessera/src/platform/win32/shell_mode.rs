@@ -28,15 +28,13 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
-    RegGetValueW,
-};
+use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::core::w;
 
 use super::Taskbar;
 use super::app_windows::executable_of;
+use super::registry::registry_text_as_written;
 
 /// The key whose `Shell` value names the shell Winlogon starts.
 pub(super) const WINLOGON: &str = r"Software\Microsoft\Windows NT\CurrentVersion\Winlogon";
@@ -99,25 +97,7 @@ fn named_by_winlogon() -> bool {
 
 /// The `Shell` value of Winlogon under `root`, as it is written.
 fn shell_value(root: HKEY) -> Option<String> {
-    let key: Vec<u16> = WINLOGON.encode_utf16().chain([0]).collect();
-    let mut text = [0_u16; VALUE_LENGTH];
-    let mut size = size_of_val(&text) as u32;
-    // SAFETY: `size` is the size in bytes of the buffer `text`, both
-    // outlive the call, and the names are NUL-terminated.
-    let status = unsafe {
-        RegGetValueW(
-            root,
-            windows::core::PCWSTR(key.as_ptr()),
-            w!("Shell"),
-            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    status.ok().ok()?;
-    let length = text.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&text[..length]))
+    registry_text_as_written(root, WINLOGON, Some("Shell"), VALUE_LENGTH)
 }
 
 /// Whether the command line `shell` starts the program file `program`:

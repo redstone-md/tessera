@@ -30,7 +30,7 @@ use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SAM_FLAGS};
 use windows::Win32::UI::Shell::SHLoadIndirectString;
 use windows::core::HSTRING;
 
-use super::registry::{Failure, Key};
+use super::super::registry::{Failure, Key};
 
 /// Where the system keeps the state of the startup tasks of a package.
 const STATES: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\SystemAppData";

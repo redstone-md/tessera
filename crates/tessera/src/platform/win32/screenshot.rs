@@ -21,14 +21,15 @@ use windows::Win32::Graphics::Gdi::{
     SRCCOPY, SelectObject,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_DWORD, RRF_RT_REG_DWORD, RegGetValueW, RegSetKeyValueW,
-};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_DWORD, RegSetKeyValueW};
 use windows::Win32::UI::Shell::{FOLDERID_Screenshots, KF_FLAG_CREATE, SHGetKnownFolderPath};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 use windows::core::w;
+
+use super::files::wide;
+use super::registry::registry_dword;
 
 /// Where Explorer keeps the number of the next screenshot.
 const EXPLORER: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer";
@@ -94,29 +95,9 @@ fn screenshots_folder() -> Option<PathBuf> {
     }
 }
 
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain([0]).collect()
-}
-
 /// The number Windows gives the next screenshot.
 fn next_index() -> Option<u32> {
-    let key = wide(EXPLORER);
-    let mut value = 0_u32;
-    let mut size = size_of::<u32>() as u32;
-    // SAFETY: the names are NUL-terminated, and `value` and `size`, the
-    // size of `value` in bytes, outlive the call.
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            windows::core::PCWSTR(key.as_ptr()),
-            w!("ScreenshotIndex"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut value).cast()),
-            Some(&raw mut size),
-        )
-    };
-    (status == ERROR_SUCCESS).then_some(value)
+    registry_dword(HKEY_CURRENT_USER, EXPLORER, "ScreenshotIndex")
 }
 
 /// Has Windows count on from `number`, so that its own next screenshot

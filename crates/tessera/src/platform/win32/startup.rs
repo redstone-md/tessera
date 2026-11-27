@@ -52,7 +52,6 @@
 
 #![allow(unsafe_code)]
 
-mod registry;
 mod tasks;
 
 use std::ffi::OsStr;
@@ -79,10 +78,10 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CLEANBOOT};
 use windows::core::GUID;
 
-use self::registry::{Failure, Key, Value};
 use self::tasks::PackageTask;
 use super::execute::expand_environment;
 use super::packaged::take;
+use super::registry::{Failure, Key, Value};
 use super::{Launch, explorer_running};
 
 /// How long a program the startup waits for may take before the startup

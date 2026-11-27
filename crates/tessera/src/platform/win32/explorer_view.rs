@@ -15,22 +15,19 @@ use std::fs::Metadata;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Com::{
     COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoTaskMemFree, CoUninitialize,
 };
-use windows::Win32::System::Registry::{
-    HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, RRF_RT_ANY, RRF_RT_REG_DWORD,
-    RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
-};
+use windows::Win32::System::Registry::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, REG_SAM_FLAGS};
 use windows::Win32::UI::Shell::{
     IShellItem, SHCreateItemFromParsingName, SHGSI_ICON, SHGSI_SMALLICON, SHGetStockIconInfo,
     SHSTOCKICONINFO, SIGDN_NORMALDISPLAY, SIID_LINK,
 };
 use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
-use windows::core::{HSTRING, PCWSTR, PWSTR};
+use windows::core::HSTRING;
 
 use super::IconPixels;
+use super::registry::{Key, registry_dword};
 
 /// The attributes of a file that is read-only, hidden, or of the system.
 const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
@@ -43,9 +40,6 @@ const ADVANCED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Adva
 /// The file that gives a folder its look and, in the language of the
 /// user, its name and the names of its files.
 const DESKTOP_INI: &str = "desktop.ini";
-
-/// The longest text read from the registry, in UTF-16 units.
-const TEXT_LENGTH: usize = 512;
 
 /// The folder options of Explorer that change what a folder shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,8 +68,7 @@ impl ExplorerSettings {
     /// those never set.
     pub fn read() -> Self {
         let defaults = Self::default();
-        let advanced = HSTRING::from(ADVANCED);
-        let value = |name: &str| dword(HKEY_CURRENT_USER, &advanced, name);
+        let value = |name: &str| registry_dword(HKEY_CURRENT_USER, ADVANCED, name);
         Self {
             hide_extensions: value("HideFileExt").map_or(defaults.hide_extensions, |v| v != 0),
             // 1 shows hidden files, 2 does not.
@@ -179,24 +172,25 @@ pub fn split_extension(name: &str) -> Option<(&str, &str)> {
 /// `AlwaysShowExt` or that Windows does not know, and for the others as
 /// `hide_known` says.
 fn extension_hidden(extension: &str, hide_known: bool) -> bool {
-    let key = HSTRING::from(format!(".{extension}"));
-    if !has_key(HKEY_CLASSES_ROOT, &key) {
+    let Some(key) = Key::read(
+        HKEY_CLASSES_ROOT,
+        &format!(".{extension}"),
+        REG_SAM_FLAGS(0),
+    ) else {
         return false;
-    }
-    let class = text(HKEY_CLASSES_ROOT, &key, None).filter(|class| !class.is_empty());
-    let keys = std::iter::once(key).chain(class.as_deref().map(HSTRING::from));
+    };
+    let class = key.expanded_text("").filter(|class| !class.is_empty());
+    let class_key = { class.as_deref() }
+        .and_then(|class| Key::read(HKEY_CLASSES_ROOT, class, REG_SAM_FLAGS(0)));
     let mut known = class.is_some();
-    for key in keys {
-        if has_value(HKEY_CLASSES_ROOT, &key, "NeverShowExt") {
+    for key in std::iter::once(&key).chain(class_key.as_ref()) {
+        if key.has("NeverShowExt") {
             return true;
         }
-        if has_value(HKEY_CLASSES_ROOT, &key, "AlwaysShowExt") {
+        if key.has("AlwaysShowExt") {
             return false;
         }
-        known |= has_key(
-            HKEY_CLASSES_ROOT,
-            &HSTRING::from(format!("{key}\\OpenWithProgids")),
-        );
+        known |= key.child("OpenWithProgids").is_some();
     }
     known && hide_known
 }
@@ -288,111 +282,6 @@ impl IconPixels {
             pixels
         }
     }
-}
-
-/// The number `name` of the key `key` under `root`.
-pub(super) fn dword(root: HKEY, key: &HSTRING, name: &str) -> Option<u32> {
-    let name = HSTRING::from(name);
-    let mut value = 0_u32;
-    let mut size = size_of::<u32>() as u32;
-    // SAFETY: the out-parameters outlive the call, and `size` is the size
-    // of what `value` points to.
-    let status = unsafe {
-        RegGetValueW(
-            root,
-            key,
-            &name,
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut value).cast()),
-            Some(&raw mut size),
-        )
-    };
-    (status == ERROR_SUCCESS).then_some(value)
-}
-
-/// The text `name` of the key `key` under `root`; with no name, the
-/// default value of the key.
-pub(super) fn text(root: HKEY, key: &HSTRING, name: Option<&str>) -> Option<String> {
-    let name = name.map(HSTRING::from);
-    let name = name
-        .as_ref()
-        .map_or(PCWSTR::null(), |name| PCWSTR(name.as_ptr()));
-    let mut buffer = [0_u16; TEXT_LENGTH];
-    let mut size = size_of_val(&buffer) as u32;
-    // SAFETY: `size` is the size in bytes of `buffer`, and both outlive
-    // the call; the names are NUL-terminated or null.
-    let status = unsafe {
-        RegGetValueW(
-            root,
-            key,
-            name,
-            RRF_RT_REG_SZ,
-            None,
-            Some(buffer.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    if status != ERROR_SUCCESS {
-        return None;
-    }
-    let length = buffer.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&buffer[..length]))
-}
-
-/// Whether the key `key` under `root` has a value `name`, of any type.
-fn has_value(root: HKEY, key: &HSTRING, name: &str) -> bool {
-    let name = HSTRING::from(name);
-    // SAFETY: no data is asked for; the names are NUL-terminated.
-    let status = unsafe { RegGetValueW(root, key, &name, RRF_RT_ANY, None, None, None) };
-    status == ERROR_SUCCESS
-}
-
-/// Whether there is a key `key` under `root`.
-fn has_key(root: HKEY, key: &HSTRING) -> bool {
-    let mut opened = HKEY::default();
-    // SAFETY: the name is NUL-terminated, and a key opened is closed.
-    unsafe {
-        let status = RegOpenKeyExW(root, key, None, KEY_READ, &raw mut opened);
-        if status != ERROR_SUCCESS {
-            return false;
-        }
-        let _ = RegCloseKey(opened);
-    }
-    true
-}
-
-/// The names of the keys right under the key `key` of `root`.
-pub(super) fn subkeys(root: HKEY, key: &HSTRING) -> Vec<String> {
-    let mut opened = HKEY::default();
-    let mut names = Vec::new();
-    // SAFETY: the name is NUL-terminated; each name is read into a buffer
-    // whose length is given; the key opened is closed.
-    unsafe {
-        if RegOpenKeyExW(root, key, None, KEY_READ, &raw mut opened) != ERROR_SUCCESS {
-            return names;
-        }
-        for index in 0.. {
-            let mut name = [0_u16; 256];
-            let mut length = name.len() as u32;
-            let status = RegEnumKeyExW(
-                opened,
-                index,
-                Some(PWSTR(name.as_mut_ptr())),
-                &raw mut length,
-                None,
-                None,
-                None,
-                None,
-            );
-            if status != ERROR_SUCCESS {
-                break;
-            }
-            names.push(String::from_utf16_lossy(&name[..length as usize]));
-        }
-        let _ = RegCloseKey(opened);
-    }
-    names
 }
 
 #[cfg(test)]

@@ -43,14 +43,14 @@ use windows::Win32::System::Console::{
     SetStdHandle,
 };
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_SZ, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ,
-    RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_SZ, RegDeleteKeyValueW, RegSetKeyValueW,
 };
 use windows::Win32::System::Threading::{CREATE_NO_WINDOW, GetCurrentProcessId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CLEANBOOT};
 use windows::core::HSTRING;
 
+use super::registry::registry_text_as_written;
 use super::shell_mode::{WINLOGON, explorer_running, names_program};
 use super::taskbar::wait_for;
 
@@ -377,26 +377,7 @@ fn explorer_program() -> PathBuf {
 /// The text value `name` of the key `key` under `root`, as written; `None`
 /// where it is missing.
 fn read_text(root: HKEY, key: &str, name: &str) -> Option<String> {
-    let key = HSTRING::from(key);
-    let name = HSTRING::from(name);
-    let mut text = vec![0_u16; VALUE_LENGTH];
-    let mut size = (text.len() * size_of::<u16>()) as u32;
-    // SAFETY: `size` is the size in bytes of the buffer `text`, both
-    // outlive the call, and the names are NUL-terminated.
-    let status = unsafe {
-        RegGetValueW(
-            root,
-            &key,
-            &name,
-            RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    status.ok().ok()?;
-    let length = text.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&text[..length]))
+    registry_text_as_written(root, key, Some(name), VALUE_LENGTH)
 }
 
 /// Writes the `Shell` value of Winlogon of the user.

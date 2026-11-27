@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
     MonitorFromPoint, MonitorFromWindow,
 };
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_SZ, RegGetValueW};
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -28,8 +28,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageTimeoutW, SystemParametersInfoW, WM_NCHITTEST,
     WindowFromPoint,
 };
-use windows::core::{BOOL, w};
+use windows::core::BOOL;
 
+use super::registry::registry_text;
 use super::{
     AppWindowId, DisplayKey, NOT_FILLING, NativeSurface, ScreenRect, pointer_at, pointer_held,
 };
@@ -146,23 +147,10 @@ impl WindowArranging {
     /// it, whatever it does now: a Tessera that ended without giving the
     /// arranging back leaves it off until the next sign in.
     pub fn chosen() -> bool {
-        let mut text = [0u16; 8];
-        let mut size = size_of_val(&text) as u32;
-        // SAFETY: the buffer is as large as the call is told and outlives
-        // it; the call only reads the settings of the user.
-        let read = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                w!("Control Panel\\Desktop"),
-                w!("WindowArrangementActive"),
-                RRF_RT_REG_SZ,
-                None,
-                Some(text.as_mut_ptr().cast()),
-                Some(&raw mut size),
-            )
-        };
+        let key = r"Control Panel\Desktop";
+        let chosen = registry_text(HKEY_CURRENT_USER, key, Some("WindowArrangementActive"), 8);
         // Without the value Windows arranges windows.
-        read.is_err() || text[0] != u16::from(b'0')
+        chosen.is_none_or(|text| !text.starts_with('0'))
     }
 
     /// Has Windows arrange windows, or not, until the user signs out; the

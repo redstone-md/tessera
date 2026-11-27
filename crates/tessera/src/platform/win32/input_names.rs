@@ -16,11 +16,10 @@
 use std::ffi::c_void;
 use std::thread;
 
-use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::Globalization::{
     GetLocaleInfoEx, LCIDToLocaleName, LOCALE_ALLOW_NEUTRAL_NAMES, LOCALE_SLOCALIZEDDISPLAYNAME,
 };
-use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ActivateKeyboardLayout, GetKeyboardLayoutList, GetKeyboardLayoutNameW, HKL, KLF_NOTELLSHELL,
@@ -31,6 +30,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, HKL_NEXT, HKL_PREV,
 };
 use windows::core::PCWSTR;
+
+use super::registry::registry_text;
 
 /// Where Windows describes each keyboard layout, under its identifier.
 const LAYOUTS: &str = r"SYSTEM\CurrentControlSet\Control\Keyboard Layouts";
@@ -161,34 +162,12 @@ fn layout_name(layout: HKL) -> String {
         return String::new();
     }
     let key = format!("{LAYOUTS}\\{}", text_of(&identifier));
-    let shown = registry_text(&key, "Layout Display Name").and_then(|text| indirect(&text));
-    shown
-        .or_else(|| registry_text(&key, "Layout Text"))
-        .unwrap_or_default()
-}
-
-/// The text value `name` of the key `key` of the machine.
-fn registry_text(key: &str, name: &str) -> Option<String> {
-    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain([0]).collect() };
-    let (key, name) = (wide(key), wide(name));
-    let mut text = [0_u16; NAME_LENGTH];
-    let mut size = size_of_val(&text) as u32;
-    // SAFETY: the names are NUL-terminated, and `text` and `size`, its
-    // size in bytes, outlive the call.
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            PCWSTR(key.as_ptr()),
-            PCWSTR(name.as_ptr()),
-            RRF_RT_REG_SZ,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
+    let value = |name| {
+        registry_text(HKEY_LOCAL_MACHINE, &key, Some(name), NAME_LENGTH)
+            .filter(|text| !text.is_empty())
     };
-    (status == ERROR_SUCCESS)
-        .then(|| text_of(&text))
-        .filter(|text| !text.is_empty())
+    let shown = value("Layout Display Name").and_then(|text| indirect(&text));
+    shown.or_else(|| value("Layout Text")).unwrap_or_default()
 }
 
 /// The text a reference such as `@%SystemRoot%\system32\input.dll,-5000`

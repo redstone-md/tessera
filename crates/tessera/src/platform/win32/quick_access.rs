@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use windows::Win32::Storage::EnhancedStorage::PKEY_Home_IsPinned;
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::Registry::HKEY_CURRENT_USER;
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SAM_FLAGS};
 use windows::Win32::System::SystemServices::{SFGAO_FILESYSTEM, SFGAO_FOLDER, SFGAO_STREAM};
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, FOLDERID_Recent, FOLDERID_SkyDrive, IEnumShellItems, IShellItem, IShellItem2,
@@ -23,8 +23,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HSTRING, Interface, PWSTR};
 
-use super::explorer_view::{subkeys, text};
 use super::file_op::same_path;
+use super::registry::Key;
 use super::shell_item::IdList;
 use super::shell_items::known_folder;
 use super::{ShellThread, Shortcut, shell_menu};
@@ -127,11 +127,12 @@ pub fn onedrive() -> Option<PathBuf> {
 /// The distributions of WSL of the user, each at its share under
 /// `\\wsl.localhost`, as the registry names them; empty without WSL.
 pub fn wsl_distributions() -> Vec<ShellPlace> {
-    let lxss = HSTRING::from(LXSS);
-    { subkeys(HKEY_CURRENT_USER, &lxss).into_iter() }
+    let Some(lxss) = Key::read(HKEY_CURRENT_USER, LXSS, REG_SAM_FLAGS(0)) else {
+        return Vec::new();
+    };
+    { lxss.subkeys().into_iter() }
         .filter_map(|id| {
-            let key = HSTRING::from(format!("{LXSS}\\{id}"));
-            let name = text(HKEY_CURRENT_USER, &key, Some("DistributionName"))?;
+            let name = lxss.child(&id)?.expanded_text("DistributionName")?;
             let path = PathBuf::from(format!("{WSL_ROOT}\\{name}"));
             Some(ShellPlace { name, path })
         })

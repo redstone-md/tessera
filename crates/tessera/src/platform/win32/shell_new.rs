@@ -43,18 +43,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use windows::Win32::Foundation::ERROR_SUCCESS;
-use windows::Win32::System::Registry::{
-    HKEY, HKEY_CLASSES_ROOT, KEY_READ, REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE, RegCloseKey,
-    RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW,
-};
+use windows::Win32::System::Registry::{HKEY_CLASSES_ROOT, REG_SAM_FLAGS};
 use windows::Win32::UI::Shell::{
     FOLDERID_CommonTemplates, FOLDERID_Templates, SHCNE_CREATE, SHCNE_MKDIR, SHCNF_PATHW,
     SHChangeNotify, SHLoadIndirectString,
 };
-use windows::core::{HSTRING, PWSTR};
+use windows::core::HSTRING;
 
 use super::execute::expand_environment;
+use super::registry::{Key, Value};
 use super::shell_items::{IconPlace, known_folder};
 
 /// How long the kinds that were read are used before the registry is
@@ -276,7 +273,7 @@ fn template_file(name: &str) -> Option<PathBuf> {
 
 /// Reads every kind from the registry, in the order of [`NewTemplate::all`].
 fn scan() -> Vec<NewTemplate> {
-    let Some(classes) = Key::open(HKEY_CLASSES_ROOT, "") else {
+    let Some(classes) = Key::read(HKEY_CLASSES_ROOT, "", REG_SAM_FLAGS(0)) else {
         report!("the kinds of new files could not be read from the registry");
         return Vec::new();
     };
@@ -322,7 +319,7 @@ fn builtin_folder() -> NewTemplate {
 /// The kind of files with `extension` (`.txt`), if it offers itself.
 fn of_extension(classes: &Key, extension: &str) -> Option<NewTemplate> {
     let key = classes.child(extension)?;
-    let class = key.text("").filter(|class| !class.is_empty());
+    let class = key.expanded_text("").filter(|class| !class.is_empty());
     let under_class =
         { class.as_deref() }.and_then(|class| key.child(&format!(r"{class}\ShellNew")));
     let shell_new = under_class.or_else(|| key.child("ShellNew"))?;
@@ -335,11 +332,15 @@ fn of_extension(classes: &Key, extension: &str) -> Option<NewTemplate> {
 fn of_key(shell_new: &Key, class: Option<&Key>, extension: &str) -> Option<NewTemplate> {
     let content = if shell_new.has("Directory") {
         Content::Folder
-    } else if let Some(name) = shell_new.text("FileName").filter(|name| !name.is_empty()) {
+    } else if let Some(name) = shell_new
+        .expanded_text("FileName")
+        .filter(|name| !name.is_empty())
+    {
         Content::Copy(name)
-    } else if let Some(data) = shell_new.value("Data") {
+    } else if let Some(data) = shell_new.expanded("Data") {
         match data {
             Value::Bytes(bytes) => Content::Bytes(bytes),
+            Value::Number(number) => Content::Bytes(number.to_le_bytes().to_vec()),
             Value::Text(text) => Content::Bytes(text.into_bytes()),
         }
     } else if shell_new.has("NullFile") {
@@ -348,21 +349,21 @@ fn of_key(shell_new: &Key, class: Option<&Key>, extension: &str) -> Option<NewTe
         Content::Nothing
     };
     let command = shell_new
-        .text("Command")
+        .expanded_text("Command")
         .filter(|command| !command.trim().is_empty());
     if content == Content::Nothing && command.is_none() {
         return None;
     }
     let indirect = |text: String| indirect_text(&text);
-    let name = { shell_new.text("MenuText").and_then(indirect) }
-        .or_else(|| class?.text("FriendlyTypeName").and_then(indirect))
-        .or_else(|| class?.text(""))
+    let name = { shell_new.expanded_text("MenuText").and_then(indirect) }
+        .or_else(|| class?.expanded_text("FriendlyTypeName").and_then(indirect))
+        .or_else(|| class?.expanded_text(""))
         .filter(|name| !name.trim().is_empty())?;
-    let icon = { shell_new.text("IconPath") }
-        .or_else(|| class?.child("DefaultIcon")?.text(""))
+    let icon = { shell_new.expanded_text("IconPath") }
+        .or_else(|| class?.child("DefaultIcon")?.expanded_text(""))
         .and_then(|location| IconPlace::from_location(&location));
-    let item_name =
-        { shell_new.text("ItemName").and_then(indirect) }.filter(|name| !name.trim().is_empty());
+    let item_name = { shell_new.expanded_text("ItemName").and_then(indirect) }
+        .filter(|name| !name.trim().is_empty());
     let bare = shell_new
         .child("Config")
         .is_some_and(|config| config.has("NoExtension"));
@@ -390,153 +391,6 @@ pub(super) fn indirect_text(text: &str) -> Option<String> {
     unsafe { SHLoadIndirectString(&source, &mut buffer, None) }.ok()?;
     let length = buffer.iter().position(|&unit| unit == 0)?;
     Some(String::from_utf16_lossy(&buffer[..length]))
-}
-
-/// A value of the registry, as far as kinds of files use them.
-enum Value {
-    Text(String),
-    Bytes(Vec<u8>),
-}
-
-/// An open key of the registry, closed when dropped.
-struct Key(HKEY);
-
-impl Key {
-    /// Opens `path` under `parent` to read; an empty path opens `parent`
-    /// once more.
-    fn open(parent: HKEY, path: &str) -> Option<Self> {
-        let path = HSTRING::from(path);
-        let mut key = HKEY::default();
-        // SAFETY: the path is NUL-terminated and outlives the call, and
-        // the key it opens is closed by `Drop`.
-        let opened = unsafe { RegOpenKeyExW(parent, &path, None, KEY_READ, &raw mut key) };
-        (opened == ERROR_SUCCESS).then_some(Self(key))
-    }
-
-    fn child(&self, path: &str) -> Option<Self> {
-        Self::open(self.0, path)
-    }
-
-    /// The names of the keys under this one.
-    fn subkeys(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        // A name of a key has at most 255 characters.
-        let mut buffer = [0u16; 256];
-        for index in 0.. {
-            let mut length = buffer.len() as u32;
-            // SAFETY: the buffer carries its length, which the call sets
-            // to the length of the name it writes.
-            let read = unsafe {
-                RegEnumKeyExW(
-                    self.0,
-                    index,
-                    Some(PWSTR(buffer.as_mut_ptr())),
-                    &raw mut length,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-            };
-            // The end of the keys, or a failure such as a key deleted
-            // meanwhile, which would fail again for every index after it.
-            if read != ERROR_SUCCESS {
-                break;
-            }
-            let length = (length as usize).min(buffer.len());
-            names.push(String::from_utf16_lossy(&buffer[..length]));
-        }
-        names
-    }
-
-    /// Whether the value `name` is there, whatever it holds.
-    fn has(&self, name: &str) -> bool {
-        let name = HSTRING::from(name);
-        // SAFETY: without a buffer the call only tells whether the value
-        // is there.
-        let read = unsafe { RegQueryValueExW(self.0, &name, None, None, None, None) };
-        read == ERROR_SUCCESS
-    }
-
-    /// The text of the value `name`, the default value for an empty name,
-    /// with the variables of the environment replaced where it is of the
-    /// kind that has them.
-    fn text(&self, name: &str) -> Option<String> {
-        match self.value(name)? {
-            Value::Text(text) => Some(text),
-            Value::Bytes(_) => None,
-        }
-    }
-
-    fn value(&self, name: &str) -> Option<Value> {
-        let name = HSTRING::from(name);
-        let mut kind = REG_VALUE_TYPE::default();
-        let mut size = 0u32;
-        // SAFETY: without a buffer the call tells the kind and the size of
-        // the value.
-        let asked = unsafe {
-            RegQueryValueExW(
-                self.0,
-                &name,
-                None,
-                Some(&raw mut kind),
-                None,
-                Some(&raw mut size),
-            )
-        };
-        if asked != ERROR_SUCCESS {
-            return None;
-        }
-        let mut bytes = vec![0u8; size as usize];
-        // SAFETY: the buffer is as large as the call said, and it is told
-        // so; a value that grew meanwhile makes the call fail.
-        let read = unsafe {
-            RegQueryValueExW(
-                self.0,
-                &name,
-                None,
-                Some(&raw mut kind),
-                Some(bytes.as_mut_ptr()),
-                Some(&raw mut size),
-            )
-        };
-        if read != ERROR_SUCCESS {
-            return None;
-        }
-        bytes.truncate(size as usize);
-        Some(match kind {
-            REG_SZ => Value::Text(registry_text(&bytes)),
-            REG_EXPAND_SZ => {
-                let text = registry_text(&bytes);
-                let expanded = expand_environment(OsStr::new(&text));
-                Value::Text(expanded.to_string_lossy().into_owned())
-            }
-            // Binary data, and numbers, which no kind uses.
-            _ => Value::Bytes(bytes),
-        })
-    }
-}
-
-impl Drop for Key {
-    fn drop(&mut self) {
-        // SAFETY: the key was opened for this value and is closed once.
-        unsafe {
-            let _ = RegCloseKey(self.0);
-        }
-    }
-}
-
-/// The text a value of the registry holds as UTF-16 bytes, without the
-/// NUL it may end in.
-fn registry_text(bytes: &[u8]) -> String {
-    let units: Vec<u16> = { bytes.as_chunks::<2>().0.iter() }
-        .map(|pair| u16::from_le_bytes(*pair))
-        .collect();
-    let end = units
-        .iter()
-        .position(|&unit| unit == 0)
-        .unwrap_or(units.len());
-    String::from_utf16_lossy(&units[..end])
 }
 
 #[cfg(test)]
@@ -606,13 +460,5 @@ mod tests {
         assert_eq!(split_program("notepad.exe  a b"), ("notepad.exe", "a b"));
         assert_eq!(split_program("notepad.exe"), ("notepad.exe", ""));
         assert_eq!(split_program(r#""C:\x.exe"#), (r"C:\x.exe", ""));
-    }
-
-    #[test]
-    fn a_text_of_the_registry_ends_at_its_nul() {
-        let bytes: Vec<u8> = "Hi\0\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
-        assert_eq!(registry_text(&bytes), "Hi");
-        assert_eq!(registry_text(&[]), "");
-        assert_eq!(registry_text(&[0x41, 0, 0x42]), "A");
     }
 }

@@ -13,13 +13,15 @@ use windows::Win32::Security::Authentication::Identity::{GetUserNameExW, NameDis
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures,
     FOLDERID_Profile, FOLDERID_Videos, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
 };
-use windows::core::{GUID, HSTRING, PCWSTR, PWSTR, w};
+use windows::core::{GUID, PWSTR};
+
+use super::registry::registry_text;
 
 /// The longest name asked for, in UTF-16 units.
 const NAME_LENGTH: usize = 512;
@@ -101,37 +103,14 @@ fn identifier() -> Option<String> {
 
 /// The file Windows keeps of the picture of the account `identifier`.
 fn picture(identifier: &str) -> Option<PathBuf> {
-    let key = HSTRING::from(format!(
-        "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AccountPicture\\Users\\{identifier}"
-    ));
+    let key =
+        format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\AccountPicture\Users\{identifier}");
     // The smallest size that stays sharp where Tessera draws it.
-    [w!("Image192"), w!("Image208"), w!("Image96")]
+    ["Image192", "Image208", "Image96"]
         .into_iter()
-        .filter_map(|size| registry_text(&key, size))
+        .filter_map(|size| registry_text(HKEY_LOCAL_MACHINE, &key, Some(size), NAME_LENGTH))
         .map(PathBuf::from)
         .find(|path| path.is_file())
-}
-
-/// The text value `name` of the key `key` of the machine.
-fn registry_text(key: &HSTRING, name: PCWSTR) -> Option<String> {
-    let mut text = [0_u16; NAME_LENGTH];
-    let mut size = size_of_val(&text) as u32;
-    // SAFETY: `size` is the size in bytes of the buffer `text`, both
-    // outlive the call, and the names are NUL-terminated.
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            key,
-            name,
-            RRF_RT_REG_SZ,
-            None,
-            Some(text.as_mut_ptr().cast()),
-            Some(&raw mut size),
-        )
-    };
-    status.ok().ok()?;
-    let length = text.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&text[..length]))
 }
 
 /// A folder Windows keeps for every account.
