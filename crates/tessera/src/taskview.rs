@@ -38,9 +38,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AsyncApp, Context, FocusHandle, FontWeight, Global, InteractiveElement,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window,
-    WindowHandle, div, img, px,
+    IntoElement, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task,
+    WeakEntity, Window, WindowHandle, div, img, px,
 };
 
 use crate::actions::{Action, Actions};
@@ -49,11 +49,12 @@ use crate::icons::{AppIcons, Icon};
 use crate::module::WidgetContext;
 use crate::motion::{InteractionState, Spring};
 use crate::platform::{
-    AppWindow, AppWindowId, DisplayKey, NativeSurface, ScreenRect, Thumbnail, Veil, display_at,
-    display_frames,
+    AppWindow, AppWindowId, Display, DisplayKey, NativeSurface, ScreenRect, Thumbnail, Veil,
+    display_at, display_frames,
 };
 use crate::popup::{open_floating, retire_floating};
 use crate::runners::{Answer, History, Query, RunnerOptions, Runners};
+use crate::snap::gpui_display;
 use crate::switcher::choice::{answers, same_application, typed_text};
 use crate::switcher::{program_name, resident_switchable, switchable};
 use crate::theme::Theme;
@@ -90,9 +91,12 @@ const CARD_ICONS: usize = 6;
 const CARD_ICON_SIDE: f32 = 48.;
 
 /// How far a press moves before it drags a picture, in logical pixels,
-/// and how large a dragged picture is next to its place.
+/// how large a dragged picture is next to its place, and how far below
+/// and to the right of the pointer it hangs. It is never larger than a
+/// card and never covers the cards: Windows draws it over them.
 const DRAG_START: f32 = 6.;
 const DRAG_SCALE: f32 = 0.45;
+const DRAG_OFFSET: f32 = 16.;
 
 /// How many answers of the runners are shown, and how often and how many
 /// times a runner that is still finding out is asked again.
@@ -219,8 +223,13 @@ impl TaskView {
         this.opened += 1;
         this.typed.clear();
         let mut screens = Vec::new();
-        for display in cx.displays() {
+        // The display is chosen here and the window put over it, as a
+        // window that waits to be opened again stands wherever it was.
+        for display in Display::all() {
+            let gpui = gpui_display(&display, cx).and_then(|id| cx.find_display(id));
+            let rough = gpui.as_ref().map(|gpui| gpui.bounds()).unwrap_or_default();
             let opening = Opening {
+                display,
                 windows: windows.clone(),
                 mode,
                 strip,
@@ -228,19 +237,64 @@ impl TaskView {
                 total,
                 runners: runners.clone(),
             };
-            let opened = open_floating(
-                display.bounds(),
-                Some(display.id()),
-                true,
-                cx,
-                |window, cx| Screen::new(opening, window, cx),
-            );
+            let opened =
+                open_floating(rough, gpui.map(|gpui| gpui.id()), true, cx, |window, cx| {
+                    Screen::new(opening, window, cx)
+                });
             match opened {
-                Ok(screen) => screens.push(screen),
+                // One that could not be put over its display goes away
+                // at once, and Task View is not open there.
+                Ok(screen) => {
+                    let open = |screen: &mut Screen, _: &mut Window, _: &mut Context<Screen>| {
+                        !screen.closing
+                    };
+                    if screen.update(cx, open).unwrap_or(false) {
+                        screens.push(screen);
+                    }
+                }
                 Err(error) => report!("Task View did not open on a display: {error:#}"),
             }
         }
         cx.global_mut::<Self>().screens = screens;
+        Self::give_choice(cx);
+    }
+
+    /// Has a window be chosen on the display whose window has the line of
+    /// what is typed, or where that one shows none, on the first display
+    /// that shows one: the keys that steer the choice work there.
+    fn give_choice(cx: &mut App) {
+        let screens = cx.default_global::<Self>().screens.clone();
+        let shown = |screen: &mut Screen, _: &mut Window, _: &mut Context<Screen>| {
+            (screen.main, !screen.order.is_empty())
+        };
+        let shown: Vec<(bool, bool)> = { screens.iter() }
+            .map(|screen| screen.update(cx, shown).unwrap_or((false, false)))
+            .collect();
+        let steering = { shown.iter() }
+            .position(|&(main, any)| main && any)
+            .or_else(|| shown.iter().position(|&(_, any)| any));
+        for (at, screen) in screens.iter().enumerate() {
+            let steers = steering == Some(at);
+            { screen.update(cx, |screen, _, cx| screen.offer(steers, cx)) }.ok();
+        }
+    }
+
+    /// Has a key that steers the choice work on the window that offers
+    /// the choice, where the one that has the keyboard shows no window.
+    fn steer_elsewhere(key: &str, held: Modifiers, cx: &mut App) {
+        let screens = cx.default_global::<Self>().screens.clone();
+        for screen in screens {
+            let steered = screen.update(cx, |screen, _, cx| {
+                let offers = screen.chosen.is_some();
+                if offers {
+                    screen.steer(key, held, cx);
+                }
+                offers
+            });
+            if matches!(steered, Ok(true)) {
+                return;
+            }
+        }
     }
 
     /// Closes Task View, bringing no window in front.
@@ -279,6 +333,7 @@ impl TaskView {
             let shown = screen.update(cx, |screen, _, cx| screen.filter(&typed, cx));
             matched += shown.unwrap_or(0);
         }
+        Self::give_choice(cx);
         for screen in &screens {
             let unmatched = matched == 0;
             { screen.update(cx, |screen, _, cx| screen.consult(unmatched, cx)) }.ok();
@@ -445,6 +500,8 @@ fn gather(mode: Mode, cx: &App) -> Vec<Seen> {
 
 /// What a window of Task View opens with.
 struct Opening {
+    /// The display it covers.
+    display: Display,
     windows: Vec<Seen>,
     mode: Mode,
     strip: bool,
@@ -548,6 +605,14 @@ enum Hit {
     Nothing,
 }
 
+impl Hit {
+    /// Whether it is on a tile, the picture, the title or the close
+    /// button.
+    fn is_tile(self) -> bool {
+        matches!(self, Self::Tile(_) | Self::Close(_))
+    }
+}
+
 /// A press of the left button and what it began on; once it has moved
 /// far enough it drags the tile it began on.
 #[derive(Clone, Copy, Debug)]
@@ -597,6 +662,8 @@ pub struct Screen {
     answer_chosen: usize,
     /// Whether all runners have answered what is typed.
     asked: bool,
+    /// Whether no window answers what is typed on any display.
+    unmatched: bool,
     _asking: Option<Task<()>>,
     /// 0 while hidden, 1 when fully open.
     visibility: Spring,
@@ -616,13 +683,18 @@ impl Screen {
         let placed = native
             .as_ref()
             .map_err(|error| anyhow::anyhow!("{error:#}"));
+        let Display {
+            key: display,
+            frame,
+            scale,
+            ..
+        } = opening.display;
         let placed = placed.and_then(|native| {
-            let (frame, display) = (native.display_frame()?, native.display());
             native.adopt_as_popup()?;
             native.place(frame)?;
-            Ok((*native, frame, display))
+            Ok(*native)
         });
-        let (native, frame, display) = match placed {
+        let native = match placed {
             Ok(placed) => placed,
             Err(error) => {
                 report!("Task View is not where it belongs: {error:#}");
@@ -663,7 +735,8 @@ impl Screen {
         this.total = opening.total;
         this.frame = frame;
         this.native = Some(native);
-        this.scale = window.scale_factor();
+        // That of the display it was put over: GPUI may learn it later.
+        this.scale = scale;
         this.tiles = tiles;
         this.veil = veil;
         this.strip = opening.strip;
@@ -682,9 +755,6 @@ impl Screen {
         }
         this.visibility = Spring::new(motion.spatial, 0.);
         this.visibility.animate_to(1.);
-        if main && !this.order.is_empty() {
-            this.chosen = Some(this.order[0]);
-        }
         this
     }
 
@@ -732,6 +802,7 @@ impl Screen {
             told: Vec::new(),
             answer_chosen: 0,
             asked: false,
+            unmatched: false,
             _asking: None,
             visibility: Spring::new(motion.spatial, 0.),
             closing: false,
@@ -864,11 +935,18 @@ impl Screen {
     fn filter(&mut self, typed: &str, cx: &mut Context<Self>) -> usize {
         self.typed = typed.to_owned();
         self.arrange();
-        if self.chosen.is_none() && self.main {
-            self.chosen = self.order.first().copied();
-        }
         cx.notify();
         self.order.len()
+    }
+
+    /// Has a tile be chosen where the keys that steer the choice work
+    /// here, `steers`, keeping the one chosen; none otherwise.
+    fn offer(&mut self, steers: bool, cx: &mut Context<Self>) {
+        self.chosen = match steers {
+            true => self.chosen.or_else(|| self.order.first().copied()),
+            false => None,
+        };
+        cx.notify();
     }
 
     /// Asks the runners about what is typed where this window has the
@@ -879,9 +957,10 @@ impl Screen {
         self.told.clear();
         self.answer_chosen = 0;
         self.asked = false;
+        self.unmatched = unmatched;
         self._asking = None;
         cx.notify();
-        if !self.main || !unmatched || self.typed.trim().is_empty() {
+        if !self.answering() {
             return;
         }
         let (text, language, runners) =
@@ -938,9 +1017,11 @@ impl Screen {
         cx.notify();
     }
 
-    /// Whether the answers of the runners stand where the tiles would.
+    /// Whether the answers of the runners stand where the tiles would:
+    /// on the display with the line of what is typed, where no window on
+    /// any display answers it.
     fn answering(&self) -> bool {
-        self.main && !self.typed.trim().is_empty() && self.order.is_empty()
+        self.main && self.unmatched && !self.typed.trim().is_empty()
     }
 
     /// Does the answer at `index`, and closes.
@@ -1010,11 +1091,24 @@ impl Screen {
             std::cmp::Ordering::Equal => None,
             std::cmp::Ordering::Greater => Some(at - 1),
         };
+        let lost = self.chosen == Some(index);
         self.chosen = self.chosen.and_then(fix);
+        // The order is told again here, as a Task View that is closing
+        // does not arrange its tiles.
+        self.order = self.order.iter().copied().filter_map(fix).collect();
+        // What was pressed and what is under the pointer name tiles by
+        // their places, which have moved; the pointer tells again when
+        // it moves.
+        self.press = self.press.filter(|press| !press.on.is_tile());
+        self.hovered = Hit::Nothing;
         self.arrange();
-        // The choice goes on to another window where the chosen one went.
-        if self.chosen.is_none() && self.main {
+        // The choice goes on to another window where the chosen one went,
+        // on another display where this one shows none now.
+        if lost {
             self.chosen = self.order.first().copied();
+            if self.chosen.is_none() {
+                cx.defer(TaskView::give_choice);
+            }
         }
         cx.notify();
     }
@@ -1154,6 +1248,9 @@ impl Screen {
     }
 
     fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if self.closing {
+            return;
+        }
         let at = self.at(event.position);
         self.pointer = at;
         if let Some(press) = &mut self.press
@@ -1247,20 +1344,13 @@ impl Screen {
         match keystroke.key.as_str() {
             "escape" if !typed.is_empty() => cx.defer(|cx| TaskView::type_into(String::new(), cx)),
             "escape" => cx.defer(TaskView::close),
-            "enter" => self.enter(cx),
-            "left" => self.arrow(Toward::Left, cx),
-            "right" => self.arrow(Toward::Right, cx),
-            "up" => self.arrow(Toward::Up, cx),
-            "down" => self.arrow(Toward::Down, cx),
-            "tab" => self.step(held.shift, cx),
-            "delete" => {
-                if let Some(chosen) = self.chosen {
-                    self.close_window(chosen, cx);
-                }
-            }
-            "w" if held.control => {
-                if let Some(chosen) = self.chosen {
-                    self.close_window(chosen, cx);
+            key if steers(key, held) => {
+                if self.chosen.is_none() && !self.answering() {
+                    // The choice is offered on another display.
+                    let key = key.to_owned();
+                    cx.defer(move |cx| TaskView::steer_elsewhere(&key, held, cx));
+                } else {
+                    self.steer(key, held, cx);
                 }
             }
             "backspace" => {
@@ -1278,6 +1368,23 @@ impl Screen {
             }
         }
         cx.stop_propagation();
+    }
+
+    /// Does what `key`, one that [`steers`], does with the choice.
+    fn steer(&mut self, key: &str, held: Modifiers, cx: &mut Context<Self>) {
+        match key {
+            "enter" => self.enter(cx),
+            "left" => self.arrow(Toward::Left, cx),
+            "right" => self.arrow(Toward::Right, cx),
+            "up" => self.arrow(Toward::Up, cx),
+            "down" => self.arrow(Toward::Down, cx),
+            "tab" => self.step(held.shift, cx),
+            _ => {
+                if let Some(chosen) = self.chosen {
+                    self.close_window(chosen, cx);
+                }
+            }
+        }
     }
 
     /// Enter: does the chosen answer while answers stand in the place of
@@ -1340,6 +1447,15 @@ impl Screen {
         self.chosen = Some(self.order[next]);
         cx.notify();
     }
+}
+
+/// Whether `key`, with `held`, steers the choice: Enter, the arrows and
+/// Tab move or take it, Delete and Ctrl+W close the chosen window.
+fn steers(key: &str, held: Modifiers) -> bool {
+    matches!(
+        key,
+        "enter" | "left" | "right" | "up" | "down" | "tab" | "delete"
+    ) || (key == "w" && held.control)
 }
 
 /// What the button of the workspace at `index` says, with the word for
@@ -1562,12 +1678,7 @@ impl Render for Screen {
         }
         for &index in &order {
             let rect = match dragged == Some(index) {
-                true => {
-                    let place = self.tiles[index].place;
-                    let rect = scaled(place, DRAG_SCALE);
-                    let (x, y) = center(rect);
-                    shifted(rect, pointer.0 - x, pointer.1 - y)
-                }
+                true => self.dragged_place(self.tiles[index].place, pointer),
                 false => self.tiles[index].now(window),
             };
             let tile = &self.tiles[index];
@@ -1578,7 +1689,7 @@ impl Render for Screen {
             if let Some((thumbnail, _)) = &tile.picture {
                 thumbnail.place(rect, opacity);
             }
-            let chosen = self.chosen == Some(index) && self.main;
+            let chosen = self.chosen == Some(index);
             let hovered = matches!(self.hovered, Hit::Tile(at) | Hit::Close(at) if at == index);
             let settled = labels * if dragged == Some(index) { 0. } else { 1. };
             if (chosen || hovered) && dragged != Some(index) {
@@ -1639,6 +1750,35 @@ impl Render for Screen {
 }
 
 impl Screen {
+    /// Where the picture of a tile at `place` is drawn while it is dragged
+    /// with the pointer at `pointer`: smaller, below and to the right of
+    /// the pointer, and below the cards, so that the card it is dropped
+    /// on and its mark stay seen.
+    fn dragged_place(&self, place: ScreenRect, pointer: (i32, i32)) -> ScreenRect {
+        let rect = scaled(place, DRAG_SCALE);
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        let (most_wide, most_high) = (self.physical(CARD.0), self.physical(CARD.1));
+        let fit = { most_wide as f32 / width.max(1) as f32 }
+            .min(most_high as f32 / height.max(1) as f32)
+            .min(1.);
+        let (width, height) = (
+            (width as f32 * fit).round() as i32,
+            (height as f32 * fit).round() as i32,
+        );
+        let offset = self.physical(DRAG_OFFSET);
+        let below_cards = self
+            .plan
+            .strip
+            .map_or(i32::MIN, |strip| strip.bottom + offset);
+        let (left, top) = (pointer.0 + offset, (pointer.1 + offset).max(below_cards));
+        ScreenRect {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+        }
+    }
+
     /// A box standing at `rect`, physical pixels of the window.
     fn place(&self, rect: ScreenRect) -> gpui::Div {
         div()

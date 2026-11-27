@@ -1300,7 +1300,7 @@ fn aim_at(pointer: (i32, i32), settings: &Settings) -> Option<Aim> {
 }
 
 /// The display of GPUI that is `display`.
-fn gpui_display(display: &Display, cx: &App) -> Option<DisplayId> {
+pub fn gpui_display(display: &Display, cx: &App) -> Option<DisplayId> {
     let (x, y) = (
         display.frame.left as f32 / display.scale,
         display.frame.top as f32 / display.scale,
