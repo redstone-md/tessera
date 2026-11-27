@@ -179,16 +179,6 @@ impl Permissions {
         self.network.iter().cloned().chain(local).collect()
     }
 
-    /// The files the extension asks to read.
-    pub fn files(&self) -> &[String] {
-        &self.files
-    }
-
-    /// The kinds of devices the extension asks to be told of.
-    pub fn devices(&self) -> &[DeviceKind] {
-        &self.devices
-    }
-
     /// What of the machine and the shell the extension asks for.
     pub fn system(&self) -> &[SystemKind] {
         &self.system
@@ -220,10 +210,6 @@ impl Permissions {
     /// hosts, the files and the devices, then the machine and the shell,
     /// then the actions. The marketplace asks with these before it
     /// installs an extension.
-    #[allow(
-        dead_code,
-        reason = "the install prompt of the marketplace lists these"
-    )]
     pub fn wishes(&self, language: Language) -> Vec<String> {
         let say = |text| language.say(text);
         let mut wishes = Vec::new();

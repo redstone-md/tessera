@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::access::Permissions;
-use super::{DeviceKind, MANIFEST_FILE, Manifest, STATE_FILE, WASM_FILE, http, is_identifier};
+use super::{MANIFEST_FILE, Manifest, STATE_FILE, WASM_FILE, http, is_identifier};
 use crate::config::edit::Slot;
 use crate::i18n::Language;
 use crate::icon_packs::{self, PackManifest, check_picture_name};
@@ -594,7 +594,7 @@ impl Offer {
                         .ok()
                 });
                 Ok(Package {
-                    wishes: wishes(&parsed.permissions, language),
+                    wishes: parsed.permissions.wishes(language),
                     widgets,
                     place,
                     ..package(Content::Extension { manifest, wasm })
@@ -682,39 +682,6 @@ fn check_single(kind: Kind, content: &[u8]) -> anyhow::Result<()> {
         Kind::Extension | Kind::IconPack => {}
     }
     Ok(())
-}
-
-/// What an extension with `permissions` asks for, one wish a line, in
-/// `language`.
-///
-/// Stand-in for `Permissions::wishes`, which the extension API adds with
-/// the further kinds of wishes; it gives the same lines for the three
-/// kinds there are now. To be removed when that is merged.
-fn wishes(permissions: &Permissions, language: Language) -> Vec<String> {
-    let say = |text| language.say(text);
-    let mut wishes = Vec::new();
-    let network = permissions.network();
-    if !network.is_empty() {
-        wishes.push(format!("{} {}", say("contact"), network.join(", ")));
-    }
-    let files = permissions.files();
-    if !files.is_empty() {
-        wishes.push(format!("{} {}", say("read"), files.join(", ")));
-    }
-    let devices = permissions.devices();
-    if !devices.is_empty() {
-        let kinds: Vec<_> = devices
-            .iter()
-            .map(|&kind: &DeviceKind| kind.name())
-            .collect();
-        let kinds = kinds.join(", ");
-        // English names the kinds in the middle of the phrase.
-        wishes.push(match language {
-            Language::English => format!("be told of the {kinds} devices"),
-            _ => format!("{} {kinds}", say("be told of the devices")),
-        });
-    }
-    wishes
 }
 
 /// What the registries offer, and what went wrong while reading them.
@@ -1117,7 +1084,7 @@ impl Installed {
     /// [`Package::wishes`] says it.
     pub fn wishes(&self, language: Language) -> Vec<String> {
         { self.permissions.as_ref() }
-            .map(|permissions| wishes(permissions, language))
+            .map(|permissions| permissions.wishes(language))
             .unwrap_or_default()
     }
 

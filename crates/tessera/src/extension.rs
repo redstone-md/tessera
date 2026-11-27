@@ -29,7 +29,6 @@ use anyhow::{Context as _, bail};
 use gpui::{App, AppContext};
 use serde::Deserialize;
 
-pub use self::access::DeviceKind;
 use self::access::{Access, Permissions, WatchKind};
 use self::host::{Loaded, Worker};
 use self::runner::{ANSWER_ACTION, Answering};
