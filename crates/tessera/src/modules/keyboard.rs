@@ -21,7 +21,7 @@
 //! layout, the widget shows the mode of its input method beside the
 //! letters, as the input indicator of Explorer does (A, あ, カ, 가, 中, 英),
 //! read on the background executor while the widget is shown; a click on
-//! the mode switches the input method on or off.
+//! the mode switches it as the indicator does ([`ImeState::toggle`]).
 //!
 //! The widget `touch-keyboard` is the button of the taskbar of Explorer
 //! that shows and hides the touch keyboard of Windows.
@@ -279,8 +279,8 @@ impl Keyboard {
         }
     }
 
-    /// Switches the input method of the window on or off, and reads it
-    /// again once that is done.
+    /// Switches the input method of the window as a click on the
+    /// indicator does, and reads it again once that is done.
     fn toggle_ime(&mut self, cx: &mut Context<Self>) {
         let Some(ime) = self.ime else {
             return;

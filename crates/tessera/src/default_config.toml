@@ -472,7 +472,8 @@
 #               letters; a click asks that window for the next language
 #               (for a Japanese, Korean or Chinese layout the mode of its
 #               input method follows (A, あ, カ, 가, 中, 英); a click on it switches
-#               the input method on or off)
+#               a Japanese one on or off, a Korean or Chinese one between
+#               its own letters and Latin ones)
 #   "touch-keyboard"  a button that shows and hides the touch keyboard of
 #               Windows, as the one of the taskbar of Explorer
 #   "volume-slider"  a mute button and a slider for the output volume
