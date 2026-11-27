@@ -51,6 +51,7 @@ use tree::Axis;
 use crate::actions::{Action, Actions};
 use crate::config::config_dir;
 use crate::i18n::Language;
+use crate::keys::Shortcuts;
 use crate::motion::{Spring, SpringSpec, mix};
 use crate::platform::{
     AppWindow, AppWindowId, Display, DisplayKey, MoveEvent, MoveWatch, ScreenRect, TileBorder,
@@ -84,7 +85,8 @@ const LONGEST_HOLD: Duration = Duration::from_secs(60);
 const LAYOUTS_DIRECTORY: &str = "tiling-layouts";
 
 /// The keys the action `tiling` has by default where the keys of Windows
-/// are in use: where the next window opens, and every tile alike again.
+/// are in use, while tiling is on: where the next window opens, and every
+/// tile alike again.
 const DEFAULT_KEYS: [(&str, &str); 5] = [
     ("win+shift+i", "reserve up"),
     ("win+shift+k", "reserve down"),
@@ -504,6 +506,11 @@ impl Tiler {
         }
         this.nudged = true;
         cx.set_global(mode);
+        // The keys of tiling by default are left to other programs while
+        // tiling is off, when they would do nothing.
+        if cx.default_global::<Actions>().rest("tiling", !enabled) {
+            Shortcuts::again(cx);
+        }
         Self::run(cx);
     }
 
