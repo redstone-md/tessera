@@ -324,3 +324,15 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 
 # Window snapping, rules, hot corners and the window menu.
 "Choose a window for this space" = "Elige una ventana para este espacio"
+"Keep above other windows" = "Mantener sobre otras ventanas"
+"Stop keeping above other windows" = "Dejar de mantener sobre otras ventanas"
+"Window opacity" = "Opacidad de la ventana"
+"Move to the next display" = "Mover a la siguiente pantalla"
+"Snap to the left half" = "Ajustar a la mitad izquierda"
+"Snap to the right half" = "Ajustar a la mitad derecha"
+"Restore the size of the window" = "Restaurar el tamaño de la ventana"
+"Maximize the window" = "Maximizar la ventana"
+"Minimize the window" = "Minimizar la ventana"
+"Close the window" = "Cerrar la ventana"
+"Create a rule for this window" = "Crear una regla para esta ventana"
+"Move to workspace" = "Mover al espacio de trabajo"

@@ -39,6 +39,7 @@ mod tiling;
 mod tip;
 mod ui;
 mod wallpaper;
+mod window_menu;
 mod workspaces;
 
 use std::time::Duration;

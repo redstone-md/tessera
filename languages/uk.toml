@@ -324,3 +324,15 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 # Window snapping, rules, hot corners and the window menu.
 "Choose a window for this space" = "Виберіть вікно для цього місця"
+"Keep above other windows" = "Тримати поверх інших вікон"
+"Stop keeping above other windows" = "Не тримати поверх інших вікон"
+"Window opacity" = "Непрозорість вікна"
+"Move to the next display" = "Перемістити на наступний екран"
+"Snap to the left half" = "Прикріпити до лівої половини"
+"Snap to the right half" = "Прикріпити до правої половини"
+"Restore the size of the window" = "Відновити розмір вікна"
+"Maximize the window" = "Розгорнути вікно"
+"Minimize the window" = "Згорнути вікно"
+"Close the window" = "Закрити вікно"
+"Create a rule for this window" = "Створити правило для цього вікна"
+"Move to workspace" = "Перемістити в робочу область"

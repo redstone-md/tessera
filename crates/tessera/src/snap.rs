@@ -1386,7 +1386,7 @@ impl Module for SnapModule {
             .taking_reserved_keys()
             .by_default("win+z", None);
         actions.register("snap-layouts", layouts)?;
-        Ok(())
+        crate::window_menu::register(actions)
     }
 }
 
