@@ -5,7 +5,9 @@
 //! next to a surface and closes once one is chosen or the user turns away.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
+use gpui::{AnyElement, RenderImage, img};
 use gpui::{
     App, Bounds, Context, Global, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, StatefulInteractiveElement, Styled, Subscription, Window, WindowHandle, div,
@@ -27,6 +29,12 @@ const ROW_HEIGHT: f32 = 36.;
 /// How many entries a menu shows at once; the others are scrolled to.
 const ROWS_SHOWN: usize = 12;
 
+/// How large the picture of an entry is, in parts of the size of its text.
+const PICTURE_SIZE: f32 = 1.25;
+
+/// What the button at the end of an entry does.
+type Aside = Rc<dyn Fn(&mut App)>;
+
 /// Something a menu offers.
 #[derive(Clone)]
 pub struct MenuEntry {
@@ -34,6 +42,14 @@ pub struct MenuEntry {
     glyph: &'static str,
     label: SharedString,
     action: Rc<dyn Fn(&mut App)>,
+    /// A picture shown instead of the glyph, such as the icon of a file.
+    picture: Option<Arc<RenderImage>>,
+    /// A small button at the end of the entry, seen while the pointer is
+    /// on it: its glyph and what it does.
+    aside: Option<(&'static str, Aside)>,
+    /// Whether the entry is the title of the entries that follow it, which
+    /// does nothing.
+    heading: bool,
 }
 
 impl MenuEntry {
@@ -46,7 +62,32 @@ impl MenuEntry {
             glyph,
             label: label.into(),
             action: Rc::new(action),
+            picture: None,
+            aside: None,
+            heading: false,
         }
+    }
+
+    /// The title of the entries that follow it, which does nothing.
+    pub fn heading(label: impl Into<SharedString>) -> Self {
+        Self {
+            heading: true,
+            ..Self::new("", label, |_| {})
+        }
+    }
+
+    /// The entry, showing `picture` instead of its glyph where there is
+    /// one.
+    pub fn with_picture(mut self, picture: Option<Arc<RenderImage>>) -> Self {
+        self.picture = picture;
+        self
+    }
+
+    /// The entry, with a small button at its end that shows `glyph` while
+    /// the pointer is on the entry and does `action` instead of the entry.
+    pub fn with_aside(mut self, glyph: &'static str, action: impl Fn(&mut App) + 'static) -> Self {
+        self.aside = Some((glyph, Rc::new(action)));
+        self
     }
 }
 
@@ -104,6 +145,20 @@ impl Menus {
             window.update(cx, |view, _, cx| view.close(cx)).ok();
         }
     }
+}
+
+/// The title of the entries of a menu that follow it.
+fn heading(theme: &Theme, label: SharedString) -> AnyElement {
+    div()
+        .h(px(ROW_HEIGHT))
+        .flex_none()
+        .px(theme.spacing.medium)
+        .flex()
+        .items_end()
+        .pb(theme.spacing.tiny)
+        .text_color(theme.colors.on_surface_variant)
+        .child(one_line(label))
+        .into_any_element()
 }
 
 /// The logical width and height of the panel of a menu of `rows` entries,
@@ -179,8 +234,37 @@ impl Render for MenuView {
             .iter()
             .enumerate()
             .map(|(index, entry)| {
+                if entry.heading {
+                    return heading(&theme, entry.label.clone());
+                }
                 let state = self.rows[index].state(window);
                 let action = entry.action.clone();
+                let lead = match &entry.picture {
+                    Some(picture) => img(picture.clone())
+                        .size(theme.typography.label_size * PICTURE_SIZE)
+                        .flex_none()
+                        .into_any_element(),
+                    None => icon(&theme, entry.glyph)
+                        .text_size(theme.typography.label_size)
+                        .text_color(theme.colors.on_surface_variant)
+                        .into_any_element(),
+                };
+                let aside = entry.aside.clone().map(|(glyph, aside)| {
+                    div()
+                        .id(("menu-aside", index))
+                        .flex_none()
+                        .opacity(state.hover)
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            aside(cx);
+                            cx.defer(Menus::close);
+                        })
+                        .child(
+                            icon(&theme, glyph)
+                                .text_size(theme.typography.label_size)
+                                .text_color(theme.colors.on_surface_variant),
+                        )
+                });
                 let row = div()
                     .id(("menu-entry", index))
                     .h(px(ROW_HEIGHT))
@@ -197,18 +281,16 @@ impl Render for MenuView {
                         // handles the click.
                         cx.defer(Menus::close);
                     })
-                    .child(
-                        icon(&theme, entry.glyph)
-                            .text_size(theme.typography.label_size)
-                            .text_color(theme.colors.on_surface_variant),
-                    )
+                    .child(lead)
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .child(one_line(entry.label.clone())),
-                    );
+                    )
+                    .children(aside);
                 Interaction::track(row, cx, move |this: &mut Self| this.rows.get_mut(index))
+                    .into_any_element()
             })
             .collect();
         floating_panel(&theme, self.edge, visibility, |panel| {
