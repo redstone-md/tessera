@@ -281,15 +281,7 @@ fn with(pins: &[String], name: &str) -> Vec<String> {
 /// which the shell then takes over. A failure is reported on the error
 /// output.
 fn repin(cx: &mut App, change: impl FnOnce(&[String]) -> Vec<String>) {
-    let changed = ConfigFile::open().and_then(|mut file| {
-        let pins = file.config()?.pinned();
-        let pins = pins.ok_or("the layout has no `windows` widget to pin to")?;
-        if !file.set_pinned(&change(&pins)) {
-            return Err("the layout has no `windows` widget to pin to".to_owned());
-        }
-        file.save()
-    });
-    match changed {
+    match ConfigFile::change_pinned(change) {
         Ok(()) => cx.defer(Shell::config_changed),
         Err(error) => report!("{error}"),
     }

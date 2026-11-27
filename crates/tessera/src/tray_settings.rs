@@ -397,19 +397,21 @@ impl TraySettings {
 /// Writes the lists of `config` into the configuration file. Empty lists
 /// are taken out.
 fn write(config: &TrayConfig) -> Result<(), String> {
-    let mut file = ConfigFile::open()?;
     let lists = [
         ("shown", &config.shown),
         ("hidden", &config.hidden),
         ("order", &config.order),
     ];
-    for (key, entries) in lists {
-        let value = (!entries.is_empty()).then(|| Value::Array(entries.iter().collect::<Array>()));
-        if !file.set_in(TABLE, key, value) {
-            return Err("`tray` in the configuration is not a table".to_owned());
+    ConfigFile::change(|file| {
+        for (key, entries) in lists {
+            let value =
+                (!entries.is_empty()).then(|| Value::Array(entries.iter().collect::<Array>()));
+            if !file.set_in(TABLE, key, value) {
+                return Err("`tray` in the configuration is not a table".to_owned());
+            }
         }
-    }
-    file.save()
+        Ok(())
+    })
 }
 
 #[cfg(test)]

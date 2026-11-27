@@ -157,11 +157,11 @@ impl Pins {
     /// configuration file as well.
     pub fn toggle(&mut self, name: &str, cx: &mut Context<Self>) {
         let names = toggled(&self.names, name);
-        let written = ConfigFile::open().and_then(|mut file| {
+        let written = ConfigFile::change(|file| {
             if !file.set_start_pinned(&names) {
                 return Err("no popup holds an `apps` widget to pin to".to_owned());
             }
-            file.save()
+            Ok(())
         });
         match written {
             Ok(()) => {

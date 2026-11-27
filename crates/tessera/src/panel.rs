@@ -1186,11 +1186,11 @@ fn centered_column(theme: &Theme, start: Div, center: Div, end: Div, lead: Optio
 /// Changes the configuration file with `change` and takes the file over at
 /// once. A change that cannot be made or written is reported.
 pub fn rewrite(cx: &mut App, change: impl FnOnce(&mut ConfigFile) -> bool) {
-    let written = ConfigFile::open().and_then(|mut file| {
-        if !change(&mut file) {
+    let written = ConfigFile::change(|file| {
+        if !change(file) {
             return Err("the configuration has changed in the meantime".to_owned());
         }
-        file.save()
+        Ok(())
     });
     match written {
         Ok(()) => Shell::config_changed(cx),

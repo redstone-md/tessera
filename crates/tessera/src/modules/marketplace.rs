@@ -209,11 +209,12 @@ fn nothing_offered(kind: Kind) -> &'static str {
 /// Changes the configuration file with `change` and has the shell apply
 /// it once the update under way is over.
 fn change_config(cx: &mut App, change: impl FnOnce(&mut ConfigFile) -> bool) -> Result<(), String> {
-    let mut file = ConfigFile::open()?;
-    if !change(&mut file) {
-        return Err("the configuration has no place for it".to_owned());
-    }
-    file.save()?;
+    ConfigFile::change(|file| {
+        if !change(file) {
+            return Err("the configuration has no place for it".to_owned());
+        }
+        Ok(())
+    })?;
     cx.defer(Shell::config_changed);
     Ok(())
 }

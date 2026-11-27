@@ -1089,11 +1089,12 @@ pub fn write_rule_for(id: AppWindowId) -> Result<PathBuf, String> {
         "Written from the window menu for \u{201c}{}\u{201d}.\nChange or remove what it does; see the [[rule]] section of CONFIGURATION.md.",
         named.title.replace('\n', " ")
     );
-    let mut file = ConfigFile::open()?;
-    if !file.add_rule(rule, &note) {
-        return Err("the configuration has a `rule` that is no list of tables".to_owned());
-    }
-    file.save()?;
+    ConfigFile::change(|file| {
+        if !file.add_rule(rule, &note) {
+            return Err("the configuration has a `rule` that is no list of tables".to_owned());
+        }
+        Ok(())
+    })?;
     ConfigFile::location()
 }
 

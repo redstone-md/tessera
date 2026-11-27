@@ -1172,11 +1172,10 @@ impl Settings {
     /// Reads the file, applies `change` to it, writes it and has the shell
     /// take it over. A change that no longer fits the file is not made.
     fn change(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ConfigFile) -> bool) {
-        let changed = ConfigFile::open().and_then(|mut file| {
-            if !change(&mut file) {
+        let changed = ConfigFile::change(|file| {
+            if !change(file) {
                 return Err("the configuration has changed in the meantime".to_owned());
             }
-            file.save()?;
             Ok((file.config()?, file.table()))
         });
         match changed {

@@ -273,11 +273,11 @@ fn themes_in_use(config: &Config) -> Vec<String> {
 /// Writes `value` at the declared setting `row` straight to the file, for
 /// a change made while the settings are not shown.
 fn write_now(row: &RowKey, value: Option<&toml::Value>, cx: &mut App) {
-    let written = ConfigFile::open().and_then(|mut file| {
-        if !row.owner.write(&mut file, &row.key, value) {
+    let written = ConfigFile::change(|file| {
+        if !row.owner.write(file, &row.key, value) {
             return Err("the configuration has changed in the meantime".to_owned());
         }
-        file.save()
+        Ok(())
     });
     match written {
         Ok(()) => Shell::config_changed(cx),

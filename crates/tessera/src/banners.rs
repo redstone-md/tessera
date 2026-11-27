@@ -532,12 +532,12 @@ impl Banners {
     /// Writes into the configuration whether do not disturb holds until it
     /// is switched off; the configuration is read again at once.
     fn write_quiet(quiet: bool, cx: &mut App) {
-        let written = ConfigFile::open().and_then(|mut file| {
+        let written = ConfigFile::change(|file| {
             let value = quiet.then_some(toml_edit::Value::from(true));
             if !file.set_in("notifications", "quiet", value) {
                 return Err("`notifications` in the configuration is no table".to_owned());
             }
-            file.save()
+            Ok(())
         });
         match written {
             // Until then it holds as asked.

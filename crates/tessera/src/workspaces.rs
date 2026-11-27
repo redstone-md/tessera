@@ -1282,13 +1282,13 @@ impl Workspaces {
         let list = |list: &[String]| {
             (!list.is_empty()).then(|| toml_edit::Value::Array(list.iter().collect()))
         };
-        let written = ConfigFile::open().and_then(|mut file| {
+        let written = ConfigFile::change(|file| {
             let named = !naming || file.set_in("workspaces", "names", list(&names));
             let iconed = !iconing || file.set_in("workspaces", "icons", list(&icons));
             if !named || !iconed {
                 return Err("`workspaces` in the configuration is no table".to_owned());
             }
-            file.save()
+            Ok(())
         });
         match written {
             Ok(()) => {

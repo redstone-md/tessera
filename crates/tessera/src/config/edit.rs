@@ -7,6 +7,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value, value};
 
@@ -137,9 +138,27 @@ pub struct ConfigFile {
     document: DocumentMut,
 }
 
+/// Held from the reading of the file to its writing by [`ConfigFile::change`],
+/// so that changes from different threads (the settings, the tray, a
+/// program that sets the wallpaper) are made one after the other and none
+/// writes over another it did not read.
+static WRITING: Mutex<()> = Mutex::new(());
+
 impl ConfigFile {
+    /// Reads the file, has `change` change it and writes it, unless
+    /// `change` fails or the shell could not use what the file would hold;
+    /// what `change` answers is answered. No other change of the file is
+    /// made meanwhile, so `change` must not change the file itself.
+    pub fn change<T>(change: impl FnOnce(&mut Self) -> Result<T, String>) -> Result<T, String> {
+        let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut file = Self::open()?;
+        let answer = change(&mut file)?;
+        file.save()?;
+        Ok(answer)
+    }
+
     /// The user's file, or the built-in configuration, comments and all,
-    /// where there is none yet.
+    /// where there is none yet. It is changed through [`Self::change`].
     pub fn open() -> Result<Self, String> {
         let path = Self::path()?;
         match fs::read_to_string(&path) {
@@ -170,7 +189,7 @@ impl ConfigFile {
     /// Writes the file, unless the shell could not use what it would hold.
     /// It is written beside itself first and then put in place, so that a
     /// half-written file is never read.
-    pub fn save(&self) -> Result<(), String> {
+    fn save(&self) -> Result<(), String> {
         self.config()?;
         let path = Self::path()?;
         let failed = |error| format!("{} cannot be written: {error}", path.display());
@@ -735,12 +754,13 @@ impl ConfigFile {
     /// and writes the disk, so it is called away from the thread of GPUI.
     pub fn change_pinned(change: impl FnOnce(&[String]) -> Vec<String>) -> Result<(), String> {
         const NO_DOCK: &str = "the layout has no `windows` widget to pin to";
-        let mut file = Self::open()?;
-        let pins = file.config()?.pinned().ok_or(NO_DOCK)?;
-        if !file.set_pinned(&change(&pins)) {
-            return Err(NO_DOCK.to_owned());
-        }
-        file.save()
+        Self::change(|file| {
+            let pins = file.config()?.pinned().ok_or(NO_DOCK)?;
+            if !file.set_pinned(&change(&pins)) {
+                return Err(NO_DOCK.to_owned());
+            }
+            Ok(())
+        })
     }
 }
 

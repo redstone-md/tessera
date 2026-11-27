@@ -10,7 +10,6 @@
 //! that each change is made to the file as the one before left it.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError};
 
 use toml_edit::{Array, Value};
 
@@ -99,24 +98,18 @@ pub fn paths_value(paths: &[PathBuf]) -> Value {
 /// fit the file is left out; a file that would not be usable is not
 /// written.
 pub fn write(edits: Vec<Edit>) -> Result<WallpaperConfig, String> {
-    let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut file = ConfigFile::open()?;
-    for edit in edits {
-        edit.apply(&mut file);
-    }
-    file.save()?;
-    Ok(file.config()?.wallpaper)
+    ConfigFile::change(|file| {
+        for edit in edits {
+            edit.apply(file);
+        }
+        Ok(file.config()?.wallpaper)
+    })
 }
 
 /// The configuration of the wallpaper the file holds.
 pub fn read() -> Result<WallpaperConfig, String> {
-    let _alone = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
     Ok(ConfigFile::open()?.config()?.wallpaper)
 }
-
-/// Held while the file is read and written, so that a change from the
-/// settings and one from a program are made one after the other.
-static WRITING: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 mod tests {
