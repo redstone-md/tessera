@@ -32,6 +32,7 @@ mod packaged;
 mod passage;
 mod plans;
 mod power;
+mod shell_host;
 mod shell_mode;
 mod shell_thread;
 mod shortcuts;
@@ -44,6 +45,7 @@ mod veil;
 mod video;
 mod wifi;
 mod windows_key;
+mod winlogon;
 
 pub use accent::{accent_color, light_mode, set_light_mode};
 pub use account::{Account, Place};
@@ -79,6 +81,8 @@ pub use packaged::{app_id_in, app_path};
 pub use passage::Passage;
 pub use plans::PowerPlan;
 pub use power::PowerAction;
+pub use shell_host::{HostOptions, ShellEvent, ShellHost};
+pub use shell_mode::started_as_shell;
 pub use shell_mode::{explorer_running, shell_mode};
 pub use shell_thread::ShellThread;
 pub use shortcuts::Shortcut;
@@ -91,6 +95,10 @@ pub use veil::Veil;
 pub use video::{DesktopVideo, VideoState};
 pub use wifi::{Wifi, WifiNetwork, WifiReach, WifiSecurity, password_fits};
 pub use windows_key::{ChoiceKey, TakenKeys, WindowsKey};
+pub use winlogon::{
+    ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
+    own_program_name, recovery_keys_held,
+};
 
 use std::ffi::c_void;
 use std::mem::size_of;

@@ -163,6 +163,23 @@
 # own = true
 # view = "details"
 
+# [shell] says what Tessera does as the shell of the session, in the place of
+# Explorer (`tessera shell install` makes it that at the next sign-in,
+# `tessera shell revert` gives it back; see docs/SHELL.md). Beside Explorer
+# it changes nothing.
+#   emergency_keys    whether Ctrl+Win+Alt+E starts Task Manager and hands the
+#                     session to Explorer, and Ctrl+Win+Alt+R starts Tessera
+#                     again (true)
+#   quit_to_explorer  whether Tessera that quits starts Explorer as the shell,
+#                     so the session keeps one (true)
+#   media_keys        whether the keys of the volume and of media change the
+#                     volume and go to the media application, as Explorer
+#                     has them (true)
+# [shell]
+# emergency_keys = true
+# quit_to_explorer = true
+# media_keys = true
+
 # Each [[surface]] is a strip docked to a screen edge.
 #   edge       "top" or "bottom"
 #   thickness  reserved screen space, in logical pixels

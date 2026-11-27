@@ -12,6 +12,7 @@ use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context as _, Result, bail};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
@@ -28,6 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
+use super::shell_mode::shell_mode;
+use super::winlogon::SHELL_FLAG;
+
 /// The command of the taskbar that shows the desktop or brings the
 /// windows back.
 const TOGGLE_DESKTOP: usize = 407;
@@ -42,8 +46,11 @@ const SUCCESSOR_FLAG: &str = "--start-after";
 /// The watchdog this shell started.
 static WATCHDOG: OnceLock<u32> = OnceLock::new();
 
+/// Whether this shell started the one that takes over from it.
+static SUCCESSOR: AtomicBool = AtomicBool::new(false);
+
 /// Waits until the process with the number `process` is gone.
-fn wait_for(process: u32) {
+pub(super) fn wait_for(process: u32) {
     // SAFETY: the handle is only waited on and then closed. A process that
     // is already gone cannot be opened and the wait is skipped.
     unsafe {
@@ -96,10 +103,22 @@ impl Taskbar {
         if let Some(watchdog) = WATCHDOG.get() {
             command.arg(watchdog.to_string());
         }
+        // The shell of the session hands that on, whatever the value of
+        // Winlogon says.
+        if shell_mode() {
+            command.arg(SHELL_FLAG);
+        }
         command
             .spawn()
             .context("the next shell could not be started")?;
+        SUCCESSOR.store(true, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Whether this shell started the one that takes over from it, so
+    /// that it quits without handing the session to anyone else.
+    pub fn successor_started() -> bool {
+        SUCCESSOR.load(Ordering::Relaxed)
     }
 
     /// Waits for the shell this one takes over from, if the arguments

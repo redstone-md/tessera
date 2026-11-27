@@ -85,6 +85,16 @@ impl WorkspacesConfig {
         }
     }
 
+    /// The same, with `count` workspaces of Tessera's own where it names
+    /// no number: without Explorer, as when Tessera is the shell, Windows
+    /// has no virtual desktops.
+    pub fn owning(&self, count: usize) -> Self {
+        Self {
+            own: self.own.or(Some(count)),
+            ..self.clone()
+        }
+    }
+
     /// How many workspaces of its own Tessera keeps, if it keeps any. A
     /// number that is not usable is reported and counts as none.
     fn count(&self) -> Option<usize> {
@@ -717,7 +727,7 @@ impl Workspaces {
 
     /// Shows the windows that are written down as hidden, if they are
     /// still the same windows and still hidden.
-    fn recover() {
+    pub(crate) fn recover() {
         let Some(path) = Self::record() else {
             return;
         };

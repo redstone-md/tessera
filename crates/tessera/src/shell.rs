@@ -80,6 +80,7 @@ impl Shell {
         if surfaces.is_empty() {
             bail!("the layout opened no surface");
         }
+        crate::session::surfaces_ready(cx);
         Wallpaper::start(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
         Flyouts::configure(&config.flyout, cx);
@@ -120,6 +121,14 @@ impl Shell {
         if let Err(error) = WindowsKey::take_over(taken) {
             report!("the Windows key stays with Windows: {error:#}");
         }
+    }
+
+    /// Answers Ctrl+Esc and the Windows key, which Windows hands to the
+    /// shell of the session: opens the popup of the Windows key, or the
+    /// launcher where the configuration names none, or closes it.
+    pub fn start_requested(cx: &mut App) {
+        let named = cx.global::<Self>().config.windows_key.clone();
+        Self::toggle_popup(named.as_deref().unwrap_or("launcher"), cx);
     }
 
     /// Opens the popup of the Windows key, or closes it when it is open.
@@ -260,6 +269,8 @@ impl Shell {
             report!("the configuration in use stays");
             return;
         };
+        crate::session::adjust(&mut config);
+        crate::session::reconfigure(&config.shell, cx);
         cx.set_global(Theme::load(config.theme.as_deref(), config.contrast));
         cx.set_global(config.language);
         Tiler::configure(&config.tiling, cx);

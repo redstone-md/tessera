@@ -54,5 +54,21 @@ From a console, `tessera do <action> [arg]` does an action in the running shell,
 | `popup` | the name of a popup | opens that popup, or closes it when it is open; its keys are taken from Windows |
 | `desktop` | `toggle`, `minimize`, `restore`, `others`, or none | without `arg` or with `toggle`, shows the desktop, or brings the windows back, as the widget `desktop` does: through the taskbar of Explorer where it runs, and otherwise by minimizing the application windows itself and restoring those still minimized on the next press; the keyboard goes to the desktop, and the windows come back in their order with the one that was in front active. `minimize` minimizes every application window (as Win+M), `restore` brings back those Tessera minimized (as Win+Shift+M) and `others` minimizes all but the window in front (as Win+Home); these three are Tessera's own even where Explorer runs, so `restore` does not bring back what the taskbar of Explorer put aside. Its keys (Win+D, Win+M, Win+Home) are taken from Windows |
 | `files` | a folder, as `files` names one, or none | opens a window of the file manager there, as `files = "..."` does; without `arg`, at the folder of the user; its keys (Win+E) are taken from Windows |
+| `shell` | `install`, `revert` or `explorer` | `install` makes Tessera the shell of the user's next sessions and `revert` gives that back to what the machine names, as `tessera shell install` and `tessera shell revert` do; `explorer` hands this session to Explorer now, when Tessera is its shell: Explorer starts as the shell once Tessera has quit |
 
 The keys a `press` can end with are a digit, a letter, `f1` to `f24`, `space`, `tab`, `enter`, `left`, `up`, `right`, `down`, `home`, `end`, `pageup`, `pagedown`, `insert`, `delete`, `backspace`, `escape`, `pause`, `printscreen`, and the keys a US layout has for `period`, `comma`, `plus`, `minus` and `backquote` (on another layout, the keys in their place).
+
+## The shell of the session
+
+`tessera shell install` makes Tessera the shell Windows starts at the user's next sign-in, `tessera shell revert` gives that back, and `tessera shell status` prints what Windows reads and which program it will start; [SHELL.md](SHELL.md) says how this works, the ways back, and what does not work without Explorer. The widget `shell`, in the popup `shell` that comes with it, shows the same and has buttons for both, and, as the shell, one that hands the session to Explorer at once.
+
+`[shell]` says what Tessera does as the shell; beside Explorer it changes nothing:
+
+```toml
+[shell]
+emergency_keys = true    # Ctrl+Win+Alt+E: Task Manager, and Explorer as the shell; Ctrl+Win+Alt+R: Tessera again
+quit_to_explorer = true  # a Tessera that quits starts Explorer as the shell, so the session keeps one
+media_keys = true        # the keys of the volume and of media work as with Explorer
+```
+
+As the shell, `[workspaces]` without `own` keeps four workspaces of Tessera's own, as the virtual desktops of Windows are part of Explorer.

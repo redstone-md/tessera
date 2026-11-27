@@ -321,3 +321,18 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# Tessera as the shell of the session (shell-host).
+"Shell of the session" = "Оболонка сеансу"
+"Tessera is the shell of this session." = "Tessera — оболонка цього сеансу."
+"Tessera runs beside Explorer." = "Tessera працює поруч із Провідником."
+"At the next sign-in Windows starts Tessera." = "Під час наступного входу Windows запустить Tessera."
+"At the next sign-in Windows starts Explorer." = "Під час наступного входу Windows запустить Провідник."
+"At the next sign-in Windows starts another program:" = "Під час наступного входу Windows запустить іншу програму:"
+"A policy of this computer names the shell; only an administrator can change it." = "Оболонку задає політика цього комп'ютера; змінити її може лише адміністратор."
+"Windows is told to read the shell of the computer. It is widely reported to read the one of the user all the same; that is not certain on this computer." = "Windows налаштовано читати оболонку комп'ютера. За численними повідомленнями, вона все одно читає оболонку користувача; на цьому комп'ютері це не перевірено."
+"A change takes effect at the next sign-in." = "Зміна набуде чинності під час наступного входу."
+"Make Tessera the shell" = "Зробити Tessera оболонкою"
+"Give the shell back to Explorer" = "Повернути оболонку Провіднику"
+"Hand this session to Explorer now" = "Передати цей сеанс Провіднику зараз"
+"Ctrl+Win+Alt+E starts Task Manager and hands the session to Explorer; Ctrl+Win+Alt+R starts Tessera again." = "Ctrl+Win+Alt+E запускає диспетчер завдань і передає сеанс Провіднику; Ctrl+Win+Alt+R перезапускає Tessera."

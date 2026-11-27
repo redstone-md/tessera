@@ -28,6 +28,11 @@ pub use win32::{
     pointer_held, pointer_on_own_window, read_desktop_if_requested, reveal_in_explorer,
     set_light_mode, show_properties,
 };
+pub use win32::{
+    ExplorerShell, NextShell, SHELL_FLAG, ShellRegistration, attach_console, is_safe_mode,
+    own_program_name, recovery_keys_held, started_as_shell,
+};
+pub use win32::{HostOptions, ShellEvent, ShellHost};
 #[allow(
     unused_imports,
     reason = "Show is for the launchers that ask for a window state"
