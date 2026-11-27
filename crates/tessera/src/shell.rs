@@ -22,6 +22,7 @@ use crate::keys::Shortcuts;
 use crate::menu::Menus;
 use crate::module::WidgetRegistry;
 use crate::modules;
+use crate::notifications_store::NotificationStore;
 use crate::panel::Panel;
 use crate::platform::{DisplayKey, NativeSurface, ScreenEdge, Taskbar, WindowsKey};
 use crate::popup::{PopupAnchor, Popups};
@@ -82,6 +83,7 @@ impl Shell {
         }
         Wallpaper::start(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
+        NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);
@@ -267,6 +269,7 @@ impl Shell {
         Shortcuts::configure(&config.keys, config.windows_keys, cx);
         Wallpaper::configure(&config.wallpaper, cx);
         Banners::configure(&config.notifications, cx);
+        NotificationStore::configure(&config.notifications, &config.notification_rules, cx);
         Flyouts::configure(&config.flyout, cx);
         Switcher::configure(&config.switcher, cx);
         Files::configure(&config.files, cx);

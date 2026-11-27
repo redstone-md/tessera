@@ -17,6 +17,7 @@ use crate::extension::registry::OFFICIAL_REGISTRY;
 use crate::files::FilesConfig;
 use crate::flyout::FlyoutConfig;
 use crate::i18n::Language;
+use crate::notifications_store::NotificationRule;
 use crate::platform::ScreenEdge;
 use crate::switcher::SwitcherConfig;
 use crate::tiling::TilingConfig;
@@ -341,6 +342,9 @@ pub struct Config {
     /// Whether notifications that arrive are shown as banners.
     #[serde(default)]
     pub notifications: NotificationsConfig,
+    /// What is kept and shown of the notifications of which application.
+    #[serde(default, rename = "notification_rule")]
+    pub notification_rules: Vec<NotificationRule>,
     /// Whether a change of the volume is shown for a moment.
     #[serde(default)]
     pub flyout: FlyoutConfig,
