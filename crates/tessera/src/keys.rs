@@ -846,7 +846,7 @@ mod tests {
         assert!(deed(&key(None, None, None)).is_err());
         assert!(deed(&key(Some("launcher"), Some("next"), None)).is_err());
         assert!(deed(&key(None, None, Some(&[]))).is_err());
-        assert!(deed(&key(None, Some("spiral"), None)).is_err());
+        assert!(deed(&key(None, Some("grid now"), None)).is_err());
         let mut both = key(Some("launcher"), None, None);
         both.focus = Some("left".to_owned());
         assert!(deed(&both).is_err());

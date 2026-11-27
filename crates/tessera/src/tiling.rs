@@ -473,14 +473,17 @@ impl Tiler {
     /// something else of the layouts, the layouts chosen while Tessera
     /// ran give way to it.
     pub fn configure(config: &TilingConfig, cx: &mut App) {
+        // The layout files are read again with the configuration, away
+        // from the user interface, so that it may name a file that was
+        // just made; the layouts it names are checked once they are read.
+        let changed = cx.global::<Self>().config != *config;
+        Self::rescan(cx, move |taken, cx| {
+            if changed || taken {
+                cx.global::<Self>().check_layouts();
+            }
+        });
         let this = cx.global_mut::<Self>();
-        // The layout files are read again with the configuration, so that
-        // keys may name a file that was just made.
-        if let Some(directory) = layouts_directory() {
-            let scan = declarative::scan(&directory);
-            this.take_scan(scan);
-        }
-        if this.config == *config {
+        if !changed {
             return;
         }
         if this.config.layouts_differ(config) {
@@ -498,7 +501,6 @@ impl Tiler {
         this.config = config.clone();
         this.knobs = knobs;
         config.check();
-        this.check_layouts();
         this.nudged = true;
         let running = cx.global::<TilingMode>().enabled;
         if running == config.enabled {
@@ -594,16 +596,12 @@ impl Tiler {
                 if let (Some(known), Some(directory)) = (tick.scan, layouts_directory()) {
                     let scanned = cx
                         .background_executor()
-                        .spawn(async move {
-                            let stamp = declarative::stamp(&directory);
-                            (Some(stamp) != known).then(|| declarative::scan(&directory))
-                        })
+                        .spawn(async move { scan_changed(&directory, known) })
                         .await;
                     let taken = cx.update(|cx| {
                         let this = cx.global_mut::<Self>();
                         this.scanning = false;
-                        if let Some(scan) = scanned {
-                            this.take_scan(scan);
+                        if scanned.is_some_and(|scan| this.take_scan(scan)) {
                             this.check_layouts();
                         }
                     });
@@ -807,7 +805,16 @@ impl Tiler {
         if let LayoutChoice::File(name) = &choice
             && cx.global::<Self>().library.get(name).is_none()
         {
-            report!("there is no tiling layout named `{name}`");
+            // The file may have been made since the directory was looked
+            // at last, as it is not while tiling is off.
+            let name = name.clone();
+            Self::rescan(cx, move |_, cx| {
+                if cx.global::<Self>().library.get(&name).is_some() {
+                    Self::choose(display, choice, cx);
+                } else {
+                    report!("there is no tiling layout named `{name}`");
+                }
+            });
             return;
         }
         let look = Look::now(cx);
@@ -1488,10 +1495,33 @@ impl Tiler {
         true
     }
 
-    /// Takes over the layout files as `scan` found them, if they changed.
-    fn take_scan(&mut self, scan: declarative::Scan) {
+    /// Reads the layout files again away from the user interface where
+    /// they changed, takes them over, and then does `then`, told whether
+    /// they changed.
+    fn rescan(cx: &mut App, then: impl FnOnce(bool, &mut App) + 'static) {
+        let Some(directory) = layouts_directory() else {
+            return then(false, cx);
+        };
+        let known = cx.global::<Self>().layouts_stamp;
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let scanned = cx
+                .background_executor()
+                .spawn(async move { scan_changed(&directory, known) })
+                .await;
+            cx.update(|cx| {
+                let taken = scanned.is_some_and(|scan| cx.global_mut::<Self>().take_scan(scan));
+                then(taken, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Takes over the layout files as `scan` found them, if they changed;
+    /// whether they did.
+    fn take_scan(&mut self, scan: declarative::Scan) -> bool {
         if self.layouts_stamp == Some(scan.stamp) {
-            return;
+            return false;
         }
         for problem in &scan.problems {
             report!("{problem}");
@@ -1499,6 +1529,7 @@ impl Tiler {
         self.layouts_stamp = Some(scan.stamp);
         self.library = Library::with(scan.layouts);
         self.nudged = true;
+        true
     }
 
     /// Reports the layouts the configuration names that no file has.
@@ -1513,6 +1544,13 @@ impl Tiler {
             }
         }
     }
+}
+
+/// The layout files of `directory`, where they are other than the stamp
+/// `known` says.
+fn scan_changed(directory: &Path, known: Option<u64>) -> Option<declarative::Scan> {
+    let stamp = declarative::stamp(directory);
+    (Some(stamp) != known).then(|| declarative::scan(directory))
 }
 
 /// What a look at the windows came to.

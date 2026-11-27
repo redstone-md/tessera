@@ -46,8 +46,9 @@ pub enum TilingCommand {
 }
 
 /// What `words` ask of the tiling, or why they ask nothing: `next`,
-/// `off`, `float`, `wider`, `narrower`, `reset`, a layout of Tessera or of
-/// a layout file, `reserve` with a side or `float`, `split` with
+/// `off`, `float`, `wider`, `narrower`, `reset`, a layout of Tessera or the
+/// name of a layout file (whether there is one is asked when it is
+/// chosen), `reserve` with a side or `float`, `split` with
 /// `horizontal` or `vertical`, or `width` or `height` with `more` or
 /// `less`.
 pub fn parse_command(words: &[&str]) -> Result<TilingCommand, String> {
@@ -83,7 +84,7 @@ pub fn parse_command(words: &[&str]) -> Result<TilingCommand, String> {
         )),
         [name] => match TileLayout::named(name) {
             Some(layout) => Ok(TilingCommand::Layout(LayoutChoice::Builtin(layout))),
-            None if declarative::is_known(name) => {
+            None if declarative::may_name(name) => {
                 Ok(TilingCommand::Layout(LayoutChoice::File(name.to_owned())))
             }
             None => Err(format!(
@@ -121,7 +122,13 @@ mod tests {
                 TileLayout::Grid
             )))
         );
-        assert!(parse("spiral").is_err());
+        assert_eq!(
+            parse("spiral"),
+            Ok(TilingCommand::Layout(LayoutChoice::File(
+                "spiral".to_owned()
+            )))
+        );
+        assert!(parse("a/b").is_err());
         assert!(parse("").is_err());
     }
 

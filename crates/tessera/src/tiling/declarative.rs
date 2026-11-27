@@ -28,7 +28,6 @@
 use std::cmp::Reverse;
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 use serde::Deserialize;
@@ -51,10 +50,6 @@ const BUNDLED_TITLES: [&str; 3] = ["Tall", "Wide", "Three columns"];
 const LARGEST_FILE: u64 = 64 * 1024;
 const MOST_PARTS: usize = 256;
 const DEEPEST: usize = 16;
-
-/// The names of the layouts there are, those of the files of the user
-/// included, for commands and keys that name one.
-static KNOWN: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -412,11 +407,7 @@ impl Library {
             .collect();
         layouts.extend(own);
         layouts.sort_by_key(|layout| (Reverse(layout.bundled), layout.name.clone()));
-        let library = Self { layouts };
-        if let Ok(mut known) = KNOWN.lock() {
-            *known = library.names();
-        }
-        library
+        Self { layouts }
     }
 
     /// The layout of the file called `name`.
@@ -433,12 +424,16 @@ impl Library {
     }
 }
 
-/// Whether a layout of a file is called `name`: one that comes with
-/// Tessera, or one of the user that was read.
-pub fn is_known(name: &str) -> bool {
-    let name = name.to_lowercase();
-    BUNDLED.iter().any(|&(bundled, _)| bundled == name)
-        || KNOWN.lock().is_ok_and(|known| known.contains(&name))
+/// Whether `name` can be the name of a layout file: letters, digits,
+/// `-`, `_` and `.`, which is not checked against the files there are, as
+/// a file may be made later; choosing a layout that has no file reports
+/// it.
+pub fn may_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .chars()
+            .all(|letter| letter.is_alphanumeric() || matches!(letter, '-' | '_' | '.'))
 }
 
 #[cfg(test)]
@@ -497,7 +492,8 @@ mod tests {
                 );
             }
         }
-        assert!(is_known("tall") && is_known("Three-Columns") && !is_known("spiral"));
+        assert!(may_name("tall") && may_name("three-columns") && may_name("my_layout.2"));
+        assert!(!may_name("") && !may_name(".hidden") && !may_name("a/b") && !may_name("a:b"));
     }
 
     #[test]
