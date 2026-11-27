@@ -71,6 +71,8 @@ pub use win32::{
 pub use win32::{
     FileDeed, FileOperation, LinkTarget, Made, Outcome, ShellId, UndoJournal, unique_name,
 };
+#[allow(unused_imports, reason = "the parts the dock and its previews read")]
+pub use win32::{GivenIcon, Progress, ProgressState, TaskbarList, TaskbarState, ThumbButton};
 pub use win32::{HostOptions, ShellEvent, ShellHost};
 pub use win32::{Hotspot, HotspotBand, HotspotInfo, HotspotState};
 pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
