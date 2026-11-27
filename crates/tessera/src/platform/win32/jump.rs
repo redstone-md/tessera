@@ -46,7 +46,7 @@ use windows::Win32::UI::Shell::{
     ADLT_RECENT, ApplicationDestinations, ApplicationDocumentLists, IApplicationDestinations,
     IApplicationDocumentLists, ILFree, IShellItem, IShellLinkW, SHCreateItemFromIDList,
     SHCreateItemFromParsingName, SHCreateMemStream, SHLoadIndirectString,
-    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellLink,
+    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellItem, ShellLink,
 };
 use windows::core::{BSTR, HSTRING, IUnknown, Interface, PCWSTR};
 
@@ -105,18 +105,28 @@ const KNOWN_RECENT: u32 = 2;
 /// What ends each part of a list.
 const PART_END: [u8; 4] = [0xAB, 0xFB, 0xBF, 0xBA];
 
-/// How a shortcut in a list starts: the identifier of the class of
-/// shortcuts, then the shortcut as it would be in a file of its own, which
-/// starts with the size of its header and that identifier again.
+/// The identifier of the class of shortcuts (`CLSID_ShellLink`), as it
+/// stands before each shortcut a list holds.
+const LINK_CLASS: [u8; 16] = [
+    0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46,
+];
+
+/// The identifier of the class of the items of the Shell
+/// (`CLSID_ShellItem`), as it stands before each item a list holds: an
+/// application that lists its documents as items instead of shortcuts.
+const ITEM_CLASS: [u8; 16] = [
+    0xE1, 0xFB, 0xC9, 0x9A, 0xA2, 0xE0, 0xD6, 0x4A, 0xB4, 0xEE, 0xE2, 0x12, 0x01, 0x3E, 0xA9, 0x17,
+];
+
+/// How a shortcut in a list starts: the identifier of its class, then the
+/// shortcut as it would be in a file of its own, which starts with the
+/// size of its header and that identifier again.
 const LINK_START: [u8; 36] = {
-    const CLASS: [u8; 16] = [
-        0x01, 0x14, 0x02, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46,
-    ];
     let mut start = [0; 36];
     let mut index = 0;
     while index < 16 {
-        start[index] = CLASS[index];
-        start[20 + index] = CLASS[index];
+        start[index] = LINK_CLASS[index];
+        start[20 + index] = LINK_CLASS[index];
         index += 1;
     }
     start[16] = 0x4C;
@@ -172,6 +182,7 @@ impl JumpTask {
             _ => None,
         });
         { tasks.unwrap_or_default().into_iter() }
+            .filter_map(Saved::link)
             .filter_map(LinkFacts::load)
             .filter_map(|facts| facts.task())
             .collect()
@@ -233,18 +244,23 @@ impl JumpItem {
         }
     }
 
+    /// Whether [`Self::remove`] can take the entry off its list: a
+    /// document Windows recorded by itself. A recorded shortcut that
+    /// starts a program with arguments cannot be named to Windows by a
+    /// path, so it stays.
+    pub fn removable(&self) -> bool {
+        self.recorded && matches!(self.target, JumpTarget::Item(_))
+    }
+
     /// Takes the entry off the jump list of `app_id`, from both Recent and
     /// Frequent, with `IApplicationDestinations`, which is documented for
     /// what Windows recorded. Pinned entries and those of the
     /// application's own categories are not taken off by it. To be called
     /// where COM is initialized.
     pub fn remove(&self, app_id: &str) -> anyhow::Result<()> {
-        let JumpTarget::Item(path) = &self.target else {
+        let (JumpTarget::Item(path), true) = (&self.target, self.removable()) else {
             bail!("only a recorded document can be taken off a jump list");
         };
-        if !self.recorded {
-            bail!("only a recorded document can be taken off a jump list");
-        }
         // SAFETY: COM is initialized on the calling thread; the strings
         // outlive the calls, and every interface is released when it goes
         // out of scope.
@@ -360,7 +376,7 @@ impl JumpList {
             .unwrap_or_default();
         let (pinned, frequent, recent) = arranged(&recorded);
         let item = |recorded: &(Recorded, Vec<u8>)| {
-            let facts = LinkFacts::load(&recorded.1);
+            let facts = LinkFacts::load_destination(Saved::Link(&recorded.1));
             let item = facts.and_then(|facts| facts.destination(true));
             item.or_else(|| Recorded::item(recorded))
         };
@@ -375,7 +391,7 @@ impl JumpList {
             match part {
                 Part::Category(name, links) => {
                     let items = { links.iter() }
-                        .filter_map(|link| LinkFacts::load(link)?.destination(false))
+                        .filter_map(|saved| LinkFacts::load_destination(*saved)?.destination(false))
                         .collect::<Vec<_>>();
                     if !items.is_empty() {
                         list.categories.push((spelled_out(name), items));
@@ -383,7 +399,7 @@ impl JumpList {
                 }
                 Part::Tasks(links) => {
                     list.tasks = { links.iter() }
-                        .filter_map(|link| LinkFacts::load(link)?.task_item())
+                        .filter_map(|saved| LinkFacts::load(saved.link()?)?.task_item())
                         .collect();
                 }
                 Part::Known(_) => {}
@@ -434,16 +450,77 @@ struct LinkFacts {
 }
 
 impl LinkFacts {
-    /// Loads the shortcut `link` holds; `None` where it is none.
+    /// Loads the shortcut `link` holds, without asking the Shell about the
+    /// item it points at: enough for a task, which names its program.
+    /// `None` where it is none.
     fn load(link: &[u8]) -> Option<Self> {
+        Self::shortcut(link).map(|(facts, _)| facts)
+    }
+
+    /// Loads `saved` as a destination, also with what the Shell calls the
+    /// item it is or points at, which may wait on the network or on a
+    /// drive for an item there. `None` where it is no shortcut or item.
+    fn load_destination(saved: Saved) -> Option<Self> {
+        match saved {
+            Saved::Link(link) => {
+                let (mut facts, shortcut) = Self::shortcut(link)?;
+                // SAFETY: COM is initialized on the calling thread, and the
+                // item list is freed once the item is made of it.
+                let item = unsafe {
+                    let list = shortcut.GetIDList().ok().filter(|list| !list.is_null());
+                    list.and_then(|list| {
+                        let item = SHCreateItemFromIDList::<IShellItem>(list).ok();
+                        ILFree(Some(list));
+                        item
+                    })
+                };
+                if let Some(item) = item {
+                    facts.name_item(&item);
+                }
+                Some(facts)
+            }
+            Saved::Item(data) => {
+                // SAFETY: COM is initialized on the calling thread; the
+                // stream copies the bytes, and the item is loaded by the
+                // class that saved it.
+                let item = unsafe {
+                    let stream = SHCreateMemStream(Some(data))?;
+                    let saved: IPersistStream =
+                        CoCreateInstance(&ShellItem, None, CLSCTX_INPROC_SERVER).ok()?;
+                    saved.Load(&stream).ok()?;
+                    saved.cast::<IShellItem>().ok()?
+                };
+                // SAFETY: the item is a loaded item of the Shell.
+                let path = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) };
+                let mut facts = Self {
+                    path: path.ok().and_then(take),
+                    ..Self::default()
+                };
+                facts.name_item(&item);
+                Some(facts)
+            }
+        }
+    }
+
+    /// Notes what the Shell shows and parses as the name of `item`.
+    fn name_item(&mut self, item: &IShellItem) {
+        // SAFETY: the item is a loaded item of the Shell; each name the
+        // Shell gives is taken over and freed by `take`.
+        unsafe {
+            self.shown = item.GetDisplayName(SIGDN_NORMALDISPLAY).ok().and_then(take);
+            self.parsed = { item.GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING).ok() }.and_then(take);
+        }
+    }
+
+    /// The shortcut `link` holds, loaded, with what it says.
+    fn shortcut(link: &[u8]) -> Option<(Self, IShellLinkW)> {
         let mut path = [0u16; LINK_TEXT];
         let mut arguments = [0u16; LINK_TEXT];
         let mut description = [0u16; LINK_TEXT];
         let mut icon = [0u16; LINK_TEXT];
         let mut index = 0;
         // SAFETY: COM is initialized on the calling thread; the stream
-        // copies the bytes, each buffer is passed with its length, and the
-        // item list is freed once the item is made of it.
+        // copies the bytes, and each buffer is passed with its length.
         unsafe {
             let stream = SHCreateMemStream(Some(link))?;
             let shortcut: IShellLinkW =
@@ -460,26 +537,16 @@ impl LinkFacts {
                 .and_then(|title| BSTR::try_from(&title).ok())
                 .map(|title| title.to_string())
                 .filter(|title| !title.is_empty());
-            let (mut shown, mut parsed) = (None, None);
-            if let Ok(list) = shortcut.GetIDList()
-                && !list.is_null()
-            {
-                if let Ok(item) = SHCreateItemFromIDList::<IShellItem>(list) {
-                    shown = item.GetDisplayName(SIGDN_NORMALDISPLAY).ok().and_then(take);
-                    parsed =
-                        { item.GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING).ok() }.and_then(take);
-                }
-                ILFree(Some(list));
-            }
-            Some(Self {
+            let facts = Self {
                 path: text_in(&path),
                 arguments: text_in(&arguments),
                 description: text_in(&description),
                 title,
                 icon: text_in(&icon).map(|file| (PathBuf::from(expand_variables(&file)), index)),
-                shown,
-                parsed,
-            })
+                shown: None,
+                parsed: None,
+            };
+            Some((facts, shortcut))
         }
     }
 
@@ -660,11 +727,31 @@ fn link_length(link: &[u8]) -> Option<usize> {
 /// A part of a list an application made.
 #[derive(Debug, PartialEq, Eq)]
 enum Part<'a> {
-    /// A category of its own: its name and its shortcuts.
-    Category(String, Vec<&'a [u8]>),
+    /// A category of its own: its name and its entries.
+    Category(String, Vec<Saved<'a>>),
     Known(KnownCategory),
-    /// The tasks, as shortcuts.
-    Tasks(Vec<&'a [u8]>),
+    /// The tasks, which are shortcuts.
+    Tasks(Vec<Saved<'a>>),
+}
+
+/// An entry of a part of a list, as the object it was saved from saved
+/// itself, by the class of that object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Saved<'a> {
+    /// A shortcut (`IShellLink`).
+    Link(&'a [u8]),
+    /// An item of the Shell (`IShellItem`).
+    Item(&'a [u8]),
+}
+
+impl<'a> Saved<'a> {
+    /// The bytes of the shortcut, where it is one.
+    fn link(self) -> Option<&'a [u8]> {
+        match self {
+            Self::Link(link) => Some(link),
+            Self::Item(_) => None,
+        }
+    }
 }
 
 /// The parts of `list`, a list an application made, in their order. A
@@ -712,26 +799,56 @@ fn custom_parts(list: &[u8]) -> Vec<Part<'_>> {
     parts
 }
 
-/// The shortcuts at the start of `body`, which begins with their number,
-/// and what follows them. A shortcut is measured by its layout, or else
-/// taken up to where the next one or the end of the part begins.
-fn shortcuts(body: &[u8]) -> (Vec<&[u8]>, &[u8]) {
-    let mut links = Vec::new();
+/// The entries at the start of `body`, which begins with their number,
+/// and what follows them. Each entry is the identifier of a class and what
+/// the object of that class saved. A shortcut is measured by its layout;
+/// an item, whose layout is not described, and a shortcut that cannot be
+/// measured are taken up to where the next entry or the end of the part
+/// begins. An entry of another class is passed over in the same way.
+fn shortcuts(body: &[u8]) -> (Vec<Saved<'_>>, &[u8]) {
+    let mut entries = Vec::new();
     let count = u32_at(body, 0).unwrap_or(0);
     let mut rest = body.get(4..).unwrap_or_default();
     for _ in 0..count {
-        if !rest.starts_with(&LINK_START[..16]) {
+        if rest.starts_with(&PART_END) {
             break;
         }
-        let link = &rest[16..];
-        let length = link_length(link)
-            .or_else(|| position(&link[1..], &LINK_START).map(|next| next + 1))
-            .or_else(|| position(link, &PART_END))
-            .unwrap_or(link.len());
-        links.push(&link[..length]);
-        rest = &link[length..];
+        let Some((class, data)) = rest.split_first_chunk::<16>() else {
+            break;
+        };
+        let length = match *class {
+            LINK_CLASS => link_length(data),
+            _ => None,
+        };
+        let length = length.unwrap_or_else(|| unmeasured(data));
+        let saved = &data[..length];
+        entries.extend(match *class {
+            LINK_CLASS => Some(Saved::Link(saved)),
+            ITEM_CLASS => Some(Saved::Item(saved)),
+            _ => None,
+        });
+        rest = &data[length..];
     }
-    (links, rest)
+    (entries, rest)
+}
+
+/// How long the entry that starts `data` is taken to be where its length
+/// is not known: up to where the next shortcut or item or the end of the
+/// part begins, whichever comes first, or else all of `data`.
+fn unmeasured(data: &[u8]) -> usize {
+    let after_first = |pattern: &[u8]| {
+        let next = position(data.get(1..)?, pattern)?;
+        Some(next + 1)
+    };
+    [
+        after_first(&LINK_START),
+        after_first(&ITEM_CLASS),
+        position(data, &PART_END),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(data.len())
 }
 
 /// Which known categories a list shows, given the parts of the list the
@@ -1125,9 +1242,12 @@ mod tests {
         assert_eq!(
             parts,
             [
-                Part::Category("Media".to_owned(), vec![&first[..], &second[..]]),
+                Part::Category(
+                    "Media".to_owned(),
+                    vec![Saved::Link(&first), Saved::Link(&second)]
+                ),
                 Part::Known(KnownCategory::Frequent),
-                Part::Tasks(vec![&task[..]]),
+                Part::Tasks(vec![Saved::Link(&task)]),
             ]
         );
         assert_eq!(known_shown(Some(&parts)), [KnownCategory::Frequent]);
@@ -1148,9 +1268,98 @@ mod tests {
         other.extend(7u32.to_le_bytes());
         let list = custom_list(&[other, tasks]);
         let parts = custom_parts(&list);
-        assert_eq!(parts, [Part::Tasks(vec![&odd(2)[..], &odd(3)[..]])]);
+        assert_eq!(
+            parts,
+            [Part::Tasks(vec![
+                Saved::Link(&odd(2)),
+                Saved::Link(&odd(3))
+            ])]
+        );
         assert!(custom_parts(&list[..list.len() - 2]).is_empty());
         assert!(custom_parts(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_list_cut_short_after_the_class_of_a_shortcut_is_read_as_far_as_it_goes() {
+        let mut tasks = TASKS.to_le_bytes().to_vec();
+        tasks.extend(1u32.to_le_bytes());
+        tasks.extend(&LINK_START[..16]);
+        let mut list = custom_list(&[tasks]);
+        list.truncate(list.len() - PART_END.len());
+        assert_eq!(
+            shortcuts(&list[LIST_HEADER + 4..]),
+            (vec![Saved::Link(&[])], &[][..])
+        );
+        assert!(custom_parts(&list).is_empty());
+    }
+
+    #[test]
+    fn items_and_entries_of_other_classes_are_passed_over_to_the_next() {
+        let first = link(0x20 | IS_UNICODE, 0, 0, &["one"], 0);
+        let item = [5u8; 12];
+        let other = [6u8; 9];
+        let last = link(0, 0, 0, &[], 0);
+        let mut category = CATEGORY.to_le_bytes().to_vec();
+        category.extend(4u16.to_le_bytes());
+        category.extend(utf16("Docs"));
+        category.extend(4u32.to_le_bytes());
+        category.extend(&LINK_START[..16]);
+        category.extend(&first);
+        category.extend([0x11; 16]);
+        category.extend(other);
+        category.extend(ITEM_CLASS);
+        category.extend(item);
+        category.extend(&LINK_START[..16]);
+        category.extend(&last);
+        let mut known = KNOWN.to_le_bytes().to_vec();
+        known.extend(KNOWN_RECENT.to_le_bytes());
+        let list = custom_list(&[category, known]);
+        assert_eq!(
+            custom_parts(&list),
+            [
+                Part::Category(
+                    "Docs".to_owned(),
+                    vec![Saved::Link(&first), Saved::Item(&item), Saved::Link(&last)]
+                ),
+                Part::Known(KnownCategory::Recent),
+            ]
+        );
+        // An item that ends its part is taken up to the end of the part.
+        let mut tasks = TASKS.to_le_bytes().to_vec();
+        tasks.extend(1u32.to_le_bytes());
+        tasks.extend(ITEM_CLASS);
+        tasks.extend(item);
+        assert_eq!(
+            custom_parts(&custom_list(&[tasks])),
+            [Part::Tasks(vec![Saved::Item(&item)])]
+        );
+    }
+
+    #[test]
+    fn only_a_recorded_document_can_be_taken_off() {
+        let document = JumpItem {
+            name: "notes".to_owned(),
+            target: JumpTarget::Item(PathBuf::from(
+                r"C:
+otes.txt",
+            )),
+            icon: None,
+            recorded: true,
+        };
+        let command = JumpItem {
+            target: JumpTarget::Command {
+                program: PathBuf::from(r"C:pp.exe"),
+                arguments: "--open notes".to_owned(),
+            },
+            ..document.clone()
+        };
+        let own = JumpItem {
+            recorded: false,
+            ..document.clone()
+        };
+        assert!(document.removable());
+        assert!(!command.removable());
+        assert!(!own.removable());
     }
 
     /// An entry of a `DestList` of `version`.
