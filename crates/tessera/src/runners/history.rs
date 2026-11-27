@@ -210,6 +210,28 @@ impl History {
         self.file.prune(now);
     }
 
+    /// Forgets every choice, of every launcher, runner and Run dialog:
+    /// the history is emptied and its file written empty aside, also one
+    /// that could not be read. Asked while the file is being read, it
+    /// waits until that is done, so that what the file held is not merged
+    /// back afterwards.
+    pub fn clear(cx: &mut App) {
+        let history = cx.default_global::<Self>();
+        if history.disk == Disk::Reading {
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+                cx.update(Self::clear).ok();
+            })
+            .detach();
+            return;
+        }
+        history.file = HistoryFile::default();
+        history.disk = Disk::Read;
+        Self::save(cx);
+    }
+
     /// Sends the history as it is to be written aside.
     fn save(cx: &mut App) {
         let history = cx.global_mut::<Self>();
