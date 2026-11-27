@@ -75,8 +75,8 @@ pub use win32::{Intercept, MenuOutcome, ShellMenu, ShellVerb};
 )]
 pub use win32::{Launch, Show};
 pub use win32::{QuickAccess, ShellPlace, onedrive, recent_files, wsl_distributions};
-pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{RunHistory, RunningProcess};
+pub use win32::{SessionStartup, StartupEntry, StartupSource, SwitchRefusal};
 pub use win32::{expand_variables, find_program, recent_folder};
 #[allow(
     unused_imports,
