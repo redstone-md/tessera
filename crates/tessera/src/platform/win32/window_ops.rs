@@ -11,10 +11,11 @@
 //!
 //! Windows does none of this to a window of a process that runs with more
 //! rights than Tessera, and says nothing about it. A request that sends
-//! the window a message is posted, or made from a short thread of its own,
-//! so that a program that hangs never holds the shell up.
+//! the window a message is posted, or made from a short thread of its own
+//! and not at all to a window whose program hangs, so that such a program
+//! never holds the shell up.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
 
@@ -23,13 +24,16 @@ use windows::Win32::Graphics::Dwm::DWMWA_COLOR_NONE;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetLayeredWindowAttributes, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IsHungAppWindow, IsIconic, IsZoomed,
-    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SHOW_WINDOW_CMD, SW_MAXIMIZE, SW_MINIMIZE,
-    SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
-    ShowWindowAsync, WINDOWPLACEMENT, WS_EX_LAYERED, WS_EX_TOPMOST,
+    GWL_EXSTYLE, GWL_STYLE, GetLayeredWindowAttributes, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IsHungAppWindow, IsIconic, IsZoomed,
+    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SHOW_WINDOW_CMD, SM_CXBORDER, SM_CXFIXEDFRAME,
+    SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYBORDER, SM_CYFIXEDFRAME, SM_CYSIZEFRAME, SW_MAXIMIZE,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SYSTEM_METRICS_INDEX, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SetWindowPlacement, SetWindowPos, ShowWindowAsync, WINDOWPLACEMENT, WS_DLGFRAME, WS_EX_LAYERED,
+    WS_EX_TOPMOST, WS_THICKFRAME,
 };
 
 use super::{AppWindowId, ScreenRect};
@@ -40,6 +44,15 @@ const LEAST_OPACITY: f32 = 0.1;
 /// The windows Tessera made layered to make them see-through, so that it
 /// takes that away again when they are opaque again, and only from them.
 static LAYERED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
+
+/// The invisible border of windows as it was last measured while they
+/// were neither maximized nor minimized, when it is wider or narrower
+/// then, by window.
+static MARGINS: Mutex<Option<HashMap<isize, [i32; 4]>>> = Mutex::new(None);
+
+/// How many windows the invisible border is remembered for before those
+/// that are gone are forgotten.
+const MARGINS_KEPT: usize = 256;
 
 /// How much the invisible border of a window reaches beyond what is seen
 /// of it, on the left, top, right and bottom: `whole` is the window as
@@ -198,10 +211,30 @@ impl AppWindowId {
     /// Draws the whole window `opacity` opaque, from 0.1 to 1. The window
     /// is made layered for that, which some programs do not draw well in;
     /// it stops being layered once it is opaque again, unless it was
-    /// layered before. Whether Windows took the request is returned.
-    pub fn set_opacity(self, opacity: f32) -> bool {
-        let hwnd = self.hwnd();
+    /// layered before.
+    ///
+    /// Windows sends the window messages to change its style, so it is
+    /// done from a short thread of its own; a window whose program hangs
+    /// is left as it is.
+    pub fn set_opacity(self, opacity: f32) {
+        let raw = self.raw();
         let opacity = opacity.clamp(LEAST_OPACITY, 1.);
+        let started = thread::Builder::new()
+            .name("tessera window opacity".to_owned())
+            .spawn(move || {
+                let id = AppWindowId::from_raw(raw);
+                if !id.is_hung() {
+                    id.set_opacity_here(opacity);
+                }
+            });
+        if let Err(error) = started {
+            report!("a window is not made see-through: {error}");
+        }
+    }
+
+    /// What [`Self::set_opacity`] does, on the thread it is called on.
+    fn set_opacity_here(self, opacity: f32) {
+        let hwnd = self.hwnd();
         let mut layered = LAYERED.lock().unwrap_or_else(PoisonError::into_inner);
         let ours = layered.get_or_insert_with(HashSet::new);
         // SAFETY: the calls change the extended style and the opacity of a
@@ -211,20 +244,20 @@ impl AppWindowId {
             let is_layered = extended as u32 & WS_EX_LAYERED.0 != 0;
             if opacity >= 1. {
                 if !is_layered {
-                    return true;
+                    return;
                 }
-                let alpha = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA).is_ok();
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
                 if ours.remove(&self.raw()) {
                     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, extended & !(WS_EX_LAYERED.0 as isize));
                 }
-                return alpha;
+                return;
             }
             if !is_layered {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, extended | WS_EX_LAYERED.0 as isize);
                 ours.insert(self.raw());
             }
             let alpha = (opacity * 255.).round() as u8;
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).is_ok()
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
         }
     }
 
@@ -235,14 +268,61 @@ impl AppWindowId {
         self.set_border(Some(DWMWA_COLOR_NONE))
     }
 
-    /// The invisible border of the window, as [`margins`] gives it.
+    /// The invisible border the window has while it is neither maximized
+    /// nor minimized, as [`margins`] gives it. A maximized window reaches
+    /// beyond the display on every side, and a minimized one has no
+    /// border to measure, so for them it is the border measured before,
+    /// or else the one Windows gives a window of its kind.
     fn margins(self) -> Option<[i32; 4]> {
+        let mut remembered = MARGINS.lock().unwrap_or_else(PoisonError::into_inner);
+        let remembered = remembered.get_or_insert_with(HashMap::new);
+        if self.is_maximized() || self.is_minimized() {
+            return remembered
+                .get(&self.raw())
+                .copied()
+                .or_else(|| self.usual_margins());
+        }
         let seen = self.frame()?;
         let mut whole = RECT::default();
         // SAFETY: `whole` outlives the call, which tolerates a handle whose
         // window has since been destroyed.
         unsafe { GetWindowRect(self.hwnd(), &raw mut whole) }.ok()?;
-        Some(margins(seen, whole.into()))
+        let measured = margins(seen, whole.into());
+        if remembered.len() >= MARGINS_KEPT {
+            remembered.retain(|&raw, _| AppWindowId::from_raw(raw).exists());
+        }
+        remembered.insert(self.raw(), measured);
+        Some(measured)
+    }
+
+    /// The invisible border Windows gives a window with the frame this
+    /// one has, at its scale, when it is neither maximized nor minimized:
+    /// the frame and its padding beyond the line that is drawn of it, on
+    /// every side but the top. A program that draws its own frame may
+    /// have another.
+    fn usual_margins(self) -> Option<[i32; 4]> {
+        let hwnd = self.hwnd();
+        // SAFETY: the calls only read the scale and the style of a window,
+        // and the sizes Windows gives frames at a scale.
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd);
+            if dpi == 0 {
+                return None;
+            }
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+            let (x, y) = if style & WS_THICKFRAME.0 != 0 {
+                (SM_CXSIZEFRAME, SM_CYSIZEFRAME)
+            } else if style & WS_DLGFRAME.0 != 0 {
+                (SM_CXFIXEDFRAME, SM_CYFIXEDFRAME)
+            } else {
+                return Some([0; 4]);
+            };
+            let metric = |index: SYSTEM_METRICS_INDEX| GetSystemMetricsForDpi(index, dpi);
+            let padding = metric(SM_CXPADDEDBORDER);
+            let side = (metric(x) + padding - metric(SM_CXBORDER)).max(0);
+            let bottom = (metric(y) + padding - metric(SM_CYBORDER)).max(0);
+            Some([side, 0, side, bottom])
+        }
     }
 
     /// What is seen of the window when it is restored, on the screen: for
