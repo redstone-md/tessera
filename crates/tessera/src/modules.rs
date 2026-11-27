@@ -21,6 +21,7 @@ mod network;
 mod notifications;
 mod overview;
 mod plan;
+mod power_dialog;
 mod problems;
 mod session;
 mod settings;
@@ -71,6 +72,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(look::LookModule),
         Box::new(hdr::HdrModule),
         Box::new(plan::PlanModule),
+        Box::new(power_dialog::PowerDialogModule),
         Box::new(trash::TrashModule),
         Box::new(update::UpdateModule),
         Box::new(tray::TrayModule),

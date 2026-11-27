@@ -321,3 +321,23 @@ short-weekdays = ["Lun.", "Mar.", "Mer.", "Jeu.", "Ven.", "Sam.", "Dim."]
 # Settings: keys that name an action.
 "Action" = "Action"
 "The action is written in the file by hand." = "L’action est écrite à la main dans le fichier."
+
+# The dialog to shut down (winx-hotkeys).
+"What should the computer do?" = "Que doit faire l’ordinateur ?"
+"Switch user" = "Changer d’utilisateur"
+"Shows the sign-in screen and keeps this session with its apps open." = "Affiche l’écran de connexion et garde cette session ouverte avec ses applications."
+"Sign out" = "Se déconnecter"
+"Closes all apps and ends the session." = "Ferme toutes les applications et termine la session."
+"Sleep" = "Mettre en veille"
+"Keeps the session in memory and puts the computer into a low-power state." = "Garde la session en mémoire et met l’ordinateur dans un état de faible consommation."
+"Hibernate" = "Mettre en veille prolongée"
+"Saves the session to the disk and turns the computer off." = "Enregistre la session sur le disque et éteint l’ordinateur."
+"Update and shut down" = "Mettre à jour et arrêter"
+"Installs the updates that wait, then turns the computer off." = "Installe les mises à jour en attente, puis éteint l’ordinateur."
+"Shut down" = "Arrêter"
+"Closes all apps and turns the computer off." = "Ferme toutes les applications et éteint l’ordinateur."
+"Update and restart" = "Mettre à jour et redémarrer"
+"Installs the updates that wait, then starts the computer again." = "Installe les mises à jour en attente, puis redémarre l’ordinateur."
+"Restart" = "Redémarrer"
+"Closes all apps, turns the computer off and starts it again." = "Ferme toutes les applications, éteint l’ordinateur et le redémarre."
+"OK" = "OK"

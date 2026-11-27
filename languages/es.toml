@@ -321,3 +321,23 @@ short-weekdays = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"]
 # Settings: keys that name an action.
 "Action" = "Acción"
 "The action is written in the file by hand." = "La acción se escribe a mano en el archivo."
+
+# The dialog to shut down (winx-hotkeys).
+"What should the computer do?" = "¿Qué debe hacer el equipo?"
+"Switch user" = "Cambiar de usuario"
+"Shows the sign-in screen and keeps this session with its apps open." = "Muestra la pantalla de inicio de sesión y mantiene abierta esta sesión con sus aplicaciones."
+"Sign out" = "Cerrar sesión"
+"Closes all apps and ends the session." = "Cierra todas las aplicaciones y termina la sesión."
+"Sleep" = "Suspender"
+"Keeps the session in memory and puts the computer into a low-power state." = "Mantiene la sesión en memoria y pone el equipo en un estado de bajo consumo."
+"Hibernate" = "Hibernar"
+"Saves the session to the disk and turns the computer off." = "Guarda la sesión en el disco y apaga el equipo."
+"Update and shut down" = "Actualizar y apagar"
+"Installs the updates that wait, then turns the computer off." = "Instala las actualizaciones pendientes y luego apaga el equipo."
+"Shut down" = "Apagar"
+"Closes all apps and turns the computer off." = "Cierra todas las aplicaciones y apaga el equipo."
+"Update and restart" = "Actualizar y reiniciar"
+"Installs the updates that wait, then starts the computer again." = "Instala las actualizaciones pendientes y luego reinicia el equipo."
+"Restart" = "Reiniciar"
+"Closes all apps, turns the computer off and starts it again." = "Cierra todas las aplicaciones, apaga el equipo y lo vuelve a iniciar."
+"OK" = "Aceptar"

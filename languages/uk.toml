@@ -321,3 +321,23 @@ short-weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 # Settings: keys that name an action.
 "Action" = "Дія"
 "The action is written in the file by hand." = "Дію записують у файл вручну."
+
+# The dialog to shut down (winx-hotkeys).
+"What should the computer do?" = "Що має зробити комп’ютер?"
+"Switch user" = "Змінити користувача"
+"Shows the sign-in screen and keeps this session with its apps open." = "Показує екран входу; цей сеанс і його застосунки лишаються відкритими."
+"Sign out" = "Вийти з системи"
+"Closes all apps and ends the session." = "Закриває всі застосунки та завершує сеанс."
+"Sleep" = "Сон"
+"Keeps the session in memory and puts the computer into a low-power state." = "Зберігає сеанс у пам’яті й переводить комп’ютер у режим зниженого енергоспоживання."
+"Hibernate" = "Глибокий сон"
+"Saves the session to the disk and turns the computer off." = "Зберігає сеанс на диск і вимикає комп’ютер."
+"Update and shut down" = "Оновити й завершити роботу"
+"Installs the updates that wait, then turns the computer off." = "Встановлює оновлення, що очікують, потім вимикає комп’ютер."
+"Shut down" = "Завершення роботи"
+"Closes all apps and turns the computer off." = "Закриває всі застосунки й вимикає комп’ютер."
+"Update and restart" = "Оновити й перезавантажити"
+"Installs the updates that wait, then starts the computer again." = "Встановлює оновлення, що очікують, потім перезапускає комп’ютер."
+"Restart" = "Перезавантаження"
+"Closes all apps, turns the computer off and starts it again." = "Закриває всі застосунки, вимикає комп’ютер і знову вмикає його."
+"OK" = "OK"
