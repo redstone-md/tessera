@@ -17,6 +17,7 @@ pub use win32::EXPLORER_APP_ID;
 pub use win32::FileSearch;
 pub use win32::HookAsks;
 pub use win32::InputName;
+pub use win32::JobWords;
 pub use win32::Occupation;
 pub use win32::OwnInput;
 pub use win32::PinVerb;
@@ -133,11 +134,13 @@ pub use win32::{LARGEST_THUMBNAIL, ThumbnailKind, Thumbnails};
     reason = "Show is for the launchers that ask for a window state"
 )]
 pub use win32::{Launch, Show};
+pub use win32::{Libraries, Reading, ShellChild, ShellFailure, ShellFolder, ShellPath, ShellRead};
 #[allow(
     unused_imports,
     reason = "bound by shortcuts-editor, reported by window-rules-editor"
 )]
 pub use win32::{MouseBinding, MouseButtonName, MouseButtons};
+pub use win32::{NetworkLocation, RememberedDrive};
 pub use win32::{NewTemplate, OpenWithHandler, SendToTarget, choose_app};
 pub use win32::{PathDrop, PathDropTarget, PathZone, PathZones, ZoneEffect};
 pub use win32::{Poster, VideoLook, VideoOverlay};
@@ -158,4 +161,5 @@ pub use win32::{expand_variables, find_program, recent_folder};
 )]
 pub use win32::{explorer_running, shell_mode};
 pub use win32::{scheme_handler, windows_taskbar_pins};
+pub use win32::{open_folder_options, set_extensions_shown, show_properties_of};
 pub use win32::{terminal, windows_terminal};

@@ -80,6 +80,7 @@ mod run_history;
 mod screenshot;
 mod send_to;
 mod share;
+mod shell_folder;
 mod shell_host;
 mod shell_item;
 mod shell_items;
@@ -164,11 +165,13 @@ pub use explorer_view::{
     Attributes, ExplorerSettings, NameRules, localized_candidates, shell_names,
 };
 pub use file_jobs::{FileJobEvent, FileJobState, FileJobs};
+pub use file_op::JobWords;
 pub use file_op::{FileDeed, FileOperation, LinkTarget, Made, Outcome, UndoJournal, unique_name};
 pub use files::{
     Drive, DriveKind, FileClipboard, FileWork, disk_space, is_hidden, reveal_in_explorer,
     show_properties,
 };
+pub use files::{open_folder_options, set_extensions_shown, show_properties_of};
 pub use files::{reveal, reveal_with};
 pub use focus_guard::{FocusGuard, FocusLevel};
 pub use folder_handler::{FilesStart, start_detached};
@@ -199,6 +202,7 @@ pub use mouse_hook::HookAsks;
 pub use mouse_hook::{ActiveTracking, GrabKey, MouseHook, PointerButton, PointerEvent};
 pub use move_watch::{MoveEvent, MoveWatch};
 pub use net_drives::{DriveDialog, NetworkDrives};
+pub use net_drives::{NetworkLocation, RememberedDrive};
 pub use network::{Link, Network};
 pub use night_light::{COLDEST, GammaNight, WARMEST, WindowsNight, WindowsNightLight};
 pub use notifications::Occupation;
@@ -233,6 +237,9 @@ pub use run_history::RunHistory;
 pub use screenshot::save_screenshot;
 pub use send_to::SendToTarget;
 pub use share::SharePackage;
+pub use shell_folder::{
+    Libraries, Reading, ShellChild, ShellFailure, ShellFolder, ShellPath, ShellRead,
+};
 pub use shell_host::{HostOptions, ShellEvent, ShellHost};
 pub use shell_item::ShellId;
 pub use shell_menu::{Intercept, MenuOutcome, ShellMenu, ShellVerb};

@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use anyhow::{Result, bail};
 use async_channel::Sender;
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, POINT};
+use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
 };
@@ -28,7 +29,11 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::UI::Shell::{
-    DROPFILES, DragQueryFileW, HDROP, SHOP_FILEPATH, SHObjectProperties,
+    DROPFILES, DragQueryFileW, HDROP, SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify,
+    SHMultiFileProperties, SHOP_FILEPATH, SHObjectProperties,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
 };
 use windows::core::{BOOL, PCWSTR, w};
 
@@ -233,6 +238,70 @@ pub fn show_properties(path: &Path) -> Result<()> {
     if !shown.as_bool() {
         bail!("Windows shows no properties of {}", path.display());
     }
+    Ok(())
+}
+
+/// Opens one sheet of the properties of the files and folders `paths`
+/// together, as Alt+Enter on several items in Explorer does, or of items
+/// of the Shell by their parsing names. It is shown on the shell thread; a
+/// failure is reported.
+pub fn show_properties_of(paths: Vec<PathBuf>) {
+    super::ShellThread::run(move || {
+        let shown = super::shell_items::data_object(&paths).and_then(|data| {
+            // SAFETY: the data object is alive for the call, which opens
+            // the sheet on a thread of the Shell's own.
+            unsafe { SHMultiFileProperties(&data, 0) }.map_err(anyhow::Error::from)
+        });
+        if let Err(error) = shown {
+            report!("Windows shows no properties of these items: {error:#}");
+        }
+    });
+}
+
+/// Where Explorer keeps the options of its View menu.
+const ADVANCED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
+
+/// Shows the extensions of the names of files of known types with
+/// `shown`, or hides them, as "File name extensions" of Explorer's View
+/// menu does: in Explorer's own option, which every window of Explorer
+/// and of Tessera follows, and tells the Shell and the windows open that
+/// it changed. It writes the registry and waits a moment for the windows,
+/// so it is done away from the user interface.
+pub fn set_extensions_shown(shown: bool) -> Result<()> {
+    let (key, _) = super::registry::Key::create(
+        windows::Win32::System::Registry::HKEY_CURRENT_USER,
+        ADVANCED,
+        Default::default(),
+        false,
+    )
+    .map_err(|failure| failure.into_error("Explorer's options"))?;
+    key.set_number("HideFileExt", u32::from(!shown))
+        .map_err(|failure| failure.into_error("Explorer's options"))?;
+    let setting: Vec<u16> = "ShellState".encode_utf16().chain([0]).collect();
+    // SAFETY: the calls only tell the Shell and the windows that the
+    // option changed; the text outlives the broadcast, which gives up on
+    // a window that hangs.
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            WPARAM(0),
+            LPARAM(setting.as_ptr() as isize),
+            SMTO_ABORTIFHUNG,
+            1000,
+            None,
+        );
+    }
+    Ok(())
+}
+
+/// Opens the Folder Options of Explorer, on its General tab.
+pub fn open_folder_options() -> Result<()> {
+    Command::new("rundll32.exe")
+        .arg("shell32.dll,Options_RunDLL")
+        .arg("0")
+        .spawn()?;
     Ok(())
 }
 

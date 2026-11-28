@@ -30,12 +30,23 @@
 //! Each operation runs on a thread of its own (see
 //! [`ShellThread::run_alone`]), as its dialogs keep it for as long as the
 //! work lasts; the thread of GPUI never waits for it.
+//!
+//! While anybody listens to the jobs on files ([`FileJobs::subscribe`], as
+//! the notifications do), an operation publishes how far it got there,
+//! under a title made of the [`JobWords`] the file manager gives in the
+//! language shown, stops between two items once it is cancelled, and the
+//! Shell's own progress window is left out (`FOF_SILENT`); its questions
+//! about conflicts and confirmations stay. `IFileOperation` cannot pause,
+//! so a job only runs, ends or is cancelled. Where nobody listens, the
+//! Shell shows its progress as Explorer does.
 #![allow(unsafe_code)]
 
 use std::ffi::{OsStr, OsString, c_void};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 use async_channel::Receiver;
@@ -47,18 +58,80 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::{
     COPYENGINE_E_USER_CANCELLED, FILEOPERATION_FLAGS, FOF_ALLOWUNDO, FOF_NOCONFIRMMKDIR,
-    FOF_RENAMEONCOLLISION, FOFX_RECYCLEONDELETE, FileOperation as FileOperationClass,
+    FOF_RENAMEONCOLLISION, FOF_SILENT, FOFX_RECYCLEONDELETE, FileOperation as FileOperationClass,
     IFileOperation, IFileOperationProgressSink, IFileOperationProgressSink_Impl, IShellItem,
     IShellLinkW, SHGNLI_PIDL, SHGetNewLinkInfoW, ShellLink,
 };
 use windows::core::{BOOL, HRESULT, Interface, PCWSTR, Ref, implement};
 
 use super::execute::own_window_in_front;
+use super::file_jobs::{FileJobEvent, FileJobState, FileJobs};
 use super::shell_item::{IdList, ShellId, item_of_path, path_of_item, wide};
 use super::{NativeSurface, ShellThread, shell_menu};
 
 /// How many pieces of work the journal keeps to take back.
 const JOURNAL_DEPTH: usize = 100;
+
+/// How often a job tells how far it got, at most.
+const JOB_TELLS: Duration = Duration::from_millis(150);
+
+/// The words the titles of jobs are made of, in the language shown, each
+/// with `{}` for the number of items and, where it goes somewhere, `{}`
+/// for the folder after it: "Copying {} items to {}". The file manager
+/// gives them; until it does, they are English.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobWords {
+    pub copying: String,
+    pub moving: String,
+    pub deleting: String,
+    pub renaming: String,
+    pub making: String,
+}
+
+impl Default for JobWords {
+    fn default() -> Self {
+        Self {
+            copying: "Copying {} items to {}".to_owned(),
+            moving: "Moving {} items to {}".to_owned(),
+            deleting: "Deleting {} items".to_owned(),
+            renaming: "Renaming {} items".to_owned(),
+            making: "Making {} items in {}".to_owned(),
+        }
+    }
+}
+
+impl JobWords {
+    /// Has every job from now on titled with these words.
+    pub fn take(self) {
+        *lock(&JOB_WORDS) = Some(self);
+    }
+
+    /// The title of a job that does `steps`, after what the first does.
+    fn title(&self, steps: &[Step]) -> String {
+        let count = steps.len().to_string();
+        let into = |folder: &Path| {
+            { folder.file_name() }.map_or_else(
+                || folder.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        };
+        let (words, folder) = match steps.first() {
+            Some(Step::Copy { into: folder, .. }) => (&self.copying, Some(into(folder))),
+            Some(Step::Move { into: folder, .. }) => (&self.moving, Some(into(folder))),
+            Some(Step::Rename { .. }) => (&self.renaming, None),
+            Some(Step::Delete { .. } | Step::Restore { .. }) | None => (&self.deleting, None),
+            Some(Step::New { into: folder, .. }) => (&self.making, Some(into(folder))),
+        };
+        let mut title = words.replacen("{}", &count, 1);
+        if let Some(folder) = folder {
+            title = title.replacen("{}", &folder, 1);
+        }
+        title
+    }
+}
+
+/// The words of the titles of jobs, once the file manager gave them.
+static JOB_WORDS: Mutex<Option<JobWords>> = Mutex::new(None);
 
 /// What a shortcut that Tessera makes points to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -291,9 +364,20 @@ fn passes(steps: &[Step]) -> Vec<(Pass, Range<usize>)> {
 }
 
 /// The flags of an `IFileOperation` that does `steps`, deleting into the
-/// Recycle Bin when `recycle`.
+/// Recycle Bin when `recycle`, with the Shell's progress window.
+#[cfg(test)]
 fn flags_of(steps: &[Step], recycle: bool) -> FILEOPERATION_FLAGS {
+    flags_shown(steps, recycle, false)
+}
+
+/// The flags of an `IFileOperation` as [`flags_of`] gives them, and with
+/// `silent`, without the Shell's progress window, which a job shown
+/// elsewhere takes the place of.
+fn flags_shown(steps: &[Step], recycle: bool, silent: bool) -> FILEOPERATION_FLAGS {
     let mut flags = FOF_NOCONFIRMMKDIR.0;
+    if silent {
+        flags |= FOF_SILENT.0;
+    }
     if recycle {
         flags |= FOF_ALLOWUNDO.0 | FOFX_RECYCLEONDELETE.0;
     }
@@ -526,6 +610,37 @@ impl FileOperation {
         self.steps.is_empty()
     }
 
+    // files-namespace: work on items of the Shell without a path (a
+    // phone, the inside of a ZIP file), named by their parsing names,
+    // which the Shell parses as it parses paths. What is done to them is
+    // not in the journal, as it is no path to take back.
+
+    /// Copies the items of the Shell `names` into the place `into`, a
+    /// folder or another place of the Shell, by parsing names.
+    #[allow(dead_code, reason = "for the jobs on the items of the Shell")]
+    pub fn copy_items(self, names: &[String], into: &str) -> Self {
+        self.copy(names.iter().map(PathBuf::from), Path::new(into))
+    }
+
+    /// Moves the items of the Shell `names` into the place `into`.
+    #[allow(dead_code, reason = "for the jobs on the items of the Shell")]
+    pub fn move_items(self, names: &[String], into: &str) -> Self {
+        self.move_(names.iter().map(PathBuf::from), Path::new(into))
+    }
+
+    /// Deletes the items of the Shell `names`, into the Recycle Bin where
+    /// their place has one, else for good after the Shell asks.
+    #[allow(dead_code, reason = "for the jobs on the items of the Shell")]
+    pub fn recycle_items(self, names: &[String]) -> Self {
+        self.recycle(names.iter().map(PathBuf::from))
+    }
+
+    /// Gives the item of the Shell `name` the name `new`.
+    #[allow(dead_code, reason = "for the jobs on the items of the Shell")]
+    pub fn rename_item(self, name: &str, new: &str) -> Self {
+        self.rename(Path::new(name), new)
+    }
+
     /// Starts the work on a thread of its own and returns at once; the
     /// receiver yields what was done, and is closed without an answer if
     /// the work failed in a way that ended it. Await it from a task of
@@ -611,9 +726,12 @@ fn shell_pass(steps: &[Step], recycle: bool, owner: HWND, outcome: &mut Outcome)
         .map(Path::to_owned)
         .collect();
     let deeds = Arc::new(Mutex::new(Vec::new()));
+    let job = FileJobs::has_subscribers().then(|| Job::of(steps));
+    let silent = job.is_some();
     let sink: IFileOperationProgressSink = Sink {
         asked,
         deeds: deeds.clone(),
+        job,
     }
     .into();
     // SAFETY: the operation and the sink are alive for the calls.
@@ -621,7 +739,7 @@ fn shell_pass(steps: &[Step], recycle: bool, owner: HWND, outcome: &mut Outcome)
         if !owner.is_invalid() {
             operation.SetOwnerWindow(owner)?;
         }
-        operation.SetOperationFlags(flags_of(steps, recycle))?;
+        operation.SetOperationFlags(flags_shown(steps, recycle, silent))?;
         operation.Advise(&sink)?
     };
     let mut queued = 0usize;
@@ -852,6 +970,73 @@ struct Sink {
     /// a folder is not written down apart.
     asked: Vec<PathBuf>,
     deeds: Arc<Mutex<Vec<FileDeed>>>,
+    /// The job it publishes, where anybody listens.
+    job: Option<Job>,
+}
+
+/// A run of work on files as the jobs on files tell it.
+struct Job {
+    id: u64,
+    title: String,
+    destination: Option<PathBuf>,
+    /// The items asked about, and how many are done.
+    items: u64,
+    done: AtomicU64,
+    /// The Shell's units of work, which follow the bytes, done and in all.
+    work: Mutex<(u64, u64)>,
+    /// When it last told how far it got.
+    told: Mutex<Option<Instant>>,
+}
+
+impl Job {
+    fn of(steps: &[Step]) -> Self {
+        let words = lock(&JOB_WORDS).clone().unwrap_or_default();
+        let destination = steps.iter().find_map(|step| match step {
+            Step::Copy { into, .. } | Step::Move { into, .. } | Step::New { into, .. } => {
+                Some(into.clone())
+            }
+            _ => None,
+        });
+        Self {
+            id: FileJobs::next_id(),
+            title: words.title(steps),
+            destination,
+            items: steps.len() as u64,
+            done: AtomicU64::new(0),
+            work: Mutex::new((0, 0)),
+            told: Mutex::new(None),
+        }
+    }
+
+    /// Tells how far the job got in `state`; while it runs, not more often
+    /// than [`JOB_TELLS`] unless `now`.
+    fn tell(&self, state: FileJobState, now: bool) {
+        if state == FileJobState::Running && !now {
+            let mut told = lock(&self.told);
+            if told.is_some_and(|told| told.elapsed() < JOB_TELLS) {
+                return;
+            }
+            *told = Some(Instant::now());
+        }
+        FileJobs::publish(FileJobEvent {
+            id: self.id,
+            title: self.title.clone(),
+            items: (self.done.load(Ordering::Relaxed), self.items),
+            bytes: *lock(&self.work),
+            state,
+            destination: self.destination.clone(),
+            can_cancel: true,
+        });
+    }
+
+    /// Whether the job was asked to stop, which stops the Shell before the
+    /// next item.
+    fn go_on(&self) -> windows::core::Result<()> {
+        match FileJobs::is_cancelled(self.id) {
+            true => Err(HRESULT::from_win32(ERROR_CANCELLED.0).into()),
+            false => Ok(()),
+        }
+    }
 }
 
 /// What `mutex` holds, also where a thread panicked while it held it.
@@ -862,6 +1047,19 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Sink {
+    /// Asks the job whether to go on, before an item.
+    fn go_on(&self) -> windows::core::Result<()> {
+        self.job.as_ref().map_or(Ok(()), Job::go_on)
+    }
+
+    /// Counts an item done, and tells so.
+    fn item_done(&self) {
+        if let Some(job) = &self.job {
+            job.done.fetch_add(1, Ordering::Relaxed);
+            job.tell(FileJobState::Running, false);
+        }
+    }
+
     /// The path of `item`, where it is one the steps name.
     fn asked_path(&self, item: Ref<'_, IShellItem>) -> Option<PathBuf> {
         let path = path_of_item(item.as_ref()?)?;
@@ -893,10 +1091,21 @@ impl Sink {
 #[allow(non_snake_case, reason = "the names of the methods of COM")]
 impl IFileOperationProgressSink_Impl for Sink_Impl {
     fn StartOperations(&self) -> windows::core::Result<()> {
+        if let Some(job) = &self.job {
+            job.tell(FileJobState::Running, true);
+        }
         Ok(())
     }
 
-    fn FinishOperations(&self, _result: HRESULT) -> windows::core::Result<()> {
+    fn FinishOperations(&self, result: HRESULT) -> windows::core::Result<()> {
+        if let Some(job) = &self.job {
+            let state = match result {
+                result if result.is_ok() => FileJobState::Done,
+                result if cancelled(result) => FileJobState::Cancelled,
+                result => FileJobState::Failed(windows::core::Error::from(result).message()),
+            };
+            job.tell(state, true);
+        }
         Ok(())
     }
 
@@ -906,7 +1115,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         _item: Ref<'_, IShellItem>,
         _name: &PCWSTR,
     ) -> windows::core::Result<()> {
-        Ok(())
+        self.go_on()
     }
 
     fn PostRenameItem(
@@ -921,6 +1130,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
             from,
             to,
         });
+        self.item_done();
         Ok(())
     }
 
@@ -931,7 +1141,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         _folder: Ref<'_, IShellItem>,
         _name: &PCWSTR,
     ) -> windows::core::Result<()> {
-        Ok(())
+        self.go_on()
     }
 
     fn PostMoveItem(
@@ -944,6 +1154,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         made: Ref<'_, IShellItem>,
     ) -> windows::core::Result<()> {
         self.write(item, result, made, |from, to| FileDeed::Moved { from, to });
+        self.item_done();
         Ok(())
     }
 
@@ -954,7 +1165,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         _folder: Ref<'_, IShellItem>,
         _name: &PCWSTR,
     ) -> windows::core::Result<()> {
-        Ok(())
+        self.go_on()
     }
 
     fn PostCopyItem(
@@ -967,11 +1178,12 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         made: Ref<'_, IShellItem>,
     ) -> windows::core::Result<()> {
         self.write(item, result, made, |from, to| FileDeed::Copied { from, to });
+        self.item_done();
         Ok(())
     }
 
     fn PreDeleteItem(&self, _flags: u32, _item: Ref<'_, IShellItem>) -> windows::core::Result<()> {
-        Ok(())
+        self.go_on()
     }
 
     fn PostDeleteItem(
@@ -981,6 +1193,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         result: HRESULT,
         made: Ref<'_, IShellItem>,
     ) -> windows::core::Result<()> {
+        self.item_done();
         if result.is_err() {
             return Ok(());
         }
@@ -1006,7 +1219,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         _folder: Ref<'_, IShellItem>,
         _name: &PCWSTR,
     ) -> windows::core::Result<()> {
-        Ok(())
+        self.go_on()
     }
 
     fn PostNewItem(
@@ -1040,7 +1253,12 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         Ok(())
     }
 
-    fn UpdateProgress(&self, _total: u32, _done: u32) -> windows::core::Result<()> {
+    fn UpdateProgress(&self, total: u32, done: u32) -> windows::core::Result<()> {
+        if let Some(job) = &self.job {
+            *lock(&job.work) = (u64::from(done), u64::from(total));
+            job.tell(FileJobState::Running, false);
+            return job.go_on();
+        }
         Ok(())
     }
 
@@ -1320,6 +1538,32 @@ fn label(deeds: &[FileDeed], again: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_job_is_titled_after_its_first_step() {
+        let words = JobWords::default();
+        let copy = FileOperation::new().copy(
+            [PathBuf::from(r"C:\a.txt"), PathBuf::from(r"C:\b.txt")],
+            Path::new(r"C:\Users\me\Downloads"),
+        );
+        assert_eq!(words.title(&copy.steps), "Copying 2 items to Downloads");
+        let gone = FileOperation::new().recycle([PathBuf::from(r"C:\a.txt")]);
+        assert_eq!(words.title(&gone.steps), "Deleting 1 items");
+        let phone = FileOperation::new()
+            .copy_items(&["::{20D04FE0}\\phone\\a.jpg".to_owned()], r"C:\Photos");
+        assert_eq!(words.title(&phone.steps), "Copying 1 items to Photos");
+    }
+
+    #[test]
+    fn a_silent_operation_keeps_its_questions() {
+        let steps = FileOperation::new()
+            .recycle([PathBuf::from(r"C:\a.txt")])
+            .steps;
+        let silent = flags_shown(&steps, true, true).0;
+        assert_ne!(silent & FOF_SILENT.0, 0);
+        assert_ne!(silent & FOF_ALLOWUNDO.0, 0);
+        assert_eq!(flags_of(&steps, true).0 & FOF_SILENT.0, 0);
+    }
 
     fn path(text: &str) -> PathBuf {
         PathBuf::from(text)

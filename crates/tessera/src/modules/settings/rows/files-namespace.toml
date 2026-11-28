@@ -1,3 +1,155 @@
 # Rows of the settings filled by files-namespace. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# The file manager: how folders are shown and what it opens. `own` and
+# `hidden` are settings-core's rows, `restore_windows` is files-terminal's.
+
+[[card]]
+section = "Files"
+title = "File manager"
+table = "files"
+search = ["Explorer", "Archives", "ZIP", "Home", "AutoPlay"]
+
+[[card.row]]
+key = "explorer"
+kind = "toggle"
+label = "Follow Explorer's folder options"
+description = "Extensions of known types hidden, hidden and protected files shown as Explorer shows them, and the names a desktop.ini gives."
+default = true
+
+[[card.row]]
+key = "folders_first"
+kind = "toggle"
+label = "Folders before files"
+default = true
+
+[[card.row]]
+key = "view"
+kind = "choice"
+label = "How folders are shown"
+default = "details"
+choices = [
+    { value = "details", label = "Details" },
+    { value = "list", label = "List" },
+    { value = "tiles", label = "Tiles" },
+    { value = "icons", label = "Large icons" },
+]
+
+[[card.row]]
+key = "group"
+kind = "choice"
+label = "Groups"
+default = "none"
+choices = [
+    { value = "none", label = "No groups" },
+    { value = "type", label = "Group by type" },
+    { value = "date", label = "Group by date" },
+]
+
+[[card.row]]
+key = "per_folder"
+kind = "toggle"
+label = "Each folder keeps its own look"
+default = false
+
+[[card.row]]
+key = "restore"
+kind = "toggle"
+label = "A new window opens with the tabs of the last one closed"
+default = false
+
+[[card.row]]
+key = "archives"
+kind = "choice"
+label = "Archives"
+description = "ZIP files and the other archives Windows opens as folders (7z, rar, tar and gz on Windows 11 23H2 and later)."
+default = "browse"
+choices = [
+    { value = "browse", label = "Browse as folders" },
+    { value = "open", label = "Open with their program" },
+]
+
+[[card.row]]
+key = "home"
+kind = "choice"
+label = "Home"
+default = "tessera"
+choices = [
+    { value = "tessera", label = "Tessera's Quick access and recent files" },
+    { value = "windows", label = "Windows' own Home" },
+]
+
+[[card.row]]
+key = "autoplay"
+kind = "choice"
+label = "AutoPlay for drives that arrive"
+default = "shell"
+choices = [
+    { value = "shell", label = "Only as the shell" },
+    { value = "always", label = "Always" },
+    { value = "off", label = "Never" },
+]
+
+# Thumbnails, overlays and the panes beside the list.
+
+[[card]]
+section = "Files"
+title = "Thumbnails and panes"
+table = "file_view"
+search = ["Preview", "Overlays", "OneDrive"]
+
+[[card.row]]
+key = "thumbnails"
+kind = "toggle"
+label = "Pictures of what files hold"
+default = true
+
+[[card.row]]
+key = "folder_thumbnails"
+kind = "toggle"
+label = "Pictures of what folders hold"
+default = true
+
+[[card.row]]
+key = "thumbnail_size"
+kind = "slider"
+label = "Largest thumbnail"
+min = 32
+max = 256
+step = 32
+unit = "px"
+default = 256
+
+[[card.row]]
+key = "overlays"
+kind = "toggle"
+label = "Overlays of programs over icons"
+default = true
+
+[[card.row]]
+key = "preview"
+kind = "toggle"
+label = "Preview pane"
+default = false
+
+[[card.row]]
+key = "details"
+kind = "toggle"
+label = "Details pane"
+default = false
+
+[[card.row]]
+key = "preview_handlers"
+kind = "toggle"
+label = "Previews by the handlers of programs"
+default = true
+
+[[card.row]]
+key = "preview_timeout"
+kind = "number"
+label = "Seconds a preview handler is waited for"
+min = 1
+max = 60
+step = 1
+default = 5.0

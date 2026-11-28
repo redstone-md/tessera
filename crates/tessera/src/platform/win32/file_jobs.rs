@@ -18,10 +18,6 @@ use async_channel::{Receiver, Sender};
 
 /// Where a job is.
 #[derive(Clone, Debug, PartialEq)]
-#[allow(
-    dead_code,
-    reason = "published by the jobs of files-namespace and files-search-actions"
-)]
 pub enum FileJobState {
     Running,
     Done,
@@ -34,7 +30,7 @@ pub enum FileJobState {
 #[derive(Clone, Debug)]
 #[allow(
     dead_code,
-    reason = "published by the jobs of files-namespace and files-search-actions"
+    reason = "read by the notifications of notifications-rich, which show the jobs"
 )]
 pub struct FileJobEvent {
     /// The number of the job, from [`FileJobs::next_id`].
@@ -66,10 +62,6 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[allow(
-    dead_code,
-    reason = "used by files-namespace, files-search-actions and notifications-rich"
-)]
 impl FileJobs {
     /// A number no other job of this process has.
     pub fn next_id() -> u64 {
@@ -90,6 +82,7 @@ impl FileJobs {
 
     /// A receiver of every event from now on, in the order they are
     /// published; each caller gets its own.
+    #[allow(dead_code, reason = "subscribed by notifications-rich")]
     pub fn subscribe() -> Receiver<FileJobEvent> {
         let (sender, receiver) = async_channel::unbounded();
         locked(&SUBSCRIBERS).push(sender);
@@ -105,6 +98,10 @@ impl FileJobs {
     }
 
     /// Asks the job `id` to stop; it stops between two items.
+    #[allow(
+        dead_code,
+        reason = "cancelled from the notifications of notifications-rich"
+    )]
     pub fn cancel(id: u64) {
         locked(&CANCELLED).get_or_insert_default().insert(id);
     }

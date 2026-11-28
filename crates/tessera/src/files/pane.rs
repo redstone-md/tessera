@@ -25,18 +25,21 @@ use gpui::{
 use gpui::{NavigationDirection, ObjectFit, RenderImage, StyledImage, Subscription};
 
 use super::columns::Columns;
+use super::model::is_bare_server;
 use super::model::{
     Arrangement, Column, Entry, GroupLabel, Grouping, History, Line, Listing, Location, Look,
     Order, Selection, Shape, Shown, TypeAhead, crumbs, is_valid_name, read_folder, size_text,
     stamp_of,
 };
+use super::model::{COMPUTER_PARSING, KnownShellPlace, PICTURES_LIBRARY, is_archive};
+use super::model::{address_parts, suggestions};
 use super::recycle_view::{self, Bin, BinDeed};
 use super::rename::{BatchRename, RenameEvent, apply, parent_key};
 use super::search::{FOUND_MOST, Found, Search, SearchState};
 use super::session::{FolderView, FolderViews};
 use super::thumbs::{FileViewConfig, Picture, Thumbs, drop_pictures};
 use super::view::{DropPlaces, DropSpot};
-use super::{Files, FilesConfig};
+use super::{Archives, Files, FilesConfig};
 use crate::actions::Actions;
 use crate::field::TextField;
 use crate::i18n::Language;
@@ -48,11 +51,17 @@ use crate::platform::{
     QuickAccess, disk_space, recent_files, reveal_in_explorer, show_properties, terminal,
 };
 use crate::platform::{FileProperty, Overlays, PropertyValue, RecycleBin};
+use crate::platform::{
+    Libraries, NetworkDrives, NetworkLocation, Reading, RememberedDrive, ShellFailure, ShellFolder,
+    ShellId, ShellMenu, ShellPath, ShellRead, open_folder_options, set_extensions_shown,
+    show_properties_of,
+};
 use crate::popup::PopupAnchor;
 use crate::theme::Theme;
 use crate::ui::{icon, one_line};
 
-use super::sidebar::ICON_HOME;
+use super::places::PlaceGroup;
+use super::sidebar::{ICON_HOME, add_to_places};
 
 mod header;
 mod search_bar;
@@ -78,6 +87,9 @@ const WATCH_INTERVAL: Duration = Duration::from_millis(1500);
 /// How many of the files used lately Home shows.
 const RECENT_SHOWN: usize = 20;
 
+/// How many places a right click on Back or Forward lists.
+const HISTORY_SHOWN: usize = 12;
+
 /// How far the pointer moves with the button held, in logical pixels,
 /// before what is chosen is dragged.
 const DRAG_DISTANCE: f32 = 4.;
@@ -96,6 +108,8 @@ pub const ICON_USB: &str = "\u{e88e}";
 pub const ICON_NETWORK: &str = "\u{e968}";
 pub const ICON_DISC: &str = "\u{e958}";
 pub const ICON_BIN: &str = "\u{e74d}";
+pub const ICON_DEVICE: &str = "\u{e8ea}";
+const ICON_CROSS: &str = "\u{e711}";
 pub const ICON_HIDDEN: &str = "\u{e7b3}";
 const ICON_OPEN: &str = "\u{e8e5}";
 const ICON_CUT: &str = "\u{e8c6}";
@@ -192,8 +206,11 @@ pub struct FolderPane {
     pins: HashSet<PathBuf>,
     /// What the filter field narrows the list to.
     filter: Entity<TextField>,
-    /// The path being written in place of the steps, when it is.
+    /// The path being written in place of the steps, when it is, with
+    /// what it suggests and the reading of the folder it names.
     address: Option<Entity<TextField>>,
+    suggested: Vec<String>,
+    _suggesting: Option<(Subscription, Option<Task<()>>)>,
     rename: Option<Rename>,
     /// Why the folder cannot be shown.
     problem: Option<String>,
@@ -292,6 +309,43 @@ pub struct FolderPane {
     /// folder and they were not read yet.
     _views: Option<gpui::Subscription>,
     _watch: Task<()>,
+    /// What is done instead where the place of the Shell just opened lists
+    /// nothing: the item is opened by its verb, or the file by its program.
+    fallback: Option<Fallback>,
+    /// What This PC shows beside its drives: the phones, cameras and other
+    /// devices without a letter, the network locations and the drives of
+    /// the network remembered for the next sign-in; and their reading.
+    devices: Vec<Entry>,
+    locations: Vec<NetworkLocation>,
+    remembered: Vec<RememberedDrive>,
+    _devices: Option<Task<()>>,
+    /// Whether the place of the Shell shown is Network and it was read
+    /// without a single computer, as when network discovery is off.
+    quiet_network: bool,
+}
+
+/// What a pane does where a place of the Shell it went into lists
+/// nothing, and the place it went into.
+struct Fallback {
+    location: Location,
+    deed: FallbackDeed,
+}
+
+enum FallbackDeed {
+    /// Opens the item of the Shell by its default verb.
+    Invoke(ShellId, String),
+    /// Opens the file by its program, as an archive the Shell does not open
+    /// as a folder.
+    Launch(PathBuf, String),
+}
+
+impl FallbackDeed {
+    fn run(self) {
+        match self {
+            Self::Invoke(id, name) => ShellFolder::invoke(id, name),
+            Self::Launch(path, name) => Launch::new(&path).named(format!("`{name}`")).start(),
+        }
+    }
 }
 
 impl EventEmitter<PaneEvent> for FolderPane {}
@@ -383,6 +437,8 @@ impl FolderPane {
             pins: HashSet::new(),
             filter,
             address: None,
+            suggested: Vec::new(),
+            _suggesting: None,
             rename: None,
             problem: None,
             stamp: None,
@@ -420,6 +476,12 @@ impl FolderPane {
             language,
             _views: views,
             _watch: watch,
+            fallback: None,
+            devices: Vec::new(),
+            locations: Vec::new(),
+            remembered: Vec::new(),
+            _devices: None,
+            quiet_network: false,
         };
         pane.take_view(cx);
         pane.load(cx);
@@ -526,18 +588,8 @@ impl FolderPane {
     }
 
     /// What the title of the window and of the tab say of the pane.
-    pub fn title(&self, cx: &gpui::App) -> String {
-        match self.history.current() {
-            Location::Home => Language::of(cx).say("Quick access").to_owned(),
-            Location::Computer => Language::of(cx).say("This PC").to_owned(),
-            Location::Folder(path) => title_of(path),
-            Location::Search { root, .. } => format!(
-                "{} {}",
-                Language::of(cx).say("Search results in"),
-                title_of(root)
-            ),
-            Location::RecycleBin => Language::of(cx).say("Recycle Bin").to_owned(),
-        }
+    pub fn title(&self, _: &gpui::App) -> String {
+        self.title_of_location(self.history.current())
     }
 
     /// Gives the pane the keys.
@@ -568,6 +620,256 @@ impl FolderPane {
         .detach();
     }
 
+    /// Reads what This PC shows beside the drives, away from the user
+    /// interface: its items of the Shell without a letter (phones, cameras,
+    /// media players) through the Shell's own This PC, the network
+    /// locations and the remembered network drives.
+    fn read_devices(&mut self, cx: &mut Context<Self>) {
+        let computer = ShellPath::named(COMPUTER_PARSING, "This PC");
+        let listing = ShellFolder::open(&computer, Reading::default());
+        let locations = NetworkDrives::locations();
+        let remembered = NetworkDrives::remembered();
+        self._devices = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let mut devices = Vec::new();
+                while let Some(read) = listing.next().await {
+                    match read {
+                        ShellRead::Items(children) => devices
+                            .extend(children.into_iter().filter(|child| child.path.is_none())),
+                        ShellRead::Resolved(_) => {}
+                        _ => break,
+                    }
+                }
+                let locations = locations.recv().await.unwrap_or_default();
+                let remembered = remembered.recv().await.unwrap_or_default();
+                this.update(cx, |this, cx| {
+                    this.devices = devices.into_iter().map(Entry::of_shell).collect();
+                    this.locations = locations;
+                    this.remembered = remembered;
+                    cx.notify();
+                })
+                .ok();
+            }),
+        );
+    }
+
+    /// Reads the place of the Shell `place` on a thread of its own, taking
+    /// its items in batches as they come. Leaving the place drops the
+    /// reading, which stops it.
+    fn load_shell(&mut self, place: ShellPath, cx: &mut Context<Self>) {
+        self.problem = None;
+        self.space = None;
+        let asked = place.parsing().to_owned();
+        let gallery = KnownShellPlace::of_word("gallery")
+            .is_some_and(|gallery| gallery.parsing.eq_ignore_ascii_case(&asked));
+        if gallery && self.grouping == Grouping::None {
+            self.grouping = Grouping::Month;
+        }
+        let listing = ShellFolder::open(
+            &place,
+            Reading {
+                dates_taken: gallery,
+            },
+        );
+        self.reading = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                // What was shown stays until the first items come, so that
+                // reading a place again keeps the choice.
+                let mut fresh = true;
+                while let Some(read) = listing.next().await {
+                    let more =
+                        this.update(cx, |this, cx| this.took_shell(read, &asked, &mut fresh, cx));
+                    if !matches!(more, Ok(true)) {
+                        return;
+                    }
+                }
+            }),
+        );
+    }
+
+    /// Takes what reading a place of the Shell told, `asked` being the name
+    /// it was read by; says whether more is to come.
+    fn took_shell(
+        &mut self,
+        read: ShellRead,
+        asked: &str,
+        fresh: &mut bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match read {
+            ShellRead::Resolved(place) => {
+                // The steps and the names are known now; This PC and the
+                // Recycle Bin are shown as Tessera shows them.
+                let resolved = Location::of_shell(place);
+                let shell = matches!(resolved, Location::Shell(_));
+                self.history.refine(resolved);
+                if !shell {
+                    self.reading = None;
+                    self.load(cx);
+                }
+                cx.emit(PaneEvent::Navigated);
+                shell
+            }
+            ShellRead::Folder(path) => {
+                Files::take_fallback(asked, cx);
+                self.history.refine(Location::Folder(path));
+                self.reading = None;
+                self.take_view(cx);
+                self.load(cx);
+                cx.emit(PaneEvent::Navigated);
+                false
+            }
+            ShellRead::Items(children) => {
+                Files::take_fallback(asked, cx);
+                self.fallback = None;
+                let entries = children.into_iter().map(Entry::of_shell);
+                if std::mem::take(fresh) {
+                    self.listing = Listing::new(entries.collect());
+                } else {
+                    self.listing.extend(entries);
+                }
+                self.arrange(cx);
+                true
+            }
+            ShellRead::Done => {
+                Files::take_fallback(asked, cx);
+                self.fallback = None;
+                self.reading = None;
+                if std::mem::take(fresh) {
+                    self.listing = Listing::default();
+                    self.quiet_network = KnownShellPlace::of_word("network")
+                        .is_some_and(|network| network.parsing.eq_ignore_ascii_case(asked));
+                }
+                self.arrange(cx);
+                self.take_pending_names(cx);
+                false
+            }
+            ShellRead::Failed(failure) => {
+                self.reading = None;
+                self.shell_failed(failure, asked, cx);
+                false
+            }
+        }
+    }
+
+    /// The place of the Shell `asked` could not be read: a window that
+    /// `Files::open_shell` opened for it hands it to Explorer and closes, a
+    /// place gone into from an item that lists nothing opens that item as
+    /// a double click would, a Gallery missing from Windows is the library
+    /// of pictures, and anything else says the Shell's reason.
+    fn shell_failed(&mut self, failure: ShellFailure, asked: &str, cx: &mut Context<Self>) {
+        let first = !matches!(failure, ShellFailure::Broken(_));
+        if first && Files::take_fallback(asked, cx) {
+            Files::hand_to_explorer(asked);
+            self.window
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+            return;
+        }
+        let current = self.history.current().clone();
+        let fallback = { self.fallback.take() }.filter(|fallback| fallback.location == current);
+        if let (true, Some(fallback)) = (first, fallback) {
+            fallback.deed.run();
+            self.after_menu(cx, |this, window, cx| this.back(window, cx));
+            return;
+        }
+        if first && is_bare_server(asked) {
+            return self.list_shares(asked.to_owned(), failure, cx);
+        }
+        let gallery = KnownShellPlace::of_word("gallery")
+            .is_some_and(|gallery| gallery.parsing.eq_ignore_ascii_case(asked));
+        if gallery && matches!(failure, ShellFailure::Unknown(_)) {
+            let pictures = ShellPath::named(PICTURES_LIBRARY, Language::of(cx).say("Gallery"));
+            self.history.refine(Location::Shell(pictures));
+            self.load(cx);
+            return;
+        }
+        self.problem = Some(failure.text().to_owned());
+        self.listing = Listing::default();
+        self.arrange(cx);
+    }
+
+    /// Lists the shares of the server `server` as the server itself tells
+    /// them, where the Shell could not, for the reason `failure`, which is
+    /// shown where the server tells nothing either.
+    fn list_shares(&mut self, server: String, failure: ShellFailure, cx: &mut Context<Self>) {
+        let shares = cx
+            .background_executor()
+            .spawn(async move { NetworkDrives::shares(&server) });
+        self.reading = Some(
+            cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let shares = shares.await;
+                this.update(cx, |this, cx| {
+                    this.reading = None;
+                    match shares {
+                        Ok(shares) => {
+                            let entries = { shares.into_iter() }
+                                .map(|share| {
+                                    let path = PathBuf::from(&share);
+                                    let name =
+                                        share.rsplit('\\').next().unwrap_or(&share).to_owned();
+                                    Entry {
+                                        name: name.clone(),
+                                        display: name,
+                                        path,
+                                        folder: true,
+                                        ..Entry::default()
+                                    }
+                                })
+                                .collect();
+                            this.listing = Listing::new(entries);
+                        }
+                        Err(_) => {
+                            this.problem = Some(failure.text().to_owned());
+                            this.listing = Listing::default();
+                        }
+                    }
+                    this.arrange(cx);
+                })
+                .ok();
+            }),
+        );
+    }
+
+    /// Where opening `entry` leads, where it is a place the file manager
+    /// shows: a folder, a place of the Shell that lists items, or an
+    /// archive the Shell opens as a folder while `[files] archives` browses
+    /// them. None for what is opened by its program or its verb.
+    fn location_of(&self, entry: &Entry) -> Option<Location> {
+        let archives = self.config.archives == Archives::Browse;
+        if let Some(child) = &entry.shell {
+            if !child.attributes.is_browsed(archives) {
+                return None;
+            }
+            let parent = match self.history.current() {
+                Location::Shell(place) => place.clone(),
+                _ => ShellPath::named(COMPUTER_PARSING, self.language.say("This PC")),
+            };
+            return Some(Location::of_shell(parent.child(child)));
+        }
+        if entry.folder {
+            return Some(Location::Folder(entry.path.clone()));
+        }
+        (archives && is_archive(&entry.path)).then(|| {
+            let parsing = entry.path.to_string_lossy();
+            Location::Shell(ShellPath::named(&parsing, &entry.display))
+        })
+    }
+
+    /// Opens `entry` where it is no place to go to: an item of the Shell
+    /// by its default verb, through its identifier list, a file by its
+    /// program.
+    fn open_item(entry: &Entry) {
+        match &entry.shell {
+            Some(child) if child.path.is_none() => {
+                ShellFolder::invoke(child.id.clone(), entry.display.clone())
+            }
+            _ => Launch::new(&entry.path)
+                .named(format!("`{}`", entry.display))
+                .start(),
+        }
+    }
+
     /// Reads the location shown anew, keeping what was chosen.
     pub fn load(&mut self, cx: &mut Context<Self>) {
         // A read still running is of the place left: dropping it stops it
@@ -576,10 +878,12 @@ impl FolderPane {
         self.search = None;
         self.searched = None;
         self._overlays = None;
+        self.quiet_network = false;
         let path = match self.history.current().clone() {
             Location::Folder(path) => path,
             Location::Home => return self.load_home(cx),
             Location::RecycleBin => return self.load_bin(cx),
+            Location::Shell(place) => return self.load_shell(place, cx),
             Location::Search { root, query } => {
                 self.listing = Listing::default();
                 self.problem = None;
@@ -596,6 +900,7 @@ impl FolderPane {
                 self.space = None;
                 self.relayout(true);
                 self.read_drives(cx);
+                self.read_devices(cx);
                 cx.notify();
                 return;
             }
@@ -1078,13 +1383,23 @@ impl FolderPane {
         if self.in_bin() {
             return;
         }
-        if entry.folder {
-            self.go(Location::Folder(entry.path.clone()), window, cx);
-        } else {
-            Launch::new(&entry.path)
-                .named(format!("`{}`", entry.display))
-                .start();
+        let Some(location) = self.location_of(entry) else {
+            return Self::open_item(entry);
+        };
+        // A place of the Shell that turns out to list nothing, as an applet
+        // of Control Panel with a view of its own or an archive Windows
+        // does not open, is opened as a double click in Explorer does.
+        if matches!(location, Location::Shell(_)) {
+            let deed = match &entry.shell {
+                Some(child) => FallbackDeed::Invoke(child.id.clone(), entry.display.clone()),
+                None => FallbackDeed::Launch(entry.path.clone(), entry.display.clone()),
+            };
+            self.fallback = Some(Fallback {
+                location: location.clone(),
+                deed,
+            });
         }
+        self.go(location, window, cx);
     }
 
     /// The chosen entries, in the order of the list.
@@ -1103,9 +1418,9 @@ impl FolderPane {
             [one] => self.open(one, window, cx),
             many => {
                 for entry in many {
-                    match entry.folder {
-                        true => Files::open(Location::Folder(entry.path.clone()), cx),
-                        false => self.open(entry, window, cx),
+                    match self.location_of(entry) {
+                        Some(location) => Files::open(location, cx),
+                        None => Self::open_item(entry),
                     }
                 }
             }
@@ -1118,14 +1433,28 @@ impl FolderPane {
         if chosen.is_empty() || self.in_bin() {
             return;
         }
+        // Items without a path go on the clipboard as the Shell puts them
+        // there, as the items they are.
+        if self.chosen_entries().iter().any(Entry::is_virtual) {
+            let verb = if cut { "cut" } else { "copy" };
+            let done = ShellMenu::do_verb(chosen, verb);
+            std::thread::spawn(move || {
+                if let Ok(Err(error)) = done.recv_blocking() {
+                    report!("the items are not on the clipboard: {error}");
+                }
+            });
+            return;
+        }
         if let Err(error) = FileClipboard::put(&chosen, cut) {
             report!("the files are not on the clipboard: {error:#}");
         }
     }
 
-    /// Copies or moves what is on the clipboard into the folder shown.
+    /// Copies or moves what is on the clipboard into the folder shown, or
+    /// into the place of the Shell shown, as a phone or a ZIP file.
     fn paste(&mut self, cx: &mut Context<Self>) {
-        let (Some(folder), Some((from, cut))) = (self.folder(), FileClipboard::take()) else {
+        let target = self.history.current().target();
+        let (Some(folder), Some((from, cut))) = (target, FileClipboard::take()) else {
             return;
         };
         let work = match cut {
@@ -1191,9 +1520,12 @@ impl FolderPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let file = { self.listing.position_of(&path) }
+            .and_then(|position| self.listing.get(position))
+            .is_none_or(|entry| !entry.folder);
         let field = cx.new(|cx| {
             let mut field = TextField::new(SharedString::default(), cx);
-            field.set_text(&name, !path.is_dir(), cx);
+            field.set_text(&name, file, cx);
             field
         });
         field.read(cx).focus(window);
@@ -1215,10 +1547,16 @@ impl FolderPane {
         let [path] = chosen.as_slice() else {
             return;
         };
-        let Some(name) = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-        else {
+        // An item of the Shell without a path is renamed from the name the
+        // user reads.
+        let shown = { self.listing.position_of(path) }
+            .and_then(|position| self.listing.get(position))
+            .filter(|entry| entry.is_virtual())
+            .map(|entry| entry.display.clone());
+        let Some(name) = shown.or_else(|| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }) else {
             return;
         };
         self.begin_rename(path.clone(), name, window, cx);
@@ -1300,15 +1638,27 @@ impl FolderPane {
         }
         let name = rename.field.read(cx).text();
         let name = name.trim();
+        if !is_valid_name(name) && !name.is_empty() {
+            report!("`{name}` cannot be the name of a file");
+            return;
+        }
+        // An item without a path is renamed by the Shell, by its parsing
+        // name, and read again under the name the Shell gives it.
+        if !rename.path.is_absolute() {
+            if !name.is_empty() {
+                let work = FileWork::Rename {
+                    path: rename.path,
+                    name: name.to_owned(),
+                };
+                self.work(work, cx);
+            }
+            return;
+        }
         let Some(parent) = rename.path.parent() else {
             return;
         };
         let target = parent.join(name);
         if target == rename.path || name.is_empty() {
-            return;
-        }
-        if !is_valid_name(name) {
-            report!("`{name}` cannot be the name of a file");
             return;
         }
         self.selection.clear();
@@ -1341,8 +1691,8 @@ impl FolderPane {
 
     /// Writes the path of the folder shown in a field instead of its steps.
     pub fn edit_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self
-            .folder()
+        // A place of the Shell is written as the name the Shell parses.
+        let text = { self.history.current().target() }
             .map(|path| path.display().to_string())
             .unwrap_or_default();
         let field = cx.new(|cx| {
@@ -1351,12 +1701,64 @@ impl FolderPane {
             field
         });
         field.read(cx).focus(window);
+        let typed = cx.observe(&field, |this, field, cx| {
+            this.suggest(field.read(cx).text(), cx)
+        });
+        self._suggesting = Some((typed, None));
+        self.suggested.clear();
         self.address = Some(field);
+        cx.notify();
+    }
+
+    /// Suggests what the address bar may go to as `text` is typed: the
+    /// folders of the folder it names, read away from the user interface,
+    /// the `shell:` names and the places gone through.
+    fn suggest(&mut self, text: String, cx: &mut Context<Self>) {
+        let history: Vec<String> = { self.history.behind(64).into_iter() }
+            .chain(self.history.ahead(64))
+            .filter_map(|place| place.parsing_name())
+            .collect();
+        let folder = address_parts(&text).map(|(folder, _)| folder);
+        let reading = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let children = match folder {
+                Some(folder) => {
+                    cx.background_executor()
+                        .spawn(async move {
+                            let read = std::fs::read_dir(&folder).into_iter().flatten().flatten();
+                            { read.filter(|item| item.file_type().is_ok_and(|kind| kind.is_dir())) }
+                                .map(|item| item.path())
+                                .collect::<Vec<_>>()
+                        })
+                        .await
+                }
+                None => Vec::new(),
+            };
+            this.update(cx, |this, cx| {
+                this.suggested = suggestions(&text, &children, &history);
+                cx.notify();
+            })
+            .ok();
+        });
+        if let Some((_, task)) = &mut self._suggesting {
+            *task = Some(reading);
+        }
+    }
+
+    /// Writes the suggestion `place` in the address bar, to go there with
+    /// Enter.
+    fn take_suggestion(&mut self, place: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(field) = &self.address {
+            field.update(cx, |field, cx| field.set_text(&place, false, cx));
+            field.read(cx).focus(window);
+        }
+        self.suggested.clear();
         cx.notify();
     }
 
     /// Goes where the address field says, or back to the steps.
     fn end_address(&mut self, go: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self._suggesting = None;
+        self.suggested.clear();
         let Some(field) = self.address.take() else {
             return;
         };
@@ -1668,22 +2070,72 @@ impl FolderPane {
                     .ok();
             })
         }));
+        let hidden = pane.clone();
         entries.push(MenuEntry::new(
             mark(self.hidden()),
             language.say("Show hidden files"),
             move |cx| {
-                pane.update(cx, |pane, cx| pane.toggle_hidden(cx)).ok();
+                hidden.update(cx, |pane, cx| pane.toggle_hidden(cx)).ok();
+            },
+        ));
+        // Explorer's own options, which every window follows.
+        let shown = !self.explorer.hide_extensions;
+        entries.push(MenuEntry::new(
+            mark(shown),
+            language.say("File name extensions"),
+            move |cx| {
+                let changed = cx
+                    .background_executor()
+                    .spawn(async move { set_extensions_shown(!shown) });
+                let pane = pane.clone();
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    if let Err(error) = changed.await {
+                        report!("the extensions were not changed: {error:#}");
+                    }
+                    pane.update(cx, |pane, cx| pane.load(cx)).ok();
+                })
+                .detach();
+            },
+        ));
+        entries.push(MenuEntry::new(
+            ICON_NONE,
+            language.say("Folder options…"),
+            |_| {
+                if let Err(error) = open_folder_options() {
+                    report!("the folder options did not open: {error:#}");
+                }
             },
         ));
         entries
     }
 
+    /// Opens the properties of what is chosen: one sheet for several items,
+    /// as Explorer's Alt+Enter does, the Shell's own for an item without a
+    /// path, and for nothing chosen, those of the folder shown, or of the
+    /// computer on This PC.
     fn properties(&self) {
         let chosen = self.chosen();
-        let path = chosen.first().cloned().or_else(|| self.folder());
-        if let Some(path) = path
-            && let Err(error) = show_properties(&path)
-        {
+        if chosen.len() > 1 || self.chosen_entries().iter().any(Entry::is_virtual) {
+            return show_properties_of(chosen);
+        }
+        if chosen.is_empty() && *self.history.current() == Location::Computer {
+            return Launch::new("ms-settings:about").start();
+        }
+        let path = chosen
+            .first()
+            .cloned()
+            .or_else(|| self.history.current().target());
+        let Some(path) = path else {
+            return;
+        };
+        let shown = match path.is_absolute() {
+            true => show_properties(&path),
+            false => {
+                show_properties_of(vec![path]);
+                Ok(())
+            }
+        };
+        if let Err(error) = shown {
             report!("{error:#}");
         }
     }
@@ -1709,10 +2161,9 @@ impl FolderPane {
         self.take_focus(window, cx);
         let held = event.modifiers;
         if event.button == MouseButton::Middle {
-            if let Some(entry) = self.listing.get(position).filter(|entry| entry.folder) {
-                cx.emit(PaneEvent::OpenInNewTab(Location::Folder(
-                    entry.path.clone(),
-                )));
+            let location = { self.listing.get(position) }.and_then(|entry| self.location_of(entry));
+            if let Some(location) = location {
+                cx.emit(PaneEvent::OpenInNewTab(location));
             }
             return;
         }
@@ -1829,7 +2280,7 @@ impl FolderPane {
             Menus::open(entries, anchor, cx);
             return;
         }
-        let (chosen, folder) = (self.chosen(), self.folder());
+        let (chosen, folder) = (self.chosen(), self.history.current().target());
         let kinds: Vec<(PathBuf, bool)> = { self.chosen_entries().into_iter() }
             .map(|entry| (entry.path, entry.folder))
             .collect();
@@ -1878,6 +2329,13 @@ impl FolderPane {
             return entries;
         }
         if chosen.is_empty() {
+            // A phone or the inside of an archive takes what is pasted.
+            if self.folder().is_none()
+                && self.history.current().shell().is_some()
+                && FileClipboard::take().is_some()
+            {
+                entries.push(entry(ICON_PASTE, "Paste", |this, cx| this.paste(cx)));
+            }
             if self.folder().is_some() {
                 entries.push(entry(ICON_NEW_FOLDER, "New folder", |this, cx| {
                     this.new_folder(cx)
@@ -1915,6 +2373,14 @@ impl FolderPane {
                     ));
                 }
             }
+            entries.extend(self.library_entries(None, cx));
+            // The place shown is kept at the side.
+            let current = self.history.current();
+            if matches!(current, Location::Folder(_) | Location::Shell(_)) {
+                let group = PlaceGroup::of_location(&current.name());
+                let name = self.title_of_location(current);
+                entries.push(add_to_places(name, current, group, language));
+            }
             entries.push(entry(ICON_SELECT_ALL, "Select all", |this, cx| {
                 this.choose_all(cx)
             }));
@@ -1940,7 +2406,39 @@ impl FolderPane {
                 this.after_menu(cx, |this, window, cx| this.open_location(window, cx))
             }));
         }
-        let one_folder = matches!(chosen.as_slice(), [path] if path.is_dir());
+        let chosen_entries = self.chosen_entries();
+        // Items of the Shell without a path have no path to copy, share,
+        // show in Explorer or open a terminal in.
+        let virtual_items = chosen_entries.iter().any(Entry::is_virtual);
+        let place = match chosen_entries.as_slice() {
+            [one] => self.location_of(one),
+            _ => None,
+        };
+        let one_folder = place.as_ref().is_some_and(|place| place.folder().is_some());
+        if let (Some(place), [one]) = (&place, chosen_entries.as_slice()) {
+            let group = PlaceGroup::of_location(&place.name());
+            entries.push(add_to_places(one.display.clone(), place, group, language));
+        }
+        if let Some(place) = place.filter(|place| place.folder().is_none()) {
+            // A place of the Shell, as a phone or a library, opens in a tab or
+            // a window of its own too.
+            let tab = place.clone();
+            let pane = view.clone();
+            entries.push(MenuEntry::new(
+                ICON_NEW_TAB,
+                language.say("Open in new tab"),
+                move |cx| {
+                    let tab = tab.clone();
+                    pane.update(cx, |_, cx| cx.emit(PaneEvent::OpenInNewTab(tab)))
+                        .ok();
+                },
+            ));
+            entries.push(MenuEntry::new(
+                ICON_NEW_WINDOW,
+                language.say("Open in new window"),
+                move |cx| Files::open(place.clone(), cx),
+            ));
+        }
         if one_folder {
             entries.push(entry(ICON_NEW_TAB, "Open in new tab", |this, cx| {
                 for path in this.chosen() {
@@ -1978,18 +2476,23 @@ impl FolderPane {
                 }
             }));
         }
+        if let [one] = chosen_entries.as_slice() {
+            entries.extend(self.library_entries(Some(one), cx));
+        }
         entries.push(entry(ICON_CUT, "Cut", |this, _| {
             this.put_on_clipboard(true)
         }));
         entries.push(entry(ICON_COPY, "Copy", |this, _| {
             this.put_on_clipboard(false)
         }));
-        entries.push(entry(ICON_LINK, "Copy path", |this, cx| {
-            this.copy_paths(false, cx)
-        }));
-        entries.push(entry(ICON_SHARE, "Share", |this, cx| {
-            Files::share(this.chosen(), cx)
-        }));
+        if !virtual_items {
+            entries.push(entry(ICON_LINK, "Copy path", |this, cx| {
+                this.copy_paths(false, cx)
+            }));
+            entries.push(entry(ICON_SHARE, "Share", |this, cx| {
+                Files::share(this.chosen(), cx)
+            }));
+        }
         entries.push(entry(ICON_INVERT, "Invert selection", |this, cx| {
             this.invert_choice(cx)
         }));
@@ -2002,24 +2505,164 @@ impl FolderPane {
             }));
         }
         let rename = match chosen.len() {
-            1 => "Rename",
-            _ => "Rename all",
+            1 => Some("Rename"),
+            // Many items of the Shell without paths are renamed one by one.
+            _ if virtual_items => None,
+            _ => Some("Rename all"),
         };
-        entries.push(entry(ICON_RENAME, rename, |this, cx| {
-            this.after_menu(cx, |this, window, cx| this.rename_chosen(window, cx))
-        }));
-        entries.push(entry(ICON_BIN, "Delete", |this, cx| this.delete(false, cx)));
-        entries.push(entry(ICON_EXPLORER, "Show in Explorer", |this, _| {
-            if let Some(path) = this.chosen().first()
-                && let Err(error) = reveal_in_explorer(path)
-            {
-                report!("{error:#}");
-            }
-        }));
+        let renames = { chosen_entries.iter() }
+            .all(|entry| { entry.shell.as_ref() }.is_none_or(|child| child.attributes.can_rename));
+        if let (Some(rename), true) = (rename, renames) {
+            entries.push(entry(ICON_RENAME, rename, |this, cx| {
+                this.after_menu(cx, |this, window, cx| this.rename_chosen(window, cx))
+            }));
+        }
+        let deletes = { chosen_entries.iter() }
+            .all(|entry| { entry.shell.as_ref() }.is_none_or(|child| child.attributes.can_delete));
+        if deletes {
+            entries.push(entry(ICON_BIN, "Delete", |this, cx| this.delete(false, cx)));
+        }
+        if !virtual_items {
+            entries.push(entry(ICON_EXPLORER, "Show in Explorer", |this, _| {
+                if let Some(path) = this.chosen().first()
+                    && let Err(error) = reveal_in_explorer(path)
+                {
+                    report!("{error:#}");
+                }
+            }));
+        }
         entries.push(entry(ICON_PROPERTIES, "Properties", |this, _| {
             this.properties()
         }));
         entries
+    }
+
+    /// The entries of the libraries of Windows in the menu of `chosen`, or
+    /// of the background where nothing is chosen: New library in
+    /// Libraries, Manage library and whether it shows at the side for a
+    /// library, and in a library, its management and "Set save location"
+    /// for a folder of it.
+    fn library_entries(&self, chosen: Option<&Entry>, cx: &mut Context<Self>) -> Vec<MenuEntry> {
+        let language = Language::of(cx);
+        let mut entries = Vec::new();
+        let Some(place) = self.history.current().shell() else {
+            return entries;
+        };
+        let is_library = |parsing: &str| parsing.to_ascii_lowercase().ends_with(".library-ms");
+        let libraries = KnownShellPlace::of_word("libraries")
+            .is_some_and(|libraries| libraries.parsing.eq_ignore_ascii_case(place.parsing()));
+        let view = cx.entity().downgrade();
+        let library = match chosen {
+            None if libraries => {
+                let name = language.say("New library").to_owned();
+                entries.push(MenuEntry::new(
+                    ICON_NEW_FOLDER,
+                    language.say("New library"),
+                    move |cx| {
+                        let made = Libraries::create(name.clone());
+                        let view = view.clone();
+                        cx.spawn(async move |cx: &mut AsyncApp| {
+                            if let Ok(Err(error)) = made.recv().await {
+                                report!("no library was made: {error}");
+                            }
+                            view.update(cx, |this, cx| this.load(cx)).ok();
+                        })
+                        .detach();
+                    },
+                ));
+                return entries;
+            }
+            None => is_library(place.parsing()).then(|| place.parsing().to_owned()),
+            Some(entry) => {
+                let parsing = entry.shell.as_ref().map(|child| child.parsing.clone());
+                match parsing.filter(|parsing| is_library(parsing)) {
+                    Some(parsing) => Some(parsing),
+                    // A folder of the library shown can be where it saves.
+                    None if entry.folder && is_library(place.parsing()) => {
+                        let (library, folder) = (place.parsing().to_owned(), entry.path.clone());
+                        entries.push(MenuEntry::new(
+                            ICON_FOLDER,
+                            language.say("Set save location"),
+                            move |_| Libraries::set_save_folder(library.clone(), folder.clone()),
+                        ));
+                        None
+                    }
+                    None => None,
+                }
+            }
+        };
+        if let Some(library) = library {
+            let managed = library.clone();
+            entries.push(MenuEntry::new(
+                ICON_PROPERTIES,
+                language.say("Manage library…"),
+                move |_| Libraries::manage(managed.clone()),
+            ));
+            for (label, shown) in [
+                ("Show in navigation pane", true),
+                ("Hide from navigation pane", false),
+            ] {
+                let library = library.clone();
+                entries.push(MenuEntry::new(ICON_NONE, language.say(label), move |_| {
+                    Libraries::set_in_navigation(library.clone(), shown)
+                }));
+            }
+        }
+        entries
+    }
+
+    /// The places behind the pane, the latest first, or with `forward`
+    /// those ahead of it, as entries of a menu that goes to each: what a
+    /// right click on Back or Forward shows.
+    #[allow(
+        dead_code,
+        reason = "the buttons Back and Forward are drawn by view.rs of files-terminal, which calls it after the merge"
+    )]
+    pub fn history_entries(&self, forward: bool, cx: &mut Context<Self>) -> Vec<MenuEntry> {
+        let places = match forward {
+            true => self.history.ahead(HISTORY_SHOWN),
+            false => self.history.behind(HISTORY_SHOWN),
+        };
+        let pane = cx.entity().downgrade();
+        let window = self.window;
+        { places.into_iter().enumerate() }
+            .map(|(index, place)| {
+                let title = self.title_of_location(&place);
+                let pane = pane.clone();
+                MenuEntry::new(ICON_NONE, title, move |cx| {
+                    let pane = pane.clone();
+                    window
+                        .update(cx, |_, window, cx| {
+                            pane.update(cx, |this, cx| {
+                                let went = match forward {
+                                    true => this.history.forward_by(index + 1),
+                                    false => this.history.back_by(index + 1),
+                                };
+                                if went {
+                                    this.arrived(window, cx);
+                                }
+                            })
+                            .ok();
+                        })
+                        .ok();
+                })
+            })
+            .collect()
+    }
+
+    /// What a place is called in the history.
+    fn title_of_location(&self, location: &Location) -> String {
+        let language = self.language;
+        match location {
+            Location::Home => language.say("Quick access").to_owned(),
+            Location::Computer => language.say("This PC").to_owned(),
+            Location::Folder(path) => title_of(path),
+            Location::Search { root, .. } => {
+                format!("{} {}", language.say("Search results in"), title_of(root))
+            }
+            Location::RecycleBin => language.say("Recycle Bin").to_owned(),
+            Location::Shell(place) => place.name().to_owned(),
+        }
     }
 
     /// Puts the paths of what is chosen on the clipboard as text, a line
@@ -2117,10 +2760,47 @@ impl FolderPane {
     /// written, its field.
     pub fn render_address(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if let Some(field) = &self.address {
+            let shown = { self.suggested.iter().enumerate() }.map(|(index, place)| {
+                let taken = place.clone();
+                div()
+                    .id(("files-suggestion", index))
+                    .px(theme.spacing.medium)
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .rounded(theme.shape.small)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.colors.surface_container_highest))
+                    .child(one_line(place.clone()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.take_suggestion(taken.clone(), window, cx)
+                    }))
+            });
+            let list = (!self.suggested.is_empty()).then(|| {
+                // Drawn over the list below, after everything else.
+                gpui::deferred(
+                    div()
+                        .absolute()
+                        .top(px(38.))
+                        .left_0()
+                        .right_0()
+                        .p(theme.spacing.tiny)
+                        .rounded(theme.shape.medium)
+                        .bg(theme.colors.surface_container)
+                        .border_1()
+                        .border_color(theme.colors.outline.opacity(0.3))
+                        .text_size(theme.typography.label_size)
+                        .text_color(theme.colors.on_surface)
+                        .children(shown),
+                )
+                .with_priority(1)
+            });
             return div()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .child(field.clone())
+                .children(list)
                 .into_any_element();
         }
         let language = Language::of(cx);
@@ -2141,7 +2821,39 @@ impl FolderPane {
                 cx.stop_propagation();
                 this.go(Location::Computer, window, cx)
             }));
-        if *self.history.current() == Location::Home {
+        if let Location::Shell(place) = self.history.current() {
+            for (index, step) in place.steps().iter().enumerate() {
+                if index > 0 {
+                    steps.push(
+                        div()
+                            .text_color(theme.colors.on_surface_variant)
+                            .child("\u{203a}")
+                            .into_any_element(),
+                    );
+                }
+                let target = place.up_to(index).map(Location::of_shell);
+                steps.push(
+                    div()
+                        .id(("files-shell-crumb", index))
+                        .flex_none()
+                        .px(theme.spacing.small)
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .rounded(theme.shape.small)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(theme.colors.surface_container_highest))
+                        .child(step.name.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            if let Some(target) = target.clone() {
+                                this.go(target, window, cx)
+                            }
+                        }))
+                        .into_any_element(),
+                );
+            }
+        } else if *self.history.current() == Location::Home {
             let home = div()
                 .flex()
                 .items_center()
@@ -2161,6 +2873,7 @@ impl FolderPane {
                         .child("\u{203a}")
                         .into_any_element(),
                 );
+                let listed = target.clone();
                 steps.push(
                     div()
                         .id(("files-crumb", index))
@@ -2177,6 +2890,30 @@ impl FolderPane {
                             cx.stop_propagation();
                             this.go(Location::Folder(target.clone()), window, cx)
                         }))
+                        .into_any_element(),
+                );
+                steps.push(
+                    div()
+                        .id(("files-crumb-folders", index))
+                        .flex_none()
+                        .w(px(16.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(theme.shape.small)
+                        .cursor_pointer()
+                        .font_family(theme.typography.icon_family)
+                        .text_size(px(8.))
+                        .text_color(theme.colors.on_surface_variant)
+                        .hover(|style| style.bg(theme.colors.surface_container_highest))
+                        .child(ICON_SORT_DOWN)
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.list_folders(listed.clone(), event.position(), window, cx)
+                            }),
+                        )
                         .into_any_element(),
                 );
             }
@@ -2214,6 +2951,58 @@ impl FolderPane {
             .into_any_element()
     }
 
+    /// Opens a menu of the folders in `folder` under `position`, read away
+    /// from the user interface, each of which the pane goes to.
+    fn list_folders(
+        &mut self,
+        folder: PathBuf,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = match PopupAnchor::under(window, position, cx) {
+            Ok(anchor) => anchor,
+            Err(error) => return report!("the menu has no place: {error:#}"),
+        };
+        let (follow, shown) = (self.config.explorer, self.shown());
+        let read = cx.background_executor().spawn(async move {
+            let explorer = ExplorerSettings::read();
+            let mut rules = NameRules::new(explorer, follow);
+            let mut folders: Vec<Entry> = { read_folder(&folder, &mut rules).unwrap_or_default() }
+                .into_iter()
+                .filter(|entry| entry.folder && shown.shows(entry))
+                .collect();
+            folders.sort_by(|a, b| super::model::natural(&a.display, &b.display));
+            folders
+        });
+        let window = self.window;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let folders = read.await;
+            this.update(cx, |_, cx| {
+                let entries: Vec<MenuEntry> = { folders.into_iter() }
+                    .map(|entry| {
+                        let pane = cx.entity().downgrade();
+                        let location = Location::Folder(entry.path.clone());
+                        MenuEntry::new(ICON_FOLDER, entry.display.clone(), move |cx| {
+                            let (pane, location) = (pane.clone(), location.clone());
+                            window
+                                .update(cx, |_, window, cx| {
+                                    pane.update(cx, |this, cx| this.go(location, window, cx))
+                                        .ok();
+                                })
+                                .ok();
+                        })
+                    })
+                    .collect();
+                if !entries.is_empty() {
+                    Menus::open(entries, anchor, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// The field the list is filtered with.
     pub fn filter_field(&self) -> Entity<TextField> {
         self.filter.clone()
@@ -2236,6 +3025,11 @@ impl FolderPane {
         let thumbnail = match self.history.current() {
             // What lies in the bin is pictured by its icon only.
             Location::RecycleBin => Picture::Icon,
+            // An item of the Shell without a path has no kind of file to
+            // take an icon from: the Shell draws its own.
+            _ if entry.is_virtual() => { self.thumbs.clone() }.update(cx, |thumbs, cx| {
+                thumbs.shell_picture(entry, side, scale, priority, cx)
+            }),
             _ => { self.thumbs.clone() }.update(cx, |thumbs, cx| {
                 thumbs.picture(entry, side, scale, priority, cx)
             }),
@@ -2272,6 +3066,15 @@ impl FolderPane {
         theme: &Theme,
         cx: &Context<Self>,
     ) -> AnyElement {
+        // Its own icon is coming from the Shell.
+        if entry.is_virtual() {
+            return div()
+                .size(size)
+                .flex_none()
+                .rounded(theme.shape.small)
+                .bg(theme.colors.outline.opacity(0.15))
+                .into_any_element();
+        }
         let icons = cx.global::<AppIcons>();
         // A folder has the folder of the icon font unless a pack has one.
         if entry.folder
@@ -2363,10 +3166,81 @@ impl FolderPane {
         element
     }
 
-    /// The drives of the computer as cards with how full each is.
+    /// A card of This PC: a glyph, a title and what is below it, which
+    /// takes the keys of the pane when pressed. A card of something not
+    /// connected is dim, with a red cross over its glyph.
+    fn computer_card(
+        id: impl Into<gpui::ElementId>,
+        glyph: &'static str,
+        title: String,
+        below: AnyElement,
+        connected: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let mark = div()
+            .relative()
+            .font_family(theme.typography.icon_family)
+            .text_size(px(34.))
+            .text_color(theme.colors.primary)
+            .child(glyph)
+            .when(!connected, |mark| {
+                mark.child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .bottom_0()
+                        .text_size(px(14.))
+                        .text_color(gpui::rgb(0xe5534b))
+                        .child(ICON_CROSS),
+                )
+            });
+        div()
+            .id(id)
+            .w(px(260.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(theme.spacing.medium)
+            .p(theme.spacing.medium)
+            .rounded(theme.shape.large)
+            .bg(theme.colors.surface_container_highest.opacity(0.7))
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.colors.secondary_container))
+            .when(!connected, |card| card.opacity(0.6))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.take_focus(window, cx)),
+            )
+            .child(mark)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(theme.spacing.tiny)
+                    .child(one_line(title))
+                    .child(below),
+            )
+    }
+
+    /// A line under the title of a card.
+    fn card_detail(text: String, theme: &Theme) -> AnyElement {
+        div()
+            .text_size(theme.typography.label_size * 0.85)
+            .text_color(theme.colors.on_surface_variant)
+            .child(one_line(text))
+            .into_any_element()
+    }
+
+    /// The drives of the computer as cards with how full each is, then
+    /// the devices without a letter (phones, cameras), the network
+    /// locations, and the network drives remembered but not connected.
     fn render_computer(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let language = Language::of(cx);
-        let cards = self.drives.iter().enumerate().map(|(index, drive)| {
+        let mut cards: Vec<AnyElement> = Vec::new();
+        for (index, drive) in self.drives.iter().enumerate() {
             let target = Location::Folder(drive.root.clone());
             let share = used_share(drive.total, drive.free);
             let free = match (drive.free, drive.total) {
@@ -2378,49 +3252,88 @@ impl FolderPane {
                 ),
                 _ => String::new(),
             };
-            div()
-                .id(("files-drive-card", index))
-                .w(px(260.))
-                .flex_none()
+            let below = div()
                 .flex()
-                .items_center()
-                .gap(theme.spacing.medium)
-                .p(theme.spacing.medium)
-                .rounded(theme.shape.large)
-                .bg(theme.colors.surface_container_highest.opacity(0.7))
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.colors.secondary_container))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| this.take_focus(window, cx)),
-                )
-                .on_click(
-                    cx.listener(move |this, _, window, cx| this.go(target.clone(), window, cx)),
-                )
-                .child(
-                    div()
-                        .font_family(theme.typography.icon_family)
-                        .text_size(px(34.))
-                        .text_color(theme.colors.primary)
-                        .child(drive_glyph(drive.kind)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(theme.spacing.tiny)
-                        .child(one_line(drive.title()))
-                        .child(fill_bar(theme, share, 6.))
-                        .child(
-                            div()
-                                .text_size(theme.typography.label_size * 0.85)
-                                .text_color(theme.colors.on_surface_variant)
-                                .child(free),
-                        ),
-                )
-        });
+                .flex_col()
+                .gap(theme.spacing.tiny)
+                .child(fill_bar(theme, share, 6.))
+                .child(Self::card_detail(free, theme))
+                .into_any_element();
+            let glyph = drive_glyph(drive.kind);
+            let card = Self::computer_card(
+                ("files-drive-card", index),
+                glyph,
+                drive.title(),
+                below,
+                true,
+                theme,
+                cx,
+            );
+            let card = card.on_click(
+                cx.listener(move |this, _, window, cx| this.go(target.clone(), window, cx)),
+            );
+            cards.push(card.into_any_element());
+        }
+        for (index, device) in self.devices.iter().enumerate() {
+            let detail = { device.shell.as_ref() }
+                .and_then(|child| child.kind.clone())
+                .unwrap_or_default();
+            let card = Self::computer_card(
+                ("files-device-card", index),
+                ICON_DEVICE,
+                device.display.clone(),
+                Self::card_detail(detail, theme),
+                true,
+                theme,
+                cx,
+            );
+            let device = device.clone();
+            let card = card
+                .on_click(cx.listener(move |this, _, window, cx| this.open(&device, window, cx)));
+            cards.push(card.into_any_element());
+        }
+        for (index, location) in self.locations.iter().enumerate() {
+            let target = location.target.clone();
+            let card = Self::computer_card(
+                ("files-location-card", index),
+                ICON_NETWORK,
+                location.name.clone(),
+                Self::card_detail(target.clone(), theme),
+                true,
+                theme,
+                cx,
+            );
+            let card =
+                card.on_click(cx.listener(move |this, _, window, cx| {
+                    this.go(Files::named(&target), window, cx)
+                }));
+            cards.push(card.into_any_element());
+        }
+        let lettered = |letter: char| {
+            { self.drives.iter() }.any(|drive| {
+                drive.root.to_string_lossy().starts_with(letter) && drive.total.is_some()
+            })
+        };
+        let absent =
+            { self.remembered.iter() }.filter(|drive| !drive.connected || !lettered(drive.letter));
+        for (index, drive) in absent.enumerate() {
+            let title = format!("{} ({}:)", drive.remote, drive.letter);
+            let detail = language.say("Not connected").to_owned();
+            let card = Self::computer_card(
+                ("files-remembered-card", index),
+                ICON_NETWORK,
+                title,
+                Self::card_detail(detail, theme),
+                drive.connected,
+                theme,
+                cx,
+            );
+            let (letter, remote) = (drive.letter, drive.remote.clone());
+            let card = card.on_click(
+                cx.listener(move |this, _, _, cx| this.reconnect(letter, remote.clone(), cx)),
+            );
+            cards.push(card.into_any_element());
+        }
         div()
             .id("files-computer-view")
             .flex_1()
@@ -2439,6 +3352,28 @@ impl FolderPane {
             .into_any_element()
     }
 
+    /// Connects the remembered network drive `letter` again, away from the
+    /// user interface, and opens it once it is.
+    fn reconnect(&mut self, letter: char, remote: String, cx: &mut Context<Self>) {
+        let connected = NetworkDrives::reconnect(letter, remote);
+        let window = self.window;
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            match connected.recv().await {
+                Ok(Ok(())) => {
+                    let root = Location::Folder(PathBuf::from(format!("{letter}:\\")));
+                    window
+                        .update(cx, |_, window, cx| {
+                            this.update(cx, |this, cx| this.go(root, window, cx)).ok();
+                        })
+                        .ok();
+                }
+                Ok(Err(error)) => report!("{letter}: was not connected: {error}"),
+                Err(_) => {}
+            }
+        })
+        .detach();
+    }
+
     /// The heading of a group, with how many it holds.
     fn render_heading(
         &self,
@@ -2451,6 +3386,9 @@ impl FolderPane {
         let label: SharedString = match label {
             GroupLabel::Said(text) => language.say(text).into(),
             GroupLabel::Text(text) => text.clone().into(),
+            GroupLabel::Month(_, year, month) => chrono::NaiveDate::from_ymd_opt(*year, *month, 1)
+                .map_or_else(String::new, |day| language.month(day))
+                .into(),
         };
         div()
             .h(px(GROUP_HEIGHT))
@@ -2668,10 +3606,18 @@ impl FolderPane {
     /// how many of them are chosen and what they take.
     pub fn status_text(&self, cx: &gpui::App) -> String {
         let language = Language::of(cx);
-        if self.reading.is_some() {
+        let count = self.listing.len();
+        // A place of the Shell shows its items as they come.
+        if self.reading.is_some() && count == 0 {
             return language.say("Reading…").to_owned();
         }
-        let count = self.listing.len();
+        if self.reading.is_some() {
+            return format!(
+                "{count} {}  ·  {}",
+                language.say("items"),
+                language.say("Reading…")
+            );
+        }
         let chosen = self.selection.chosen.len();
         let mut text = format!("{count} {}", language.say("items"));
         match self.searched {
@@ -2724,6 +3670,39 @@ impl FolderPane {
                 cx.listener(|this, event, window, cx| this.press_empty(event, window, cx)),
             )
             .child(text)
+            .into_any_element()
+    }
+
+    /// What Network shows where it found no computer: that network
+    /// discovery may be off, with the settings of Windows that turn it on.
+    fn render_quiet_network(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let language = Language::of(cx);
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(theme.spacing.medium)
+            .text_color(theme.colors.on_surface_variant)
+            .child(
+                language.say(
+                    "No computer was found. Where network discovery is off, Windows finds none.",
+                ),
+            )
+            .child(
+                div()
+                    .id("files-network-settings")
+                    .px(theme.spacing.medium)
+                    .py(theme.spacing.small)
+                    .rounded(theme.shape.medium)
+                    .bg(theme.colors.secondary_container)
+                    .text_color(theme.colors.on_surface)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.colors.surface_container_highest))
+                    .child(language.say("Network discovery settings"))
+                    .on_click(|_, _, _| Launch::new("ms-settings:network-advancedsharing").start()),
+            )
             .into_any_element()
     }
 
@@ -2815,6 +3794,11 @@ impl Render for FolderPane {
                 let text = language.say("Nothing was found").to_owned();
                 self.notice(text, &theme, cx)
             }
+            (Location::Shell(_), None)
+                if self.quiet_network && self.listing.is_empty() && self.reading.is_none() =>
+            {
+                self.render_quiet_network(&theme, cx)
+            }
             (_, None) if self.listing.is_empty() && self.reading.is_none() => {
                 let text = language.say("This folder is empty").to_owned();
                 self.notice(text, &theme, cx)
@@ -2855,8 +3839,9 @@ impl Render for FolderPane {
                     }
                 }),
             )
-            // The folder shown takes drops beneath the rows of its folders.
-            .children(self.folder().map(|folder| self.drop_zone(folder, cx)))
+            // The folder shown takes drops beneath the rows of its folders;
+            // so does a place of the Shell that holds files, as a phone.
+            .children({ self.history.current().target() }.map(|folder| self.drop_zone(folder, cx)))
             .children(self.render_bin_bar(&theme, cx))
             .children(self.render_pattern(&theme))
             .child(content)
