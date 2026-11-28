@@ -25,6 +25,7 @@ mod marketplace;
 mod media;
 mod network;
 pub mod night;
+mod notification_rules;
 mod notifications;
 mod overview;
 mod plan;
@@ -93,6 +94,7 @@ pub fn builtin(config: &Config) -> Vec<Box<dyn Module>> {
         Box::new(media::MediaModule),
         Box::new(network::NetworkModule),
         Box::new(notifications::NotificationsModule),
+        Box::new(notification_rules::NotificationRulesModule),
         Box::new(problems::ProblemsModule),
         Box::new(session::SessionModule),
         Box::new(ShellModule),
