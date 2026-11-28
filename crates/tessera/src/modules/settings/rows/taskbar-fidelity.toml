@@ -1,3 +1,43 @@
 # Rows of the settings filled by taskbar-fidelity. Format: modules/settings/rows.rs
 # (RowCard, and [[action]] titles). Plain labels are English texts of the
 # RUSSIAN table in i18n.rs.
+
+# [tray]: which icons of the notification area stand in the bar and which
+# wait in the overflow, and in what order (tray_settings.rs). The tray
+# widget writes the same lists when an icon is dragged or moved with its
+# menu.
+
+[[card]]
+section = "Tray"
+title = "Where the icons stand"
+table = "tray"
+search = ["Notification area", "Overflow"]
+
+[[card.row]]
+key = "new"
+kind = "choice"
+label = "New icons"
+description = "Where an icon goes that no list here and no choice in the settings of Windows places."
+default = "shown"
+choices = [{ value = "shown", label = "In the bar" }, { value = "hidden", label = "In the overflow" }]
+
+[[card.row]]
+key = "shown"
+kind = "list"
+label = "Always in the bar"
+description = "Icons by their identifier, by their program and number (app.exe#1), or by their program alone."
+default = []
+
+[[card.row]]
+key = "hidden"
+kind = "list"
+label = "Always in the overflow"
+description = "Named as above; of two entries that name an icon, the closer one decides."
+default = []
+
+[[card.row]]
+key = "order"
+kind = "list"
+label = "Order of the icons"
+description = "The icons named come first, in this order, in the bar and in the overflow alike; the others follow as they came."
+default = []
